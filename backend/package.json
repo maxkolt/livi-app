@@ -1,0 +1,33 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "prestart": "../scripts/kill-port.sh",
+    "start": "ts-node index.ts",
+    "predev": "../scripts/kill-port.sh",
+    "dev": "ts-node-dev --respawn --transpile-only index.ts"
+  },
+  "dependencies": {
+    "@types/fluent-ffmpeg": "^2.1.27",
+    "@types/multer": "^1.4.12",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "mongoose": "^8.17.0",
+    "multer": "^1.4.5-lts.1",
+    "sharp": "^0.33.5",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "stream-chat": "^9.17.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.3.0",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,353 @@
+// sockets/identity.ts
+import { Server } from 'socket.io';
+import mongoose, { ClientSession, Types } from 'mongoose';
+import User from '../models/User';
+import Message from '../models/Message';
+import OfflineMessage from '../models/OfflineMessage';
+import FriendshipMessages from '../models/FriendshipMessages';
+import Install from '../models/Install';
+// Cloudinary удален, используем только MongoDB
+import { getAndClearOfflineMessages, getAndClearOfflineChatClearedQueue } from './messagesReliable';
+
+type AttachPayload = {
+  installId?: string | null;
+  profile?: { nick?: string; avatar?: string } | null;
+};
+
+/** ===== presence helpers ===== */
+function getOnlineList(io: Server): string[] {
+  const set = new Set<string>();
+  for (const s of io.sockets.sockets.values()) {
+    const uid = (s as any)?.data?.userId;
+    if (uid) set.add(String(uid));
+  }
+  return Array.from(set);
+}
+export async function bindUser(io: Server, sock: any, userId: string) {
+  // Проверяем, не подключен ли уже этот пользователь
+  const existingSocket = Array.from(io.sockets.sockets.values())
+    .find(s => (s as any)?.data?.userId === userId && s.id !== sock.id);
+
+  if (existingSocket) {
+    console.warn(`[user] duplicate connection ${userId} old=${existingSocket.id} -> disconnect`);
+    existingSocket.disconnect(true);
+  }
+
+  sock.data.userId = String(userId);
+
+  // Присоединяем к комнате пользователя
+  try { 
+    sock.join(`u:${userId}`); 
+    // room join ok
+  } catch (error) {
+    console.error(`❌ Failed to join room u:${userId}:`, error);
+  }
+
+  const list = getOnlineList(io);
+  io.emit('presence_update', list);
+  io.emit('presence:update', list);
+
+  // Доставляем офлайн сообщения после установки userId
+  const offlineMessages = await getAndClearOfflineMessages(userId);
+  if (offlineMessages.length) {}
+
+  if (offlineMessages.length > 0) {
+    offlineMessages.forEach((message) => {
+      sock.emit('message:received', message);
+    });
+    
+    // delivered
+  } else {
+    // no offline
+  }
+
+  // Доставляем офлайн уведомления об очистке чата
+  const offlineChatClearedNotifications = getAndClearOfflineChatClearedQueue(userId);
+
+  if (offlineChatClearedNotifications.length > 0) {
+    offlineChatClearedNotifications.forEach((notification: any) => {
+      sock.emit('message:chat_cleared', notification);
+    });
+    
+    // delivered
+  } else {
+    // none
+  }
+}
+
+/** Сообщаем друзьям, что профиль userId поменялся */
+export async function broadcastProfileToFriends(io: Server, userId: string) {
+  const u = await User.findById(userId).select('nick avatar avatarVer avatarThumbB64 friends').lean();
+  if (!u) return;
+  
+  // Теперь avatar - просто маркер, avatarVer - версия для кеша
+  const rawAvatar = String((u as any)?.avatar || '');
+  const avatarVer = (u as any)?.avatarVer || 0;
+  const avatarThumbB64 = (u as any)?.avatarThumbB64 || '';
+
+  const payload = {
+    userId: String(userId),
+    nick: String(u.nick || '').trim(),
+    avatar: rawAvatar, // маркер наличия
+    avatarVer, // версия для инвалидации кеша клиента
+    avatarThumbB64, // миниатюра для списков
+  };
+  const friends = Array.isArray(u.friends) ? (u.friends as any[]) : [];
+  for (const fid of friends) {
+    try { io.to(`u:${String(fid)}`).emit('friend:profile', payload); } catch {}
+  }
+}
+
+/** Собираем $set только по реально переданным полям профиля */
+function buildSetFromProfile(p?: { nick?: string; avatar?: string }) {
+  const safe: any = {};
+  if (!p) return safe;
+
+  if ('nick' in p) {
+    safe.nick = String(p.nick ?? '').trim(); // '' допустимо — осознанная очистка
+  }
+
+  if ('avatar' in p) {
+    const raw = String(p.avatar ?? '').trim();
+    // разрешаем только https
+    if (/^https?:\/\//i.test(raw)) {
+      safe.avatar = raw;
+    } else if (!raw) {
+      safe.avatar = '';
+    }
+  }
+
+  return safe;
+}
+
+// Кэш для предотвращения дублирования запросов
+const attachRequestCache = new Map<string, { timestamp: number; promise: Promise<any> }>();
+
+export default function registerIdentitySockets(io: Server) {
+  io.on('connection', (sock) => {
+    // Обработка отключения пользователя
+    sock.on('disconnect', (reason) => {
+      const userId = (sock as any).data?.userId;
+      if (userId) {
+        try { 
+          sock.leave(`u:${userId}`); 
+          // left room
+        } catch (error) {
+          console.error(`❌ Failed to leave room u:${userId}:`, error);
+        }
+
+        // Обновляем список онлайн пользователей
+        const list = getOnlineList(io);
+        io.emit('presence_update', list);
+        io.emit('presence:update', list);
+      }
+    });
+    /* -------- identity:attach --------
+       Привязка installId -> user + "мягкое" обновление профиля.
+       ВАЖНО: апдейтим ТОЛЬКО поля, которые пришли в payload.profile. */
+    sock.on('identity:attach', async (payload: AttachPayload, ack?: Function) => {
+      const installId = String(payload?.installId || '').trim();
+      const cacheKey = `${installId}_${sock.id}`;
+      
+      try {
+        if (!installId) return ack?.({ ok: false, error: 'no_installId' });
+
+        // Защита от дублирования запросов
+        const now = Date.now();
+        const cached = attachRequestCache.get(cacheKey);
+
+        if (cached && (now - cached.timestamp) < 2000) { // 2 секунды защиты
+          console.warn(`[identity] attach duplicate blocked install=${installId}`);
+          return ack?.({ ok: false, error: 'duplicate_request' });
+        }
+
+        // Сохраняем запрос в кэш
+        attachRequestCache.set(cacheKey, { timestamp: now, promise: Promise.resolve() });
+
+        // 1) install уже существует -> пользователь есть/нет
+        const inst = await Install.findOne({ installId }).lean();
+        if (inst) {
+          const userId = String((inst as any).user);
+          const exists = await User.exists({ _id: userId });
+
+          if (!exists) {
+            // Пользователь был удалён - создаём ПУСТОГО (игнорируем входящий profile)
+            const incomingProfile = payload?.profile || {};
+            const hasIncomingData = !!(incomingProfile.nick || incomingProfile.avatar);
+
+            if (hasIncomingData) {}
+
+            await User.create({
+              _id: userId,
+              nick: '', // ВСЕГДА пустой для нового пользователя
+              avatar: '', // ВСЕГДА пустой для нового пользователя
+              friends: [],
+            });
+          } else {
+            // Пользователь существует - можно обновлять профиль
+            const $set = buildSetFromProfile(payload?.profile || undefined);
+            if (Object.keys($set).length) {
+              await User.updateOne({ _id: userId }, { $set });
+              await broadcastProfileToFriends(io, userId);
+            }
+          }
+
+          await bindUser(io, sock, userId);
+          ack?.({ ok: true, userId });
+
+          // Очищаем кэш
+          setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+          return;
+        }
+
+        // 2) install нет — создаём user + install атомарно
+        // ВАЖНО: создаём ПУСТОГО пользователя, игнорируем входящий profile
+        // Это предотвращает "воскрешение" удалённых данных из черновика
+        const newUserId = new Types.ObjectId();
+        const incomingProfile = payload?.profile || {};
+        const hasIncomingData = !!(incomingProfile.nick || incomingProfile.avatar);
+
+        if (hasIncomingData) {}
+
+        let session: ClientSession | null = null;
+        try { session = await mongoose.startSession(); } catch {}
+
+        const work = async (s?: ClientSession) => {
+          const opt = s ? { session: s } : undefined;
+          await User.create(
+            [{
+              _id: newUserId,
+              nick: '', // ВСЕГДА пустой для нового пользователя
+              avatar: '', // ВСЕГДА пустой для нового пользователя
+              friends: [],
+            }],
+            opt as any
+          );
+          await Install.create([{ installId, user: newUserId }], opt as any);
+        };
+
+        if (session) {
+          await session.withTransaction(async () => { await work(session!); });
+          await session.endSession();
+        } else {
+          try { await work(); }
+          catch (e) {
+            try { await Install.deleteOne({ installId }); } catch {}
+            try { await User.deleteOne({ _id: newUserId }); } catch {}
+            throw e;
+          }
+        }
+
+        await bindUser(io, sock, String(newUserId));
+        ack?.({ ok: true, userId: String(newUserId) });
+
+        // Очищаем кэш
+        setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+        return;
+      } catch (e: any) {
+        console.error(`[identity] attach error:`, e?.message || e);
+        ack?.({ ok: false, error: e?.message || 'server_error' });
+        // Очищаем кэш при ошибке
+        setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+      }
+    });
+
+    /* -------- user:exists --------
+       Проверка существования пользователя в MongoDB. */
+    sock.on('user:exists', async ({ userId }: { userId?: string }, ack?: Function) => {
+      try {
+        const id = String(userId || '').trim();
+        if (!id) return ack?.({ ok: false, error: 'no_userId' });
+
+        const exists = await User.exists({ _id: id });
+        ack?.({ ok: true, exists: !!exists });
+      } catch (e: any) {
+        ack?.({ ok: false, error: e?.message || 'server_error' });
+      }
+    });
+
+    /* -------- identity:wipeMe --------
+       Полное удаление аккаунта по installId (+чистка дружб/заявок). */
+    sock.on('identity:wipeMe', async ({ installId }: { installId?: string }, ack?: Function) => {
+      let session: ClientSession | null = null;
+      try {
+        const id = String(installId || '').trim();
+        if (!id) return ack?.({ ok: false, error: 'no_installId' });
+
+        const inst = await Install.findOne({ installId: id }).lean();
+        const userId = inst && (inst as any).user ? String((inst as any).user) : '';
+        if (!userId) return ack?.({ ok: false, error: 'not_found' });
+
+        try { session = await mongoose.startSession(); } catch {}
+
+        const work = async (s?: ClientSession) => {
+          const opt = s ? { session: s } : undefined;
+          
+          // FriendRequest больше не используется - удаляем только из друзей
+          await User.updateMany(
+            { friends: userId },
+            { $pull: { friends: userId } },
+            opt as any
+          );
+          // 1) Разрываем дружбы у других
+          await User.updateMany(
+            { friends: userId },
+            { $pull: { friends: userId } },
+            opt as any,
+          );
+
+          // 2) Удаляем входящие заявки у других
+          await User.updateMany(
+            { friendRequests: userId },
+            { $pull: { friendRequests: userId } },
+            opt as any,
+          );
+
+          // 3) Чистим сообщения (две модели + офлайн)
+          await Message.deleteMany({ $or: [{ from: userId }, { to: userId }] }, opt as any);
+          await OfflineMessage.deleteMany({ $or: [{ senderId: userId }, { recipientId: userId }] }, opt as any);
+          await FriendshipMessages.deleteMany({ $or: [{ user1: userId }, { user2: userId }] }, opt as any);
+
+          // 4) Очищаем данные пользователя вместо удаления
+          await User.updateOne(
+            { _id: userId }, 
+            { 
+              $set: { 
+                nick: '', 
+                avatar: '', 
+                avatarB64: '', 
+                avatarThumbB64: '', 
+                avatarVer: 0,
+                friends: [],
+                friendRequests: []
+              } 
+            }, 
+            opt as any
+          );
+          
+          // Удаляем только инсталлы (пользователь остается с тем же ID)
+          await Install.deleteMany({ user: userId }, opt as any);
+        };
+
+        if (session) {
+          await session.withTransaction(async () => { await work(session!); });
+          await session.endSession();
+        } else {
+          await work();
+        }
+
+        // отвязываем сокет и обновляем presence
+        (sock as any).data.userId = undefined;
+        try { sock.leave(`u:${userId}`); } catch {}
+        const list = getOnlineList(io);
+        io.emit('presence_update', list);
+        io.emit('presence:update', list);
+
+        ack?.({ ok: true });
+      } catch (e: any) {
+        try { session?.endSession(); } catch {}
+        ack?.({ ok: false, error: e?.message || 'server_error' });
+      }
+    });
+  });
+}

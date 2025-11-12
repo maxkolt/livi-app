@@ -1,0 +1,14 @@
+{
+  "name": "videochat-app",
+  "version": "1.0.0",
+  "description": "Video Chat App with WebRTC and LiveKit",
+  "scripts": {
+    "kill-port": "./scripts/kill-port.sh",
+    "backend": "cd backend && npm run dev",
+    "frontend": "cd frontend && npm start",
+    "start": "npm run kill-port && npm run backend"
+  },
+  "keywords": ["videochat", "webrtc", "livekit", "react-native"],
+  "author": "",
+  "license": "ISC"
+}
