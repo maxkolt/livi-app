@@ -1,0 +1,23 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,         // ✅ игнорим кривые типы из node_modules
+    "noEmit": true,               // не генерировать .js файлы
+    "jsx": "react-native",        // правильный JSX для RN
+    "types": ["react", "react-native", "node"], // типы для RN и React
+    "typeRoots": ["./node_modules/@types", "./"]
+  },
+  "exclude": [
+    "node_modules",               // не проверяем типы внутри зависимостей
+    "babel.config.js",            // конфиги не нужны для TS
+    "metro.config.js"
+  ],
+  "include": [
+    "src",                        // твой код
+    "components",                 // компоненты
+    "App.tsx",                    // главный вход
+    "global.d.ts"
+  ]
+}
