@@ -3,8 +3,7 @@
     <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
     <item name="android:windowOptOutEdgeToEdgeEnforcement" tools:targetApi="35">true</item>
     <item name="colorPrimary">@color/colorPrimary</item>
-    <item name="android:statusBarColor">@android:color/transparent</item>
-    <item name="android:windowTranslucentStatus">true</item>
+    <item name="android:statusBarColor">#0B0B0C</item>
     <item name="android:navigationBarColor">@color/navigationBarColor</item>
   </style>
   <style name="Theme.App.SplashScreen" parent="AppTheme">

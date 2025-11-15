@@ -15,7 +15,7 @@ PODS:
   - EXJSONUtils (0.15.0)
   - EXManifests (0.16.6):
     - ExpoModulesCore
-  - Expo (53.0.22):
+  - Expo (53.0.23):
     - DoubleConversion
     - ExpoModulesCore
     - glog
@@ -299,7 +299,7 @@ PODS:
     - ExpoModulesCore
   - ExpoHaptics (14.1.4):
     - ExpoModulesCore
-  - ExpoImage (2.4.0):
+  - ExpoImage (2.4.1):
     - ExpoModulesCore
     - libavif/libdav1d
     - SDWebImage (~> 5.21.0)
@@ -1705,20 +1705,20 @@ PODS:
     - React-jsiexecutor
     - React-RCTFBReactNativeSpec
     - ReactCommon/turbomodule/core
-  - react-native-cometchat-ui-kit (5.0.1):
+  - react-native-cometchat-ui-kit (5.2.2):
     - React-Core
-    - react-native-cometchat-ui-kit/Video (= 5.0.1)
-    - react-native-cometchat-ui-kit/VideoCaching (= 5.0.1)
-  - react-native-cometchat-ui-kit/Video (5.0.1):
+    - react-native-cometchat-ui-kit/Video (= 5.2.2)
+    - react-native-cometchat-ui-kit/VideoCaching (= 5.2.2)
+  - react-native-cometchat-ui-kit/Video (5.2.2):
     - React-Core
-  - react-native-cometchat-ui-kit/VideoCaching (5.0.1):
+  - react-native-cometchat-ui-kit/VideoCaching (5.2.2):
     - DVAssetLoaderDelegate (~> 0.3.1)
     - React-Core
     - react-native-cometchat-ui-kit/Video
     - SPTPersistentCache (~> 1.1.0)
   - react-native-get-random-values (1.11.0):
     - React-Core
-  - react-native-keyboard-controller (1.18.6):
+  - react-native-keyboard-controller (1.19.5):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1733,7 +1733,7 @@ PODS:
     - React-hermes
     - React-ImageManager
     - React-jsi
-    - react-native-keyboard-controller/common (= 1.18.6)
+    - react-native-keyboard-controller/common (= 1.19.5)
     - React-NativeModulesApple
     - React-RCTFabric
     - React-renderercss
@@ -1743,7 +1743,7 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
-  - react-native-keyboard-controller/common (1.18.6):
+  - react-native-keyboard-controller/common (1.19.5):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1846,7 +1846,7 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
-  - react-native-video (6.16.1):
+  - react-native-video (6.17.0):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1861,7 +1861,7 @@ PODS:
     - React-hermes
     - React-ImageManager
     - React-jsi
-    - react-native-video/Video (= 6.16.1)
+    - react-native-video/Video (= 6.17.0)
     - React-NativeModulesApple
     - React-RCTFabric
     - React-renderercss
@@ -1871,7 +1871,7 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
-  - react-native-video/Fabric (6.16.1):
+  - react-native-video/Fabric (6.17.0):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1895,7 +1895,7 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
-  - react-native-video/Video (6.16.1):
+  - react-native-video/Video (6.17.0):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1920,7 +1920,7 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
-  - react-native-webrtc (124.0.6):
+  - react-native-webrtc (124.0.7):
     - JitsiWebRTC (~> 124.0.0)
     - React-Core
   - react-native-webview (13.16.0):
@@ -2345,6 +2345,30 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
+  - RNLocalize (3.6.0):
+    - DoubleConversion
+    - glog
+    - hermes-engine
+    - RCT-Folly (= 2024.11.18.00)
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - Yoga
   - RNReanimated (3.17.5):
     - DoubleConversion
     - glog
@@ -2733,6 +2757,7 @@ DEPENDENCIES:
   - "RNCAsyncStorage (from `../node_modules/@react-native-async-storage/async-storage`)"
   - "RNCClipboard (from `../node_modules/@react-native-clipboard/clipboard`)"
   - RNGestureHandler (from `../node_modules/react-native-gesture-handler`)
+  - RNLocalize (from `../node_modules/react-native-localize`)
   - RNReanimated (from `../node_modules/react-native-reanimated`)
   - RNScreens (from `../node_modules/react-native-screens`)
   - RNSVG (from `../node_modules/react-native-svg`)
@@ -2990,6 +3015,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/@react-native-clipboard/clipboard"
   RNGestureHandler:
     :path: "../node_modules/react-native-gesture-handler"
+  RNLocalize:
+    :path: "../node_modules/react-native-localize"
   RNReanimated:
     :path: "../node_modules/react-native-reanimated"
   RNScreens:
@@ -3011,7 +3038,7 @@ SPEC CHECKSUMS:
   EXImageLoader: 4d3d3284141f1a45006cc4d0844061c182daf7ee
   EXJSONUtils: 1d3e4590438c3ee593684186007028a14b3686cd
   EXManifests: 691a779b04e4f2c96da46fb9bef4f86174fefcb5
-  Expo: a64c53f1ebaa36c439a87874759b6690785e60a4
+  Expo: dd7f49380001a55ea776f905f8b3c1c540160b09
   expo-dev-client: 9b1e78baf0dd87b005f035d180bbb07c05917fad
   expo-dev-launcher: 35dc0269b5fc1f628abc00e08e5a969e7809eff4
   expo-dev-menu: 0771fa9c5c405e07aa15e55a699b8a4a984ea77a
@@ -3026,7 +3053,7 @@ SPEC CHECKSUMS:
   ExpoFileSystem: 7f92f7be2f5c5ed40a7c9efc8fa30821181d9d63
   ExpoFont: cf508bc2e6b70871e05386d71cab927c8524cc8e
   ExpoHaptics: 0ff6e0d83cd891178a306e548da1450249d54500
-  ExpoImage: e4102c93d1dbe99ff54b075452d1bc9d6ec21b7c
+  ExpoImage: b0b4a838c62bb9d5438bb475cccc85619a5f59dc
   ExpoImageManipulator: 1e06e7a1e56f454e75d01b7032c1e44963bfc865
   ExpoImagePicker: 0963da31800c906e01c03e25d7c849f16ebf02a2
   ExpoKeepAwake: 1a2e820692e933c94a565ec3fbbe38ac31658ffe
@@ -3079,14 +3106,14 @@ SPEC CHECKSUMS:
   React-logger: 85fa3509931497c72ccd2547fcc91e7299d8591e
   React-Mapbuffer: 96a2f2a176268581733be182fa6eebab1c0193be
   React-microtasksnativemodule: bda561d2648e1e52bd9e5a87f8889836bdbde2e2
-  react-native-cometchat-ui-kit: 95998dd7d1fe5b1383ad8aed256359c9e4cdf9b8
+  react-native-cometchat-ui-kit: a3ed74fa24e7c668d2dd72afbe66db2887a18efa
   react-native-get-random-values: d16467cf726c618e9c7a8c3c39c31faa2244bbba
-  react-native-keyboard-controller: 16d80dc94f13d201ae48530023940260fc63eb0a
+  react-native-keyboard-controller: fbe295fd2dbadde0300fa5b01dec8deb3ec6b021
   react-native-netinfo: cec9c4e86083cb5b6aba0e0711f563e2fbbff187
   react-native-pip-android: 4132a11014293fd7a90cead371eab58acd65c4d8
   react-native-safe-area-context: 562163222d999b79a51577eda2ea8ad2c32b4d06
-  react-native-video: 8b867791128487bf82c9b6070ceddd2697bfabec
-  react-native-webrtc: 96fdff9e3a942ed88cafe01898da1c93fd628957
+  react-native-video: fccfd55807cbe814c2b9e505c1bc3fc0b9fd9e25
+  react-native-webrtc: e8f0ce746353adc2744a2b933645e1aeb41eaa74
   react-native-webview: 1d8659a52cb8b8504f6c965555d1b27bdd313880
   React-NativeModulesApple: 1ecb83880dd11baf2228f8dd89d8419c387e03ad
   React-oscompat: 0592889a9fcf0eacb205532028e4a364e22907dd
@@ -3124,6 +3151,7 @@ SPEC CHECKSUMS:
   RNCAsyncStorage: 39c42c1e478e1f5166d1db52b5055e090e85ad66
   RNCClipboard: ea6045252d5c0753cf17f62290f647dc0096f6ac
   RNGestureHandler: 7d0931a61d7ba0259f32db0ba7d0963c3ed15d2b
+  RNLocalize: 29008c87d158bb1fe13bab3cf9dd8cdcc2761207
   RNReanimated: 2313402fe27fecb7237619e9c6fcee3177f08a65
   RNScreens: 482e9707f9826230810c92e765751af53826d509
   RNSVG: 794f269526df9ddc1f79b3d1a202b619df0368e3

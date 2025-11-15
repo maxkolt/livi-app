@@ -1,19 +1,5 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 
-ext {
-  // Ensure all modules (including third-party) use consistent SDK versions
-  buildToolsVersion = "35.0.0"
-  minSdkVersion = 24
-  compileSdkVersion = 35
-  targetSdkVersion = 35
-
-  // Overrides for react-native-pip-android safeExtGet
-  PipAndroid_buildToolsVersion = buildToolsVersion
-  PipAndroid_minSdkVersion = minSdkVersion
-  PipAndroid_compileSdkVersion = compileSdkVersion
-  PipAndroid_targetSdkVersion = targetSdkVersion
-}
-
 buildscript {
   repositories {
     google()
@@ -44,6 +30,25 @@ allprojects {
     google()
     mavenCentral()
     maven { url 'https://www.jitpack.io' }
+  }
+  
+  // Устанавливаем минимальный compileSdkVersion для всех подпроектов (включая react-native-pip-android)
+  subprojects { subproject ->
+    afterEvaluate {
+      if (subproject.hasProperty('android')) {
+        subproject.android {
+          if (compileSdkVersion != null) {
+            def sdkStr = compileSdkVersion.toString()
+            def sdkNum = sdkStr.replaceAll('android-', '').toInteger()
+            if (sdkNum < 30) {
+              compileSdkVersion 30
+            }
+          } else {
+            compileSdkVersion 30
+          }
+        }
+      }
+    }
   }
 }
 

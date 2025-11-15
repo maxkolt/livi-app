@@ -409,93 +409,10 @@ function AppContent() {
     };
   }, []); // КРИТИЧНО: Не зависим от PiP - keep-awake должен работать ВСЕГДА когда приложение не в фоне
 
-  // КРИТИЧНО: Глобальная обработка блокировки экрана для завершения звонков в PiP
-  // Это нужно чтобы звонок завершался даже когда VideoChat размонтирован (оба пользователя в PiP)
-  React.useEffect(() => {
-    let inactiveTimerRef: ReturnType<typeof setTimeout> | null = null;
-    
-    const handleAppStateChange = (nextAppState: string) => {
-      // Проверяем, есть ли активный звонок в PiP
-      const hasActiveCallInPiP = pip.visible && (!!pip.callId || !!pip.roomId);
-      
-      if (nextAppState === 'inactive') {
-        // iOS: inactive означает что экран может быть заблокирован
-        if (Platform.OS === 'ios' && hasActiveCallInPiP) {
-          if (inactiveTimerRef) {
-            clearTimeout(inactiveTimerRef);
-          }
-          
-          inactiveTimerRef = setTimeout(() => {
-            if (AppState.currentState === 'inactive' || AppState.currentState === 'background') {
-              const stillHasCall = pip.visible && (!!pip.callId || !!pip.roomId);
-              
-              if (stillHasCall) {
-                // Отправляем call:end на сервер
-                try {
-                  const callId = pip.callId || pip.roomId;
-                  if (callId) {
-                    socket.emit('call:end', { callId });
-                  }
-                } catch (e) {
-                  console.warn('[App] Error sending call:end (iOS screen lock):', e);
-                }
-                
-                // Вызываем функцию очистки из VideoChat
-                try {
-                  const cleanupFn = (global as any).__endCallCleanupRef?.current;
-                  if (cleanupFn && typeof cleanupFn === 'function') {
-                    cleanupFn();
-                  }
-                } catch (e) {
-                  console.warn('[App] Error calling endCall cleanup (iOS screen lock):', e);
-                }
-              }
-            }
-            inactiveTimerRef = null;
-          }, 1500); // 1.5 секунды - достаточно для определения блокировки экрана
-        }
-      } else if (nextAppState === 'background') {
-        // Android и iOS: background означает блокировку экрана
-        if (hasActiveCallInPiP) {
-          // Отправляем call:end на сервер
-          try {
-            const callId = pip.callId || pip.roomId;
-            if (callId) {
-              socket.emit('call:end', { callId });
-            }
-          } catch (e) {
-            console.warn('[App] Error sending call:end (screen lock):', e);
-          }
-          
-          // Вызываем функцию очистки из VideoChat
-          try {
-            const cleanupFn = (global as any).__endCallCleanupRef?.current;
-            if (cleanupFn && typeof cleanupFn === 'function') {
-              cleanupFn();
-            }
-          } catch (e) {
-            console.warn('[App] Error calling endCall cleanup (screen lock):', e);
-          }
-        }
-      } else if (nextAppState === 'active') {
-        // Приложение вернулось в активное состояние - очищаем таймер
-        if (inactiveTimerRef) {
-          clearTimeout(inactiveTimerRef);
-          inactiveTimerRef = null;
-        }
-      }
-    };
-    
-    const subscription = AppState.addEventListener('change', handleAppStateChange);
-    
-    return () => {
-      if (inactiveTimerRef) {
-        clearTimeout(inactiveTimerRef);
-        inactiveTimerRef = null;
-      }
-      subscription.remove();
-    };
-  }, [pip.visible, pip.callId, pip.roomId]); // Зависим от PiP состояния для отслеживания активных звонков
+  // КРИТИЧНО: Убрана глобальная обработка блокировки экрана из App.tsx
+  // Логика завершения звонков при блокировке экрана теперь полностью обрабатывается в VideoChat.tsx
+  // VideoChat.tsx правильно различает звонки друзьям (не завершаются) и рандомные чаты (завершаются)
+  // Это предотвращает конфликты и дублирование логики
 
   // КРИТИЧНО: Обработчик входящего звонка - должен быть всегда зарегистрирован
   // Используем useRef для хранения функции, чтобы она не пересоздавалась

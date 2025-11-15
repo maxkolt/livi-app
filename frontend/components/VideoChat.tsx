@@ -34,6 +34,7 @@ import { CommonActions } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { PanGestureHandler } from 'react-native-gesture-handler';
 import { logger } from '../utils/logger';
+import { getIceConfiguration, getEnvFallbackConfiguration } from '../utils/iceConfig';
 import { BlurView } from 'expo-blur';
 import { SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -78,31 +79,7 @@ import { onCallCanceled } from '../sockets/socket';
 // --------------------------
 const screenHeight = Dimensions.get('window').height;
 
-const TURN_URL = process.env.EXPO_PUBLIC_TURN_URL || 'turn.yourdomain.com:5349';
-
-const ICE_SERVERS = {
-  iceServers: [
-    {
-      urls: [
-        'stun:stun.l.google.com:19302',
-        'stun:stun1.l.google.com:19302',
-        'stun:stun2.l.google.com:19302',
-        'stun:stun3.l.google.com:19302',
-        'stun:stun4.l.google.com:19302',
-        'stun:stun.stunprotocol.org:3478',
-      ],
-    },
-    {
-      urls: [
-        `turn:${TURN_URL}?transport=udp`,
-        `turn:${TURN_URL}?transport=tcp`,
-        `turns:${TURN_URL.split(':')[0]}:443?transport=tcp`, // безопаснее
-      ],
-      username: process.env.EXPO_PUBLIC_TURN_USERNAME || 'user',
-      credential: process.env.EXPO_PUBLIC_TURN_CREDENTIAL || 'pass',
-    },
-  ],
-};
+// Статическая конфигурация ICE_SERVERS удалена - теперь используется динамическая загрузка через getIceConfiguration()
 
 // Animated wrapper for SafeAreaView (для плавного свайпа)
 const AnimatedSafeAreaView = Animated.createAnimatedComponent(SafeAreaView as any);
@@ -308,6 +285,21 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
         }
       } catch (e) {
         logger.warn('Failed to load profile on init:', e);
+      }
+      
+      // Загружаем ICE конфигурацию с бэкенда
+      try {
+        const iceConfig = await getIceConfiguration();
+        iceConfigRef.current = iceConfig;
+        logger.debug('ICE configuration loaded', { 
+          hasIceServers: !!iceConfig.iceServers,
+          iceServersCount: iceConfig.iceServers?.length || 0
+        });
+      } catch (e) {
+        logger.warn('Failed to load ICE configuration, using fallback:', e);
+        // Используем fallback конфигурацию
+        const fallbackConfig = await getIceConfiguration(true);
+        iceConfigRef.current = fallbackConfig;
       }
     })();
   }, []);
@@ -645,34 +637,77 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   // DEPRECATED: remoteRender больше не используется
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  
+  // Динамическая ICE конфигурация (загружается с бэкенда)
+  const iceConfigRef = useRef<RTCConfiguration | null>(null);
   useEffect(() => { remoteStreamRef.current = remoteStream; }, [remoteStream]);
   
+  // КРИТИЧНО: Объявляем переменные ДО использования в useEffect ниже
+  const [remoteCamOn, setRemoteCamOn] = useState(true);
+  const remoteCamOnRef = useRef(true);
+  useEffect(() => { remoteCamOnRef.current = remoteCamOn; }, [remoteCamOn]);
+  
+  // Состояние неактивного режима после нажатия "Прервать"
+  const [isInactiveState, setIsInactiveState] = useState(false);
+  const isInactiveStateRef = useRef(false);
+  useEffect(() => { isInactiveStateRef.current = isInactiveState; }, [isInactiveState]);
+  
   // КРИТИЧНО: Автоматически устанавливаем remoteCamOn в true когда появляется video track в remoteStream
-  // Это особенно важно при повторных звонках, когда video track может прийти позже
+  // Это особенно важно при повторных звонках и плохом интернете, когда video track может прийти позже
   useEffect(() => {
     if (remoteStream && !isInactiveState) {
       try {
         const videoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
-        if (videoTrack) {
-          // КРИТИЧНО: Устанавливаем remoteCamOn в true если video track live или ready
-          if (videoTrack.readyState === 'live' || videoTrack.readyState === 'ready') {
-            // КРИТИЧНО: Проверяем через ref чтобы избежать лишних обновлений
-            if (!remoteCamOnRef.current) {
-              setRemoteCamOn(true);
-              console.log('[useEffect remoteStream] Auto-set remoteCamOn=true (video track live/ready)', {
-                readyState: videoTrack.readyState,
-                enabled: videoTrack.enabled
-              });
-            }
-            // КРИТИЧНО: Обновляем remoteViewKey для гарантированного ререндера
-            setRemoteViewKey(Date.now());
-          }
+        if (videoTrack && videoTrack.readyState !== 'ended') {
+          // КРИТИЧНО: ВСЕГДА устанавливаем remoteCamOn в true если video track существует и не ended
+          // Это гарантирует отображение видео даже при плохом интернете
+          // Не проверяем через ref, так как это может быть проблемой при повторных звонках
+          setRemoteCamOn(true);
+          // КРИТИЧНО: Обновляем remoteViewKey для гарантированного ререндера
+          setRemoteViewKey(Date.now());
+          console.log('[useEffect remoteStream] Auto-set remoteCamOn=true (video track exists)', {
+            readyState: videoTrack.readyState,
+            enabled: videoTrack.enabled,
+            currentRemoteCamOn: remoteCamOnRef.current,
+            willShowVideo: true
+          });
         }
       } catch (e) {
         console.warn('[useEffect remoteStream] Error checking video track:', e);
       }
     }
   }, [remoteStream, isInactiveState]);
+  
+  // КРИТИЧНО: Периодическая проверка video track для случаев плохого интернета
+  // Это гарантирует, что видео будет отображаться даже если track приходит с задержкой
+  useEffect(() => {
+    if (!remoteStream || isInactiveState) return;
+    
+    const checkVideoTrack = () => {
+      try {
+        const videoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
+        if (videoTrack && videoTrack.readyState !== 'ended' && !remoteCamOn) {
+          // КРИТИЧНО: Если video track есть, но remoteCamOn false - устанавливаем в true
+          setRemoteCamOn(true);
+          setRemoteViewKey(Date.now());
+          console.log('[useEffect videoTrack check] Found video track, set remoteCamOn=true', {
+            readyState: videoTrack.readyState,
+            enabled: videoTrack.enabled
+          });
+        }
+      } catch (e) {
+        console.warn('[useEffect videoTrack check] Error:', e);
+      }
+    };
+    
+    // Проверяем сразу
+    checkVideoTrack();
+    
+    // Проверяем каждые 500ms для случаев плохого интернета
+    const interval = setInterval(checkVideoTrack, 500);
+    
+    return () => clearInterval(interval);
+  }, [remoteStream, isInactiveState, remoteCamOn]);
 
   // DEPRECATED: remoteRender больше не используется
   const roomIdRef = useRef<string | null>(null);
@@ -959,14 +994,10 @@ const [pcConnected, setPcConnected] = useState(false);
 const energyRef = useRef<number | null>(null);
 const durRef = useRef<number | null>(null);
 
-  const [remoteCamOn, setRemoteCamOn] = useState(true);
   const [partnerInPiP, setPartnerInPiP] = useState(false); // Отслеживаем когда партнер ушел в PiP
   const [remoteViewKey, setRemoteViewKey] = useState(0); // Key для принудительной перерисовки RTCView
   
-  // Состояние неактивного режима после нажатия "Прервать"
-  const [isInactiveState, setIsInactiveState] = useState(false);
-  const isInactiveStateRef = useRef(false);
-  useEffect(() => { isInactiveStateRef.current = isInactiveState; }, [isInactiveState]);
+  // КРИТИЧНО: remoteCamOn и isInactiveState объявлены выше (строка 651-658) ДО использования в useEffect
   
   // Флаг для отслеживания завершенного звонка друга (для показа заблокированной кнопки "Прервать")
   const [wasFriendCallEnded, setWasFriendCallEnded] = useState(false);
@@ -981,7 +1012,8 @@ const durRef = useRef<number | null>(null);
   const partnerUserIdRef = useRef(partnerUserId);
   partnerUserIdRef.current = partnerUserId;
   
-  const remoteCamOnRef = useRef(remoteCamOn);
+  // КРИТИЧНО: remoteCamOnRef уже объявлен выше (строка 652) ДО использования в useEffect
+  // Обновляем ref значение
   remoteCamOnRef.current = remoteCamOn;
   
   const friendCallAcceptedRef = useRef(friendCallAccepted);
@@ -1029,98 +1061,29 @@ const durRef = useRef<number | null>(null);
         }
       } else if (s === 'inactive') {
         // inactive - приложение теряет фокус, но еще не в фоне
-        // На iOS при блокировке экрана может остаться в inactive без перехода в background
-        // Используем таймер для определения блокировки экрана
+        // КРИТИЧНО: Звонок продолжается в фоне, НИКОГДА не завершаем его для звонков друзьям
         const isFriendCall = isDirectCall || inDirectCallRef.current || friendCallAcceptedRef.current;
         
-        if (Platform.OS === 'ios' && isFriendCall && (roomIdRef.current || currentCallIdRef.current)) {
-          // На iOS при блокировке экрана приложение может остаться в inactive
-          // Используем таймер: если через 1.5 секунды все еще inactive - это блокировка
-          console.log('[AppState] iOS became inactive during friend call - checking if screen locked');
-          
-          // Очищаем предыдущий таймер если был
-          if (inactiveTimerRef.current) {
-            clearTimeout(inactiveTimerRef.current);
-          }
-          
-          inactiveTimerRef.current = setTimeout(() => {
-            // Проверяем что все еще в inactive и звонок активен
-            if (AppState.currentState === 'inactive' || AppState.currentState === 'background') {
-              const stillFriendCall = isDirectCall || inDirectCallRef.current || friendCallAcceptedRef.current;
-              const stillHasCall = roomIdRef.current || currentCallIdRef.current;
-              
-              if (stillFriendCall && stillHasCall) {
-                console.log('[AppState] iOS screen locked (inactive timeout) - ending friend call');
-                
-                try {
-                  const callId = currentCallIdRef.current || roomIdRef.current;
-                  if (callId) {
-                    socket.emit('call:end', { callId });
-                    console.log('[AppState] Sent call:end for friend call (iOS inactive):', callId);
-                  }
-                } catch (e) {
-                  console.warn('[AppState] Error sending call:end (iOS inactive):', e);
-                }
-                
-                // Завершаем звонок локально
-                try {
-                  setIsInactiveState(true);
-                  isInactiveStateRef.current = true;
-                  stopMicMeter();
-                  // КРИТИЧНО: Дополнительно устанавливаем micLevel=0 для эквалайзера
-                  setMicLevel(0);
-                  try { pip.updatePiPState({ micLevel: 0 }); } catch {}
-                  try { stopSpeaker(); } catch {}
-                  cleanupPeer(peerRef.current);
-                  peerRef.current = null;
-                  currentCallIdRef.current = null;
-                  roomIdRef.current = null;
-                  console.log('[AppState] Friend call ended locally due to iOS screen lock (inactive)');
-                } catch (e) {
-                  console.warn('[AppState] Error ending call locally (iOS inactive):', e);
-                }
-              }
-            }
-            inactiveTimerRef.current = null;
-          }, 1500); // 1.5 секунды - достаточно для определения блокировки экрана
+        if (isFriendCall && (roomIdRef.current || currentCallIdRef.current)) {
+          console.log('[AppState] App became inactive during friend call - call continues in background (NOT ending)');
+          // КРИТИЧНО: НЕ завершаем звонок, он продолжается в фоне
+          // PiP будет автоматически активирован если доступен
+          // НЕ отправляем call:end, НЕ очищаем ресурсы, НЕ завершаем соединение
+          return; // Выходим сразу, ничего не делаем
         } else {
           console.log('[AppState] App became inactive - not activating background yet');
         }
       } else if (s === 'background') {
-        // background - приложение полностью в фоне (блокировка экрана)
+        // background - приложение полностью в фоне (блокировка экрана или переключение на другое приложение)
+        // КРИТИЧНО: Звонок другу продолжается в фоне, НИКОГДА не завершаем его
         const isFriendCall = isDirectCall || inDirectCallRef.current || friendCallAcceptedRef.current;
         
         if (isFriendCall && (roomIdRef.current || currentCallIdRef.current)) {
-          // Звонок другу - завершаем вызов при блокировке экрана
-          console.log('[AppState] Friend call backgrounded (screen locked) - ending call');
-          
-          try {
-            const callId = currentCallIdRef.current || roomIdRef.current;
-            if (callId) {
-              socket.emit('call:end', { callId });
-              console.log('[AppState] Sent call:end for friend call:', callId);
-            }
-          } catch (e) {
-            console.warn('[AppState] Error sending call:end:', e);
-          }
-          
-          // Завершаем звонок локально
-          try {
-            setIsInactiveState(true);
-            isInactiveStateRef.current = true;
-            stopMicMeter();
-            // КРИТИЧНО: Дополнительно устанавливаем micLevel=0 для эквалайзера
-            setMicLevel(0);
-            try { pip.updatePiPState({ micLevel: 0 }); } catch {}
-            try { stopSpeaker(); } catch {}
-            cleanupPeer(peerRef.current);
-            peerRef.current = null;
-            currentCallIdRef.current = null;
-            roomIdRef.current = null;
-            console.log('[AppState] Friend call ended locally due to screen lock');
-          } catch (e) {
-            console.warn('[AppState] Error ending call locally:', e);
-          }
+          // КРИТИЧНО: Звонок другу продолжается в фоне, НЕ завершаем его
+          console.log('[AppState] Friend call backgrounded - call continues in background (NOT ending)');
+          // КРИТИЧНО: Звонок продолжается, PiP будет автоматически активирован если доступен
+          // НЕ завершаем звонок, НЕ очищаем ресурсы, НЕ отправляем call:end - все продолжает работать в фоне
+          return; // Выходим сразу, ничего не делаем
         } else if (!isFriendCall && (roomIdRef.current || partnerIdRef.current)) {
           // Рандомный чат - отправляем stop/leave
           console.log('[AppState] Random chat backgrounded, notifying partner');
@@ -3387,23 +3350,41 @@ const flipCam = useCallback(async () => {
       }
 
       // КРИТИЧНО: Обновляем remoteCamOn
+      // КРИТИЧНО: Всегда обновляем remoteCamOn, даже если значение не изменилось
+      // Это важно для принудительного ререндера при повторных звонках
       setRemoteCamOn(!!enabled);
-      console.log('[cam-toggle] Updated remoteCamOn to:', enabled);
+      console.log('[cam-toggle] Updated remoteCamOn to:', enabled, {
+        previousValue: remoteCamOn,
+        newValue: !!enabled,
+        hasRemoteStream: !!remoteStream,
+        remoteStreamId: remoteStream?.id
+      });
       
-      // Принудительное обновление RTCView при изменении состояния камеры
+      // КРИТИЧНО: Принудительное обновление RTCView при изменении состояния камеры
+      // КРИТИЧНО: Всегда обновляем remoteViewKey для гарантированного ререндера
       setRemoteViewKey(Date.now());
       
       // КРИТИЧНО: Если камера включена — сбрасываем флаг PiP (самовосстановление заглушки)
       if (enabled) {
         setPartnerInPiP(false);
         console.log('[cam-toggle] Camera enabled, reset partnerInPiP flag');
+      } else {
+        // КРИТИЧНО: Если камера выключена, также сбрасываем partnerInPiP для корректного отображения заглушки
+        setPartnerInPiP(false);
+        console.log('[cam-toggle] Camera disabled, reset partnerInPiP flag for away placeholder');
       }
       
       // КРИТИЧНО: Если камера выключена, показываем заглушку
       if (!enabled) {
-        console.log('[cam-toggle] Camera disabled, showing away placeholder');
+        console.log('[cam-toggle] Camera disabled, showing away placeholder', {
+          remoteCamOn: !!enabled,
+          hasRemoteStream: !!remoteStream
+        });
       } else {
-        console.log('[cam-toggle] Camera enabled, showing video');
+        console.log('[cam-toggle] Camera enabled, showing video', {
+          remoteCamOn: !!enabled,
+          hasRemoteStream: !!remoteStream
+        });
       }
     });
   
@@ -3557,10 +3538,25 @@ const flipCam = useCallback(async () => {
                 // КРИТИЧНО: Принудительно обновляем remoteViewKey при установке нового stream
                 // Это критично для повторных звонков, чтобы гарантировать отображение видеопотока
                 setRemoteViewKey(Date.now());
+                // КРИТИЧНО: Если video track уже есть в новом stream, ВСЕГДА устанавливаем remoteCamOn в true
+                // Это особенно важно при повторных звонках и плохом интернете
+                const videoTrack = rs.getVideoTracks?.()?.[0];
+                if (videoTrack && videoTrack.readyState !== 'ended') {
+                  // КРИТИЧНО: Устанавливаем remoteCamOn в true даже если track еще не live
+                  // Это гарантирует отображение видео даже при плохом интернете
+                  setRemoteCamOn(true);
+                  console.log('[handleRemote] New stream has video track, set remoteCamOn=true immediately', {
+                    readyState: videoTrack.readyState,
+                    enabled: videoTrack.enabled,
+                    willShowVideo: true
+                  });
+                }
                 console.log('[handleRemote] Remote stream set in state and ref, remoteViewKey updated', {
                   streamId: rs.id,
                   videoTracks: rs.getVideoTracks?.()?.length || 0,
-                  audioTracks: rs.getAudioTracks?.()?.length || 0
+                  audioTracks: rs.getAudioTracks?.()?.length || 0,
+                  hasVideoTrack: !!videoTrack,
+                  videoTrackReadyState: videoTrack?.readyState
                 });
               } else {
                 // Это тот же stream, но возможно с новым track - обновляем ref для гарантии
@@ -3573,20 +3569,27 @@ const flipCam = useCallback(async () => {
                   hasAudioTrack: !!rs.getAudioTracks?.()?.[0]
                 });
                 // КРИТИЧНО: Принудительно обновляем state для ререндера когда появляется video track
-                if (rs.getVideoTracks?.()?.length > 0 && (!remoteStream || !remoteStream.getVideoTracks?.()?.length)) {
+                const videoTracks = rs.getVideoTracks?.() || [];
+                if (videoTracks.length > 0) {
+                  // КРИТИЧНО: ВСЕГДА обновляем remoteStream в state когда появляется video track
+                  // Это особенно важно при повторных звонках, когда stream может быть уже установлен, но без video track
                   setRemoteStream(rs);
                   // КРИТИЧНО: Обновляем remoteViewKey при появлении video track
                   setRemoteViewKey(Date.now());
                   // КРИТИЧНО: Устанавливаем remoteCamOn в true когда появляется video track
-                  setRemoteCamOn(true);
-                  console.log('[handleRemote] Video track appeared, updated state, remoteViewKey and remoteCamOn for re-render');
-                } else if (rs.getVideoTracks?.()?.length > 0) {
-                  // КРИТИЧНО: Даже если stream тот же, но video track есть, убеждаемся что remoteCamOn=true
-                  const vt = rs.getVideoTracks?.()?.[0];
-                  if (vt && vt.readyState === 'live') {
+                  // КРИТИЧНО: ВСЕГДА устанавливаем в true если track существует и не ended
+                  // Это гарантирует отображение видео даже при плохом интернете
+                  const vt = videoTracks[0];
+                  if (vt && vt.readyState !== 'ended') {
+                    // КРИТИЧНО: Устанавливаем в true даже если track еще не live
+                    // Это критично для плохого интернета, когда track может быть в состоянии 'ready'
                     setRemoteCamOn(true);
-                    setRemoteViewKey(Date.now());
-                    console.log('[handleRemote] Video track is live in same stream, ensuring remoteCamOn=true');
+                    console.log('[handleRemote] Video track appeared, updated state, remoteViewKey and remoteCamOn for re-render', {
+                      readyState: vt.readyState,
+                      enabled: vt.enabled,
+                      streamId: rs.id,
+                      willShowVideo: true
+                    });
                   }
                 }
               }
@@ -3913,6 +3916,18 @@ const flipCam = useCallback(async () => {
   };
   
   const ensurePcWithLocal = useCallback((stream: MediaStream): RTCPeerConnection | null => {
+    // Вспомогательная функция для получения ICE конфигурации
+    const getIceConfig = (): RTCConfiguration => {
+      // Используем кэшированную конфигурацию если доступна
+      if (iceConfigRef.current) {
+        return iceConfigRef.current;
+      }
+      // Если конфигурация еще не загружена, используем fallback синхронно
+      // Это не должно происходить в нормальных условиях, но на всякий случай
+      console.warn('[ensurePcWithLocal] ICE config not loaded yet, using fallback');
+      return getEnvFallbackConfiguration();
+    };
+    
     // КРИТИЧНО: При возврате из PiP проверяем существующий PC
     // Если PC существует и валиден - возвращаем его, иначе создаем новый
     if (resume && fromPiP) {
@@ -4031,21 +4046,23 @@ const flipCam = useCallback(async () => {
           audioTrackEnabled: audioTrack?.enabled
         });
         
+      let iceConfig: RTCConfiguration = getIceConfig();
       try {
-        pc = new RTCPeerConnection(ICE_SERVERS); 
+        pc = new RTCPeerConnection(iceConfig); 
         peerRef.current = pc; 
           // Передаем текущий partnerId для проверки в bindConnHandlers
           bindConnHandlers(pc, partnerIdRef.current || undefined);
           console.log('[ensurePcWithLocal] Created new PeerConnection successfully', { 
             partnerId: partnerIdRef.current,
-            pcSignalingState: pc.signalingState
+            pcSignalingState: pc.signalingState,
+            iceServersCount: iceConfig.iceServers?.length || 0
           });
         } catch (createError: any) {
           console.error('[ensurePcWithLocal] RTCPeerConnection constructor failed:', createError, {
             errorMessage: createError?.message,
             errorStack: createError?.stack,
             streamId: stream.id,
-            ICE_SERVERS: JSON.stringify(ICE_SERVERS)
+            iceConfig: JSON.stringify(iceConfig)
           });
           throw createError; // Пробрасываем ошибку в catch блок выше
         }
@@ -4098,7 +4115,9 @@ const flipCam = useCallback(async () => {
     }
     
     console.log('[preCreatePeerConnection] Creating new PC in background');
-    const pc = new RTCPeerConnection(ICE_SERVERS);
+    // Получаем ICE конфигурацию (используем кэш или fallback)
+    const iceConfig = iceConfigRef.current || getEnvFallbackConfiguration();
+    const pc = new RTCPeerConnection(iceConfig);
     
     // КРИТИЧНО: Добавляем только LIVE треки - не используем старые остановленные треки
     if (localStreamRef.current) {
@@ -7136,9 +7155,13 @@ const eqLevels = useMemo(() => {
                 return <AwayPlaceholder />;
               }
               
-              // Если камера включена и есть видеотрек - показываем видео
-              if (remoteVideoTrack && remoteVideoTrack.readyState === 'live') {
+              // КРИТИЧНО: Если камера включена и есть видеотрек - ВСЕГДА показываем видео
+              // КРИТИЧНО: Показываем видео даже если readyState не 'live' (для плохого интернета)
+              // Это гарантирует отображение видео при любых условиях
+              if (remoteVideoTrack && remoteVideoTrack.readyState !== 'ended') {
                 if (remoteStream && isValidStream(remoteStream)) {
+                  // КРИТИЧНО: Показываем видео даже если track в состоянии 'ready' (не только 'live')
+                  // Это критично для плохого интернета
                   return (
                     <RTCView
                       key={`remote-video-${remoteViewKey}-${remoteStream.id}`}
@@ -7147,6 +7170,21 @@ const eqLevels = useMemo(() => {
                       objectFit="cover"
                     />
                   );
+                }
+                // Если стрим невалидный, но track есть - все равно пытаемся показать
+                if (remoteStream) {
+                  try {
+                    return (
+                      <RTCView
+                        key={`remote-video-fallback-${remoteViewKey}-${remoteStream.id}`}
+                        streamURL={remoteStream.toURL()}
+                        style={styles.rtc}
+                        objectFit="cover"
+                      />
+                    );
+                  } catch (e) {
+                    console.warn('[RTCView] Error rendering fallback stream:', e);
+                  }
                 }
                 // Если стрим невалидный - чёрный фон
                 return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
