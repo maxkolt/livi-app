@@ -95,6 +95,15 @@ function tryMatch(io: Server, socket: AuthedSocket) {
     const other = safeGet(io, sid);
     if (!other || other.data.partnerSid) return false;
     
+    // Проверяем, что это не один и тот же пользователь (по userId)
+    // Это важно, если пользователь подключен с нескольких устройств
+    const myUserId = String(socket.data.userId || '');
+    const otherUserId = String(other.data.userId || '');
+    if (myUserId && otherUserId && myUserId === otherUserId) {
+      logger.debug('Skipping self-match by userId', { socketId: socket.id, userId: myUserId, otherSocketId: sid });
+      return false;
+    }
+    
     // Если в очереди только 2 пользователя, разрешаем матч даже если они в бане
     if (waitQueue.length <= 2) {
       logger.debug('Only 2 users in queue, allowing match despite ban');

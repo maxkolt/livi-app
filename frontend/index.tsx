@@ -21,41 +21,8 @@ LogBox.ignoreLogs([
   '`new NativeEventEmitter()` was called with a non-null argument without the required `removeListeners` method.',
 ]);
 
-// Жёсткий фильтр console.warn для ранних варнингов NativeEventEmitter, которые могут выстрелить
-// до применения LogBox (на некоторых билдах Android/JSI порядок отличается)
-try {
-  const ORIG_WARN = console.warn.bind(console);
-  const IGNORE_SUBSTR = [
-    '`new NativeEventEmitter()` was called with a non-null argument without the required `addListener` method.',
-    '`new NativeEventEmitter()` was called with a non-null argument without the required `removeListeners` method.',
-  ];
-  console.warn = (...args: any[]) => {
-    try {
-      const msg = args?.[0] ? String(args[0]) : args.map(a => String(a)).join(' ');
-      if (IGNORE_SUBSTR.some(s => msg.includes(s))) return;
-    } catch {}
-    ORIG_WARN(...args as any);
-  };
-} catch {}
-
-// Android-only: мягкий shim для нативных модулей, у которых отсутствуют методы
-// addListener/removeListeners. Это предотвращает ранние варнинги от NativeEventEmitter,
-// не влияя на реальное поведение модулей.
-if (Platform.OS === 'android') {
-  try {
-    const mods: Record<string, any> = (NativeModules as unknown) as Record<string, any>;
-    Object.keys(mods || {}).forEach((key) => {
-      const m = mods[key];
-      if (!m || typeof m !== 'object') return;
-      if (typeof m.addListener !== 'function') {
-        try { (m as any).addListener = () => {}; } catch {}
-      }
-      if (typeof m.removeListeners !== 'function') {
-        try { (m as any).removeListeners = () => {}; } catch {}
-      }
-    });
-  } catch {}
-}
+// УБРАНО: Дублирующий код - эта логика уже есть в shims/nativeEventEmitterShim.ts
+// который импортируется первым (строка 2)
 
 // Глобальный обработчик ошибок для скрытия ненужных ошибок
 try {

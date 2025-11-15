@@ -53,7 +53,7 @@ import HomeScreen from "./screens/HomeScreen";
 import VideoChat from "./components/VideoChat";
 import ChatScreen from "./screens/ChatScreen";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
-import { WebRTCProvider } from "./contexts/WebRTCContext";
+// УБРАНО: WebRTCProvider не используется - useWebRTC нигде не вызывается
 import PiPOverlay from "./src/pip/PiPOverlay";
 
 import { ensureCometChatReady } from "./chat/cometchat";
@@ -474,40 +474,13 @@ function AppContent() {
     const offClose = onCloseIncoming?.(() => { setIncoming(null); stopAnim(); });
     
     // Регистрируем через обертку (основной способ)
+    // УБРАНО: Дублирующий прямой слушатель - он регистрируется в отдельном useEffect для переподключения
     const off = onCallIncoming?.(handleIncomingCall);
-    
-    // КРИТИЧНО: Дублирующий прямой слушатель socket как fallback
-    // Используем общий обработчик из sharedDirectHandlerRef если он уже создан
-    // Если нет - создаем новый, но он будет перезаписан в следующем useEffect
-    const directHandler = (d: any) => {
-      // Используем обработчик из ref чтобы всегда был актуальный
-      if (incomingCallHandlerRef.current) {
-        incomingCallHandlerRef.current(d);
-      }
-    };
-    
-    // Если sharedDirectHandlerRef еще не установлен, устанавливаем его
-    if (!sharedDirectHandlerRef.current) {
-      sharedDirectHandlerRef.current = directHandler;
-    }
-    
-    try {
-      socket.on('call:incoming', sharedDirectHandlerRef.current || directHandler);
-      logger.debug('Registered direct call:incoming handler');
-    } catch (e) {
-      logger.warn('Failed to register direct call:incoming handler:', e);
-    }
     
     return () => { 
       off?.(); 
       offReq?.(); 
       offClose?.();
-      try {
-        if (sharedDirectHandlerRef.current) {
-          socket.off('call:incoming', sharedDirectHandlerRef.current);
-        }
-        logger.debug('Unregistered direct call:incoming handler');
-      } catch {}
     };
   }, [handleIncomingCall, stopAnim]);
 
@@ -594,72 +567,12 @@ function AppContent() {
 
   // Android nav bar: управление перенесено на конкретные экраны (Home/Chat/Video)
 
-  // Закрываем входящую модалку по таймауту звонка
-  React.useEffect(() => {
-    const off = onCallTimeout?.(async (p: any) => {
-      logger.debug('Call timeout received', { callId: p?.callId });
-      // Мгновенно закрываем UI
-      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
-      try {
-        const id = String(p?.callId || '');
-        if (id) timedOutCallsRef.current.set(id, Date.now());
-      } catch {}
-      // Инкремент пропущенного — на случай, если HomeScreen ещё не активен
-      try {
-        const uid = await AsyncStorage.getItem('last_incoming_from');
-        if (uid) {
-          const key = 'missed_calls_by_user_v1';
-          const raw = await AsyncStorage.getItem(key);
-          const map = raw ? JSON.parse(raw) : {};
-          map[uid] = (map[uid] || 0) + 1;
-          await AsyncStorage.setItem(key, JSON.stringify(map));
-          try { emitMissedIncrement(uid); } catch {}
-          // очищаем маркер, чтобы у звонящего не сработали другие обработчики
-          try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
-        }
-      } catch {}
-      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
-    });
-    return () => { off?.(); };
-  }, [stopAnim]);
+  // УБРАНО: Дублирующий обработчик onCallTimeout - он уже зарегистрирован в общем useEffect ниже
+  // вместе с onCallDeclined, onCallCanceled, onCallAccepted
 
-  // Резервные сырые слушатели (на случай несоответствия врапперам)
-  // КРИТИЧНО: Обновляем ref'ы для синхронизации с основными обработчиками
-  React.useEffect(() => {
-    const close = () => { setIncoming(null); stopAnim(); };
-    const hDeclined = (d: any) => {
-      try {
-        const id = String((d as any)?.callId || '');
-        if (id) canceledCallsRef.current.set(id, Date.now());
-      } catch {}
-      close();
-    };
-    const hTimeout = (d: any) => {
-      try {
-        const id = String((d as any)?.callId || '');
-        if (id) timedOutCallsRef.current.set(id, Date.now());
-      } catch {}
-      close();
-    };
-    const hCancel = (d: any) => {
-      try {
-        const id = String((d as any)?.callId || '');
-        if (id) canceledCallsRef.current.set(id, Date.now());
-      } catch {}
-      close();
-    };
-    const hAccepted = () => close();
-    try { socket.on('call:declined', hDeclined); } catch {}
-    try { socket.on('call:timeout',  hTimeout); } catch {}
-    try { socket.on('call:cancel',   hCancel); } catch {}
-    try { socket.on('call:accepted', hAccepted); } catch {}
-    return () => {
-      try { socket.off('call:declined', hDeclined); } catch {}
-      try { socket.off('call:timeout',  hTimeout); } catch {}
-      try { socket.off('call:cancel',   hCancel); } catch {}
-      try { socket.off('call:accepted', hAccepted); } catch {}
-    };
-  }, [stopAnim]);
+  // УБРАНО: Резервные сырые слушатели - они дублируют обработчики через обертки
+  // Все события обрабатываются через onCallDeclined, onCallTimeout, onCallCanceled, onCallAccepted
+  // которые уже зарегистрированы в useEffect выше
 
   // Закрываем входящую модалку, если звонящий отменил вызов
   React.useEffect(() => {
@@ -734,14 +647,29 @@ function AppContent() {
     });
     // Обработчик таймаута
     const offTimeout = onCallTimeout?.(async (d) => {
+      logger.debug('Call timeout received', { callId: d?.callId });
+      // Мгновенно закрываем UI
+      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       try {
         const id = String((d as any)?.callId || '');
         if (id) {
-          const now = Date.now();
-          timedOutCallsRef.current.set(id, now);
+          timedOutCallsRef.current.set(id, Date.now());
         }
       } catch {}
-      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+      // Инкремент пропущенного — на случай, если HomeScreen ещё не активен
+      try {
+        const uid = await AsyncStorage.getItem('last_incoming_from');
+        if (uid) {
+          const key = 'missed_calls_by_user_v1';
+          const raw = await AsyncStorage.getItem(key);
+          const map = raw ? JSON.parse(raw) : {};
+          map[uid] = (map[uid] || 0) + 1;
+          await AsyncStorage.setItem(key, JSON.stringify(map));
+          try { emitMissedIncrement(uid); } catch {}
+          // очищаем маркер, чтобы у звонящего не сработали другие обработчики
+          try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
+        }
+      } catch {}
     });
     
     return () => { offDecl?.(); offCancel?.(); onAccepted?.(); offTimeout?.(); };
@@ -998,11 +926,10 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
-        <WebRTCProvider>
-          <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
-            <AppContent />
-          </PiPProvider>
-        </WebRTCProvider>
+        {/* УБРАНО: WebRTCProvider - не используется, useWebRTC нигде не вызывается */}
+        <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
+          <AppContent />
+        </PiPProvider>
       </ThemeProvider>
     </GestureHandlerRootView>
   );

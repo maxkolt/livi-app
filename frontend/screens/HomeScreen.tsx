@@ -51,7 +51,7 @@ import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout 
 import { onMissedIncrement, onRequestCloseIncoming, emitCloseIncoming } from '../utils/globalEvents';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
-import { forceClearUserDataOnly } from '../utils/forceClearAllData';
+// УБРАНО: forceClearUserDataOnly не используется - вместо этого используется hardLocalReset() и clearAllUserData() из socket.ts
 import { warmAvatar, putThumb, putFull, getFull, clearAvatarCacheFor } from '../utils/avatarCache';
 import * as FileSystem from 'expo-file-system';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';

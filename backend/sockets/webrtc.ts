@@ -318,7 +318,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     logger.debug('Socket disconnected from webrtc', { socketId: socket.id, reason });
     
     // Если пользователь просто нажал "Next", не чистим очередь
-    if (reason === "transport close" && socket.data.isNexting) {
+    if (socket.data?.isNexting) {
       logger.debug('Socket performing next, skip cleanup', { socketId: socket.id });
       socket.data.isNexting = false;
       return;

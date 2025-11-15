@@ -406,7 +406,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       }
       
       // Включаем локальные и удалённые видео-треки при возврате на экран
-      // КРИТИЧНО: При возврате из PiP состояние кнопки камеры должно оставаться включенной
+      // При возврате из PiP состояние кнопки камеры должно оставаться включенной
       try {
         const lt = (localStream || localStreamRef.current)?.getVideoTracks?.()?.[0];
         if (lt) {
@@ -414,7 +414,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           lt.enabled = true;
           console.log('[useFocusEffect] Re-enabled local video track');
           }
-          // КРИТИЧНО: Устанавливаем camOn в true если трек включен при возврате из PiP
+          // Устанавливаем camOn в true если трек включен при возврате из PiP
           // Это гарантирует что кнопка камеры остается в правильном состоянии
           if (lt.enabled) {
             setCamOn(true);
@@ -479,22 +479,33 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       }
 
       const isFriendCall = isDirectCall || inDirectCallRef.current || friendCallAcceptedRef.current;
-      // КРИТИЧНО: hasActiveCall должен быть false если мы в неактивном состоянии
-      // Это предотвращает показ PiP после завершения звонка
-      const hasActiveCall = !!roomIdRef.current && !isInactiveStateRef.current;
+      // ВАЖНО: Проверяем isJustStarted ПЕРЕД вычислением hasActiveCall
+      // Это предотвращает остановку стрима сразу после нажатия "Начать"
+      const isJustStarted = startedRef.current && !partnerIdRef.current && !roomIdRef.current;
+      // hasActiveCall должен быть false если мы в неактивном состоянии ИЛИ если пользователь только что начал поиск
+      // Это предотвращает показ PiP после завершения звонка и остановку стрима при начале поиска
+      const hasActiveCall = !!roomIdRef.current && !isInactiveStateRef.current && !isJustStarted;
       const isRandomChat = !isFriendCall && (roomIdRef.current || partnerIdRef.current || startedRef.current);
 
       console.log('[useFocusEffect] Cleanup - checking conditions:', {
         isFriendCall,
         isRandomChat,
         hasActiveCall,
+        isJustStarted,
         roomId: roomIdRef.current,
         pipVisible: pipRef.current.visible,
       });
 
-      // КРИТИЧНО: Для рандомного чата отправляем stop и room:leave при выходе
+      // Для рандомного чата отправляем stop и room:leave при выходе
       // И ОСТАНАВЛИВАЕМ камеру локально
-      if (isRandomChat && hasActiveCall) {
+      // ВАЖНО: НЕ останавливаем стрим если пользователь только что начал поиск (started=true, но нет partnerId и roomId)
+      // Это предотвращает остановку стрима сразу после нажатия "Начать"
+      const hasStream = !!(localStreamRef.current || localStream);
+      // ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА: Проверяем, что мы не в процессе создания стрима (loading=true)
+      // Это предотвращает остановку стрима сразу после создания
+      const isLoading = loading;
+      // ВАЖНО: НЕ останавливаем стрим если пользователь только что начал поиск ИЛИ стрима нет ИЛИ идет загрузка
+      if (isRandomChat && hasActiveCall && !isJustStarted && hasStream && !isLoading) {
         console.log('[useFocusEffect] Random chat cleanup - sending stop and room:leave');
         try {
           const currentRoomId = roomIdRef.current;
@@ -513,21 +524,32 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           console.warn('[useFocusEffect] Error sending stop for random chat:', e);
         }
         
-        // КРИТИЧНО: Останавливаем камеру локально при выходе с рандомного чата
-        try {
-          stopLocalStream();
-          setLocalStream(null);
-          localStreamRef.current = null;
-          setCamOn(false);
-          setMicOn(false);
-          console.log('[useFocusEffect] Stopped local stream for random chat');
-        } catch (e) {
-          console.warn('[useFocusEffect] Error stopping local stream:', e);
+        // Останавливаем камеру локально при выходе с рандомного чата
+        // ВАЖНО: НЕ останавливаем камеру если пользователь только что начал поиск ИЛИ есть активное соединение
+        const isJustStarted = startedRef.current && !partnerIdRef.current && !roomIdRef.current;
+        const hasActiveConnection = !!partnerIdRef.current || !!roomIdRef.current;
+        if (!isJustStarted && !hasActiveConnection) {
+          try {
+            stopLocalStream();
+            setLocalStream(null);
+            localStreamRef.current = null;
+            setCamOn(false);
+            setMicOn(false);
+            console.log('[useFocusEffect] Stopped local stream for random chat');
+          } catch (e) {
+            console.warn('[useFocusEffect] Error stopping local stream:', e);
+          }
+        } else if (isJustStarted) {
+          console.log('[useFocusEffect] Skipping stopLocalStream - user just started search');
+        } else if (hasActiveConnection) {
+          console.log('[useFocusEffect] Skipping stopLocalStream - active connection exists (partnerId or roomId)');
         }
+      } else if (isJustStarted) {
+        console.log('[useFocusEffect] Skipping cleanup - user just started search (started=true, no partnerId/roomId)');
       }
 
       // Показываем PiP только если его еще нет и есть активный звонок (только для friend calls)
-      // КРИТИЧНО: НЕ показываем PiP если находимся в неактивном состоянии (звонок завершен)
+      // НЕ показываем PiP если находимся в неактивном состоянии (звонок завершен)
       // Двойная проверка: и через hasActiveCall (который уже проверяет isInactiveStateRef), и напрямую
       const currentPip = pipRef.current;
       if (isFriendCall && hasActiveCall && !currentPip.visible && !isInactiveState && !isInactiveStateRef.current) {
@@ -561,7 +583,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
             : `${serverUrl}${partner.avatar.startsWith('/') ? '' : '/'}${partner.avatar}`;
         }
         
-        // КРИТИЧНО: Сохраняем partnerUserId в navParams для восстановления при возврате
+        // Сохраняем partnerUserId в navParams для восстановления при возврате
         currentPip.showPiP({
           callId: currentCallIdRef.current || '',
           roomId: roomIdRef.current || '',
@@ -574,7 +596,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           navParams: {
             ...route?.params,
             peerUserId: partnerUserId || partnerUserIdRef.current,
-            partnerId: partnerId || partnerIdRef.current, // КРИТИЧНО: Сохраняем partnerId для восстановления соединения
+            partnerId: partnerId || partnerIdRef.current, // Сохраняем partnerId для восстановления соединения
           } as any,
         });
 
@@ -613,6 +635,8 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   useEffect(() => { startedRef.current = started; }, [started]);
   
   const [loading, setLoading] = useState(false);
+  const loadingRef = useRef(false);
+  useEffect(() => { loadingRef.current = loading; }, [loading]);
   
   // Защита от спама кнопки "Далее"
   const [isNexting, setIsNexting] = useState(false);
@@ -642,7 +666,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   const iceConfigRef = useRef<RTCConfiguration | null>(null);
   useEffect(() => { remoteStreamRef.current = remoteStream; }, [remoteStream]);
   
-  // КРИТИЧНО: Объявляем переменные ДО использования в useEffect ниже
+          // Объявляем переменные ДО использования в useEffect ниже
   const [remoteCamOn, setRemoteCamOn] = useState(true);
   const remoteCamOnRef = useRef(true);
   useEffect(() => { remoteCamOnRef.current = remoteCamOn; }, [remoteCamOn]);
@@ -652,18 +676,18 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   const isInactiveStateRef = useRef(false);
   useEffect(() => { isInactiveStateRef.current = isInactiveState; }, [isInactiveState]);
   
-  // КРИТИЧНО: Автоматически устанавливаем remoteCamOn в true когда появляется video track в remoteStream
+          // Автоматически устанавливаем remoteCamOn в true когда появляется video track в remoteStream
   // Это особенно важно при повторных звонках и плохом интернете, когда video track может прийти позже
   useEffect(() => {
     if (remoteStream && !isInactiveState) {
       try {
         const videoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
         if (videoTrack && videoTrack.readyState !== 'ended') {
-          // КРИТИЧНО: ВСЕГДА устанавливаем remoteCamOn в true если video track существует и не ended
+          // ВСЕГДА устанавливаем remoteCamOn в true если video track существует и не ended
           // Это гарантирует отображение видео даже при плохом интернете
           // Не проверяем через ref, так как это может быть проблемой при повторных звонках
           setRemoteCamOn(true);
-          // КРИТИЧНО: Обновляем remoteViewKey для гарантированного ререндера
+          // Обновляем remoteViewKey для гарантированного ререндера
           setRemoteViewKey(Date.now());
           console.log('[useEffect remoteStream] Auto-set remoteCamOn=true (video track exists)', {
             readyState: videoTrack.readyState,
@@ -678,7 +702,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     }
   }, [remoteStream, isInactiveState]);
   
-  // КРИТИЧНО: Периодическая проверка video track для случаев плохого интернета
+          // Периодическая проверка video track для случаев плохого интернета
   // Это гарантирует, что видео будет отображаться даже если track приходит с задержкой
   useEffect(() => {
     if (!remoteStream || isInactiveState) return;
@@ -687,7 +711,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       try {
         const videoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
         if (videoTrack && videoTrack.readyState !== 'ended' && !remoteCamOn) {
-          // КРИТИЧНО: Если video track есть, но remoteCamOn false - устанавливаем в true
+          // Если video track есть, но remoteCamOn false - устанавливаем в true
           setRemoteCamOn(true);
           setRemoteViewKey(Date.now());
           console.log('[useEffect videoTrack check] Found video track, set remoteCamOn=true', {
@@ -825,8 +849,9 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   useEffect(() => { localStreamRef.current = localStream; }, [localStream]);
+  const [streamValid, setStreamValid] = useState(false);
 
-  // КРИТИЧНО: Управление keep-awake для активного видеочата (особенно важно для iOS)
+          // Управление keep-awake для активного видеочата (особенно важно для iOS)
   useEffect(() => {
     const hasActiveVideoCall = !!remoteStream && (
       remoteStream.getVideoTracks?.()?.length > 0 || 
@@ -909,6 +934,73 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
 
   const [micOn, setMicOn] = useState(false);
   const [camOn, setCamOn] = useState(false);
+  const camOnRef = useRef(false);
+  useEffect(() => { 
+    const prevCamOn = camOnRef.current;
+    camOnRef.current = camOn;
+    // Логируем только если значение изменилось
+    if (prevCamOn !== camOn) {
+      const stack = new Error().stack;
+      console.log('[camOn state changed]', { 
+        from: prevCamOn, 
+        to: camOn,
+        stack: stack?.split('\n').slice(1, 6).join('\n')
+      });
+    }
+  }, [camOn]);
+  
+  // ЗАЩИТА: Предотвращаем сброс camOn в false при активном соединении
+  // Камера должна быть ВСЕГДА включена при подключении и выключаться ТОЛЬКО по нажатию на кнопку
+  useEffect(() => {
+    // Если есть активное соединение (partnerId или roomId) И started=true И есть localStream,
+    // но camOn=false - это ошибка, нужно установить camOn=true
+    const hasActiveConnection = !!partnerIdRef.current || !!roomIdRef.current;
+    const hasLocalStream = !!(localStreamRef.current || localStream);
+    const isRandomChat = !isDirectCall && !inDirectCall && !friendCallAccepted;
+    
+    if (hasActiveConnection && started && hasLocalStream && !camOn && isRandomChat) {
+      // ВАЖНО: Проверяем, что стрим валиден и не остановлен
+      const stream = localStreamRef.current || localStream;
+      if (!stream || !isValidStream(stream)) {
+        console.warn('[camOn protection] Stream is invalid or stopped, cannot fix camOn', {
+          hasStream: !!stream,
+          streamValid: stream ? isValidStream(stream) : false,
+          streamId: stream?.id,
+          tracksCount: stream ? stream.getTracks()?.length : 0
+        });
+        return;
+      }
+      
+      console.warn('[camOn protection] camOn is false but should be true - fixing', {
+        hasActiveConnection,
+        started,
+        hasLocalStream,
+        camOn,
+        partnerId: partnerIdRef.current,
+        roomId: roomIdRef.current,
+        streamId: stream.id,
+        streamValid: isValidStream(stream)
+      });
+      
+      // Включаем video track и устанавливаем camOn=true
+      const videoTrack = stream.getVideoTracks()?.[0];
+      if (videoTrack && videoTrack.readyState !== 'ended') {
+        videoTrack.enabled = true;
+        setCamOn(true);
+        console.log('[camOn protection] Enabled video track and set camOn=true', {
+          trackId: videoTrack.id,
+          trackEnabled: videoTrack.enabled,
+          trackReadyState: videoTrack.readyState
+        });
+      } else {
+        console.warn('[camOn protection] No valid video track found in local stream', {
+          hasVideoTrack: !!videoTrack,
+          trackReadyState: videoTrack?.readyState,
+          streamId: stream.id
+        });
+      }
+    }
+  }, [camOn, started, localStream, partnerId, isDirectCall, inDirectCall, friendCallAccepted]);
   const [remoteMutedMain, setRemoteMutedMain] = useState(false);
 
   // ДРУЖБА
@@ -980,7 +1072,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   // === Индикатор громкости (только при соединении) ===
   const [micLevel, setMicLevel] = useState(0);
   const micStatsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // КРИТИЧНО: Для iOS - отслеживаем низкие значения для определения молчания
+          // Для iOS - отслеживаем низкие значения для определения молчания
   const lowLevelCountRef = useRef<number>(0);
 
   // Toast
@@ -997,7 +1089,7 @@ const durRef = useRef<number | null>(null);
   const [partnerInPiP, setPartnerInPiP] = useState(false); // Отслеживаем когда партнер ушел в PiP
   const [remoteViewKey, setRemoteViewKey] = useState(0); // Key для принудительной перерисовки RTCView
   
-  // КРИТИЧНО: remoteCamOn и isInactiveState объявлены выше (строка 651-658) ДО использования в useEffect
+          // remoteCamOn и isInactiveState объявлены выше (строка 651-658) ДО использования в useEffect
   
   // Флаг для отслеживания завершенного звонка друга (для показа заблокированной кнопки "Прервать")
   const [wasFriendCallEnded, setWasFriendCallEnded] = useState(false);
@@ -1012,7 +1104,7 @@ const durRef = useRef<number | null>(null);
   const partnerUserIdRef = useRef(partnerUserId);
   partnerUserIdRef.current = partnerUserId;
   
-  // КРИТИЧНО: remoteCamOnRef уже объявлен выше (строка 652) ДО использования в useEffect
+          // remoteCamOnRef уже объявлен выше (строка 652) ДО использования в useEffect
   // Обновляем ref значение
   remoteCamOnRef.current = remoteCamOn;
   
@@ -1061,12 +1153,12 @@ const durRef = useRef<number | null>(null);
         }
       } else if (s === 'inactive') {
         // inactive - приложение теряет фокус, но еще не в фоне
-        // КРИТИЧНО: Звонок продолжается в фоне, НИКОГДА не завершаем его для звонков друзьям
+        // Звонок продолжается в фоне, НИКОГДА не завершаем его для звонков друзьям
         const isFriendCall = isDirectCall || inDirectCallRef.current || friendCallAcceptedRef.current;
         
         if (isFriendCall && (roomIdRef.current || currentCallIdRef.current)) {
           console.log('[AppState] App became inactive during friend call - call continues in background (NOT ending)');
-          // КРИТИЧНО: НЕ завершаем звонок, он продолжается в фоне
+          // НЕ завершаем звонок, он продолжается в фоне
           // PiP будет автоматически активирован если доступен
           // НЕ отправляем call:end, НЕ очищаем ресурсы, НЕ завершаем соединение
           return; // Выходим сразу, ничего не делаем
@@ -1075,13 +1167,13 @@ const durRef = useRef<number | null>(null);
         }
       } else if (s === 'background') {
         // background - приложение полностью в фоне (блокировка экрана или переключение на другое приложение)
-        // КРИТИЧНО: Звонок другу продолжается в фоне, НИКОГДА не завершаем его
+        // Звонок другу продолжается в фоне, НИКОГДА не завершаем его
         const isFriendCall = isDirectCall || inDirectCallRef.current || friendCallAcceptedRef.current;
         
         if (isFriendCall && (roomIdRef.current || currentCallIdRef.current)) {
-          // КРИТИЧНО: Звонок другу продолжается в фоне, НЕ завершаем его
+          // Звонок другу продолжается в фоне, НЕ завершаем его
           console.log('[AppState] Friend call backgrounded - call continues in background (NOT ending)');
-          // КРИТИЧНО: Звонок продолжается, PiP будет автоматически активирован если доступен
+          // Звонок продолжается, PiP будет автоматически активирован если доступен
           // НЕ завершаем звонок, НЕ очищаем ресурсы, НЕ отправляем call:end - все продолжает работать в фоне
           return; // Выходим сразу, ничего не делаем
         } else if (!isFriendCall && (roomIdRef.current || partnerIdRef.current)) {
@@ -1389,11 +1481,94 @@ const flipCam = useCallback(async () => {
 
 
   // Unified local stream stopper
-  const stopLocalStream = useCallback(async () => {
+  const stopLocalStream = useCallback(async (preserveStreamForConnection: boolean = false) => {
+    // ЛОГИРУЕМ СТЕК ВЫЗОВА для отладки
+    const stack = new Error().stack;
+    console.log('[stopLocalStream] CALLED', {
+      preserveStreamForConnection,
+      startedRef: startedRef.current,
+      loading: loadingRef.current,
+      hasPartnerId: !!partnerIdRef.current,
+      hasRoomId: !!roomIdRef.current,
+      hasStream: !!(localStreamRef.current || localStream),
+      stack: stack?.split('\n').slice(1, 5).join('\n')
+    });
+    
+    // КРИТИЧЕСКАЯ ЗАЩИТА: Не останавливаем стрим если идет загрузка (создание стрима)
+    // Это предотвращает остановку стрима сразу после создания
+    // НО: Если поиск остановлен (startedRef.current = false), игнорируем проверку loading
+    // Это позволяет остановить стрим при нажатии "Стоп" даже если loading еще true
+    if (loadingRef.current && startedRef.current) {
+      console.log('[stopLocalStream] SKIPPING - loading in progress and search is active', { 
+        loading: loadingRef.current,
+        started: startedRef.current
+      });
+      return;
+    }
+    
+    // Не останавливаем стрим если мы в процессе поиска (started=true, но нет partnerId)
+    // Это защищает стрим от остановки при активном поиске
+    const isSearching = startedRef.current && !partnerIdRef.current && !isInactiveStateRef.current;
+    
+    // ВАЖНО: Проверяем наличие активного соединения (partnerId или roomId)
+    // Если есть активное соединение, НЕ останавливаем стрим - он нужен для видеозвонка
+    const hasActiveConnection = !!partnerIdRef.current || !!roomIdRef.current;
+    
+    // Проверяем, что стрим действительно существует перед остановкой
+    const hasStream = !!(localStreamRef.current || localStream);
+    
+    // Если preserveStreamForConnection=true или мы в процессе поиска ИЛИ есть активное соединение, не останавливаем стрим
+    if (preserveStreamForConnection || isSearching || hasActiveConnection) {
+      console.log('[stopLocalStream] Preserving stream', {
+        preserveStreamForConnection,
+        isSearching,
+        hasActiveConnection,
+        hasStream,
+        hasPartnerId: !!partnerIdRef.current,
+        hasRoomId: !!roomIdRef.current,
+        started: startedRef.current
+      });
+      // Закрываем только PeerConnection, но НЕ останавливаем локальный стрим
+      try {
+        if (peerRef.current) {
+          cleanupPeer(peerRef.current);
+          peerRef.current = null;
+        }
+        if (preCreatedPcRef.current) {
+          cleanupPeer(preCreatedPcRef.current);
+          preCreatedPcRef.current = null;
+        }
+      } catch {}
+      return;
+    }
+    
+    if (!hasStream) {
+      console.log('[stopLocalStream] No local stream to stop');
+      // Все равно закрываем все PeerConnection даже если стрима нет
+      try {
+        if (peerRef.current) {
+          cleanupPeer(peerRef.current);
+          peerRef.current = null;
+        }
+        if (preCreatedPcRef.current) {
+          cleanupPeer(preCreatedPcRef.current);
+          preCreatedPcRef.current = null;
+        }
+      } catch {}
+      return;
+    }
+    
+    console.log('[stopLocalStream] WILL STOP STREAM - this should not happen during search!', {
+      startedRef: startedRef.current,
+      hasPartnerId: !!partnerIdRef.current,
+      hasRoomId: !!roomIdRef.current,
+      hasStream
+    });
+    
     const ls = localStreamRef.current || localStream;
     if (!ls) {
       console.log('[stopLocalStream] No local stream to stop');
-      // КРИТИЧНО: Все равно закрываем все PeerConnection даже если стрима нет
+      // Все равно закрываем все PeerConnection даже если стрима нет
       try {
         if (peerRef.current) {
           cleanupPeer(peerRef.current);
@@ -1408,17 +1583,17 @@ const flipCam = useCallback(async () => {
     }
     console.log('[stopLocalStream] Stopping local stream tracks');
     
-    // КРИТИЧНО: Сначала ЗАКРЫВАЕМ ВСЕ PeerConnection, чтобы iOS точно понял что камера не используется
+    // Сначала ЗАКРЫВАЕМ ВСЕ PeerConnection, чтобы iOS точно понял что камера не используется
     try {
       // Закрываем основной PeerConnection
       const pc = peerRef.current;
       if (pc) {
         console.log('[stopLocalStream] Closing main PeerConnection first');
         
-        // КРИТИЧНО: СНАЧАЛА устанавливаем peerRef.current = null, чтобы обработчики не видели активный PC
+        // СНАЧАЛА устанавливаем peerRef.current = null, чтобы обработчики не видели активный PC
         peerRef.current = null;
         
-        // КРИТИЧНО: Отключаем и удаляем все треки из senders ДО закрытия PC
+        // Отключаем и удаляем все треки из senders ДО закрытия PC
         const senders = pc.getSenders() || [];
         console.log('[stopLocalStream] Removing tracks from', senders.length, 'senders');
         
@@ -1443,14 +1618,14 @@ const flipCam = useCallback(async () => {
         await Promise.all(replacePromises);
         console.log('[stopLocalStream] All tracks removed from main PeerConnection');
         
-        // КРИТИЧНО: Очищаем все обработчики событий перед закрытием PC
+        // Очищаем все обработчики событий перед закрытием PC
         // Это предотвращает создание offer'ов после закрытия
         try {
           (pc as any).ontrack = null;
           (pc as any).onaddstream = null;
           (pc as any).onicecandidate = null;
           (pc as any).onconnectionstatechange = null;
-          (pc as any).oniceconnectionstatechange = null; // КРИТИЧНО: Очищаем обработчик ICE
+          (pc as any).oniceconnectionstatechange = null; // Очищаем обработчик ICE
           (pc as any).onsignalingstatechange = null;
           (pc as any).onicegatheringstatechange = null;
           console.log('🔴 [stopLocalStream] Handlers cleared from main PeerConnection (correct cleanup)');
@@ -1458,7 +1633,7 @@ const flipCam = useCallback(async () => {
           console.warn('⚫ [stopLocalStream] Error clearing handlers from main PC (incorrect cleanup):', e);
         }
         
-        // КРИТИЧНО: Закрываем PeerConnection после удаления треков и очистки обработчиков
+        // Закрываем PeerConnection после удаления треков и очистки обработчиков
         try {
           pc.close();
           console.log('🔴 [stopLocalStream] Main PeerConnection closed (correct cleanup)');
@@ -1467,22 +1642,22 @@ const flipCam = useCallback(async () => {
         }
       }
       
-      // КРИТИЧНО: Также закрываем предварительно созданный PeerConnection
+      // Также закрываем предварительно созданный PeerConnection
       if (preCreatedPcRef.current) {
         console.log('[stopLocalStream] Closing pre-created PeerConnection');
         try {
           const prePc = preCreatedPcRef.current;
           
-          // КРИТИЧНО: СНАЧАЛА устанавливаем preCreatedPcRef.current = null
+          // СНАЧАЛА устанавливаем preCreatedPcRef.current = null
           preCreatedPcRef.current = null;
           
-          // КРИТИЧНО: Сначала удаляем все треки из senders
+          // Сначала удаляем все треки из senders
           const preSenders = prePc.getSenders() || [];
           const preReplacePromises = preSenders.map(async (sender: any) => {
             try {
               const track = sender.track;
               if (track) {
-                // КРИТИЧНО: Отключаем трек перед удалением
+                // Отключаем трек перед удалением
                 track.enabled = false;
                 console.log('[stopLocalStream] Disabled track in pre-created PC sender:', track.kind, track.id);
               }
@@ -1495,13 +1670,13 @@ const flipCam = useCallback(async () => {
           await Promise.all(preReplacePromises);
           console.log('[stopLocalStream] All tracks removed from pre-created PeerConnection');
           
-          // КРИТИЧНО: Очищаем обработчики событий перед закрытием
+          // Очищаем обработчики событий перед закрытием
           try {
             (prePc as any).ontrack = null;
             (prePc as any).onaddstream = null;
             (prePc as any).onicecandidate = null;
             (prePc as any).onconnectionstatechange = null;
-            (prePc as any).oniceconnectionstatechange = null; // КРИТИЧНО: Очищаем обработчик ICE
+            (prePc as any).oniceconnectionstatechange = null; // Очищаем обработчик ICE
             (prePc as any).onsignalingstatechange = null;
             (prePc as any).onicegatheringstatechange = null;
             console.log('🔴 [stopLocalStream] Handlers cleared from pre-created PC (correct cleanup)');
@@ -1509,7 +1684,7 @@ const flipCam = useCallback(async () => {
             console.warn('⚫ [stopLocalStream] Error clearing handlers from pre-created PC:', e);
           }
           
-          // КРИТИЧНО: Закрываем PeerConnection после удаления треков и очистки обработчиков
+          // Закрываем PeerConnection после удаления треков и очистки обработчиков
           prePc.close();
           console.log('[stopLocalStream] Pre-created PeerConnection closed');
         } catch (e) {
@@ -1527,7 +1702,7 @@ const flipCam = useCallback(async () => {
       
       tracks.forEach((t: any) => {
         try {
-          // КРИТИЧНО: Сначала отключаем трек (чтобы iOS понял что камера не используется)
+          // Сначала отключаем трек (чтобы iOS понял что камера не используется)
           t.enabled = false;
           console.log('[stopLocalStream] Disabled track:', t.kind, t.id);
         } catch (e) {
@@ -1548,12 +1723,12 @@ const flipCam = useCallback(async () => {
       
       console.log('[stopLocalStream] Stopped', tracks.length, 'tracks');
       
-      // КРИТИЧНО: Дополнительная проверка - убеждаемся что все треки камеры остановлены
-      // Это критично для iOS где индикатор камеры может оставаться активным
+      // Дополнительная проверка - убеждаемся что все треки камеры остановлены
+      // для iOS где индикатор камеры может оставаться активным
       const videoTracks = tracks.filter((t: any) => t.kind === 'video');
       videoTracks.forEach((t: any) => {
         try {
-          // КРИТИЧНО: Всегда отключаем и останавливаем видео треки
+          // Всегда отключаем и останавливаем видео треки
           t.enabled = false;
           if (t.readyState !== 'ended') {
             console.warn('[stopLocalStream] Video track still active:', t.id, 'readyState:', t.readyState, 'stopping');
@@ -1566,7 +1741,7 @@ const flipCam = useCallback(async () => {
         }
       });
       
-      // КРИТИЧНО: Также проверяем аудио треки и убеждаемся что они остановлены
+      // Также проверяем аудио треки и убеждаемся что они остановлены
       const audioTracks = tracks.filter((t: any) => t.kind === 'audio');
       audioTracks.forEach((t: any) => {
         try {
@@ -1591,13 +1766,13 @@ const flipCam = useCallback(async () => {
     
     console.log('[stopLocalStream] Local stream stopping completed');
     
-    // КРИТИЧНО: Гарантированно обнуляем localStreamRef.current СРАЗУ после остановки треков
+    // Гарантированно обнуляем localStreamRef.current СРАЗУ после остановки треков
     // Это предотвращает использование старых треков в preCreatePeerConnection и других местах
     localStreamRef.current = null;
     setLocalStream(null);
     console.log('[stopLocalStream] Cleared localStreamRef and localStream state immediately');
     
-    // КРИТИЧНО: Дополнительная проверка - убеждаемся что все треки действительно остановлены
+    // Дополнительная проверка - убеждаемся что все треки действительно остановлены
     // Используем ls (локальную переменную), так как ref уже обнулен
     const remainingTracks = ls.getTracks?.() || [];
     if (remainingTracks.length > 0) {
@@ -1610,7 +1785,7 @@ const flipCam = useCallback(async () => {
       });
     }
     
-    // КРИТИЧНО: Дополнительная проверка через mediaDevices - убеждаемся что нет активных устройств
+    // Дополнительная проверка через mediaDevices - убеждаемся что нет активных устройств
     // Это особенно важно при втором и последующих вызовах
     try {
       const devicesResult = await mediaDevices.enumerateDevices();
@@ -1620,13 +1795,13 @@ const flipCam = useCallback(async () => {
       }
     } catch {}
     
-    // КРИТИЧНО: Дополнительная задержка чтобы дать iOS время полностью освободить камеру
-    // Это критично для iOS, где индикатор камеры может оставаться активным если камера не полностью освобождена
+    // Дополнительная задержка чтобы дать iOS время полностью освободить камеру
+    // для iOS, где индикатор камеры может оставаться активным если камера не полностью освобождена
     // Увеличиваем задержку для более надежного освобождения камеры
-    // КРИТИЧНО: Для второго и последующих вызовов может потребоваться больше времени
+    // Для второго и последующих вызовов может потребоваться больше времени
     await new Promise(resolve => setTimeout(resolve, 300));
     
-    // КРИТИЧНО: Финальная проверка - убеждаемся что все треки действительно остановлены
+    // Финальная проверка - убеждаемся что все треки действительно остановлены
     const finalCheckTracks = ls.getTracks?.() || [];
     if (finalCheckTracks.length > 0) {
       console.error('[stopLocalStream] CRITICAL: Tracks still exist after cleanup!', finalCheckTracks.length);
@@ -1644,7 +1819,7 @@ const flipCam = useCallback(async () => {
     }
     
     console.log('[stopLocalStream] Final cleanup completed, camera should be fully released');
-  }, [localStream]);
+  }, [localStream, started]);
 
   
 
@@ -1719,9 +1894,9 @@ const flipCam = useCallback(async () => {
   // Local stream
   // --------------------------
   const startLocalStream = useCallback(async (_: CamSide) => {
-    // КРИТИЧНО: НЕ запускаем камеру если находимся в неактивном состоянии (завершенный звонок)
+    // НЕ запускаем камеру если находимся в неактивном состоянии (завершенный звонок)
     // Используем ref вместо state для проверки, чтобы избежать race condition
-    // КРИТИЧНО: Также проверяем что нет активного звонка (partnerId, roomId, callId)
+    // Также проверяем что нет активного звонка (partnerId, roomId, callId)
     const hasActiveCall = !!partnerIdRef.current || !!roomIdRef.current || !!currentCallIdRef.current;
     if (isInactiveStateRef.current && !friendCallAccepted && !hasActiveCall) {
       console.log('🔴 [startLocalStream] Skipping - in inactive state after call ended, no active call', {
@@ -1736,7 +1911,7 @@ const flipCam = useCallback(async () => {
     }
     
     // Пропускаем создание локального стрима при возврате из PiP
-    // КРИТИЧНО: Проверяем что pipLocalStream действительно валиден перед использованием
+    // Проверяем что pipLocalStream действительно валиден перед использованием
     if (resume && fromPiP && pipLocalStream && isValidStream(pipLocalStream)) {
       console.log('[startLocalStream] Skipping local stream creation - resuming from PiP');
       setLocalStream(pipLocalStream);
@@ -1744,17 +1919,23 @@ const flipCam = useCallback(async () => {
     }
     
     // Проверяем, не запущен ли уже локальный стрим
-    // КРИТИЧНО: Проверяем валидность существующего стрима
-    if (localStream && isValidStream(localStream)) {
+    // ВАЖНО: Используем localStreamRef.current вместо localStream из замыкания, чтобы избежать race condition
+    // localStream из замыкания может быть устаревшим
+    const existingStream = localStreamRef.current || localStream;
+    if (existingStream && isValidStream(existingStream)) {
       console.log('[startLocalStream] Local stream already exists, returning existing stream');
-      return localStream;
+      // Убеждаемся что стрим сохранен в state
+      if (!localStream) {
+        setLocalStream(existingStream);
+      }
+      return existingStream;
     }
     
-    // КРИТИЧНО: Если localStream существует но невалиден, очищаем его
-    if (localStream && !isValidStream(localStream)) {
+    // Если localStream существует но невалиден, очищаем его
+    if (existingStream && !isValidStream(existingStream)) {
       console.log('[startLocalStream] Existing local stream is invalid, clearing it');
       try {
-        const tracks = localStream.getTracks?.() || [];
+        const tracks = existingStream.getTracks?.() || [];
         tracks.forEach((t: any) => {
           try { t.stop(); } catch {}
         });
@@ -1774,7 +1955,7 @@ const flipCam = useCallback(async () => {
       googAutoGainControl: true,
     };
 
-    // КРИТИЧНО: Всегда запрашиваем и камеру и микрофон, даже если камера выключена
+    // Всегда запрашиваем и камеру и микрофон, даже если камера выключена
     // Это необходимо для корректной работы WebRTC PeerConnection
     const try1 = () => {
       console.log('[startLocalStream] Trying getUserMedia with basic constraints...');
@@ -1826,34 +2007,51 @@ const flipCam = useCallback(async () => {
     const a = audioTracks[0];
     const v = videoTracks[0];
     
-    // КРИТИЧНО: Всегда включаем микрофон и камеру в стриме (нужно для PeerConnection)
+    // Всегда включаем микрофон и камеру в стриме (нужно для PeerConnection)
     // Но состояние UI контролируется через camOn/micOn
     if (a) { 
-      a.enabled = true; // КРИТИЧНО: Микрофон включен по умолчанию
+      a.enabled = true; // Микрофон включен по умолчанию
       try { (a as any).contentHint = 'speech'; } catch {} 
     }
     if (v) {
-      v.enabled = true; // КРИТИЧНО: Включаем трек при создании стрима
+      v.enabled = true; // Включаем трек при создании стрима
     }
 
+    // ВАЖНО: Сначала устанавливаем в ref, потом в state
+    // Это гарантирует, что защита в stopLocalStream сработает до того как cleanup попытается остановить стрим
+    localStreamRef.current = stream;
     setLocalStream(stream);
-    setMicOn(!!a?.enabled); // КРИТИЧНО: Микрофон включен по умолчанию
-    // КРИТИЧНО: При создании стрима камера всегда включена (пользователь может выключить через toggleCam)
-    setCamOn(!!v);
-    await new Promise(r => setTimeout(r, 30));
+    setMicOn(!!a?.enabled); // Микрофон включен по умолчанию
+    // ВАЖНО: При создании стрима камера ВСЕГДА включена (пользователь может выключить через toggleCam)
+    // Устанавливаем camOn в true если есть video track, и ВСЕГДА включаем video track
+    if (v) {
+      v.enabled = true; // Гарантируем что трек включен
+      setCamOn(true);
+      console.log('[startLocalStream] Video track enabled and camOn set to true', {
+        trackId: v.id,
+        trackEnabled: v.enabled,
+        trackReadyState: v.readyState
+      });
+    } else {
+      console.warn('[startLocalStream] No video track found in stream');
+      // НЕ устанавливаем camOn в false, если трека нет - это может быть временная проблема
+      // setCamOn(false);
+    }
+    // Небольшая задержка для гарантии что ref установлен до возможного cleanup
+    await new Promise(r => setTimeout(r, 50));
     setLocalRenderKey(k => k + 1);
 
     try { forceSpeakerOnHard(); } catch {}
     if (Platform.OS === 'ios') configureIOSAudioSession();
 
     return stream;
-  }, [localStream, resume, fromPiP, pipLocalStream, isValidStream, isInactiveState, friendCallAccepted]);
+  }, [resume, fromPiP, pipLocalStream, isValidStream, isInactiveState, friendCallAccepted]);
   
   const ensureStreamReady = useCallback(async () => {
-    // КРИТИЧНО: Проверяем валидность существующего стрима
+    // Проверяем валидность существующего стрима
     if (localStream && isValidStream(localStream)) {
       console.log('[ensureStreamReady] Local stream already exists and is valid, returning existing stream');
-      // КРИТИЧНО: Убеждаемся что камера включена при использовании существующего стрима
+      // Убеждаемся что камера включена при использовании существующего стрима
       const videoTrack = localStream.getVideoTracks()?.[0];
       if (videoTrack) {
         videoTrack.enabled = true;
@@ -1878,7 +2076,7 @@ const flipCam = useCallback(async () => {
     
     console.log('[ensureStreamReady] No valid local stream, starting new one');
     
-    // КРИТИЧНО: Если находимся в неактивном состоянии, но это активный звонок (например, приняли входящий),
+    // Если находимся в неактивном состоянии, но это активный звонок (например, приняли входящий),
     // выходим из неактивного состояния перед созданием стрима
     if (isInactiveStateRef.current && (friendCallAccepted || isDirectCall || inDirectCall)) {
       console.log('[ensureStreamReady] In inactive state but active call detected, exiting inactive state');
@@ -1890,7 +2088,7 @@ const flipCam = useCallback(async () => {
     
     const stream = await startLocalStream('front');
     
-    // КРИТИЧНО: Убеждаемся что камера включена после создания стрима
+    // Убеждаемся что камера включена после создания стрима
     if (stream) {
       const videoTrack = stream.getVideoTracks()?.[0];
       if (videoTrack) {
@@ -1900,7 +2098,7 @@ const flipCam = useCallback(async () => {
       }
     }
     
-    // КРИТИЧНО: Если startLocalStream вернул null (например, из-за проверки isInactiveState),
+    // Если startLocalStream вернул null (например, из-за проверки isInactiveState),
     // создаем напрямую ТОЛЬКО если это активный звонок (не завершенный)
     if (!stream && (friendCallAccepted || isDirectCall || inDirectCall)) {
       console.log('[ensureStreamReady] startLocalStream returned null, creating stream directly for active call');
@@ -1924,7 +2122,7 @@ const flipCam = useCallback(async () => {
             setCamOn(true);
           }
           if (audioTrack) {
-            audioTrack.enabled = true; // КРИТИЧНО: Микрофон включен по умолчанию
+            audioTrack.enabled = true; // Микрофон включен по умолчанию
             setMicOn(true);
           }
           console.log('[ensureStreamReady] Created stream directly via getUserMedia');
@@ -1940,7 +2138,7 @@ const flipCam = useCallback(async () => {
   }, [localStream, startLocalStream, isValidStream, friendCallAccepted, isDirectCall, inDirectCall]);
 
   const isMicReallyOn = useCallback(() => {
-    // КРИТИЧНО: Используем localStreamRef.current вместо localStream state
+    // Используем localStreamRef.current вместо localStream state
     // так как ref может быть актуальнее state, особенно при быстрых изменениях
     const stream = localStreamRef.current || localStream;
     const a = stream?.getAudioTracks?.()[0];
@@ -2026,7 +2224,7 @@ const flipCam = useCallback(async () => {
   const stopMicMeter = useCallback(() => {
     if (micStatsTimerRef.current) { clearInterval(micStatsTimerRef.current); micStatsTimerRef.current = null; }
     setMicLevel(0);
-    // КРИТИЧНО: Обновляем micLevel=0 в PiP при остановке метра
+    // Обновляем micLevel=0 в PiP при остановке метра
     try {
       pip.updatePiPState({ micLevel: 0 });
     } catch (e) {
@@ -2056,20 +2254,20 @@ const flipCam = useCallback(async () => {
   
     micStatsTimerRef.current = setInterval(async () => {
       try {
-        // КРИТИЧНО: Проверяем текущий PC из ref (не замыкаем старый)
+        // Проверяем текущий PC из ref (не замыкаем старый)
         const currentPc = peerRef.current;
         if (!currentPc || currentPc.signalingState === 'closed' || currentPc.connectionState === 'closed') {
           stopMicMeter();
           return;
         }
         
-        // КРИТИЧНО: Проверяем что звонок не завершен
+        // Проверяем что звонок не завершен
         if (isInactiveStateRef.current) {
           stopMicMeter();
           return;
         }
         
-        // КРИТИЧНО: Проверяем что соединение еще активно
+        // Проверяем что соединение еще активно
         // Для звонков друзьям также проверяем наличие активного звонка
         const hasActiveCall = !!partnerIdRef.current || !!roomIdRef.current || !!currentCallIdRef.current;
         if (!pcConnectedRef.current && !hasActiveCall) {
@@ -2112,7 +2310,7 @@ const flipCam = useCallback(async () => {
   
           // 1) Прямо из audioLevel если есть
           if (typeof r.audioLevel === 'number') {
-            // КРИТИЧНО: На iOS audioLevel может быть в диапазоне 0-127, на Android 0-1
+            // На iOS audioLevel может быть в диапазоне 0-127, на Android 0-1
             // Нормализуем для iOS
             const audioLvl = Platform.OS === 'ios' && r.audioLevel > 1 
               ? r.audioLevel / 127 
@@ -2142,7 +2340,7 @@ const flipCam = useCallback(async () => {
         // clamp [0..1]
         let normalized = Math.max(0, Math.min(1, lvl));
         
-        // КРИТИЧНО: Для iOS - если уровень очень низкий несколько раз подряд, сбрасываем до 0
+        // Для iOS - если уровень очень низкий несколько раз подряд, сбрасываем до 0
         // Это решает проблему, когда эквалайзер не возвращается к 0 при молчании на iOS
         // Используем более чувствительный порог и быстрее реагируем для лучшей синхронизации с Android
         if (Platform.OS === 'ios') {
@@ -2188,7 +2386,7 @@ const flipCam = useCallback(async () => {
     // Проверяем что PC еще не закрыт
     if (pc.signalingState === 'closed' || pc.connectionState === 'closed') {
       console.log('[cleanupPeer] PC already closed, but clearing handlers anyway');
-      // КРИТИЧНО: Даже если PC закрыт, очищаем обработчики на всякий случай
+      // Даже если PC закрыт, очищаем обработчики на всякий случай
       try { 
         (pc as any).ontrack = null; 
         (pc as any).onaddstream = null; 
@@ -2214,15 +2412,15 @@ const flipCam = useCallback(async () => {
       console.warn('[cleanupPeer] Error cleaning senders:', e);
     }
     
-    // КРИТИЧНО: Очищаем ВСЕ обработчики ПЕРЕД закрытием
+    // Очищаем ВСЕ обработчики ПЕРЕД закрытием
     try { 
       (pc as any).ontrack = null; 
       (pc as any).onaddstream = null; 
       (pc as any).onicecandidate = null; 
       (pc as any).onconnectionstatechange = null;
-      (pc as any).oniceconnectionstatechange = null; // КРИТИЧНО: Очищаем обработчик ICE соединения
+      (pc as any).oniceconnectionstatechange = null; // Очищаем обработчик ICE соединения
       (pc as any).onsignalingstatechange = null;
-      (pc as any).onicegatheringstatechange = null; // КРИТИЧНО: Также очищаем этот обработчик
+      (pc as any).onicegatheringstatechange = null; // Также очищаем этот обработчик
       console.log('🔴 [cleanupPeer] All handlers cleared');
     } catch (e) {
       console.warn('⚫ [cleanupPeer] Error clearing handlers:', e);
@@ -2237,21 +2435,36 @@ const flipCam = useCallback(async () => {
   }, []);
 
   const onStartStop = useCallback(async () => {
-    if (started) {
+    // Используем ref для проверки, чтобы избежать проблем с замыканием
+    if (startedRef.current) {
       // === STOP ===
+      // ВАЖНО: При нажатии "Стоп" мы ВСЕГДА должны остановить поиск, независимо от состояния loading
+      // Поэтому НЕ проверяем loadingRef.current для блока STOP
+      console.log('[onStartStop] STOP button pressed - stopping search');
+      
+      // ВАЖНО: Устанавливаем loadingRef.current в false СРАЗУ ПЕРЕД всеми операциями
+      // Это гарантирует, что stopLocalStream не будет пропущен из-за проверки loadingRef.current
+      loadingRef.current = false;
       setLoading(false);
 
       // Метр — в ноль и стоп
       stopMicMeter();
 
+      // ВАЖНО: Устанавливаем startedRef.current в false СРАЗУ, чтобы состояние было синхронизировано
+      startedRef.current = false;
       setStarted(false);
       setIsInactiveState(false); // Сбрасываем неактивное состояние при остановке поиска
       setWasFriendCallEnded(false); // Сбрасываем флаг завершенного звонка
 
       try { stopSpeaker(); } catch {}
-      try { socket.emit('stop'); } catch {}
+      try { 
+        socket.emit('stop'); 
+        console.log('[onStartStop] Emitted socket.emit("stop") to stop search');
+      } catch (e) {
+        console.error('[onStartStop] Error emitting stop:', e);
+      }
 
-      // КРИТИЧНО: Покидаем комнату при остановке (и для direct calls, и для рандомного чата)
+      // Покидаем комнату при остановке (и для direct calls, и для рандомного чата)
       try {
         const currentRoomId = roomIdRef.current;
         if (currentRoomId) {
@@ -2268,8 +2481,39 @@ const flipCam = useCallback(async () => {
       // УПРОЩЕНО: закрыть единственный peer
       cleanupPeer(peerRef.current);
       peerRef.current = null;
-
-      // остановить локальный стрим
+      
+      // ВАЖНО: Очищаем partnerId и processingOffersRef ПЕРЕД остановкой стрима
+      // чтобы защита в stopLocalStream не предотвратила остановку камеры
+      partnerIdRef.current = null;
+      processingOffersRef.current.clear();
+      
+      // Останавливаем локальный стрим БЕЗ защиты (force stop)
+      // При нажатии "Стоп" камера должна быть остановлена независимо от состояния
+      const ls = localStreamRef.current || localStream;
+      if (ls) {
+        try {
+          const tracks = ls.getTracks?.() || [];
+          console.log('[onStartStop] Stopping', tracks.length, 'tracks from local stream');
+          tracks.forEach((t: any) => {
+            try {
+              t.enabled = false;
+              t.stop();
+              console.log('[onStartStop] Stopped track:', t.kind, t.id);
+            } catch (e) {
+              console.warn('[onStartStop] Error stopping track:', e);
+            }
+          });
+        } catch (e) {
+          console.warn('[onStartStop] Error stopping tracks:', e);
+        }
+        localStreamRef.current = null;
+      }
+      
+      // ВАЖНО: Убеждаемся что loadingRef.current = false ПЕРЕД вызовом stopLocalStream
+      // Это гарантирует, что stopLocalStream не будет пропущен из-за проверки loadingRef.current
+      loadingRef.current = false;
+      
+      // Также вызываем stopLocalStream для полной очистки PC и других ресурсов
       stopLocalStream();
 
       // сброс стейта
@@ -2282,36 +2526,112 @@ const flipCam = useCallback(async () => {
       setCamOn(false);
       setRemoteMutedMain(false);
       setRemoteCamOn(true);
+      
+      console.log('[onStartStop] Search stopped successfully', {
+        started: startedRef.current,
+        hasStream: !!(localStreamRef.current || localStream),
+        hasPartnerId: !!partnerIdRef.current,
+        hasRoomId: !!roomIdRef.current
+      });
       return;
     }
 
     // === START ===
+    // Защита от повторных вызовов - проверяем loadingRef только для блока START
+    // Для блока STOP мы не проверяем loading, так как остановка должна происходить всегда
+    if (loadingRef.current) {
+      console.log('[onStartStop] Already processing (START), skipping', { loading: loadingRef.current });
+      return;
+    }
+    
     const ok = await requestPermissions();
     if (!ok) {
       Alert.alert('Разрешения', 'Нет доступа к камере/микрофону');
       return;
     }
 
+    // ВАЖНО: Устанавливаем loading в true и loadingRef СРАЗУ
     setLoading(true);
+    loadingRef.current = true;
+    // КРИТИЧЕСКИ ВАЖНО: Устанавливаем startedRef.current в true ПЕРЕД созданием стрима
+    // Это гарантирует, что stopLocalStream не остановит стрим при активном поиске
+    // Если установить ПОСЛЕ, то cleanup функции могут вызвать stopLocalStream до установки
+    startedRef.current = true;
+    console.log('[onStartStop] Set startedRef.current = true BEFORE creating stream');
     try {
       const stream = await startLocalStream('front');
-      // КРИТИЧНО: При начале поиска камера всегда включена
+      // ВАЖНО: При начале поиска камера ВСЕГДА включена и кнопка камеры НЕ перечеркнута
+      // Камера должна быть ВСЕГДА включена при подключении и выключаться ТОЛЬКО по нажатию на кнопку камеры
       if (stream) {
         const videoTrack = stream.getVideoTracks()?.[0];
         if (videoTrack) {
+          // ВАЖНО: ВСЕГДА включаем video track и устанавливаем camOn=true
           videoTrack.enabled = true;
           setCamOn(true);
-          console.log('[onStartStop] Enabled camera for search start');
+          console.log('[onStartStop] Enabled camera for search start - video track enabled, camOn=true');
+        } else {
+          console.warn('[onStartStop] No video track in stream after startLocalStream');
         }
+      } else {
+        console.error('[onStartStop] Failed to get stream from startLocalStream');
       }
+      
+      // ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА: Убеждаемся что camOn установлен в true при начале поиска
+      // Это предотвращает автоматическое выключение камеры
+      // Проверяем еще раз что video track включен
+      if (stream) {
+        const videoTrack = stream.getVideoTracks()?.[0];
+        if (videoTrack && !videoTrack.enabled) {
+          videoTrack.enabled = true;
+          console.log('[onStartStop] Force enabled video track after stream creation');
+        }
+        setCamOn(true);
+        console.log('[onStartStop] Final check - camOn set to true, video track enabled:', videoTrack?.enabled);
+      }
+      
       setStarted(true);
-      try { socket.emit('start'); } catch {}
+      // ВАЖНО: НЕ устанавливаем loading в false здесь!
+      // loading должен оставаться true во время поиска, чтобы показывался лоадер в блоке "Собеседник"
+      // loading будет установлен в false только когда найден собеседник (в handleMatchFound) или при остановке поиска
+      // setLoading(false);
+      // loadingRef.current = false;
+      
+      // ФИНАЛЬНАЯ ПРОВЕРКА: Убеждаемся что camOn установлен в true и video track включен
+      // ВАЖНО: Делаем это с задержкой, чтобы избежать конфликтов с cleanup функциями
+      setTimeout(() => {
+        if (stream && startedRef.current) {
+          const videoTrack = stream.getVideoTracks()?.[0];
+          if (videoTrack) {
+            videoTrack.enabled = true;
+            setCamOn(true);
+            console.log('[onStartStop] Final final check (delayed) - video track enabled, camOn=true, stream exists');
+          } else {
+            console.error('[onStartStop] ERROR: No video track in stream after all checks!');
+          }
+        } else if (!startedRef.current) {
+          console.log('[onStartStop] Skipping final check - started is false (user stopped search)');
+        } else if (loadingRef.current) {
+          console.log('[onStartStop] Skipping final check - loading is true');
+        } else {
+          console.error('[onStartStop] ERROR: No stream after startLocalStream!');
+        }
+      }, 200);
+      
+      try { 
+        socket.emit('start'); 
+        console.log('[onStartStop] Emitted socket.emit("start") for random chat search');
+      } catch (e) {
+        console.error('[onStartStop] Error emitting start:', e);
+      }
     } catch (e) {
+      startedRef.current = false;
       setStarted(false);
       setLoading(false);
+      loadingRef.current = false;
+      setCamOn(false);
       Alert.alert('Ошибка', 'Не удалось запустить камеру/микрофон');
     }
-  }, [started, requestPermissions, startLocalStream, cleanupPeer, stopMicMeter, isDirectCall]);
+  }, [requestPermissions, startLocalStream, cleanupPeer, stopMicMeter, isDirectCall]);
 
   const stopRemoteOnly = useCallback(() => {
     // Метр только при соединении — гасим
@@ -2357,7 +2677,7 @@ const flipCam = useCallback(async () => {
     }
     setRemoteStream(null);
     
-    // КРИТИЧНО: Очищаем partnerId СНАЧАЛА, чтобы предотвратить обработку устаревших событий
+    // Очищаем partnerId СНАЧАЛА, чтобы предотвратить обработку устаревших событий
     const oldPartnerId = partnerIdRef.current;
     partnerIdRef.current = null;
     setPartnerId(null);
@@ -2406,7 +2726,7 @@ const flipCam = useCallback(async () => {
           }
         }
         
-        // КРИТИЧНО: Уведомляем друзей что мы снова доступны
+        // Уведомляем друзей что мы снова доступны
         try {
           socket.emit('presence:update', { status: 'available' });
           console.log('[onAbortCall] Sent presence:update available');
@@ -2414,7 +2734,7 @@ const flipCam = useCallback(async () => {
           console.error('[onAbortCall] Failed to send presence update:', e);
         }
         
-        // КРИТИЧНО: Сначала очищаем ВСЕ refs и state связанные со звонком ПЕРЕД остановкой потоков
+        // Сначала очищаем ВСЕ refs и state связанные со звонком ПЕРЕД остановкой потоков
         // Это предотвращает восстановление состояния звонка в useEffect
         currentCallIdRef.current = null;
         roomIdRef.current = null;
@@ -2426,27 +2746,27 @@ const flipCam = useCallback(async () => {
         // Переходим в неактивное состояние
         logger.debug('[onAbortCall] Switching to inactive state');
         
-        // КРИТИЧНО: САМОЕ ПЕРВОЕ ДЕЛО - устанавливаем peerRef.current = null и isInactiveStateRef.current = true
+        // САМОЕ ПЕРВОЕ ДЕЛО - устанавливаем peerRef.current = null и isInactiveStateRef.current = true
         // Это должно быть ДО любых других действий, чтобы обработчики видели что звонок завершен
         const pcMain = peerRef.current;
         const pcPreCreated = preCreatedPcRef.current;
         
-        // КРИТИЧНО: СНАЧАЛА устанавливаем peerRef.current = null, чтобы обработчики не видели активный PC
+        // СНАЧАЛА устанавливаем peerRef.current = null, чтобы обработчики не видели активный PC
         peerRef.current = null;
         preCreatedPcRef.current = null;
         
-        // КРИТИЧНО: СНАЧАЛА очищаем ВСЕ refs СИНХРОННО
+        // СНАЧАЛА очищаем ВСЕ refs СИНХРОННО
         currentCallIdRef.current = null;
         roomIdRef.current = null;
         partnerUserIdRef.current = null;
         partnerIdRef.current = null;
         
-        // КРИТИЧНО: СНАЧАЛА устанавливаем isInactiveStateRef.current = true СИНХРОННО
+        // СНАЧАЛА устанавливаем isInactiveStateRef.current = true СИНХРОННО
         isInactiveStateRef.current = true;
         setIsInactiveState(true);
         console.log('🔴 [onAbortCall] Set peerRef=null, isInactiveState=true, refs cleared FIRST (before any cleanup)');
         
-        // КРИТИЧНО: Теперь очищаем обработчики ПЕРЕД закрытием PC
+        // Теперь очищаем обработчики ПЕРЕД закрытием PC
         // Это предотвратит их срабатывание
         try {
           if (pcMain) {
@@ -2484,28 +2804,28 @@ const flipCam = useCallback(async () => {
           console.warn('⚫ [onAbortCall] Error clearing handlers:', e);
         }
         
-        // КРИТИЧНО: Очищаем state
+        // Очищаем state
         setPartnerUserId(null);
         setPartnerId(null);
-        // КРИТИЧНО: Устанавливаем флаг что звонок друга был завершен
+        // Устанавливаем флаг что звонок друга был завершен
         setWasFriendCallEnded(true);
         
-        // КРИТИЧНО: Устанавливаем started в false для скрытия кнопок в блоках
+        // Устанавливаем started в false для скрытия кнопок в блоках
         setStarted(false);
         setCamOn(false); // Выключаем камеру
         setMicOn(false); // Выключаем микрофон
         setFriendCallAccepted(false);
         setInDirectCall(false);
         
-        // КРИТИЧНО: Останавливаем локальные потоки (stopLocalStream сам закроет все PeerConnection внутри)
+        // Останавливаем локальные потоки (stopLocalStream сам закроет все PeerConnection внутри)
         try {
           await stopLocalStream();
-          // КРИТИЧНО: localStreamRef и localStream уже очищены в stopLocalStream
+          // localStreamRef и localStream уже очищены в stopLocalStream
           console.log('[onAbortCall] Local stream stopped and cleared');
           
-          // КРИТИЧНО: Дополнительная проверка для повторных вызовов - убеждаемся что ВСЕ треки действительно остановлены
+          // Дополнительная проверка для повторных вызовов - убеждаемся что ВСЕ треки действительно остановлены
           // Это особенно важно для второго и последующих вызовов когда камера может оставаться активной
-          // КРИТИЧНО: Проверяем как localStreamRef, так и локальную переменную localStream (на случай если ref уже очищен)
+          // Проверяем как localStreamRef, так и локальную переменную localStream (на случай если ref уже очищен)
           const remainingTracksAfterStop = (localStreamRef.current || localStream)?.getTracks?.() || [];
           if (remainingTracksAfterStop.length > 0) {
             console.warn('[onAbortCall] CRITICAL: Tracks still exist after stopLocalStream, force stopping:', remainingTracksAfterStop.length);
@@ -2521,7 +2841,7 @@ const flipCam = useCallback(async () => {
             });
           }
           
-          // КРИТИЧНО: Дополнительная проверка всех активных mediaDevices
+          // Дополнительная проверка всех активных mediaDevices
           // Это особенно важно для iOS где индикатор камеры может оставаться активным
           try {
             const allDevices = await mediaDevices.enumerateDevices() as any[];
@@ -2531,14 +2851,14 @@ const flipCam = useCallback(async () => {
             }
         } catch {}
         
-          // КРИТИЧНО: Дополнительная задержка для iOS чтобы камера полностью освободилась
+          // Дополнительная задержка для iOS чтобы камера полностью освободилась
           // Это особенно важно при повторных вызовах
           await new Promise(resolve => setTimeout(resolve, 200));
         } catch (e) {
           console.error('[onAbortCall] Error stopping local stream:', e);
         }
         
-        // КРИТИЧНО: Дополнительная проверка - убеждаемся что все PeerConnection закрыты
+        // Дополнительная проверка - убеждаемся что все PeerConnection закрыты
         // peerRef и preCreatedPcRef уже установлены в null выше, поэтому просто закрываем PC
         try { 
           if (pcMain) {
@@ -2552,7 +2872,7 @@ const flipCam = useCallback(async () => {
           }
         } catch {}
         
-        // КРИТИЧНО: Очищаем remote потоки - останавливаем треки перед очисткой
+        // Очищаем remote потоки - останавливаем треки перед очисткой
         try {
           const remoteStream = remoteStreamRef.current;
           if (remoteStream) {
@@ -2571,7 +2891,7 @@ const flipCam = useCallback(async () => {
         remoteStreamRef.current = null;
         // DEPRECATED: remoteRender больше не используется
         
-        // КРИТИЧНО: Сбрасываем ВСЕ флаги состояния
+        // Сбрасываем ВСЕ флаги состояния
         setRemoteMutedMain(false);
         setRemoteCamOn(false);
         setPartnerInPiP(false);
@@ -2581,7 +2901,7 @@ const flipCam = useCallback(async () => {
         // Останавливаем индикаторы
         try { 
           stopMicMeter(); 
-          // КРИТИЧНО: Дополнительно устанавливаем micLevel=0 для эквалайзера
+          // Дополнительно устанавливаем micLevel=0 для эквалайзера
           setMicLevel(0);
           try { pip.updatePiPState({ micLevel: 0 }); } catch {}
         } catch {}
@@ -2629,7 +2949,7 @@ const flipCam = useCallback(async () => {
   
   // Восстанавливаем состояние звонка при монтировании если есть активный звонок
   useEffect(() => {
-    // КРИТИЧНО: Если пользователь в неактивном состоянии (завершенный звонок с задизейбленной кнопкой),
+    // Если пользователь в неактивном состоянии (завершенный звонок с задизейбленной кнопкой),
     // НЕ восстанавливаем активное состояние. Исключение - только входящий звонок от друга или возврат из PiP
     // ИЛИ если уже принят входящий звонок (friendCallAccepted === true)
     if (isInactiveState && !incomingFriendCall && !(resume && fromPiP) && !friendCallAccepted) {
@@ -2677,25 +2997,25 @@ const flipCam = useCallback(async () => {
         roomIdRef.current = routeRoomId;
       }
       
-      // КРИТИЧНО: Устанавливаем все флаги активного звонка для правильного отображения UI
+      // Устанавливаем все флаги активного звонка для правильного отображения UI
       setStarted(true);
       setPcConnected(true);
       setInDirectCall(true);
       setFriendCallAccepted(true);
       setLoading(false); // Сбрасываем лоадер если был
       
-      // КРИТИЧНО: Выходим из неактивного состояния при возврате из PiP
+      // Выходим из неактивного состояния при возврате из PiP
       setIsInactiveState(false);
       setWasFriendCallEnded(false);
       
-      // КРИТИЧНО: Восстанавливаем partnerUserId из route.params (сохранено при уходе в PiP)
+      // Восстанавливаем partnerUserId из route.params (сохранено при уходе в PiP)
       const routePartnerUserId = route?.params?.peerUserId || (route?.params as any)?.partnerUserId;
       if (routePartnerUserId && !partnerUserId) {
         setPartnerUserId(routePartnerUserId);
         partnerUserIdRef.current = routePartnerUserId;
       }
       
-      // КРИТИЧНО: Восстанавливаем partnerId (socket.id) из route.params для правильного восстановления соединения
+      // Восстанавливаем partnerId (socket.id) из route.params для правильного восстановления соединения
       const routePartnerId = (route?.params as any)?.partnerId;
       if (routePartnerId && !partnerIdRef.current) {
         setPartnerId(routePartnerId);
@@ -2710,7 +3030,7 @@ const flipCam = useCallback(async () => {
       // НЕ трогаем remoteStream - им управляет только партнёр через pip:state
       
       // Включаем ТОЛЬКО локальные видео треки обратно (они были отключены для PiP)
-      // КРИТИЧНО: При возврате из PiP состояние кнопки камеры должно оставаться включенной
+      // При возврате из PiP состояние кнопки камеры должно оставаться включенной
       if (currentPip.localStream) {
         try {
           let hasEnabled = false;
@@ -2725,7 +3045,7 @@ const flipCam = useCallback(async () => {
           if (hasEnabled) {
             console.log('[VideoChat] Re-enabled local video track');
           }
-          // КРИТИЧНО: Устанавливаем camOn в true если трек включен (независимо от того, был ли он включен до этого или мы его только что включили)
+          // Устанавливаем camOn в true если трек включен (независимо от того, был ли он включен до этого или мы его только что включили)
           // Это гарантирует что кнопка камеры остается в правильном состоянии при возврате из PiP
           const videoTrack = (currentPip.localStream as any)?.getVideoTracks?.()?.[0];
           if (videoTrack && videoTrack.enabled) {
@@ -2737,7 +3057,7 @@ const flipCam = useCallback(async () => {
         }
       }
       
-      // КРИТИЧНО: Также проверяем localStreamRef для обратной совместимости
+      // Также проверяем localStreamRef для обратной совместимости
       if (localStreamRef.current && !currentPip.localStream) {
         try {
           const videoTrack = localStreamRef.current.getVideoTracks?.()?.[0];
@@ -2768,7 +3088,7 @@ const flipCam = useCallback(async () => {
       setRemoteViewKey(Date.now());
       setPartnerInPiP(false);
       
-      // КРИТИЧНО: Синхронизируем состояние камеры с партнером при возврате из PiP
+      // Синхронизируем состояние камеры с партнером при возврате из PiP
       setTimeout(() => {
         try {
           sendCameraState();
@@ -2784,11 +3104,11 @@ const flipCam = useCallback(async () => {
       pipResumeProcessedRef.current = false;
     }
     
-    // КРИТИЧНО: НЕ восстанавливаем состояние звонка если находимся в неактивном состоянии
+    // НЕ восстанавливаем состояние звонка если находимся в неактивном состоянии
     // Это предотвращает случайное восстановление после завершения звонка
     // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: также не восстанавливаем если wasFriendCallEnded === true (звонок друга был завершен)
-    // КРИТИЧНО: Дополнительная проверка - убеждаемся что currentCallIdRef тоже не очищен (если это звонок друга)
-    // КРИТИЧНО: Также проверяем что roomIdRef и partnerUserIdRef не очищены (если они null, значит звонок завершен)
+    // Дополнительная проверка - убеждаемся что currentCallIdRef тоже не очищен (если это звонок друга)
+    // Также проверяем что roomIdRef и partnerUserIdRef не очищены (если они null, значит звонок завершен)
     const hasActiveCallId = currentCallIdRef.current && (isDirectCall || inDirectCall || friendCallAccepted);
     const hasActiveRefs = roomIdRef.current && partnerUserIdRef.current && partnerIdRef.current;
     const shouldRestoreCall = hasActiveRefs && (!started || isFrombackground || returnToActiveCall) && !isInactiveState && !wasFriendCallEnded && hasActiveCallId;
@@ -2813,14 +3133,14 @@ const flipCam = useCallback(async () => {
         lastRouteParamsRef.current.restored = true;
       }
       
-      // КРИТИЧНО: Восстанавливаем состояние звонка только если НЕ в неактивном состоянии
+      // Восстанавливаем состояние звонка только если НЕ в неактивном состоянии
       // (неактивное состояние обрабатывается выше через return в начале useEffect)
-      // КРИТИЧНО: НЕ восстанавливаем состояние если был завершен звонок друга
+      // НЕ восстанавливаем состояние если был завершен звонок друга
       if (!wasFriendCallEnded && hasActiveCallId) {
       setStarted(true);
       setPcConnected(true);
       setInDirectCall(true);
-        setFriendCallAccepted(true); // КРИТИЧНО: Для инициатора устанавливаем friendCallAccepted при восстановлении
+        setFriendCallAccepted(true); // Для инициатора устанавливаем friendCallAccepted при восстановлении
       } else {
         console.log('[useEffect restore call] Skipping state restoration - friend call ended or no active call ID');
         return; // Выходим если звонок завершен
@@ -2855,7 +3175,7 @@ const flipCam = useCallback(async () => {
           navParams: {
             ...route?.params,
             peerUserId: partnerUserId || partnerUserIdRef.current,
-            partnerId: partnerId || partnerIdRef.current, // КРИТИЧНО: Сохраняем partnerId для восстановления соединения
+            partnerId: partnerId || partnerIdRef.current, // Сохраняем partnerId для восстановления соединения
           } as any,
         });
         // Обновляем micLevel в PiP сразу после показа
@@ -2885,7 +3205,7 @@ const flipCam = useCallback(async () => {
       // DEPRECATED: remoteRenderKey больше не используется
       setLocalRenderKey(prev => prev + 1);
       
-      // КРИТИЧНО: Обновляем состояние локальной камеры только если НЕ в неактивном состоянии
+      // Обновляем состояние локальной камеры только если НЕ в неактивном состоянии
       // В неактивном состоянии камера должна быть выключена
       // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: также не включаем камеру если был завершен звонок друга
       if (!isInactiveState && !wasFriendCallEnded && hasActiveCallId) {
@@ -2936,7 +3256,7 @@ const flipCam = useCallback(async () => {
     // Ждем чтобы PC полностью закрылся (уменьшили задержку для ускорения)
     await new Promise(resolve => setTimeout(resolve, 200));
     
-    // КРИТИЧНО: Покидаем текущую комнату перед поиском нового собеседника (только для direct calls)
+    // Покидаем текущую комнату перед поиском нового собеседника (только для direct calls)
     try {
       const currentRoomId = roomIdRef.current;
       if (currentRoomId && isDirectCall) {
@@ -2948,13 +3268,37 @@ const flipCam = useCallback(async () => {
       }
     } catch {}
     
+    // ВАЖНО: Убеждаемся что started=true для защиты стрима от остановки
+    // Это гарантирует что камера не остановится при поиске нового собеседника
+    if (!started) {
+      setStarted(true);
+      console.log('[onNext] Set started=true to protect stream during search');
+    }
+    
     // Если локального стрима нет (например, пришли из Home), включим его
-    // КРИТИЧНО: НЕ запускаем камеру если находимся в неактивном состоянии (завершенный звонок)
+    // НЕ запускаем камеру если находимся в неактивном состоянии (завершенный звонок)
     if (!localStreamRef.current && !isInactiveStateRef.current) {
       try { 
-        await startLocalStream?.('front'); 
+        const stream = await startLocalStream?.('front');
+        if (stream) {
+          // Убеждаемся что камера включена после создания стрима
+          const videoTrack = stream.getVideoTracks()?.[0];
+          if (videoTrack) {
+            videoTrack.enabled = true;
+            setCamOn(true);
+            console.log('[onNext] Enabled camera after stream creation');
+          }
+        }
       } catch (e) {
         console.warn('[onNext] Failed to start local stream:', e);
+      }
+    } else if (localStreamRef.current && !isInactiveStateRef.current) {
+      // Если стрим уже есть, убеждаемся что камера включена
+      const videoTrack = localStreamRef.current.getVideoTracks()?.[0];
+      if (videoTrack) {
+        videoTrack.enabled = true;
+        setCamOn(true);
+        console.log('[onNext] Enabled camera in existing stream');
       }
     } else if (isInactiveStateRef.current) {
       console.log('[onNext] Skipping startLocalStream - in inactive state');
@@ -2970,7 +3314,7 @@ const flipCam = useCallback(async () => {
     try { socket.emit('next'); } catch {}
     console.log('[onNext] Emitted next event');
     
-    // КРИТИЧНО: Устанавливаем loading в true для показа лоадера при поиске
+    // Устанавливаем loading в true для показа лоадера при поиске
     setLoading(true);
     console.log('[onNext] Set loading to true after emit next for search');
     
@@ -2979,13 +3323,13 @@ const flipCam = useCallback(async () => {
       setIsNexting(false);
       console.log('[onNext] Button unblocked - ready for next click');
     }, 1500);
-  }, [stopRemoteOnly, startLocalStream, isDirectCall, isNexting]);
+  }, [stopRemoteOnly, startLocalStream, isDirectCall, isNexting, started]);
 
   // --------------------------
   // Local toggles
   // --------------------------
   const toggleMic = useCallback(async () => {
-    // КРИТИЧНО: Используем localStreamRef.current для работы даже когда компонент размонтирован (в PiP)
+    // Используем localStreamRef.current для работы даже когда компонент размонтирован (в PiP)
     const stream = localStreamRef.current || localStream;
     if (!stream) {
       return; // не трогаем камеру/мик, если поток не запущен
@@ -3006,7 +3350,7 @@ const flipCam = useCallback(async () => {
     // Если микрофон выключили — просто показываем 0, без доп. логов
     if (!t.enabled) {
       setMicLevel(0);
-      // КРИТИЧНО: Обновляем micLevel=0 в PiP и останавливаем метр
+      // Обновляем micLevel=0 в PiP и останавливаем метр
       try {
         pip.updatePiPState({ micLevel: 0, isMuted: true });
       } catch (e) {
@@ -3018,7 +3362,7 @@ const flipCam = useCallback(async () => {
 
     // Если микрофон включили и есть соединение — убеждаемся, что метр запущен
     // Для звонков друзьям запускаем метры даже если pcConnectedRef еще не установлен
-    // КРИТИЧНО: Используем refs для работы даже когда компонент размонтирован (в PiP)
+    // Используем refs для работы даже когда компонент размонтирован (в PiP)
     const remoteStreamForCheck = remoteStream || (pip.visible ? pip.remoteStream : null);
     if (remoteStreamForCheck || stream) {
       // Небольшая задержка для звонков друзьям, чтобы дать время на установку соединения
@@ -3056,34 +3400,49 @@ const flipCam = useCallback(async () => {
   }, [partnerId]);
 
   const toggleCam = useCallback(() => {
-    if (!localStreamRef.current) return;
+    if (!localStreamRef.current) {
+      console.warn('[toggleCam] No local stream available');
+      return;
+    }
 
     const videoTrack = (localStreamRef.current as any)?.getVideoTracks?.()?.[0];
-    if (!videoTrack) return;
+    if (!videoTrack) {
+      console.warn('[toggleCam] No video track available');
+      return;
+    }
 
     setCamOn((prev) => {
       const newValue = !prev;
 
       videoTrack.enabled = newValue;
 
-      // отправляем событие собеседнику с указанием отправителя
-      console.log('[toggleCam] Sending cam-toggle event:', { 
+      // ВАЖНО: НЕ отправляем событие cam-toggle при выключении локальной камеры
+      // Выключение локальной камеры - это локальное действие, которое не должно
+      // влиять на удаленное видео. Заглушка "Отошел" должна показываться только
+      // когда удаленная камера действительно выключена, а не когда локальная камера выключена.
+      // Событие cam-toggle используется только для синхронизации состояния удаленной камеры
+      // при подключении нового собеседника (через sendCameraState), но не при локальном выключении.
+      console.log('[toggleCam] Camera toggled locally:', { 
         enabled: newValue, 
         from: socket.id,
-        partnerId 
+        partnerId,
+        isRandomChat: !isDirectCall && !inDirectCall && !friendCallAccepted
       });
-      socket.emit("cam-toggle", { 
-        enabled: newValue, 
-        from: socket.id 
-      });
+
+      // ВАЖНО: При выключении камеры обновляем localRenderKey для принудительного обновления отображения
+      // Это гарантирует, что при выключении камеры сразу показывается заглушка "Вы", а не последний кадр
+      if (!newValue) {
+        setLocalRenderKey(prev => prev + 1);
+        console.log('[toggleCam] Camera disabled, updated localRenderKey to show placeholder');
+      }
 
       return newValue;
     });
-  }, [partnerId]);
+  }, [partnerId, isDirectCall, inDirectCall, friendCallAccepted]);
 
 
   const toggleRemoteAudio = useCallback(() => {
-    // КРИТИЧНО: Используем remoteStream или pip.remoteStream для работы даже когда компонент размонтирован (в PiP)
+    // Используем remoteStream или pip.remoteStream для работы даже когда компонент размонтирован (в PiP)
     const stream = remoteStream || (pip.visible ? pip.remoteStream : null);
     if (!stream) {
       return;
@@ -3109,7 +3468,7 @@ const flipCam = useCallback(async () => {
       toggleRemoteAudio: toggleRemoteAudio,
     });
     
-    // КРИТИЧНО: Регистрируем функцию очистки в глобальном месте
+    // Регистрируем функцию очистки в глобальном месте
     // Это нужно чтобы можно было вызвать очистку даже когда компонент размонтирован (в PiP)
     try {
       if ((global as any).__endCallCleanupRef) {
@@ -3119,7 +3478,7 @@ const flipCam = useCallback(async () => {
       console.warn('[VideoChatContent] Error registering endCall cleanup:', e);
     }
     
-    // КРИТИЧНО: Регистрируем функцию переключения микрофона в глобальном месте
+    // Регистрируем функцию переключения микрофона в глобальном месте
     // Это нужно чтобы можно было запустить startMicMeter даже когда компонент размонтирован (в PiP)
     try {
       if ((global as any).__toggleMicRef) {
@@ -3129,7 +3488,7 @@ const flipCam = useCallback(async () => {
       console.warn('[VideoChatContent] Error registering toggleMic:', e);
     }
     
-    // КРИТИЧНО: Регистрируем функцию переключения удаленного аудио в глобальном месте
+    // Регистрируем функцию переключения удаленного аудио в глобальном месте
     // Это нужно чтобы можно было переключать динамик даже когда компонент размонтирован (в PiP)
     try {
       if ((global as any).__toggleRemoteAudioRef) {
@@ -3172,13 +3531,13 @@ const flipCam = useCallback(async () => {
         finalRemoteStream?.getVideoTracks()?.forEach((t: any) => { t.enabled = false; }); 
       } catch {}
       
-      // КРИТИЧНО: НЕ показываем PiP если находимся в неактивном состоянии (звонок завершен)
+      // НЕ показываем PiP если находимся в неактивном состоянии (звонок завершен)
       if (isInactiveState) {
         console.log('[showPiPOnExit] In inactive state, skipping PiP');
         return;
       }
       
-      // КРИТИЧНО: Сохраняем partnerUserId в navParams для восстановления при возврате
+      // Сохраняем partnerUserId в navParams для восстановления при возврате
       pip.showPiP({
         callId: currentCallIdRef.current || '',
         roomId: roomIdRef.current || '',
@@ -3191,7 +3550,7 @@ const flipCam = useCallback(async () => {
         navParams: {
           ...route?.params,
           peerUserId: partnerUserId || partnerUserIdRef.current,
-          partnerId: partnerId || partnerIdRef.current, // КРИТИЧНО: Сохраняем partnerId для восстановления соединения
+          partnerId: partnerId || partnerIdRef.current, // Сохраняем partnerId для восстановления соединения
         } as any,
       });
       
@@ -3228,7 +3587,7 @@ const flipCam = useCallback(async () => {
         isInactiveState,
       });
       
-      // КРИТИЧНО: НЕ показываем PiP если находимся в неактивном состоянии (звонок завершен)
+      // НЕ показываем PiP если находимся в неактивном состоянии (звонок завершен)
       // В этом случае просто возвращаемся назад на Home
       if (isInactiveState) {
         console.log('[BackHandler] In inactive state, just navigating back without PiP');
@@ -3322,7 +3681,7 @@ const flipCam = useCallback(async () => {
       console.log('[cam-toggle] Received:', { enabled, from, partnerId, partnerIdRef: partnerIdRef.current, roomId: roomIdRef.current });
       console.log('[cam-toggle] Current remoteCamOn state before update:', remoteCamOn);
       
-      // КРИТИЧНО: Для звонков друзей проверяем наличие активной комнаты или прямого звонка
+      // Для звонков друзей проверяем наличие активной комнаты или прямого звонка
       const isDirectFriendCall = isDirectCall || inDirectCall || friendCallAccepted;
       const hasActiveRoom = !!roomIdRef.current;
       
@@ -3349,8 +3708,8 @@ const flipCam = useCallback(async () => {
           console.log('[cam-toggle] partnerId fallback set to', from);
       }
 
-      // КРИТИЧНО: Обновляем remoteCamOn
-      // КРИТИЧНО: Всегда обновляем remoteCamOn, даже если значение не изменилось
+      // Обновляем remoteCamOn
+      // Всегда обновляем remoteCamOn, даже если значение не изменилось
       // Это важно для принудительного ререндера при повторных звонках
       setRemoteCamOn(!!enabled);
       console.log('[cam-toggle] Updated remoteCamOn to:', enabled, {
@@ -3360,21 +3719,21 @@ const flipCam = useCallback(async () => {
         remoteStreamId: remoteStream?.id
       });
       
-      // КРИТИЧНО: Принудительное обновление RTCView при изменении состояния камеры
-      // КРИТИЧНО: Всегда обновляем remoteViewKey для гарантированного ререндера
+      // Принудительное обновление RTCView при изменении состояния камеры
+      // Всегда обновляем remoteViewKey для гарантированного ререндера
       setRemoteViewKey(Date.now());
       
-      // КРИТИЧНО: Если камера включена — сбрасываем флаг PiP (самовосстановление заглушки)
+      // Если камера включена — сбрасываем флаг PiP (самовосстановление заглушки)
       if (enabled) {
         setPartnerInPiP(false);
         console.log('[cam-toggle] Camera enabled, reset partnerInPiP flag');
       } else {
-        // КРИТИЧНО: Если камера выключена, также сбрасываем partnerInPiP для корректного отображения заглушки
+        // Если камера выключена, также сбрасываем partnerInPiP для корректного отображения заглушки
         setPartnerInPiP(false);
         console.log('[cam-toggle] Camera disabled, reset partnerInPiP flag for away placeholder');
       }
       
-      // КРИТИЧНО: Если камера выключена, показываем заглушку
+      // Если камера выключена, показываем заглушку
       if (!enabled) {
         console.log('[cam-toggle] Camera disabled, showing away placeholder', {
           remoteCamOn: !!enabled,
@@ -3479,9 +3838,9 @@ const flipCam = useCallback(async () => {
               existingRemoteStreamId: remoteStream?.id
             });
             
-            // КРИТИЧНО: Для второго и последующих вызовов - очищаем старый remote stream перед установкой нового
+            // Для второго и последующих вызовов - очищаем старый remote stream перед установкой нового
             // Это гарантирует что новый stream установится правильно
-            // КРИТИЧНО: Проверяем и state и ref, так как они могут быть рассинхронизированы при повторных вызовах
+            // Проверяем и state и ref, так как они могут быть рассинхронизированы при повторных вызовах
             const existingRemoteStream = remoteStreamRef.current || remoteStream;
             if (existingRemoteStream && existingRemoteStream.id !== rs.id) {
               console.log('[handleRemote] Clearing old remote stream before setting new one', {
@@ -3507,7 +3866,7 @@ const flipCam = useCallback(async () => {
               setRemoteStream(null);
               remoteStreamRef.current = null;
               
-              // КРИТИЧНО: Небольшая задержка перед установкой нового stream для гарантированной очистки
+              // Небольшая задержка перед установкой нового stream для гарантированной очистки
               // Используем setTimeout так как handleRemote не async
               setTimeout(() => {
                 try { 
@@ -3525,24 +3884,24 @@ const flipCam = useCallback(async () => {
               return; // Выходим, установка произойдет в setTimeout
             }
             
-            // КРИТИЧНО: Проверяем, это ли тот же stream (когда приходит новый track к существующему stream)
+            // Проверяем, это ли тот же stream (когда приходит новый track к существующему stream)
             const currentRemoteStream = remoteStreamRef.current || remoteStream;
             const isSameStream = currentRemoteStream && currentRemoteStream.id === rs.id;
             
-            // КРИТИЧНО: Устанавливаем новый remote stream (для первого вызова или когда stream ID совпадает)
+            // Устанавливаем новый remote stream (для первого вызова или когда stream ID совпадает)
             // Если это тот же stream, но с новым track, просто обновляем ref для гарантии актуальности
             try { 
               if (!isSameStream) {
                 setRemoteStream(rs); 
                 remoteStreamRef.current = rs;
-                // КРИТИЧНО: Принудительно обновляем remoteViewKey при установке нового stream
-                // Это критично для повторных звонков, чтобы гарантировать отображение видеопотока
+                // Принудительно обновляем remoteViewKey при установке нового stream
+                // для повторных звонков, чтобы гарантировать отображение видеопотока
                 setRemoteViewKey(Date.now());
-                // КРИТИЧНО: Если video track уже есть в новом stream, ВСЕГДА устанавливаем remoteCamOn в true
+                // Если video track уже есть в новом stream, ВСЕГДА устанавливаем remoteCamOn в true
                 // Это особенно важно при повторных звонках и плохом интернете
                 const videoTrack = rs.getVideoTracks?.()?.[0];
                 if (videoTrack && videoTrack.readyState !== 'ended') {
-                  // КРИТИЧНО: Устанавливаем remoteCamOn в true даже если track еще не live
+                  // Устанавливаем remoteCamOn в true даже если track еще не live
                   // Это гарантирует отображение видео даже при плохом интернете
                   setRemoteCamOn(true);
                   console.log('[handleRemote] New stream has video track, set remoteCamOn=true immediately', {
@@ -3568,21 +3927,21 @@ const flipCam = useCallback(async () => {
                   hasVideoTrack: !!rs.getVideoTracks?.()?.[0],
                   hasAudioTrack: !!rs.getAudioTracks?.()?.[0]
                 });
-                // КРИТИЧНО: Принудительно обновляем state для ререндера когда появляется video track
+                // Принудительно обновляем state для ререндера когда появляется video track
                 const videoTracks = rs.getVideoTracks?.() || [];
                 if (videoTracks.length > 0) {
-                  // КРИТИЧНО: ВСЕГДА обновляем remoteStream в state когда появляется video track
+                  // ВСЕГДА обновляем remoteStream в state когда появляется video track
                   // Это особенно важно при повторных звонках, когда stream может быть уже установлен, но без video track
                   setRemoteStream(rs);
-                  // КРИТИЧНО: Обновляем remoteViewKey при появлении video track
+                  // Обновляем remoteViewKey при появлении video track
                   setRemoteViewKey(Date.now());
-                  // КРИТИЧНО: Устанавливаем remoteCamOn в true когда появляется video track
-                  // КРИТИЧНО: ВСЕГДА устанавливаем в true если track существует и не ended
+                  // Устанавливаем remoteCamOn в true когда появляется video track
+                  // ВСЕГДА устанавливаем в true если track существует и не ended
                   // Это гарантирует отображение видео даже при плохом интернете
                   const vt = videoTracks[0];
                   if (vt && vt.readyState !== 'ended') {
-                    // КРИТИЧНО: Устанавливаем в true даже если track еще не live
-                    // Это критично для плохого интернета, когда track может быть в состоянии 'ready'
+                    // Устанавливаем в true даже если track еще не live
+                    // для плохого интернета, когда track может быть в состоянии 'ready'
                     setRemoteCamOn(true);
                     console.log('[handleRemote] Video track appeared, updated state, remoteViewKey and remoteCamOn for re-render', {
                       readyState: vt.readyState,
@@ -3591,15 +3950,29 @@ const flipCam = useCallback(async () => {
                       willShowVideo: true
                     });
                   }
+                } else {
+                  // Если video track еще не пришел, но есть audio track - все равно обновляем state
+                  // Это гарантирует что когда video track придет, он сразу отобразится
+                  const audioTracks = rs.getAudioTracks?.() || [];
+                  if (audioTracks.length > 0) {
+                    // Обновляем state даже если есть только audio track
+                    // Это важно для синхронизации состояния
+                    setRemoteStream(rs);
+                    console.log('[handleRemote] Audio track received, updated state, waiting for video track', {
+                      streamId: rs.id,
+                      hasAudioTrack: true,
+                      hasVideoTrack: false
+                    });
+                  }
                 }
               }
             } catch (e) {
               console.error('[handleRemote] Error setting remote stream:', e);
             }
             // DEPRECATED: remoteRenderKey больше не используется
-            // КРИТИЧНО: Для дружеских звонков ВСЕГДА сбрасываем partnerInPiP при получении нового потока
+            // Для дружеских звонков ВСЕГДА сбрасываем partnerInPiP при получении нового потока
             // Это гарантирует, что useEffect для partnerInPiP не перезапишет remoteCamOn в false
-            // КРИТИЧНО: Проверяем не только friendCallAccepted, но и partnerUserId - если он установлен, это дружеский звонок
+            // Проверяем не только friendCallAccepted, но и partnerUserId - если он установлен, это дружеский звонок
             const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted || !!partnerUserId;
             if (isFriendCall) {
               try {
@@ -3608,13 +3981,13 @@ const flipCam = useCallback(async () => {
               } catch {}
             }
             
-            // КРИТИЧНО: Проверяем наличие video track перед установкой remoteCamOn
-            // КРИТИЧНО: Это особенно важно при повторных звонках
+            // Проверяем наличие video track перед установкой remoteCamOn
+            // Это особенно важно при повторных звонках
             const hasVideoTrack = !!(rs as any)?.getVideoTracks?.()?.[0];
             if (hasVideoTrack) {
               try {
                 const vt = (rs as any).getVideoTracks()[0];
-                // КРИТИЧНО: Устанавливаем remoteCamOn в true только если video track live или ready
+                // Устанавливаем remoteCamOn в true только если video track live или ready
                 if (vt.readyState === 'live' || vt.readyState === 'ready') {
                   setRemoteCamOn(true);
                   console.log('[handleRemote] Set remoteCamOn to true (video track present and live/ready)', {
@@ -3634,7 +4007,7 @@ const flipCam = useCallback(async () => {
               console.log('[handleRemote] Video track not yet available, waiting for it (audio track received)');
             }
             
-            // КРИТИЧНО: Для звонков друзьям запускаем метры при получении remoteStream
+            // Для звонков друзьям запускаем метры при получении remoteStream
             // Это гарантирует что эквалайзер работает даже если bindConnHandlers не сработал
             if (isFriendCall) {
               try {
@@ -3650,52 +4023,115 @@ const flipCam = useCallback(async () => {
             }
             
             try {
-              setLoading(false); 
-            } catch {} // КРИТИЧНО: Сбрасываем loading при получении потока
+              setLoading(false);
+              // ВАЖНО: ВСЕГДА устанавливаем started=true при получении remote stream
+              // Это гарантирует что камера работает и UI отображается правильно
+              // handleRemote может использовать старое значение started из замыкания,
+              // поэтому ВСЕГДА устанавливаем его в true, независимо от текущего значения
+              setStarted(true);
+              console.log('[handleRemote] Set started=true after receiving remote stream', {
+                wasStarted: startedRef.current,
+                nowStarted: true
+              });
+              
+              // ВАЖНО: ВСЕГДА включаем локальную камеру при получении remote stream
+              // Это гарантирует что камера в блоке "Вы" работает и кнопка не перечеркнута
+              // Камера должна быть ВСЕГДА включена при подключении и выключаться ТОЛЬКО по нажатию на кнопку
+              const localVideoTrack = localStreamRef.current?.getVideoTracks()?.[0];
+              if (localVideoTrack) {
+                // ВСЕГДА включаем video track и устанавливаем camOn=true
+                // Это гарантирует что камера включена при подключении
+                localVideoTrack.enabled = true;
+                setCamOn(true);
+                console.log('[handleRemote] Enabled local video track and set camOn=true after receiving remote stream', {
+                  trackEnabled: localVideoTrack.enabled,
+                  camOn: true,
+                  trackReadyState: localVideoTrack.readyState
+                });
+              } else {
+                console.warn('[handleRemote] No local video track found - camera may not work');
+              }
+              
+              // ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА: Убеждаемся что camOn установлен в true даже если track еще не готов
+              // Это предотвращает автоматическое выключение камеры при подключении
+              // ВАЖНО: Для рандомного чата камера должна быть ВСЕГДА включена при подключении
+              const isRandomChat = !isDirectCall && !inDirectCall && !friendCallAccepted;
+              if (isRandomChat) {
+                setCamOn(true);
+                console.log('[handleRemote] Force set camOn=true for random chat after receiving remote stream');
+              } else {
+                setCamOn(true);
+              }
+            } catch (e) {
+              console.error('[handleRemote] Error setting started/camOn:', e);
+            } // Сбрасываем loading при получении потока
 
-            // КРИТИЧНО: Явно включаем видео трек если он есть и выключен
+            // Явно включаем видео и аудио треки если они есть и выключены
             // Это особенно важно при втором вызове, когда remote stream может не отображаться
             try {
               const vt = (rs as any)?.getVideoTracks?.()?.[0];
+              const at = (rs as any)?.getAudioTracks?.()?.[0];
+              
+              // Включаем видео трек
               if (vt) {
                 if (!vt.enabled) {
                   vt.enabled = true;
+                  console.log('[handleRemote] Enabled remote video track');
                 }
-                // КРИТИЧНО: Убеждаемся что трек действительно active
+                // Убеждаемся что трек действительно active
                 if (vt.readyState !== 'live') {
                   console.warn('[handleRemote] Remote video track is not live:', vt.readyState);
                 }
-              } else {
-                // КРИТИЧНО: Не выдаем предупреждение если треки еще приходят асинхронно
-                // Video track может прийти позже audio track
-                const hasAudioTrack = !!(rs as any)?.getAudioTracks?.()?.[0];
-                if (!hasAudioTrack) {
-                  console.warn('[handleRemote] No tracks found in remote stream');
+              }
+              
+              // ВАЖНО: Включаем аудио трек для звука СРАЗУ при получении remote stream
+              // Звук должен работать сразу при подключении собеседника
+              if (at) {
+                // ВСЕГДА включаем audio track сразу, даже если он уже enabled
+                // Это гарантирует, что звук работает сразу при подключении
+                at.enabled = true;
+                console.log('[handleRemote] Enabled remote audio track for sound immediately', {
+                  wasEnabled: at.enabled,
+                  readyState: at.readyState,
+                  trackId: at.id
+                });
+                // Убеждаемся что трек действительно active
+                if (at.readyState !== 'live') {
+                  console.warn('[handleRemote] Remote audio track is not live yet:', at.readyState, '- will work when live');
+                } else {
+                  console.log('[handleRemote] Remote audio track is live, sound should work NOW');
                 }
+              } else {
+                console.warn('[handleRemote] No audio track found in remote stream - sound will not work');
+              }
+              
+              // Проверяем наличие треков
+              if (!vt && !at) {
+                console.warn('[handleRemote] No tracks found in remote stream');
               }
             } catch (e) {
-              console.warn('[handleRemote] Error enabling remote video track:', e);
+              console.warn('[handleRemote] Error enabling remote tracks:', e);
             }
             
-            // КРИТИЧНО: Принудительно обновляем remoteViewKey для гарантированного ререндера
+            // Принудительно обновляем remoteViewKey для гарантированного ререндера
             // Это особенно важно при втором и последующих вызовах
             try {
               setRemoteViewKey(Date.now());
             } catch {}
 
-            // КРИТИЧНО: Bump ключа для принудительного ререндера при первом приходе видео
-            // КРИТИЧНО: Это особенно важно при повторных звонках
+            // Bump ключа для принудительного ререндера при первом приходе видео
+            // Это особенно важно при повторных звонках
             try {
               const vt = (rs as any)?.getVideoTracks?.()?.[0];
               if (vt) {
                 const live = vt.readyState === 'live' && vt.enabled !== false;
                 if (live) {
                   setRemoteViewKey(Date.now());
-                  // КРИТИЧНО: Убеждаемся что remoteCamOn установлен в true когда video track live
+                  // Убеждаемся что remoteCamOn установлен в true когда video track live
                   setRemoteCamOn(true);
                   console.log('[handleRemote] Video track is live, updated remoteViewKey and remoteCamOn');
                 } else {
-                  // КРИТИЧНО: Даже если track не live, но он есть, устанавливаем remoteCamOn в true
+                  // Даже если track не live, но он есть, устанавливаем remoteCamOn в true
                   // Это важно для повторных звонков, когда track может быть еще не live
                   if (vt.readyState === 'ready' || vt.readyState === 'live') {
                     setRemoteCamOn(true);
@@ -3727,7 +4163,7 @@ const flipCam = useCallback(async () => {
 
     (pc as any).ontrack = handleRemote;
     
-    // КРИТИЧНО: Добавляем альтернативный обработчик для совместимости
+    // Добавляем альтернативный обработчик для совместимости
     (pc as any).onaddstream = (e: any) => {
       console.log('[onaddstream] Received stream via onaddstream:', e?.stream?.id);
       if (e?.stream) {
@@ -3754,7 +4190,7 @@ const flipCam = useCallback(async () => {
         return;
       }
       
-      // КРИТИЧНО: Не пытаемся перезапустить если приложение в background (заблокирован экран)
+      // Не пытаемся перезапустить если приложение в background (заблокирован экран)
       if (AppState.currentState === 'background' || AppState.currentState === 'inactive') {
         console.log('🔴 [tryIceRestart] App in background/inactive - skipping ICE restart (screen locked)', {
           appState: AppState.currentState
@@ -3762,8 +4198,8 @@ const flipCam = useCallback(async () => {
         return;
       }
       
-      // КРИТИЧНО: Не пытаемся перезапустить если звонок завершен
-      // КРИТИЧНО: Проверяем не только isInactiveState, но и наличие partnerId
+      // Не пытаемся перезапустить если звонок завершен
+      // Проверяем не только isInactiveState, но и наличие partnerId
       const hasActiveCall = !!partnerIdRef.current || !!roomIdRef.current || !!currentCallIdRef.current;
       if (isInactiveStateRef.current || !hasActiveCall) {
         console.log('🔴 [tryIceRestart] Call ended - skipping ICE restart (correct behavior)', {
@@ -3814,30 +4250,30 @@ const flipCam = useCallback(async () => {
 
   const bindConnHandlers = (pc: RTCPeerConnection, expectedPartnerId?: string) => {
     const bump = () => {
-      // КРИТИЧНО: СНАЧАЛА проверяем что PC все еще валиден (не закрыт и не null)
+      // СНАЧАЛА проверяем что PC все еще валиден (не закрыт и не null)
       if (!pc || pc.signalingState === 'closed' || (pc as any).connectionState === 'closed') {
         return;
       }
       
-      // КРИТИЧНО: СНАЧАЛА проверяем что звонок не завершен - это самая важная проверка
+      // СНАЧАЛА проверяем что звонок не завершен - это самая важная проверка
       // Делаем это ДО проверки peerRef, чтобы не обрабатывать события от завершенного звонка
       if (isInactiveStateRef.current) {
         return; // НЕ обрабатываем никакие изменения состояния если звонок завершен
       }
       
-      // КРИТИЧНО: Проверяем что это все еще тот же PC, на который ссылается peerRef
+      // Проверяем что это все еще тот же PC, на который ссылается peerRef
       // Если PC был заменен или удален, игнорируем изменения старого PC
       if (!peerRef.current || peerRef.current !== pc) {
         return;
       }
       
-      // КРИТИЧНО: Дополнительная проверка - если refs очищены, не обрабатываем события
+      // Дополнительная проверка - если refs очищены, не обрабатываем события
       const hasActiveCall = !!partnerIdRef.current || !!roomIdRef.current || !!currentCallIdRef.current;
       if (!hasActiveCall) {
         return;
       }
       
-      // КРИТИЧНО: Дополнительная проверка - если звонок завершен, не обрабатываем соединение
+      // Дополнительная проверка - если звонок завершен, не обрабатываем соединение
       if (isInactiveStateRef.current || !hasActiveCall) {
         return; // Уже проверили выше, но проверяем еще раз перед обработкой соединения
       }
@@ -3847,21 +4283,21 @@ const flipCam = useCallback(async () => {
       pcConnectedRef.current = ok;
       setPcConnected(ok);
       if (ok) {
-        // КРИТИЧНО: Проверяем что это соединение с текущим партнером, а не со старым
+        // Проверяем что это соединение с текущим партнером, а не со старым
         const currentPartnerId = partnerIdRef.current;
         if (expectedPartnerId && expectedPartnerId !== currentPartnerId) {
           return; // Игнорируем соединение со старым партнером
         }
         
-        // КРИТИЧНО: Проверяем что звонок все еще активен перед запуском метра
-        // Это критично, потому что обработчик может сработать после завершения звонка
+        // Проверяем что звонок все еще активен перед запуском метра
+        //, потому что обработчик может сработать после завершения звонка
         const hasActiveCall = !!partnerIdRef.current || !!roomIdRef.current || !!currentCallIdRef.current;
         if (isInactiveStateRef.current || !hasActiveCall) {
           return; // НЕ запускаем метры если звонок завершен
         }
         
         startMicMeter();
-        // КРИТИЧНО: Сбрасываем loading при успешном соединении с ТЕКУЩИМ партнером
+        // Сбрасываем loading при успешном соединении с ТЕКУЩИМ партнером
         setLoading(false);
         setIsNexting(false); // Сбрасываем блокировку кнопки при успешном соединении
       } else {
@@ -3870,32 +4306,32 @@ const flipCam = useCallback(async () => {
 
       // УПРОЩЕНО: Авто-ICE рестарт при сбоях (только один PC)
       if (st === 'failed' || st === 'disconnected') {
-        // КРИТИЧНО: Не пытаемся перезапустить если звонок завершен
-        // КРИТИЧНО: Проверяем СНАЧАЛА isInactiveState - это самая важная проверка
-        // КРИТИЧНО: Проверяем ДО всех остальных проверок, чтобы избежать race condition
+        // Не пытаемся перезапустить если звонок завершен
+        // Проверяем СНАЧАЛА isInactiveState - это самая важная проверка
+        // Проверяем ДО всех остальных проверок, чтобы избежать race condition
         if (isInactiveStateRef.current) {
           return;
         }
         
-        // КРИТИЧНО: Проверяем что peerRef.current все еще указывает на этот PC
+        // Проверяем что peerRef.current все еще указывает на этот PC
         // Это должно быть проверено ДО проверки hasActiveCall
         if (!peerRef.current || peerRef.current !== pc) {
           return;
         }
         
-        // КРИТИЧНО: Проверяем наличие активного звонка
+        // Проверяем наличие активного звонка
         const hasActiveCall = !!partnerIdRef.current || !!roomIdRef.current || !!currentCallIdRef.current;
         if (!hasActiveCall) {
           return;
         }
         
-        // КРИТИЧНО: Проверяем еще раз isInactiveState после всех проверок (на случай если изменился)
-        // Это критично, потому что обработчик может сработать асинхронно после завершения звонка
+        // Проверяем еще раз isInactiveState после всех проверок (на случай если изменился)
+        //, потому что обработчик может сработать асинхронно после завершения звонка
         if (isInactiveStateRef.current) {
           return;
         }
         
-        // КРИТИЧНО: Не пытаемся перезапустить если приложение в background (заблокирован экран)
+        // Не пытаемся перезапустить если приложение в background (заблокирован экран)
         // При блокировке экрана вызов должен завершаться, а не пытаться перезапускать соединение
         if (AppState.currentState === 'background' || AppState.currentState === 'inactive') {
           return;
@@ -3928,7 +4364,7 @@ const flipCam = useCallback(async () => {
       return getEnvFallbackConfiguration();
     };
     
-    // КРИТИЧНО: При возврате из PiP проверяем существующий PC
+    // При возврате из PiP проверяем существующий PC
     // Если PC существует и валиден - возвращаем его, иначе создаем новый
     if (resume && fromPiP) {
       const existingPc = peerRef.current;
@@ -3947,13 +4383,13 @@ const flipCam = useCallback(async () => {
           console.warn('[ensurePcWithLocal] Existing PC is invalid after PiP resume, will create new one:', e);
         }
       }
-      // КРИТИЧНО: Если PC не существует или невалиден при возврате из PiP - создаем новый
+      // Если PC не существует или невалиден при возврате из PiP - создаем новый
       console.log('[ensurePcWithLocal] No valid PC found after PiP resume, will create new one');
     }
     
     let pc = peerRef.current;
     
-     // КРИТИЧНО: Проверяем состояние существующего PC
+     // Проверяем состояние существующего PC
      // Если PC существует, проверяем что он в правильном состоянии для переиспользования
      if (pc) {
        try {
@@ -3987,7 +4423,7 @@ const flipCam = useCallback(async () => {
        }
      }
      
-     // КРИТИЧНО: Также очищаем preCreatedPcRef перед созданием нового PC
+     // Также очищаем preCreatedPcRef перед созданием нового PC
      // чтобы избежать конфликтов
      if (preCreatedPcRef.current) {
        try {
@@ -4000,7 +4436,7 @@ const flipCam = useCallback(async () => {
     
     if (!pc) { 
       try {
-        // КРИТИЧНО: Убеждаемся что stream существует и валиден перед созданием PC
+        // Убеждаемся что stream существует и валиден перед созданием PC
         if (!stream || !isValidStream(stream)) {
           console.error('[ensurePcWithLocal] Cannot create PC - stream is invalid or null', {
             streamExists: !!stream,
@@ -4010,7 +4446,7 @@ const flipCam = useCallback(async () => {
           return null;
         }
         
-        // КРИТИЧНО: Дополнительная проверка валидности стрима перед созданием PC
+        // Дополнительная проверка валидности стрима перед созданием PC
         // Проверяем что треки действительно доступны и не были остановлены
         const videoTrack = stream.getVideoTracks()?.[0];
         const audioTrack = stream.getAudioTracks()?.[0];
@@ -4052,6 +4488,15 @@ const flipCam = useCallback(async () => {
         peerRef.current = pc; 
           // Передаем текущий partnerId для проверки в bindConnHandlers
           bindConnHandlers(pc, partnerIdRef.current || undefined);
+          // ВАЖНО: Устанавливаем обработчик ontrack сразу после создания PC
+          // Это гарантирует что удаленные треки будут обработаны даже если attachRemoteHandlers
+          // еще не был вызван из handleMatchFound или handleOffer
+          if (partnerIdRef.current) {
+            attachRemoteHandlers(pc, partnerIdRef.current);
+            console.log('[ensurePcWithLocal] Attached remote handlers immediately after PC creation', {
+              partnerId: partnerIdRef.current
+            });
+          }
           console.log('[ensurePcWithLocal] Created new PeerConnection successfully', { 
             partnerId: partnerIdRef.current,
             pcSignalingState: pc.signalingState,
@@ -4098,11 +4543,11 @@ const flipCam = useCallback(async () => {
     try { (pc as any).addStream?.(stream as any); } catch {}
 
     return pc;
-  }, [bindConnHandlers, resume, fromPiP]); 
+  }, [bindConnHandlers, attachRemoteHandlers, resume, fromPiP]); 
   
   // Функция для предварительного создания PeerConnection
   const preCreatePeerConnection = useCallback(() => {
-    // КРИТИЧНО: Не создаем PC вне активного звонка
+    // Не создаем PC вне активного звонка
     const hasActiveCall = !!roomIdRef.current || !!currentCallIdRef.current || !!partnerIdRef.current;
     if (!hasActiveCall) {
       console.log('[preCreatePeerConnection] Skip precreate - no active call');
@@ -4119,7 +4564,7 @@ const flipCam = useCallback(async () => {
     const iceConfig = iceConfigRef.current || getEnvFallbackConfiguration();
     const pc = new RTCPeerConnection(iceConfig);
     
-    // КРИТИЧНО: Добавляем только LIVE треки - не используем старые остановленные треки
+    // Добавляем только LIVE треки - не используем старые остановленные треки
     if (localStreamRef.current) {
       const liveTracks = localStreamRef.current.getTracks()
         .filter((t: any) => t.readyState === 'live');
@@ -4161,7 +4606,7 @@ const flipCam = useCallback(async () => {
       return;
     }
 
-    // КРИТИЧНО: Для прямых звонков друзей НЕ игнорируем match_found даже если PC существует
+    // Для прямых звонков друзей НЕ игнорируем match_found даже если PC существует
     // Это нужно чтобы receiver мог обработать match_found после принятия звонка
     const isDirectFriendCall = isDirectCall || inDirectCall || friendCallAccepted;
 
@@ -4179,7 +4624,7 @@ const flipCam = useCallback(async () => {
       return;
     }
     
-    // КРИТИЧНО: Принудительная очистка всех существующих PC перед новым match
+    // Принудительная очистка всех существующих PC перед новым match
     console.log('[handleMatchFound] Force cleaning ALL existing connections');
     if (peerRef.current) {
       try {
@@ -4197,8 +4642,8 @@ const flipCam = useCallback(async () => {
       preCreatedPcRef.current = null; // Очищаем ссылку
     }
     
-    // КРИТИЧНО: Принудительно очищаем remoteStream и все связанные состояния перед новым звонком
-    // Это критично для повторных звонков, чтобы гарантировать правильное отображение видеопотока
+    // Принудительно очищаем remoteStream и все связанные состояния перед новым звонком
+    // для повторных звонков, чтобы гарантировать правильное отображение видеопотока
     try {
       const oldRemoteStream = remoteStreamRef.current;
       if (oldRemoteStream) {
@@ -4216,11 +4661,11 @@ const flipCam = useCallback(async () => {
     }
     setRemoteStream(null);
     remoteStreamRef.current = null;
-    // КРИТИЧНО: Принудительно сбрасываем remoteViewKey для гарантированного ререндера при новом звонке
+    // Принудительно сбрасываем remoteViewKey для гарантированного ререндера при новом звонке
     setRemoteViewKey(0);
     
     // Очищаем все устаревшие состояния чтобы предотвратить обработку старых событий
-    // КРИТИЧНО: Устанавливаем remoteCamOn в false при очистке, чтобы не показывать заглушку до получения video track
+    // Устанавливаем remoteCamOn в false при очистке, чтобы не показывать заглушку до получения video track
     setRemoteCamOn(false);
     setRemoteMutedMain(false);
     setPartnerInPiP(false); // Сбрасываем состояние PiP при новом соединении
@@ -4231,7 +4676,7 @@ const flipCam = useCallback(async () => {
     
     processingOffersRef.current.add(matchKey);
     
-    // КРИТИЧНО: Устанавливаем loading в true при получении match_found
+    // Устанавливаем loading в true при получении match_found
     setLoading(true);
     console.log('[handleMatchFound] Set loading to true, current loading state:', loading);
     setAddBlocked(false);
@@ -4249,10 +4694,37 @@ const flipCam = useCallback(async () => {
       
       // PC уже очищен выше принудительно
       
+      console.log('[handleMatchFound] Initial stream check:', {
+        hasLocalStream: !!localStream,
+        hasLocalStreamRef: !!localStreamRef.current,
+        localStreamId: localStream?.id,
+        localStreamRefId: localStreamRef.current?.id,
+        streamValidState: streamValid
+      });
+      
       let stream = localStream || localStreamRef.current;
-      // КРИТИЧНО: Проверяем валидность существующего стрима - если он невалиден или треки остановлены, создаем новый
+      console.log('[handleMatchFound] Selected stream:', {
+        streamExists: !!stream,
+        streamId: stream?.id,
+        streamValid: stream ? isValidStream(stream) : false,
+        tracksCount: stream ? stream.getTracks()?.length : 0,
+        videoTracksCount: stream ? stream.getVideoTracks()?.length : 0,
+        audioTracksCount: stream ? stream.getAudioTracks()?.length : 0
+      });
+      
+      // ВАЖНО: Устанавливаем started=true СРАЗУ при получении match_found
+      // Это гарантирует, что камера будет работать после нахождения собеседника
+      // Устанавливаем ДО проверок стрима, чтобы не потерять состояние
+      setStarted(true);
+      
+      // Проверяем валидность существующего стрима - если он невалиден или треки остановлены, создаем новый
       if (stream && !isValidStream(stream)) {
-        console.log('[handleMatchFound] Existing stream is invalid, clearing and creating new one');
+        console.log('[handleMatchFound] Existing stream is invalid, clearing and creating new one', {
+          streamId: stream.id,
+          tracksCount: stream.getTracks()?.length || 0,
+          videoTracks: stream.getVideoTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) || [],
+          audioTracks: stream.getAudioTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) || []
+        });
         try {
           const tracks = stream.getTracks?.() || [];
           tracks.forEach((t: any) => {
@@ -4262,46 +4734,186 @@ const flipCam = useCallback(async () => {
         stream = null;
         setLocalStream(null);
         localStreamRef.current = null;
+        setStreamValid(false);
+        console.log('[handleMatchFound] Cleared invalid stream');
       }
       
+      // ВАЖНО: Создаем локальный стрим только если пользователь нажал "Начать" (started === true)
+      // Камера должна работать только после нажатия кнопки "Начать"
+      // НО: Если match_found пришел, значит пользователь уже нажал "Начать" (started уже установлен выше)
       if (!stream) {
-        // КРИТИЧНО: Всегда создаем локальный стрим для рандомного чата
-        // Это нужно для корректной работы WebRTC
+        // Проверяем, что пользователь нажал "Начать" перед созданием стрима
+        // Но так как мы установили started=true выше, эта проверка должна пройти
+        if (!started) {
+          console.log('[handleMatchFound] No stream available and started=false, NOT creating stream - user must click Start first');
+          // НЕ создаем стрим, если пользователь не нажал "Начать"
+          // Это гарантирует, что камера работает только после нажатия кнопки
+          return;
+        }
+        
+        console.log('[handleMatchFound] No stream available, creating new one (started=true)');
+        // Создаем локальный стрим только если пользователь нажал "Начать"
         stream = await startLocalStream('front');
-        // КРИТИЧНО: Убеждаемся что камера включена для отображения в блоке "Вы"
+        // Убеждаемся что камера включена для отображения в блоке "Вы"
         if (stream) {
           const videoTrack = stream.getVideoTracks()?.[0];
           if (videoTrack) {
             videoTrack.enabled = true;
             setCamOn(true);
-            console.log('[handleMatchFound] Enabled video track and set camOn=true');
+            setStreamValid(true);
+            // Сохраняем стрим в state и ref для использования в PC
+            setLocalStream(stream);
+            localStreamRef.current = stream;
+            console.log('[handleMatchFound] Enabled video track and set camOn=true, streamValid=true, saved stream to state and ref');
           }
         }
       } else {
         // Если стрим уже существует и валиден, убеждаемся что камера включена
+        // И ВАЖНО: сохраняем стрим в state и ref, чтобы он не был потерян
+        setLocalStream(stream);
+        localStreamRef.current = stream;
+        
         const videoTrack = stream.getVideoTracks()?.[0];
         if (videoTrack && !videoTrack.enabled) {
           videoTrack.enabled = true;
           setCamOn(true);
-          console.log('[handleMatchFound] Enabled existing video track and set camOn=true');
+          setStreamValid(true);
+          console.log('[handleMatchFound] Enabled existing video track and set camOn=true, streamValid=true, saved stream to state and ref');
         } else if (videoTrack && videoTrack.enabled) {
           // Камера уже включена, просто обновляем состояние
+          // ВАЖНО: ВСЕГДА устанавливаем camOn=true для гарантированного отображения видео
+          // Камера должна быть ВСЕГДА включена при подключении и выключаться ТОЛЬКО по нажатию на кнопку
           setCamOn(true);
+          setStreamValid(true);
+          console.log('[handleMatchFound] Stream already valid, saved to state and ref, camOn=true');
+        } else if (videoTrack) {
+          // Если video track существует, но не включен - включаем его
+          // ВАЖНО: Камера должна быть ВСЕГДА включена при подключении
+          videoTrack.enabled = true;
+          setCamOn(true);
+          setStreamValid(true);
+          console.log('[handleMatchFound] Enabled video track and set camOn=true');
+        }
+        
+        // ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА: Убеждаемся что camOn установлен в true при подключении
+        // Это предотвращает автоматическое выключение камеры при подключении
+        // Камера должна быть ВСЕГДА включена при подключении и выключаться ТОЛЬКО по нажатию на кнопку
+        // ВАЖНО: Для рандомного чата камера должна быть ВСЕГДА включена при подключении
+        if (stream && isValidStream(stream)) {
+          const isRandomChat = !isDirectCall && !inDirectCall && !friendCallAccepted;
+          if (isRandomChat) {
+            setCamOn(true);
+            const videoTrack = stream.getVideoTracks()?.[0];
+            if (videoTrack) {
+              videoTrack.enabled = true;
+            }
+            console.log('[handleMatchFound] Force set camOn=true and enabled video track for random chat');
+          } else {
+            setCamOn(true);
+            const videoTrack = stream.getVideoTracks()?.[0];
+            if (videoTrack) {
+              videoTrack.enabled = true;
+            }
+          }
         }
       }
       
-      setStarted(true);
+      // Финальная проверка - если стрим все еще невалиден после всех попыток, создаем новый
+      if (stream && !isValidStream(stream)) {
+        console.warn('[handleMatchFound] Stream became invalid after checks, recreating', {
+          streamId: stream.id,
+          tracksCount: stream.getTracks()?.length || 0,
+          videoTracks: stream.getVideoTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) || [],
+          audioTracks: stream.getAudioTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) || []
+        });
+        try {
+          const tracks = stream.getTracks?.() || [];
+          tracks.forEach((t: any) => {
+            try { t.stop(); } catch {}
+          });
+        } catch {}
+        stream = null;
+        setLocalStream(null);
+        localStreamRef.current = null;
+        setStreamValid(false);
+        
+        // ВАЖНО: Создаем новый стрим только если пользователь нажал "Начать"
+        if (!started) {
+          console.log('[handleMatchFound] Stream invalid and started=false, NOT recreating - user must click Start first');
+          return;
+        }
+        
+        // Создаем новый стрим
+        stream = await startLocalStream('front');
+        if (stream) {
+          const videoTrack = stream.getVideoTracks()?.[0];
+          if (videoTrack) {
+            videoTrack.enabled = true;
+            setCamOn(true);
+            setStreamValid(true);
+            // Сохраняем стрим в state и ref для использования в PC
+            setLocalStream(stream);
+            localStreamRef.current = stream;
+            console.log('[handleMatchFound] Recreated stream and enabled video track', {
+              streamId: stream.id,
+              videoTrackId: videoTrack.id,
+              videoTrackEnabled: videoTrack.enabled,
+              videoTrackReadyState: videoTrack.readyState
+            });
+          }
+        }
+      }
+      
+      console.log('[handleMatchFound] Final stream state before caller/receiver logic:', {
+        streamExists: !!stream,
+        streamId: stream?.id,
+        streamValid: stream ? isValidStream(stream) : false,
+        tracksCount: stream ? stream.getTracks()?.length : 0,
+        videoTracksCount: stream ? stream.getVideoTracks()?.length : 0,
+        audioTracksCount: stream ? stream.getAudioTracks()?.length : 0,
+        videoTracks: stream ? stream.getVideoTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) : [],
+        audioTracks: stream ? stream.getAudioTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) : []
+      });
+      
+      // started=true уже установлен выше, перед проверками стрима
       if (!socket.connected) await new Promise<void>(res => socket.once('connect', () => res()));
       
       const myId = String(socket.id);
       const partnerIdNow = String(id);
       const iAmCaller = isDirectCall ? isDirectInitiator : (myId < partnerIdNow);
+      
+      console.log('[handleMatchFound] Caller/Receiver determination:', {
+        myId,
+        partnerIdNow,
+        iAmCaller,
+        isDirectCall,
+        isDirectInitiator
+      });
 
       // УПРОЩЕНО: только один PC для 1-на-1
+      console.log('[handleMatchFound] Before setting partner info - stream check:', {
+        streamExists: !!stream,
+        streamId: stream?.id,
+        streamValid: stream ? isValidStream(stream) : false,
+        tracksCount: stream ? stream.getTracks()?.length : 0
+      });
+      
       setPartnerId(partnerIdNow);
       setPartnerUserId(userId ? String(userId) : null);
       partnerIdRef.current = partnerIdNow;
       console.log('[handleMatchFound] Set partnerUserId:', userId, 'roomId:', roomId, 'partnerIdNow:', partnerIdNow);
+      
+      // Проверяем стрим после установки partnerUserId (на случай если что-то его очистило)
+      console.log('[handleMatchFound] After setting partner info - stream check:', {
+        streamExists: !!stream,
+        streamId: stream?.id,
+        streamValid: stream ? isValidStream(stream) : false,
+        tracksCount: stream ? stream.getTracks()?.length : 0,
+        localStreamId: localStream?.id,
+        localStreamRefId: localStreamRef.current?.id,
+        streamMatchesLocalStream: stream === localStream,
+        streamMatchesLocalStreamRef: stream === localStreamRef.current
+      });
       
       // Обновляем информацию о собеседнике в PiP
       if (userId) {
@@ -4337,18 +4949,105 @@ const flipCam = useCallback(async () => {
           // Caller - создаем PC и отправляем offer
           console.log('[handleMatchFound] Caller - creating PC and sending offer');
           
-          // КРИТИЧНО: Проверяем что stream валиден перед созданием PC
-          if (!stream || !isValidStream(stream)) {
-            console.error('[handleMatchFound] Caller: Cannot create PC - stream is invalid', {
-              streamExists: !!stream,
-              streamValid: stream ? isValidStream(stream) : false,
-              streamId: stream?.id
+          // ВАЖНО: Используем стрим из state или ref, чтобы убедиться что мы используем актуальный стрим
+          // Это предотвращает использование устаревшего стрима, который мог быть очищен
+          const currentStream = localStreamRef.current || localStream || stream;
+          if (currentStream !== stream) {
+            console.log('[handleMatchFound] Caller: Stream changed, using current stream from state/ref', {
+              oldStreamId: stream?.id,
+              newStreamId: currentStream?.id
             });
-            return;
+            stream = currentStream;
           }
           
-          // КРИТИЧНО: Устанавливаем partnerIdRef синхронно перед созданием PC
+          // Проверяем текущее состояние стрима перед проверкой валидности
+          console.log('[handleMatchFound] Caller: Stream state check', {
+            streamExists: !!stream,
+            streamId: stream?.id,
+            streamFromLocalStream: stream === localStream,
+            streamFromLocalStreamRef: stream === localStreamRef.current,
+            localStreamId: localStream?.id,
+            localStreamRefId: localStreamRef.current?.id,
+            streamValidState: streamValid,
+            tracksCount: stream ? stream.getTracks()?.length : 0,
+            videoTracksCount: stream ? stream.getVideoTracks()?.length : 0,
+            audioTracksCount: stream ? stream.getAudioTracks()?.length : 0,
+            videoTracks: stream ? stream.getVideoTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) : [],
+            audioTracks: stream ? stream.getAudioTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) : []
+          });
+          
+          // Проверяем что stream валиден перед созданием PC
+          const streamIsValid = stream ? isValidStream(stream) : false;
+          console.log('[handleMatchFound] Caller: Stream validation result', {
+            streamExists: !!stream,
+            streamIsValid,
+            streamId: stream?.id
+          });
+          
+          if (!stream || !streamIsValid) {
+            console.error('[handleMatchFound] Caller: Cannot create PC - stream is invalid', {
+              streamExists: !!stream,
+              streamValid: streamIsValid,
+              streamId: stream?.id,
+              tracksCount: stream ? stream.getTracks()?.length : 0,
+              videoTracks: stream ? stream.getVideoTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) : [],
+              audioTracks: stream ? stream.getAudioTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) : []
+            });
+            
+            // Пытаемся пересоздать стрим для caller
+            // ВАЖНО: Пересоздаем только если пользователь нажал "Начать"
+            if (!started) {
+              console.error('[handleMatchFound] Caller: Cannot recreate stream - started=false, user must click Start first');
+              return;
+            }
+            
+            console.log('[handleMatchFound] Caller: Attempting to recreate stream (started=true)');
+            try {
+              if (stream) {
+                const tracks = stream.getTracks?.() || [];
+                tracks.forEach((t: any) => {
+                  try { t.stop(); } catch {}
+                });
+              }
+              stream = await startLocalStream('front');
+              if (stream && isValidStream(stream)) {
+                // Сохраняем стрим в state и ref для использования в PC
+                setLocalStream(stream);
+                localStreamRef.current = stream;
+                setStreamValid(true);
+                console.log('[handleMatchFound] Caller: Successfully recreated stream', {
+                  streamId: stream.id,
+                  tracksCount: stream.getTracks()?.length || 0
+                });
+              } else {
+                console.error('[handleMatchFound] Caller: Failed to recreate valid stream');
+                return;
+              }
+            } catch (recreateError) {
+              console.error('[handleMatchFound] Caller: Error recreating stream:', recreateError);
+              return;
+            }
+          }
+          
+          // Устанавливаем partnerIdRef синхронно перед созданием PC
           partnerIdRef.current = partnerIdNow;
+          
+          // Финальная проверка стрима перед созданием PC
+          console.log('[handleMatchFound] Caller: Final stream check before PC creation', {
+            streamExists: !!stream,
+            streamId: stream?.id,
+            streamValid: stream ? isValidStream(stream) : false,
+            streamFromLocalStream: stream === localStream,
+            streamFromLocalStreamRef: stream === localStreamRef.current,
+            localStreamId: localStream?.id,
+            localStreamRefId: localStreamRef.current?.id,
+            tracksCount: stream ? stream.getTracks()?.length : 0,
+            videoTracksCount: stream ? stream.getVideoTracks()?.length : 0,
+            audioTracksCount: stream ? stream.getAudioTracks()?.length : 0,
+            videoTracks: stream ? stream.getVideoTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) : [],
+            audioTracks: stream ? stream.getAudioTracks()?.map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) : [],
+            partnerId: partnerIdNow
+          });
           
           console.log('[handleMatchFound] Caller: Creating PC with validated stream', {
             streamId: stream.id,
@@ -4369,7 +5068,7 @@ const flipCam = useCallback(async () => {
             return;
           }
           
-          // КРИТИЧНО: Обновляем bindConnHandlers с новым partnerId если PC был переиспользован
+          // Обновляем bindConnHandlers с новым partnerId если PC был переиспользован
           bindConnHandlers(pc, partnerIdNow);
           
           // Проверяем что PC не имеет локального описания ПЕРЕД созданием offer
@@ -4389,9 +5088,21 @@ const flipCam = useCallback(async () => {
               }
               
               // Проверяем что partnerId еще актуален
-              if (partnerIdRef.current !== partnerIdNow) {
-                console.warn('[handleMatchFound] Partner changed during offer creation, aborting');
+              // НО: не прерываем если partnerId изменился на null (это может быть временное состояние)
+              const currentPartnerId = partnerIdRef.current;
+              if (currentPartnerId && currentPartnerId !== partnerIdNow) {
+                console.warn('[handleMatchFound] Partner changed during offer creation, aborting', {
+                  expected: partnerIdNow,
+                  current: currentPartnerId
+                });
                 return;
+              }
+              
+              // Если partnerId был очищен, но мы все еще обрабатываем этот матч - восстанавливаем его
+              if (!currentPartnerId && partnerIdNow) {
+                console.log('[handleMatchFound] PartnerId was cleared, restoring it', { partnerIdNow });
+                partnerIdRef.current = partnerIdNow;
+                setPartnerId(partnerIdNow);
               }
               
               // В background не пытаемся перевыстроить PC
@@ -4400,7 +5111,7 @@ const flipCam = useCallback(async () => {
                 return;
               }
               
-              // КРИТИЧНО: Проверяем signalingState - нельзя создавать offer если уже установлен remote description
+              // Проверяем signalingState - нельзя создавать offer если уже установлен remote description
               const signalingState = pc.signalingState;
               const hasRemoteDesc = !!(pc as any).remoteDescription;
               const hasLocalDesc = !!(pc as any).localDescription;
@@ -4422,7 +5133,7 @@ const flipCam = useCallback(async () => {
                 return;
               }
               
-              // КРИТИЧНО: Проверяем что PC в правильном состоянии для создания offer (stable без описаний)
+              // Проверяем что PC в правильном состоянии для создания offer (stable без описаний)
               if (signalingState !== 'stable') {
                 console.warn('[handleMatchFound] PC not in stable state for offer creation:', signalingState);
                 return;
@@ -4468,9 +5179,9 @@ const flipCam = useCallback(async () => {
           // Receiver - просто ждем offer
           console.log('[handleMatchFound] Receiver - waiting for offer');
           
-          // КРИТИЧНО: Проверяем, не существует ли уже PC для этого партнера
+          // Проверяем, не существует ли уже PC для этого партнера
           // Это может произойти если handleOffer уже создал PC и обрабатывает offer
-          // КРИТИЧНО: Проверяем не только stable, но и другие состояния (have-local-offer, have-remote-offer)
+          // Проверяем не только stable, но и другие состояния (have-local-offer, have-remote-offer)
           // потому что handleOffer может создать PC и установить remote description ДО того как мы проверим
           const existingPc = peerRef.current;
           if (existingPc && partnerIdRef.current === partnerIdNow) {
@@ -4490,17 +5201,30 @@ const flipCam = useCallback(async () => {
             }
           }
           
-          // КРИТИЧНО: Устанавливаем partnerIdRef синхронно перед созданием PC
+          // Устанавливаем partnerIdRef синхронно перед созданием PC
           partnerIdRef.current = partnerIdNow;
           
-          // КРИТИЧНО: Убеждаемся что локальный стрим готов перед созданием PC
+          // Убеждаемся что локальный стрим готов перед созданием PC
           // Особенно важно при принятии звонка в неактивном состоянии, когда localStream может быть null
-          let finalStream = stream;
+          // ВАЖНО: Используем стрим из state или ref, чтобы убедиться что мы используем актуальный стрим
+          let finalStream = localStreamRef.current || localStream || stream;
+          if (finalStream !== stream) {
+            console.log('[handleMatchFound] Receiver: Stream changed, using current stream from state/ref', {
+              oldStreamId: stream?.id,
+              newStreamId: finalStream?.id
+            });
+          }
           if (!finalStream) {
-            console.log('[handleMatchFound] Receiver: No local stream, creating one before PC creation');
+            // ВАЖНО: Создаем локальный стрим только если пользователь нажал "Начать" (started === true)
+            if (!started) {
+              console.log('[handleMatchFound] Receiver: No local stream and started=false, NOT creating stream - user must click Start first');
+              return;
+            }
+            
+            console.log('[handleMatchFound] Receiver: No local stream, creating one before PC creation (started=true)');
             try {
               finalStream = await startLocalStream('front');
-              // КРИТИЧНО: Если startLocalStream вернул null (например, из-за проверки PiP),
+              // Если startLocalStream вернул null (например, из-за проверки PiP),
               // принудительно создаем стрим напрямую через getUserMedia
               if (!finalStream) {
                 console.log('[handleMatchFound] Receiver: startLocalStream returned null, creating stream directly');
@@ -4535,7 +5259,7 @@ const flipCam = useCallback(async () => {
               }
               
               if (finalStream) {
-                // КРИТИЧНО: Убеждаемся что стрим действительно валиден
+                // Убеждаемся что стрим действительно валиден
                 if (!isValidStream(finalStream)) {
                   console.error('[handleMatchFound] Receiver: Created stream is invalid');
                   try {
@@ -4545,9 +5269,10 @@ const flipCam = useCallback(async () => {
                   return;
                 }
                 
-                // КРИТИЧНО: Сохраняем стрим в state и ref
+                // Сохраняем стрим в state и ref
                 setLocalStream(finalStream);
                 localStreamRef.current = finalStream;
+                setStreamValid(true);
                 
                 const videoTrack = finalStream.getVideoTracks()?.[0];
                 if (videoTrack) {
@@ -4572,24 +5297,77 @@ const flipCam = useCallback(async () => {
             }
           }
           
-          // КРИТИЧНО: Проверяем что finalStream действительно существует и валиден перед созданием PC
+          // Проверяем что finalStream действительно существует и валиден перед созданием PC
           if (!finalStream) {
             console.error('[handleMatchFound] Receiver: No valid stream available for PC creation');
             return;
           }
           
-          // КРИТИЧНО: Проверяем валидность стрима перед использованием
+          // Проверяем валидность стрима перед использованием
           if (!isValidStream(finalStream)) {
-            console.error('[handleMatchFound] Receiver: Stream is invalid, cannot create PC', {
+            console.warn('[handleMatchFound] Receiver: Stream is invalid, attempting to recreate', {
               finalStreamExists: !!finalStream,
               finalStreamId: finalStream?.id,
               hasToURL: finalStream ? typeof (finalStream as any).toURL === 'function' : false,
               tracksLength: finalStream ? (finalStream as any).getTracks?.()?.length : 0
             });
-            return;
+            
+            // Пытаемся пересоздать стрим
+            // ВАЖНО: Пересоздаем только если пользователь нажал "Начать"
+            if (!started) {
+              console.error('[handleMatchFound] Receiver: Cannot recreate stream - started=false, user must click Start first');
+              return;
+            }
+            
+            try {
+              const tracks = finalStream.getTracks?.() || [];
+              tracks.forEach((t: any) => {
+                try { t.stop(); } catch {}
+              });
+            } catch {}
+            
+            try {
+              finalStream = await startLocalStream('front');
+              if (!finalStream) {
+                // Если startLocalStream вернул null, создаем напрямую
+                const audioConstraints: any = {
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                  autoGainControl: true,
+                  googEchoCancellation: true,
+                  googNoiseSuppression: true,
+                  googAutoGainControl: true,
+                };
+                finalStream = await mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
+                if (finalStream) {
+                  setLocalStream(finalStream);
+                  localStreamRef.current = finalStream;
+                  setStreamValid(true);
+                  const videoTrack = finalStream.getVideoTracks()?.[0];
+                  if (videoTrack) {
+                    videoTrack.enabled = true;
+                    setCamOn(true);
+                  }
+                }
+              } else {
+                setLocalStream(finalStream);
+                localStreamRef.current = finalStream;
+                setStreamValid(true);
+              }
+              
+              if (!finalStream || !isValidStream(finalStream)) {
+                console.error('[handleMatchFound] Receiver: Failed to recreate valid stream');
+                return;
+              }
+              
+              console.log('[handleMatchFound] Receiver: Successfully recreated stream');
+            } catch (recreateError) {
+              console.error('[handleMatchFound] Receiver: Error recreating stream:', recreateError);
+              return;
+            }
           }
           
-          // КРИТИЧНО: Проверяем что треки не остановлены перед созданием PC
+          // Проверяем что треки не остановлены перед созданием PC
           const videoTrack = finalStream.getVideoTracks()?.[0];
           const audioTrack = finalStream.getAudioTracks()?.[0];
           if (videoTrack && videoTrack.readyState === 'ended') {
@@ -4601,7 +5379,7 @@ const flipCam = useCallback(async () => {
             return;
           }
           
-          // КРИТИЧНО: Добавляем детальную диагностику перед созданием PC
+          // Добавляем детальную диагностику перед созданием PC
           console.log('[handleMatchFound] Receiver: Preparing to create PC', {
             finalStreamExists: !!finalStream,
             finalStreamId: finalStream?.id,
@@ -4620,7 +5398,7 @@ const flipCam = useCallback(async () => {
             preCreatedPcRefCurrent: !!preCreatedPcRef.current
           });
           
-          // КРИТИЧНО: Очищаем старый PC если он существует и не в правильном состоянии
+          // Очищаем старый PC если он существует и не в правильном состоянии
           // Это особенно важно при принятии звонка в неактивном состоянии
           const existingPcForReceiver = peerRef.current;
           if (existingPcForReceiver) {
@@ -4649,7 +5427,7 @@ const flipCam = useCallback(async () => {
             }
           }
           
-          // КРИТИЧНО: Также очищаем preCreatedPcRef
+          // Также очищаем preCreatedPcRef
           if (preCreatedPcRef.current) {
             try {
               cleanupPeer(preCreatedPcRef.current);
@@ -4670,7 +5448,7 @@ const flipCam = useCallback(async () => {
             });
             return;
           }
-          // КРИТИЧНО: Обновляем bindConnHandlers с новым partnerId если PC был переиспользован
+          // Обновляем bindConnHandlers с новым partnerId если PC был переиспользован
           bindConnHandlers(pc, partnerIdNow);
           attachRemoteHandlers(pc, partnerIdNow);
         }
@@ -4690,8 +5468,8 @@ const flipCam = useCallback(async () => {
       return;
     }
 
-    // КРИТИЧНО: Принудительно очищаем remoteStream перед обработкой нового offer
-    // Это критично для повторных звонков, чтобы гарантировать правильное отображение видеопотока
+    // Принудительно очищаем remoteStream перед обработкой нового offer
+    // для повторных звонков, чтобы гарантировать правильное отображение видеопотока
     // Очищаем только если это новый партнер или если remoteStream существует
     const isNewPartner = !partnerIdRef.current || partnerIdRef.current !== from;
     if (isNewPartner || remoteStreamRef.current) {
@@ -4709,9 +5487,9 @@ const flipCam = useCallback(async () => {
         }
         setRemoteStream(null);
         remoteStreamRef.current = null;
-        // КРИТИЧНО: Принудительно сбрасываем remoteViewKey для гарантированного ререндера при новом звонке
+        // Принудительно сбрасываем remoteViewKey для гарантированного ререндера при новом звонке
         setRemoteViewKey(0);
-        // КРИТИЧНО: Устанавливаем remoteCamOn в false при очистке, чтобы не показывать заглушку до получения video track
+        // Устанавливаем remoteCamOn в false при очистке, чтобы не показывать заглушку до получения video track
         setRemoteCamOn(false);
         console.log('[handleOffer] Cleared old remote stream before processing new offer');
       } catch (e) {
@@ -4725,14 +5503,14 @@ const flipCam = useCallback(async () => {
       return;
     }
 
-    // КРИТИЧНО: Определяем тип звонка
+    // Определяем тип звонка
     // Входящий прямой звонок от друга: isDirectCall || inDirectCall || есть активный incomingFriendCall
     // Рандомный чат между друзьями: нет isDirectCall/inDirectCall, но fromUserId в списке друзей
     const isDirectFriendCall = isDirectCall || inDirectCall || !!incomingFriendCall;
     const isRandomChatWithFriend = !isDirectFriendCall && fromUserId && friends.some(f => String(f._id) === String(fromUserId));
     const isIncomingFriendCall = isDirectFriendCall || isRandomChatWithFriend;
     
-    // КРИТИЧНО: НЕ обрабатываем offer если:
+    // НЕ обрабатываем offer если:
     // 1. Мы в неактивном состоянии после завершения звонка друга
     // 2. Это рандомный чат, но мы не в поиске (started=false) - это остаточный offer после завершения звонка
     // 3. Это рандомный чат с другом, но нет активного входящего звонка - остаточный offer
@@ -4761,13 +5539,13 @@ const flipCam = useCallback(async () => {
       }
     }
     
-    // КРИТИЧНО: Для обычного рандомного чата (не с другом) требуем активный поиск
+    // Для обычного рандомного чата (не с другом) требуем активный поиск
     if (!startedRef.current && !isIncomingFriendCall) {
       console.log('[handleOffer] Not in search mode and not an incoming friend call, ignoring offer from:', from);
       return;
     }
     
-    // КРИТИЧНО: Для входящих прямых звонков от друзей устанавливаем started
+    // Для входящих прямых звонков от друзей устанавливаем started
     // НО НЕ для рандомного чата с другом после завершения звонка
     if (isDirectFriendCall && !startedRef.current) {
       console.log('[handleOffer] Direct friend call, setting started=true');
@@ -4810,17 +5588,17 @@ const flipCam = useCallback(async () => {
       
       let stream = localStream;
       if (!stream) {
-        // КРИТИЧНО: Всегда создаем локальный стрим для рандомного чата
+        // Всегда создаем локальный стрим для рандомного чата
         // Это нужно для корректной работы WebRTC
         // Особенно важно при принятии звонка в неактивном состоянии
         console.log('[handleOffer] No local stream, creating one before PC creation');
         
-        // КРИТИЧНО: Для входящих дружеских звонков гарантируем выход из неактивного состояния
+        // Для входящих дружеских звонков гарантируем выход из неактивного состояния
         // ПЕРЕД созданием стрима, чтобы избежать race condition
-        // КРИТИЧНО: НО не выходим если звонок был завершен (wasFriendCallEnded) - это может быть остаточный offer
+        // НО не выходим если звонок был завершен (wasFriendCallEnded) - это может быть остаточный offer
         // от предыдущего звонка. Выходим только если это действительно новый входящий звонок (есть incomingFriendCall)
         if (isIncomingFriendCall && isInactiveStateRef.current) {
-          // КРИТИЧНО: Не обрабатываем offer в неактивном состоянии если звонок был завершен
+          // Не обрабатываем offer в неактивном состоянии если звонок был завершен
           // Это может быть остаточный/отложенный offer от завершенного звонка
           if (wasFriendCallEnded) {
             console.log('[handleOffer] Ignoring offer in inactive state after call ended - may be residual offer from previous call', {
@@ -4833,7 +5611,7 @@ const flipCam = useCallback(async () => {
             return;
           }
           
-          // КРИТИЧНО: Проверяем что это действительно новый входящий звонок (есть incomingFriendCall)
+          // Проверяем что это действительно новый входящий звонок (есть incomingFriendCall)
           // а не просто остаточный offer от завершенного звонка
           if (!incomingFriendCall) {
             console.log('[handleOffer] Ignoring offer in inactive state - no active incoming call, may be residual offer', {
@@ -4847,7 +5625,7 @@ const flipCam = useCallback(async () => {
           }
           
           console.log('[handleOffer] Incoming friend call from inactive state, exiting inactive state first');
-          // КРИТИЧНО: Устанавливаем friendCallAccepted ПЕРЕД выходом из неактивного состояния
+          // Устанавливаем friendCallAccepted ПЕРЕД выходом из неактивного состояния
           // чтобы startLocalStream не блокировал создание стрима
           setFriendCallAccepted(true);
           setIsInactiveState(false);
@@ -4865,11 +5643,38 @@ const flipCam = useCallback(async () => {
           hasAudioTrack: !!stream?.getAudioTracks()?.[0]
         });
         
-        // КРИТИЧНО: Если startLocalStream вернул null (например, из-за проверки isInactiveState),
+        // ВАЖНО: Проверяем валидность стрима после создания
+        // Если стрим существует, но невалиден (нет треков), пересоздаем его
+        if (stream && !isValidStream(stream)) {
+          console.warn('[handleOffer] Stream is invalid after startLocalStream, stopping and recreating', {
+            streamId: stream.id,
+            tracksCount: stream.getTracks()?.length || 0
+          });
+          try {
+            const tracks = stream.getTracks() || [];
+            tracks.forEach((t: any) => {
+              try { t.stop(); } catch {}
+            });
+          } catch {}
+          stream = null; // Сбрасываем, чтобы пересоздать ниже
+        }
+        
+        // Если startLocalStream вернул null или стрим невалиден,
         // принудительно создаем стрим напрямую через getUserMedia
-        // НО: только если это действительно входящий дружеский звонок (не завершенный)
-        if (!stream && (isIncomingFriendCall || friendCallAccepted || isDirectCall || inDirectCall)) {
-          console.log('[handleOffer] startLocalStream returned null, creating stream directly for friend call');
+        // Для рандомного чата: создаем стрим если started=true (пользователь нажал "Начать")
+        // Для дружеских звонков: создаем всегда
+        const isRandomChat = !isDirectCall && !inDirectCall && !friendCallAccepted;
+        const shouldCreateStream = !stream && (
+          (isRandomChat && started) || // Для рандомного чата только если started=true
+          (isIncomingFriendCall || friendCallAccepted || isDirectCall || inDirectCall) // Для дружеских звонков всегда
+        );
+        
+        if (shouldCreateStream) {
+          if (isRandomChat) {
+            console.log('[handleOffer] Random chat - creating stream directly via getUserMedia (started=true)');
+          } else {
+            console.log('[handleOffer] startLocalStream returned null, creating stream directly for friend call');
+          }
           try {
             const audioConstraints: any = {
               echoCancellation: true,
@@ -4881,9 +5686,12 @@ const flipCam = useCallback(async () => {
             };
             stream = await mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
             if (stream) {
-              // КРИТИЧНО: Проверяем валидность стрима перед сохранением
+              // Проверяем валидность стрима перед сохранением
               if (!isValidStream(stream)) {
-                console.error('[handleOffer] Created stream is invalid, stopping and retrying');
+                console.error('[handleOffer] Created stream is invalid, stopping and retrying', {
+                  streamId: stream.id,
+                  tracksCount: stream.getTracks()?.length || 0
+                });
                 try {
                   const tracks = stream.getTracks?.() || [];
                   tracks.forEach((t: any) => { try { t.stop(); } catch {} });
@@ -4892,6 +5700,18 @@ const flipCam = useCallback(async () => {
                 // Пытаемся еще раз с небольшой задержкой
                 await new Promise(resolve => setTimeout(resolve, 100));
                 stream = await mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
+                // Проверяем валидность после повторной попытки
+                if (stream && !isValidStream(stream)) {
+                  console.error('[handleOffer] Stream still invalid after retry, stopping', {
+                    streamId: stream.id,
+                    tracksCount: stream.getTracks()?.length || 0
+                  });
+                  try {
+                    const tracks = stream.getTracks?.() || [];
+                    tracks.forEach((t: any) => { try { t.stop(); } catch {} });
+                  } catch {}
+                  stream = null;
+                }
               }
               
               if (stream && isValidStream(stream)) {
@@ -4911,10 +5731,15 @@ const flipCam = useCallback(async () => {
                   streamId: stream.id,
                   hasVideoTrack: !!videoTrack,
                   hasAudioTrack: !!audioTrack,
-                  isValid: isValidStream(stream)
+                  isValid: isValidStream(stream),
+                  isRandomChat
                 });
               } else {
-                console.error('[handleOffer] Failed to create valid stream after retry');
+                console.error('[handleOffer] Failed to create valid stream after retry', {
+                  streamExists: !!stream,
+                  streamValid: stream ? isValidStream(stream) : false,
+                  isRandomChat
+                });
                 stream = null;
               }
             }
@@ -4924,12 +5749,19 @@ const flipCam = useCallback(async () => {
           }
         }
         
-        if (!stream) {
-          console.error('[handleOffer] Failed to create local stream after all attempts');
+        if (!stream || !isValidStream(stream)) {
+          console.error('[handleOffer] Stream is invalid or null, cannot create PC', {
+            streamExists: !!stream,
+            streamValid: stream ? isValidStream(stream) : false,
+            streamId: stream?.id,
+            tracksCount: stream ? stream.getTracks()?.length : 0,
+            hasVideoTrack: !!stream?.getVideoTracks()?.[0],
+            hasAudioTrack: !!stream?.getAudioTracks()?.[0]
+          });
           return;
         }
         
-        // КРИТИЧНО: Убеждаемся что камера включена
+        // Убеждаемся что камера включена
         const videoTrack = stream.getVideoTracks()?.[0];
         if (videoTrack && !videoTrack.enabled) {
           videoTrack.enabled = true;
@@ -4938,7 +5770,7 @@ const flipCam = useCallback(async () => {
         }
       }
       
-      // КРИТИЧНО: Проверяем валидность стрима перед использованием
+      // Проверяем валидность стрима перед использованием
       if (!stream || !isValidStream(stream)) {
         console.error('[handleOffer] Stream is invalid or null, cannot create PC', {
           streamExists: !!stream,
@@ -4947,8 +5779,8 @@ const flipCam = useCallback(async () => {
         return;
       }
       
-      // КРИТИЧНО: Проверяем существующий PC перед созданием нового
-      // КРИТИЧНО: Если PC уже существует для этого партнера и он в процессе обработки offer,
+      // Проверяем существующий PC перед созданием нового
+      // Если PC уже существует для этого партнера и он в процессе обработки offer,
       // НЕ создаем новый PC, так как это приведет к потере remote description
       const existingPc = peerRef.current;
       if (existingPc) {
@@ -4958,7 +5790,7 @@ const flipCam = useCallback(async () => {
           const hasRemoteDesc = !!(existingPc as any)?.remoteDescription;
           const existingPartnerId = partnerIdRef.current;
           
-          // КРИТИЧНО: Если PC уже существует для этого партнера и он не закрыт,
+          // Если PC уже существует для этого партнера и он не закрыт,
           // НЕ создаем новый PC - используем существующий и продолжаем обработку
           if (existingPartnerId === from && state !== 'closed') {
             console.log('[handleOffer] PC already exists for this partner, reusing existing PC', {
@@ -4970,7 +5802,7 @@ const flipCam = useCallback(async () => {
             // Просто обновляем bindConnHandlers с правильным partnerId
             bindConnHandlers(existingPc, from);
             attachRemoteHandlers(existingPc, from);
-            // КРИТИЧНО: Продолжаем обработку offer с существующим PC (не возвращаемся!)
+            // Продолжаем обработку offer с существующим PC (не возвращаемся!)
             // Устанавливаем partnerId для продолжения обработки
             partnerIdRef.current = from;
             setPartnerId(from);
@@ -5008,7 +5840,7 @@ const flipCam = useCallback(async () => {
         }
       }
       
-      // КРИТИЧНО: Также очищаем preCreatedPcRef
+      // Также очищаем preCreatedPcRef
       if (preCreatedPcRef.current) {
         try {
           cleanupPeer(preCreatedPcRef.current);
@@ -5020,7 +5852,7 @@ const flipCam = useCallback(async () => {
       
       setStarted(true);
       
-      // КРИТИЧНО: Добавляем детальную диагностику перед созданием PC
+      // Добавляем детальную диагностику перед созданием PC
       console.log('[handleOffer] Preparing to create PC', {
         streamExists: !!stream,
         streamId: stream?.id,
@@ -5040,7 +5872,7 @@ const flipCam = useCallback(async () => {
       });
       
       // УПРОЩЕНО: только один PC для 1-на-1
-      // КРИТИЧНО: Проверяем, был ли PC переиспользован выше
+      // Проверяем, был ли PC переиспользован выше
       let pc = peerRef.current;
       if (!pc || partnerIdRef.current !== from) {
         // PC не существует или это другой партнер - создаем новый
@@ -5074,7 +5906,7 @@ const flipCam = useCallback(async () => {
       partnerIdRef.current = from;
       setPartnerId(from);
         
-        // КРИТИЧНО: Устанавливаем partnerUserId если он передан (для звонков друзей)
+        // Устанавливаем partnerUserId если он передан (для звонков друзей)
         if (fromUserId) {
           setPartnerUserId(String(fromUserId));
           partnerUserIdRef.current = String(fromUserId);
@@ -5105,7 +5937,7 @@ const flipCam = useCallback(async () => {
       // Небольшая задержка для добавления треков
       try { await new Promise(res => setTimeout(res, 150)); } catch {}
       
-      // КРИТИЧНО: Используем peerRef.current вместо локальной переменной pc
+      // Используем peerRef.current вместо локальной переменной pc
       // чтобы гарантировать что мы работаем с актуальным PC
       const currentPc = peerRef.current;
       if (!currentPc || currentPc !== pc) {
@@ -5131,7 +5963,7 @@ const flipCam = useCallback(async () => {
       
       if (!hasRemoteDesc) {
         try {
-          // КРИТИЧНО: Проверяем еще раз перед вызовом, так как состояние может измениться
+          // Проверяем еще раз перед вызовом, так как состояние может измениться
           if (peerRef.current !== currentPc) {
             console.warn('[handleOffer] PC was changed right before setRemoteDescription, aborting');
             return;
@@ -5167,7 +5999,7 @@ const flipCam = useCallback(async () => {
       // Прожигаем отложенные ICE кандидаты
       try { await flushIceFor(from); } catch {}
       
-      // КРИТИЧНО: Используем peerRef.current для проверки перед созданием answer
+      // Используем peerRef.current для проверки перед созданием answer
       const currentPcForAnswer = peerRef.current;
       if (!currentPcForAnswer || currentPcForAnswer !== pc) {
         console.warn('[handleOffer] PC was changed before answer creation, aborting');
@@ -5190,7 +6022,7 @@ const flipCam = useCallback(async () => {
           }
           
           console.log('[handleOffer] Creating answer...');
-          // КРИТИЧНО: Проверяем еще раз перед созданием answer
+          // Проверяем еще раз перед созданием answer
           if (peerRef.current !== currentPcForAnswer) {
             console.warn('[handleOffer] PC was changed during answer creation, aborting');
             return;
@@ -5201,7 +6033,7 @@ const flipCam = useCallback(async () => {
             hasAnswer: !!answer
           });
           
-          // КРИТИЧНО: Проверяем перед setLocalDescription
+          // Проверяем перед setLocalDescription
           if (peerRef.current !== currentPcForAnswer) {
             console.warn('[handleOffer] PC was changed during setLocalDescription, aborting');
             return;
@@ -5272,18 +6104,18 @@ const flipCam = useCallback(async () => {
       // УПРОЩЕНО: только один PC для 1-на-1
       let pc = peerRef.current;
       
-      // КРИТИЧНО: Если PC не существует для инициатора дружеского звонка - создаем его
+      // Если PC не существует для инициатора дружеского звонка - создаем его
       // Это может произойти если answer пришел до создания PC в useEffect для call:accepted
       if (!pc && (isDirectCall || inDirectCall || friendCallAccepted)) {
         console.log('[handleAnswer] PC not found for friend call, creating one');
         let stream = localStream || localStreamRef.current;
         
-        // КРИТИЧНО: Если локального стрима нет, создаем его
+        // Если локального стрима нет, создаем его
         if (!stream) {
           console.log('[handleAnswer] No local stream, creating one');
           try {
             stream = await startLocalStream('front');
-            // КРИТИЧНО: Если startLocalStream вернул null, создаем напрямую через getUserMedia
+            // Если startLocalStream вернул null, создаем напрямую через getUserMedia
             if (!stream) {
               console.log('[handleAnswer] startLocalStream returned null, creating stream directly');
               try {
@@ -5325,14 +6157,14 @@ const flipCam = useCallback(async () => {
           try {
             pc = ensurePcWithLocal(stream);
             if (pc) {
-              // КРИТИЧНО: Устанавливаем partnerId из from если он не установлен (для восстановления после PiP)
+              // Устанавливаем partnerId из from если он не установлен (для восстановления после PiP)
               if (!partnerIdRef.current && from) {
                 setPartnerId(from);
                 partnerIdRef.current = from;
                 console.log('[handleAnswer] Set partnerId from answer:', from);
               }
               
-              // КРИТИЧНО: Используем partnerId из ref или from
+              // Используем partnerId из ref или from
               const partnerIdForHandlers = partnerIdRef.current || from;
               if (partnerIdForHandlers) {
                 attachRemoteHandlers(pc, partnerIdForHandlers);
@@ -5388,7 +6220,7 @@ const flipCam = useCallback(async () => {
       // Задержка для снятия гонки одновременных SDP
       try { await new Promise(res => setTimeout(res, 150)); } catch {}
       
-      // КРИТИЧНО: Используем peerRef.current вместо локальной переменной pc
+      // Используем peerRef.current вместо локальной переменной pc
       const currentPcForAnswer = peerRef.current;
       if (!currentPcForAnswer || currentPcForAnswer !== pc) {
         console.warn('[handleAnswer] PC was changed or removed, aborting setRemoteDescription');
@@ -5398,7 +6230,7 @@ const flipCam = useCallback(async () => {
       // Проверяем состояние PC перед setRemoteDescription
       if (currentPcForAnswer.signalingState === 'have-local-offer') {
         try {
-          // КРИТИЧНО: Проверяем еще раз перед вызовом
+          // Проверяем еще раз перед вызовом
           if (peerRef.current !== currentPcForAnswer) {
             console.warn('[handleAnswer] PC was changed right before setRemoteDescription, aborting');
             return;
@@ -5473,7 +6305,7 @@ const flipCam = useCallback(async () => {
     stopRemoteOnly();
     try { stopSpeaker(); } catch {}
     
-    // КРИТИЧНО: Сохраняем старые значения ДО очистки для проверки типа звонка
+    // Сохраняем старые значения ДО очистки для проверки типа звонка
     const oldPartnerId = partnerIdRef.current;
     const isInactive = isInactiveStateRef.current || wasFriendCallEnded;
     
@@ -5483,9 +6315,9 @@ const flipCam = useCallback(async () => {
     setPartnerUserId(null);
     setPartnerInPiP(false);
     
-    // КРИТИЧНО: Полностью закрываем старое PC чтобы избежать ложных срабатываний bindConnHandlers
+    // Полностью закрываем старое PC чтобы избежать ложных срабатываний bindConnHandlers
     if (peerRef.current) {
-      console.log('[handlePeerStopped] Cleaning up old PC before auto-search');
+      console.log('[handlePeerStopped] Cleaning up old PC');
       try {
         cleanupPeer(peerRef.current);
       } catch (e) {
@@ -5494,14 +6326,18 @@ const flipCam = useCallback(async () => {
       peerRef.current = null;
     }
     
-    // КРИТИЧНО: Определяем тип чата ДО очистки
+    // Определяем тип чата ДО очистки
     const isRandomChat = !isDirectCall && !inDirectCallRef.current;
     const wasDirectCall = isDirectCall || inDirectCallRef.current;
     const hadPartner = !!oldPartnerId;
     
-    // КРИТИЧНО: НЕ запускаем автопоиск если:
+    // НЕ запускаем автопоиск если:
     // 1. Звонок был завершен (isInactiveState или wasFriendCallEnded) - это завершенный звонок друга
     // 2. Это был прямой звонок (isDirectCall или inDirectCall) - для прямых звонков нет автопоиска
+    // 3. Это скипнутый пользователь - автопоиск должен запускаться только у того, кто нажал "Далее"
+    // ВАЖНО: peer:stopped приходит у скипнутого пользователя, когда его партнер нажал "Далее"
+    // У скипнутого пользователя НЕ должен запускаться автопоиск - он должен остаться в текущем состоянии
+    // Автопоиск запускается только у того, кто нажал "Далее" (через onNext)
     if (isInactive || wasDirectCall) {
       console.log('[handlePeerStopped] Skipping auto-search - call ended or was direct call', { 
         isInactive, 
@@ -5511,23 +6347,19 @@ const flipCam = useCallback(async () => {
       return;
     }
     
-    // КРИТИЧНО: Для рандомного чата ВСЕГДА запускаем автопоиск, даже если пользователи друзья
-    // Это гарантирует, что оба пользователя начнут поиск нового партнера
-    if (isRandomChat && !manuallyRequestedNextRef.current) {
-      console.log('[handlePeerStopped] Starting auto-search for random chat', { hadPartner, wasStarted: startedRef.current });
-      setLoading(true); // Показываем спиннер загрузки
-      setStarted(true); // Включаем поиск
-      setTimeout(() => {
-        try { 
-          socket.emit('next'); 
-          console.log('[handlePeerStopped] Emitted next for auto-search');
-        } catch (e) {
-          console.warn('[handlePeerStopped] Error emitting next:', e);
-        }
-      }, 300);
-    } else if (manuallyRequestedNextRef.current) {
-      console.log('[handlePeerStopped] Skipping auto-search - manual next was requested');
-      manuallyRequestedNextRef.current = false; // Сбрасываем флаг
+    // ВАЖНО: НЕ запускаем автопоиск у скипнутого пользователя
+    // peer:stopped приходит когда партнер нажал "Далее" - это означает что партнер ищет нового собеседника
+    // У скипнутого пользователя автопоиск НЕ должен запускаться - он должен остаться в текущем состоянии
+    // Автопоиск запускается только у того, кто нажал "Далее" (через onNext -> socket.emit('next'))
+    console.log('[handlePeerStopped] Partner stopped (likely skipped by partner), NOT starting auto-search', { 
+      hadPartner, 
+      wasStarted: startedRef.current,
+      isRandomChat
+    });
+    
+    // Сбрасываем флаг если он был установлен
+    if (manuallyRequestedNextRef.current) {
+      manuallyRequestedNextRef.current = false;
     }
   }, [stopRemoteOnly, isDirectCall, cleanupPeer, wasFriendCallEnded]);
 
@@ -5537,7 +6369,7 @@ const flipCam = useCallback(async () => {
     if (peerId === partnerIdRef.current) {
       stopRemoteOnly();
       
-      // КРИТИЧНО: Сохраняем старые значения ДО очистки для проверки типа звонка
+      // Сохраняем старые значения ДО очистки для проверки типа звонка
       const oldPartnerId = partnerIdRef.current;
       const isInactive = isInactiveStateRef.current || wasFriendCallEnded;
       
@@ -5547,9 +6379,9 @@ const flipCam = useCallback(async () => {
       setPartnerUserId(null);
       setPartnerInPiP(false); // Сбрасываем состояние PiP при остановке партнера
       
-      // КРИТИЧНО: Полностью закрываем старое PC чтобы избежать ложных срабатываний bindConnHandlers
+      // Полностью закрываем старое PC чтобы избежать ложных срабатываний bindConnHandlers
       if (peerRef.current) {
-        console.log('[handlePeerLeft] Cleaning up old PC before auto-search');
+        console.log('[handlePeerLeft] Cleaning up old PC');
         try {
           cleanupPeer(peerRef.current);
         } catch (e) {
@@ -5558,13 +6390,14 @@ const flipCam = useCallback(async () => {
         peerRef.current = null;
       }
       
-      // КРИТИЧНО: Определяем тип чата ДО очистки
+      // Определяем тип чата ДО очистки
       const isRandomChat = !isDirectCall && !inDirectCallRef.current;
       const wasDirectCall = isDirectCall || inDirectCallRef.current;
       
-      // КРИТИЧНО: НЕ запускаем автопоиск если:
+      // НЕ запускаем автопоиск если:
       // 1. Звонок был завершен (isInactiveState или wasFriendCallEnded) - это завершенный звонок друга
       // 2. Это был прямой звонок (isDirectCall или inDirectCall) - для прямых звонков нет автопоиска
+      // 3. Это скипнутый пользователь - автопоиск должен запускаться только у того, кто нажал "Далее"
       if (isInactive || wasDirectCall) {
         console.log('[handlePeerLeft] Skipping auto-search - call ended or was direct call', { 
           isInactive, 
@@ -5574,23 +6407,19 @@ const flipCam = useCallback(async () => {
         return;
       }
       
-      // КРИТИЧНО: Для рандомного чата ВСЕГДА запускаем автопоиск, даже если пользователи друзья
-      // Это гарантирует, что оба пользователя начнут поиск нового партнера
-      if (isRandomChat && !manuallyRequestedNextRef.current) {
-        console.log('[handlePeerLeft] Starting auto-search for random chat', { wasStarted: startedRef.current });
-        setLoading(true); // Показываем спиннер загрузки
-        setStarted(true); // Включаем поиск
-        setTimeout(() => {
-          try { 
-            socket.emit('next'); 
-            console.log('[handlePeerLeft] Emitted next for auto-search');
-          } catch (e) {
-            console.warn('[handlePeerLeft] Error emitting next:', e);
-          }
-        }, 300);
-      } else if (manuallyRequestedNextRef.current) {
-        console.log('[handlePeerLeft] Skipping auto-search - manual next was requested');
-        manuallyRequestedNextRef.current = false; // Сбрасываем флаг
+      // ВАЖНО: НЕ запускаем автопоиск у скипнутого пользователя
+      // peer:left приходит когда партнер нажал "Далее" или вышел - это означает что партнер ищет нового собеседника
+      // У скипнутого пользователя автопоиск НЕ должен запускаться - он должен остаться в текущем состоянии
+      // Автопоиск запускается только у того, кто нажал "Далее" (через onNext -> socket.emit('next'))
+      console.log('[handlePeerLeft] Partner left (likely skipped by partner), NOT starting auto-search', { 
+        wasStarted: startedRef.current,
+        isRandomChat,
+        reason
+      });
+      
+      // Сбрасываем флаг если он был установлен
+      if (manuallyRequestedNextRef.current) {
+        manuallyRequestedNextRef.current = false;
       }
     }
   }, [stopRemoteOnly, isDirectCall, cleanupPeer, wasFriendCallEnded]);
@@ -5654,7 +6483,7 @@ const eqLevels = useMemo(() => {
 
   const showFriendBadge = useMemo(() => {
     // УПРОЩЕНО: бейдж «Друг» для единственного собеседника
-    // КРИТИЧНО: Не показываем бэйдж в неактивном состоянии (после завершения звонка)
+    // Не показываем бэйдж в неактивном состоянии (после завершения звонка)
     if (!partnerUserId || !started || isInactiveState) {
       console.log('[showFriendBadge] Returning false:', { partnerUserId, started, isInactiveState });
       return false;
@@ -5676,7 +6505,7 @@ const eqLevels = useMemo(() => {
     const isFriendsMode = isDirectCall || inDirectCall || friendCallAccepted;
     // Для дружеских звонков показываем "Прервать" сразу после принятия звонка
     // Не ждем remoteStream - он может появиться позже
-    // КРИТИЧНО: hasActiveCall должен быть false если мы в неактивном состоянии
+    // hasActiveCall должен быть false если мы в неактивном состоянии
     const hasActiveCall = !isInactiveState && (!!roomIdRef.current || !!currentCallIdRef.current || pcConnected || started);
     
     // Дополнительная проверка для возврата из background
@@ -5862,7 +6691,7 @@ const eqLevels = useMemo(() => {
     const wasDirectCall = isDirectCall;
     const wasInDirectCall = inDirectCall;
     
-    // КРИТИЧНО: Сохраняем старые значения ДО очистки для проверки типа звонка
+    // Сохраняем старые значения ДО очистки для проверки типа звонка
     const isInactive = isInactiveStateRef.current || wasFriendCallEnded;
     
     console.log('[handleDisconnected] State:', { wasInCall, wasStarted, wasDirectCall, wasInDirectCall, isInactive });
@@ -5879,11 +6708,11 @@ const eqLevels = useMemo(() => {
     setInDirectCall(false);
     stopSpeaker();
     
-    // КРИТИЧНО: Определяем тип чата
+    // Определяем тип чата
     const isRandomChat = !wasDirectCall && !wasInDirectCall;
     const wasDirectCallFlag = wasDirectCall || wasInDirectCall;
     
-    // КРИТИЧНО: НЕ запускаем автопоиск если:
+    // НЕ запускаем автопоиск если:
     // 1. Звонок был завершен (isInactiveState или wasFriendCallEnded) - это завершенный звонок друга
     // 2. Это был прямой звонок (wasDirectCall || wasInDirectCall) - для прямых звонков нет автопоиска
     if (isInactive || wasDirectCallFlag) {
@@ -5902,11 +6731,10 @@ const eqLevels = useMemo(() => {
       return;
     }
     
-    // КРИТИЧНО: Автоматически начинаем поиск если были в рандомном чате
-    // Для рандомного чата ВСЕГДА запускаем автопоиск, даже если пользователи друзья
-    // Это гарантирует, что оба пользователя начнут поиск нового партнера
+    // ВАЖНО: Если партнер вышел из общения (любым способом), запускаем автопоиск
+    // Это гарантирует, что оставшийся пользователь автоматически найдет нового собеседника
     if (isRandomChat && wasInCall) {
-      console.log('[handleDisconnected] Starting auto-search for random chat', { wasStarted, wasInCall });
+      console.log('[handleDisconnected] Starting auto-search for random chat after connection lost', { wasStarted, wasInCall });
       setLoading(true); // Показываем спиннер загрузки
       setStarted(true); // Включаем поиск
       setTimeout(() => {
@@ -6041,6 +6869,12 @@ const eqLevels = useMemo(() => {
     };
     socket.on('call:timeout', () => {
       // Таймаут: просто закрываем модалку. Если мы были в поиске внутри VideoChat — останавливаем поиск.
+      // ВАЖНО: Это событие ТОЛЬКО для звонков друзей, НЕ для рандомного чата
+      const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted || !!currentCallIdRef.current;
+      if (!isFriendCall) {
+        console.log('[call:timeout] Ignoring - not a friend call');
+        return;
+      }
       const uid = incomingFriendCall?.from ? String(incomingFriendCall.from) : undefined;
       setIncomingOverlay(false);
       setIncomingFriendCall(null);
@@ -6054,6 +6888,12 @@ const eqLevels = useMemo(() => {
     // Новый обработчик: собеседник занят
     socket.on('call:busy', (data: any) => {
       console.log('[call:busy] Received call:busy:', data);
+      // ВАЖНО: Это событие ТОЛЬКО для звонков друзей, НЕ для рандомного чата
+      const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted || !!currentCallIdRef.current;
+      if (!isFriendCall) {
+        console.log('[call:busy] Ignoring - not a friend call');
+        return;
+      }
       setIncomingOverlay(false);
       setIncomingFriendCall(null);
       stopIncomingAnim();
@@ -6062,7 +6902,7 @@ const eqLevels = useMemo(() => {
       // НЕ показываем тост - у занятых друзей уже есть бэйдж "Занято" и задизейблена кнопка
       // В рандомном поиске это нормальный процесс поиска свободного собеседника
       
-      // КРИТИЧНО: Очищаем WebRTC состояние при call:busy
+      // Очищаем WebRTC состояние при call:busy
       try {
         console.log('[call:busy] Cleaning up WebRTC state...');
         const pc = peerRef.current;
@@ -6099,6 +6939,12 @@ const eqLevels = useMemo(() => {
     // HomeScreen.tsx уже обрабатывает это событие глобально
     
     socket.on('call:declined', (d: any) => {
+      // ВАЖНО: Это событие ТОЛЬКО для звонков друзей, НЕ для рандомного чата
+      const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted || !!currentCallIdRef.current;
+      if (!isFriendCall) {
+        console.log('[call:declined] Ignoring - not a friend call');
+        return;
+      }
       // Увеличиваем только если отменил звонящий, а не я сам
       const from = d?.from ? String(d.from) : undefined;
       if (from && from !== String(myUserId || '')) void incMissed(from);
@@ -6115,6 +6961,12 @@ const eqLevels = useMemo(() => {
       try { if (started) onStartStop(); } catch {}
     });
     const offCancel = onCallCanceled?.(async (d) => {
+      // ВАЖНО: Это событие ТОЛЬКО для звонков друзей, НЕ для рандомного чата
+      const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted || !!currentCallIdRef.current;
+      if (!isFriendCall) {
+        console.log('[call:canceled] Ignoring - not a friend call');
+        return;
+      }
       // Отмена инициатором — закрыть оверлей и отметить пропущенный
       const from = d?.from ? String(d.from) : undefined;
       if (from && from !== String(myUserId || '')) await incMissed(from);
@@ -6161,7 +7013,7 @@ const eqLevels = useMemo(() => {
         currentFriendCallAccepted: friendCallAccepted
       });
       
-      // КРИТИЧНО: Устанавливаем incomingCall всегда, даже если callId нет
+      // Устанавливаем incomingCall всегда, даже если callId нет
       // Это нужно для работы кнопок "Принять" и "Отклонить"
       setIncomingCall({ 
         callId: callId || currentCallIdRef.current || '', 
@@ -6237,7 +7089,7 @@ const eqLevels = useMemo(() => {
       stopIncomingAnim();
     };
 
-    // КРИТИЧНО: Регистрируем обработчики с приоритетом - сначала call:incoming, потом friend:call:incoming
+    // Регистрируем обработчики с приоритетом - сначала call:incoming, потом friend:call:incoming
     // Это нужно чтобы оба обработчика могли сработать если событие отправлено в обоих форматах
     socket.on("call:incoming", directCallHandler);
     socket.on("friend:call:incoming", friendCallHandler);
@@ -6263,7 +7115,7 @@ const eqLevels = useMemo(() => {
         console.log('[call:accepted] Set currentCallIdRef to:', currentCallIdRef.current);
       } catch {}
       
-      // КРИТИЧНО: Для инициатора устанавливаем флаги при получении call:accepted
+      // Для инициатора устанавливаем флаги при получении call:accepted
       // Это нужно чтобы handleMatchFound мог корректно обработать соединение
       if (isDirectCall && isDirectInitiator) {
         console.log('[call:accepted] Setting flags for initiator');
@@ -6271,7 +7123,7 @@ const eqLevels = useMemo(() => {
         setInDirectCall(true);
         setStarted(true);
         
-        // КРИТИЧНО: Создаем локальный стрим для инициатора, если его еще нет
+        // Создаем локальный стрим для инициатора, если его еще нет
         // Это нужно чтобы при приходе match_found стрим уже был готов
         if (!localStream) {
           console.log('[call:accepted] Creating local stream for initiator');
@@ -6285,7 +7137,7 @@ const eqLevels = useMemo(() => {
         }
       }
       
-      // КРИТИЧНО: Создаем PeerConnection после принятия вызова
+      // Создаем PeerConnection после принятия вызова
       try {
         const stream = localStream;
         if (stream && !peerRef.current && (friendCallAccepted || (isDirectCall && isDirectInitiator)) && inDirectCall) {
@@ -6309,15 +7161,18 @@ const eqLevels = useMemo(() => {
   // Unmount cleanup
   // --------------------------
   useEffect(() => {
-    // КРИТИЧНО: call:ended только для звонков друзей (directCall/inDirectCall), НЕ для рандомных!
+    // call:ended только для звонков друзей (directCall/inDirectCall), НЕ для рандомных!
     const onCallEnded = async (data?: any) => {
       logger.debug('[call:ended] Received call:ended event', data);
       
-      // КРИТИЧНО: Проверяем, был ли это звонок друга, используя и state, и refs
+      // Проверяем, был ли это звонок друга, используя и state, и refs
       // Это важно когда пользователь в PiP и state может быть не актуален
+      // ВАЖНО: Для рандомного чата НЕ должно быть isDirectCall, inDirectCall, friendCallAccepted, roomIdRef (для друзей), или currentCallIdRef
+      // partnerIdRef может быть и для рандомного чата, поэтому НЕ используем его в проверке
       const wasFriendCall = isDirectCall || inDirectCall || friendCallAccepted || 
                            inDirectCallRef.current || friendCallAcceptedRef.current ||
-                           !!roomIdRef.current || !!currentCallIdRef.current || !!partnerIdRef.current;
+                           !!currentCallIdRef.current || 
+                           (!!roomIdRef.current && (roomIdRef.current.startsWith('room_') || roomIdRef.current.includes('call_')));
       logger.debug('[call:ended] Was friend call?', { 
         wasFriendCall, 
         isDirectCall, 
@@ -6338,7 +7193,7 @@ const eqLevels = useMemo(() => {
         return;
       }
       
-      // КРИТИЧНО: Также проверяем, что callId совпадает (если указан)
+      // Также проверяем, что callId совпадает (если указан)
       // Это предотвращает завершение не того звонка
       if (data?.callId && currentCallIdRef.current && data.callId !== currentCallIdRef.current) {
         console.log('[call:ended] Ignoring call:ended - callId mismatch', {
@@ -6354,28 +7209,28 @@ const eqLevels = useMemo(() => {
         // background removed
       } catch {}
       
-      // КРИТИЧНО: САМОЕ ПЕРВОЕ ДЕЛО - устанавливаем peerRef.current = null и isInactiveStateRef.current = true
+      // САМОЕ ПЕРВОЕ ДЕЛО - устанавливаем peerRef.current = null и isInactiveStateRef.current = true
       // Это должно быть ДО любых других действий, чтобы обработчики видели что звонок завершен
       const pcMain = peerRef.current;
       const pcPreCreated = preCreatedPcRef.current;
       
-      // КРИТИЧНО: СНАЧАЛА устанавливаем peerRef.current = null, чтобы обработчики не видели активный PC
+      // СНАЧАЛА устанавливаем peerRef.current = null, чтобы обработчики не видели активный PC
       peerRef.current = null;
       preCreatedPcRef.current = null;
       
-      // КРИТИЧНО: СНАЧАЛА очищаем ВСЕ refs СИНХРОННО
+      // СНАЧАЛА очищаем ВСЕ refs СИНХРОННО
       currentCallIdRef.current = null;
       roomIdRef.current = null;
       partnerUserIdRef.current = null;
       partnerIdRef.current = null;
       
-      // КРИТИЧНО: СНАЧАЛА устанавливаем isInactiveStateRef.current = true СИНХРОННО
+      // СНАЧАЛА устанавливаем isInactiveStateRef.current = true СИНХРОННО
       isInactiveStateRef.current = true;
       setIsInactiveState(true);
       setWasFriendCallEnded(true);
       console.log('🔴 [call:ended] Set peerRef=null, isInactiveState=true, refs cleared FIRST (before any cleanup)');
       
-      // КРИТИЧНО: Теперь очищаем обработчики ПЕРЕД закрытием PC
+      // Теперь очищаем обработчики ПЕРЕД закрытием PC
       // Это предотвратит их срабатывание
       try {
         if (pcMain) {
@@ -6413,10 +7268,10 @@ const eqLevels = useMemo(() => {
         console.warn('⚫ [call:ended] Error clearing handlers:', e);
       }
       
-      // КРИТИЧНО: Останавливаем все таймеры и метры СРАЗУ
+      // Останавливаем все таймеры и метры СРАЗУ
       console.log('[call:ended] Stopping mic meter and cleaning up resources');
       stopMicMeter();
-      // КРИТИЧНО: Дополнительно устанавливаем micLevel=0 для эквалайзера
+      // Дополнительно устанавливаем micLevel=0 для эквалайзера
       setMicLevel(0);
       try { 
         pip.updatePiPState({ micLevel: 0 }); 
@@ -6432,19 +7287,19 @@ const eqLevels = useMemo(() => {
       // Локальный клинап без повторной отправки событий
       setLoading(false);
       
-      // КРИТИЧНО: Очищаем state
+      // Очищаем state
       setPartnerUserId(null);
       setPartnerId(null);
       
-      // КРИТИЧНО: Также устанавливаем все флаги в false чтобы предотвратить любые автоматические действия
+      // Также устанавливаем все флаги в false чтобы предотвратить любые автоматические действия
       setStarted(false);
       setCamOn(false);
       setMicOn(false);
       setFriendCallAccepted(false);
       setInDirectCall(false);
       
-      // КРИТИЧНО: СНАЧАЛА очищаем все PeerConnection и их обработчики ПЕРЕД остановкой стрима
-      // Это критично, потому что обработчики могут сработать во время остановки стрима
+      // СНАЧАЛА очищаем все PeerConnection и их обработчики ПЕРЕД остановкой стрима
+      //, потому что обработчики могут сработать во время остановки стрима
       try {
         // Очищаем основной PC и его обработчики СРАЗУ
         if (peerRef.current) {
@@ -6485,14 +7340,14 @@ const eqLevels = useMemo(() => {
         console.warn('⚫ [call:ended] Error clearing handlers before stopLocalStream:', e);
       }
       
-      // КРИТИЧНО: Останавливаем локальные потоки ПОСЛЕ очистки обработчиков
-      // КРИТИЧНО: Ждем завершения остановки, чтобы камера точно выключилась
-      // КРИТИЧНО: stopLocalStream сам закроет PeerConnection внутри, но мы также явно очищаем их
+      // Останавливаем локальные потоки ПОСЛЕ очистки обработчиков
+      // Ждем завершения остановки, чтобы камера точно выключилась
+      // stopLocalStream сам закроет PeerConnection внутри, но мы также явно очищаем их
       try { 
         await stopLocalStream(); 
         console.log('[call:ended] Local stream stopped successfully');
         
-        // КРИТИЧНО: Дополнительная проверка - убеждаемся что все треки действительно остановлены
+        // Дополнительная проверка - убеждаемся что все треки действительно остановлены
         // Это особенно важно для iOS где индикатор камеры может оставаться активным
         const remainingTracks = localStreamRef.current?.getTracks?.() || [];
         if (remainingTracks.length > 0) {
@@ -6509,7 +7364,7 @@ const eqLevels = useMemo(() => {
         console.error('[call:ended] Error stopping local stream:', e);
       }
       
-      // КРИТИЧНО: После остановки стрима ЯВНО закрываем ВСЕ PeerConnection
+      // После остановки стрима ЯВНО закрываем ВСЕ PeerConnection
       // peerRef и preCreatedPcRef уже установлены в null выше, поэтому просто закрываем PC
       try { 
         if (pcMain) {
@@ -6529,7 +7384,7 @@ const eqLevels = useMemo(() => {
         console.warn('⚫ [call:ended] Error closing pre-created PC:', e);
       }
       
-      // КРИТИЧНО: Очищаем remote stream и все связанные состояния
+      // Очищаем remote stream и все связанные состояния
       try {
         const remoteStream = remoteStreamRef.current;
         if (remoteStream) {
@@ -6538,7 +7393,7 @@ const eqLevels = useMemo(() => {
             try {
               t.enabled = false;
               t.stop();
-              // КРИТИЧНО: Дополнительная попытка освободить трек
+              // Дополнительная попытка освободить трек
               try { (t as any).release?.(); } catch {}
             } catch {}
           });
@@ -6548,27 +7403,27 @@ const eqLevels = useMemo(() => {
       }
       setRemoteStream(null);
       remoteStreamRef.current = null;
-      // КРИТИЧНО: Принудительно обновляем remoteViewKey для очистки отображения
+      // Принудительно обновляем remoteViewKey для очистки отображения
       setRemoteViewKey(0);
       
-      // КРИТИЧНО: localStreamRef и localStream уже очищены в stopLocalStream выше
+      // localStreamRef и localStream уже очищены в stopLocalStream выше
       
-      // КРИТИЧНО: Сбрасываем ВСЕ флаги состояния для правильного отображения неактивного состояния
-      // КРИТИЧНО: Делаем это ПОСЛЕ очистки всех потоков и PeerConnection
+      // Сбрасываем ВСЕ флаги состояния для правильного отображения неактивного состояния
+      // Делаем это ПОСЛЕ очистки всех потоков и PeerConnection
       // чтобы гарантировать что следующему вызову не останется "мусора" от предыдущего
       setLocalRenderKey(k => k + 1);
       setMicOn(false);
       setCamOn(false);
       setRemoteMutedMain(false);
-      setRemoteCamOn(false); // КРИТИЧНО: Должно быть false после завершения звонка
-      setPartnerInPiP(false); // КРИТИЧНО: Сбрасываем partnerInPiP
+      setRemoteCamOn(false); // Должно быть false после завершения звонка
+      setPartnerInPiP(false); // Сбрасываем partnerInPiP
       setFriendCallAccepted(false);
       setInDirectCall(false);
       setStarted(false);
-      setPcConnected(false); // КРИТИЧНО: Сбрасываем состояние соединения
-      setLoading(false); // КРИТИЧНО: Сбрасываем loading
+      setPcConnected(false); // Сбрасываем состояние соединения
+      setLoading(false); // Сбрасываем loading
       
-      // КРИТИЧНО: Флаги неактивного состояния уже установлены выше ПЕРЕД остановкой стрима
+      // Флаги неактивного состояния уже установлены выше ПЕРЕД остановкой стрима
       // Не дублируем здесь, просто логируем
       
       console.log('[call:ended] Call cleanup completed - all resources cleared, ready for next call');
@@ -6576,7 +7431,7 @@ const eqLevels = useMemo(() => {
       
       try { showToast('Звонок завершён'); } catch {}
 
-      // КРИТИЧНО: Уведомляем друзей что мы снова доступны
+      // Уведомляем друзей что мы снова доступны
       try {
         socket.emit('presence:update', { status: 'available' });
         console.log('[call:ended] Sent presence:update available');
@@ -6584,7 +7439,7 @@ const eqLevels = useMemo(() => {
         console.error('[call:ended] Failed to send presence update:', e);
       }
       
-      // КРИТИЧНО: Все состояния уже установлены выше, не дублируем
+      // Все состояния уже установлены выше, не дублируем
     };
 
     socket.on('call:ended', onCallEnded);
@@ -6629,7 +7484,7 @@ const eqLevels = useMemo(() => {
       const hasActivePC = !!peerRef.current;
       const hasActivePartner = !!partnerIdRef.current || !!partnerUserIdRef.current;
       
-      // КРИТИЧНО: Для дружеских звонков проверяем не только roomId, но и наличие PC или callId
+      // Для дружеских звонков проверяем не только roomId, но и наличие PC или callId
       // Это важно во время установки соединения, когда roomId еще может быть null, но PC уже создан
       const hasActiveCall = hasActiveRoomId || hasActiveCallId || (hasActivePC && hasActivePartner);
       const keepAliveForPiP = (isFriendCall && hasActiveCall) || pip.visible;
@@ -6639,9 +7494,14 @@ const eqLevels = useMemo(() => {
         return;
       }
 
-      // КРИТИЧНО: Для рандомного чата отправляем stop и room:leave при unmount
+      // Для рандомного чата отправляем stop и room:leave при unmount
       const isRandomChat = !isFriendCall && (roomIdRef.current || partnerIdRef.current || startedRef.current);
-      if (isRandomChat) {
+      // ВАЖНО: НЕ останавливаем стрим если пользователь только что начал поиск (started=true, но нет partnerId и roomId)
+      // Это предотвращает остановку стрима сразу после нажатия "Начать"
+      const isJustStarted = startedRef.current && !partnerIdRef.current && !roomIdRef.current;
+      const hasStream = !!(localStreamRef.current || localStream);
+      
+      if (isRandomChat && !isJustStarted) {
         try {
           const currentRoomId = roomIdRef.current;
           if (currentRoomId) {
@@ -6658,7 +7518,7 @@ const eqLevels = useMemo(() => {
         }
       }
       
-      // КРИТИЧНО: Очищаем глобальные ссылки на функции
+      // Очищаем глобальные ссылки на функции
       try {
         if ((global as any).__endCallCleanupRef) {
           (global as any).__endCallCleanupRef.current = null;
@@ -6681,8 +7541,32 @@ const eqLevels = useMemo(() => {
       } catch {}
       peerRef.current = null;
 
-      try { stopLocalStream(); } catch {}
-      try { setCamOn(false); } catch {}
+      // ВАЖНО: НЕ останавливаем стрим если пользователь только что начал поиск ИЛИ стрима нет ИЛИ есть активное соединение
+      // Это предотвращает остановку стрима сразу после нажатия "Начать" и при активном соединении
+      // ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА: Проверяем, что мы не в процессе создания стрима (loading=true)
+      const isLoading = loading;
+      // ВАЖНО: Проверяем наличие активного соединения (partnerId или roomId)
+      // Если есть активное соединение, НЕ останавливаем стрим - он нужен для видеозвонка
+      const hasActiveConnection = !!partnerIdRef.current || !!roomIdRef.current;
+      if (!isJustStarted && hasStream && !isLoading && !hasActiveConnection) {
+        console.log('[Unmount cleanup] Calling stopLocalStream', { isJustStarted, hasStream, isLoading, hasActiveConnection });
+        try { stopLocalStream(); } catch {}
+      } else {
+        console.log('[Unmount cleanup] Skipping stopLocalStream', { 
+          isJustStarted, 
+          hasStream, 
+          isLoading,
+          hasActiveConnection,
+          reason: isJustStarted ? 'just started search' : isLoading ? 'loading' : hasActiveConnection ? 'active connection' : 'no stream'
+        });
+      }
+      // ВАЖНО: НЕ сбрасываем camOn если есть активное соединение
+      // Камера должна оставаться включенной при активном видеозвонке
+      if (!hasActiveConnection) {
+        try { setCamOn(false); } catch {}
+      } else {
+        console.log('[Unmount cleanup] Preserving camOn state due to active connection');
+      }
       try { setTimeout(() => { mediaDevices.enumerateDevices?.(); }, 0); } catch {}
       try { stopSpeaker(); } catch {}
     };
@@ -6753,7 +7637,7 @@ const eqLevels = useMemo(() => {
           const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted;
           const hasActiveCall = !!roomIdRef.current && !isInactiveStateRef.current;
           
-          // КРИТИЧНО: Если находимся в неактивном состоянии (завершенный звонок),
+          // Если находимся в неактивном состоянии (завершенный звонок),
           // просто навигируем назад без показа PiP и без каких-либо действий
           if (isInactiveStateRef.current) {
             console.log('[PanGestureHandler] In inactive state, just navigating back');
@@ -6796,7 +7680,7 @@ const eqLevels = useMemo(() => {
                 : `${serverUrl}${partner.avatar.startsWith('/') ? '' : '/'}${partner.avatar}`;
             }
             
-            // КРИТИЧНО: Сохраняем partnerUserId в navParams для восстановления при возврате
+            // Сохраняем partnerUserId в navParams для восстановления при возврате
             pip.showPiP({
               callId: currentCallIdRef.current || '',
               roomId: roomIdRef.current || '',
@@ -6809,7 +7693,7 @@ const eqLevels = useMemo(() => {
               navParams: {
                 ...route?.params,
                 peerUserId: partnerUserId || partnerUserIdRef.current,
-                partnerId: partnerId || partnerIdRef.current, // КРИТИЧНО: Сохраняем partnerId для восстановления соединения
+                partnerId: partnerId || partnerIdRef.current, // Сохраняем partnerId для восстановления соединения
               } as any,
             });
             
@@ -6873,11 +7757,11 @@ const eqLevels = useMemo(() => {
       <View style={styles.card}>
         {/* Модалка входящего звонка друга - показывается в любом состоянии (даже когда поиск не начат) */}
         {(() => {
-          // КРИТИЧНО: Убираем условие !remoteStream - модалка должна показываться даже если есть remoteStream
+          // Убираем условие !remoteStream - модалка должна показываться даже если есть remoteStream
           // из предыдущего звонка (например, в неактивном состоянии после завершенного звонка)
           // Исключение: не показываем если уже принят этот конкретный звонок (friendCallAccepted)
           // или если есть активный remoteStream от того же пользователя (проверяем по partnerUserId)
-          // КРИТИЧНО: В неактивном состоянии remoteStream не считается активным, даже если существует
+          // В неактивном состоянии remoteStream не считается активным, даже если существует
           const hasActiveRemoteStream = !isInactiveState && !!remoteStream && !!partnerUserId && 
             incomingFriendCall && 
             String(partnerUserId) === String(incomingFriendCall.from);
@@ -6924,11 +7808,11 @@ const eqLevels = useMemo(() => {
                       // Сбрасываем блокировку (если была) — это новый явный приём вызова
                       try { clearDeclinedBlock(); } catch {}
                       
-                      // КРИТИЧНО: Используем callId из incomingCall или roomId из ref
+                      // Используем callId из incomingCall или roomId из ref
                       const finalCallId = incomingCall?.callId || currentCallIdRef.current || roomIdRef.current;
                       if (finalCallId) {
                         currentCallIdRef.current = finalCallId;
-                        roomIdRef.current = finalCallId; // КРИТИЧНО: Устанавливаем roomId для приватной комнаты
+                        roomIdRef.current = finalCallId; // Устанавливаем roomId для приватной комнаты
                         console.log('[Accept Call] Set currentCallIdRef to:', currentCallIdRef.current);
                         console.log('[Accept Call] Set roomId to:', roomIdRef.current);
                       }
@@ -6937,26 +7821,26 @@ const eqLevels = useMemo(() => {
                       setFriendCallAccepted(true);
                       setInDirectCall(true);
                       
-                      // КРИТИЧНО: Устанавливаем partnerUserId из входящего звонка
+                      // Устанавливаем partnerUserId из входящего звонка
                       if (incomingFriendCall?.from) {
                         setPartnerUserId(incomingFriendCall.from);
                         partnerUserIdRef.current = incomingFriendCall.from;
                         console.log('[Accept Call] Set partnerUserId:', incomingFriendCall.from);
                       }
                       
-                      // КРИТИЧНО: Сначала сбрасываем входящий звонок и закрываем модалку
+                      // Сначала сбрасываем входящий звонок и закрываем модалку
                       setIncomingOverlay(false);
                       setIncomingFriendCall(null);
                       setIncomingCall(null);
                       stopIncomingAnim();
                       
-                      // КРИТИЧНО: Очищаем старый PeerConnection если он существует
+                      // Очищаем старый PeerConnection если он существует
                       // Это важно при принятии звонка в неактивном состоянии, когда может остаться старый PC
                       const oldPc = peerRef.current;
                       if (oldPc) {
                         console.log('[Accept Call] Cleaning up old PeerConnection before accepting new call');
                         try {
-                          // КРИТИЧНО: Сначала удаляем все треки из старого PC
+                          // Сначала удаляем все треки из старого PC
                           const oldSenders = oldPc.getSenders() || [];
                           const removePromises = oldSenders.map(async (sender: any) => {
                             try {
@@ -6979,7 +7863,7 @@ const eqLevels = useMemo(() => {
                         peerRef.current = null;
                       }
                       
-                      // КРИТИЧНО: Очищаем remote stream от предыдущего звонка если он существует
+                      // Очищаем remote stream от предыдущего звонка если он существует
                       // Это важно при принятии нового звонка в неактивном состоянии
                       if (remoteStream || remoteStreamRef.current) {
                         console.log('[Accept Call] Clearing old remote stream');
@@ -7000,20 +7884,20 @@ const eqLevels = useMemo(() => {
                         setPartnerInPiP(false);
                       }
                       
-                      // КРИТИЧНО: Выходим из неактивного состояния ПЕРЕД установкой флагов активного звонка
-                      // КРИТИЧНО: Устанавливаем флаг принятия звонка СРАЗУ, чтобы избежать race condition
+                      // Выходим из неактивного состояния ПЕРЕД установкой флагов активного звонка
+                      // Устанавливаем флаг принятия звонка СРАЗУ, чтобы избежать race condition
                       setFriendCallAccepted(true);
                       setIsInactiveState(false);
                       setWasFriendCallEnded(false); // Сбрасываем флаг завершенного звонка
                       
-                      // КРИТИЧНО: Даем время для обновления state перед созданием стрима
+                      // Даем время для обновления state перед созданием стрима
                       await new Promise(resolve => setTimeout(resolve, 50));
                       
-                      // КРИТИЧНО: Устанавливаем started для создания PeerConnection
+                      // Устанавливаем started для создания PeerConnection
                       setStarted(true);
                       setLoading(true);
-                      setCamOn(true); // КРИТИЧНО: Включаем камеру сразу при принятии вызова
-                      setMicOn(true); // КРИТИЧНО: Включаем микрофон сразу при принятии вызова
+                      setCamOn(true); // Включаем камеру сразу при принятии вызова
+                      setMicOn(true); // Включаем микрофон сразу при принятии вызова
                       setPcConnected(false); // Сбрасываем состояние соединения чтобы оно обновилось при установке
                       console.log('[Accept Call] Set started=true, loading=true, camOn=true, micOn=true, isInactiveState=false, friendCallAccepted=true');
                       
@@ -7030,7 +7914,7 @@ const eqLevels = useMemo(() => {
                         }
                       } catch {}
                       
-                      // КРИТИЧНО: Уведомляем друзей что мы заняты
+                      // Уведомляем друзей что мы заняты
                       try {
                         socket.emit('presence:update', { status: 'busy', roomId: roomIdRef.current });
                         console.log('[Accept Call] Sent presence:update busy for roomId:', roomIdRef.current);
@@ -7038,7 +7922,7 @@ const eqLevels = useMemo(() => {
                         console.error('[Accept Call] Failed to send presence update:', e);
                       }
                       
-                      // КРИТИЧНО: Отправляем состояние камеры после принятия вызова
+                      // Отправляем состояние камеры после принятия вызова
                       setTimeout(() => {
                         try {
                           sendCameraState();
@@ -7048,23 +7932,23 @@ const eqLevels = useMemo(() => {
                         }
                       }, 100);
                       
-                      // КРИТИЧНО: Гарантируем локальный поток для ответа
+                      // Гарантируем локальный поток для ответа
                       // PeerConnection будет создан в handleMatchFound когда придет событие match_found
                       // Это важно чтобы partnerId был установлен правильно перед созданием PC
-                      // КРИТИЧНО: К этому моменту friendCallAccepted уже установлен в true выше, 
+                      // К этому моменту friendCallAccepted уже установлен в true выше, 
                       // поэтому ensureStreamReady сможет создать стрим даже если был в неактивном состоянии
                       try { 
                         const stream = await ensureStreamReady();
                         if (stream) {
                           localStreamRef.current = stream;
-                          // КРИТИЧНО: Убеждаемся что камера включена (camOn уже установлен выше)
+                          // Убеждаемся что камера включена (camOn уже установлен выше)
                           const videoTrack = stream.getVideoTracks()?.[0];
                           if (videoTrack) {
                             if (!videoTrack.enabled) {
                               videoTrack.enabled = true;
                               console.log('[Accept Call] Enabled video track after ensureStreamReady');
                             }
-                            // КРИТИЧНО: Убеждаемся что camOn установлен в true
+                            // Убеждаемся что camOn установлен в true
                             setCamOn(true);
                           }
                         console.log('[Accept Call] Got local stream:', stream?.id);
@@ -7124,7 +8008,7 @@ const eqLevels = useMemo(() => {
           // ВСЕГДА показываем блок с видео/заглушкой (не текст "Собеседник")
           <>
             {(() => {
-              // КРИТИЧНО: В неактивном состоянии ВСЕГДА показываем только текст "Собеседник", независимо от наличия remoteStream
+              // В неактивном состоянии ВСЕГДА показываем только текст "Собеседник", независимо от наличия remoteStream
                 if (isInactiveState) {
                   return <Text style={styles.placeholder}>{L("peer")}</Text>;
               }
@@ -7144,24 +8028,21 @@ const eqLevels = useMemo(() => {
               const remoteVideoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
               const partnerInPiPState = partnerInPiP && !pip.visible;
               
-              // КРИТИЧНО: Если партнёр в PiP - всегда показываем черный экран (не застывший кадр)
+              // Если партнёр в PiP - всегда показываем черный экран (не застывший кадр)
               if (partnerInPiPState) {
                 return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
               }
               
-              // КРИТИЧНО: Если камера выключена - всегда показываем заглушку "Отошёл", даже если трек жив
-              // Это нужно чтобы при выключении камеры у друга сразу появлялась заглушка
-              if (!remoteCamOn) {
-                return <AwayPlaceholder />;
-              }
-              
-              // КРИТИЧНО: Если камера включена и есть видеотрек - ВСЕГДА показываем видео
-              // КРИТИЧНО: Показываем видео даже если readyState не 'live' (для плохого интернета)
+              // ВАЖНО: Показываем видео если есть remoteStream и video track, даже если remoteCamOn еще не установлен
+              // Это гарантирует отображение видео сразу после получения стрима
+              // Если есть видеотрек - ВСЕГДА показываем видео, независимо от remoteCamOn
+              // (remoteCamOn может быть false из-за задержки обновления состояния)
+              // Показываем видео даже если readyState не 'live' (для плохого интернета)
               // Это гарантирует отображение видео при любых условиях
               if (remoteVideoTrack && remoteVideoTrack.readyState !== 'ended') {
                 if (remoteStream && isValidStream(remoteStream)) {
-                  // КРИТИЧНО: Показываем видео даже если track в состоянии 'ready' (не только 'live')
-                  // Это критично для плохого интернета
+                  // Показываем видео даже если track в состоянии 'ready' (не только 'live')
+                  // для плохого интернета
                   return (
                     <RTCView
                       key={`remote-video-${remoteViewKey}-${remoteStream.id}`}
@@ -7188,6 +8069,28 @@ const eqLevels = useMemo(() => {
                 }
                 // Если стрим невалидный - чёрный фон
                 return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
+              }
+              
+              // ВАЖНО: Если есть remoteStream, но еще нет video track (он может прийти позже)
+              // Показываем видео сразу, чтобы не было задержки отображения
+              if (remoteStream && isValidStream(remoteStream)) {
+                // Проверяем, есть ли хотя бы один track (audio или video)
+                const hasAnyTrack = (remoteStream.getTracks?.() || []).length > 0;
+                if (hasAnyTrack) {
+                  // Показываем видео даже если video track еще не пришел (он придет позже)
+                  try {
+                    return (
+                      <RTCView
+                        key={`remote-video-waiting-${remoteViewKey}-${remoteStream.id}`}
+                        streamURL={remoteStream.toURL()}
+                        style={styles.rtc}
+                        objectFit="cover"
+                      />
+                    );
+                  } catch (e) {
+                    console.warn('[RTCView] Error rendering stream while waiting for video track:', e);
+                  }
+                }
               }
               
               // Если нет видеотрека - показываем заглушку "Отошёл"
@@ -7290,24 +8193,35 @@ const eqLevels = useMemo(() => {
       {/* Карточка «Вы» */}
       <View style={styles.card}>
         {(() => {
-          // КРИТИЧНО: Если камера выключена - всегда показываем заглушку "Вы", даже если стрим существует
-          // Это нужно чтобы при выключении камеры сразу появлялась заглушка вместо последнего кадра
-          if (!camOn) {
-            return <Text style={styles.placeholder}>{L("you")}</Text>;
-          }
-          
           // При возврате из background показываем видео если есть поток, независимо от camOn
           const isReturnFrombackground = route?.params?.returnToActiveCall;
-          // КРИТИЧНО: Для звонков друзей показываем локальное видео если камера включена и есть поток
-          // Для рандомного чата показываем видео если есть стрим и started=true
-          const shouldShowLocalVideo = !isInactiveState && camOn && (
-            (inDirectCall && localStream) || // Показываем видео при звонке друзей если камера включена
-            (localStream && started) || // Для рандомного чата показываем если started=true (стрим активен)
-            (isReturnFrombackground && (localStream || localRender))
+          // ВАЖНО: Показываем видео ТОЛЬКО если камера включена (camOn === true)
+          // Если камера выключена (camOn === false), показываем заглушку с надписью "Вы"
+          // Это работает и для звонков друзей, и для рандомного чата
+          const shouldShowLocalVideo = !isInactiveState && (
+            (inDirectCall && localStream && camOn) || // Показываем видео при звонке друзей если камера включена
+            (!inDirectCall && localStream && started && camOn) || // Для рандомного чата показываем если started=true И camOn=true
+            (isReturnFrombackground && (localStream || localRender) && camOn) // При возврате из background показываем только если камера включена
           );
           
+          // ЛОГИРУЕМ для отладки
+          if (started && localStream) {
+            console.log('[Render "Вы"] Video display check', {
+              isInactiveState,
+              inDirectCall,
+              hasLocalStream: !!localStream,
+              started,
+              camOn,
+              shouldShowLocalVideo,
+              videoTrackEnabled: localStream?.getVideoTracks()?.[0]?.enabled
+            });
+          }
+          
+          // ВАЖНО: Показываем видео только если камера включена (camOn === true)
+          // Если камера выключена (camOn === false), показываем заглушку с надписью "Вы"
+          // Это гарантирует, что при нажатии на кнопку отключения камеры показывается заглушка, а не последний кадр
           if (shouldShowLocalVideo) {
-            // КРИТИЧНО: Возвращаемся к оригинальному RTCView
+            // Возвращаемся к оригинальному RTCView
             if (localRender) {
               return (
                 <RTCView
@@ -7319,7 +8233,7 @@ const eqLevels = useMemo(() => {
                 />
               );
             } else if (localStream && isValidStream(localStream)) {
-              // КРИТИЧНО: Возвращаемся к оригинальному методу toURL()
+              // Возвращаемся к оригинальному методу toURL()
               // Убрали постоянный лог для уменьшения шума
               return (
                 <RTCView
@@ -7410,16 +8324,17 @@ const eqLevels = useMemo(() => {
           // Стандартные кнопки «Начать / Далее» вне звонка
           (<>
             <TouchableOpacity
-              style={[styles.bigBtn, started ? styles.btnDanger : styles.btnTitan]}
-              onPress={onStartStop}
+              style={[styles.bigBtn, started ? styles.btnDanger : styles.btnTitan, isInactiveState && styles.disabled]}
+              disabled={isInactiveState}
+              onPress={isInactiveState ? undefined : onStartStop}
             >
               <Text style={styles.bigBtnText}>
                 {started ? L("stop") : L("start")}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.bigBtn, styles.btnTitan, (!started || isNexting) && styles.disabled]}
-              disabled={!started || isNexting}
+              style={[styles.bigBtn, styles.btnTitan, (!started || isNexting || isInactiveState) && styles.disabled]}
+              disabled={!started || isNexting || isInactiveState}
               onPress={onNext}
             >
               <Text style={styles.bigBtnText}>

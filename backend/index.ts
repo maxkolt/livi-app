@@ -441,7 +441,26 @@ const pairAndNotify = (aSid: string, bSid: string) => {
 const tryPairFor = (sock: AuthedSocket): boolean => {
   // Ищем любого другого ожидающего участника, не находящегося в разговоре
   removeFromWaitingQueue(sock.id); // исключаем себя из очереди на время подбора
-  const candidates = waitingQueue.filter((sid) => sid !== sock.id && !partnerOf(sid) && isConnected(sid));
+  const myUserId = String(sock.data.userId || '');
+  
+  const candidates = waitingQueue.filter((sid) => {
+    if (sid === sock.id) return false;
+    if (partnerOf(sid)) return false;
+    if (!isConnected(sid)) return false;
+    
+    // Проверяем, что это не один и тот же пользователь (по userId)
+    // Это важно, если пользователь подключен с нескольких устройств
+    const otherSock = io.sockets.sockets.get(sid) as AuthedSocket | undefined;
+    if (otherSock) {
+      const otherUserId = String(otherSock.data.userId || '');
+      if (myUserId && otherUserId && myUserId === otherUserId) {
+        return false;
+      }
+    }
+    
+    return true;
+  });
+  
   if (candidates.length === 0) {
     // Вернём себя в очередь ожидания
     enqueueWaiting(sock.id);
