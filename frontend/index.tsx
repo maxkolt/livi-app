@@ -9,17 +9,7 @@ import React from 'react';
 import { LogBox, ErrorUtils, NativeModules, Platform } from 'react-native';
 
 // Отключаем только ненужные предупреждения, но оставляем console.warn
-LogBox.ignoreLogs([
-  'Warning: componentWillReceiveProps',
-  'Warning: componentWillMount',
-  'Warning: componentWillUpdate',
-  'Non-serializable values were found in the navigation state',
-  'VirtualizedLists should never be nested',
-  'useInsertionEffect must not schedule',
-  'Warning: useInsertionEffect',
-  '`new NativeEventEmitter()` was called with a non-null argument without the required `addListener` method.',
-  '`new NativeEventEmitter()` was called with a non-null argument without the required `removeListeners` method.',
-]);
+
 
 // УБРАНО: Дублирующий код - эта логика уже есть в shims/nativeEventEmitterShim.ts
 // который импортируется первым (строка 2)

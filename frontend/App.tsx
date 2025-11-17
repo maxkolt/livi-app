@@ -18,36 +18,7 @@ import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, onReq
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
-
-// Импорт expo-keep-awake с безопасной загрузкой
-let activateKeepAwakeAsync: (() => Promise<void>) | null = null;
-let deactivateKeepAwakeAsync: (() => Promise<void>) | null = null;
-
-try {
-  const keepAwakeModule = require("expo-keep-awake");
-  // КРИТИЧНО: Используем асинхронные версии (activateKeepAwakeAsync вместо activateKeepAwake)
-  activateKeepAwakeAsync = keepAwakeModule.activateKeepAwakeAsync;
-  deactivateKeepAwakeAsync = keepAwakeModule.deactivateKeepAwakeAsync;
-  // Fallback: если async версии нет, пробуем синхронные (для обратной совместимости)
-  if (!activateKeepAwakeAsync && keepAwakeModule.activateKeepAwake) {
-    activateKeepAwakeAsync = async () => { keepAwakeModule.activateKeepAwake(); };
-  }
-  if (!deactivateKeepAwakeAsync && keepAwakeModule.deactivateKeepAwake) {
-    deactivateKeepAwakeAsync = async () => { keepAwakeModule.deactivateKeepAwake(); };
-  }
-} catch (e) {
-  logger.warn("expo-keep-awake module not available, using fallback", e);
-  // Fallback функции если модуль недоступен
-  activateKeepAwakeAsync = async () => {
-    logger.debug("keep-awake activate (fallback - module not available)");
-  };
-  deactivateKeepAwakeAsync = async () => {
-    logger.debug("keep-awake deactivate (fallback - module not available)");
-  };
-}
-
-// Экспортируем функции для использования в других компонентах
-export { activateKeepAwakeAsync, deactivateKeepAwakeAsync };
+import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from './utils/keepAwake';
 
 import HomeScreen from "./screens/HomeScreen";
 import VideoChat from "./components/VideoChat";
