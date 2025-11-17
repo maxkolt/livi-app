@@ -1,49 +1,90 @@
-// index.tsx
 import './shims/nativeEventEmitterShim';
 import 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 import { registerRootComponent } from 'expo';
-import React from 'react';
+import { ErrorUtils, LogBox } from 'react-native';
 
-import { LogBox, ErrorUtils, NativeModules, Platform } from 'react-native';
-
-// Отключаем только ненужные предупреждения, но оставляем console.warn
-
-
-// УБРАНО: Дублирующий код - эта логика уже есть в shims/nativeEventEmitterShim.ts
-// который импортируется первым (строка 2)
-
-// Глобальный обработчик ошибок для скрытия ненужных ошибок
 try {
   const originalErrorHandler = ErrorUtils.getGlobalHandler();
   ErrorUtils.setGlobalHandler((error, isFatal) => {
-    // Скрываем ошибки useInsertionEffect
     if (error?.message?.includes('useInsertionEffect must not schedule')) {
       return;
     }
-    
-    // Для остальных ошибок используем стандартный обработчик
     originalErrorHandler(error, isFatal);
   });
-} catch (e) {}
-
-// Диагностика (один раз — можно удалить позже)
-try {} catch {}
-
-// Инициализация WebRTC отключена - будет происходить только при необходимости
-// try {
-//   // Инициализируем react-native-webrtc
-//   const WebRTC = require('react-native-webrtc');
-//   if (WebRTC.registerGlobals) {
-//     WebRTC.registerGlobals();
-//     console.log('[WebRTC] Globals registered via react-native-webrtc');
-//   }
-// } catch (e) {
-//   console.log('[WebRTC] Failed to register globals via react-native-webrtc:', e);
-// }
-
+} catch {}
 
 import App from './App';
+
+// Dev-only: фильтр console.* логов, оставляем только нужные теги
+if (__DEV__ && process.env.EXPO_PUBLIC_LOG_FILTER !== 'off') {
+  try {
+    // Скрываем известные шумные предупреждения в dev
+    try {
+      LogBox.ignoreLogs([
+        'Sending `onAnimatedValueUpdate` with no listeners registered',
+      ]);
+    } catch {}
+
+    const allowTags = [
+      '[socket]',
+      '[onStartStop]',
+      '[videochat]',
+      '[pip:state]',
+      '[PiPContext]',
+      '[PanGestureHandler]',
+      '[support]',
+      '[analytics]',
+      'friend:call',       // включает [friend:call:incoming]
+      'call:incoming',
+      '[App] navigateToCall',
+    ];
+    const noisyPrefixes = [
+      'rn-webrtc:', // внутренний спам нативного webrtc
+    ];
+    const noisySubstrings = [
+      'getStats +', // частые периодические логи статистики
+      'ontrack +',  // спам ontrack из нативного слоя
+      'ctor +',
+      'addTrack +',
+      'createOffer',
+      'createAnswer',
+      'setLocalDescription',
+      'setRemoteDescription',
+      'addIceCandidate',
+    ];
+    const wrap = (orig: (...a: any[]) => void) => (...args: any[]) => {
+      try {
+        const first = String(args[0] ?? '');
+        if (noisyPrefixes.some((p) => first.startsWith(p))) return;
+        if (noisySubstrings.some((s) => first.includes(s))) return;
+        const pass = allowTags.some(tag => first.includes(tag));
+        if (!pass) return;
+      } catch {
+        // fallthrough
+      }
+      orig(...args);
+    };
+    console.log = wrap(console.log.bind(console));
+    console.info = wrap(console.info.bind(console));
+    console.debug = wrap(console.debug ? console.debug.bind(console) : console.log.bind(console));
+
+    // Перехватываем нативный логгер RN, чтобы отфильтровать низкоуровневые логи (rn-webrtc: getStats и т.п.)
+    try {
+      const origNativeHook = (global as any).nativeLoggingHook;
+      (global as any).nativeLoggingHook = (message: string, level: number) => {
+        try {
+          if (typeof message === 'string') {
+            if (message.startsWith('rn-webrtc:') || message.includes('getStats +') || message.includes('ontrack +')) {
+              return; // глушим
+            }
+          }
+        } catch {}
+        if (origNativeHook) return origNativeHook(message, level);
+      };
+    } catch {}
+  } catch {}
+}
 
 registerRootComponent(App);

@@ -428,6 +428,30 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [pressedButton, setPressedButton] = useState<'boosty' | 'patreon' | null>(null);
   const BOOSTY_URL = process.env.EXPO_PUBLIC_BOOSTY_URL || "https://boosty.to/liviapp/donate";
   const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || "https://www.patreon.com/c/LiViApp";
+  const appendUtm = React.useCallback((url: string, params: Record<string, string>) => {
+    try {
+      const u = new URL(url);
+      Object.entries(params).forEach(([k, v]) => u.searchParams.set(k, v));
+      return u.toString();
+    } catch {
+      // fallback простая конкатенация
+      const hasQ = url.includes('?');
+      const qs = Object.entries(params).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+      return url + (hasQ ? '&' : '?') + qs;
+    }
+  }, []);
+  const incrCounter = React.useCallback(async (key: string) => {
+    try {
+      const raw = await AsyncStorage.getItem(key);
+      const n = raw ? Number(raw) || 0 : 0;
+      const next = String(n + 1);
+      await AsyncStorage.setItem(key, next);
+      console.warn(`[analytics] ${key} -> ${next}`);
+      return Number(next);
+    } catch {
+      return 0;
+    }
+  }, []);
   
   useEffect(() => { (async () => { setLang(await loadLang()); })(); }, []);
   const openLangPicker  = () => setLangPickerVisible(true);
@@ -2436,7 +2460,10 @@ const handleClearNick = useCallback(async () => {
       {/* Donate */}
       <TouchableOpacity 
         activeOpacity={0.85}
-        onPress={() => setDonateVisible(true)}
+        onPress={async () => {
+          await incrCounter('support_help_clicks');
+          setDonateVisible(true);
+        }}
         style={{ 
           backgroundColor: 'rgba(113,91,168,0.1)', 
           borderColor: LIVI.accent, 
@@ -2844,7 +2871,18 @@ const handleClearNick = useCallback(async () => {
               <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#B8A9E8' }]}>Поддержать проект</Text>
               <View style={{ marginBottom: 20 }}>
                 <TouchableOpacity
-                  onPress={() => Linking.openURL(BOOSTY_URL)}
+                  onPress={async () => {
+                    const clicks = await incrCounter('support_boosty_clicks');
+                    const url = appendUtm(BOOSTY_URL, {
+                      utm_source: 'livi_app',
+                      utm_medium: 'support',
+                      utm_campaign: 'donate',
+                      utm_content: 'boosty',
+                      utm_count: String(clicks),
+                    });
+                    console.warn('[support] Open Boosty', { url });
+                    Linking.openURL(url);
+                  }}
                   onPressIn={() => setPressedButton('boosty')}
                   onPressOut={() => setPressedButton(null)}
                   activeOpacity={1}
@@ -2877,7 +2915,18 @@ const handleClearNick = useCallback(async () => {
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  onPress={() => Linking.openURL(PATREON_URL)}
+                  onPress={async () => {
+                    const clicks = await incrCounter('support_patreon_clicks');
+                    const url = appendUtm(PATREON_URL, {
+                      utm_source: 'livi_app',
+                      utm_medium: 'support',
+                      utm_campaign: 'donate',
+                      utm_content: 'patreon',
+                      utm_count: String(clicks),
+                    });
+                    console.warn('[support] Open Patreon', { url });
+                    Linking.openURL(url);
+                  }}
                   onPressIn={() => setPressedButton('patreon')}
                   onPressOut={() => setPressedButton(null)}
                   activeOpacity={1}

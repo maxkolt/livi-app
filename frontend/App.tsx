@@ -860,7 +860,7 @@ function AppContent() {
 export default function App() {
   // Навигация в «вернуться к звонку»:
   const navigateToCall = (callId: string | null, roomId: string | null) => {
-    console.log('[App] navigateToCall called with:', { callId, roomId });
+    console.warn('[App] navigateToCall', { callId, roomId });
     // возвращаем ровно на экран друга, НЕ на «Начать/Далее»
     if (navRef.isReady()) {
       navRef.navigate('VideoChat', {
@@ -890,7 +890,7 @@ export default function App() {
     try {
       socket.emit('call:end', { roomId: roomId || 'current' });
     } catch (e) {
-      console.log('[App] Error ending call:', e);
+      console.warn('[App] Error ending call:', e);
     }
   };
 
