@@ -428,12 +428,13 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           if (!rt.enabled) {
           rt.enabled = true;
           }
-          setRemoteCamOn(true);
+          if (remoteCamOnRef.current) {
+            setRemoteCamOn(true);
+          }
           setRemoteViewKey(Date.now());
           console.log('[useFocusEffect] Re-enabled remote video track after PiP return');
         } else {
-          console.log('[useFocusEffect] No remote video track found, setting remoteCamOn=true anyway');
-          setRemoteCamOn(true);
+          console.log('[useFocusEffect] No remote video track found; keep remoteCamOn as is');
         }
       } catch (e) {
         console.warn('[useFocusEffect] Error enabling video tracks:', e);
@@ -699,10 +700,10 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     if (remoteStream && !isInactiveState) {
       try {
         const videoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
-        // Если камеру принудительно скрыли (cam-toggle=false), не включаем обратно автоматически
-        if (remoteCamOnRef.current === false) return;
         if (videoTrack && videoTrack.readyState !== 'ended' && videoTrack.enabled === true) {
-          setRemoteCamOn(true);
+          if (remoteCamOnRef.current) {
+            setRemoteCamOn(true);
+          }
           setRemoteViewKey(Date.now());
           console.log('[useEffect remoteStream] Auto-set remoteCamOn=true (enabled video track exists)', {
             readyState: videoTrack.readyState,
@@ -710,6 +711,10 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
             currentRemoteCamOn: remoteCamOnRef.current,
             willShowVideo: true
           });
+        } else if (videoTrack && videoTrack.readyState === 'live' && videoTrack.enabled === false) {
+          // На случай если получаем disabled-трек (совместимость некоторых устройств)
+          setRemoteCamOn(false);
+          setRemoteViewKey(Date.now());
         }
       } catch (e) {
         console.warn('[useEffect remoteStream] Error checking video track:', e);
@@ -725,15 +730,19 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     const checkVideoTrack = () => {
       try {
         const videoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
-        // Не переопределяем cam-toggle=false
-        if (remoteCamOnRef.current === false) return;
         if (videoTrack && videoTrack.readyState !== 'ended' && videoTrack.enabled === true && !remoteCamOnRef.current) {
-          setRemoteCamOn(true);
+          if (remoteCamOnRef.current) {
+            setRemoteCamOn(true);
+          }
           setRemoteViewKey(Date.now());
           console.log('[useEffect videoTrack check] Found enabled video track, set remoteCamOn=true', {
             readyState: videoTrack.readyState,
             enabled: videoTrack.enabled
           });
+        } else if (videoTrack && videoTrack.readyState === 'live' && videoTrack.enabled === false && remoteCamOnRef.current) {
+          // Совместимость: если вдруг пришёл disabled-трек — показать заглушку
+          setRemoteCamOn(false);
+          setRemoteViewKey(Date.now());
         }
       } catch (e) {
         console.warn('[useEffect videoTrack check] Error:', e);
@@ -3159,7 +3168,9 @@ const flipCam = useCallback(async () => {
         if (vt && !vt.enabled) vt.enabled = true;
       } catch {}
       
-      setRemoteCamOn(true);
+      if (remoteCamOnRef.current) {
+        setRemoteCamOn(true);
+      }
       setRemoteViewKey(Date.now());
       setPartnerInPiP(false);
       
@@ -3321,7 +3332,7 @@ const flipCam = useCallback(async () => {
     setRemoteStream(null);
     setPartnerId(null);
     setPartnerUserId(null);
-    setRemoteCamOn(true);
+    setRemoteCamOn(false);
     setRemoteMutedMain(false);
     setPartnerInPiP(false); // Сбрасываем состояние PiP при очистке
     
@@ -3766,20 +3777,18 @@ const flipCam = useCallback(async () => {
       
       // Для звонков друзей проверяем наличие активной комнаты или прямого звонка
       const isDirectFriendCall = isDirectCall || inDirectCall || friendCallAccepted;
-      const hasActiveRoom = !!roomIdRef.current;
-      
-      // Для рандомного чата проверяем что это событие от текущего партнера (по socket.id)
-      // Для звонков друзей принимаем событие если есть активная комната (событие пришло через комнату)
-      const shouldProcess = isDirectFriendCall 
-        ? hasActiveRoom  // Для звонков друзей - если есть комната, значит это от нашего партнера
-        : (partnerIdRef.current === from);  // Для рандомного чата - проверяем по socket.id
+      // Для звонков «друг-друг» принимаем событие без дополнительных проверок,
+      // так как соединение строго 1-на-1 и событие приходит только от собеседника.
+      // Для рандомного чата продолжаем чекать socket.id.
+      const shouldProcess = isDirectFriendCall
+        ? true
+        : (partnerIdRef.current === from);
       
       if (!shouldProcess) {
         console.log('[cam-toggle] Ignoring event - not from current partner:', { 
           from, 
           currentPartnerId: partnerIdRef.current, 
-          isDirectFriendCall,
-          hasActiveRoom 
+          isDirectFriendCall
         });
         return;
       }
@@ -3999,8 +4008,15 @@ const flipCam = useCallback(async () => {
                 // Это особенно важно при повторных звонках и плохом интернете
                 const videoTrack = rs.getVideoTracks?.()?.[0];
                 if (videoTrack && videoTrack.readyState !== 'ended' && videoTrack.enabled === true) {
-                  // Показываем видео только если трек включён на стороне отправителя
-                  setRemoteCamOn(true);
+                  // Уважаем cam-toggle=false в рандомном чате
+                  if (!remoteCamOnRef.current) {
+                    // не поднимаем заглушку
+                  } else {
+                    // Показываем видео только если трек включён на стороне отправителя
+                    if (remoteCamOnRef.current) {
+                      setRemoteCamOn(true);
+                    }
+                  }
                   console.log('[handleRemote] New stream has video track, set remoteCamOn=true immediately', {
                     readyState: videoTrack.readyState,
                     enabled: videoTrack.enabled,
@@ -4037,8 +4053,15 @@ const flipCam = useCallback(async () => {
                   // Это гарантирует отображение видео даже при плохом интернете
                   const vt = videoTracks[0];
                   if (vt && vt.readyState !== 'ended' && vt.enabled === true) {
-                    // Показываем видео только если трек включён у отправителя
-                    setRemoteCamOn(true);
+                    // Уважаем cam-toggle=false
+                    if (!remoteCamOnRef.current) {
+                      // не поднимаем заглушку
+                    } else {
+                      // Показываем видео только если трек включён у отправителя
+                      if (remoteCamOnRef.current) {
+                        setRemoteCamOn(true);
+                      }
+                    }
                     console.log('[handleRemote] Video track appeared, updated state, remoteViewKey and remoteCamOn for re-render', {
                       readyState: vt.readyState,
                       enabled: vt.enabled,
@@ -4085,7 +4108,9 @@ const flipCam = useCallback(async () => {
                 const vt = (rs as any).getVideoTracks()[0];
                 // Устанавливаем remoteCamOn в true только если video track live И включён
                 if ((vt.readyState === 'live' || vt.readyState === 'ready') && vt.enabled === true) {
-                  setRemoteCamOn(true);
+                  if (remoteCamOnRef.current) {
+                    setRemoteCamOn(true);
+                  }
                   console.log('[handleRemote] Set remoteCamOn to true (video track present and live/ready)', {
                     readyState: vt.readyState,
                     enabled: vt.enabled
@@ -4210,8 +4235,10 @@ const flipCam = useCallback(async () => {
                 const liveAndEnabled = vt.readyState === 'live' && vt.enabled === true;
                 if (liveAndEnabled) {
                   setRemoteViewKey(Date.now());
-                  // remoteCamOn=true только если трек действительно live И включён
-                  setRemoteCamOn(true);
+                  // remoteCamOn=true только если трек действительно live И включён и не был явно выключен cam-toggle
+                  if (remoteCamOnRef.current) {
+                    setRemoteCamOn(true);
+                  }
                   console.log('[handleRemote] Video track is live and enabled, updated remoteViewKey and remoteCamOn');
                 } else {
                   // НЕ поднимаем remoteCamOn автоматически, если трек выключен или не live.
@@ -6136,7 +6163,9 @@ const flipCam = useCallback(async () => {
     try {
       const vt = (remoteStream as any)?.getVideoTracks?.()?.[0];
       if (vt && vt.readyState === 'live' && vt.enabled === true) {
-        setRemoteCamOn(true);
+        if (remoteCamOnRef.current !== false) {
+          setRemoteCamOn(true);
+        }
       }
       // partnerInPiP управляется только через pip:state от партнёра
     } catch {}
@@ -6151,7 +6180,9 @@ const flipCam = useCallback(async () => {
       // Друг вернулся из PiP → включаем трек, снимаем заглушку
       const v = (remoteStreamRef.current as any)?.getVideoTracks?.()?.[0];
       if (v) v.enabled = true;
-      setRemoteCamOn(true);
+      if (remoteCamOnRef.current !== false) {
+        setRemoteCamOn(true);
+      }
       setRemoteViewKey(Date.now()); // принудительный ре-рендер RTCView
     }
   }, [partnerInPiP]);
@@ -6944,13 +6975,17 @@ const eqLevels = useMemo(() => {
           const videoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
           if (videoTrack) {
             videoTrack.enabled = true; // включаем трек
-            setRemoteCamOn(true);      // убираем заглушку
+            if (remoteCamOnRef.current !== false) {
+              setRemoteCamOn(true);      // убираем заглушку
+            }
             setLoading(false);
             setRemoteViewKey(Date.now()); // принудительная перерисовка RTCView
             console.log('[pip:state] Partner returned from PiP — remote video restored');
           } else {
-            console.log('[pip:state] Partner back from PiP, but no video track found - setting remoteCamOn=true anyway');
-            setRemoteCamOn(true);
+            console.log('[pip:state] Partner back from PiP, but no video track found - keeping remoteCamOn as is');
+            if (remoteCamOnRef.current !== false) {
+              setRemoteCamOn(true);
+            }
             setLoading(false);
           }
           
@@ -8205,31 +8240,45 @@ const eqLevels = useMemo(() => {
               
               // Проверяем состояние удалённого видео
               const remoteVideoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
+              const remoteVideoEnded = !remoteVideoTrack || remoteVideoTrack.readyState === 'ended';
+              const remoteVideoDisabled = !!remoteVideoTrack && remoteVideoTrack.enabled === false;
               const partnerInPiPState = partnerInPiP && !pip.visible;
               
               // Если собеседник выключил камеру — показываем заглушку «Отошел..»
               if (!remoteCamOn) {
+                try {
+                  console.log('[videochat] peer:away (remoteCamOn=false)', {
+                    hasRemoteStream: !!remoteStream,
+                    vt: remoteVideoTrack ? { enabled: remoteVideoTrack.enabled, rs: remoteVideoTrack.readyState } : null,
+                    partnerInPiPState
+                  });
+                } catch {}
                 return <AwayPlaceholder />;
               }
               
-              // Если партнёр в PiP и НЕТ видеотрека — показываем черный экран (не застывший кадр)
+              // Если партнёр в PiP и НЕТ/ВЫКЛЮЧЕН видеотрек — показываем черный экран (не застывший кадр)
               // Если видеотрек уже есть, отрисовываем видео (иначе у некоторых устройств остаётся чёрный экран)
-              if (partnerInPiPState && !remoteVideoTrack) {
+              if (partnerInPiPState && (remoteVideoEnded || remoteVideoDisabled)) {
+                try {
+                  console.log('[videochat] peer:black (PiP, no/disabled vt)', {
+                    vt: remoteVideoTrack ? { enabled: remoteVideoTrack.enabled, rs: remoteVideoTrack.readyState } : null
+                  });
+                } catch {}
                 return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
               }
               
-              // ВАЖНО: Если есть remoteStream - ВСЕГДА пытаемся показать видео
-              // Это гарантирует отображение видео сразу после получения стрима
-              // Показываем видео независимо от состояния remoteCamOn или readyState
-              if (remoteStream) {
+              // Если есть поток И remoteCamOn=true — показываем видео (только при живом включённом видеотреке)
+              if (remoteStream && remoteCamOn) {
                 try {
-                  // Проверяем, есть ли хотя бы один track (audio или video)
-                  const tracks = (remoteStream as any)?.getTracks?.() || [];
-                  const hasAnyTrack = tracks.length > 0;
-                  
-                  if (hasAnyTrack) {
-                    // Показываем видео если есть хотя бы один track
-                    // Это работает даже если video track еще не пришел или в состоянии 'ready'
+                  const vt = (remoteStream as any)?.getVideoTracks?.()?.[0];
+                  const canShowVideo = !!vt && vt.readyState !== 'ended' && vt.enabled === true;
+                  if (canShowVideo) {
+                    try {
+                      console.log('[videochat] peer:video', {
+                        vt: { enabled: vt.enabled, rs: vt.readyState },
+                        remoteViewKey
+                      });
+                    } catch {}
                     return (
                       <RTCView
                         key={`remote-video-${remoteViewKey}-${remoteStream.id || 'unknown'}`}
@@ -8245,13 +8294,20 @@ const eqLevels = useMemo(() => {
                 }
               }
               
-              // Если нет видеотрека или стрима - показываем заглушку "Отошёл"
-              if (!remoteVideoTrack) {
-                return <AwayPlaceholder />;
+              // Если нет видеотрека, он завершён или выключен — показываем пустой блок с подписью «Собеседник»
+              if (!remoteVideoTrack || remoteVideoEnded || remoteVideoDisabled) {
+                try {
+                  console.log('[videochat] peer:placeholder (no/ended/disabled vt)', {
+                    hasRemoteStream: !!remoteStream,
+                    vt: remoteVideoTrack ? { enabled: remoteVideoTrack.enabled, rs: remoteVideoTrack.readyState } : null
+                  });
+                } catch {}
+                return <Text style={styles.placeholder}>{L("peer")}</Text>;
               }
               
-              // В остальных случаях - чёрный фон
-              return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
+              // Фолбэк: если что-то пошло не так, лучше показать заглушку
+              try { console.log('[videochat] peer:fallback-away'); } catch {}
+              return <AwayPlaceholder />;
             })()}
 
             {/* Иконка звука */}

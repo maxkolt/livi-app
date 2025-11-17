@@ -31,6 +31,7 @@ if (__DEV__ && process.env.EXPO_PUBLIC_LOG_FILTER !== 'off') {
       '[socket]',
       '[onStartStop]',
       '[videochat]',
+             '[cam-toggle]',
       '[pip:state]',
       '[PiPContext]',
       '[PanGestureHandler]',
