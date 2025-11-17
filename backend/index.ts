@@ -901,34 +901,14 @@ io.on('connection', async (sock: AuthedSocket) => {
     const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a) as AuthedSocket | undefined;
     const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b) as AuthedSocket | undefined;
     
-    // КРИТИЧНО: Отправляем call:accepted напрямую на все сокеты обоих участников для гарантированной доставки
-    // Инициатор (link.a) - получает уведомление что получатель принял вызов
-    // Получатель (link.b) - получает уведомление что вызов принят
-    if (aSock) {
-      try {
-        aSock.emit('call:accepted', { callId: id, from: link.b });
-      } catch {}
-    }
-    if (bSock) {
-      try {
-        bSock.emit('call:accepted', { callId: id, from: link.a });
-      } catch {}
-    }
-    
-    // Также отправляем через комнаты на случай, если сокеты не найдены напрямую
-    try {
-      io.to(`u:${link.a}`).emit('call:accepted', { callId: id, from: link.b });
-      io.to(`u:${link.b}`).emit('call:accepted', { callId: id, from: link.a });
-    } catch {}
-    
     if (aSock && bSock) {
       // УПРОЩЕНО: Создаем простую комнату 1-на-1
       const sorted = [aSock.id, bSock.id].sort();
       const roomId = `room_${sorted[0]}_${sorted[1]}`;
       
-      // Добавляем в комнату
-      try { aSock.join(id); } catch {}
-      try { bSock.join(id); } catch {}
+      // Добавляем в комнату с правильным roomId
+      try { aSock.join(roomId); } catch {}
+      try { bSock.join(roomId); } catch {}
       try { activeCallBySocket.set(aSock.id, id); } catch {}
       try { activeCallBySocket.set(bSock.id, id); } catch {}
       
@@ -945,6 +925,24 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (link.b) {
         io.emit("presence:update", { userId: link.b, busy: true });
       }
+      
+      // Отправляем call:accepted с roomId
+      if (aSock) {
+        try {
+          aSock.emit('call:accepted', { callId: id, from: link.b, roomId });
+        } catch {}
+      }
+      if (bSock) {
+        try {
+          bSock.emit('call:accepted', { callId: id, from: link.a, roomId });
+        } catch {}
+      }
+      
+      // Также отправляем через комнаты на случай, если сокеты не найдены напрямую
+      try {
+        io.to(`u:${link.a}`).emit('call:accepted', { callId: id, from: link.b, roomId });
+        io.to(`u:${link.b}`).emit('call:accepted', { callId: id, from: link.a, roomId });
+      } catch {}
       
       // Отправляем match_found обоим
       try { io.to(aSock.id).emit('match_found', { roomId, id: bSock.id, userId: link.b }); } catch {}

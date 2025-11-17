@@ -307,6 +307,9 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   // Guard от повторных вызовов
   const focusEffectGuardRef = useRef(false);
   const fromPiPProcessedRef = useRef(false);
+  // Запоминаем состояние локальной камеры перед входом в PiP,
+  // чтобы корректно восстановить его после возврата
+  const pipPrevCamOnRef = useRef<boolean | null>(null);
   const lastRouteParamsRef = useRef<any>(null);
 
   // Сбрасываем флаг when route params change
@@ -406,20 +409,38 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       }
       
       // Включаем локальные и удалённые видео-треки при возврате на экран
-      // При возврате из PiP состояние кнопки камеры должно оставаться включенной
+      // При возврате из PiP восстанавливаем состояние камеры как было до PiP
       try {
         const lt = (localStream || localStreamRef.current)?.getVideoTracks?.()?.[0];
         if (lt) {
-          if (!lt.enabled) {
-          lt.enabled = true;
-          console.log('[useFocusEffect] Re-enabled local video track');
-          }
-          // Устанавливаем camOn в true если трек включен при возврате из PiP
-          // Это гарантирует что кнопка камеры остается в правильном состоянии
-          if (lt.enabled) {
+          const shouldEnableAfterPip = (pipPrevCamOnRef.current !== false) && camUserPreferenceRef.current !== false;
+          if (shouldEnableAfterPip) {
+            if (!lt.enabled) {
+              lt.enabled = true;
+              console.log('[useFocusEffect] Re-enabled local video track (return from PiP)');
+            }
             setCamOn(true);
-            console.log('[useFocusEffect] Set camOn=true after PiP return - local video track is enabled');
+            // Сообщаем собеседнику, что камера снова включена
+            try {
+              const currentRoomId = roomIdRef.current;
+              const payload: any = { enabled: true, from: socket.id };
+              if (currentRoomId) {
+                payload.roomId = currentRoomId;
+              }
+              socket.emit('cam-toggle', payload);
+              console.log('[useFocusEffect] Sent cam-toggle(true) on return from PiP, roomId:', currentRoomId);
+            } catch (e) {
+              console.warn('[useFocusEffect] Error emitting cam-toggle on PiP return:', e);
+            }
+          } else {
+            // Оставляем выключенной
+            if (lt.enabled) {
+              lt.enabled = false;
+            }
+            setCamOn(false);
           }
+          // Сбрасываем сохранённое состояние после восстановления
+          pipPrevCamOnRef.current = null;
         }
         
         // Включаем удалённый видео-трек, если он был отключён для PiP
@@ -625,6 +646,21 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
               roomId: roomIdRef.current,
               from: socket.id 
             });
+            // Показываем у собеседника заглушку «Отошёл…» во время PiP: выключаем камеру логически
+            try {
+              // Запоминаем прежнее состояние (до выключения) чтобы восстановить после возврата
+              const v = (localStream || localStreamRef.current)?.getVideoTracks?.()?.[0];
+              pipPrevCamOnRef.current = (typeof v?.enabled === 'boolean') ? v.enabled : camOnRef.current;
+              const currentRoomId = roomIdRef.current;
+              const payload: any = { enabled: false, from: socket.id };
+              if (currentRoomId) {
+                payload.roomId = currentRoomId;
+              }
+              socket.emit('cam-toggle', payload);
+              console.log('[useFocusEffect] Sent cam-toggle(false) on entering PiP, prevCamOn:', pipPrevCamOnRef.current, 'roomId:', currentRoomId);
+            } catch (e) {
+              console.warn('[useFocusEffect] Error emitting cam-toggle on PiP:', e);
+            }
           } catch (e) {
             console.warn('[useFocusEffect] ❌ Error sending pip:state:', e);
           }
@@ -688,6 +724,21 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   const [remoteCamOn, setRemoteCamOn] = useState(true);
   const remoteCamOnRef = useRef(true);
   useEffect(() => { remoteCamOnRef.current = remoteCamOn; }, [remoteCamOn]);
+  // Видели ли cam-toggle от собеседника в текущем соединении
+  const camToggleSeenRef = useRef<boolean>(false);
+  // Жёсткая блокировка авто‑включений удалённого видео после cam-toggle(false)
+  const remoteForcedOffRef = useRef<boolean>(false);
+  // Сбрасываем принудительную блокировку при смене собеседника
+  useEffect(() => { remoteForcedOffRef.current = false; }, [partnerId]);
+  // Хелпер: можно ли автоматически включать remoteCamOn (без явного cam-toggle)
+  const canAutoShowRemote = useCallback(() => {
+    if (remoteForcedOffRef.current) return false;
+    // В звонке друг‑друг, если уже видели cam-toggle — больше не авто‑включаем
+    if ((isDirectCall || inDirectCall || friendCallAccepted) && camToggleSeenRef.current) return false;
+    return true;
+  }, [isDirectCall, inDirectCall, friendCallAccepted]);
+  // Было ли явное локальное нажатие на кнопку камеры в этой сессии
+  const explicitCamToggledRef = useRef<boolean>(false);
   
   // Состояние неактивного режима после нажатия "Прервать"
   const [isInactiveState, setIsInactiveState] = useState(false);
@@ -701,7 +752,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       try {
         const videoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
         if (videoTrack && videoTrack.readyState !== 'ended' && videoTrack.enabled === true) {
-          if (remoteCamOnRef.current) {
+          if (canAutoShowRemote() && (remoteCamOnRef.current || ((isDirectCall || inDirectCall || friendCallAccepted) && camToggleSeenRef.current === false))) {
             setRemoteCamOn(true);
           }
           setRemoteViewKey(Date.now());
@@ -731,7 +782,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       try {
         const videoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
         if (videoTrack && videoTrack.readyState !== 'ended' && videoTrack.enabled === true && !remoteCamOnRef.current) {
-          if (remoteCamOnRef.current) {
+          if (canAutoShowRemote() && ((isDirectCall || inDirectCall || friendCallAccepted) && camToggleSeenRef.current === false)) {
             setRemoteCamOn(true);
           }
           setRemoteViewKey(Date.now());
@@ -3168,7 +3219,7 @@ const flipCam = useCallback(async () => {
         if (vt && !vt.enabled) vt.enabled = true;
       } catch {}
       
-      if (remoteCamOnRef.current) {
+      if (canAutoShowRemote() && remoteCamOnRef.current) {
         setRemoteCamOn(true);
       }
       setRemoteViewKey(Date.now());
@@ -3483,6 +3534,7 @@ const flipCam = useCallback(async () => {
   }, [partnerId]);
 
   const toggleCam = useCallback(() => {
+    console.log('[toggleCam] Called - button pressed');
     if (!localStreamRef.current) {
       console.warn('[toggleCam] No local stream available');
       return;
@@ -3493,22 +3545,43 @@ const flipCam = useCallback(async () => {
       console.warn('[toggleCam] No video track available');
       return;
     }
+    console.log('[toggleCam] Video track found, current enabled:', videoTrack.enabled);
 
     setCamOn((prev) => {
       const newValue = !prev;
       camUserPreferenceRef.current = newValue;
+      explicitCamToggledRef.current = true;
 
       videoTrack.enabled = newValue;
 
       // Синхронизируем состояние камеры у собеседника: показываем/убираем заглушку «Отошел»
+      const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted;
+      const currentRoomId = roomIdRef.current;
       try {
-        socket.emit('cam-toggle', { enabled: newValue, from: socket.id });
-      } catch {}
+        const payload: any = { enabled: newValue, from: socket.id };
+        // Для звонков друг-друг добавляем roomId, если он есть
+        if (isFriendCall && currentRoomId) {
+          payload.roomId = currentRoomId;
+        }
+        socket.emit('cam-toggle', payload);
+        console.log('[toggleCam] Emitted cam-toggle:', { 
+          enabled: newValue, 
+          from: socket.id,
+          roomId: currentRoomId,
+          isFriendCall,
+          partnerId,
+          isRandomChat: !isFriendCall
+        });
+      } catch (e) {
+        console.warn('[toggleCam] Error emitting cam-toggle:', e);
+      }
       console.log('[toggleCam] Camera toggled locally:', { 
         enabled: newValue, 
         from: socket.id,
         partnerId,
-        isRandomChat: !isDirectCall && !inDirectCall && !friendCallAccepted
+        roomId: currentRoomId,
+        isFriendCall,
+        isRandomChat: !isFriendCall
       });
 
       // ВАЖНО: При выключении камеры обновляем localRenderKey для принудительного обновления отображения
@@ -3745,14 +3818,9 @@ const flipCam = useCallback(async () => {
         currentCallIdRef.current = d?.callId || null;
         console.log('[onCallIncoming] Set currentCallIdRef to:', currentCallIdRef.current);
       } catch {}
-      // Присоединяемся к комнате звонка, чтобы получать call:ended
-      try { 
-        if (d?.callId && roomIdRef.current !== d.callId) {
-          roomIdRef.current = d.callId;
-          socket.emit('room:join:ack', { roomId: d.callId });
-          console.log('[onCallIncoming] Sent room:join:ack for roomId:', d.callId);
-        }
-      } catch {}
+      // НЕ присоединяемся к комнате здесь - roomId будет установлен в call:accepted
+      // callId используется только для отслеживания звонка, не для комнаты
+      // Комната создается на бэкенде при принятии звонка с форматом room_<socketId1>_<socketId2>
       // Лимит: сервер блокирует третьего участника через call:busy
       // Фиксируем маршрут на момент входящего звонка
       try {
@@ -3770,19 +3838,40 @@ const flipCam = useCallback(async () => {
       setFriendCallAccepted(false);
       startIncomingAnim();
     });
-    socket.on("cam-toggle", ({ enabled, from }) => {
+    const camToggleHandler = ({ enabled, from }: { enabled: boolean; from: string }) => {
+      console.log('[cam-toggle] EVENT RECEIVED:', { enabled, from, socketId: socket.id });
+      camToggleSeenRef.current = true;
       // УПРОЩЕНО: только один собеседник
-      console.log('[cam-toggle] Received:', { enabled, from, partnerId, partnerIdRef: partnerIdRef.current, roomId: roomIdRef.current });
-      console.log('[cam-toggle] Current remoteCamOn state before update:', remoteCamOn);
+      // Используем refs для актуальных значений
+      const currentPartnerId = partnerIdRef.current;
+      const currentRoomId = roomIdRef.current;
+      const currentRemoteCamOn = remoteCamOnRef.current;
+      const currentRemoteStream = remoteStreamRef.current;
+      // isDirectCall - это prop из route, не меняется, можно использовать напрямую
+      const currentInDirectCall = inDirectCallRef.current;
+      const currentFriendCallAccepted = friendCallAcceptedRef.current;
+      
+      console.log('[cam-toggle] Received:', { enabled, from, partnerId: currentPartnerId, roomId: currentRoomId, socketId: socket.id });
+      console.log('[cam-toggle] Current remoteCamOn state before update:', currentRemoteCamOn);
       
       // Для звонков друзей проверяем наличие активной комнаты или прямого звонка
-      const isDirectFriendCall = isDirectCall || inDirectCall || friendCallAccepted;
+      const isDirectFriendCall = isDirectCall || currentInDirectCall || currentFriendCallAccepted;
+      console.log('[cam-toggle] isDirectFriendCall check:', { 
+        isDirectCall, 
+        inDirectCall: currentInDirectCall, 
+        friendCallAccepted: currentFriendCallAccepted, 
+        isDirectFriendCall,
+        hasRoomId: !!currentRoomId,
+        roomId: currentRoomId
+      });
       // Для звонков «друг-друг» принимаем событие без дополнительных проверок,
       // так как соединение строго 1-на-1 и событие приходит только от собеседника.
       // Для рандомного чата продолжаем чекать socket.id.
       const shouldProcess = isDirectFriendCall
         ? true
         : (partnerIdRef.current === from);
+      
+      console.log('[cam-toggle] shouldProcess:', { shouldProcess, isDirectFriendCall, partnerIdRef: partnerIdRef.current, from });
       
       if (!shouldProcess) {
         console.log('[cam-toggle] Ignoring event - not from current partner:', { 
@@ -3794,23 +3883,48 @@ const flipCam = useCallback(async () => {
       }
       
       // если partnerId ещё не восстановился — поднимаем его из 'from' (для рандомного чата)
-      if (!isDirectFriendCall && !partnerIdRef.current) {
+      if (!isDirectFriendCall && !currentPartnerId) {
           partnerIdRef.current = from;
           setPartnerId(from);
           console.log('[cam-toggle] partnerId fallback set to', from);
       }
 
+      // Фиксируем принудительное состояние удалённой камеры
+      remoteForcedOffRef.current = !enabled;
+      console.log('[cam-toggle] Set remoteForcedOffRef.current =', !enabled);
+
       // Обновляем remoteCamOn
       // Всегда обновляем remoteCamOn, даже если значение не изменилось
       // Это важно для принудительного ререндера при повторных звонках
-      setRemoteCamOn(!!enabled);
+      const newRemoteCamOn = !!enabled;
+      setRemoteCamOn(newRemoteCamOn);
+      // Синхронно обновляем ref для немедленного использования
+      remoteCamOnRef.current = newRemoteCamOn;
+      console.log('[cam-toggle] Set remoteCamOn and remoteCamOnRef to:', newRemoteCamOn);
       console.log('[cam-toggle] Updated remoteCamOn to:', enabled, {
-        previousValue: remoteCamOn,
+        previousValue: currentRemoteCamOn,
         newValue: !!enabled,
-        hasRemoteStream: !!remoteStream,
-        remoteStreamId: remoteStream?.id
+        hasRemoteStream: !!currentRemoteStream,
+        remoteStreamId: currentRemoteStream?.id
       });
       
+      // Синхронно переключаем локально удалённый видеотрек, чтобы не оставался последний кадр
+      try {
+        const rs = currentRemoteStream;
+        const vt = (rs as any)?.getVideoTracks?.()?.[0];
+        if (vt) {
+          if (!enabled && vt.enabled) {
+            vt.enabled = false;
+            console.log('[cam-toggle] Disabled remote video track locally to avoid frozen frame');
+          } else if (enabled && !vt.enabled) {
+            vt.enabled = true;
+            console.log('[cam-toggle] Re-enabled remote video track locally');
+          }
+        }
+      } catch (e) {
+        console.warn('[cam-toggle] Error toggling remote track locally:', e);
+      }
+
       // Принудительное обновление RTCView при изменении состояния камеры
       // Всегда обновляем remoteViewKey для гарантированного ререндера
       setRemoteViewKey(Date.now());
@@ -3829,19 +3943,23 @@ const flipCam = useCallback(async () => {
       if (!enabled) {
         console.log('[cam-toggle] Camera disabled, showing away placeholder', {
           remoteCamOn: !!enabled,
-          hasRemoteStream: !!remoteStream
+          hasRemoteStream: !!currentRemoteStream
         });
       } else {
         console.log('[cam-toggle] Camera enabled, showing video', {
           remoteCamOn: !!enabled,
-          hasRemoteStream: !!remoteStream
+          hasRemoteStream: !!currentRemoteStream
         });
       }
-    });
+    };
+    
+    socket.on("cam-toggle", camToggleHandler);
+    console.log('[cam-toggle] Registered socket.on("cam-toggle") handler');
   
     return () => {
       offIncoming?.();
-      socket.off("cam-toggle");
+      socket.off("cam-toggle", camToggleHandler);
+      console.log('[cam-toggle] Cleanup: removed socket.on("cam-toggle") handler');
     };
   }, [partnerId, isDirectCall, inDirectCall, friendCallAccepted]);
   
@@ -4008,14 +4126,9 @@ const flipCam = useCallback(async () => {
                 // Это особенно важно при повторных звонках и плохом интернете
                 const videoTrack = rs.getVideoTracks?.()?.[0];
                 if (videoTrack && videoTrack.readyState !== 'ended' && videoTrack.enabled === true) {
-                  // Уважаем cam-toggle=false в рандомном чате
-                  if (!remoteCamOnRef.current) {
-                    // не поднимаем заглушку
-                  } else {
-                    // Показываем видео только если трек включён на стороне отправителя
-                    if (remoteCamOnRef.current) {
-                      setRemoteCamOn(true);
-                    }
+                  // Уважаем cam-toggle=false и remoteForcedOffRef
+                  if (canAutoShowRemote() && remoteCamOnRef.current) {
+                    setRemoteCamOn(true);
                   }
                   console.log('[handleRemote] New stream has video track, set remoteCamOn=true immediately', {
                     readyState: videoTrack.readyState,
@@ -4053,14 +4166,9 @@ const flipCam = useCallback(async () => {
                   // Это гарантирует отображение видео даже при плохом интернете
                   const vt = videoTracks[0];
                   if (vt && vt.readyState !== 'ended' && vt.enabled === true) {
-                    // Уважаем cam-toggle=false
-                    if (!remoteCamOnRef.current) {
-                      // не поднимаем заглушку
-                    } else {
-                      // Показываем видео только если трек включён у отправителя
-                      if (remoteCamOnRef.current) {
-                        setRemoteCamOn(true);
-                      }
+                    // Уважаем cam-toggle=false и remoteForcedOffRef
+                    if (canAutoShowRemote() && remoteCamOnRef.current) {
+                      setRemoteCamOn(true);
                     }
                     console.log('[handleRemote] Video track appeared, updated state, remoteViewKey and remoteCamOn for re-render', {
                       readyState: vt.readyState,
@@ -4108,7 +4216,7 @@ const flipCam = useCallback(async () => {
                 const vt = (rs as any).getVideoTracks()[0];
                 // Устанавливаем remoteCamOn в true только если video track live И включён
                 if ((vt.readyState === 'live' || vt.readyState === 'ready') && vt.enabled === true) {
-                  if (remoteCamOnRef.current) {
+                  if (canAutoShowRemote() && remoteCamOnRef.current) {
                     setRemoteCamOn(true);
                   }
                   console.log('[handleRemote] Set remoteCamOn to true (video track present and live/ready)', {
@@ -4236,7 +4344,7 @@ const flipCam = useCallback(async () => {
                 if (liveAndEnabled) {
                   setRemoteViewKey(Date.now());
                   // remoteCamOn=true только если трек действительно live И включён и не был явно выключен cam-toggle
-                  if (remoteCamOnRef.current) {
+                  if (canAutoShowRemote() && remoteCamOnRef.current) {
                     setRemoteCamOn(true);
                   }
                   console.log('[handleRemote] Video track is live and enabled, updated remoteViewKey and remoteCamOn');
@@ -5557,6 +5665,21 @@ const flipCam = useCallback(async () => {
       console.warn('[handleOffer] Invalid offer data');
       return;
     }
+    
+    // Для прямого звонка друга: включаем камеру по умолчанию,
+    // если пользователь явно не выключал её в этой сессии
+    if ((isDirectCall || inDirectCall || friendCallAccepted) && !explicitCamToggledRef.current) {
+      camUserPreferenceRef.current = true;
+      try {
+        const s = localStreamRef.current || localStream;
+        const v = s?.getVideoTracks?.()?.[0];
+        if (v && !v.enabled) {
+          v.enabled = true;
+          setCamOn(true);
+          try { socket.emit('cam-toggle', { enabled: true, from: socket.id }); } catch {}
+        }
+      } catch {}
+    }
 
     // Принудительно очищаем remoteStream перед обработкой нового offer
     // для повторных звонков, чтобы гарантировать правильное отображение видеопотока
@@ -5633,6 +5756,26 @@ const flipCam = useCallback(async () => {
     if (!startedRef.current && !isIncomingFriendCall) {
       console.log('[handleOffer] Not in search mode and not an incoming friend call, ignoring offer from:', from);
       return;
+    }
+    
+    // Для звонков друг-друг: устанавливаем roomId если он еще не установлен
+    // roomId может прийти в событии call:incoming или быть установлен при создании звонка
+    if (isDirectFriendCall && !roomIdRef.current) {
+      // Пытаемся получить roomId из currentCallIdRef или из route params
+      const routeRoomId = (route?.params as any)?.roomId;
+      const callIdFromRef = currentCallIdRef.current;
+      const roomIdToSet = routeRoomId || callIdFromRef;
+      if (roomIdToSet) {
+        roomIdRef.current = roomIdToSet;
+        console.log('[handleOffer] Set roomId for friend call:', roomIdToSet);
+      } else {
+        // Если roomId нет, создаем его из socket.id обоих пользователей
+        // Формат: room_<socketId1>_<socketId2> (сортируем для консистентности)
+        const ids = [socket.id, from].sort();
+        const generatedRoomId = `room_${ids[0]}_${ids[1]}`;
+        roomIdRef.current = generatedRoomId;
+        console.log('[handleOffer] Generated roomId for friend call:', generatedRoomId);
+      }
     }
     
     // Для входящих прямых звонков от друзей устанавливаем started
@@ -6190,6 +6333,20 @@ const flipCam = useCallback(async () => {
   const handleAnswer = useCallback(async ({ from, answer }: { from: string; answer: any }) => {
     console.log('[handleAnswer] Received answer', { from, isDirectCall, hasAnswer: !!answer, pcExists: !!peerRef.current });
     try {
+      // Для звонков друг-друг включаем камеру по умолчанию,
+      // если пользователь явно не выключал её в этой сессии
+      if ((isDirectCall || inDirectCall || friendCallAccepted) && !explicitCamToggledRef.current) {
+        camUserPreferenceRef.current = true;
+        try {
+          const s = localStreamRef.current || localStream;
+          const v = s?.getVideoTracks?.()?.[0];
+          if (v && !v.enabled) {
+            v.enabled = true;
+            setCamOn(true);
+            try { socket.emit('cam-toggle', { enabled: true, from: socket.id }); } catch {}
+          }
+        } catch {}
+      }
       // УПРОЩЕНО: только один PC для 1-на-1
       let pc = peerRef.current;
       
@@ -6975,7 +7132,7 @@ const eqLevels = useMemo(() => {
           const videoTrack = (remoteStream as any)?.getVideoTracks?.()?.[0];
           if (videoTrack) {
             videoTrack.enabled = true; // включаем трек
-            if (remoteCamOnRef.current !== false) {
+            if (canAutoShowRemote() && remoteCamOnRef.current !== false) {
               setRemoteCamOn(true);      // убираем заглушку
             }
             setLoading(false);
@@ -6983,7 +7140,7 @@ const eqLevels = useMemo(() => {
             console.log('[pip:state] Partner returned from PiP — remote video restored');
           } else {
             console.log('[pip:state] Partner back from PiP, but no video track found - keeping remoteCamOn as is');
-            if (remoteCamOnRef.current !== false) {
+            if (canAutoShowRemote() && remoteCamOnRef.current !== false) {
               setRemoteCamOn(true);
             }
             setLoading(false);
@@ -7257,7 +7414,18 @@ const eqLevels = useMemo(() => {
       try { 
         currentCallIdRef.current = d?.callId || null;
         console.log('[call:accepted] Set currentCallIdRef to:', currentCallIdRef.current);
+        // Устанавливаем roomId если он пришел в событии
+        if (d?.roomId && roomIdRef.current !== d.roomId) {
+          roomIdRef.current = d.roomId;
+          socket.emit('room:join:ack', { roomId: d.roomId });
+          console.log('[call:accepted] Set roomId and joined room:', d.roomId);
+        }
       } catch {}
+      
+      // Для friend-call камера по умолчанию ВКЛ, если пользователь её явно не выключал
+      if (!explicitCamToggledRef.current) {
+        camUserPreferenceRef.current = true;
+      }
       
       // Для инициатора устанавливаем флаги при получении call:accepted
       // Это нужно чтобы handleMatchFound мог корректно обработать соединение
@@ -8019,16 +8187,21 @@ const eqLevels = useMemo(() => {
                     onPress={async () => {
                       console.log('[Accept Call] Accepting call, callId:', incomingCall?.callId);
                       
+                      // Для friend-call включаем камеру по умолчанию, если пользователь не нажимал "выкл"
+                      if (!explicitCamToggledRef.current) {
+                        camUserPreferenceRef.current = true;
+                      }
+                      
                       // Сбрасываем блокировку (если была) — это новый явный приём вызова
                       try { clearDeclinedBlock(); } catch {}
                       
-                      // Используем callId из incomingCall или roomId из ref
-                      const finalCallId = incomingCall?.callId || currentCallIdRef.current || roomIdRef.current;
+                      // Используем callId из incomingCall
+                      const finalCallId = incomingCall?.callId || currentCallIdRef.current;
                       if (finalCallId) {
                         currentCallIdRef.current = finalCallId;
-                        roomIdRef.current = finalCallId; // Устанавливаем roomId для приватной комнаты
                         console.log('[Accept Call] Set currentCallIdRef to:', currentCallIdRef.current);
-                        console.log('[Accept Call] Set roomId to:', roomIdRef.current);
+                        // roomId будет установлен в событии call:accepted от бэкенда
+                        // Не устанавливаем roomId здесь, чтобы не использовать callId вместо roomId
                       }
                       
                       // СНАЧАЛА устанавливаем флаги режима друзей
@@ -8154,6 +8327,9 @@ const eqLevels = useMemo(() => {
                       try { 
                         const stream = await ensureStreamReady();
                         if (stream) {
+                          // ВАЖНО: сохраняем стрим и в state, и в ref,
+                          // чтобы локальный RTCView сразу отрисовал превью
+                          setLocalStream(stream);
                           localStreamRef.current = stream;
                           // Убеждаемся что камера включена (camOn уже установлен выше)
                           const videoTrack = stream.getVideoTracks()?.[0];
