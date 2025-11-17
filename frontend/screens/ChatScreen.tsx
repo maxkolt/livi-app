@@ -1857,7 +1857,8 @@ export default function ChatScreen({ route, navigation }: Props) {
             inverted={!isEmpty}
             maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
             ListHeaderComponent={!isEmpty ? () => (
-              <View style={{ height: 70 + keyboardHeight }} /> // Отступ снизу для блока ввода + высота клавиатуры для поднятия сообщений
+              // Отступ под блок ввода; с adjustResize хватит высоты инпута + нижнего инсета
+              <View style={{ height: 70 + insets.bottom }} />
             ) : null}
             ListEmptyComponent={() => (
               <View
@@ -1891,7 +1892,9 @@ export default function ChatScreen({ route, navigation }: Props) {
           <View
             style={{
               position: 'absolute',
-              bottom: keyboardHeight, // Поднимаем блок ввода на высоту клавиатуры
+              // С adjustResize система сама ужимает экран под клавиатуру.
+              // Держим инпут у низа, учитывая только safe-area.
+              bottom: insets.bottom,
               left: 0,
               right: 0,
             }}
