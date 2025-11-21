@@ -41,6 +41,27 @@ if (__DEV__ && process.env.EXPO_PUBLIC_LOG_FILTER !== 'off') {
       'friend:call',       // включает [friend:call:incoming]
       'call:incoming',
       '[App] navigateToCall',
+      // Теги для отладки видеозвонков
+      '[call:accepted]',
+      '[ensurePcWithLocal]',
+      '[createStreamForReceiver]',
+      '[createStreamForInitiator]',
+      '[handleOffer]',
+      '[handleAnswer]',
+      '[handleMatchFound]',
+      '[handleRemote]',
+      '[attachRemoteHandlers]',
+      '[onNext]',
+      '[stopRemoteOnly]',
+      '[cleanupPeer]',
+      '[isPartnerFriend]',
+      '[showFriendBadge]',
+      '[UI State]',
+      '[UI Render]',
+      '[DEBUG]',
+      '[WARN]',
+      '[ERROR]',
+      '[INFO]',
     ];
     const noisyPrefixes = [
       'rn-webrtc:', // внутренний спам нативного webrtc
@@ -56,13 +77,20 @@ if (__DEV__ && process.env.EXPO_PUBLIC_LOG_FILTER !== 'off') {
       'setRemoteDescription',
       'addIceCandidate',
     ];
-    const wrap = (orig: (...a: any[]) => void) => (...args: any[]) => {
+    const wrap = (orig: (...a: any[]) => void, isErrorOrWarn = false) => (...args: any[]) => {
       try {
         const first = String(args[0] ?? '');
-        if (noisyPrefixes.some((p) => first.startsWith(p))) return;
-        if (noisySubstrings.some((s) => first.includes(s))) return;
-        const pass = allowTags.some(tag => first.includes(tag));
-        if (!pass) return;
+        // Для warn и error фильтруем только очень шумные префиксы
+        if (isErrorOrWarn && noisyPrefixes.some((p) => first.startsWith(p))) {
+          return;
+        }
+        // Для остальных логов применяем полную фильтрацию
+        if (!isErrorOrWarn) {
+          if (noisyPrefixes.some((p) => first.startsWith(p))) return;
+          if (noisySubstrings.some((s) => first.includes(s))) return;
+          const pass = allowTags.some(tag => first.includes(tag));
+          if (!pass) return;
+        }
       } catch {
         // fallthrough
       }
@@ -71,6 +99,8 @@ if (__DEV__ && process.env.EXPO_PUBLIC_LOG_FILTER !== 'off') {
     console.log = wrap(console.log.bind(console));
     console.info = wrap(console.info.bind(console));
     console.debug = wrap(console.debug ? console.debug.bind(console) : console.log.bind(console));
+    console.warn = wrap(console.warn.bind(console), true); // Отдельная обертка для warn
+    console.error = wrap(console.error.bind(console), true); // Отдельная обертка для error
 
     // Перехватываем нативный логгер RN, чтобы отфильтровать низкоуровневые логи (rn-webrtc: getStats и т.п.)
     try {

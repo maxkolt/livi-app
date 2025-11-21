@@ -926,22 +926,37 @@ io.on('connection', async (sock: AuthedSocket) => {
         io.emit("presence:update", { userId: link.b, busy: true });
       }
       
-      // Отправляем call:accepted с roomId
+      // КРИТИЧНО: Устанавливаем partnerSid и roomId для обоих участников
+      // чтобы WebRTC события могли быть пересланы
+      if (aSock) {
+        (aSock as any).data = (aSock as any).data || {};
+        (aSock as any).data.partnerSid = bSock.id;
+        (aSock as any).data.roomId = roomId;
+        (aSock as any).data.inCall = true;
+      }
+      if (bSock) {
+        (bSock as any).data = (bSock as any).data || {};
+        (bSock as any).data.partnerSid = aSock.id;
+        (bSock as any).data.roomId = roomId;
+        (bSock as any).data.inCall = true;
+      }
+      
+      // Отправляем call:accepted с socket.id в from (не userId!)
       if (aSock) {
         try {
-          aSock.emit('call:accepted', { callId: id, from: link.b, roomId });
+          aSock.emit('call:accepted', { callId: id, from: bSock.id, fromUserId: link.b, roomId });
         } catch {}
       }
       if (bSock) {
         try {
-          bSock.emit('call:accepted', { callId: id, from: link.a, roomId });
+          bSock.emit('call:accepted', { callId: id, from: aSock.id, fromUserId: link.a, roomId });
         } catch {}
       }
       
       // Также отправляем через комнаты на случай, если сокеты не найдены напрямую
       try {
-        io.to(`u:${link.a}`).emit('call:accepted', { callId: id, from: link.b, roomId });
-        io.to(`u:${link.b}`).emit('call:accepted', { callId: id, from: link.a, roomId });
+        io.to(`u:${link.a}`).emit('call:accepted', { callId: id, from: bSock.id, fromUserId: link.b, roomId });
+        io.to(`u:${link.b}`).emit('call:accepted', { callId: id, from: aSock.id, fromUserId: link.a, roomId });
       } catch {}
       
       // Отправляем match_found обоим

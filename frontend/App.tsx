@@ -19,19 +19,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from './utils/keepAwake';
-
 import HomeScreen from "./screens/HomeScreen";
 import VideoChat from "./components/VideoChat";
 import ChatScreen from "./screens/ChatScreen";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
-// УБРАНО: WebRTCProvider не используется - useWebRTC нигде не вызывается
 import PiPOverlay from "./src/pip/PiPOverlay";
-
 import { ensureCometChatReady } from "./chat/cometchat";
- 
 
-// Temporary workaround: silence "useInsertionEffect must not schedule updates" warnings
-// by redirecting useInsertionEffect to useEffect for RN libraries that update state inside it
 try { (React as any).useInsertionEffect = (React as any).useEffect; } catch {}
 
 

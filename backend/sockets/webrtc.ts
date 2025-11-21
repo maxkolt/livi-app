@@ -112,24 +112,88 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     socket.on(event, (data: SignalPayload) => {
       const { roomId, to, ...payload } = data;
       const targetId = roomId || to;
-      if (!targetId) return;
+      if (!targetId) {
+        logger.warn(`[forward ${event}] No targetId (roomId or to) provided`, { socketId: socket.id });
+        return;
+      }
 
-      // Логирование
+      // Логирование для отладки
       if (payload?.offer?.sdp) {
+        logger.debug(`[forward ${event}] Forwarding offer`, { 
+          socketId: socket.id, 
+          roomId, 
+          to, 
+          targetId,
+          hasRoomId: !!roomId,
+          hasTo: !!to
+        });
       } else if (payload?.answer?.sdp) {
+        logger.debug(`[forward ${event}] Forwarding answer`, { 
+          socketId: socket.id, 
+          roomId, 
+          to, 
+          targetId,
+          hasRoomId: !!roomId,
+          hasTo: !!to
+        });
       } else if (payload?.candidate) {
+        // ICE кандидаты слишком частые, не логируем
       } else {
+        logger.debug(`[forward ${event}] Forwarding event`, { 
+          socketId: socket.id, 
+          roomId, 
+          to, 
+          targetId 
+        });
       }
 
       // Отправка: либо в комнату, либо конкретному сокету
       // При hangup дополнительно продублируем в обе стороны на всякий случай
       const fromUserId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : undefined;
       const envelope = { from: socket.id, fromUserId, ...payload } as any;
+      
+      let delivered = false;
+      
+      // КРИТИЧНО: Для прямых звонков используем roomId для гарантированной доставки
+      // КРИТИЧНО: Используем socket.to() вместо io.to(), чтобы исключить отправителя из получателей
       if (roomId) {
-        io.to(roomId).emit(event, envelope);
+        const room = io.sockets.adapter.rooms.get(roomId);
+        const roomSize = room ? room.size : 0;
+        logger.debug(`[forward ${event}] Sending to room`, { 
+          roomId, 
+          roomSize,
+          socketId: socket.id 
+        });
+        // КРИТИЧНО: socket.to() исключает отправителя, io.to() включает всех в комнате
+        socket.to(roomId).emit(event, envelope);
+        delivered = true;
       }
+      
+      // Также отправляем напрямую по to для совместимости
       if (to) {
-        socket.to(to).emit(event, envelope);
+        const targetSocket = io.sockets.sockets.get(to);
+        if (targetSocket) {
+          logger.debug(`[forward ${event}] Sending directly to socket`, { 
+            to, 
+            socketId: socket.id,
+            targetExists: true
+          });
+          targetSocket.emit(event, envelope);
+          delivered = true;
+        } else {
+          logger.warn(`[forward ${event}] Target socket not found`, { 
+            to, 
+            socketId: socket.id 
+          });
+        }
+      }
+      
+      if (!delivered) {
+        logger.error(`[forward ${event}] Failed to deliver event`, { 
+          socketId: socket.id, 
+          roomId, 
+          to 
+        });
       }
       // Доп. гарантия доставки для завершения вызова: шлем во все общие комнаты сокета
       if (event === 'hangup') {
