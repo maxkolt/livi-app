@@ -217,18 +217,19 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
   /** =========================
    *  Camera toggle forwarding
    *  ========================= */
-  socket.on("cam-toggle", (data: { enabled: boolean; from: string }) => {
-    const { enabled, from } = data;
+  socket.on("cam-toggle", (data: { enabled: boolean; from: string; to?: string; roomId?: string }) => {
+    const { enabled, from, to, roomId } = data;
     // Логируем только отключение камеры
     if (!enabled) {
       logger.debug('Camera disabled', { socketId: socket.id });
     }
     
     // Пересылаем событие всем в комнатах, где находится этот сокет
-    socket.rooms.forEach((roomId) => {
-      if (roomId.startsWith("room_")) {
-        socket.to(roomId).emit("cam-toggle", { enabled, from });
-        if (!enabled) logger.debug('Camera toggle forwarded to room', { roomId });
+    socket.rooms.forEach((currentRoomId) => {
+      if (currentRoomId.startsWith("room_")) {
+        // КРИТИЧНО: Передаем roomId при пересылке для правильной обработки на клиенте
+        socket.to(currentRoomId).emit("cam-toggle", { enabled, from, roomId: currentRoomId });
+        if (!enabled) logger.debug('Camera toggle forwarded to room', { roomId: currentRoomId });
       }
     });
     
@@ -238,7 +239,8 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     if (socketData && socketData.partnerSid) {
       const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
       if (partnerSocket) {
-        partnerSocket.emit("cam-toggle", { enabled, from });
+        // КРИТИЧНО: Передаем to при пересылке для правильной обработки на клиенте
+        partnerSocket.emit("cam-toggle", { enabled, from, to: partnerSocket.id });
         // Логируем только при ошибках или отключении камеры
         if (!enabled) logger.debug('Camera toggle forwarded to WebRTC partner', { partnerId: socketData.partnerSid });
       } else {
