@@ -428,6 +428,10 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
             overflow: 'hidden',
             shadowOpacity: 0, // Тень убрана
             elevation: 0,
+            ...(Platform.OS === "android" && !isDark ? {
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: 'rgba(138, 143, 153, 0.3)', // Титановый цвет с прозрачностью для светлой темы
+            } : {}),
           }}
         >
           {/* Анимированный градиент - заполняет весь контейнер */}
@@ -462,7 +466,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
               bottom: borderWidth,
               borderRadius: borderRadius,
               overflow: 'hidden',
-              backgroundColor: backgroundColor || (isDark ? '#151F33' : 'rgba(182, 203, 216, 0.93)'), // Цвет фона страницы - перекрывает градиент
+              backgroundColor: backgroundColor || (isDark ? '#151F33' : '#8a8f99'), // Для светлой темы используем цвет как у других кнопок (btnTitan)
             }}
           >
             {/* Эффект стекла с blur - фон страницы просвечивает через размытие */}
@@ -947,6 +951,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /* ===== syncUserData - проверка существования пользователя ===== */
   const syncUserData = useCallback(async (): Promise<boolean> => {
     try {
+      // Проверяем что функции определены
+      if (typeof getCurrentUserId !== 'function') {
+        console.warn('[syncUserData] getCurrentUserId is not a function');
+        return true; // Продолжаем загрузку данных
+      }
+
+      if (typeof checkUserExists !== 'function') {
+        console.warn('[syncUserData] checkUserExists is not a function');
+        return true; // Продолжаем загрузку данных
+      }
+
       const currentUserId = getCurrentUserId();
       if (!currentUserId) {
         return true; // Продолжаем загрузку данных
@@ -959,10 +974,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         console.warn('[syncUserData] User not found on server, performing hard reset...');
         
         // Жёсткий локальный сброс
-        await hardLocalReset();
-        resetAllState();
+        if (typeof hardLocalReset === 'function') {
+          await hardLocalReset();
+        }
         
-        showNotice('Пользователь удален, данные очищены', 'error', 3000);
+        if (typeof resetAllState === 'function') {
+          resetAllState();
+        }
+        
+        if (typeof showNotice === 'function') {
+          showNotice('Пользователь удален, данные очищены', 'error', 3000);
+        }
         return false; // Пользователь не существует
       }
       
@@ -2831,16 +2853,16 @@ const handleClearNick = useCallback(async () => {
         <View style={{ position: 'relative' }}>
           <IconButton 
             icon="menu" 
-            size={24} 
+            size={Platform.OS === "ios" ? 28 : 24} 
             iconColor={isDark ? LIVI.white : LIVI.textThemeWhite} 
             style={[
               styles.menuBtn,
               { 
                 backgroundColor: isDark 
-                  ? 'rgba(138, 143, 153, 0.25)' // Титановый цвет для темной темы
+                  ? 'rgba(138, 143, 153, 0.15)' // Титановый цвет для темной темы
                   : Platform.OS === 'android' 
-                    ? 'rgba(59, 68, 83, 0.17)' // Чуть светлее для светлой темы на Android
-                    : 'rgba(59, 68, 83, 0.25)', // Обычный для светлой темы на iOS
+                    ? 'rgba(59, 68, 83, 0.10)' // Чуть светлее для светлой темы на Android
+                    : 'rgba(59, 68, 83, 0.15)', // Обычный для светлой темы на iOS
                 borderColor: theme.colors.outline,
                 borderWidth: StyleSheet.hairlineWidth,
               }
@@ -3190,7 +3212,7 @@ const handleClearNick = useCallback(async () => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: LIVI.bg, paddingHorizontal: 14, paddingBottom: 32, justifyContent: 'center' },
   topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
-  brand: { color: LIVI.text, fontSize: 30, fontWeight: '800', letterSpacing: 0.3, paddingHorizontal: Platform.OS === "android" ? 10 : 0 },
+  brand: { color: LIVI.text, fontSize: Platform.OS === "ios" ? 39 : 30, fontWeight: Platform.OS === "ios" ? '600' : '800', letterSpacing: 0.3, paddingHorizontal: Platform.OS === "android" ? 10 : 0 },
   menuBtn: { backgroundColor: LIVI.glass, borderRadius: 14 },
   listRow: { backgroundColor: 'transparent', paddingVertical: 10, paddingRight: 8 },
   listRowAligned: { alignItems: 'center', paddingLeft: 0, paddingRight: 8, minHeight: 72 },

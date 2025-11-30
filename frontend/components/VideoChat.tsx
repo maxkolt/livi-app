@@ -4418,7 +4418,7 @@ const styles = StyleSheet.create({
   card: {
     ...CARD_BASE,
     width: Platform.OS === "android" ? '97%' : '94%', // 🔹 шире на Android
-    ...((Platform.OS === "ios" ? { height: Dimensions.get('window').height * 0.4 } : { height: Dimensions.get('window').height * 0.42 })
+    ...((Platform.OS === "ios" ? { height: Dimensions.get('window').height * 0.4 } : { height: Dimensions.get('window').height * 0.43 })
     ),
   },
 
@@ -4494,13 +4494,13 @@ const styles = StyleSheet.create({
   bottomRow: { 
     width: Platform.OS === "android" ? '96%' : '93%', // 🔹 шире на Android
     flexDirection: 'row', 
-    gap: 16, 
-    marginTop: 10, 
+    gap: Platform.OS === "android" ? 14 : 16, 
+    marginTop: Platform.OS === "android" ? 6 : 10, 
     marginBottom: 18,
   },
   bigBtn: { 
     flex: 1, 
-    height: 55, 
+    height: Platform.OS === "android" ? 50 : 55, 
     borderRadius: 10, 
     alignItems: 'center', 
     justifyContent: 'center' 
