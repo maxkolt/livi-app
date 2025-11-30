@@ -349,6 +349,8 @@ type AnimatedBorderButtonProps = {
 
 const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onPress, label, style, backgroundColor }) => {
   const rotateAnim = useRef(new Animated.Value(0)).current;
+  const [blurIntensity, setBlurIntensity] = useState<number>(isDark ? 15 : 20);
+  const titanOpacity = useRef(new Animated.Value(0.25)).current;
   const borderWidth = 2; // Тонкий бордер
 
   // Цвета из палитры эквалайзера для темной темы - зациклены для непрерывности
@@ -403,7 +405,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
   const titanRgba = hexToRgba(titanColor, 0.25); // 25% непрозрачности для еще большей прозрачности
 
   const buttonWidth = Platform.OS === "ios" ? screenWidth - 60 : screenWidth - 40;
-  const buttonHeight = 60;
+  const buttonHeight = Platform.OS === "ios" ? 60 : 50;
   const borderRadius = 12;
   const gradientSize = Math.max(buttonWidth, buttonHeight) * 2; // Достаточно большой для плавного движения
 
@@ -424,11 +426,8 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
             height: buttonHeight + borderWidth * 2,
             borderRadius: borderRadius + borderWidth,
             overflow: 'hidden',
-            shadowColor: isDark ? '#00b5ff' : '#06b6d4',
-            shadowOffset: { width: 0, height: 8 }, // Тень смещена вниз для эффекта парения
-            shadowOpacity: 1.0, // Яркая тень для эффекта глубины
-            shadowRadius: 24, // Большой радиус для мягкого свечения и эффекта парения
-            elevation: 24,
+            shadowOpacity: 0, // Тень убрана
+            elevation: 0,
           }}
         >
           {/* Анимированный градиент - заполняет весь контейнер */}
@@ -468,7 +467,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
           >
             {/* Эффект стекла с blur - фон страницы просвечивает через размытие */}
             <BlurView
-              intensity={isDark ? 15 : 20}
+              intensity={blurIntensity}
               tint={isDark ? 'dark' : 'light'}
               style={{
                 ...StyleSheet.absoluteFillObject,
@@ -476,15 +475,34 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
               }}
             />
             {/* Титановый слой с прозрачностью - создает эффект титанового стекла */}
-            <View
+            <Animated.View
               style={{
                 ...StyleSheet.absoluteFillObject,
                 borderRadius: borderRadius,
-                backgroundColor: titanRgba, // Титановый цвет с прозрачностью - фон страницы просвечивает через blur
+                backgroundColor: titanColor,
+                opacity: titanOpacity,
               }}
             />
             <TouchableOpacity
-              activeOpacity={0.9}
+              activeOpacity={1}
+              onPressIn={() => {
+                // Увеличиваем blur и прозрачность титана при нажатии - более заметно для светлой темы
+                setBlurIntensity(isDark ? 25 : 40);
+                Animated.timing(titanOpacity, {
+                  toValue: isDark ? 0.4 : 0.5, // Больше для светлой темы
+                  duration: 150,
+                  useNativeDriver: true,
+                }).start();
+              }}
+              onPressOut={() => {
+                // Возвращаем к исходным значениям
+                setBlurIntensity(isDark ? 15 : 20);
+                Animated.timing(titanOpacity, {
+                  toValue: 0.25,
+                  duration: 200,
+                  useNativeDriver: true,
+                }).start();
+              }}
               onPress={onPress}
               style={{
                 width: '100%',
@@ -493,11 +511,10 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
                 backgroundColor: 'transparent', // Полностью прозрачный фон
                 alignItems: 'center',
                 justifyContent: 'center',
-                paddingVertical: Platform.OS === "ios" ? 18 : 16,
                 paddingHorizontal: 32,
               }}
             >
-              <Text style={[styles.buttonLabel, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>{label}</Text>
+              <Text style={[styles.buttonLabel, { color: isDark ? LIVI.text : LIVI.textThemeWhite, textAlign: 'center' }]}>{label}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -2688,7 +2705,7 @@ const handleClearNick = useCallback(async () => {
     const letter = displayAvatarLetter(savedNick);
     const wrapperStyle: StyleProp<ViewStyle> = {
       alignItems: "center",
-      marginTop: Platform.OS === "android" ? 12 : 12,
+      marginTop: Platform.OS === "android" ? 12 : (12 + 20), // Добавляем 20px для iOS
       marginBottom: -65,
     };
 
@@ -2819,7 +2836,11 @@ const handleClearNick = useCallback(async () => {
             style={[
               styles.menuBtn,
               { 
-                backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+                backgroundColor: isDark 
+                  ? 'rgba(138, 143, 153, 0.25)' // Титановый цвет для темной темы
+                  : Platform.OS === 'android' 
+                    ? 'rgba(59, 68, 83, 0.17)' // Чуть светлее для светлой темы на Android
+                    : 'rgba(59, 68, 83, 0.25)', // Обычный для светлой темы на iOS
                 borderColor: theme.colors.outline,
                 borderWidth: StyleSheet.hairlineWidth,
               }

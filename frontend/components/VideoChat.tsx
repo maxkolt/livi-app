@@ -1040,6 +1040,13 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       
       try { stopSpeaker(); } catch {}
       
+      // КРИТИЧНО: Сначала сбрасываем состояние started, чтобы UI сразу обновился
+      // Это гарантирует, что кнопка "Стоп" сразу изменится на "Начать"
+      startedRef.current = false;
+      setStarted(false);
+      setLoading(false);
+      loadingRef.current = false;
+      
       // Используем session для остановки
       session.stopRandomChat();
       

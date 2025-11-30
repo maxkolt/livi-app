@@ -19,8 +19,31 @@ export function getEnvFallbackConfiguration(): RTCConfiguration {
 
   // Используем несколько STUN серверов для лучшей надежности
   const iceServers: any[] = [googleStun, cloudflareStun];
-  if (turnUrls.length) iceServers.push({ urls: turnUrls, username, credential });
-  if (turnTcpUrls.length) iceServers.push({ urls: turnTcpUrls, username, credential });
+  
+  // КРИТИЧНО: TURN обязателен для пробития NAT в мобильных сетях
+  if (turnUrls.length) {
+    // Каждый TURN URL должен быть отдельным объектом
+    turnUrls.forEach(url => {
+      iceServers.push({ urls: url, username, credential });
+    });
+  }
+  if (turnTcpUrls.length) {
+    turnTcpUrls.forEach(url => {
+      iceServers.push({ urls: url, username, credential });
+    });
+  }
+
+  // Логирование для отладки
+  const hasTurn = turnUrls.length > 0 || turnTcpUrls.length > 0;
+  console.log('[ICE Config] Fallback configuration:', {
+    stunCount: 2,
+    turnCount: turnUrls.length + turnTcpUrls.length,
+    hasTurn,
+    hasCredentials: !!(username && credential),
+    turnUrls: turnUrls.length > 0 ? turnUrls : undefined,
+    turnTcpUrls: turnTcpUrls.length > 0 ? turnTcpUrls : undefined,
+    warning: !hasTurn ? '⚠️ NO TURN SERVER - NAT traversal may fail!' : undefined,
+  });
 
   const relayOnly = icePolicyEnv === 'relay' || icePolicyEnv === 'relay-only' || process.env.EXPO_PUBLIC_ICE_RELAY_ONLY === '1';
   return {
@@ -45,6 +68,22 @@ export async function getIceConfiguration(forceRefresh = false): Promise<RTCConf
     if (r.ok) {
       const j = await r.json();
       if (j?.ok && Array.isArray(j.iceServers)) {
+        // Проверяем наличие TURN серверов
+        const hasTurn = j.iceServers.some((server: any) => 
+          server.urls && (
+            (Array.isArray(server.urls) && server.urls.some((u: string) => u.startsWith('turn:'))) ||
+            (typeof server.urls === 'string' && server.urls.startsWith('turn:'))
+          )
+        );
+        
+        console.log('[ICE Config] Server configuration loaded:', {
+          serverCount: j.iceServers.length,
+          hasTurn,
+          hasCredentials: j.iceServers.some((s: any) => s.username && s.credential),
+          ttl: j.ttl,
+          warning: !hasTurn ? '⚠️ NO TURN SERVER from server - NAT traversal may fail!' : undefined,
+        });
+
         const relayOnlyEnv = (process.env.EXPO_PUBLIC_ICE_POLICY || '').trim().toLowerCase();
         const relayOnly = relayOnlyEnv === 'relay' || relayOnlyEnv === 'relay-only' || process.env.EXPO_PUBLIC_ICE_RELAY_ONLY === '1';
         const cfg: RTCConfiguration = {
@@ -60,7 +99,11 @@ export async function getIceConfiguration(forceRefresh = false): Promise<RTCConf
         const ttlSec = Math.max(60, Math.min(Number(j.ttl || 300), 3600));
         cacheUntil = now + Math.floor(ttlSec * 900); // 90% of ttl in ms
         return cfg;
+      } else {
+        console.warn('[ICE Config] Invalid server response format:', j);
       }
+    } else {
+      console.warn('[ICE Config] Server returned error:', r.status, r.statusText);
     }
   } catch (error) {
     console.warn('[ICE Config] Failed to fetch server config, using fallback:', error);

@@ -163,7 +163,19 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
 
     markBusy(io, socket, true);
     pushToQueue(socket.id);
+    // КРИТИЧНО: Вызываем tryMatch немедленно, без задержек
+    // Это гарантирует быстрое нахождение собеседника
     tryMatch(io, socket);
+    
+    // КРИТИЧНО: Если матч не найден сразу, пробуем еще раз через небольшую задержку
+    // Это помогает в случаях, когда оба пользователя нажимают "Начать" одновременно
+    if (!socket.data.partnerSid) {
+      setTimeout(() => {
+        if (!socket.data.partnerSid && inQueue(socket.id)) {
+          tryMatch(io, socket);
+        }
+      }, 100); // Небольшая задержка 100ms для повторной попытки
+    }
   });
 
   // === NEXT ================================================================

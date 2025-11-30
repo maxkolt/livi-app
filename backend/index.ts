@@ -210,18 +210,24 @@ app.get('/api/turn-credentials', async (_req, res) => {
     const turnUdp = `turn:${TURN_HOST}:${TURN_PORT}`;
     const turnTcp = `turn:${TURN_HOST}:${TURN_PORT}?transport=tcp`;
 
-    const urls = [stunUrl, turnUdp];
-    if (TURN_ENABLE_TCP) urls.push(turnTcp);
+    // КРИТИЧНО: Каждый сервер должен быть отдельным объектом в массиве iceServers
+    // STUN для обнаружения публичных IP
+    const iceServers: any[] = [
+      { urls: stunUrl },
+      { urls: turnUdp, username, credential: hmac },
+    ];
+    
+    // TURN TCP для обхода строгих NAT/firewall
+    if (TURN_ENABLE_TCP) {
+      iceServers.push({ urls: turnTcp, username, credential: hmac });
+    }
 
     return res.json({
       ok: true,
       username,
       credential: hmac,
       ttl: expiry - unixNow,
-      iceServers: [
-        { urls: stunUrl },
-        { urls, username, credential: hmac },
-      ],
+      iceServers,
     });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
