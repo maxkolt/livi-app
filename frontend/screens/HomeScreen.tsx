@@ -2863,7 +2863,7 @@ const handleClearNick = useCallback(async () => {
                   : Platform.OS === 'android' 
                     ? 'rgba(59, 68, 83, 0.10)' // Чуть светлее для светлой темы на Android
                     : 'rgba(59, 68, 83, 0.15)', // Обычный для светлой темы на iOS
-                borderColor: theme.colors.outline,
+                borderColor: isDark ? theme.colors.outline : LIVI.textThemeWhite,
                 borderWidth: StyleSheet.hairlineWidth,
               }
             ]} 
