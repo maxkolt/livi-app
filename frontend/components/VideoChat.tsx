@@ -694,6 +694,9 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   const [toastVisible, setToastVisible] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
 
+  // Анимация появления кнопок в блоках (для предотвращения визуального мелькания на Android)
+  const buttonsOpacity = useRef(new Animated.Value(0)).current;
+
   const [partnerInPiP, setPartnerInPiP] = useState(false); // Отслеживаем когда партнер ушел в PiP
   // Ref для предотвращения двойного обновления remoteViewKey при возврате из PiP
   const pipReturnUpdateRef = useRef(false);
@@ -2231,6 +2234,30 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   // Логируем изменения started для отладки
   useEffect(() => {
   }, [started, partnerUserId, inDirectCall, friendCallAccepted, isDirectCall]);
+
+  // Анимация появления кнопок в блоках (предотвращает визуальное мелькание на Android)
+  useEffect(() => {
+    if (started && !isInactiveState) {
+      // Небольшая задержка перед анимацией, чтобы иконки успели загрузиться
+      const timer = setTimeout(() => {
+        Animated.timing(buttonsOpacity, {
+          toValue: 1,
+          duration: 200,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }).start();
+      }, Platform.OS === 'android' ? 100 : 50); // Больше задержка на Android для загрузки иконок
+      
+      return () => clearTimeout(timer);
+    } else {
+      // Скрываем кнопки сразу при скрытии
+      Animated.timing(buttonsOpacity, {
+        toValue: 0,
+        duration: 150,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [started, isInactiveState, buttonsOpacity]);
   
   // Логируем изменения friends для отладки
   useEffect(() => {
@@ -4126,42 +4153,50 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
                 {/* КРИТИЧНО: Показываем кнопки сразу после нажатия "Начать" (started=true), не ждем подключения пользователя */}
                 {started && !isInactiveState && (() => {
                   const remoteBlockedByPiP = partnerInPiP && !pip.visible;
+                  const baseOpacity = remoteStream ? (remoteMutedMain ? 0.6 : 1) : 0.5;
                   return (
-                    <TouchableOpacity
-                      onPress={toggleRemoteAudio}
-                      disabled={!remoteStream || remoteBlockedByPiP}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      activeOpacity={0.7}
+                    <Animated.View
                       style={[
-                        styles.iconBtn,
-                        remoteBlockedByPiP && styles.iconBtnDisabled,
                         {
                           position: "absolute",
                           top: 8,
                           left: 8,
-                          opacity: remoteStream ? (remoteMutedMain ? 0.6 : 1) : 0.5,
+                          opacity: buttonsOpacity,
                         },
                       ]}
                     >
-                      <View style={{ position: 'relative', justifyContent: 'center', alignItems: 'center' }}>
-                        <MaterialIcons
-                          name={remoteMutedMain ? "volume-off" : "volume-up"}
-                          size={26}
-                          color={remoteMutedMain ? "#999" : (remoteStream ? "#fff" : "#777")}
-                        />
-                        {remoteMutedMain && (
-                          <View
-                            style={{
-                              position: 'absolute',
-                              width: 28,
-                              height: 2,
-                              backgroundColor: '#999',
-                              transform: [{ rotate: '45deg' }],
-                            }}
-                          />
-                        )}
+                      <View style={{ opacity: baseOpacity }}>
+                        <TouchableOpacity
+                          onPress={toggleRemoteAudio}
+                          disabled={!remoteStream || remoteBlockedByPiP}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          activeOpacity={0.7}
+                          style={[
+                            styles.iconBtn,
+                            remoteBlockedByPiP && styles.iconBtnDisabled,
+                          ]}
+                        >
+                          <View style={{ position: 'relative', justifyContent: 'center', alignItems: 'center' }}>
+                            <MaterialIcons
+                              name={remoteMutedMain ? "volume-off" : "volume-up"}
+                              size={26}
+                              color={remoteMutedMain ? "#999" : (remoteStream ? "#fff" : "#777")}
+                            />
+                            {remoteMutedMain && (
+                              <View
+                                style={{
+                                  position: 'absolute',
+                                  width: 28,
+                                  height: 2,
+                                  backgroundColor: '#999',
+                                  transform: [{ rotate: '45deg' }],
+                                }}
+                              />
+                            )}
+                          </View>
+                        </TouchableOpacity>
                       </View>
-                    </TouchableOpacity>
+                    </Animated.View>
                   );
                 })()}
 
@@ -4173,25 +4208,30 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
                   }
                   return shouldShowAddFriend;
                 })() && (
-                  <TouchableOpacity
-                    onPress={onAddFriend}
-                    disabled={addPending || addBlocked}
+                  <Animated.View
                     style={[
-                      styles.iconBtn,
                       {
                         position: "absolute",
                         top: 8,
                         right: 8,
-                        opacity: addPending || addBlocked ? 0.5 : 1,
+                        opacity: buttonsOpacity,
                       },
                     ]}
                   >
-                    <MaterialIcons
-                      name={addBlocked ? "person-add-disabled" : "person-add"}
-                      size={26}
-                      color="#fff"
-                    />
-                  </TouchableOpacity>
+                    <View style={{ opacity: addPending || addBlocked ? 0.5 : 1 }}>
+                      <TouchableOpacity
+                        onPress={onAddFriend}
+                        disabled={addPending || addBlocked}
+                        style={styles.iconBtn}
+                      >
+                        <MaterialIcons
+                          name={addBlocked ? "person-add-disabled" : "person-add"}
+                          size={26}
+                          color="#fff"
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  </Animated.View>
                 )}
 
             {/* Бейдж «Друг» */}
@@ -4264,7 +4304,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
 
         {/* КРИТИЧНО: Кнопки показываются сразу после нажатия "Начать" (started=true), не ждем подключения пользователя */}
         {started && !isInactiveState && (
-          <View style={styles.topLeft}>
+          <Animated.View style={[styles.topLeft, { opacity: buttonsOpacity }]}>
             <TouchableOpacity
               onPress={() => sessionRef.current?.flipCamera()}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -4273,12 +4313,12 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
             >
               <MaterialIcons name="flip-camera-ios" size={26} color="#fff" />
             </TouchableOpacity>
-          </View>
+          </Animated.View>
         )}
 
         {/* КРИТИЧНО: Кнопки показываются сразу после нажатия "Начать" (started=true), не ждем подключения пользователя */}
         {started && !isInactiveState && (
-          <View style={styles.bottomOverlay}>
+          <Animated.View style={[styles.bottomOverlay, { opacity: buttonsOpacity }]}>
             <TouchableOpacity
               onPress={toggleMic}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -4305,7 +4345,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
                 color={camOn ? "#fff" : "#888"}
               />
             </TouchableOpacity>
-          </View>
+          </Animated.View>
         )}
       </View>
       {/* Кнопки снизу */}
