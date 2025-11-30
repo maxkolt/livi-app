@@ -45,6 +45,21 @@ import { useAppTheme, ThemePreference } from '../theme/ThemeProvider';
 import { t, loadLang, saveLang, defaultLang } from '../utils/i18n';
 import type { Lang } from '../utils/i18n';
 
+// expo-linear-gradient -> react-native-linear-gradient -> fallback
+const LinearGradient: any = (() => {
+  try {
+    return require("expo-linear-gradient").LinearGradient;
+  } catch {
+    try {
+      return require("react-native-linear-gradient").default;
+    } catch {
+      return ({ style, children }: any) => (
+        <View style={[{ backgroundColor: "#2EE6FF" }, style]}>{children}</View>
+      );
+    }
+  }
+})();
+
 import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
@@ -320,6 +335,175 @@ const useLiviNotice = () => {
   ) : null;
 
   return { askConfirm: ask, ConfirmView: view };
+};
+
+/* ================= Animated Border Button Component ================= */
+
+type AnimatedBorderButtonProps = {
+  isDark: boolean;
+  onPress: () => void;
+  label: string;
+  style?: ViewStyle;
+  backgroundColor?: string; // Цвет фона страницы для перекрытия градиента
+};
+
+const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onPress, label, style, backgroundColor }) => {
+  const rotateAnim = useRef(new Animated.Value(0)).current;
+  const borderWidth = 2; // Тонкий бордер
+
+  // Цвета из палитры эквалайзера для темной темы - зациклены для непрерывности
+  const darkColors = [
+    '#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0', // бирюзовый, синий, голубой, жемчужно-белый
+    '#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0', // дублируем для плавного перехода
+  ];
+  
+  // Цвета из палитры эквалайзера для светлой темы - зациклены для непрерывности
+  const lightColors = [
+    '#a78bfa', '#FFF8F0', '#B0B5BF', // фиолетовый, жемчужно-белый, светлый титан (осветлен)
+    '#a78bfa', '#FFF8F0', '#B0B5BF', // дублируем для плавного перехода
+  ];
+  
+  const colors = isDark ? darkColors : lightColors;
+
+  useEffect(() => {
+    // Запускаем анимацию сразу при монтировании
+    rotateAnim.setValue(0);
+    const rotateAnimation = Animated.loop(
+      Animated.timing(rotateAnim, {
+        toValue: 1,
+        duration: 3000, // одинаковая скорость для обеих тем
+        easing: Easing.linear, // линейная для непрерывности
+        useNativeDriver: true,
+      }),
+      { iterations: -1 } // бесконечный цикл
+    );
+    rotateAnimation.start();
+
+    return () => {
+      rotateAnimation.stop();
+      rotateAnim.stopAnimation();
+    };
+  }, [rotateAnim]);
+
+  const rotate = rotateAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  // Функция для конвертации hex в rgba
+  const hexToRgba = (hex: string, alpha: number): string => {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+
+  // Цвет титана в зависимости от темы
+  const titanColor = isDark ? '#8A8F99' : '#3B4453'; // LIVI.titan для темной, LightPalette.titan для светлой
+  const titanRgba = hexToRgba(titanColor, 0.25); // 25% непрозрачности для еще большей прозрачности
+
+  const buttonWidth = Platform.OS === "ios" ? screenWidth - 60 : screenWidth - 40;
+  const buttonHeight = 60;
+  const borderRadius = 12;
+  const gradientSize = Math.max(buttonWidth, buttonHeight) * 2; // Достаточно большой для плавного движения
+
+  return (
+    <View style={[{ alignItems: 'center', justifyContent: 'center' }, style]}>
+      {/* Внешний контейнер для отражения/тени */}
+      <View
+        style={{
+        
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {/* Контейнер с градиентной рамкой и внешним отражением */}
+        <View
+          style={{
+            width: buttonWidth + borderWidth * 2,
+            height: buttonHeight + borderWidth * 2,
+            borderRadius: borderRadius + borderWidth,
+            overflow: 'hidden',
+            shadowColor: isDark ? '#00b5ff' : '#06b6d4',
+            shadowOffset: { width: 0, height: 8 }, // Тень смещена вниз для эффекта парения
+            shadowOpacity: 1.0, // Яркая тень для эффекта глубины
+            shadowRadius: 24, // Большой радиус для мягкого свечения и эффекта парения
+            elevation: 24,
+          }}
+        >
+          {/* Анимированный градиент - заполняет весь контейнер */}
+          <Animated.View
+            style={{
+              position: 'absolute',
+              width: gradientSize,
+              height: gradientSize,
+              left: (buttonWidth + borderWidth * 2 - gradientSize) / 2,
+              top: (buttonHeight + borderWidth * 2 - gradientSize) / 2,
+              transform: [{ rotate }],
+            }}
+          >
+            <LinearGradient
+              colors={colors}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{
+                width: '100%',
+                height: '100%',
+              }}
+            />
+          </Animated.View>
+          
+          {/* Внутренний контейнер - перекрывает центр градиента, создавая эффект рамки */}
+          <View
+            style={{
+              position: 'absolute',
+              top: borderWidth,
+              left: borderWidth,
+              right: borderWidth,
+              bottom: borderWidth,
+              borderRadius: borderRadius,
+              overflow: 'hidden',
+              backgroundColor: backgroundColor || (isDark ? '#151F33' : 'rgba(182, 203, 216, 0.93)'), // Цвет фона страницы - перекрывает градиент
+            }}
+          >
+            {/* Эффект стекла с blur - фон страницы просвечивает через размытие */}
+            <BlurView
+              intensity={isDark ? 15 : 20}
+              tint={isDark ? 'dark' : 'light'}
+              style={{
+                ...StyleSheet.absoluteFillObject,
+                borderRadius: borderRadius,
+              }}
+            />
+            {/* Титановый слой с прозрачностью - создает эффект титанового стекла */}
+            <View
+              style={{
+                ...StyleSheet.absoluteFillObject,
+                borderRadius: borderRadius,
+                backgroundColor: titanRgba, // Титановый цвет с прозрачностью - фон страницы просвечивает через blur
+              }}
+            />
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={onPress}
+              style={{
+                width: '100%',
+                height: '100%',
+                borderRadius: borderRadius,
+                backgroundColor: 'transparent', // Полностью прозрачный фон
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingVertical: Platform.OS === "ios" ? 18 : 16,
+                paddingHorizontal: 32,
+              }}
+            >
+              <Text style={[styles.buttonLabel, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>{label}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
 };
 
 /* ================= component ================= */
@@ -2318,8 +2502,8 @@ const handleClearNick = useCallback(async () => {
         <IconButton
           icon="video"
           size={22}
-          iconColor={LIVI.white}
-          style={[styles.inviteBtn, busy ? { opacity: 0.5 } : null]}
+          iconColor={busy ? 'rgba(255,255,255,0.5)' : LIVI.white}
+          style={[styles.inviteBtn, busy ? styles.inviteBtnDisabled : null]}
           disabled={busy}
           onPress={() => {
             setMissedByUser((prev) => {
@@ -2655,13 +2839,13 @@ const handleClearNick = useCallback(async () => {
 
       {NoticeView}
 
-      <TouchableOpacity
-        activeOpacity={0.9}
-        style={[styles.button, { marginBottom: 60, backgroundColor: LIVI.titan }]}
+      <AnimatedBorderButton
+        isDark={isDark}
         onPress={() => navigation.navigate("VideoChat", { callMode: 'random', returnTo: { name: 'Home' } })}
-      >
-        <Text style={styles.buttonLabel}>{L("startSearchBtn")}</Text>
-      </TouchableOpacity>
+        label={L("startSearchBtn")}
+        style={{ marginBottom: 60 }}
+        backgroundColor={theme.colors.background as string}
+      />
 
       {menuOpen && (
         <View style={styles.overlayMenu}>
@@ -3016,16 +3200,16 @@ const styles = StyleSheet.create({
 
   button: {
     borderRadius: 12,
-    paddingVertical: Platform.OS === "ios" ? 18 : 12,
+    paddingVertical: Platform.OS === "ios" ? 18 : 16,
+    paddingHorizontal: 32,
     alignItems: "center",
+    justifyContent: "center",
     shadowColor: "#000",
     shadowOpacity: 0.35,
     shadowRadius: 22,
     shadowOffset: { width: 0, height: 12 },
     elevation: 6,
-    marginBottom: 50,
     backgroundColor: LIVI.titan,
-    marginHorizontal: Platform.OS === "ios" ? 30 : 20,
   },
   buttonLabel: { color: '#151515', fontSize: 16, fontWeight: '700', letterSpacing: 0.4 },
 
@@ -3077,6 +3261,12 @@ const styles = StyleSheet.create({
 
   rightWrap: { width: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
   inviteBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
+  inviteBtnDisabled: { 
+    opacity: 0.5, 
+    backgroundColor: LIVI.glass,
+    // КРИТИЧНО: На Android disabled кнопки могут быть не видны, поэтому явно устанавливаем opacity
+    // и сохраняем backgroundColor для видимости
+  },
   busyBadge: {
     backgroundColor: 'rgba(255,90,103,0.25)',
     borderRadius: 8,
