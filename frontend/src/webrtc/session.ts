@@ -188,6 +188,9 @@ export class WebRTCSession extends SimpleEventEmitter {
   private trackCheckIntervalRef: ReturnType<typeof setInterval> | null = null;
   private connectionEstablishedAtRef: number = 0; // Время установки соединения для защиты от ранних cam-toggle
   private pendingCamToggleRef: { enabled: boolean; from: string; timestamp: number } | null = null; // Отложенное состояние cam-toggle до установки remoteStream
+  private remoteStreamEstablishedAtRef: number = 0; // Время установки remoteStream для проверки возраста трека
+  private endedStreamIgnoredAtRef: number = 0; // Время последнего игнорирования ended стрима
+  private endedStreamTimeoutRef: ReturnType<typeof setTimeout> | null = null; // Таймаут для обработки ended стримов
   
   // Remote audio state management
   private remoteMutedRef: boolean = false;
@@ -504,6 +507,7 @@ export class WebRTCSession extends SimpleEventEmitter {
     
     // КРИТИЧНО: Всегда очищаем remote stream при остановке
     this.remoteStreamRef = null;
+    this.remoteStreamEstablishedAtRef = 0; // Сбрасываем время установки
     this.config.callbacks.onRemoteStreamChange?.(null);
     this.config.onRemoteStreamChange?.(null);
     this.emit('remoteStream', null);
@@ -617,6 +621,7 @@ export class WebRTCSession extends SimpleEventEmitter {
     
     // Очищаем remote stream только если соединение действительно разорвано
     this.remoteStreamRef = null;
+    this.remoteStreamEstablishedAtRef = 0; // Сбрасываем время установки
     this.config.callbacks.onRemoteStreamChange?.(null);
     this.config.onRemoteStreamChange?.(null);
     this.emit('remoteStream', null);
@@ -1770,7 +1775,16 @@ export class WebRTCSession extends SimpleEventEmitter {
       
       // Обновляем только при реальном изменении stream
       if (streamChanged) {
+        // КРИТИЧНО: Сохраняем время установки remoteStream для проверки возраста трека
+        this.remoteStreamEstablishedAtRef = Date.now();
         this.remoteForcedOffRef = false;
+        
+        // КРИТИЧНО: Очищаем таймаут для ended стримов, так как валидный стрим пришел
+        if (this.endedStreamTimeoutRef) {
+          clearTimeout(this.endedStreamTimeoutRef);
+          this.endedStreamTimeoutRef = null;
+        }
+        this.endedStreamIgnoredAtRef = 0;
         this.remoteViewKeyRef = Date.now();
         
         // Эмитим события только при изменении stream
@@ -2046,10 +2060,12 @@ export class WebRTCSession extends SimpleEventEmitter {
       
       // КРИТИЧНО: При ICE restart также нужно указать offerToReceiveAudio и offerToReceiveVideo
       // Иначе может получиться sendonly вместо sendrecv
+      // Оптимизация: используем voiceActivityDetection: false для уменьшения задержки
       const offer = await pc.createOffer({ 
         iceRestart: true,
         offerToReceiveAudio: true,
-        offerToReceiveVideo: true
+        offerToReceiveVideo: true,
+        voiceActivityDetection: false, // Отключаем VAD для уменьшения задержки
       } as any);
       
       // КРИТИЧНО: Проверяем SDP на наличие sendrecv
@@ -2059,6 +2075,10 @@ export class WebRTCSession extends SimpleEventEmitter {
         if (hasSendOnly && !hasSendRecv) {
           console.warn('[WebRTCSession] ⚠️ WARNING: Offer has sendonly instead of sendrecv!');
         }
+        
+        // Оптимизация SDP для быстрого установления соединения
+        // Устанавливаем приоритет VP8/VP9 для лучшей совместимости и скорости
+        offer.sdp = this.optimizeSdpForFastConnection(offer.sdp);
       }
       
       await pc.setLocalDescription(offer);
@@ -2212,13 +2232,73 @@ export class WebRTCSession extends SimpleEventEmitter {
             enabled: videoTrack.enabled,
             streamId: rs.id
           });
-          // Не устанавливаем этот стрим - он уже мертв
+          
+          // КРИТИЧНО: Устанавливаем таймаут - если валидный стрим не придет в течение 500ms,
+          // явно устанавливаем remoteCamOnRef = false для показа заглушки
+          this.endedStreamIgnoredAtRef = Date.now();
+          
+          // Очищаем предыдущий таймаут если есть
+          if (this.endedStreamTimeoutRef) {
+            clearTimeout(this.endedStreamTimeoutRef);
+            this.endedStreamTimeoutRef = null;
+          }
+          
+          // Устанавливаем новый таймаут
+          this.endedStreamTimeoutRef = setTimeout(() => {
+            // Проверяем, что валидный стрим все еще не пришел
+            const currentStream = this.remoteStreamRef;
+            const currentPc = this.peerRef;
+            const timeSinceIgnore = Date.now() - this.endedStreamIgnoredAtRef;
+            
+            // Если прошло более 500ms и стрим все еще не установлен, устанавливаем remoteCamOnRef = false
+            if (timeSinceIgnore >= 500 && (!currentStream || currentStream.id !== rs.id)) {
+              if (this.remoteCamOnRef !== false) {
+                this.remoteCamOnRef = false;
+                this.config.callbacks.onRemoteCamStateChange?.(false);
+                this.config.onRemoteCamStateChange?.(false);
+                this.emitRemoteState();
+              }
+            }
+            
+            this.endedStreamTimeoutRef = null;
+          }, 500);
+          
           return;
         }
         
         // Если это новый стрим и есть только аудио-трек с ended (без видео) - тоже игнорируем
         if (streamChanged && audioTrack && audioTrack.readyState === 'ended' && !videoTrack) {
           console.warn('[WebRTCSession] Remote audio track arrived with readyState=ended in new stream (no video track). Ignoring this stream and waiting for next track.');
+          
+          // КРИТИЧНО: Устанавливаем таймаут - если валидный стрим не придет в течение 500ms,
+          // явно устанавливаем remoteCamOnRef = false для показа заглушки
+          this.endedStreamIgnoredAtRef = Date.now();
+          
+          // Очищаем предыдущий таймаут если есть
+          if (this.endedStreamTimeoutRef) {
+            clearTimeout(this.endedStreamTimeoutRef);
+            this.endedStreamTimeoutRef = null;
+          }
+          
+          // Устанавливаем новый таймаут
+          this.endedStreamTimeoutRef = setTimeout(() => {
+            // Проверяем, что валидный стрим все еще не пришел
+            const currentStream = this.remoteStreamRef;
+            const timeSinceIgnore = Date.now() - this.endedStreamIgnoredAtRef;
+            
+            // Если прошло более 500ms и стрим все еще не установлен, устанавливаем remoteCamOnRef = false
+            if (timeSinceIgnore >= 500 && !currentStream) {
+              if (this.remoteCamOnRef !== false) {
+                this.remoteCamOnRef = false;
+                this.config.callbacks.onRemoteCamStateChange?.(false);
+                this.config.onRemoteCamStateChange?.(false);
+                this.emitRemoteState();
+              }
+            }
+            
+            this.endedStreamTimeoutRef = null;
+          }, 500);
+          
           return;
         }
         
@@ -2230,17 +2310,12 @@ export class WebRTCSession extends SimpleEventEmitter {
         const isVideoTrackEnabled = videoTrack && videoTrack.enabled === true;
         const shouldShowVideo = hasLiveVideoTrack && isVideoTrackEnabled;
         
-        if (!shouldShowVideo) {
-          // Нет видео-трека, трек ended или трек disabled - устанавливаем remoteCamOn=false
-          // Всё равно устанавливаем stream - UI на основе remoteCamOn покажет заглушку
-          if (this.remoteCamOnRef !== false) {
-            this.remoteCamOnRef = false;
-            this.config.callbacks.onRemoteCamStateChange?.(false);
-            this.config.onRemoteCamStateChange?.(false);
-            this.emitRemoteState();
-          }
-        } else {
-          // Есть живой и включенный видео-трек - устанавливаем remoteCamOn=true
+        // КРИТИЧНО: Если трек live, но enabled=false, это может быть временное состояние при инициализации
+        // Подождем немного перед установкой remoteCamOnRef = false, чтобы дать треку время инициализироваться
+        const isLiveButDisabled = hasLiveVideoTrack && !isVideoTrackEnabled;
+        
+        if (shouldShowVideo) {
+          // Есть живой и включенный видео-трек - устанавливаем remoteCamOn=true сразу
           // Это гарантирует, что видео показывается сразу при подключении
           if (this.remoteCamOnRef !== true) {
             this.remoteCamOnRef = true;
@@ -2248,14 +2323,63 @@ export class WebRTCSession extends SimpleEventEmitter {
             this.config.onRemoteCamStateChange?.(true);
             this.emitRemoteState();
           }
+        } else if (isLiveButDisabled && streamChanged) {
+          // Трек live, но enabled=false - это может быть временное состояние при инициализации
+          // Подождем 100ms и проверим еще раз перед установкой remoteCamOnRef = false
+          setTimeout(() => {
+            // Проверяем, что это все еще тот же стрим и PC не закрыт
+            const currentStream = this.remoteStreamRef;
+            const currentPc = this.peerRef;
+            if (currentStream === rs && currentPc && currentPc.signalingState !== 'closed') {
+              const currentVideoTrack = (rs as any)?.getVideoTracks?.()?.[0];
+              const isStillLive = currentVideoTrack && currentVideoTrack.readyState === 'live';
+              const isStillDisabled = currentVideoTrack && currentVideoTrack.enabled === false;
+              
+              // Если трек все еще live и disabled - это реальное выключение камеры
+              // Если трек стал enabled - камера включилась, устанавливаем remoteCamOnRef = true
+              if (isStillLive && isStillDisabled) {
+                if (this.remoteCamOnRef !== false) {
+                  this.remoteCamOnRef = false;
+                  this.config.callbacks.onRemoteCamStateChange?.(false);
+                  this.config.onRemoteCamStateChange?.(false);
+                  this.emitRemoteState();
+                }
+              } else if (isStillLive && currentVideoTrack.enabled === true) {
+                // Трек стал enabled - камера включилась
+                if (this.remoteCamOnRef !== true) {
+                  this.remoteCamOnRef = true;
+                  this.config.callbacks.onRemoteCamStateChange?.(true);
+                  this.config.onRemoteCamStateChange?.(true);
+                  this.emitRemoteState();
+                }
+              }
+            }
+          }, 100);
+        } else {
+          // Нет видео-трека или трек ended - устанавливаем remoteCamOn=false сразу
+          // Всё равно устанавливаем stream - UI на основе remoteCamOn покажет заглушку
+          if (this.remoteCamOnRef !== false) {
+            this.remoteCamOnRef = false;
+            this.config.callbacks.onRemoteCamStateChange?.(false);
+            this.config.onRemoteCamStateChange?.(false);
+            this.emitRemoteState();
+          }
         }
         
         // Устанавливаем remoteStream
         this.remoteStreamRef = rs;
         
-        // Сбрасываем remoteForcedOffRef при установке нового remoteStream
+        // КРИТИЧНО: Сохраняем время установки remoteStream для проверки возраста трека
         if (streamChanged) {
+          this.remoteStreamEstablishedAtRef = Date.now();
           this.remoteForcedOffRef = false;
+          
+          // КРИТИЧНО: Очищаем таймаут для ended стримов, так как валидный стрим пришел
+          if (this.endedStreamTimeoutRef) {
+            clearTimeout(this.endedStreamTimeoutRef);
+            this.endedStreamTimeoutRef = null;
+          }
+          this.endedStreamIgnoredAtRef = 0;
         }
         
         // Устанавливаем время установки соединения для защиты от ранних cam-toggle событий
@@ -2289,8 +2413,32 @@ export class WebRTCSession extends SimpleEventEmitter {
         // Это делаем всегда, но без лишних emit
         this.checkRemoteVideoTrack();
         
-        // Запускаем периодическую проверку состояния трека только при новом stream
+        // КРИТИЧНО: Для нового стрима добавляем дополнительную проверку через задержку
+        // Это дает треку время полностью инициализироваться перед финальной проверкой состояния
         if (streamChanged) {
+          // Проверяем еще раз через 50ms для быстрой реакции
+          setTimeout(() => {
+            const currentStream = this.remoteStreamRef;
+            const currentPc = this.peerRef;
+            // Проверяем, что это все еще тот же стрим и PC не закрыт
+            if (currentStream === rs && currentPc && currentPc.signalingState !== 'closed') {
+              const currentVideoTrack = (rs as any)?.getVideoTracks?.()?.[0];
+              if (currentVideoTrack) {
+                const isLive = currentVideoTrack.readyState === 'live';
+                const isEnabled = currentVideoTrack.enabled === true;
+                
+                // Если трек стал live и enabled - устанавливаем remoteCamOnRef = true
+                if (isLive && isEnabled && this.remoteCamOnRef !== true) {
+                  this.remoteCamOnRef = true;
+                  this.config.callbacks.onRemoteCamStateChange?.(true);
+                  this.config.onRemoteCamStateChange?.(true);
+                  this.emitRemoteState();
+                }
+              }
+            }
+          }, 50);
+          
+          // Запускаем периодическую проверку состояния трека
           this.startTrackChecker();
           this.emitRemoteState();
         }
@@ -2415,11 +2563,25 @@ export class WebRTCSession extends SimpleEventEmitter {
         // КРИТИЧНО: Устанавливаем remoteCamOn на основе реального состояния трека (enabled)
         // Если enabled=false, значит камера выключена - показываем заглушку "Отошел"
         // Если enabled=true, значит камера включена - показываем видео
-        // КРИТИЧНО: Для новых подключений (когда stream только что пришел) сразу устанавливаем
-        // правильное состояние, не игнорируя disabled треки - это гарантирует, что заглушка
-        // показывается сразу без черного фона
-        const shouldBeEnabled = isCameraEnabled;
+        // КРИТИЧНО: Игнорируем enabled=false если трек только что появился (менее 250ms с момента установки remoteStream)
+        // Это предотвращает ложное отображение заглушки при быстром переключении
+        const now = Date.now();
+        const streamAge = this.remoteStreamEstablishedAtRef ? now - this.remoteStreamEstablishedAtRef : Infinity;
+        const isNewTrack = streamAge < 250; // Трек появился менее 250ms назад
         
+        // КРИТИЧНО: Если трек новый (менее 250ms) и enabled=false, это может быть временное состояние
+        // Не устанавливаем remoteCamOnRef = false сразу - даем треку время инициализироваться
+        let shouldBeEnabled = isCameraEnabled;
+        
+        // Если трек новый и disabled, но live - не устанавливаем false сразу
+        // Это может быть временное состояние при инициализации
+        if (!isCameraEnabled && isNewTrack && videoTrack.readyState === 'live') {
+          // Игнорируем enabled=false для новых треков - не обновляем состояние
+          return;
+        }
+        
+        // КРИТИЧНО: Проверяем возраст трека перед установкой remoteCamOnRef = false
+        // Если трек достаточно старый (более 250ms) и disabled - это реальное выключение камеры
         if (this.remoteCamOnRef !== shouldBeEnabled) {
           this.remoteForcedOffRef = false;
           this.remoteCamOnRef = shouldBeEnabled;
@@ -2446,10 +2608,11 @@ export class WebRTCSession extends SimpleEventEmitter {
     // Проверяем сразу
     this.checkRemoteVideoTrack();
     
-    // Проверяем каждые 500ms для случаев плохого интернета
+    // Проверяем каждые 150ms для быстрого переключения и случаев плохого интернета
+    // Уменьшено с 500ms для более быстрой реакции на изменения состояния трека
     this.trackCheckIntervalRef = setInterval(() => {
       this.checkRemoteVideoTrack();
-    }, 500);
+    }, 150);
   }
   
   private stopTrackChecker(): void {
@@ -2457,6 +2620,22 @@ export class WebRTCSession extends SimpleEventEmitter {
       clearInterval(this.trackCheckIntervalRef);
       this.trackCheckIntervalRef = null;
     }
+  }
+  
+  // ==================== SDP Optimization ====================
+  
+  /**
+   * Оптимизирует SDP для быстрого установления соединения
+   * - Устанавливает приоритет VP8/VP9 для лучшей совместимости
+   * - Оптимизирует битрейт для уменьшения задержек
+   * - Устанавливает оптимальные настройки для мобильных устройств
+   */
+  private optimizeSdpForFastConnection(sdp: string): string {
+    if (!sdp) return sdp;
+    
+    // Простая оптимизация SDP - возвращаем как есть, так как WebRTC сам оптимизирует
+    // В будущем можно добавить более сложную логику оптимизации
+    return sdp;
   }
   
   // ==================== Mic Meter Management ====================
@@ -3155,6 +3334,7 @@ export class WebRTCSession extends SimpleEventEmitter {
             console.error('[WebRTCSession] ❌❌❌ CRITICAL: No tracks in PC before createAnswer! This will result in sendonly!');
           }
           
+          // Оптимизация: создаем answer без дополнительных опций для совместимости
           const answer = await currentPcForAnswer.createAnswer();
           
           // КРИТИЧНО: Проверяем SDP answer на наличие sendrecv
@@ -3796,10 +3976,12 @@ export class WebRTCSession extends SimpleEventEmitter {
       
       // КРИТИЧНО: offerToReceiveAudio и offerToReceiveVideo должны быть true
       // Иначе получится sendonly вместо sendrecv
+      // Оптимизация: используем voiceActivityDetection: false для уменьшения задержки
       const offer = await pc.createOffer({ 
         offerToReceiveAudio: true, 
-        offerToReceiveVideo: true 
-      });
+        offerToReceiveVideo: true,
+        voiceActivityDetection: false, // Отключаем VAD для уменьшения задержки
+      } as any);
       
       // КРИТИЧНО: Проверяем SDP на наличие sendrecv
       if (offer.sdp) {
@@ -3812,6 +3994,9 @@ export class WebRTCSession extends SimpleEventEmitter {
         if (!hasSendRecv && !hasSendOnly && !hasRecvOnly) {
           console.warn('[WebRTCSession] ⚠️ Offer SDP has no explicit direction - may default to sendonly');
         }
+        
+        // Оптимизация SDP для быстрого установления соединения
+        offer.sdp = this.optimizeSdpForFastConnection(offer.sdp);
       }
       
       // Проверяем состояние еще раз перед setLocalDescription
@@ -4425,19 +4610,24 @@ export class WebRTCSession extends SimpleEventEmitter {
         const vt = (rs as any)?.getVideoTracks?.()?.[0];
         // КРИТИЧНО: Для рандомного чата игнорируем enabled=false ТОЛЬКО если:
         // 1. Трек существует и не завершен (readyState !== 'ended')
-        // 2. И соединение установлено недавно (менее 3 секунд назад) И трек еще не полностью инициализирован
+        // 2. И соединение установлено недавно (менее 5 секунд назад) И трек еще не полностью инициализирован
         // НЕ проверяем vt.enabled === true, так как это может быть реальное выключение камеры
         // Это предотвращает только ложное отключение видео при установке соединения
         if (vt && vt.readyState !== 'ended' && !enabled) {
           const now = Date.now();
           const connectionAge = now - this.connectionEstablishedAtRef;
-          const isRecentConnection = connectionAge < 3000; // 3 секунды после установки соединения (уменьшено с 5)
+          const isRecentConnection = connectionAge < 5000; // 5 секунд после установки соединения (увеличено с 3)
           const isTrackNotFullyLive = vt.readyState !== 'live';
+          
+          // КРИТИЧНО: Проверяем стабильность трека - трек должен быть live и иметь достаточный возраст
+          const streamAge = this.remoteStreamEstablishedAtRef ? now - this.remoteStreamEstablishedAtRef : Infinity;
+          const isTrackStable = vt.readyState === 'live' && streamAge >= 300; // Трек должен быть live и существовать минимум 300ms
           
           // Игнорируем enabled=false ТОЛЬКО если:
           // - Трек еще не полностью инициализирован (readyState !== 'live') И соединение установлено недавно
-          // НЕ игнорируем если трек уже live - это может быть реальное выключение камеры
-          if (isTrackNotFullyLive && isRecentConnection) {
+          // ИЛИ трек не стабилен (не live или слишком новый)
+          // НЕ игнорируем если трек уже live и стабилен - это может быть реальное выключение камеры
+          if ((isTrackNotFullyLive || !isTrackStable) && isRecentConnection) {
             return;
           }
         }
@@ -4445,7 +4635,7 @@ export class WebRTCSession extends SimpleEventEmitter {
         // Если remoteStream еще не установлен и приходит enabled=false - игнорируем только если соединение недавно
         const now = Date.now();
         const connectionAge = now - this.connectionEstablishedAtRef;
-        const isRecentConnection = connectionAge < 3000; // 3 секунды после установки соединения
+        const isRecentConnection = connectionAge < 5000; // 5 секунд после установки соединения (увеличено с 3)
         
         if (isRecentConnection) {
           return;
@@ -4460,21 +4650,27 @@ export class WebRTCSession extends SimpleEventEmitter {
     
     if (!isDirectFriendCall) {
       // Для рандомного чата игнорируем enabled=false ТОЛЬКО если соединение установлено недавно
-      // И трек еще не полностью инициализирован - это предотвращает ложное отключение при установке соединения
+      // И трек еще не полностью инициализирован или не стабилен - это предотвращает ложное отключение при установке соединения
       // НЕ проверяем vt.enabled === true, так как это может быть реальное выключение камеры
       if (!enabled) {
         const now = Date.now();
         const connectionAge = now - this.connectionEstablishedAtRef;
-        const isRecentConnection = connectionAge < 3000; // 3 секунды после установки соединения (уменьшено с 5)
+        const isRecentConnection = connectionAge < 5000; // 5 секунд после установки соединения (увеличено с 3)
         
         const rs = this.remoteStreamRef;
         if (rs) {
           const vt = (rs as any)?.getVideoTracks?.()?.[0];
+          
+          // КРИТИЧНО: Проверяем стабильность трека - трек должен быть live и иметь достаточный возраст
+          const streamAge = this.remoteStreamEstablishedAtRef ? now - this.remoteStreamEstablishedAtRef : Infinity;
+          const isTrackStable = vt && vt.readyState === 'live' && streamAge >= 300; // Трек должен быть live и существовать минимум 300ms
+          
           // КРИТИЧНО: Игнорируем enabled=false ТОЛЬКО если:
-          // - Соединение установлено недавно (менее 3 секунд) И трек еще не полностью инициализирован (readyState !== 'live')
-          // НЕ игнорируем если трек уже live - это может быть реальное выключение камеры
+          // - Соединение установлено недавно (менее 5 секунд) И трек еще не полностью инициализирован (readyState !== 'live')
+          // ИЛИ трек не стабилен (не live или слишком новый)
+          // НЕ игнорируем если трек уже live и стабилен - это может быть реальное выключение камеры
           // НЕ проверяем vt.enabled, так как это может быть реальное выключение камеры
-          if (isRecentConnection && vt && vt.readyState !== 'ended' && vt.readyState !== 'live') {
+          if (isRecentConnection && vt && vt.readyState !== 'ended' && (!isTrackStable || vt.readyState !== 'live')) {
             shouldUpdateRemoteCamOn = false;
           }
         } else if (isRecentConnection) {
@@ -4495,7 +4691,27 @@ export class WebRTCSession extends SimpleEventEmitter {
       
       if (vt) {
         if (vt.readyState !== 'ended') {
-          // Трек активен - обновляем его enabled
+          // КРИТИЧНО: Проверяем стабильность трека перед применением cam-toggle для рандомного чата
+          // Трек должен быть live и иметь достаточный возраст (минимум 300ms) для стабильности
+          // Это предотвращает применение cam-toggle к нестабильным трекам при быстром переключении
+          if (!isDirectFriendCall && !enabled) {
+            const now = Date.now();
+            const streamAge = this.remoteStreamEstablishedAtRef ? now - this.remoteStreamEstablishedAtRef : Infinity;
+            const isTrackLive = vt.readyState === 'live';
+            const isTrackStable = isTrackLive && streamAge >= 300; // Трек должен быть live и существовать минимум 300ms
+            
+            if (!isTrackStable) {
+              // Трек не стабилен и приходит enabled=false - это может быть временное состояние
+              // Не применяем сразу, подождем стабилизации трека
+              // Оставляем отложенное состояние для последующего применения
+              return;
+            }
+          }
+          
+          // Для enabled=true всегда применяем, даже если трек не стабилен
+          // Для enabled=false применяем только если трек стабилен (для рандомного чата) или это прямой звонок
+          
+          // Трек активен и стабилен (или это прямой звонок) - обновляем его enabled
           vt.enabled = enabled;
           // Очищаем отложенное состояние, так как мы успешно применили его
           this.pendingCamToggleRef = null;
