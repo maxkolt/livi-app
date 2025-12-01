@@ -749,20 +749,97 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     };
   }, [applyNavBarForVideo]);
 
+  // Обработчик AppState для остановки активности при уходе в фон и запуска автопоиска
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', async (nextAppState) => {
+      const session = sessionRef.current;
+      if (!session) return;
+
+      // Определяем, это рандомный чат (не звонок с другом)
+      const isRandomChat = !isDirectCall && !inDirectCallRef.current && !friendCallAccepted;
+      
+      if (nextAppState === 'background' || nextAppState === 'inactive') {
+        // Приложение ушло в фон
+        if (startedRef.current && isRandomChat) {
+          // Если активность запущена и это рандомный чат - останавливаем активность
+          // Автопоиск запустится у собеседника через peer:stopped
+          logger.debug('[AppState] App going to background, stopping activity for random chat');
+          
+          // Останавливаем текущую активность
+          try {
+            // Останавливаем поиск/соединение
+            // Сервер отправит peer:stopped партнеру, и у него запустится автопоиск
+            session.stopRandomChat();
+          } catch (e) {
+            logger.warn('[AppState] Error stopping activity:', e);
+          }
+        }
+      } else if (nextAppState === 'active') {
+        // Приложение вернулось на передний план
+        // Сбрасываем isInactiveState чтобы кнопка "Начать" была кликабельна
+        if (isInactiveStateRef.current) {
+          logger.debug('[AppState] App returned to foreground, resetting inactive state');
+          isInactiveStateRef.current = false;
+          setIsInactiveState(false);
+        }
+      }
+    });
+    
+    return () => {
+      sub.remove();
+    };
+  }, [isDirectCall, friendCallAccepted]);
+
   // Обработчик кнопки "Назад" Android для активации background
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       // Проверяем: это звонок друга с активным соединением?
       const isFriendCall = isDirectCall || inDirectCallRef.current || friendCallAccepted;
-      const hasActiveCall = !!roomId;
+      // Для рандомного чата проверяем активное соединение (roomId или partnerId или started)
+      const hasActiveRandomChat = !isFriendCall && (!!roomId || !!partnerId || startedRef.current);
+      // Для звонка друга проверяем наличие roomId
+      const hasActiveFriendCall = isFriendCall && !!roomId;
       
-      if (isFriendCall && hasActiveCall) {
+      if (hasActiveFriendCall) {
+        // Звонок другу - вызываем PiP
         try {
-          const partnerNick = friendsRef.current.find(f => String(f._id) === String(partnerUserIdRef.current))?.nick;
+          // Ищем партнера в списке друзей
+          const partner = partnerUserId 
+            ? friendsRef.current.find(f => String(f._id) === String(partnerUserId))
+            : null;
           
-          const streamToUse = remoteStream;
+          // Строим полный URL аватара из поля avatar (проверяем что не пустая строка)
+          let partnerAvatarUrl: string | undefined = undefined;
+          if (partner?.avatar && typeof partner.avatar === 'string' && partner.avatar.trim() !== '') {
+            const SERVER_CONFIG = require('../src/config/server').SERVER_CONFIG;
+            const serverUrl = SERVER_CONFIG.BASE_URL;
+            partnerAvatarUrl = partner.avatar.startsWith('http') 
+              ? partner.avatar 
+              : `${serverUrl}${partner.avatar.startsWith('/') ? '' : '/'}${partner.avatar}`;
+          }
           
-          let finalStreamToUse = streamToUse;
+          // Показываем PiP
+          pipRef.current.showPiP({
+            callId: currentCallIdRef.current || '',
+            roomId: roomId || '',
+            partnerName: partner?.nick || 'Друг',
+            partnerAvatarUrl: partnerAvatarUrl,
+            muteLocal: !micOn,
+            muteRemote: remoteMutedMain,
+            localStream: localStream || null,
+            remoteStream: remoteStream || null,
+            navParams: {
+              ...route?.params,
+              peerUserId: partnerUserId || partnerUserIdRef.current,
+              partnerId: partnerId || partnerId,
+            } as any,
+          });
+          
+          // Вызываем enterPiP в session
+          const session = sessionRef.current;
+          if (session) {
+            session.enterPiP();
+          }
           
           try {
             socket.emit('bg:entered', { 
@@ -771,6 +848,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
             });
           } catch {}
           
+          // Навигация назад
           const nav = (global as any).__navRef;
           if (nav?.canGoBack?.()) {
             nav.goBack();
@@ -780,9 +858,10 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           
           return true;
         } catch (e) {
-          logger.warn('[BackHandler] Error showing background:', e);
+          logger.warn('[BackHandler] Error showing PiP:', e);
         }
-      } else if (!isFriendCall && hasActiveCall) {
+      } else if (hasActiveRandomChat) {
+        // Рандомный чат - останавливаем соединение
         const session = sessionRef.current;
         if (session) {
           const currentRoomId = roomId;
@@ -793,6 +872,8 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           session.destroy();
         }
         setPartnerUserId(null);
+        setStarted(false);
+        startedRef.current = false;
         
         // Навигация назад
         const nav = (global as any).__navRef;
@@ -809,7 +890,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     });
 
     return () => backHandler.remove();
-  }, [isDirectCall]);
+  }, [isDirectCall, friendCallAccepted, roomId, partnerId, partnerUserId, localStream, remoteStream, micOn, remoteMutedMain, route?.params, pip]);
 
   // Incoming call card
   const [incomingCall, setIncomingCall] = useState<{ callId: string; from: string; fromNick?: string } | null>(null);
@@ -3680,10 +3761,13 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           
           // Проверяем: есть ли активный звонок друга?
           const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted;
-          const hasActiveCall = !!roomId && !isInactiveStateRef.current;
+          // Для рандомного чата проверяем активное соединение (roomId или partnerId или started)
+          const hasActiveRandomChat = !isFriendCall && (!!roomId || !!partnerId || startedRef.current);
+          // Для звонка друга проверяем наличие roomId и активное состояние
+          const hasActiveFriendCall = isFriendCall && !!roomId && !isInactiveStateRef.current;
           
           // Если это не звонок с другом (рандомный чат) — немедленно завершаем поиск и стрим перед навигацией
-          if (!isFriendCall) {
+          if (hasActiveRandomChat) {
             try {
               leavingRef.current = true;
               startedRef.current = false;
@@ -3781,7 +3865,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           }
           
           // Если есть активный звонок друга - показываем PiP перед навигацией
-          if (isFriendCall && hasActiveCall) {
+          if (hasActiveFriendCall) {
             // Выключаем видео локально для экономии
 
             try {
@@ -3839,7 +3923,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
             } else {
               navigation.navigate('Home' as never);
             }
-          }, hasActiveCall && isFriendCall ? 100 : 0);
+          }, hasActiveFriendCall ? 100 : 0);
           
           // Сбрасываем флаг через небольшую задержку
           setTimeout(() => {

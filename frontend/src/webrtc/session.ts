@@ -187,6 +187,7 @@ export class WebRTCSession extends SimpleEventEmitter {
   private remoteViewKeyRef: number = 0;
   private trackCheckIntervalRef: ReturnType<typeof setInterval> | null = null;
   private connectionEstablishedAtRef: number = 0; // Время установки соединения для защиты от ранних cam-toggle
+  private pendingCamToggleRef: { enabled: boolean; from: string; timestamp: number } | null = null; // Отложенное состояние cam-toggle до установки remoteStream
   
   // Remote audio state management
   private remoteMutedRef: boolean = false;
@@ -514,6 +515,7 @@ export class WebRTCSession extends SimpleEventEmitter {
     this.remoteViewKeyRef = 0;
     this.remoteMutedRef = false;
     this.remoteInPiPRef = false;
+    this.pendingCamToggleRef = null; // Очищаем отложенное состояние cam-toggle
     this.config.callbacks.onRemoteCamStateChange?.(false);
     this.config.onRemoteCamStateChange?.(false);
     this.emit('remoteCamStateChanged', false);
@@ -1777,6 +1779,9 @@ export class WebRTCSession extends SimpleEventEmitter {
         this.config.onRemoteStreamChange?.(stream);
         this.emit('remoteViewKeyChanged', this.remoteViewKeyRef);
         
+        // КРИТИЧНО: Применяем отложенное состояние cam-toggle, если оно было сохранено
+        this.applyPendingCamToggle();
+        
         // Проверяем состояние трека
         this.checkRemoteVideoTrack();
         this.startTrackChecker();
@@ -1820,7 +1825,15 @@ export class WebRTCSession extends SimpleEventEmitter {
         
         if (isRandomChat && !hasOntrack) {
           console.warn('[WebRTCSession] ontrack handler missing after connection established, reattaching');
-          this.attachRemoteHandlers(pc, this.partnerIdRef);
+          const partnerId = this.partnerIdRef;
+          if (partnerId) {
+            this.attachRemoteHandlers(pc, partnerId);
+            // Проверяем еще раз после переустановки
+            const hasOntrackAfterReattach = !!(pc as any)?.ontrack;
+            if (!hasOntrackAfterReattach) {
+              console.error('[WebRTCSession] ❌❌❌ CRITICAL: Failed to attach ontrack handler after connection established!');
+            }
+          }
         } else {
         }
         
@@ -2183,6 +2196,32 @@ export class WebRTCSession extends SimpleEventEmitter {
         const videoTrack = (rs as any)?.getVideoTracks?.()?.[0];
         const audioTrack = (rs as any)?.getAudioTracks?.()?.[0];
         
+        // КРИТИЧНО: Предотвращаем множественные emit для одного и того же stream
+        // Это устраняет мелькания видеопотока
+        const existingStream = this.remoteStreamRef;
+        const isSameStream = existingStream === rs || (existingStream && existingStream.id === rs.id);
+        const streamChanged = !isSameStream;
+        
+        // КРИТИЧНО: Если это НОВЫЙ стрим и видео-трек приходит с readyState=ended,
+        // это означает, что трек уже завершен (скорее всего из-за быстрого переключения).
+        // НЕ устанавливаем такой стрим - ждем следующего трека от нового соединения.
+        // Если это тот же стрим, но трек стал ended - это нормально (камера выключена).
+        if (streamChanged && videoTrack && videoTrack.readyState === 'ended') {
+          console.warn('[WebRTCSession] Remote video track arrived with readyState=ended in new stream (likely due to fast switching). Ignoring this stream and waiting for next track.', {
+            trackId: videoTrack.id,
+            enabled: videoTrack.enabled,
+            streamId: rs.id
+          });
+          // Не устанавливаем этот стрим - он уже мертв
+          return;
+        }
+        
+        // Если это новый стрим и есть только аудио-трек с ended (без видео) - тоже игнорируем
+        if (streamChanged && audioTrack && audioTrack.readyState === 'ended' && !videoTrack) {
+          console.warn('[WebRTCSession] Remote audio track arrived with readyState=ended in new stream (no video track). Ignoring this stream and waiting for next track.');
+          return;
+        }
+        
         // КРИТИЧНО: Если нет видео-трека, трек ended или трек disabled, ставим remoteCamOn=false
         // UI на основе remoteCamOn покажет заглушку, а не RTCView на "мертвый" или выключенный трек
         // Это гарантирует, что при переходе к следующему собеседнику сразу показывается заглушка,
@@ -2211,26 +2250,6 @@ export class WebRTCSession extends SimpleEventEmitter {
           }
         }
         
-        // КРИТИЧНО: Если видео трек "ended", это баг на стороне отправителя
-        // Но мы все равно устанавливаем remoteStream - UI покажет placeholder
-        if (videoTrack && videoTrack.readyState === 'ended') {
-          console.warn('[WebRTCSession] Remote video track arrived with readyState=ended (bug on sender side). Setting stream anyway - UI will show placeholder.', {
-            trackId: videoTrack.id,
-            enabled: videoTrack.enabled
-          });
-        }
-        
-        // Если аудио трек "ended", но видео трек жив - все равно устанавливаем (может быть только аудио)
-        if (audioTrack && audioTrack.readyState === 'ended' && !videoTrack) {
-          console.warn('[WebRTCSession] Remote audio track arrived with readyState=ended and no video track. Setting stream anyway.');
-        }
-        
-        // КРИТИЧНО: Предотвращаем множественные emit для одного и того же stream
-        // Это устраняет мелькания видеопотока
-        const existingStream = this.remoteStreamRef;
-        const isSameStream = existingStream === rs || (existingStream && existingStream.id === rs.id);
-        const streamChanged = !isSameStream;
-        
         // Устанавливаем remoteStream
         this.remoteStreamRef = rs;
         
@@ -2242,6 +2261,12 @@ export class WebRTCSession extends SimpleEventEmitter {
         // Устанавливаем время установки соединения для защиты от ранних cam-toggle событий
         if (!this.connectionEstablishedAtRef) {
           this.connectionEstablishedAtRef = Date.now();
+        }
+        
+        // КРИТИЧНО: Применяем отложенное состояние cam-toggle, если оно было сохранено
+        // Это решает проблему, когда cam-toggle приходит до установки remoteStream
+        if (streamChanged) {
+          this.applyPendingCamToggle();
         }
         
         // КРИТИЧНО: Обновляем remoteViewKey ТОЛЬКО при реальном изменении stream
@@ -2276,33 +2301,67 @@ export class WebRTCSession extends SimpleEventEmitter {
     
     // КРИТИЧНО: Устанавливаем обработчик ontrack - БЕЗ ЭТОГО вы НИКОГДА не увидите собеседника
     // Это обязательный обработчик для получения удаленных треков (видео/аудио)
+    // Устанавливаем обработчик синхронно и проверяем сразу
     (pc as any).ontrack = handleRemote;
     (pc as any)._remoteHandlersAttached = true;
     (pc as any)._ontrackHandler = handleRemote; // Сохраняем ссылку для проверки
     
-    // КРИТИЧНО: Проверяем что обработчик действительно установлен
-    const verifyOntrack = !!(pc as any)?.ontrack;
+    // КРИТИЧНО: Проверяем что обработчик действительно установлен СРАЗУ после присваивания
+    let verifyOntrack = !!(pc as any)?.ontrack;
     if (!verifyOntrack) {
-      console.error('[WebRTCSession] ❌❌❌ CRITICAL ERROR: ontrack handler was NOT set after assignment!', {
+      console.error('[WebRTCSession] ❌❌❌ CRITICAL ERROR: ontrack handler was NOT set after assignment! Retrying...', {
         pcExists: !!pc,
         setToId,
         handlerType: typeof (pc as any)?.ontrack
       });
-    } else {
+      // Пытаемся установить еще раз
+      (pc as any).ontrack = handleRemote;
+      verifyOntrack = !!(pc as any)?.ontrack;
+      if (!verifyOntrack) {
+        console.error('[WebRTCSession] ❌❌❌ CRITICAL ERROR: Failed to set ontrack handler even after retry!', {
+          pcExists: !!pc,
+          setToId
+        });
+      }
     }
     
-    // КРИТИЧНО: Проверяем, что обработчик действительно установлен
-    // Иногда обработчик может быть потерян из-за внутренних операций WebRTC
+    // КРИТИЧНО: Проверяем, что обработчик действительно установлен через небольшую задержку
+    // Иногда обработчик может быть потерян из-за внутренних операций WebRTC или race condition
+    // Используем несколько проверок с разными задержками для максимальной надежности
     setTimeout(() => {
       const currentPc = this.peerRef;
-      if (currentPc === pc && this.partnerIdRef) {
+      if (currentPc === pc) {
         const hasOntrack = !!(currentPc as any)?.ontrack;
         if (!hasOntrack) {
-          console.warn('[WebRTCSession] ontrack handler was lost after attachment, reattaching');
-          this.attachRemoteHandlers(currentPc, this.partnerIdRef);
+          const partnerId = this.partnerIdRef || setToId;
+          if (partnerId) {
+            console.warn('[WebRTCSession] ontrack handler was lost after attachment (50ms check), reattaching', {
+              partnerId,
+              setToId
+            });
+            this.attachRemoteHandlers(currentPc, partnerId);
+          }
         }
       }
-    }, 100);
+    }, 50);
+    
+    // Дополнительная проверка через 200ms для защиты от более поздних race conditions
+    setTimeout(() => {
+      const currentPc = this.peerRef;
+      if (currentPc === pc) {
+        const hasOntrack = !!(currentPc as any)?.ontrack;
+        if (!hasOntrack) {
+          const partnerId = this.partnerIdRef || setToId;
+          if (partnerId) {
+            console.warn('[WebRTCSession] ontrack handler was lost after attachment (200ms check), reattaching', {
+              partnerId,
+              setToId
+            });
+            this.attachRemoteHandlers(currentPc, partnerId);
+          }
+        }
+      }
+    }, 200);
   }
   
   // ==================== Remote Camera State Management ====================
@@ -2966,11 +3025,15 @@ export class WebRTCSession extends SimpleEventEmitter {
       if (!hasRemoteDesc) {
         // КРИТИЧНО: Убеждаемся, что обработчик ontrack установлен ДО setRemoteDescription
         // БЕЗ ontrack вы НИКОГДА не увидите собеседника - это критично для всех типов звонков
-        const hasOntrack = !!(pc as any)?.ontrack;
+        let hasOntrack = !!(pc as any)?.ontrack;
         if (!hasOntrack && from) {
           this.attachRemoteHandlers(pc, from);
-        } else if (hasOntrack) {
-        } else {
+          // Проверяем еще раз после установки
+          hasOntrack = !!(pc as any)?.ontrack;
+          if (!hasOntrack) {
+            console.error('[WebRTCSession] ❌❌❌ CRITICAL: Failed to attach ontrack handler BEFORE setRemoteDescription in handleOffer!');
+          }
+        } else if (!hasOntrack) {
           console.warn('[WebRTCSession] ⚠️ Cannot attach ontrack handler - no from ID', {
             from,
             hasOntrack: false
@@ -2994,13 +3057,32 @@ export class WebRTCSession extends SimpleEventEmitter {
           // НЕ удаляем из processingOffersRef - оставляем для защиты от дубликатов
           
           // КРИТИЧНО: Проверяем, что обработчик ontrack установлен после setRemoteDescription
-          const hasOntrackAfterOffer = !!(pc as any)?.ontrack;
+          // setRemoteDescription может сбросить обработчик из-за внутренних операций WebRTC
+          let hasOntrackAfterOffer = !!(pc as any)?.ontrack;
           
-          // Если обработчик отсутствует, устанавливаем его снова
+          // Если обработчик отсутствует, устанавливаем его снова СРАЗУ
           if (!hasOntrackAfterOffer && from) {
-            console.warn('[WebRTCSession] ontrack handler missing after setRemoteDescription in handleOffer, reattaching');
+            console.warn('[WebRTCSession] ontrack handler missing after setRemoteDescription in handleOffer, reattaching immediately');
             this.attachRemoteHandlers(pc, from);
+            // Проверяем еще раз после переустановки
+            hasOntrackAfterOffer = !!(pc as any)?.ontrack;
+            if (!hasOntrackAfterOffer) {
+              console.error('[WebRTCSession] ❌❌❌ CRITICAL: Failed to attach ontrack handler after setRemoteDescription in handleOffer!');
+            }
           }
+          
+          // КРИТИЧНО: Дополнительная проверка через небольшую задержку для защиты от race condition
+          // Это гарантирует, что обработчик не потеряется из-за асинхронных операций
+          setTimeout(() => {
+            const pcAfterDelay = this.peerRef;
+            if (pcAfterDelay === pc && from) {
+              const hasOntrackAfterDelay = !!(pcAfterDelay as any)?.ontrack;
+              if (!hasOntrackAfterDelay) {
+                console.warn('[WebRTCSession] ontrack handler lost after setRemoteDescription in handleOffer (delayed check), reattaching');
+                this.attachRemoteHandlers(pcAfterDelay, from);
+              }
+            }
+          }, 50);
           
           // КРИТИЧНО: Проверяем receivers один раз после установки offer (для рандомного чата)
           // Одна проверка через 500ms - достаточно для появления треков, без мельканий
@@ -3412,11 +3494,15 @@ export class WebRTCSession extends SimpleEventEmitter {
           
           // КРИТИЧНО: Убеждаемся, что обработчик ontrack установлен ДО setRemoteDescription
           // БЕЗ ontrack вы НИКОГДА не увидите собеседника - это критично для всех типов звонков
-          const hasOntrack = !!(currentPcForAnswer as any)?.ontrack;
+          let hasOntrack = !!(currentPcForAnswer as any)?.ontrack;
           if (!hasOntrack && from) {
             this.attachRemoteHandlers(currentPcForAnswer, from);
-          } else if (hasOntrack) {
-          } else {
+            // Проверяем еще раз после установки
+            hasOntrack = !!(currentPcForAnswer as any)?.ontrack;
+            if (!hasOntrack) {
+              console.error('[WebRTCSession] ❌❌❌ CRITICAL: Failed to attach ontrack handler BEFORE setRemoteDescription in handleAnswer!');
+            }
+          } else if (!hasOntrack) {
             console.warn('[WebRTCSession] ⚠️ Cannot attach ontrack handler - no from ID', {
               from,
               hasOntrack: false
@@ -3448,13 +3534,32 @@ export class WebRTCSession extends SimpleEventEmitter {
           }
           
           // КРИТИЧНО: Проверяем, что обработчик ontrack установлен после setRemoteDescription
-          const hasOntrackAfterAnswer = !!(currentPcForAnswer as any)?.ontrack;
+          // setRemoteDescription может сбросить обработчик из-за внутренних операций WebRTC
+          let hasOntrackAfterAnswer = !!(currentPcForAnswer as any)?.ontrack;
           
-          // Если обработчик отсутствует, устанавливаем его снова
+          // Если обработчик отсутствует, устанавливаем его снова СРАЗУ
           if (!hasOntrackAfterAnswer && from) {
-            console.warn('[WebRTCSession] ontrack handler missing after setRemoteDescription, reattaching');
+            console.warn('[WebRTCSession] ontrack handler missing after setRemoteDescription in handleAnswer, reattaching immediately');
             this.attachRemoteHandlers(currentPcForAnswer, from);
+            // Проверяем еще раз после переустановки
+            hasOntrackAfterAnswer = !!(currentPcForAnswer as any)?.ontrack;
+            if (!hasOntrackAfterAnswer) {
+              console.error('[WebRTCSession] ❌❌❌ CRITICAL: Failed to attach ontrack handler after setRemoteDescription in handleAnswer!');
+            }
           }
+          
+          // КРИТИЧНО: Дополнительная проверка через небольшую задержку для защиты от race condition
+          // Это гарантирует, что обработчик не потеряется из-за асинхронных операций
+          setTimeout(() => {
+            const pcAfterDelay = this.peerRef;
+            if (pcAfterDelay === currentPcForAnswer && from) {
+              const hasOntrackAfterDelay = !!(pcAfterDelay as any)?.ontrack;
+              if (!hasOntrackAfterDelay) {
+                console.warn('[WebRTCSession] ontrack handler lost after setRemoteDescription in handleAnswer (delayed check), reattaching');
+                this.attachRemoteHandlers(pcAfterDelay, from);
+              }
+            }
+          }, 50);
           
           // КРИТИЧНО: Проверяем receivers один раз после установки answer (для рандомного чата)
           // Одна проверка через 500ms - достаточно для появления треков, без мельканий
@@ -4386,22 +4491,57 @@ export class WebRTCSession extends SimpleEventEmitter {
     try {
       const rs = this.remoteStreamRef;
       const vt = rs ? (rs as any)?.getVideoTracks?.()?.[0] : null;
+      const pc = this.peerRef;
+      
       if (vt) {
         if (vt.readyState !== 'ended') {
+          // Трек активен - обновляем его enabled
           vt.enabled = enabled;
+          // Очищаем отложенное состояние, так как мы успешно применили его
+          this.pendingCamToggleRef = null;
         } else {
-          console.warn('[WebRTCSession] cam-toggle: Cannot update track - readyState is ended', {
-            enabled,
-            trackId: vt.id,
-            from
-          });
+          // Трек уже завершен (ended) - это может быть из-за быстрого переключения или закрытия соединения
+          // Проверяем, что соединение еще активно и партнер тот же (или партнер еще не установлен, но from совпадает)
+          const isPcActive = pc && 
+            pc.signalingState !== 'closed' && 
+            (pc as any).connectionState !== 'closed';
+          
+          // Проверяем, что партнер совпадает (или еще не установлен, но событие прошло проверку shouldProcess)
+          const isPartnerMatch = !this.partnerIdRef || this.partnerIdRef === from;
+          
+          if (isPcActive && isPartnerMatch) {
+            // Соединение активно, но трек ended - это может быть временное состояние
+            // Обновляем только состояние remoteCamOnRef, не трогая трек
+            // Это позволит UI правильно отобразить состояние камеры
+            // Трек может быть восстановлен позже через новый ontrack
+            // Не выводим предупреждение - это нормальная ситуация при быстрых переключениях
+            // Очищаем отложенное состояние, так как мы обработали событие
+            this.pendingCamToggleRef = null;
+          } else {
+            // Соединение закрыто или партнер изменился - игнорируем событие
+            // Это событие относится к уже закрытому соединению или другому партнеру
+            // Не выводим предупреждение - это нормальная ситуация при быстрых переключениях
+            return; // Выходим раньше, не обновляя состояние
+          }
         }
       } else {
-        console.warn('[WebRTCSession] cam-toggle: No video track found in remoteStream', {
-          enabled,
-          from,
-          hasRemoteStream: !!rs
-        });
+        // КРИТИЧНО: Если remoteStream еще не установлен, сохраняем состояние для последующего применения
+        // Это решает проблему, когда cam-toggle приходит до установки remoteStream
+        if (!rs) {
+          this.pendingCamToggleRef = {
+            enabled,
+            from,
+            timestamp: Date.now()
+          };
+          // Не выводим предупреждение - это нормальная ситуация при быстрых переключениях
+        } else {
+          // Если remoteStream есть, но нет видео трека - это реальная проблема
+          console.warn('[WebRTCSession] cam-toggle: No video track found in remoteStream', {
+            enabled,
+            from,
+            hasRemoteStream: !!rs
+          });
+        }
       }
     } catch (e) {
       logger.warn('[WebRTCSession] Error updating remote track:', e);
@@ -4443,6 +4583,68 @@ export class WebRTCSession extends SimpleEventEmitter {
     }
   }
   
+  // ==================== Apply Pending Cam Toggle ====================
+  
+  /**
+   * Применяет отложенное состояние cam-toggle, если оно было сохранено до установки remoteStream
+   * Вызывается автоматически при установке remoteStream
+   */
+  private applyPendingCamToggle(): void {
+    if (!this.pendingCamToggleRef) {
+      return;
+    }
+    
+    const pending = this.pendingCamToggleRef;
+    const currentPartnerId = this.partnerIdRef;
+    
+    // Проверяем, что отложенное состояние актуально:
+    // 1. partnerId совпадает (или еще не установлен)
+    // 2. Не слишком старое (менее 5 секунд)
+    const isRecent = Date.now() - pending.timestamp < 5000;
+    const isRelevant = !currentPartnerId || currentPartnerId === pending.from;
+    
+    if (!isRecent || !isRelevant) {
+      // Отложенное состояние устарело или не относится к текущему партнеру
+      this.pendingCamToggleRef = null;
+      return;
+    }
+    
+    // Проверяем, что remoteStream теперь установлен
+    const rs = this.remoteStreamRef;
+    if (!rs) {
+      return; // remoteStream еще не установлен, оставляем состояние отложенным
+    }
+    
+    const vt = (rs as any)?.getVideoTracks?.()?.[0];
+    if (!vt || vt.readyState === 'ended') {
+      // Трек еще не готов или уже завершен
+      this.pendingCamToggleRef = null;
+      return;
+    }
+    
+    // Применяем отложенное состояние
+    try {
+      vt.enabled = pending.enabled;
+      
+      // Обновляем состояние камеры
+      this.remoteForcedOffRef = !pending.enabled;
+      this.remoteCamOnRef = pending.enabled;
+      this.camToggleSeenRef = true;
+      
+      // Уведомляем UI
+      this.config.callbacks.onRemoteCamStateChange?.(pending.enabled);
+      this.config.onRemoteCamStateChange?.(pending.enabled);
+      this.emit('remoteCamStateChanged', pending.enabled);
+      this.emitRemoteState();
+      
+      // Очищаем отложенное состояние
+      this.pendingCamToggleRef = null;
+    } catch (e) {
+      logger.warn('[WebRTCSession] Error applying pending cam-toggle:', e);
+      this.pendingCamToggleRef = null;
+    }
+  }
+  
   // ==================== Match Found Handler ====================
   
   private async handleMatchFound(data: { id: string; userId?: string | null; roomId?: string }): Promise<void> {
@@ -4459,6 +4661,10 @@ export class WebRTCSession extends SimpleEventEmitter {
     this.config.callbacks.onRemoteCamStateChange?.(false);
     this.config.onRemoteCamStateChange?.(false);
     this.emitRemoteState();
+    
+    // КРИТИЧНО: Очищаем отложенное состояние cam-toggle при новом match_found
+    // Старое отложенное состояние не относится к новому партнеру
+    this.pendingCamToggleRef = null;
     
     // Устанавливаем partnerId
     if (partnerId) {
@@ -4525,12 +4731,29 @@ export class WebRTCSession extends SimpleEventEmitter {
       // КРИТИЧНО: Убеждаемся, что обработчик ontrack установлен
       this.attachRemoteHandlers(pc, partnerId);
       
-      // Проверяем еще раз, что обработчик установлен
-      const hasOntrack = !!(pc as any)?.ontrack;
+      // КРИТИЧНО: Проверяем еще раз, что обработчик установлен СРАЗУ
+      let hasOntrack = !!(pc as any)?.ontrack;
       if (!hasOntrack) {
-        console.error('[WebRTCSession] КРИТИЧНО: ontrack handler missing after attachRemoteHandlers in handleMatchFound!');
+        console.error('[WebRTCSession] КРИТИЧНО: ontrack handler missing after attachRemoteHandlers in handleMatchFound! Retrying...');
         this.attachRemoteHandlers(pc, partnerId);
+        // Проверяем еще раз после повторной установки
+        hasOntrack = !!(pc as any)?.ontrack;
+        if (!hasOntrack) {
+          console.error('[WebRTCSession] ❌❌❌ CRITICAL: Failed to attach ontrack handler in handleMatchFound even after retry!');
+        }
       }
+      
+      // КРИТИЧНО: Дополнительная проверка через небольшую задержку для защиты от race condition
+      setTimeout(() => {
+        const pcAfterDelay = this.peerRef;
+        if (pcAfterDelay === pc && partnerId) {
+          const hasOntrackAfterDelay = !!(pcAfterDelay as any)?.ontrack;
+          if (!hasOntrackAfterDelay) {
+            console.warn('[WebRTCSession] ontrack handler lost after attachRemoteHandlers in handleMatchFound (delayed check), reattaching');
+            this.attachRemoteHandlers(pcAfterDelay, partnerId);
+          }
+        }
+      }, 50);
     }
     
     // Эмитим событие matchFound
@@ -4834,6 +5057,13 @@ export class WebRTCSession extends SimpleEventEmitter {
     if (partnerId) {
       this.remoteForcedOffRef = false;
     }
+    
+    // КРИТИЧНО: Очищаем отложенное состояние cam-toggle при смене партнера
+    // Старое отложенное состояние не относится к новому партнеру
+    if (oldPartnerId !== partnerId && this.pendingCamToggleRef) {
+      this.pendingCamToggleRef = null;
+    }
+    
     this.config.callbacks.onPartnerIdChange?.(partnerId);
     this.config.onPartnerIdChange?.(partnerId);
     
@@ -4987,6 +5217,10 @@ export class WebRTCSession extends SimpleEventEmitter {
     // Сбрасываем loading
     this.config.callbacks.onLoadingChange?.(false);
     this.config.onLoadingChange?.(false);
+    
+    // КРИТИЧНО: Сбрасываем lastAutoSearchRef чтобы автопоиск мог запуститься сразу после остановки
+    // Это важно для случая, когда пользователь уходит в фон и нужно запустить автопоиск
+    this.lastAutoSearchRef = 0;
     
     // Эмитим событие остановки
     this.emit('stopped');
