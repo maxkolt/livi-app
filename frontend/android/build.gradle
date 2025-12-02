@@ -31,25 +31,6 @@ allprojects {
     mavenCentral()
     maven { url 'https://www.jitpack.io' }
   }
-  
-  // Устанавливаем минимальный compileSdkVersion для всех подпроектов (включая react-native-pip-android)
-  subprojects { subproject ->
-    afterEvaluate {
-      if (subproject.hasProperty('android')) {
-        subproject.android {
-          if (compileSdkVersion != null) {
-            def sdkStr = compileSdkVersion.toString()
-            def sdkNum = sdkStr.replaceAll('android-', '').toInteger()
-            if (sdkNum < 30) {
-              compileSdkVersion 30
-            }
-          } else {
-            compileSdkVersion 30
-          }
-        }
-      }
-    }
-  }
 }
 
 apply plugin: "expo-root-project"

@@ -31,7 +31,6 @@
     "android": {
       "package": "com.kolt12max.livi",
       "versionCode": 1,
-      "orientation": "portrait",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"

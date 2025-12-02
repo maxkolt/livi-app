@@ -17,18 +17,6 @@ import {
   BackHandler,
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-
-// Отключаем debug логи WebRTC - показывают только рабочее состояние
-if (!(global.console as any)._originalLog) {
-  (global.console as any).log = (...args: any[]) => {
-    // Фильтруем WebRTC debug логи
-    const message = args.join(' ');
-    if (message.includes('rn-webrtc:pc:DEBUG')) {
-      return;
-    }
-    (global.console as any)._originalLog(...args);
-  };
-}
 import { CommonActions } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { PanGestureHandler } from 'react-native-gesture-handler';
@@ -623,6 +611,30 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     }
   }, [camOn]);
   
+  // Диагностика состояния удаленного видео в дружеских звонках
+  useEffect(() => {
+    const hasFriendFlags = isDirectCall || inDirectCall || friendCallAccepted;
+    const hasConnectionIds = !!partnerId || !!roomId;
+    if (!hasFriendFlags || !hasConnectionIds) return;
+    
+    try {
+      const vt = (remoteStream as any)?.getVideoTracks?.()?.[0];
+      const videoTrackEnabled = vt?.enabled ?? null;
+      const videoTrackReadyState = vt?.readyState ?? null;
+      console.warn('[VideoChat] [FRIEND CALL] remote video state', {
+        hasRemoteStream: !!remoteStream,
+        remoteStreamId: (remoteStream as any)?.id,
+        remoteCamOn,
+        started,
+        isInactiveState,
+        loading,
+        remoteViewKey,
+        videoTrackEnabled,
+        videoTrackReadyState,
+      });
+    } catch {}
+  }, [remoteStream, remoteCamOn, started, isInactiveState, loading, partnerId, roomId, isDirectCall, inDirectCall, friendCallAccepted]);
+  
   // ЗАЩИТА: Предотвращаем сброс camOn в false при активном соединении
   // Камера должна быть ВСЕГДА включена при подключении и выключаться ТОЛЬКО по нажатию на кнопку
   useEffect(() => {
@@ -1196,7 +1208,45 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       return;
     }
     
-    logger.debug('[onAbortCall] Ending 1-on-1 call');
+    // КРИТИЧНО: Сохраняем roomId и callId из состояния компонента ДО вызова endCall()
+    // session может не иметь актуальных значений, поэтому используем состояние компонента
+    const currentRoomId = roomId;
+    const currentCallId = currentCallIdRef.current;
+    
+    logger.debug('[onAbortCall] 🛑 Ending 1-on-1 call', {
+      roomId: currentRoomId,
+      callId: currentCallId,
+      partnerId,
+      partnerUserId,
+      isDirectCall,
+      inDirectCall,
+      friendCallAccepted,
+      sessionRoomId: session.getRoomId?.(),
+      sessionCallId: session.getCallId?.()
+    });
+    
+    // КРИТИЧНО: Устанавливаем roomId и callId в session перед вызовом endCall()
+    // если они есть в состоянии компонента, но отсутствуют в session
+    if (currentRoomId) {
+      const sessionRoomId = session.getRoomId?.();
+      if (!sessionRoomId || sessionRoomId !== currentRoomId) {
+        session.setRoomId?.(currentRoomId);
+        logger.debug('[onAbortCall] ✅ Set roomId in session from component state', { 
+          roomId: currentRoomId,
+          previousSessionRoomId: sessionRoomId
+        });
+      }
+    }
+    if (currentCallId) {
+      const sessionCallId = session.getCallId?.();
+      if (!sessionCallId || sessionCallId !== currentCallId) {
+        session.setCallId?.(currentCallId);
+        logger.debug('[onAbortCall] ✅ Set callId in session from component state', { 
+          callId: currentCallId,
+          previousSessionCallId: sessionCallId
+        });
+      }
+    }
     
     // Используем session для завершения звонка
     session.endCall();
@@ -1204,7 +1254,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     // Дополнительная очистка UI состояния
     setLocalRenderKey(k => k + 1);
     setPartnerUserId(null);
-  }, []);
+  }, [roomId, partnerId, partnerUserId, isDirectCall, inDirectCall, friendCallAccepted]);
 
   // Callback для возврата из background
   const onReturnToCall = useCallback(() => {
@@ -1804,8 +1854,10 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       }
       
       if (!stream) {
-        // КРИТИЧНО: Используем startedRef.current для синхронной проверки
-        if (!startedRef.current) {
+        // КРИТИЧНО: Для рандомного чата защищаемся от ложных match_found при остановленном чате
+        // Для дружеских звонков (isDirectFriendCall === true) НЕЛЬЗЯ выходить тут,
+        // иначе мы никогда не создадим стрим/PC после принятия вызова
+        if (!isDirectFriendCall && !startedRef.current) {
           console.warn('[handleMatchFound] Exiting early - startedRef.current=false (no stream)', {
             partnerId: id
           });
@@ -1832,7 +1884,10 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       // КРИТИЧНО: Логируем перед проверкой started
       
       // КРИТИЧНО: Используем startedRef.current для синхронной проверки вместо started из замыкания
-      if (!startedRef.current) {
+      // Для рандомного чата выходим, если чат уже остановлен
+      // Для дружеских звонков продолжаем даже если startedRef.current === false:
+      // соединение инициировано отдельно логикой прямого звонка
+      if (!isDirectFriendCall && !startedRef.current) {
         console.warn('[handleMatchFound] Exiting early - startedRef.current=false', {
           partnerId: id,
           hasStream: !!stream,
@@ -2348,11 +2403,12 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   const shouldShowLocalVideo = useMemo(() => {
     const isReturnFrombackground = route?.params?.returnToActiveCall;
     // КРИТИЧНО: Показываем видео если есть стрим И камера включена
+    // Для дружеских звонков НЕ показываем видео в неактивном состоянии (после завершения звонка)
     // Для рандомного чата проверяем isInactiveState только если started=true
     const result = (
-      (inDirectCall && localStream && camOn) || // Показываем видео при звонке друзей если камера включена
+      (inDirectCall && localStream && camOn && !isInactiveState) || // Показываем видео при звонке друзей если камера включена И НЕ в неактивном состоянии
       (!inDirectCall && localStream && started && camOn && !isInactiveState) || // Для рандомного чата показываем если started=true И camOn=true И НЕ в неактивном состоянии
-      (isReturnFrombackground && localStream && camOn) // При возврате из background показываем только если камера включена
+      (isReturnFrombackground && localStream && camOn && !isInactiveState) // При возврате из background показываем только если камера включена И НЕ в неактивном состоянии
     );
     // Гарантируем, что всегда возвращается boolean
     const finalResult = Boolean(result);
@@ -3057,6 +3113,18 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           setLoading(loading);
           loadingRef.current = loading;
         },
+        onRoomIdChange: (roomId) => {
+          setRoomId(roomId);
+          logger.debug('[VideoChat] RoomId changed in session', { roomId });
+        },
+        onCallIdChange: (callId) => {
+          currentCallIdRef.current = callId || null;
+          logger.debug('[VideoChat] CallId changed in session', { callId });
+        },
+        onPartnerIdChange: (partnerId) => {
+          setPartnerId(partnerId);
+          logger.debug('[VideoChat] PartnerId changed in session', { partnerId });
+        },
 
       },
       // State getters
@@ -3255,6 +3323,16 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     });
     
     session.on('callEnded', () => {
+      logger.debug('📥 [callEnded event] Received callEnded event from session', {
+        roomId,
+        callId: currentCallIdRef.current,
+        partnerId,
+        partnerUserId,
+        isDirectCall,
+        inDirectCall,
+        friendCallAccepted
+      });
+      
       // Здесь только UI:
       // - спрятать оверлеи
       setIncomingOverlay(false);
@@ -3270,6 +3348,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       try { stopSpeaker(); } catch {}
       
       // - установить флаги
+      logger.debug('📥 [callEnded event] Setting inactive state');
       setWasFriendCallEnded(true);
       setIsInactiveState(true);
       setPartnerUserId(null);
@@ -3284,6 +3363,8 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       
       // - показать уведомление
       try { showToast('Звонок завершён'); } catch {}
+      
+      logger.debug('✅ [callEnded event] UI state updated - call ended');
       
       // ВСЕ session.* вызовы для cleanup уже внутри handleExternalCallEnded
     });

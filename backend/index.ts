@@ -579,19 +579,46 @@ io.on('connection', async (sock: AuthedSocket) => {
   }
 
   // === call:end → транслируем call:ended обоим участникам (УПРОЩЕНО для 1-на-1) ===
-  sock.on('call:end', ({ callId }: { callId?: string }) => {
+  sock.on('call:end', ({ callId, roomId }: { callId?: string; roomId?: string }) => {
     try {
+      logger.debug('📥 [call:end] Received call:end event', {
+        socketId: sock.id,
+        receivedRoomId: roomId,
+        receivedCallId: callId,
+        userId: (sock as any)?.data?.userId
+      });
+      
+      // КРИТИЧНО: Для дружеских звонков используем roomId, если он передан
+      // Если roomId не передан, используем callId или fallback из activeCallBySocket
       const fallback = activeCallBySocket.get(sock.id);
-      const id = String(callId || fallback || '');
+      const id = String(roomId || callId || fallback || '');
+      
+      logger.debug('📥 [call:end] Resolved call identifier', {
+        finalId: id,
+        usedRoomId: !!roomId,
+        usedCallId: !!callId && !roomId,
+        usedFallback: !!fallback && !roomId && !callId,
+        fallbackValue: fallback
+      });
+      
       if (!id) {
-        logger.warn('Call end: no callId provided');
+        logger.warn('❌ [call:end] Call end: no callId or roomId provided', {
+          socketId: sock.id,
+          receivedRoomId: roomId,
+          receivedCallId: callId,
+          fallback
+        });
         return;
       }
       
       // Получаем участников комнаты
       const room = io.sockets.adapter.rooms.get(id);
       const participantCount = room ? room.size : 0;
-      logger.debug('Call ended', { callId: id, participants: participantCount });
+      logger.debug('📥 [call:end] Room info', {
+        roomId: id,
+        participants: participantCount,
+        socketIds: room ? Array.from(room) : []
+      });
       
       // Снимаем busy со всех участников
       if (room) {
@@ -601,6 +628,11 @@ io.on('connection', async (sock: AuthedSocket) => {
             const peerUserId = (peerSocket as any)?.data?.userId;
             (peerSocket as any).data = (peerSocket as any).data || {};
             (peerSocket as any).data.busy = false;
+            
+            logger.debug('📥 [call:end] Setting busy=false for participant', {
+              socketId: sid,
+              userId: peerUserId
+            });
             
             if (peerUserId) {
               io.emit("presence:update", { userId: peerUserId, busy: false });
@@ -613,15 +645,26 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
       
       // Отправляем call:ended обоим участникам
+      logger.debug('📤 [call:end] Sending call:ended to room', {
+        roomId: id,
+        participantCount
+      });
+      
       io.to(id).emit('call:ended', { 
         callId: id, 
+        roomId: id,
         reason: 'ended',
         scope: 'all'
       });
-      logger.debug('Call cleanup completed', { callId: id });
+      
+      logger.debug('✅ [call:end] Call cleanup completed', { 
+        callId: id,
+        roomId: id,
+        participants: participantCount
+      });
       
     } catch (e) {
-      logger.error('Call end handler error:', e);
+      logger.error('❌ [call:end] Call end handler error:', e);
     }
   });
 

@@ -45,6 +45,28 @@ if (__DEV__ && process.env.EXPO_PUBLIC_LOG_FILTER !== 'off') {
       '[WARN]',
       'Error',
       'Warning',
+      // Логи для отладки дружеских звонков
+      '📞',
+      '📥',
+      '📤',
+      '[callFriend]',
+      '[handleCallAccepted]',
+      '[handleOffer]',
+      '[createAndSendOffer]',
+      '[FRIEND CALL]',
+      'call:accepted',
+      'call:end',
+      'call:ended',
+      'friend:call',
+      'roomId',
+      'callId',
+      'partnerId',
+      'Creating PC',
+      'PC created',
+      'Answer sent',
+      'Offer sent',
+      'Local stream created',
+      'Stream not ready',
     ];
     const noisyPrefixes = [
       'rn-webrtc:', // внутренний спам нативного webrtc
