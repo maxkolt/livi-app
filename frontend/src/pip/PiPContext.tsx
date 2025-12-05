@@ -190,67 +190,104 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   }, [isRemoteMuted]);
 
   const returnToCall = useCallback(() => {
+    console.log('🔥🔥🔥 [PiPContext] returnToCall вызван', { callId, roomId, lastNavParams });
+    
     // Guard от двойной навигации
     if (navigatingRef.current) {
       console.log('[PiPContext] returnToCall blocked - already navigating');
       return;
     }
 
-    const nav = (global as any).__navRef;
-    if (!nav || !callId || !roomId) {
-      // Fallback: используем старый способ если navRef недоступен
-      if (callId) onReturnToCall?.(callId, roomId);
-      hidePiP();
-      return;
+    // КРИТИЧНО: Всегда используем onReturnToCall для навигации
+    // Это гарантирует правильную навигацию через App.tsx
+    if (callId && roomId) {
+      console.log('🔥 [PiPContext] Вызываем onReturnToCall', { callId, roomId });
+      navigatingRef.current = true;
+      
+      // Вызываем onReturnToCall который правильно навигирует через App.tsx
+      onReturnToCall?.(callId, roomId);
+      
+      // Скрываем PiP после небольшой задержки, чтобы навигация успела произойти
+      setTimeout(() => {
+        hidePiP();
+        navigatingRef.current = false;
+      }, 100);
+    } else {
+      console.warn('[PiPContext] returnToCall: No callId or roomId', { callId, roomId });
+      
+      // Fallback: пытаемся использовать навигацию напрямую
+      const nav = (global as any).__navRef;
+      if (nav && nav.isReady && nav.isReady()) {
+        try {
+          const params = {
+            ...lastNavParams,
+            resume: true,
+            fromPiP: true,
+            directCall: true,
+            directInitiator: undefined,
+            callId: callId || undefined,
+            roomId: roomId || undefined,
+          };
+          
+          navigatingRef.current = true;
+          nav.dispatch(
+            CommonActions.reset({
+              index: 1,
+              routes: [{ name: 'Home' as any }, { name: 'VideoChat' as any, params }],
+            })
+          );
+          
+          setTimeout(() => {
+            hidePiP();
+            navigatingRef.current = false;
+          }, 100);
+        } catch (e) {
+          console.error('[PiPContext] Navigation error:', e);
+          navigatingRef.current = false;
+          hidePiP();
+        }
+      } else {
+        console.warn('[PiPContext] Navigation not available, cannot return to call');
+        hidePiP();
+      }
     }
-
-    // КРИТИЧНО: Проверяем что навигация готова перед использованием
-    if (!nav.isReady || !nav.isReady()) {
-      console.warn('[PiPContext] Navigation not ready, using fallback');
-      if (callId) onReturnToCall?.(callId, roomId);
-      hidePiP();
-      return;
-    }
-
-    navigatingRef.current = true;
-
-    const params = {
-      ...lastNavParams,
-      resume: true,
-      fromPiP: true,
-      directCall: true,
-      directInitiator: undefined,
-      callId: callId,
-      roomId: roomId,
-    };
-
-    // стек: [Home, VideoChat], активен VideoChat
-    try {
-      nav.dispatch(
-        CommonActions.reset({
-          index: 1,
-          routes: [{ name: 'Home' as any }, { name: 'VideoChat' as any, params }],
-        })
-      );
-    } catch (e) {
-      console.error('[PiPContext] Navigation error:', e);
-      navigatingRef.current = false;
-      // Fallback на старый способ
-      if (callId) onReturnToCall?.(callId, roomId);
-      hidePiP();
-    }
-
-    // не скрываем PiP мгновенно: даём VideoChat фокус → он сам вызовет hidePiP(),
-    // включит видеотреки и форсит спикер
-    
-    // Сбрасываем флаг через небольшую задержку
-    setTimeout(() => {
-      navigatingRef.current = false;
-    }, 500);
   }, [callId, roomId, lastNavParams, onReturnToCall, hidePiP]);
 
   const endCall = useCallback(() => {
-    onEndCall?.(callId, roomId);
+    console.log('🔥🔥🔥 [PiPContext] endCall вызван', { callId, roomId });
+    
+    // КРИТИЧНО: Сначала останавливаем локальные стримы напрямую
+    // Это гарантирует, что камера остановится даже если VideoChat размонтирован
+    try {
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (session) {
+        console.log('🔥 [PiPContext] Останавливаем локальные стримы через session');
+        // Останавливаем локальный стрим принудительно
+        if (typeof session.stopLocalStream === 'function') {
+          session.stopLocalStream(false, true).catch((e: any) => {
+            console.warn('[PiPContext] Error stopping local stream:', e);
+          });
+        }
+        // Также вызываем endCall для полной очистки
+        if (typeof session.endCall === 'function') {
+          console.log('🔥 [PiPContext] Вызываем session.endCall()');
+          session.endCall();
+        }
+      } else {
+        console.warn('[PiPContext] Session not available in global ref');
+      }
+    } catch (e) {
+      console.warn('[PiPContext] Error stopping streams:', e);
+    }
+    
+    // КРИТИЧНО: Вызываем onEndCall (который вызовет session.endCall() через __endCallCleanupRef)
+    // Это гарантирует правильное завершение звонка через WebRTC session
+    // и отправку call:end на сервер, чтобы завершить звонок у обоих участников
+    if (onEndCall) {
+      onEndCall(callId, roomId);
+    }
+    
+    // Затем очищаем состояние PiP
     stopRemoteVAD();
     setVisible(false);
     setCallId(null);
@@ -266,26 +303,44 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // Обработчик завершения звонка для пользователя в PiP
   useEffect(() => {
     const onCallEnded = (data?: any) => {
-      // Проверяем что это наш звонок (совпадают callId или roomId)
+      // КРИТИЧНО: Проверяем что это НАШ звонок (строгое совпадение callId или roomId)
+      // НЕ закрываем PiP при любом call:ended - только если это наш звонок
       const callMatches = visible && (
-        (data?.callId && callId === data.callId) ||
-        (data?.roomId && roomId === data.roomId) ||
-        (callId && roomId) // если есть активный PiP, закрываем его при любом call:ended
+        (data?.callId && callId && callId === data.callId) ||
+        (data?.roomId && roomId && roomId === data.roomId)
       );
 
       if (callMatches) {
         console.log('[PiPContext] Call ended event received, closing PiP:', { 
           data, 
           currentCallId: callId, 
-          currentRoomId: roomId 
+          currentRoomId: roomId,
+          receivedCallId: data?.callId,
+          receivedRoomId: data?.roomId
         });
-        // Закрываем PiP и завершаем звонок
-        endCall();
-        
-        // Вызываем onEndCall callback если он есть (для дополнительной обработки)
-        if (onEndCall) {
-          onEndCall(callId, roomId);
-        }
+        // КРИТИЧНО: Когда приходит call:ended от сервера (другой участник завершил звонок),
+        // нужно только очистить PiP и состояние, НЕ вызывать onEndCall
+        // так как звонок уже завершен на сервере и session.endCall() уже был вызван другим участником
+        // или будет вызван через handleExternalCallEnded в session.ts
+        stopRemoteVAD();
+        setVisible(false);
+        setCallId(null);
+        setRoomId(null);
+        localStreamRef.current = null;
+        remoteStreamRef.current = null;
+        setIsMuted(false);
+        setIsRemoteMuted(false);
+        setPartnerAvatarUrl(undefined);
+        setLastNavParams(undefined);
+      } else if (visible && (callId || roomId)) {
+        // Логируем, но не обрабатываем, если это не наш звонок
+        console.log('[PiPContext] Call ended event received but not for our call, ignoring:', {
+          data,
+          currentCallId: callId,
+          currentRoomId: roomId,
+          receivedCallId: data?.callId,
+          receivedRoomId: data?.roomId
+        });
       }
     };
 

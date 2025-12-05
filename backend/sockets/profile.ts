@@ -2,7 +2,7 @@
 import { Server, Socket } from 'socket.io';
 import User from '../models/User';
 
-type Ack = (resp: { ok: boolean; error?: string; profile?: { nick?: string; avatarUrl?: string } }) => void;
+type Ack = (resp: { ok: boolean; error?: string; profile?: { nick?: string; avatarUrl?: string; avatarVer?: number; avatarB64?: string; avatarThumbB64?: string } }) => void;
 
 const isHttps = (s?: string) => !!s && /^https:\/\//i.test(String(s).trim());
 
@@ -19,9 +19,9 @@ export function registerProfileSockets(io: Server, socket: Socket) {
         avatarVer: (u as any).avatarVer || 0,
         avatarB64: (u as any).avatarB64 || '',
         avatarThumbB64: (u as any).avatarThumbB64 || ''
-      } : {} });
+      } as { nick?: string; avatarUrl?: string; avatarVer?: number; avatarB64?: string; avatarThumbB64?: string } : undefined });
     } catch (e: any) {
-      ack?.({ ok: true, profile: {} }); // НЕ возвращаем ошибку, возвращаем пустой профиль
+      ack?.({ ok: true, profile: undefined }); // НЕ возвращаем ошибку, возвращаем undefined для профиля
     }
   });
 

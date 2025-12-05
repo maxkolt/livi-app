@@ -212,8 +212,17 @@ app.get('/api/turn-credentials', async (_req, res) => {
 
     // КРИТИЧНО: Каждый сервер должен быть отдельным объектом в массиве iceServers
     // STUN для обнаружения публичных IP
+    // Используем несколько STUN серверов для лучшей надежности
     const iceServers: any[] = [
+      // Основной STUN сервер (наш собственный)
       { urls: stunUrl },
+      // Публичные STUN серверы для резервирования
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:stun.stunprotocol.org:3478' },
+      { urls: 'stun:stun.voiparound.com' },
+      { urls: 'stun:stun.voipbuster.com' },
+      // TURN серверы с credentials
       { urls: turnUdp, username, credential: hmac },
     ];
     

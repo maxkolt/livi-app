@@ -101,6 +101,8 @@ export interface WebRTCSessionConfig {
   getFriendCallAccepted?: () => boolean;
   getStarted?: () => boolean;
   getIsNexting?: () => boolean;
+  getIsDirectInitiator?: () => boolean;
+  getHasIncomingCall?: () => boolean;
   
   // State setters (для обновления состояния из компонента)
   setIsInactiveState?: (value: boolean) => void;
@@ -171,6 +173,11 @@ export class WebRTCSession extends SimpleEventEmitter {
   private iceRestartInProgressRef: boolean = false;
   private restartCooldownRef: number = 0;
   private isInPiPRef: boolean = false; // Флаг для защиты от закрытия PC во время PiP
+  
+  // PC creation lock - защита от множественного создания PC
+  private pcCreationInProgressRef: boolean = false;
+  private roomJoinedRef: Set<string> = new Set(); // Множество комнат, к которым мы уже присоединились
+  private callAcceptedProcessingRef: boolean = false; // Защита от множественной обработки call:accepted
   
   // PC token protection - защита от отложенных событий после Next/cleanup
   private pcToken: number = 0;
@@ -560,21 +567,67 @@ export class WebRTCSession extends SimpleEventEmitter {
       return;
     }
     
+    // КРИТИЧНО: Принудительно останавливаем все треки локального стрима
+    // Это гарантирует, что камера полностью остановится после завершения звонка
     try {
       const tracks = this.localStreamRef.getTracks?.() || [];
+      console.log('🛑 [stopLocalStreamInternal] Останавливаем треки локального стрима', {
+        tracksCount: tracks.length,
+        tracks: tracks.map((t: any) => ({
+          kind: t.kind,
+          enabled: t.enabled,
+          readyState: t.readyState
+        }))
+      });
+      
       tracks.forEach((t: any) => {
         try {
-          t.enabled = false;
-          t.stop();
-          try { (t as any).release?.(); } catch {}
-        } catch {}
+          // КРИТИЧНО: Проверяем, что трек еще не был остановлен
+          if (t && t.readyState !== 'ended' && t.readyState !== null) {
+            // Сначала отключаем трек
+            t.enabled = false;
+            // Затем останавливаем трек
+            t.stop();
+            // Пытаемся освободить ресурсы (если метод доступен)
+            try { (t as any).release?.(); } catch {}
+            
+            console.log('🛑 [stopLocalStreamInternal] Трек остановлен', {
+              kind: t.kind,
+              readyState: t.readyState
+            });
+          }
+        } catch (e) {
+          logger.warn('[WebRTCSession] Error stopping track in stopLocalStreamInternal:', e);
+        }
       });
-    } catch {}
+      
+      // КРИТИЧНО: Дополнительная проверка - убеждаемся, что все треки действительно остановлены
+      const remainingTracks = this.localStreamRef.getTracks?.() || [];
+      const activeTracks = remainingTracks.filter((t: any) => t.readyState !== 'ended');
+      if (activeTracks.length > 0) {
+        logger.warn('🛑 [stopLocalStreamInternal] ⚠️ Некоторые треки не остановлены, повторная попытка', {
+          activeTracksCount: activeTracks.length
+        });
+        // Повторная попытка остановки
+        activeTracks.forEach((t: any) => {
+          try {
+            t.enabled = false;
+            t.stop();
+            try { (t as any).release?.(); } catch {}
+          } catch {}
+        });
+      }
+    } catch (e) {
+      logger.error('[WebRTCSession] Error in stopLocalStreamInternal:', e);
+    }
     
+    // Очищаем ссылку на стрим
     this.localStreamRef = null;
     this.config.callbacks.onLocalStreamChange?.(null);
     this.config.onLocalStreamChange?.(null);
     this.emit('localStream', null);
+    
+    console.log('🛑 [stopLocalStreamInternal] ✅ Локальный стрим полностью остановлен');
   }
   
   /**
@@ -648,12 +701,15 @@ export class WebRTCSession extends SimpleEventEmitter {
    * Содержит логику очистки WebRTC состояния
    */
   handleExternalCallEnded(reason?: string, data?: any): void {
-    logger.debug('📥 [handleExternalCallEnded] Received call:ended event', {
+    console.log('🔥🔥🔥 [handleExternalCallEnded] 📥 ПОЛУЧЕНО call:ended СОБЫТИЕ', {
       reason,
       data,
-      roomId: this.roomIdRef,
-      callId: this.callIdRef,
-      partnerId: this.partnerIdRef
+      currentRoomId: this.roomIdRef,
+      currentCallId: this.callIdRef,
+      currentPartnerId: this.partnerIdRef,
+      hasPeerConnection: !!this.peerRef,
+      hasLocalStream: !!this.localStreamRef,
+      hasRemoteStream: !!this.remoteStreamRef
     });
     
     // КРИТИЧНО: Обрабатываем call:ended ТОЛЬКО для дружеских звонков
@@ -662,7 +718,7 @@ export class WebRTCSession extends SimpleEventEmitter {
                          (this.config.getInDirectCall?.() ?? false) || 
                          (this.config.getFriendCallAccepted?.() ?? false);
     
-    logger.debug('📥 [handleExternalCallEnded] Checking call type', {
+    console.log('🔥 [handleExternalCallEnded] ПРОВЕРКА ТИПА ЗВОНКА', {
       isFriendCall,
       isDirectCall: this.config.getIsDirectCall?.() ?? false,
       inDirectCall: this.config.getInDirectCall?.() ?? false,
@@ -672,11 +728,11 @@ export class WebRTCSession extends SimpleEventEmitter {
     if (!isFriendCall) {
       // Это не дружеский звонок - игнорируем call:ended
       // Для рандомного чата используется handleRandomDisconnected
-      logger.debug('📥 [handleExternalCallEnded] Ignoring call:ended - not a friend call');
+      console.log('🔥 [handleExternalCallEnded] ИГНОРИРУЕМ call:ended - НЕ ДРУЖЕСКИЙ ЗВОНОК');
       return;
     }
     
-    logger.debug('📥 [handleExternalCallEnded] Processing friend call end');
+    console.log('🔥🔥 [handleExternalCallEnded] НАЧАЛО ОБРАБОТКИ ЗАВЕРШЕНИЯ ДРУЖЕСКОГО ЗВОНКА');
     
     // КРИТИЧНО: Для дружеских звонков ВСЕГДА обрабатываем call:ended, даже если соединение активно
     // Это нужно чтобы завершить звонок у обоих участников
@@ -688,12 +744,31 @@ export class WebRTCSession extends SimpleEventEmitter {
     }
     
     // 1. Остановить локальный стрим (без лишних emit'ов)
+    // КРИТИЧНО: Для дружеских звонков принудительно останавливаем все треки
     this.stopLocalStreamInternal();
     
     // 2. Очищаем remoteStream
+    // КРИТИЧНО: Для дружеских звонков принудительно останавливаем remote stream
+    // НЕ используем stopRemoteStreamInternal, так как он проверяет активность соединения
     if (this.remoteStreamRef) {
-      this.stopRemoteStreamInternal();
+      try {
+        const tracks = this.remoteStreamRef.getTracks?.() || [];
+        tracks.forEach((t: any) => {
+          try {
+            t.enabled = false;
+            t.stop();
+            try { (t as any).release?.(); } catch {}
+          } catch {}
+        });
+      } catch {}
+      this.remoteStreamRef = null;
+      this.config.callbacks.onRemoteStreamChange?.(null);
+      this.config.onRemoteStreamChange?.(null);
+      this.emit('remoteStream', null);
     }
+    
+    // Останавливаем метры
+    this.stopMicMeter();
     
     // 3. Закрываем PeerConnection для дружеских звонков
     if (this.peerRef) {
@@ -708,23 +783,79 @@ export class WebRTCSession extends SimpleEventEmitter {
       this.peerRef = null;
     }
     
-    // 4. Сбрасываем состояние через config:
+    // 4. Останавливаем все таймеры и интервалы
+    // КРИТИЧНО: Останавливаем ВСЕ процессы, чтобы ничего не работало в фоне
+    this.clearConnectionTimers();
+    this.stopTrackChecker();
+    this.stopMicMeter();
+    
+    // КРИТИЧНО: Дополнительная проверка - убеждаемся, что локальный стрим полностью остановлен
+    // Вызываем stopLocalStreamInternal еще раз для гарантии
+    this.stopLocalStreamInternal();
+    
+    // Дополнительная проверка - если стрим все еще существует, принудительно останавливаем
+    if (this.localStreamRef) {
+      logger.warn('🛑 [handleExternalCallEnded] ⚠️ Локальный стрим все еще существует после stopLocalStreamInternal, принудительная остановка');
+      try {
+        const tracks = this.localStreamRef.getTracks?.() || [];
+        tracks.forEach((t: any) => {
+          try {
+            if (t && t.readyState !== 'ended' && t.readyState !== null) {
+              t.enabled = false;
+              t.stop();
+              try { (t as any).release?.(); } catch {}
+            }
+          } catch {}
+        });
+      } catch {}
+      // Очищаем ссылку на стрим
+      this.localStreamRef = null;
+      this.config.callbacks.onLocalStreamChange?.(null);
+      this.config.onLocalStreamChange?.(null);
+      this.emit('localStream', null);
+    }
+    
+    // 5. Сбрасываем состояние через config:
     this.config.setStarted?.(false);
     this.config.setFriendCallAccepted?.(false);
     this.config.setInDirectCall?.(false);
     this.config.setIsInactiveState?.(true);
     this.config.setWasFriendCallEnded?.(true);
     
-    logger.debug('📥 [handleExternalCallEnded] State reset completed', {
+    // 6. Выходим из комнаты перед очисткой идентификаторов
+    const roomIdToLeave = this.roomIdRef;
+    if (roomIdToLeave) {
+      try {
+        socket.emit('room:leave', { roomId: roomIdToLeave });
+        console.log('📥 [handleExternalCallEnded] ✅ Left room', { roomId: roomIdToLeave });
+      } catch (e) {
+        logger.warn('[WebRTCSession] Error emitting room:leave in handleExternalCallEnded:', e);
+      }
+    }
+    
+    // 7. Очищаем все идентификаторы
+    this.partnerIdRef = null;
+    this.roomIdRef = null;
+    this.callIdRef = null;
+    this.roomJoinedRef.clear(); // КРИТИЧНО: Очищаем список присоединенных комнат
+    this.callAcceptedProcessingRef = false; // Сбрасываем флаг обработки call:accepted
+    this.config.callbacks.onPartnerIdChange?.(null);
+    this.config.callbacks.onRoomIdChange?.(null);
+    this.config.callbacks.onCallIdChange?.(null);
+    this.config.onPartnerIdChange?.(null);
+    this.config.onRoomIdChange?.(null);
+    this.config.onCallIdChange?.(null);
+    
+    console.log('📥 [handleExternalCallEnded] State reset completed', {
       roomId: this.roomIdRef,
       callId: this.callIdRef,
       partnerId: this.partnerIdRef
     });
     
-    // 5. Эмитим 'callEnded' для UI
+    // 8. Эмитим 'callEnded' для UI
     this.emit('callEnded');
     
-    logger.debug('✅ [handleExternalCallEnded] Friend call ended successfully');
+    console.log('✅ [handleExternalCallEnded] Friend call ended successfully - all processes stopped, room left');
   }
   
   /**
@@ -1256,6 +1387,22 @@ export class WebRTCSession extends SimpleEventEmitter {
   // ==================== PeerConnection Creation ====================
   
   async ensurePcWithLocal(stream: MediaStream): Promise<RTCPeerConnection | null> {
+    // КРИТИЧНО: Защита от множественного создания PC
+    if (this.pcCreationInProgressRef) {
+      console.log('[WebRTCSession] PC creation already in progress, waiting...');
+      // Ждем завершения текущего создания PC (максимум 5 секунд)
+      let attempts = 0;
+      while (this.pcCreationInProgressRef && attempts < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
+      // Если PC уже создан, возвращаем его
+      if (this.peerRef && this.peerRef.signalingState !== 'closed') {
+        console.log('[WebRTCSession] Returning existing PC after waiting');
+        return this.peerRef;
+      }
+    }
+    
     // Проверка PiP
     const resume = this.config.getResume?.() ?? false;
     const fromPiP = this.config.getFromPiP?.() ?? false;
@@ -1294,7 +1441,7 @@ export class WebRTCSession extends SimpleEventEmitter {
         if (isClosed) {
           // Для дружеских звонков закрытый PC - критическая ошибка
           if (isFriendCall) {
-            logger.warn('[WebRTCSession] ⚠️ [FRIEND CALL] PC is closed, cleaning up', {
+            console.log('[WebRTCSession] ⚠️ [FRIEND CALL] PC is closed, cleaning up', {
               roomId: this.roomIdRef,
               partnerId: this.partnerIdRef
             });
@@ -1310,7 +1457,7 @@ export class WebRTCSession extends SimpleEventEmitter {
           // КРИТИЧНО: Для дружеских звонков ВСЕГДА переиспользуем существующий PC
           // Для рандомного чата тоже переиспользуем, если PC не в начальном состоянии
           if (isFriendCall) {
-            logger.debug('[WebRTCSession] ✅ [FRIEND CALL] Reusing existing PC', {
+            console.log('[WebRTCSession] ✅ [FRIEND CALL] Reusing existing PC', {
               state,
               hasLocalDesc,
               hasRemoteDesc,
@@ -1323,7 +1470,7 @@ export class WebRTCSession extends SimpleEventEmitter {
         } else if (isInitial && isFriendCall) {
           // Для дружеских звонков даже если PC в начальном состоянии, переиспользуем его
           // Это предотвращает создание нескольких PC
-          logger.debug('[WebRTCSession] ✅ [FRIEND CALL] Reusing PC in initial state', {
+          console.log('[WebRTCSession] ✅ [FRIEND CALL] Reusing PC in initial state', {
             state,
             roomId: this.roomIdRef
           });
@@ -1332,7 +1479,7 @@ export class WebRTCSession extends SimpleEventEmitter {
         }
       } catch (e) {
         if (isFriendCall) {
-          logger.warn('[WebRTCSession] ⚠️ [FRIEND CALL] Cannot access PC state', e);
+          console.log('[WebRTCSession] ⚠️ [FRIEND CALL] Cannot access PC state', e);
         } else {
           console.warn('[WebRTCSession] Cannot access PC state, creating new one:', e);
         }
@@ -1485,12 +1632,14 @@ export class WebRTCSession extends SimpleEventEmitter {
         }
         
         (global as any).__pcCreationLock = Date.now();
+        this.pcCreationInProgressRef = true; // КРИТИЧНО: Устанавливаем флаг создания PC
         
         try {
           const oldPc = this.peerRef;
           pc = new RTCPeerConnection(iceConfig);
           this.peerRef = pc;
           (global as any).__pcCreationLock = null;
+          this.pcCreationInProgressRef = false; // КРИТИЧНО: Сбрасываем флаг после успешного создания
           
           // КРИТИЧНО: Если создан новый PC (не переиспользован), инкрементируем токен и сбрасываем processed-сеты
           if (oldPc !== pc) {
@@ -1510,12 +1659,14 @@ export class WebRTCSession extends SimpleEventEmitter {
           this.attachRemoteHandlers(pc, this.partnerIdRef || undefined);
         } catch (createError: any) {
           (global as any).__pcCreationLock = null;
+          this.pcCreationInProgressRef = false; // КРИТИЧНО: Сбрасываем флаг при ошибке
           console.error('[WebRTCSession] RTCPeerConnection constructor failed:', createError);
           (global as any).__lastPcClosedAt = Date.now();
           throw createError;
         }
       } catch (e) {
         (global as any).__pcCreationLock = null;
+        this.pcCreationInProgressRef = false; // КРИТИЧНО: Сбрасываем флаг при ошибке
         const errorTime = Date.now();
         console.error('[WebRTCSession] Failed to create PeerConnection:', e);
         if (!(global as any).__lastPcClosedAt || (errorTime - ((global as any).__lastPcClosedAt || 0)) > 0) {
@@ -1695,7 +1846,16 @@ export class WebRTCSession extends SimpleEventEmitter {
       if (event.candidate) {
         const toId = this.partnerIdRef || expectedPartnerId;
         if (toId) {
-          socket.emit('ice-candidate', { to: toId, candidate: event.candidate });
+          const payload: any = { to: toId, candidate: event.candidate };
+          // КРИТИЧНО: Для дружеских звонков добавляем roomId
+          const isFriendCall = 
+            (this.config.getIsDirectCall?.() ?? false) ||
+            (this.config.getInDirectCall?.() ?? false) ||
+            (this.config.getFriendCallAccepted?.() ?? false);
+          if (isFriendCall && this.roomIdRef) {
+            payload.roomId = this.roomIdRef;
+          }
+          socket.emit('ice-candidate', payload);
         } else {
           // КРИТИЧНО: Кешируем ICE кандидаты до установки partnerId
           // Они будут отправлены после match_found
@@ -1909,46 +2069,57 @@ export class WebRTCSession extends SimpleEventEmitter {
       this.connectionEstablishedAtRef = Date.now();
       
       // КРИТИЧНО: Убеждаемся, что обработчик ontrack установлен после установки соединения
-      // Это важно для рандомного чата, где обработчик может быть потерян
+      // Это важно для ВСЕХ типов звонков (рандомный чат и дружеские звонки)
       const pc = this.peerRef;
       if (pc && this.partnerIdRef) {
         const hasOntrack = !!(pc as any)?.ontrack;
-        const isRandomChat = 
-          !(this.config.getIsDirectCall?.() ?? false) &&
-          !(this.config.getInDirectCall?.() ?? false) &&
-          !(this.config.getFriendCallAccepted?.() ?? false);
+        const isFriendCall = (this.config.getIsDirectCall?.() ?? false) || 
+                             (this.config.getInDirectCall?.() ?? false) || 
+                             (this.config.getFriendCallAccepted?.() ?? false);
         
-        if (isRandomChat && !hasOntrack) {
-          console.warn('[WebRTCSession] ontrack handler missing after connection established, reattaching');
+        // Для всех типов звонков проверяем и переустанавливаем ontrack если нужно
+        if (!hasOntrack) {
+          if (isFriendCall) {
+            console.log('[WebRTCSession] [FRIEND CALL] ontrack handler missing after connection established, reattaching');
+          } else {
+            console.warn('[WebRTCSession] ontrack handler missing after connection established, reattaching');
+          }
           const partnerId = this.partnerIdRef;
           if (partnerId) {
             this.attachRemoteHandlers(pc, partnerId);
             // Проверяем еще раз после переустановки
             const hasOntrackAfterReattach = !!(pc as any)?.ontrack;
             if (!hasOntrackAfterReattach) {
-              console.error('[WebRTCSession] ❌❌❌ CRITICAL: Failed to attach ontrack handler after connection established!');
+              if (isFriendCall) {
+                console.log('[WebRTCSession] [FRIEND CALL] ❌❌❌ CRITICAL: Failed to attach ontrack handler after connection established!');
+              } else {
+                console.error('[WebRTCSession] ❌❌❌ CRITICAL: Failed to attach ontrack handler after connection established!');
+              }
             }
           }
-        } else {
         }
         
         // КРИТИЧНО: Fallback - проверяем receivers напрямую, если ontrack не сработал
-        // Это важно для рандомного чата, где событие ontrack может не сработать
-        if (isRandomChat && !this.remoteStreamRef) {
+        // Это важно для ВСЕХ типов звонков (рандомный чат и дружеские звонки)
+        // Событие ontrack может не сработать по разным причинам
+        if (!this.remoteStreamRef) {
+          const isFriendCall = (this.config.getIsDirectCall?.() ?? false) || 
+                               (this.config.getInDirectCall?.() ?? false) || 
+                               (this.config.getFriendCallAccepted?.() ?? false);
           
-          // Проверяем через 1 секунду, 2 секунды и 3 секунды
-          [1000, 2000, 3000].forEach((delay) => {
+          // Для дружеских звонков проверяем чаще и раньше
+          const delays = isFriendCall ? [500, 1000, 2000] : [1000, 2000, 3000];
+          
+          delays.forEach((delay) => {
             setTimeout(() => {
               const currentPc = this.peerRef;
               const currentPartnerId = this.partnerIdRef;
               
               if (currentPc === pc && currentPartnerId && !this.remoteStreamRef) {
                 this.checkReceiversForRemoteStream(currentPc);
-              } else {
               }
             }, delay);
           });
-        } else {
         }
       }
       
@@ -2163,7 +2334,15 @@ export class WebRTCSession extends SimpleEventEmitter {
       }
       
       await pc.setLocalDescription(offer);
-      const offerPayload = { to: toId, offer };
+      const offerPayload: any = { to: toId, offer };
+      // КРИТИЧНО: Для дружеских звонков добавляем roomId
+      const isFriendCall = 
+        (this.config.getIsDirectCall?.() ?? false) ||
+        (this.config.getInDirectCall?.() ?? false) ||
+        (this.config.getFriendCallAccepted?.() ?? false);
+      if (isFriendCall && this.roomIdRef) {
+        offerPayload.roomId = this.roomIdRef;
+      }
       socket.emit('offer', offerPayload);
       this.emit('ice-restart');
       this.emit('reconnecting');
@@ -2297,6 +2476,20 @@ export class WebRTCSession extends SimpleEventEmitter {
         const videoTrack = (rs as any)?.getVideoTracks?.()?.[0];
         const audioTrack = (rs as any)?.getAudioTracks?.()?.[0];
         
+        console.log('🔥🔥🔥 [ontrack] ПОЛУЧЕН REMOTE STREAM', {
+          streamId: stream?.id,
+          hasVideoTrack: !!videoTrack,
+          hasAudioTrack: !!audioTrack,
+          videoTrackReadyState: videoTrack?.readyState,
+          videoTrackEnabled: videoTrack?.enabled,
+          audioTrackReadyState: audioTrack?.readyState,
+          audioTrackEnabled: audioTrack?.enabled,
+          currentRemoteStreamId: this.remoteStreamRef?.id,
+          partnerId: this.partnerIdRef,
+          roomId: this.roomIdRef,
+          callId: this.callIdRef
+        });
+        
         // КРИТИЧНО: Предотвращаем множественные emit для одного и того же stream
         // Это устраняет мелькания видеопотока
         const existingStream = this.remoteStreamRef;
@@ -2395,10 +2588,45 @@ export class WebRTCSession extends SimpleEventEmitter {
         // Подождем немного перед установкой remoteCamOnRef = false, чтобы дать треку время инициализироваться
         const isLiveButDisabled = hasLiveVideoTrack && !isVideoTrackEnabled;
         
+        // КРИТИЧНО: Для дружеских звонков устанавливаем remoteCamOn=true по умолчанию
+        // если есть живой видео-трек, даже если enabled еще не установлен
+        // Это гарантирует, что видео показывается сразу при подключении
+        const isFriendCall = (this.config.getIsDirectCall?.() ?? false) || 
+                            (this.config.getInDirectCall?.() ?? false) || 
+                            (this.config.getFriendCallAccepted?.() ?? false);
+        
+        console.log('🔥 [ontrack] ПРОВЕРКА УСЛОВИЙ ОТОБРАЖЕНИЯ ВИДЕО', {
+          shouldShowVideo,
+          isFriendCall,
+          hasLiveVideoTrack,
+          isVideoTrackEnabled,
+          streamChanged,
+          currentRemoteCamOn: this.remoteCamOnRef
+        });
+        
         if (shouldShowVideo) {
           // Есть живой и включенный видео-трек - устанавливаем remoteCamOn=true сразу
           // Это гарантирует, что видео показывается сразу при подключении
           if (this.remoteCamOnRef !== true) {
+            console.log('🔥✅ [ontrack] УСТАНАВЛИВАЕМ remoteCamOn=true (shouldShowVideo)', {
+              videoTrackReadyState: videoTrack?.readyState,
+              videoTrackEnabled: videoTrack?.enabled
+            });
+            this.remoteCamOnRef = true;
+            this.config.callbacks.onRemoteCamStateChange?.(true);
+            this.config.onRemoteCamStateChange?.(true);
+            this.emitRemoteState();
+          }
+        } else if (isFriendCall && hasLiveVideoTrack) {
+          // КРИТИЧНО: Для дружеских звонков если трек live, устанавливаем remoteCamOn=true
+          // даже если enabled еще не установлен (может быть временное состояние)
+          // Убираем проверку streamChanged - устанавливаем remoteCamOn для любого live трека
+          if (this.remoteCamOnRef !== true) {
+            console.log('🔥✅ [ontrack] УСТАНАВЛИВАЕМ remoteCamOn=true (friend call + live track)', {
+              videoTrackReadyState: videoTrack?.readyState,
+              videoTrackEnabled: videoTrack?.enabled,
+              streamChanged
+            });
             this.remoteCamOnRef = true;
             this.config.callbacks.onRemoteCamStateChange?.(true);
             this.config.onRemoteCamStateChange?.(true);
@@ -2450,6 +2678,17 @@ export class WebRTCSession extends SimpleEventEmitter {
         // Устанавливаем remoteStream
         this.remoteStreamRef = rs;
         
+        console.log('🔥✅✅✅ [ontrack] REMOTE STREAM УСТАНОВЛЕН', {
+          streamId: rs?.id,
+          streamChanged,
+          hasVideoTrack: !!videoTrack,
+          videoTrackReadyState: videoTrack?.readyState,
+          videoTrackEnabled: videoTrack?.enabled,
+          remoteCamOn: this.remoteCamOnRef,
+          partnerId: this.partnerIdRef,
+          roomId: this.roomIdRef
+        });
+        
         // КРИТИЧНО: Сохраняем время установки remoteStream для проверки возраста трека
         if (streamChanged) {
           this.remoteStreamEstablishedAtRef = Date.now();
@@ -2479,6 +2718,11 @@ export class WebRTCSession extends SimpleEventEmitter {
         if (streamChanged) {
           this.remoteViewKeyRef = Date.now();
           
+          console.log('🔥✅ [ontrack] ЭМИТИМ remoteStream СОБЫТИЕ', {
+            streamId: rs?.id,
+            remoteViewKey: this.remoteViewKeyRef
+          });
+          
           // КРИТИЧНО: ВАЖНО - триггер UI через emit только при изменении stream
           this.emit('remoteStream', rs);
           
@@ -2488,6 +2732,8 @@ export class WebRTCSession extends SimpleEventEmitter {
           
           // Эмитим изменение viewKey
           this.emit('remoteViewKeyChanged', this.remoteViewKeyRef);
+          
+          console.log('🔥✅ [ontrack] remoteStream СОБЫТИЕ ОТПРАВЛЕНО В UI');
         }
         
         // Проверяем состояние трека и обновляем remoteCamOn
@@ -2641,24 +2887,41 @@ export class WebRTCSession extends SimpleEventEmitter {
           return;
         }
         
-        // КРИТИЧНО: Устанавливаем remoteCamOn на основе реального состояния трека (enabled)
-        // Если enabled=false, значит камера выключена - показываем заглушку "Отошел"
-        // Если enabled=true, значит камера включена - показываем видео
-        // КРИТИЧНО: Игнорируем enabled=false если трек только что появился (менее 250ms с момента установки remoteStream)
-        // Это предотвращает ложное отображение заглушки при быстром переключении
+        // КРИТИЧНО: Для дружеских звонков устанавливаем remoteCamOn=true если трек live
+        // независимо от enabled (enabled может быть false временно при инициализации)
+        // Для рандомного чата используем реальное состояние enabled
         const now = Date.now();
         const streamAge = this.remoteStreamEstablishedAtRef ? now - this.remoteStreamEstablishedAtRef : Infinity;
         const isNewTrack = streamAge < 250; // Трек появился менее 250ms назад
         
-        // КРИТИЧНО: Если трек новый (менее 250ms) и enabled=false, это может быть временное состояние
-        // Не устанавливаем remoteCamOnRef = false сразу - даем треку время инициализироваться
-        let shouldBeEnabled = isCameraEnabled;
+        let shouldBeEnabled: boolean;
         
-        // Если трек новый и disabled, но live - не устанавливаем false сразу
-        // Это может быть временное состояние при инициализации
-        if (!isCameraEnabled && isNewTrack && videoTrack.readyState === 'live') {
-          // Игнорируем enabled=false для новых треков - не обновляем состояние
-          return;
+        if (isDirectFriendCall) {
+          // КРИТИЧНО: Для дружеских звонков показываем видео если трек live
+          // enabled может быть false временно при инициализации, но если трек live - показываем видео
+          // КРИТИЧНО: Для дружеских звонков приоритет - readyState === 'live'
+          // Если трек live, показываем видео независимо от enabled (enabled может быть false временно)
+          // Только если трек явно ended или не live - не показываем
+          if (videoTrack.readyState === 'live') {
+            // Трек live - показываем видео независимо от enabled для дружеских звонков
+            // enabled может быть false временно при инициализации, но трек уже live
+            shouldBeEnabled = true;
+          } else {
+            // Трек не live - не показываем
+            shouldBeEnabled = false;
+          }
+        } else {
+          // Для рандомного чата используем реальное состояние enabled
+          // КРИТИЧНО: Игнорируем enabled=false если трек только что появился (менее 250ms с момента установки remoteStream)
+          // Это предотвращает ложное отображение заглушки при быстром переключении
+          shouldBeEnabled = isCameraEnabled;
+          
+          // Если трек новый и disabled, но live - не устанавливаем false сразу
+          // Это может быть временное состояние при инициализации
+          if (!isCameraEnabled && isNewTrack && videoTrack.readyState === 'live') {
+            // Игнорируем enabled=false для новых треков - не обновляем состояние
+            return;
+          }
         }
         
         // КРИТИЧНО: Проверяем возраст трека перед установкой remoteCamOnRef = false
@@ -2888,7 +3151,16 @@ export class WebRTCSession extends SimpleEventEmitter {
     // Отправляем все кешированные кандидаты
     for (const candidate of this.outgoingIceCache) {
       try {
-        socket.emit('ice-candidate', { to: toId, candidate });
+        const payload: any = { to: toId, candidate };
+        // КРИТИЧНО: Для дружеских звонков добавляем roomId
+        const isFriendCall = 
+          (this.config.getIsDirectCall?.() ?? false) ||
+          (this.config.getInDirectCall?.() ?? false) ||
+          (this.config.getFriendCallAccepted?.() ?? false);
+        if (isFriendCall && this.roomIdRef) {
+          payload.roomId = this.roomIdRef;
+        }
+        socket.emit('ice-candidate', payload);
       } catch (e) {
         console.warn('[WebRTCSession] Error sending cached ICE candidate:', e);
       }
@@ -2991,7 +3263,34 @@ export class WebRTCSession extends SimpleEventEmitter {
       !(this.config.getFriendCallAccepted?.() ?? false);
     const isFriendCall = !isRandomChat;
     
-    logger.debug('📥 [handleOffer] Received offer', {
+    // КРИТИЧНО: Устанавливаем roomId если он пришел в событии и еще не установлен
+    if (isFriendCall && roomId && !this.roomIdRef) {
+      console.log('📥 [handleOffer] УСТАНАВЛИВАЕМ roomId ИЗ СОБЫТИЯ', {
+        receivedRoomId: roomId,
+        currentRoomId: this.roomIdRef
+      });
+      this.roomIdRef = roomId;
+      this.config.callbacks.onRoomIdChange?.(roomId);
+      this.config.onRoomIdChange?.(roomId);
+      this.emitSessionUpdate();
+    }
+    
+    // КРИТИЧНО: Устанавливаем partnerUserId для receiver из fromUserId в offer
+    // Это гарантирует, что partnerUserId установлен даже если он не был передан в call:accepted
+    // Для receiver: fromUserId в offer - это ID инициатора (который отправил offer)
+    if (isFriendCall && fromUserId && !this.partnerIdRef) {
+      console.log('📥 [handleOffer] УСТАНАВЛИВАЕМ partnerId ИЗ fromUserId ДЛЯ RECEIVER', {
+        fromUserId,
+        currentPartnerId: this.partnerIdRef
+      });
+      this.partnerIdRef = fromUserId;
+      this.config.callbacks.onPartnerIdChange?.(fromUserId);
+      this.config.onPartnerIdChange?.(fromUserId);
+      this.emit('partnerChanged', { partnerId: fromUserId, oldPartnerId: null });
+      this.emitSessionUpdate();
+    }
+    
+    console.log('📥 [handleOffer] Received offer', {
       from,
       roomId,
       fromUserId,
@@ -3004,10 +3303,15 @@ export class WebRTCSession extends SimpleEventEmitter {
     });
     
     // КРИТИЧНО: Проверка partnerId - если уже установлен, должен совпадать
-    if (this.partnerIdRef && this.partnerIdRef !== from) {
+    // Для дружеских звонков проверяем fromUserId, для рандомного чата - from (socket id)
+    const expectedPartnerId = isFriendCall && fromUserId ? fromUserId : from;
+    if (this.partnerIdRef && this.partnerIdRef !== expectedPartnerId) {
       console.warn('[WebRTCSession] ⚠️ Offer from different partner, ignoring', {
         from,
-        currentPartnerId: this.partnerIdRef
+        fromUserId,
+        expectedPartnerId,
+        currentPartnerId: this.partnerIdRef,
+        isFriendCall
       });
       return;
     }
@@ -3227,14 +3531,111 @@ export class WebRTCSession extends SimpleEventEmitter {
       // isFriendCall уже объявлен в начале функции
       
       let pc = this.peerRef;
-      if (!pc) {
-        if (isFriendCall) {
-          logger.debug('[WebRTCSession] [FRIEND CALL] Creating PC for offer', { from, roomId });
+      
+      // КРИТИЧНО: Для дружеских звонков проверяем, что существующий PC в правильном состоянии
+      if (pc && isFriendCall) {
+        const state = pc.signalingState;
+        const isClosed = state === 'closed' || (pc as any).connectionState === 'closed';
+        const hasRemoteDesc = !!(pc as any).remoteDescription;
+        const hasLocalDesc = !!(pc as any).localDescription;
+        
+        // Если PC закрыт - очищаем и создаем новый
+        if (isClosed) {
+          console.log('[WebRTCSession] [FRIEND CALL] Existing PC is closed, cleaning up', { from, roomId, state });
+          try {
+            this.cleanupPeer(pc);
+          } catch {}
+          pc = null;
+          this.peerRef = null;
+        } else if (hasRemoteDesc) {
+          // PC уже имеет remote description - это означает, что offer уже был обработан
+          console.log('[WebRTCSession] [FRIEND CALL] PC already has remote description, ignoring duplicate offer', {
+            from,
+            roomId,
+            state,
+            existingRemoteDesc: (pc as any).remoteDescription?.type
+          });
+          this.processingOffersRef.delete(offerKey);
+          return;
+        } else if (hasLocalDesc && state === 'have-local-offer') {
+          // КРИТИЧНО: Ситуация "glare" - оба участника отправили offer одновременно
+          // Если у нас есть local offer, но мы получаем входящий offer - отменяем свой offer
+          // и обрабатываем входящий (стандартное поведение WebRTC для разрешения glare)
+          console.log('[WebRTCSession] [FRIEND CALL] ⚠️ GLARE detected: we have local offer but received incoming offer - rolling back', {
+            from,
+            roomId,
+            state
+          });
+          try {
+            // Отменяем локальный offer (rollback) - устанавливаем пустое localDescription
+            await pc.setLocalDescription({ type: 'rollback' } as any);
+            // После rollback PC должен быть в состоянии 'stable' без localDescription
+            const newState = pc.signalingState;
+            const newHasLocalDesc = !!(pc as any).localDescription;
+            console.log('[WebRTCSession] [FRIEND CALL] ✅ Rolled back local offer, will process incoming offer', {
+              from,
+              roomId,
+              oldState: state,
+              newState,
+              hadLocalDesc: hasLocalDesc,
+              hasLocalDesc: newHasLocalDesc
+            });
+            // Проверяем, что rollback успешен
+            if (newState !== 'stable' || newHasLocalDesc) {
+              throw new Error(`Rollback failed: PC state is ${newState}, hasLocalDesc=${newHasLocalDesc}`);
+            }
+          } catch (rollbackError) {
+            // Если rollback не поддерживается или не сработал, очищаем PC и создаем новый
+            console.log('[WebRTCSession] [FRIEND CALL] ⚠️ Rollback failed, cleaning up PC and will recreate', {
+              from,
+              roomId,
+              error: rollbackError
+            });
+            try {
+              this.cleanupPeer(pc);
+            } catch {}
+            pc = null;
+            this.peerRef = null;
+          }
+        } else {
+          // PC существует и в правильном состоянии - переиспользуем
+          // КРИТИЧНО: Если у нас нет localDescription, мы можем обработать входящий offer
+          // Это разрешает ситуацию "glare" - если оба участника отправили offer одновременно,
+          // тот, кто получит offer первым, обработает его как receiver
+          console.log('[WebRTCSession] [FRIEND CALL] Reusing existing PC for offer', {
+            from,
+            roomId,
+            signalingState: state,
+            hasLocalDesc,
+            hasRemoteDesc: false
+          });
         }
-        pc = await this.ensurePcWithLocal(stream);
+      }
+      
+      if (!pc) {
+        // КРИТИЧНО: Если PC не существует, создаем его для обработки входящего offer
+        // Это разрешает ситуацию "glare" - если оба участника отправили offer одновременно,
+        // тот, кто получит offer первым, создаст PC и обработает его как receiver
+        // КРИТИЧНО: Проверяем еще раз после await, так как PC мог быть создан в другом месте
+        if (this.peerRef && this.peerRef.signalingState !== 'closed') {
+          console.log('[WebRTCSession] [FRIEND CALL] PC already exists, reusing', { 
+            from, 
+            roomId,
+            signalingState: this.peerRef.signalingState
+          });
+          pc = this.peerRef;
+        } else {
+          if (isFriendCall) {
+            console.log('[WebRTCSession] [FRIEND CALL] Creating PC for incoming offer', { 
+              from, 
+              roomId
+            });
+          }
+          pc = await this.ensurePcWithLocal(stream);
+        }
         if (!pc) {
           if (isFriendCall) {
-            logger.error('[WebRTCSession] [FRIEND CALL] Failed to create PC - attempting to recreate stream', { from, roomId });
+            console.log('[WebRTCSession] [FRIEND CALL] Failed to create PC - attempting to recreate stream', { from, roomId });
           } else {
             console.error('[WebRTCSession] Failed to create PC - attempting to recreate stream');
           }
@@ -3250,38 +3651,32 @@ export class WebRTCSession extends SimpleEventEmitter {
               pc = await this.ensurePcWithLocal(stream);
               if (!pc) {
                 if (isFriendCall) {
-                  logger.error('[WebRTCSession] [FRIEND CALL] Failed to create PC even after stream recreation', { from, roomId });
+                  console.log('[WebRTCSession] [FRIEND CALL] Failed to create PC even after stream recreation', { from, roomId });
                 } else {
                   console.error('[WebRTCSession] Failed to create PC even after stream recreation');
                 }
+                this.processingOffersRef.delete(offerKey);
                 return;
               }
             } else {
               if (isFriendCall) {
-                logger.error('[WebRTCSession] [FRIEND CALL] Failed to recreate stream', { from, roomId });
+                console.log('[WebRTCSession] [FRIEND CALL] Failed to recreate stream', { from, roomId });
               } else {
                 console.error('[WebRTCSession] Failed to recreate stream');
               }
+              this.processingOffersRef.delete(offerKey);
               return;
             }
           } catch (e) {
             if (isFriendCall) {
-              logger.error('[WebRTCSession] [FRIEND CALL] Error recreating stream', e, { from, roomId });
+              console.log('[WebRTCSession] [FRIEND CALL] Error recreating stream', e, { from, roomId });
             } else {
               console.error('[WebRTCSession] Error recreating stream:', e);
             }
+            this.processingOffersRef.delete(offerKey);
             return;
           }
         }
-      } else if (isFriendCall) {
-        // Для дружеских звонков переиспользуем существующий PC
-        logger.debug('[WebRTCSession] [FRIEND CALL] Reusing existing PC for offer', {
-          from,
-          roomId,
-          signalingState: pc.signalingState,
-          hasLocalDesc: !!(pc as any).localDescription,
-          hasRemoteDesc: !!(pc as any).remoteDescription
-        });
       }
       
       // Проверяем состояние PC
@@ -3324,14 +3719,14 @@ export class WebRTCSession extends SimpleEventEmitter {
           // Обычный случай - все ок
         } else if (pc.signalingState === 'have-local-offer' && !hasRemoteDesc) {
           // Re-negotiation - разрешаем
-          logger.debug('[WebRTCSession] [FRIEND CALL] Processing offer for re-negotiation', {
+          console.log('[WebRTCSession] [FRIEND CALL] Processing offer for re-negotiation', {
             from,
             roomId,
             signalingState: pc.signalingState
           });
         } else if (hasRemoteDesc) {
           // Уже есть remoteDesc - это дубликат
-          logger.warn('[WebRTCSession] [FRIEND CALL] PC already has remote description, ignoring duplicate offer', {
+          console.log('[WebRTCSession] [FRIEND CALL] PC already has remote description, ignoring duplicate offer', {
             from,
             roomId,
             existingRemoteDesc: (pc as any).remoteDescription?.type,
@@ -3341,7 +3736,7 @@ export class WebRTCSession extends SimpleEventEmitter {
           return;
         } else {
           // Неподходящее состояние
-          logger.warn('[WebRTCSession] [FRIEND CALL] PC in wrong state for offer', {
+          console.log('[WebRTCSession] [FRIEND CALL] PC in wrong state for offer', {
             from,
             roomId,
             signalingState: pc.signalingState,
@@ -3431,14 +3826,9 @@ export class WebRTCSession extends SimpleEventEmitter {
             }
           }, 50);
           
-          // КРИТИЧНО: Проверяем receivers один раз после установки offer (для рандомного чата)
-          // Одна проверка через 500ms - достаточно для появления треков, без мельканий
-          const isRandomChat = 
-            !(this.config.getIsDirectCall?.() ?? false) &&
-            !(this.config.getInDirectCall?.() ?? false) &&
-            !(this.config.getFriendCallAccepted?.() ?? false);
-          
-          if (isRandomChat && from) {
+          // КРИТИЧНО: Проверяем receivers после установки offer (для всех типов звонков)
+          // Это fallback механизм на случай, если ontrack не сработал
+          if (from) {
             setTimeout(() => {
               const pcAfterOffer = this.peerRef;
               if (pcAfterOffer === pc && this.partnerIdRef && !this.remoteStreamRef) {
@@ -3468,30 +3858,69 @@ export class WebRTCSession extends SimpleEventEmitter {
       } catch {}
       
       // Создаем answer
+      // КРИТИЧНО: Если мы дошли до этого шага, значит мы успешно обработали входящий offer
+      // и должны создать answer. Это разрешает ситуацию "glare" - тот, кто получил offer первым,
+      // обрабатывает его и создает answer, независимо от конфигурации isInitiator
+      
+      // КРИТИЧНО: Сохраняем ссылку на PC ДО любых асинхронных операций
+      // Это гарантирует, что мы используем тот же PC для создания answer
       const currentPcForAnswer = this.peerRef;
       // isFriendCall уже объявлен в начале handleOffer
       
-      if (!currentPcForAnswer || currentPcForAnswer !== pc) {
+      // КРИТИЧНО: Для дружеских звонков проверяем, что PC не изменился
+      if (!currentPcForAnswer) {
+        if (isFriendCall) {
+          console.log('[WebRTCSession] [FRIEND CALL] No PC exists for answer creation', {
+            from,
+            roomId: this.roomIdRef
+          });
+        } else {
+          console.warn('[WebRTCSession] No PC exists for answer creation');
+        }
+        this.processingOffersRef.delete(offerKey);
+        return;
+      }
+      
+      if (currentPcForAnswer !== pc) {
         if (isFriendCall) {
           // Для дружеских звонков это критическая ошибка - не создаем answer если PC изменился
-          logger.warn('[WebRTCSession] ⚠️ [FRIEND CALL] PC was changed before answer creation - aborting', {
+          console.log('[WebRTCSession] ⚠️ [FRIEND CALL] PC was changed before answer creation - aborting', {
             from,
             roomId: this.roomIdRef,
             hasPc: !!currentPcForAnswer,
-            pcMatches: currentPcForAnswer === pc
+            pcMatches: currentPcForAnswer === pc,
+            originalPcState: pc?.signalingState,
+            currentPcState: currentPcForAnswer?.signalingState
           });
         } else {
           // Для рандомного чата это нормально - PC может пересоздаваться
           console.warn('[WebRTCSession] PC was changed before answer creation');
         }
+        this.processingOffersRef.delete(offerKey);
+        return;
+      }
+      
+      // КРИТИЧНО: Проверяем, что PC не закрыт
+      if (currentPcForAnswer.signalingState === 'closed' || (currentPcForAnswer as any).connectionState === 'closed') {
+        if (isFriendCall) {
+          console.log('[WebRTCSession] [FRIEND CALL] PC is closed, cannot create answer', {
+            from,
+            roomId: this.roomIdRef
+          });
+        } else {
+          console.error('[WebRTCSession] PC is closed, cannot create answer');
+        }
+        this.processingOffersRef.delete(offerKey);
         return;
       }
       
       // КРИТИЧНО: Для дружеских звонков логируем состояние перед созданием answer
       if (isFriendCall) {
-        logger.debug('[WebRTCSession] [FRIEND CALL] Creating answer', {
+        console.log('[WebRTCSession] [FRIEND CALL] Creating answer', {
           from,
           roomId: this.roomIdRef,
+          callId: this.callIdRef,
+          partnerId: this.partnerIdRef,
           signalingState: currentPcForAnswer.signalingState,
           hasLocalDesc: !!(currentPcForAnswer as any).localDescription,
           hasRemoteDesc: !!(currentPcForAnswer as any).remoteDescription
@@ -3641,7 +4070,7 @@ export class WebRTCSession extends SimpleEventEmitter {
           
           // КРИТИЧНО: Для дружеских звонков логируем успешную отправку answer
           if (isFriendCall) {
-            logger.debug('[WebRTCSession] [FRIEND CALL] ✅ Answer sent', {
+            console.log('[WebRTCSession] [FRIEND CALL] ✅ Answer sent', {
               from,
               roomId: currentRoomId,
               hasRoomId: !!currentRoomId
@@ -3649,7 +4078,7 @@ export class WebRTCSession extends SimpleEventEmitter {
           }
         } catch (e) {
           if (isFriendCall) {
-            logger.error('[WebRTCSession] [FRIEND CALL] Error creating/setting answer', e, {
+            console.log('[WebRTCSession] [FRIEND CALL] Error creating/setting answer', e, {
               from,
               roomId: this.roomIdRef
             });
@@ -3660,7 +4089,7 @@ export class WebRTCSession extends SimpleEventEmitter {
       } else {
         // КРИТИЧНО: Для дружеских звонков логируем если состояние неправильное
         if (isFriendCall) {
-          logger.warn('[WebRTCSession] [FRIEND CALL] Cannot create answer - wrong PC state', {
+          console.log('[WebRTCSession] [FRIEND CALL] Cannot create answer - wrong PC state', {
             from,
             roomId: this.roomIdRef,
             signalingState: currentPcForAnswer.signalingState,
@@ -3789,6 +4218,20 @@ export class WebRTCSession extends SimpleEventEmitter {
       }
     }
     
+    // КРИТИЧНО: Для дружеских звонков проверяем роль
+    // Инициатор ДОЛЖЕН обработать answer от принимающего, чтобы установить remote description
+    // Это необходимо для получения remote stream у инициатора
+    const isDirectCall = this.config.getIsDirectCall?.() ?? false;
+    const inDirectCall = this.config.getInDirectCall?.() ?? false;
+    const isDirectInitiator = this.config.getIsDirectInitiator?.() ?? false;
+    const hasIncomingCall = this.config.getHasIncomingCall?.() ?? false;
+    const isInitiator = isDirectInitiator || (!hasIncomingCall && isDirectCall && !inDirectCall);
+    const isReceiver = !isDirectInitiator && (hasIncomingCall || inDirectCall);
+    
+    // КРИТИЧНО: Инициатор ДОЛЖЕН обработать answer, чтобы установить remote description
+    // Только если инициатор получает answer от себя (что неправильно) - игнорируем
+    // Но если answer от принимающего - обрабатываем
+    
     this.processingAnswersRef.add(answerKey);
     
     try {
@@ -3814,17 +4257,110 @@ export class WebRTCSession extends SimpleEventEmitter {
       let pc = this.peerRef;
       // isFriendCall уже объявлен в начале функции (isRandomChat)
       
-      // КРИТИЧНО: Для дружеских звонков НЕ создаем PC в handleAnswer
-      // PC должен быть создан в handleOffer или callFriend
-      // Если PC нет - это ошибка для дружеских звонков
+      // КРИТИЧНО: Для дружеских звонков проверяем наличие PC
+      // Для инициатора PC должен быть создан в callFriend и иметь local description (offer)
+      // Для принимающего PC должен быть создан в handleOffer
       if (!pc) {
         if (isFriendCall) {
-          logger.error('[WebRTCSession] [FRIEND CALL] No PC exists for answer - PC should be created in handleOffer', {
-            from,
-            roomId: this.roomIdRef
-          });
-          this.processingAnswersRef.delete(answerKey);
-          return;
+          // Для инициатора PC должен существовать с offer - если его нет, пытаемся восстановить
+          if (isInitiator && !isReceiver) {
+            console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ⚠️ No PC exists for answer - attempting to recover', {
+              from,
+              roomId: this.roomIdRef,
+              hasLocalStream: !!this.localStreamRef,
+              hasPeerRef: !!this.peerRef
+            });
+            
+            // КРИТИЧНО: Создаем локальный стрим, если его нет
+            let stream = this.localStreamRef;
+            if (!stream) {
+              console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ⚠️ No local stream, creating one', {
+                from,
+                roomId: this.roomIdRef
+              });
+              try {
+                stream = await this.startLocalStream('front');
+                if (!stream) {
+                  console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ❌ Failed to create local stream for recovery', {
+                    from,
+                    roomId: this.roomIdRef
+                  });
+                  this.processingAnswersRef.delete(answerKey);
+                  return;
+                }
+                console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ✅ Local stream created for recovery', {
+                  streamId: stream.id
+                });
+              } catch (e) {
+                console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ❌ Error creating local stream for recovery:', e);
+                this.processingAnswersRef.delete(answerKey);
+                return;
+              }
+            }
+            
+            // Пытаемся восстановить PC с локальным стримом
+            try {
+              pc = await this.ensurePcWithLocal(stream);
+              if (pc && from) {
+                this.attachRemoteHandlers(pc, from);
+                
+                // КРИТИЧНО: Если PC восстановлен, но нет local description (offer), создаем его
+                const hasLocalDesc = !!(pc as any).localDescription;
+                if (pc.signalingState === 'stable' && !hasLocalDesc) {
+                  console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ⚠️ Recovered PC has no offer, creating one', {
+                    from,
+                    signalingState: pc.signalingState
+                  });
+                  
+                  const offer = await pc.createOffer({
+                    offerToReceiveAudio: true,
+                    offerToReceiveVideo: true
+                  });
+                  await pc.setLocalDescription(offer);
+                  this.markPcWithToken(pc);
+                  
+                  // Отправляем offer
+                  const toId = this.partnerIdRef || from;
+                  const roomId = this.roomIdRef;
+                  if (toId || roomId) {
+                    socket.emit('offer', {
+                      offer,
+                      to: toId,
+                      roomId: roomId
+                    });
+                    console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ✅ Offer created and sent after recovery');
+                  }
+                }
+                
+                console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ✅ PC recovered for answer', {
+                  from,
+                  signalingState: pc.signalingState,
+                  hasLocalDesc: !!(pc as any).localDescription
+                });
+              } else {
+                console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ❌ Failed to recover PC', {
+                  from,
+                  roomId: this.roomIdRef
+                });
+                this.processingAnswersRef.delete(answerKey);
+                return;
+              }
+            } catch (e) {
+              console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ❌ Error recovering PC:', e);
+              this.processingAnswersRef.delete(answerKey);
+              return;
+            }
+          } else {
+            // Для принимающего PC должен быть создан в handleOffer
+            console.log('[WebRTCSession] [FRIEND CALL] No PC exists for answer - PC should be created in handleOffer', {
+              from,
+              roomId: this.roomIdRef,
+              isInitiator,
+              isReceiver
+            });
+            this.processingAnswersRef.delete(answerKey);
+            return;
+          }
         }
         
         // Для рандомного чата создаем PC если его нет
@@ -3878,7 +4414,18 @@ export class WebRTCSession extends SimpleEventEmitter {
           }
         }
       } else if (isFriendCall) {
-        logger.debug('[WebRTCSession] [FRIEND CALL] Reusing existing PC for answer', {
+        // КРИТИЧНО: Для дружеских звонков PC должен быть создан в handleOffer
+        // Если PC отсутствует в handleAnswer - это ошибка
+        if (!pc) {
+          console.log('[WebRTCSession] [FRIEND CALL] No PC exists for answer - PC should be created in handleOffer', {
+            from,
+            roomId: this.roomIdRef,
+            partnerId: this.partnerIdRef
+          });
+          this.processingAnswersRef.delete(answerKey);
+          return;
+        }
+        console.log('[WebRTCSession] [FRIEND CALL] Reusing existing PC for answer', {
           from,
           roomId: this.roomIdRef,
           signalingState: pc.signalingState,
@@ -3888,11 +4435,15 @@ export class WebRTCSession extends SimpleEventEmitter {
       }
       
       if (!pc) {
-        console.error('[WebRTCSession] ❌❌❌ CRITICAL: PeerConnection not found - CANNOT call setRemoteDescription for answer!', {
-          from,
-          hasAnswer: !!answer,
-          partnerIdRef: this.partnerIdRef
-        });
+        // Для рандомного чата это может быть нормально, но логируем
+        if (!isFriendCall) {
+          console.error('[WebRTCSession] ❌❌❌ CRITICAL: PeerConnection not found - CANNOT call setRemoteDescription for answer!', {
+            from,
+            hasAnswer: !!answer,
+            partnerIdRef: this.partnerIdRef
+          });
+        }
+        this.processingAnswersRef.delete(answerKey);
         return;
       }
       
@@ -3926,16 +4477,73 @@ export class WebRTCSession extends SimpleEventEmitter {
       // isFriendCall уже объявлен в начале функции (isRandomChat)
       
       if (pc.signalingState !== 'have-local-offer' || !hasLocalDesc || hasRemoteDesc) {
-        // Для дружеских звонков: если PC в stable и нет описаний, это может быть нормально
-        // если offer еще не был установлен - создаем PC и устанавливаем offer перед answer
+        // Для дружеских звонков: если PC в stable и нет описаний, это означает что offer еще не был установлен
+        // Для инициатора пытаемся создать offer на лету
         if (isFriendCall && pc.signalingState === 'stable' && !hasLocalDesc && !hasRemoteDesc) {
-          logger.warn('[WebRTCSession] ⚠️ [FRIEND CALL] PC in stable state without descriptions - offer may not be set yet', {
+          const isDirectCall = this.config.getIsDirectCall?.() ?? false;
+          const inDirectCall = this.config.getInDirectCall?.() ?? false;
+          const isDirectInitiator = this.config.getIsDirectInitiator?.() ?? false;
+          const hasIncomingCall = this.config.getHasIncomingCall?.() ?? false;
+          const isInitiator = isDirectInitiator || (!hasIncomingCall && isDirectCall && !inDirectCall);
+          if (isInitiator) {
+            console.log('[WebRTCSession] ⚠️ [FRIEND CALL] [INITIATOR] PC in stable state without offer - creating offer now', {
+              from,
+              hasAnswer: !!answer,
+              currentState: pc.signalingState,
+              hasLocalDesc,
+              hasRemoteDesc,
+              roomId: this.roomIdRef
+            });
+            
+            // КРИТИЧНО: Создаем offer на лету перед обработкой answer
+            try {
+              const offer = await pc.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: true
+              });
+              await pc.setLocalDescription(offer);
+              this.markPcWithToken(pc);
+              
+              // Отправляем offer
+              const toId = this.partnerIdRef || from;
+              const roomId = this.roomIdRef;
+              if (toId || roomId) {
+                socket.emit('offer', {
+                  offer,
+                  to: toId,
+                  roomId: roomId
+                });
+                console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ✅ Offer created and sent before answer processing');
+              }
+              
+              // Продолжаем обработку answer после создания offer
+            } catch (e) {
+              console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] ❌ Failed to create offer before answer:', e);
+              this.processingAnswersRef.delete(answerKey);
+              return;
+            }
+          } else {
+            console.log('[WebRTCSession] ❌ [FRIEND CALL] [RECEIVER] PC in stable state without offer - this should not happen', {
+              from,
+              hasAnswer: !!answer,
+              currentState: pc.signalingState,
+              hasLocalDesc,
+              hasRemoteDesc,
+              roomId: this.roomIdRef
+            });
+            this.processingAnswersRef.delete(answerKey);
+            return;
+          }
+        } else {
+          // PC не в stable или уже имеет описания - проверяем другие состояния
+          console.log('[WebRTCSession] ⚠️ [FRIEND CALL] PC in unexpected state for answer', {
             from,
             hasAnswer: !!answer,
             currentState: pc.signalingState,
             hasLocalDesc,
             hasRemoteDesc,
-            roomId: this.roomIdRef
+            roomId: this.roomIdRef,
+            isFriendCall
           });
           // Для дружеских звонков не игнорируем answer - возможно offer придет позже
           // Но лучше подождать offer перед обработкой answer
@@ -3943,28 +4551,30 @@ export class WebRTCSession extends SimpleEventEmitter {
           return;
         }
         
-        if (pc.signalingState === 'stable' && !hasLocalDesc && !hasRemoteDesc) {
-          // Для рандомного чата игнорируем answer в stable состоянии
-          console.warn('[WebRTCSession] ⚠️ PC in stable state without local description, ignoring answer', {
-            from,
-            hasAnswer: !!answer,
-            currentState: pc.signalingState,
-            hasLocalDesc,
-            hasRemoteDesc
-          });
-        } else {
-          console.warn('[WebRTCSession] ⚠️ PC not in have-local-offer state (with local, without remote), dropping answer', {
-            from,
-            hasAnswer: !!answer,
-            currentState: pc.signalingState,
-            hasLocalDesc,
-            hasRemoteDesc,
-            expectedState: 'have-local-offer (with local, without remote)',
-            isFriendCall
-          });
+        // Для рандомного чата обрабатываем другие состояния
+        if (!isFriendCall) {
+          if (pc.signalingState === 'stable' && !hasLocalDesc && !hasRemoteDesc) {
+            // Для рандомного чата игнорируем answer в stable состоянии
+            console.warn('[WebRTCSession] ⚠️ PC in stable state without local description, ignoring answer', {
+              from,
+              hasAnswer: !!answer,
+              currentState: pc.signalingState,
+              hasLocalDesc,
+              hasRemoteDesc
+            });
+          } else {
+            console.warn('[WebRTCSession] ⚠️ PC not in have-local-offer state (with local, without remote), dropping answer', {
+              from,
+              hasAnswer: !!answer,
+              currentState: pc.signalingState,
+              hasLocalDesc,
+              hasRemoteDesc,
+              expectedState: 'have-local-offer (with local, without remote)'
+            });
+          }
+          this.processingAnswersRef.delete(answerKey);
+          return;
         }
-        this.processingAnswersRef.delete(answerKey);
-        return;
       }
       
       // Задержка для снятия гонки
@@ -4063,15 +4673,37 @@ export class WebRTCSession extends SimpleEventEmitter {
             }
           }, 50);
           
-          // КРИТИЧНО: Проверяем receivers один раз после установки answer (для рандомного чата)
-          // Одна проверка через 500ms - достаточно для появления треков, без мельканий
-          if (isRandomChat && from) {
-            setTimeout(() => {
-              const pcAfterAnswer = this.peerRef;
-              if (pcAfterAnswer === currentPcForAnswer && this.partnerIdRef && !this.remoteStreamRef) {
-                this.checkReceiversForRemoteStream(pcAfterAnswer);
-              }
-            }, 500);
+          // КРИТИЧНО: Проверяем receivers после установки answer (для всех типов звонков)
+          // Это fallback механизм на случай, если ontrack не сработал
+          // КРИТИЧНО: Для инициатора это особенно важно, так как он получает remote stream после answer
+          if (from) {
+            const isFriendCall = (this.config.getIsDirectCall?.() ?? false) ||
+                                 (this.config.getInDirectCall?.() ?? false) ||
+                                 (this.config.getFriendCallAccepted?.() ?? false);
+            const isDirectCall = this.config.getIsDirectCall?.() ?? false;
+            const inDirectCall = this.config.getInDirectCall?.() ?? false;
+            const isDirectInitiator = this.config.getIsDirectInitiator?.() ?? false;
+            const hasIncomingCall = this.config.getHasIncomingCall?.() ?? false;
+            const isInitiator = isDirectInitiator || (!hasIncomingCall && isDirectCall && !inDirectCall);
+            
+            // Для дружеских звонков проверяем раньше и чаще
+            // Для инициатора проверяем еще чаще, так как он получает remote stream после answer
+            const delays = isFriendCall && isInitiator ? [200, 400, 800] : isFriendCall ? [300, 600, 1000] : [500];
+            
+            delays.forEach((delay) => {
+              setTimeout(() => {
+                const pcAfterAnswer = this.peerRef;
+                if (pcAfterAnswer === currentPcForAnswer && this.partnerIdRef && !this.remoteStreamRef) {
+                  if (isFriendCall && isInitiator) {
+                    console.log('[WebRTCSession] [FRIEND CALL] [INITIATOR] Checking receivers for remote stream after answer', {
+                      delay,
+                      from
+                    });
+                  }
+                  this.checkReceiversForRemoteStream(pcAfterAnswer);
+                }
+              }, delay);
+            });
           }
           
           // КРИТИЧНО: Проверяем receivers через 2 секунды после установки answer
@@ -4175,7 +4807,7 @@ export class WebRTCSession extends SimpleEventEmitter {
       if (!pc) {
         if (isFriendCall) {
           // Для дружеских звонков кешируем ICE кандидаты, но с ограничением
-          logger.debug('[WebRTCSession] ⚠️ [FRIEND CALL] ICE candidate received but no PC exists, queueing', { 
+          console.log('[WebRTCSession] ⚠️ [FRIEND CALL] ICE candidate received but no PC exists, queueing', { 
             from,
             roomId: this.roomIdRef
           });
@@ -4244,7 +4876,7 @@ export class WebRTCSession extends SimpleEventEmitter {
                          (this.config.getInDirectCall?.() ?? false) || 
                          (this.config.getFriendCallAccepted?.() ?? false);
     
-    logger.debug('📤 [createAndSendOffer] Starting', {
+    console.log('📤 [createAndSendOffer] Starting', {
       toPartnerId,
       roomId: roomId || this.roomIdRef,
       isFriendCall,
@@ -4255,7 +4887,7 @@ export class WebRTCSession extends SimpleEventEmitter {
       const pc = this.peerRef;
       if (!pc) {
         if (isFriendCall) {
-          logger.error('📤 [createAndSendOffer] [FRIEND CALL] ❌ Cannot create offer - no PC', {
+          console.log('📤 [createAndSendOffer] [FRIEND CALL] ❌ Cannot create offer - no PC', {
             toPartnerId,
             roomId: roomId || this.roomIdRef
           });
@@ -4400,7 +5032,7 @@ export class WebRTCSession extends SimpleEventEmitter {
       
       // КРИТИЧНО: Для дружеских звонков логируем успешную отправку offer
       if (isDirectFriendCall) {
-        logger.debug('📤 [createAndSendOffer] [FRIEND CALL] ✅ Offer sent', {
+        console.log('📤 [createAndSendOffer] [FRIEND CALL] ✅ Offer sent', {
           to: toPartnerId,
           roomId: currentRoomId,
           hasRoomId: !!currentRoomId
@@ -4413,7 +5045,7 @@ export class WebRTCSession extends SimpleEventEmitter {
         (this.config.getFriendCallAccepted?.() ?? false);
       
       if (isDirectFriendCall) {
-        logger.error('📤 [createAndSendOffer] [FRIEND CALL] ❌ Error creating/sending offer', e, {
+        console.log('📤 [createAndSendOffer] [FRIEND CALL] ❌ Error creating/sending offer', e, {
           to: toPartnerId,
           roomId: roomId || this.roomIdRef
         });
@@ -4510,6 +5142,7 @@ export class WebRTCSession extends SimpleEventEmitter {
     this.partnerIdRef = null;
     this.roomIdRef = null;
     this.callIdRef = null;
+    this.roomJoinedRef.clear(); // КРИТИЧНО: Очищаем список присоединенных комнат
     this.config.callbacks.onPartnerIdChange?.(null);
     this.config.callbacks.onRoomIdChange?.(null);
     this.config.callbacks.onCallIdChange?.(null);
@@ -4615,6 +5248,7 @@ export class WebRTCSession extends SimpleEventEmitter {
     // КРИТИЧНО: Очищаем идентификаторы партнера и комнаты
     this.partnerIdRef = null;
     this.roomIdRef = null; // КРИТИЧНО: Очищаем roomId чтобы hasActiveConnection стал false
+    this.roomJoinedRef.clear(); // КРИТИЧНО: Очищаем список присоединенных комнат
     this.config.callbacks.onPartnerIdChange?.(null);
     this.config.onPartnerIdChange?.(null);
     this.emitSessionUpdate();
@@ -4911,6 +5545,12 @@ export class WebRTCSession extends SimpleEventEmitter {
     });
     
     socket.on('call:ended', (data: any) => {
+      console.log('📥 [socket.on] Received call:ended event', {
+        data,
+        roomId: this.roomIdRef,
+        callId: this.callIdRef,
+        partnerId: this.partnerIdRef
+      });
       this.handleExternalCallEnded('server_call_ended', data);
     });
     
@@ -5393,23 +6033,42 @@ export class WebRTCSession extends SimpleEventEmitter {
     });
   }
   
-  private async handleCallAccepted(data: any): Promise<void> {
-    logger.debug('📥 [handleCallAccepted] Received call:accepted event', {
+  private   async handleCallAccepted(data: any): Promise<void> {
+    console.log('🔥🔥🔥 [handleCallAccepted] ПОЛУЧЕНО call:accepted СОБЫТИЕ', {
       callId: data.callId,
       roomId: data.roomId,
       from: data.from,
       fromUserId: data.fromUserId,
       currentRoomId: this.roomIdRef,
-      currentCallId: this.callIdRef
+      currentCallId: this.callIdRef,
+      currentPartnerId: this.partnerIdRef,
+      hasPeerConnection: !!this.peerRef,
+      hasLocalStream: !!this.localStreamRef,
+      isProcessing: this.callAcceptedProcessingRef
     });
     
+    // КРИТИЧНО: Защита от множественной обработки call:accepted
+    if (this.callAcceptedProcessingRef) {
+      console.log('🔥⏭️ [handleCallAccepted] Уже обрабатывается, пропускаем дубликат', {
+        callId: data.callId
+      });
+      return;
+    }
+    this.callAcceptedProcessingRef = true;
+    
+    try {
     // Устанавливаем callId
     if (data.callId) {
       this.callIdRef = data.callId;
       this.config.callbacks.onCallIdChange?.(data.callId);
       this.config.onCallIdChange?.(data.callId);
-      logger.debug('📥 [handleCallAccepted] ✅ CallId set', { callId: data.callId });
+      console.log('🔥✅ [handleCallAccepted] CALLID УСТАНОВЛЕН В SESSION', { 
+        callId: data.callId,
+        previousCallId: this.callIdRef 
+      });
       this.emitSessionUpdate();
+    } else {
+      logger.error('🔥❌ [handleCallAccepted] НЕТ CALLID В СОБЫТИИ!', { data });
     }
     
     // Устанавливаем roomId если есть
@@ -5417,18 +6076,27 @@ export class WebRTCSession extends SimpleEventEmitter {
       this.roomIdRef = data.roomId;
       this.config.callbacks.onRoomIdChange?.(data.roomId);
       this.config.onRoomIdChange?.(data.roomId);
-      logger.debug('📥 [handleCallAccepted] ✅ RoomId set', { roomId: data.roomId });
+      console.log('🔥✅ [handleCallAccepted] ROOMID УСТАНОВЛЕН В SESSION', { 
+        roomId: data.roomId,
+        previousRoomId: this.roomIdRef 
+      });
       this.emitSessionUpdate();
       
       // Отправляем подтверждение присоединения к комнате
-      try {
-        socket.emit('room:join:ack', { roomId: data.roomId });
-        logger.debug('📥 [handleCallAccepted] ✅ Sent room:join:ack', { roomId: data.roomId });
-      } catch (e) {
-        logger.warn('[WebRTCSession] Error sending room:join:ack:', e);
+      // КРИТИЧНО: Проверяем, не присоединились ли мы уже к этой комнате
+      if (!this.roomJoinedRef.has(data.roomId)) {
+        try {
+          socket.emit('room:join:ack', { roomId: data.roomId });
+          this.roomJoinedRef.add(data.roomId); // Отмечаем, что присоединились
+          console.log('🔥✅ [handleCallAccepted] room:join:ack ОТПРАВЛЕН', { roomId: data.roomId });
+        } catch (e) {
+          logger.error('🔥❌ [handleCallAccepted] ОШИБКА ОТПРАВКИ room:join:ack', e);
+        }
+      } else {
+        console.log('🔥⏭️ [handleCallAccepted] room:join:ack УЖЕ ОТПРАВЛЕН', { roomId: data.roomId });
       }
     } else {
-      logger.warn('📥 [handleCallAccepted] ⚠️ No roomId in call:accepted event', { data });
+      logger.error('🔥❌ [handleCallAccepted] НЕТ ROOMID В СОБЫТИИ!', { data });
     }
     
     // Устанавливаем partnerId если есть
@@ -5450,70 +6118,178 @@ export class WebRTCSession extends SimpleEventEmitter {
       this.config.setWasFriendCallEnded?.(false);
     }
     
-    // КРИТИЧНО: Для получателя звонка создаем PC если его нет
-    // Это нужно чтобы когда придет offer, можно было сразу создать answer
+    // КРИТИЧНО: Для получателя звонка НЕ создаем PC заранее
+    // PC будет создан в handleOffer когда придет offer
+    // Это предотвращает создание дублирующих PC
     const isFriendCall = (this.config.getIsDirectCall?.() ?? false) || 
                          (this.config.getInDirectCall?.() ?? false) || 
                          (this.config.getFriendCallAccepted?.() ?? false);
     
-    if (isFriendCall && !this.peerRef) {
-      logger.debug('📥 [handleCallAccepted] [FRIEND CALL] Creating PC for receiver', {
-        roomId: this.roomIdRef,
-        callId: this.callIdRef,
-        partnerId: this.partnerIdRef
-      });
+    if (isFriendCall) {
+      const isDirectCall = this.config.getIsDirectCall?.() ?? false;
+      const inDirectCall = this.config.getInDirectCall?.() ?? false;
+      const isDirectInitiator = this.config.getIsDirectInitiator?.() ?? false;
+      const hasIncomingCall = this.config.getHasIncomingCall?.() ?? false;
       
-      // Создаем локальный стрим если его нет
-      let stream = this.localStreamRef;
-      if (!stream) {
-        try {
-          stream = await this.startLocalStream('front');
-          if (stream && isValidStream(stream)) {
-            this.localStreamRef = stream;
-            this.config.callbacks.onLocalStreamChange?.(stream);
-            this.config.onLocalStreamChange?.(stream);
-            logger.debug('📥 [handleCallAccepted] [FRIEND CALL] ✅ Local stream created', {
-              roomId: this.roomIdRef
-            });
+      // КРИТИЧНО: Инициатор определяется по isDirectInitiator из route params
+      // Если isDirectInitiator = true, то это инициатор (начал звонок)
+      // Если isDirectInitiator = false И inDirectCall = true, то это receiver (принял входящий звонок)
+      // Если оба false, используем fallback: инициатор = isDirectCall && !inDirectCall
+      const isInitiator = isDirectInitiator || (!hasIncomingCall && isDirectCall && !inDirectCall);
+      const isReceiver = !isDirectInitiator && (hasIncomingCall || inDirectCall);
+
+      if (isInitiator && !isReceiver) {
+        // КРИТИЧНО: Для инициатора создаем и отправляем offer после принятия звонка
+        console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] Call accepted, creating and sending offer', {
+          roomId: this.roomIdRef,
+          callId: this.callIdRef,
+          partnerId: this.partnerIdRef,
+          hasPC: !!this.peerRef
+        });
+        
+        // Убеждаемся, что есть локальный стрим
+        let stream = this.localStreamRef;
+        if (!stream) {
+          try {
+            stream = await this.startLocalStream('front');
+            if (!stream) {
+              console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] ❌ Failed to create local stream');
+              return;
+            }
+          } catch (e) {
+            console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] Error creating stream', e);
+            return;
           }
-        } catch (e) {
-          logger.error('📥 [handleCallAccepted] [FRIEND CALL] Error creating stream', e, {
-            roomId: this.roomIdRef
-          });
         }
-      }
-      
-      // Создаем PC если есть стрим
-      if (stream && isValidStream(stream)) {
-        try {
-          const pc = await this.ensurePcWithLocal(stream);
-          if (pc && this.partnerIdRef) {
+        
+        // КРИТИЧНО: Убеждаемся, что есть PC (должен быть создан в callFriend)
+        // Если PC отсутствует, создаем его, но это не должно происходить в нормальном сценарии
+        let pc = this.peerRef;
+        if (!pc) {
+          console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] ⚠️ No PC found, creating one', {
+            roomId: this.roomIdRef,
+            hasLocalStream: !!stream
+          });
+          pc = await this.ensurePcWithLocal(stream);
+          if (!pc) {
+            console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] ❌ Failed to create PC');
+            return;
+          }
+          // КРИТИЧНО: Убеждаемся, что PC сохранен в peerRef
+          if (this.peerRef !== pc) {
+            this.peerRef = pc;
+          }
+          if (this.partnerIdRef) {
             this.attachRemoteHandlers(pc, this.partnerIdRef);
-            logger.debug('📥 [handleCallAccepted] [FRIEND CALL] ✅ PC created for receiver', {
-              roomId: this.roomIdRef,
-              partnerId: this.partnerIdRef
+          }
+        } else {
+          // КРИТИЧНО: Убеждаемся, что PC сохранен в peerRef
+          if (this.peerRef !== pc) {
+            console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] ⚠️ PC mismatch, updating peerRef');
+            this.peerRef = pc;
+          }
+        }
+        
+        // КРИТИЧНО: Создаем и отправляем offer если его еще нет
+        // Проверяем состояние PC и наличие local description
+        try {
+          const hasLocalDesc = !!(pc as any).localDescription;
+          const signalingState = pc.signalingState;
+          
+          // КРИТИЧНО: Создаем offer если:
+          // 1. PC в stable и нет local description (offer еще не создан)
+          // 2. PC в have-local-offer но local description потерян (восстанавливаем)
+          const needsOffer = (signalingState === 'stable' && !hasLocalDesc) || 
+                            (signalingState === 'have-local-offer' && !hasLocalDesc);
+          
+          if (needsOffer) {
+            console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] Creating offer...', {
+              signalingState,
+              hasLocalDesc,
+              needsOffer
             });
-          } else if (!pc) {
-            logger.error('📥 [handleCallAccepted] [FRIEND CALL] Failed to create PC', {
-              roomId: this.roomIdRef
+            
+            const offer = await pc.createOffer({
+              offerToReceiveAudio: true,
+              offerToReceiveVideo: true
             });
+            
+            await pc.setLocalDescription(offer);
+            
+            // КРИТИЧНО: Помечаем PC актуальным токеном после создания offer
+            this.markPcWithToken(pc);
+            
+            console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] ✅ Offer created and set', {
+              signalingState: pc.signalingState,
+              hasLocalDesc: !!(pc as any).localDescription
+            });
+            
+            // Отправляем offer через сокет
+            const toId = this.partnerIdRef;
+            const roomId = this.roomIdRef;
+            
+            if (toId || roomId) {
+              socket.emit('offer', {
+                offer,
+                to: toId,
+                roomId: roomId
+              });
+              console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] ✅ Offer sent', {
+                to: toId,
+                roomId: roomId
+              });
+            } else {
+              console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] ⚠️ No partnerId or roomId to send offer');
+            }
+          } else {
+            console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] PC already has local description, skipping offer creation', {
+              signalingState,
+              hasLocalDesc: !!(pc as any).localDescription
+            });
+            
+            // КРИТИЧНО: Убеждаемся, что PC помечен актуальным токеном
+            this.markPcWithToken(pc);
           }
         } catch (e) {
-          logger.error('📥 [handleCallAccepted] [FRIEND CALL] Error creating PC', e, {
-            roomId: this.roomIdRef
-          });
+          console.log('📥 [handleCallAccepted] [FRIEND CALL] [INITIATOR] Error creating/sending offer', e);
         }
       } else {
-        logger.warn('📥 [handleCallAccepted] [FRIEND CALL] Stream not ready, PC will be created when offer arrives', {
+        // Для принимающего НЕ создаем PC - он будет создан в handleOffer
+        console.log('📥 [handleCallAccepted] [FRIEND CALL] [RECEIVER] Call accepted, waiting for offer', {
           roomId: this.roomIdRef,
-          hasStream: !!stream,
-          streamValid: stream ? isValidStream(stream) : false
+          callId: this.callIdRef,
+          partnerId: this.partnerIdRef,
+          hasPC: !!this.peerRef
         });
+        
+        // Создаем только локальный стрим если его нет, но НЕ создаем PC
+        let stream = this.localStreamRef;
+        if (!stream) {
+          try {
+            stream = await this.startLocalStream('front');
+            if (stream && isValidStream(stream)) {
+              this.localStreamRef = stream;
+              this.config.callbacks.onLocalStreamChange?.(stream);
+              this.config.onLocalStreamChange?.(stream);
+              console.log('📥 [handleCallAccepted] [FRIEND CALL] [RECEIVER] ✅ Local stream created (PC will be created when offer arrives)', {
+                roomId: this.roomIdRef
+              });
+            }
+          } catch (e) {
+            console.log('📥 [handleCallAccepted] [FRIEND CALL] [RECEIVER] Error creating stream', e, {
+              roomId: this.roomIdRef
+            });
+          }
+        }
       }
     }
     
     // Эмитим событие принятия звонка
     this.emit('callAnswered');
+    } finally {
+      this.callAcceptedProcessingRef = false;
+      console.log('🔥✅ [handleCallAccepted] Обработка завершена, флаг сброшен');
+    }
   }
   
   private handleCallDeclined(data: any): void {
@@ -5571,11 +6347,12 @@ export class WebRTCSession extends SimpleEventEmitter {
     this.remoteMutedRef = false;
     this.remoteInPiPRef = false;
     this.emitRemoteState();
-    
+
     // Очищаем идентификаторы
     this.partnerIdRef = null;
     this.roomIdRef = null;
     this.callIdRef = null;
+    this.roomJoinedRef.clear(); // КРИТИЧНО: Очищаем список присоединенных комнат
     this.config.callbacks.onPartnerIdChange?.(null);
     this.config.callbacks.onRoomIdChange?.(null);
     this.config.callbacks.onCallIdChange?.(null);
@@ -5756,17 +6533,31 @@ export class WebRTCSession extends SimpleEventEmitter {
   }
   
   setRoomId(roomId: string | null): void {
+    console.log('🔥🔥🔥 [setRoomId] УСТАНАВЛИВАЕМ ROOMID', {
+      newRoomId: roomId,
+      oldRoomId: this.roomIdRef,
+      partnerId: this.partnerIdRef,
+      callId: this.callIdRef
+    });
     this.roomIdRef = roomId;
     this.config.callbacks.onRoomIdChange?.(roomId);
     this.config.onRoomIdChange?.(roomId);
     this.emitSessionUpdate();
+    console.log('🔥✅ [setRoomId] ROOMID УСТАНОВЛЕН И CALLBACKS ВЫЗВАНЫ', { roomId });
   }
   
   setCallId(callId: string | null): void {
+    console.log('🔥🔥🔥 [setCallId] УСТАНАВЛИВАЕМ CALLID', {
+      newCallId: callId,
+      oldCallId: this.callIdRef,
+      roomId: this.roomIdRef,
+      partnerId: this.partnerIdRef
+    });
     this.callIdRef = callId;
     this.config.callbacks.onCallIdChange?.(callId);
     this.config.onCallIdChange?.(callId);
     this.emitSessionUpdate();
+    console.log('🔥✅ [setCallId] CALLID УСТАНОВЛЕН И CALLBACKS ВЫЗВАНЫ', { callId });
   }
   
   // ==================== High-Level API ====================
@@ -5780,34 +6571,33 @@ export class WebRTCSession extends SimpleEventEmitter {
   async startRandomChat(): Promise<void> {
     // КРИТИЧНО: Логируем СРАЗУ в начале метода, до любых других операций
     // Используем несколько способов логирования для гарантии, что логи не фильтруются
-    logger.info('[WebRTCSession] ⚡ startRandomChat called - METHOD START');
+    console.log('[WebRTCSession] ⚡ startRandomChat called - METHOD START');
     try {
       (global.console as any)._originalLog?.('[WebRTCSession] ⚡ startRandomChat called - METHOD START _originalLog');
     } catch {}
     
     try {
       // Сбрасываем неактивное состояние ПЕРЕД созданием стрима
-      logger.info('[WebRTCSession] Resetting inactive state...');
+      console.log('[WebRTCSession] Resetting inactive state...');
       const wasInactive = this.config.getIsInactiveState?.() ?? false;
-      logger.info('[WebRTCSession] Previous inactive state:', wasInactive);
+      console.log('[WebRTCSession] Previous inactive state:', wasInactive);
       this.config.setIsInactiveState?.(false);
       this.config.setWasFriendCallEnded?.(false);
       
       // КРИТИЧНО: Устанавливаем started и эмитим searching ДО создания стрима
       // Это гарантирует, что лоадер показывается сразу при нажатии "Начать"
-      logger.info('[WebRTCSession] Setting started to true and emitting searching event BEFORE stream creation');
+      console.log('[WebRTCSession] Setting started to true and emitting searching event BEFORE stream creation');
       this.config.setStarted?.(true);
       this.config.callbacks.onLoadingChange?.(true);
       this.config.onLoadingChange?.(true);
       this.emit('searching');
-      logger.info('[WebRTCSession] Searching event emitted, loading state set to true');
+      console.log('[WebRTCSession] Searching event emitted, loading state set to true');
       
       // Создаем локальный стрим
-      logger.info('[WebRTCSession] Creating local stream...');
+      console.log('[WebRTCSession] Creating local stream...');
       const stream = await this.startLocalStream('front');
       if (!stream) {
         console.error('[WebRTCSession] Failed to create local stream - startLocalStream returned null');
-        logger.error('[WebRTCSession] Failed to create local stream - startLocalStream returned null');
         // Откатываем состояние при ошибке
         this.config.setStarted?.(false);
         this.config.callbacks.onLoadingChange?.(false);
@@ -5815,7 +6605,7 @@ export class WebRTCSession extends SimpleEventEmitter {
         throw new Error('Failed to start local stream');
       }
     
-      logger.info('[WebRTCSession] Local stream created successfully', {
+      console.log('[WebRTCSession] Local stream created successfully', {
         streamId: stream.id,
         hasVideoTrack: !!(stream as any)?.getVideoTracks?.()?.[0],
         hasAudioTrack: !!(stream as any)?.getAudioTracks?.()?.[0]
@@ -6013,67 +6803,112 @@ export class WebRTCSession extends SimpleEventEmitter {
    * @param friendId - ID друга для звонка
    */
   async callFriend(friendId: string): Promise<void> {
-    logger.debug('📞 [callFriend] Starting friend call', { friendId });
+    console.log('🔥🔥🔥 [callFriend] 📞 НАЧАЛО ЗВОНКА ДРУГУ', { 
+      friendId,
+      currentRoomId: this.roomIdRef,
+      currentCallId: this.callIdRef,
+      currentPartnerId: this.partnerIdRef
+    });
     
     // Сбрасываем неактивное состояние
     this.config.setIsInactiveState?.(false);
     this.config.setWasFriendCallEnded?.(false);
+    console.log('🔥 [callFriend] Неактивное состояние сброшено');
     
     // Устанавливаем флаги для прямого звонка
     this.config.setFriendCallAccepted?.(true);
     this.config.setInDirectCall?.(true);
-    logger.debug('📞 [callFriend] ✅ Flags set', { 
+    console.log('🔥✅ [callFriend] ФЛАГИ УСТАНОВЛЕНЫ', { 
       friendCallAccepted: true, 
       inDirectCall: true 
     });
     
     // Устанавливаем partnerId
     this.setPartnerId(friendId);
-    logger.debug('📞 [callFriend] ✅ PartnerId set', { partnerId: friendId });
+    console.log('📞 [callFriend] ✅ PartnerId set', { partnerId: friendId });
     
     // Создаем локальный стрим
-    logger.debug('📞 [callFriend] Creating local stream...');
+    console.log('📞 [callFriend] Creating local stream...');
     const stream = await this.startLocalStream('front');
     if (!stream) {
       logger.error('📞 [callFriend] ❌ Failed to start local stream');
       throw new Error('Failed to start local stream for friend call');
     }
-    logger.debug('📞 [callFriend] ✅ Local stream created', { 
+    console.log('📞 [callFriend] ✅ Local stream created', { 
       streamId: stream.id,
       hasVideo: stream.getVideoTracks().length > 0,
       hasAudio: stream.getAudioTracks().length > 0
     });
     
     // Создаем PC с локальным стримом
-    logger.debug('📞 [callFriend] Creating PC...');
+    console.log('📞 [callFriend] Creating PC...');
     const pc = await this.ensurePcWithLocal(stream);
     if (!pc) {
       logger.error('📞 [callFriend] ❌ Failed to create PC');
       throw new Error('Failed to create PeerConnection for friend call');
     }
-    logger.debug('📞 [callFriend] ✅ PC created', { 
+    console.log('📞 [callFriend] ✅ PC created', { 
       signalingState: pc.signalingState,
       hasLocalDesc: !!(pc as any).localDescription
     });
     
+    // КРИТИЧНО: Убеждаемся, что PC сохранен в peerRef
+    // Это необходимо для обработки answer после принятия звонка
+    if (this.peerRef !== pc) {
+      logger.warn('📞 [callFriend] ⚠️ PC mismatch, updating peerRef', {
+        currentPeerRef: !!this.peerRef,
+        newPc: !!pc,
+        currentPeerRefState: this.peerRef ? (this.peerRef as any).signalingState : null,
+        newPcState: pc ? (pc as any).signalingState : null
+      });
+      this.peerRef = pc;
+    }
+    
+    // КРИТИЧНО: Помечаем PC актуальным токеном, чтобы он не был очищен
+    this.markPcWithToken(pc);
+    
+    // КРИТИЧНО: Убеждаемся, что локальный стрим сохранен в localStreamRef
+    // Это необходимо для восстановления PC при получении answer
+    if (this.localStreamRef !== stream) {
+      console.log('📞 [callFriend] ✅ Local stream saved to localStreamRef', {
+        streamId: stream.id,
+        previousStreamId: this.localStreamRef ? (this.localStreamRef as any).id : null
+      });
+      this.localStreamRef = stream;
+      this.config.callbacks.onLocalStreamChange?.(stream);
+      this.config.onLocalStreamChange?.(stream);
+      this.emit('localStream', stream);
+    }
+    
     // Устанавливаем обработчики
     this.attachRemoteHandlers(pc, friendId);
-    logger.debug('📞 [callFriend] ✅ Remote handlers attached');
+    console.log('📞 [callFriend] ✅ Remote handlers attached', {
+      peerRef: !!this.peerRef,
+      peerRefMatches: this.peerRef === pc,
+      pcToken: (pc as any)?._pcToken,
+      currentToken: this.pcToken
+    });
     
     // Отправляем запрос на звонок через сокет
     // Используем requestFriend из socket.ts, который отправляет friend:call
     try {
-      logger.debug('📞 [callFriend] Emitting friend:call...', { to: friendId });
+      console.log('🔥🔥 [callFriend] ОТПРАВЛЯЕМ friend:call НА СЕРВЕР...', { to: friendId });
       socket.emit('friend:call', { to: friendId });
-      logger.debug('📞 [callFriend] ✅ friend:call emitted');
+      console.log('🔥✅✅ [callFriend] friend:call УСПЕШНО ОТПРАВЛЕН', { to: friendId });
     } catch (e) {
-      logger.error('📞 [callFriend] ❌ Error emitting friend:call', e);
+      logger.error('🔥❌❌❌ [callFriend] ОШИБКА ОТПРАВКИ friend:call', e);
       throw e;
     }
     
     // Устанавливаем started
     this.config.setStarted?.(true);
-    logger.debug('📞 [callFriend] ✅ Call initiated, waiting for acceptance...');
+    console.log('🔥✅✅✅ [callFriend] ЗВОНОК ИНИЦИИРОВАН, ОЖИДАЕМ ПРИНЯТИЯ', {
+      partnerId: friendId,
+      hasPeerConnection: !!this.peerRef,
+      hasLocalStream: !!this.localStreamRef,
+      roomId: this.roomIdRef,
+      callId: this.callIdRef
+    });
   }
   
   /**
@@ -6081,36 +6916,61 @@ export class WebRTCSession extends SimpleEventEmitter {
    * @param callId - ID звонка (опционально)
    */
   async acceptCall(callId?: string): Promise<void> {
+    console.log('🔥🔥🔥 [acceptCall] НАЧАЛО ПРИНЯТИЯ ЗВОНКА', { 
+      callId,
+      currentRoomId: this.roomIdRef,
+      currentCallId: this.callIdRef,
+      currentPartnerId: this.partnerIdRef
+    });
     
     // Устанавливаем callId если есть
     if (callId) {
       this.setCallId(callId);
+      console.log('🔥✅ [acceptCall] CALLID УСТАНОВЛЕН', { callId });
     }
     
     // Сбрасываем неактивное состояние
     this.config.setIsInactiveState?.(false);
     this.config.setWasFriendCallEnded?.(false);
+    console.log('🔥 [acceptCall] Неактивное состояние сброшено');
     
     // Устанавливаем флаги
     this.config.setFriendCallAccepted?.(true);
     this.config.setInDirectCall?.(true);
+    console.log('🔥✅ [acceptCall] ФЛАГИ УСТАНОВЛЕНЫ', {
+      friendCallAccepted: true,
+      inDirectCall: true
+    });
     
     // Создаем локальный стрим если его нет
     let stream = this.localStreamRef;
     if (!stream) {
+      console.log('🔥 [acceptCall] СОЗДАЕМ ЛОКАЛЬНЫЙ СТРИМ...');
       stream = await this.startLocalStream('front');
       if (!stream) {
+        logger.error('🔥❌❌❌ [acceptCall] НЕ УДАЛОСЬ СОЗДАТЬ ЛОКАЛЬНЫЙ СТРИМ');
         throw new Error('Failed to start local stream for accepting call');
       }
+      console.log('🔥✅ [acceptCall] ЛОКАЛЬНЫЙ СТРИМ СОЗДАН', { streamId: stream.id });
+    } else {
+      console.log('🔥 [acceptCall] ИСПОЛЬЗУЕМ СУЩЕСТВУЮЩИЙ ЛОКАЛЬНЫЙ СТРИМ', { streamId: stream.id });
     }
     
     // Создаем PC если его нет
     let pc = this.peerRef;
     if (!pc) {
+      console.log('🔥 [acceptCall] СОЗДАЕМ PEERCONNECTION...');
       pc = await this.ensurePcWithLocal(stream);
       if (pc && this.partnerIdRef) {
         this.attachRemoteHandlers(pc, this.partnerIdRef);
+        console.log('🔥✅ [acceptCall] PC СОЗДАН И ОБРАБОТЧИКИ УСТАНОВЛЕНЫ');
+      } else if (!pc) {
+        logger.error('🔥❌ [acceptCall] НЕ УДАЛОСЬ СОЗДАТЬ PC');
       }
+    } else {
+      console.log('🔥 [acceptCall] ИСПОЛЬЗУЕМ СУЩЕСТВУЮЩИЙ PC', { 
+        signalingState: pc.signalingState 
+      });
     }
     
     // Отправляем подтверждение через сокет
@@ -6119,13 +6979,16 @@ export class WebRTCSession extends SimpleEventEmitter {
       if (this.partnerIdRef) {
         acceptPayload.to = this.partnerIdRef;
       }
+      console.log('🔥🔥 [acceptCall] ОТПРАВЛЯЕМ call:accept НА СЕРВЕР', acceptPayload);
       socket.emit('call:accept', acceptPayload);
+      console.log('🔥✅✅ [acceptCall] call:accept УСПЕШНО ОТПРАВЛЕН');
     } catch (e) {
-      logger.warn('[WebRTCSession] Error emitting call:accept:', e);
+      logger.error('🔥❌ [acceptCall] ОШИБКА ОТПРАВКИ call:accept', e);
     }
     
     // Устанавливаем started
     this.config.setStarted?.(true);
+    console.log('🔥✅✅✅ [acceptCall] ЗВОНОК ПРИНЯТ');
   }
   
   /**
@@ -6167,13 +7030,18 @@ export class WebRTCSession extends SimpleEventEmitter {
     const savedCallId = this.callIdRef;
     const savedPartnerId = this.partnerIdRef;
     
-    logger.debug('🛑 [endCall] Starting call end process', {
-      roomId: savedRoomId,
-      callId: savedCallId,
-      partnerId: savedPartnerId,
+    console.log('🔥🔥🔥 [endCall] 🛑 НАЧАЛО ЗАВЕРШЕНИЯ ЗВОНКА', {
+      savedRoomId,
+      savedCallId,
+      savedPartnerId,
+      currentRoomId: this.roomIdRef,
+      currentCallId: this.callIdRef,
+      currentPartnerId: this.partnerIdRef,
       hasPeerConnection: !!this.peerRef,
       hasLocalStream: !!this.localStreamRef,
-      hasRemoteStream: !!this.remoteStreamRef
+      hasRemoteStream: !!this.remoteStreamRef,
+      pcSignalingState: this.peerRef?.signalingState,
+      pcConnectionState: (this.peerRef as any)?.connectionState
     });
     
     // Проверяем, это звонок другу или рандомный чат
@@ -6181,15 +7049,91 @@ export class WebRTCSession extends SimpleEventEmitter {
                          (this.config.getInDirectCall?.() ?? false) || 
                          (this.config.getFriendCallAccepted?.() ?? false);
     
-    logger.debug('🛑 [endCall] Call type determined', {
+    console.log('🔥 [endCall] ОПРЕДЕЛЕН ТИП ЗВОНКА', {
       isFriendCall,
       isDirectCall: this.config.getIsDirectCall?.() ?? false,
       inDirectCall: this.config.getInDirectCall?.() ?? false,
       friendCallAccepted: this.config.getFriendCallAccepted?.() ?? false
     });
     
+    // КРИТИЧНО: Отправляем call:end ДО очистки стримов и идентификаторов
+    // Это гарантирует, что идентификаторы доступны для отправки на сервер
     if (isFriendCall) {
-      logger.debug('🛑 [endCall] Processing friend call end - cleaning up streams and PC');
+      try {
+        // КРИТИЧНО: Для дружеских звонков используем сохраненные значения ИЛИ текущие
+        // Это гарантирует, что roomId будет отправлен даже если он был установлен после сохранения
+        const roomIdToSend = savedRoomId || this.roomIdRef;
+        const callIdToSend = savedCallId || this.callIdRef;
+        
+        console.log('🔥🔥🔥 [endCall] 📤 ПОДГОТОВКА К ОТПРАВКЕ call:end', {
+          savedRoomId,
+          savedCallId,
+          currentRoomId: this.roomIdRef,
+          currentCallId: this.callIdRef,
+          roomIdToSend,
+          callIdToSend,
+          partnerId: savedPartnerId,
+          hasRoomId: !!roomIdToSend,
+          hasCallId: !!callIdToSend,
+          isFriendCall
+        });
+        
+        // КРИТИЧНО: Отправляем оба параметра (roomId и callId) для надежного завершения звонка
+        // Сервер использует roomId в первую очередь, но callId может быть полезен как fallback
+        const finalRoomId = roomIdToSend;
+        const finalCallId = callIdToSend;
+        
+        console.log('🔥 [endCall] ФИНАЛЬНЫЕ ИДЕНТИФИКАТОРЫ ДЛЯ ОТПРАВКИ', {
+          finalRoomId,
+          finalCallId,
+          hasFinalRoomId: !!finalRoomId,
+          hasFinalCallId: !!finalCallId
+        });
+        
+        // КРИТИЧНО: Отправляем call:end даже если roomId/callId не установлены
+        // Сервер может использовать fallback из activeCallBySocket для завершения звонка
+        // Это гарантирует, что звонок завершится у обоих участников
+        console.log('🔥🔥 [endCall] 📤 ОТПРАВЛЯЕМ call:end НА СЕРВЕР', {
+          roomId: finalRoomId,
+          callId: finalCallId,
+          hasRoomId: !!finalRoomId,
+          hasCallId: !!finalCallId,
+          savedRoomId: roomIdToSend,
+          savedCallId: callIdToSend
+        });
+        
+        socket.emit('call:end', {
+          roomId: finalRoomId || undefined,
+          callId: finalCallId || undefined
+        });
+        
+        console.log('🔥✅✅✅ [endCall] call:end УСПЕШНО ОТПРАВЛЕН', {
+          roomId: finalRoomId,
+          callId: finalCallId,
+          hasRoomId: !!finalRoomId,
+          hasCallId: !!finalCallId,
+          savedRoomId: roomIdToSend,
+          savedCallId: callIdToSend,
+          timestamp: Date.now()
+        });
+        
+        // Если ни один идентификатор не был установлен, логируем предупреждение
+        if (!finalRoomId && !finalCallId) {
+          logger.warn('🛑 [endCall] ⚠️ No roomId or callId to send call:end, but sent anyway (server will use fallback)', {
+            savedRoomId,
+            savedCallId,
+            currentRoomId: this.roomIdRef,
+            currentCallId: this.callIdRef,
+            savedPartnerId
+          });
+        }
+      } catch (e) {
+        logger.error('🛑 [endCall] ❌ Error emitting call:end:', e);
+      }
+    }
+    
+    if (isFriendCall) {
+      console.log('🛑 [endCall] Processing friend call end - cleaning up streams and PC');
       // Для видеозвонков другу принудительно останавливаем все стримы и закрываем PC
       // КРИТИЧНО: Инкрементируем токен перед очисткой, чтобы отложенные события игнорировались
       if (this.peerRef) {
@@ -6207,19 +7151,26 @@ export class WebRTCSession extends SimpleEventEmitter {
       }
       
       // Принудительно останавливаем локальный стрим
-      logger.debug('🛑 [endCall] Stopping local stream');
+      console.log('🛑 [endCall] Stopping local stream');
       this.stopLocalStreamInternal();
+      
+      // Останавливаем все таймеры и интервалы
+      console.log('🛑 [endCall] Stopping all timers and intervals');
+      this.clearConnectionTimers();
+      this.stopTrackChecker();
+      this.stopMicMeter();
       
       // Принудительно останавливаем удаленный стрим
       if (this.remoteStreamRef) {
-        logger.debug('🛑 [endCall] Stopping remote stream');
+        console.log('🛑 [endCall] Stopping remote stream');
         try {
           const tracks = this.remoteStreamRef.getTracks?.() || [];
-          logger.debug('🛑 [endCall] Remote stream tracks', { count: tracks.length });
+          console.log('🛑 [endCall] Remote stream tracks', { count: tracks.length });
           tracks.forEach((t: any) => {
             try {
               t.enabled = false;
               t.stop();
+              try { (t as any).release?.(); } catch {}
             } catch {}
           });
         } catch {}
@@ -6229,16 +7180,28 @@ export class WebRTCSession extends SimpleEventEmitter {
         this.emit('remoteStreamRemoved');
       }
       
+      // Выходим из комнаты перед очисткой идентификаторов
+      const roomIdToLeave = savedRoomId || this.roomIdRef;
+      if (roomIdToLeave) {
+        try {
+          socket.emit('room:leave', { roomId: roomIdToLeave });
+          console.log('🛑 [endCall] ✅ Left room', { roomId: roomIdToLeave });
+        } catch (e) {
+          logger.warn('[WebRTCSession] Error emitting room:leave in endCall:', e);
+        }
+      }
+      
       // Очищаем идентификаторы
-      logger.debug('🛑 [endCall] Clearing identifiers', {
+      console.log('🛑 [endCall] Clearing identifiers', {
         savedPartnerId,
         savedRoomId,
         savedCallId
       });
-      
+
       this.partnerIdRef = null;
       this.roomIdRef = null;
       this.callIdRef = null;
+      this.roomJoinedRef.clear(); // КРИТИЧНО: Очищаем список присоединенных комнат
       this.config.callbacks.onPartnerIdChange?.(null);
       this.config.callbacks.onRoomIdChange?.(null);
       this.config.callbacks.onCallIdChange?.(null);
@@ -6257,66 +7220,69 @@ export class WebRTCSession extends SimpleEventEmitter {
       this.config.onRemoteCamStateChange?.(true);
       this.emitRemoteState();
       
+      // КРИТИЧНО: Дополнительная проверка - убеждаемся, что локальный стрим полностью остановлен
+      // Это гарантирует, что камера не будет работать в фоне
+      // Вызываем stopLocalStreamInternal еще раз для гарантии
+      this.stopLocalStreamInternal();
+      
+      // Дополнительная проверка - если стрим все еще существует, принудительно останавливаем
+      if (this.localStreamRef) {
+        logger.warn('🛑 [endCall] ⚠️ Локальный стрим все еще существует после stopLocalStreamInternal, принудительная остановка');
+        try {
+          const tracks = this.localStreamRef.getTracks?.() || [];
+          tracks.forEach((t: any) => {
+            try {
+              if (t && t.readyState !== 'ended' && t.readyState !== null) {
+                t.enabled = false;
+                t.stop();
+                try { (t as any).release?.(); } catch {}
+              }
+            } catch {}
+          });
+        } catch {}
+        // Очищаем ссылку на стрим
+        this.localStreamRef = null;
+        this.config.callbacks.onLocalStreamChange?.(null);
+        this.config.onLocalStreamChange?.(null);
+        this.emit('localStream', null);
+      }
+      
       this.emitSessionUpdate();
     } else {
       // Для рандомного чата используем стандартный stop()
       this.stop();
     }
     
-    // Сбрасываем флаги
+    // КРИТИЧНО: Сбрасываем флаги ПОСЛЕ остановки всех процессов
+    // Это гарантирует, что UI получит правильное состояние после завершения
+    console.log('🔥🔥 [endCall] СБРАСЫВАЕМ ФЛАГИ');
     this.config.setFriendCallAccepted?.(false);
     this.config.setInDirectCall?.(false);
     this.config.setStarted?.(false);
     this.config.setIsInactiveState?.(true);
     this.config.setWasFriendCallEnded?.(true);
+    console.log('🔥✅ [endCall] ФЛАГИ СБРОШЕНЫ', {
+      friendCallAccepted: false,
+      inDirectCall: false,
+      started: false,
+      isInactiveState: true,
+      wasFriendCallEnded: true
+    });
     
-    // Отправляем событие завершения звонка через сокет
-    // КРИТИЧНО: Для дружеских звонков отправляем и roomId, и callId
-    // Бэкенд теперь принимает оба параметра и использует roomId в приоритете
-    // ВАЖНО: Используем сохраненные значения ДО очистки идентификаторов
-    try {
-      // Для дружеских звонков используем сохраненные значения
-      const roomIdToSend = isFriendCall ? savedRoomId : this.roomIdRef;
-      const callIdToSend = isFriendCall ? savedCallId : this.callIdRef;
-      
-      logger.debug('🛑 [endCall] 📤 Preparing to send call:end event', {
-        roomId: roomIdToSend,
-        callId: callIdToSend,
-        partnerId: savedPartnerId,
-        hasRoomId: !!roomIdToSend,
-        hasCallId: !!callIdToSend,
-        isFriendCall
-      });
-      
-      if (roomIdToSend || callIdToSend) {
-        socket.emit('call:end', {
-          roomId: roomIdToSend || undefined,
-          callId: callIdToSend || undefined
-        });
-        logger.debug('🛑 [endCall] ✅ call:end event sent successfully', {
-          roomId: roomIdToSend,
-          callId: callIdToSend
-        });
-      } else {
-        // Если ни один идентификатор так и не был установлен, это означает,
-        // что звонок не был полностью инициализирован. В таком случае
-        // это нормальная ситуация (например, пользователь прервал набор до
-        // установления соединения) — логируем это как debug, а не warning.
-        const hadAnyIds = !!(savedRoomId || savedCallId);
-        const logFn = hadAnyIds ? logger.warn : logger.debug;
-        logFn('🛑 [endCall] ⚠️ No roomId or callId to send call:end', {
-          savedRoomId,
-          savedCallId,
-          currentRoomId: this.roomIdRef,
-          currentCallId: this.callIdRef
-        });
-      }
-    } catch (e) {
-      logger.error('🛑 [endCall] ❌ Error emitting call:end:', e);
-    }
+    // КРИТИЧНО: Останавливаем все таймеры и интервалы еще раз для гарантии
+    // Это предотвращает работу процессов в фоне после завершения звонка
+    console.log('🔥 [endCall] ОСТАНАВЛИВАЕМ ВСЕ ПРОЦЕССЫ');
+    this.clearConnectionTimers();
+    this.stopTrackChecker();
+    this.stopMicMeter();
+    console.log('🔥✅ [endCall] ВСЕ ПРОЦЕССЫ ОСТАНОВЛЕНЫ');
     
     // Эмитим событие завершения звонка
+    console.log('🔥🔥 [endCall] ЭМИТИМ callEnded СОБЫТИЕ');
     this.emit('callEnded');
+    console.log('🔥✅ [endCall] callEnded СОБЫТИЕ ОТПРАВЛЕНО');
+    
+    console.log('🔥✅✅✅ [endCall] ЗВОНОК УСПЕШНО ЗАВЕРШЕН - ВСЕ ПРОЦЕССЫ ОСТАНОВЛЕНЫ');
   }
   
   // ==================== Управление устройствами ====================
@@ -6605,11 +7571,12 @@ export class WebRTCSession extends SimpleEventEmitter {
       this.config.onRemoteStreamChange?.(null);
       this.emit('remoteStreamRemoved');
     }
-    
+
     // Очищаем все идентификаторы
     this.partnerIdRef = null;
     this.roomIdRef = null;
     this.callIdRef = null;
+    this.roomJoinedRef.clear(); // КРИТИЧНО: Очищаем список присоединенных комнат
     this.config.callbacks.onPartnerIdChange?.(null);
     this.config.callbacks.onRoomIdChange?.(null);
     this.config.callbacks.onCallIdChange?.(null);
@@ -6759,30 +7726,65 @@ export class WebRTCSession extends SimpleEventEmitter {
     const isInactiveState = this.config.getIsInactiveState?.() ?? false;
     const wasFriendCallEnded = this.config.getWasFriendCallEnded?.() ?? false;
     
-    // Не восстанавливаем если звонок завершен
-    if (isInactiveState || wasFriendCallEnded) {
+    // КРИТИЧНО: Если это возврат из PiP (returnToActiveCall === true), 
+    // НЕ проверяем isInactiveState - восстанавливаем состояние в любом случае
+    // Это гарантирует, что звонок будет восстановлен даже если он был в неактивном состоянии
+    if (!returnToActiveCall && (isInactiveState || wasFriendCallEnded)) {
+      console.log('[WebRTCSession] restoreCallState: Call is inactive, skipping restore', {
+        isInactiveState,
+        wasFriendCallEnded,
+        returnToActiveCall
+      });
       return;
     }
     
+    // КРИТИЧНО: Для возврата из PiP (returnToActiveCall === true) 
+    // проверяем наличие хотя бы roomId или callId
+    // Для обычного восстановления требуем все идентификаторы
     const hasActiveRefs = (roomId || this.roomIdRef) && (partnerId || this.partnerIdRef) && (partnerUserId || this.partnerIdRef);
     const hasActiveCallId = callId || this.callIdRef;
+    const hasMinimalRefs = (roomId || this.roomIdRef) || (callId || this.callIdRef);
     
-    if (!hasActiveRefs || !hasActiveCallId) {
-      return;
+    if (returnToActiveCall) {
+      // Для возврата из PiP достаточно иметь roomId или callId
+      if (!hasMinimalRefs) {
+        console.log('[WebRTCSession] restoreCallState: No minimal refs for returnToActiveCall', {
+          roomId: roomId || this.roomIdRef,
+          callId: callId || this.callIdRef
+        });
+        return;
+      }
+    } else {
+      // Для обычного восстановления требуем все идентификаторы
+      if (!hasActiveRefs || !hasActiveCallId) {
+        console.log('[WebRTCSession] restoreCallState: Missing required refs', {
+          hasActiveRefs,
+          hasActiveCallId
+        });
+        return;
+      }
     }
     
     
     // Восстанавливаем идентификаторы если они были переданы
-    if (roomId && !this.roomIdRef) {
+    // КРИТИЧНО: Для возврата из PiP устанавливаем идентификаторы даже если они уже установлены
+    // Это гарантирует, что все идентификаторы актуальны
+    if (roomId) {
       this.roomIdRef = roomId;
+      this.config.callbacks.onRoomIdChange?.(roomId);
+      this.config.onRoomIdChange?.(roomId);
       this.emitSessionUpdate();
     }
-    if (partnerId && !this.partnerIdRef) {
+    if (partnerId) {
       this.partnerIdRef = partnerId;
+      this.config.callbacks.onPartnerIdChange?.(partnerId);
+      this.config.onPartnerIdChange?.(partnerId);
       this.emitSessionUpdate();
     }
-    if (callId && !this.callIdRef) {
+    if (callId) {
       this.callIdRef = callId;
+      this.config.callbacks.onCallIdChange?.(callId);
+      this.config.onCallIdChange?.(callId);
       this.emitSessionUpdate();
     }
     

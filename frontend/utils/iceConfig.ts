@@ -18,7 +18,13 @@ export function getEnvFallbackConfiguration(): RTCConfiguration {
   const turnTcpUrls: string[] = rawTurnTcp ? rawTurnTcp.split(/[\,\s]+/).filter(Boolean) : [];
 
   // Используем несколько STUN серверов для лучшей надежности
-  const iceServers: any[] = [googleStun, cloudflareStun];
+  const iceServers: any[] = [
+    googleStun,
+    cloudflareStun,
+    { urls: 'stun:stun.stunprotocol.org:3478' } as any,
+    { urls: 'stun:stun.voiparound.com' } as any,
+    { urls: 'stun:stun.voipbuster.com' } as any,
+  ];
   
   // КРИТИЧНО: TURN обязателен для пробития NAT в мобильных сетях
   if (turnUrls.length) {
@@ -36,7 +42,7 @@ export function getEnvFallbackConfiguration(): RTCConfiguration {
   // Логирование для отладки
   const hasTurn = turnUrls.length > 0 || turnTcpUrls.length > 0;
   console.log('[ICE Config] Fallback configuration:', {
-    stunCount: 2,
+    stunCount: 5,
     turnCount: turnUrls.length + turnTcpUrls.length,
     hasTurn,
     hasCredentials: !!(username && credential),

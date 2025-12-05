@@ -497,6 +497,7 @@ export default function SettingsScreen() {
           text: '#B7C0CF',
           titan: '#B7C0CF',
           darkText: '#0D0E10',
+          red: '#FF5A67',
         }}
         styles={{
           fieldLabel: { color: '#B7C0CF', marginTop: 18, marginBottom: 8, fontWeight: '600' },

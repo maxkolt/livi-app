@@ -150,7 +150,8 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       // Отправка: либо в комнату, либо конкретному сокету
       // При hangup дополнительно продублируем в обе стороны на всякий случай
       const fromUserId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : undefined;
-      const envelope = { from: socket.id, fromUserId, ...payload } as any;
+      // КРИТИЧНО: Включаем roomId в envelope для правильной обработки на клиенте
+      const envelope = { from: socket.id, fromUserId, roomId, ...payload } as any;
       
       let delivered = false;
       

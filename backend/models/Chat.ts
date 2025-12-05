@@ -30,6 +30,11 @@ export interface IChat extends Document {
   lastMessageAt: Date; // Время последнего сообщения
   createdAt: Date;
   updatedAt: Date;
+  // Методы для работы с сообщениями
+  addTextMessage(messageData: Omit<ITextMessage, 'timestamp' | 'read'>): ITextMessage;
+  addMediaMessage(messageData: Omit<IMediaMessage, 'timestamp' | 'read'>): IMediaMessage;
+  clearAllMessages(): void;
+  clearMessagesFromUser(userId: mongoose.Types.ObjectId): void;
 }
 
 const TextMessageSchema = new Schema<ITextMessage>({
@@ -88,8 +93,8 @@ ChatSchema.index({ participants: 1 }, { unique: true });
 // Виртуальное поле для получения всех сообщений в хронологическом порядке
 ChatSchema.virtual('allMessages').get(function() {
   const allMessages = [
-    ...this.textMessages.map(msg => ({ ...msg.toObject(), type: 'text' })),
-    ...this.mediaMessages.map(msg => ({ ...msg.toObject(), type: msg.type }))
+    ...this.textMessages.map((msg: ITextMessage) => ({ ...msg, type: 'text' as const })),
+    ...this.mediaMessages.map((msg: IMediaMessage) => ({ ...msg, type: msg.type }))
   ];
   
   return allMessages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
@@ -130,17 +135,20 @@ ChatSchema.methods.clearAllMessages = function() {
 
 // Метод для очистки сообщений только от одного пользователя
 ChatSchema.methods.clearMessagesFromUser = function(userId: mongoose.Types.ObjectId) {
-  this.textMessages = this.textMessages.filter(msg => !msg.from.equals(userId));
-  this.mediaMessages = this.mediaMessages.filter(msg => !msg.from.equals(userId));
+  const textMessagesArray: ITextMessage[] = Array.isArray(this.textMessages) ? this.textMessages : [];
+  const mediaMessagesArray: IMediaMessage[] = Array.isArray(this.mediaMessages) ? this.mediaMessages : [];
+  
+  this.textMessages = textMessagesArray.filter((msg: ITextMessage) => !msg.from.equals(userId));
+  this.mediaMessages = mediaMessagesArray.filter((msg: IMediaMessage) => !msg.from.equals(userId));
   
   // Обновляем время последнего сообщения
-  const allMessages = [
+  const allMessages: (ITextMessage | IMediaMessage)[] = [
     ...this.textMessages,
     ...this.mediaMessages
   ];
   
   if (allMessages.length > 0) {
-    this.lastMessageAt = allMessages.reduce((latest, msg) => 
+    this.lastMessageAt = allMessages.reduce((latest, msg: ITextMessage | IMediaMessage) => 
       msg.timestamp > latest ? msg.timestamp : latest, allMessages[0].timestamp
     );
   } else {

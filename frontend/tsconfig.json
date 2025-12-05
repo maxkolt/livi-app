@@ -17,6 +17,7 @@
   "include": [
     "src",                        // твой код
     "components",                 // компоненты
+    "utils",                      // утилиты
     "App.tsx",                    // главный вход
     "global.d.ts"
   ]

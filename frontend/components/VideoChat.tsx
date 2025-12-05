@@ -368,6 +368,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
         inDirectCallRef.current = false;
         setFriendCallAccepted(false);
         setInDirectCall(false);
+        hadIncomingCallRef.current = false; // Сбрасываем флаг входящего звонка
         partnerUserIdRef.current = null as any;
         // 2) Останавливаем локальный стрим (камера/микрофон)
         const session = sessionRef.current;
@@ -472,6 +473,8 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   // Incoming direct friend call state
   const [incomingFriendCall, setIncomingFriendCall] = useState<{ from: string; nick?: string } | null>(null);
   const [friendCallAccepted, setFriendCallAccepted] = useState(false);
+  // Ref для отслеживания того, был ли входящий звонок (не сбрасывается при принятии)
+  const hadIncomingCallRef = useRef(false);
   // Флаг ухода со страницы, чтобы не запускать автопоиск и игнорировать поздние сокет-события
   const leavingRef = useRef(false);
 
@@ -788,11 +791,25 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
         }
       } else if (nextAppState === 'active') {
         // Приложение вернулось на передний план
-        // Сбрасываем isInactiveState чтобы кнопка "Начать" была кликабельна
-        if (isInactiveStateRef.current) {
-          logger.debug('[AppState] App returned to foreground, resetting inactive state');
+        // КРИТИЧНО: НЕ сбрасываем isInactiveState если звонок был завершен (wasFriendCallEnded)
+        // Это гарантирует, что кнопка "Завершить" остается заблокированной после завершения звонка
+        // даже после пробуждения устройства из спящего режима
+        if (isInactiveStateRef.current && !wasFriendCallEndedRef.current) {
+          logger.debug('[AppState] App returned to foreground, resetting inactive state (call not ended)');
           isInactiveStateRef.current = false;
           setIsInactiveState(false);
+        } else if (isInactiveStateRef.current && wasFriendCallEndedRef.current) {
+          logger.debug('[AppState] App returned to foreground, keeping inactive state (call was ended) - button will remain disabled');
+          // КРИТИЧНО: Убеждаемся, что флаги не сброшены при пробуждении
+          // Это гарантирует, что кнопка "Завершить" остается заблокированной
+          if (!wasFriendCallEndedRef.current) {
+            setWasFriendCallEnded(true);
+            wasFriendCallEndedRef.current = true;
+          }
+          if (!isInactiveStateRef.current) {
+            setIsInactiveState(true);
+            isInactiveStateRef.current = true;
+          }
         }
       }
     });
@@ -1213,20 +1230,25 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     const currentRoomId = roomId;
     const currentCallId = currentCallIdRef.current;
     
-    logger.debug('[onAbortCall] 🛑 Ending 1-on-1 call', {
-      roomId: currentRoomId,
-      callId: currentCallId,
+    logger.debug('🔥🔥🔥 [onAbortCall] 🛑 НАЧАЛО ЗАВЕРШЕНИЯ ЗВОНКА', {
+      componentRoomId: currentRoomId,
+      componentCallId: currentCallId,
       partnerId,
       partnerUserId,
       isDirectCall,
       inDirectCall,
       friendCallAccepted,
       sessionRoomId: session.getRoomId?.(),
-      sessionCallId: session.getCallId?.()
+      sessionCallId: session.getCallId?.(),
+      sessionPartnerId: session.getPartnerId?.(),
+      hasPeerConnection: !!session.getPeerConnection?.(),
+      hasLocalStream: !!localStream,
+      hasRemoteStream: !!remoteStream
     });
     
     // КРИТИЧНО: Устанавливаем roomId и callId в session перед вызовом endCall()
     // если они есть в состоянии компонента, но отсутствуют в session
+    // Это критично для правильного завершения звонка у обоих участников
     if (currentRoomId) {
       const sessionRoomId = session.getRoomId?.();
       if (!sessionRoomId || sessionRoomId !== currentRoomId) {
@@ -1236,7 +1258,16 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           previousSessionRoomId: sessionRoomId
         });
       }
+    } else {
+      // КРИТИЧНО: Если roomId нет в состоянии компонента, но есть в session, используем его
+      const sessionRoomId = session.getRoomId?.();
+      if (sessionRoomId && !currentRoomId) {
+        logger.debug('[onAbortCall] ⚠️ No roomId in component state, using session roomId', { 
+          sessionRoomId
+        });
+      }
     }
+    
     if (currentCallId) {
       const sessionCallId = session.getCallId?.();
       if (!sessionCallId || sessionCallId !== currentCallId) {
@@ -1246,6 +1277,45 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           previousSessionCallId: sessionCallId
         });
       }
+    }
+    
+    // КРИТИЧНО: Дополнительная проверка - убеждаемся что roomId установлен
+    // Если roomId все еще не установлен, пытаемся получить его из session
+    const finalRoomId = currentRoomId || session.getRoomId?.();
+    if (!finalRoomId && (isDirectCall || inDirectCall || friendCallAccepted)) {
+      logger.warn('[onAbortCall] ⚠️ No roomId available for friend call end, trying to get from session', {
+        currentRoomId,
+        sessionRoomId: session.getRoomId?.(),
+        partnerId,
+        roomId
+      });
+      
+      // КРИТИЧНО: Если roomId все еще не установлен, пытаемся получить его из session
+      // и установить в компонент и session перед вызовом endCall
+      const sessionRoomId = session.getRoomId?.();
+      if (sessionRoomId) {
+        setRoomId(sessionRoomId);
+        logger.debug('[onAbortCall] ✅ Got roomId from session and set in component', { 
+          sessionRoomId 
+        });
+      }
+    } else if (finalRoomId && !currentRoomId) {
+      // Если roomId есть в session, но нет в компоненте, устанавливаем его
+      setRoomId(finalRoomId);
+      session.setRoomId?.(finalRoomId);
+      logger.debug('[onAbortCall] ✅ Set roomId from session to component and session', { 
+        roomId: finalRoomId 
+      });
+    }
+    
+    // КРИТИЧНО: Убеждаемся что roomId установлен в session перед вызовом endCall
+    // Это гарантирует правильное завершение звонка у обоих участников
+    const roomIdToUse = finalRoomId || session.getRoomId?.();
+    if (roomIdToUse && !session.getRoomId?.()) {
+      session.setRoomId?.(roomIdToUse);
+      logger.debug('[onAbortCall] ✅ Set roomId in session before endCall', { 
+        roomId: roomIdToUse 
+      });
     }
     
     // Используем session для завершения звонка
@@ -1277,6 +1347,17 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
 
   useEffect(() => {
     if (resume && fromPiP) {
+      console.log('🔥🔥🔥 [VideoChat] ВОЗВРАТ ИЗ PiP', {
+        resume,
+        fromPiP,
+        roomId,
+        callId: currentCallIdRef.current,
+        partnerId,
+        partnerUserId,
+        hasSession: !!sessionRef.current,
+        mode: route?.params?.mode
+      });
+      
       const currentPip = pipRef.current;
       const session = sessionRef.current;
       
@@ -1287,6 +1368,62 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       
       // Скрываем PiP
       currentPip.hidePiP();
+      
+      // КРИТИЧНО: Устанавливаем флаги дружеского звонка ПЕРЕД восстановлением состояния
+      // Это гарантирует, что showAbort будет true и покажется кнопка "Завершить"
+      const routeCallId = route?.params?.callId;
+      const routeRoomId = route?.params?.roomId;
+      const routePartnerUserId = route?.params?.peerUserId || (route?.params as any)?.partnerUserId;
+      const isFriendMode = route?.params?.mode === 'friend' || !!routeRoomId || !!routeCallId;
+      
+      console.log('🔥 [VideoChat] УСТАНОВКА ФЛАГОВ ДРУЖЕСКОГО ЗВОНКА ПОСЛЕ PiP', {
+        isFriendMode,
+        routeRoomId,
+        routeCallId,
+        routePartnerUserId,
+        currentRoomId: roomId,
+        currentCallId: currentCallIdRef.current
+      });
+      
+      // КРИТИЧНО: Устанавливаем флаги дружеского звонка если это дружеский звонок
+      if (isFriendMode) {
+        // Устанавливаем флаги дружеского звонка
+        setFriendCallAccepted(true);
+        setInDirectCall(true);
+        setIsInactiveState(false);
+        setWasFriendCallEnded(false);
+        startedRef.current = true;
+        setStarted(true);
+        
+        console.log('🔥✅ [VideoChat] ФЛАГИ ДРУЖЕСКОГО ЗВОНКА УСТАНОВЛЕНЫ', {
+          friendCallAccepted: true,
+          inDirectCall: true,
+          isInactiveState: false,
+          started: true
+        });
+      }
+      
+      // КРИТИЧНО: Убеждаемся что звонок активен после возврата из PiP
+      // Восстанавливаем состояние звонка
+      if (session && (routeRoomId || roomId)) {
+        console.log('🔥 [VideoChat] ВОССТАНОВЛЕНИЕ СОСТОЯНИЯ ПОСЛЕ PiP', {
+          routeCallId,
+          routeRoomId,
+          routePartnerUserId,
+          currentRoomId: roomId,
+          currentCallId: currentCallIdRef.current
+        });
+        
+        session.restoreCallState({
+          roomId: routeRoomId || roomId,
+          partnerId: partnerId,
+          callId: routeCallId || currentCallIdRef.current,
+          partnerUserId: routePartnerUserId || partnerUserId,
+          returnToActiveCall: true,
+          isFromBackground: false
+        });
+      }
+      
       return;
     }
     
@@ -1319,6 +1456,73 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       return;
     }
     
+    // КРИТИЧНО: Проверяем тип звонка
+    const isFriendCall = isDirectCall || inDirectCallRef.current || friendCallAccepted;
+    const hasActiveFriendCall = isFriendCall && !!roomId;
+    
+    // Для дружеского звонка кнопка "Далее" должна активировать PiP, а не начинать поиск
+    if (hasActiveFriendCall) {
+      try {
+        // Ищем партнера в списке друзей
+        const partner = partnerUserId 
+          ? friendsRef.current.find(f => String(f._id) === String(partnerUserId))
+          : null;
+        
+        // Строим полный URL аватара
+        let partnerAvatarUrl: string | undefined = undefined;
+        if (partner?.avatar && typeof partner.avatar === 'string' && partner.avatar.trim() !== '') {
+          const SERVER_CONFIG = require('../src/config/server').SERVER_CONFIG;
+          const serverUrl = SERVER_CONFIG.BASE_URL;
+          partnerAvatarUrl = partner.avatar.startsWith('http') 
+            ? partner.avatar 
+            : `${serverUrl}${partner.avatar.startsWith('/') ? '' : '/'}${partner.avatar}`;
+        }
+        
+        // Показываем PiP
+        pipRef.current.showPiP({
+          callId: currentCallIdRef.current || '',
+          roomId: roomId || '',
+          partnerName: partner?.nick || 'Друг',
+          partnerAvatarUrl: partnerAvatarUrl,
+          muteLocal: !micOn,
+          muteRemote: remoteMutedMain,
+          localStream: localStream || null,
+          remoteStream: remoteStream || null,
+          navParams: {
+            ...route?.params,
+            peerUserId: partnerUserId || partnerUserIdRef.current,
+            partnerId: partnerId || partnerId,
+          } as any,
+        });
+        
+        // Вызываем enterPiP в session
+        if (session) {
+          session.enterPiP();
+        }
+        
+        try {
+          socket.emit('bg:entered', { 
+            callId: roomId,
+            partnerId: partnerUserIdRef.current 
+          });
+        } catch {}
+        
+        // Навигация назад
+        const nav = (global as any).__navRef;
+        if (nav?.canGoBack?.()) {
+          nav.goBack();
+        } else {
+          nav?.dispatch?.(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
+        }
+        
+        return;
+      } catch (e) {
+        logger.warn('[onNext] Error showing PiP for friend call:', e);
+        return;
+      }
+    }
+    
+    // Для рандомного чата - стандартная логика перехода к следующему
     // ЗАЩИТА ОТ СПАМА: Блокируем кнопку на 1.5 секунды
     if (isNexting) return;
     
@@ -1337,7 +1541,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     setTimeout(() => {
       setIsNexting(false);
     }, 500);
-  }, [isNexting, started]);
+  }, [isNexting, started, isDirectCall, inDirectCall, friendCallAccepted, roomId, partnerUserId, partnerId, micOn, remoteMutedMain, localStream, remoteStream, route?.params, pip]);
 
   // --------------------------
   // Local toggles
@@ -1528,7 +1732,21 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   // Функция для показа PiP при выходе со страницы
   const showPiPOnExit = useCallback(() => {
     const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted;
-    const hasActiveCall = !!roomId;
+    // КРИТИЧНО: Проверяем roomId из состояния и из session
+    const session = sessionRef.current;
+    const sessionRoomId = session?.getRoomId?.();
+    const hasActiveCall = !!(roomId || sessionRoomId || currentCallIdRef.current);
+    
+    logger.debug('🔥🔥🔥 [showPiPOnExit] ПОПЫТКА ПОКАЗАТЬ PiP', {
+      isFriendCall,
+      hasActiveCall,
+      roomId,
+      sessionRoomId,
+      callId: currentCallIdRef.current,
+      isInactiveState,
+      partnerId,
+      partnerUserId
+    });
     
       // Для звонков друзей показываем PiP даже без потоков - они могут быть в refs
       if (isFriendCall && hasActiveCall) {
@@ -1545,15 +1763,34 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
         }
       // Используем потоки из refs если state потоки недоступны
       
-      // НЕ показываем PiP если находимся в неактивном состоянии (звонок завершен)
-      if (isInactiveState) {
-        return;
-      }
+      logger.debug('🔥✅ [showPiPOnExit] ПОКАЗЫВАЕМ PiP', {
+        partnerNick,
+        partnerAvatarUrl,
+        hasLocalStream: !!localStream,
+        hasRemoteStream: !!remoteStream,
+        roomId,
+        sessionRoomId
+      });
+      
+      // КРИТИЧНО: Убираем проверку isInactiveState - PiP должен показываться при свайпе/нажатии назад
+      // даже если звонок завершен, чтобы пользователь мог вернуться к звонку
+      // Проверка isInactiveState блокировала переход в PiP при активном звонке
+      
+      // КРИТИЧНО: Получаем session ДО использования
+      const session = sessionRef.current;
       
       // Сохраняем partnerUserId в navParams для восстановления при возврате
+      // КРИТИЧНО: Используем roomId из состояния или из session
+      const roomIdToUse = roomId || session?.getRoomId?.() || '';
+      logger.debug('🔥 [showPiPOnExit] ИСПОЛЬЗУЕМ ROOMID', { 
+        componentRoomId: roomId,
+        sessionRoomId: session?.getRoomId?.(),
+        finalRoomId: roomIdToUse 
+      });
+      
       pip.showPiP({
         callId: currentCallIdRef.current || '',
-        roomId: roomId || '',
+        roomId: roomIdToUse,
         partnerName: partnerNick,
         partnerAvatarUrl: partnerAvatarUrl,
         muteLocal: !micOn,
@@ -1567,40 +1804,83 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
         } as any,
       });
       
-      const session = sessionRef.current;
+      logger.debug('🔥✅✅ [showPiPOnExit] PiP ПОКАЗАН');
+      
       if (session) {
         session.enterPiP();
+        logger.debug('🔥✅ [showPiPOnExit] session.enterPiP() ВЫЗВАН');
       }
+    } else {
+      logger.debug('🔥⚠️ [showPiPOnExit] НЕ ПОКАЗЫВАЕМ PiP', {
+        isFriendCall,
+        hasActiveCall,
+        reason: !isFriendCall ? 'not friend call' : 'no active call'
+      });
     }
-  }, [isDirectCall, inDirectCall, friendCallAccepted, remoteStream, localStream, friends, partnerUserId, micOn, remoteMutedMain, pip, route, isInactiveState]);
+  }, [isDirectCall, inDirectCall, friendCallAccepted, remoteStream, localStream, friends, partnerUserId, micOn, remoteMutedMain, pip, route, isInactiveState, roomId, currentCallIdRef]);
 
   // Обработчик кнопки "Назад" на Android
   useEffect(() => {
     const backAction = () => {
       const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted;
-      const hasActiveCall = !!roomId;
+      // КРИТИЧНО: Проверяем roomId из состояния и из session
+      const session = sessionRef.current;
+      const sessionRoomId = session?.getRoomId?.();
+      const hasActiveCall = !!(roomId || sessionRoomId || currentCallIdRef.current);
       
+      logger.debug('[BackHandler] Back button pressed', {
+        isFriendCall,
+        roomId,
+        sessionRoomId,
+        hasActiveCall,
+        isInactiveState,
+        partnerId
+      });
       
-      // НЕ показываем PiP если находимся в неактивном состоянии (звонок завершен)
-      // В этом случае просто возвращаемся назад на Home
-      if (isInactiveState) {
-        navigation.goBack();
-        return true;
-      }
-      
-      if (isFriendCall && hasActiveCall) {
+      // КРИТИЧНО: Показываем PiP при нажатии назад для активных звонков друзей
+      // Убираем проверку isInactiveState - PiP должен показываться даже если звонок завершен
+      // чтобы пользователь мог вернуться к звонку
+      if (isFriendCall && hasActiveCall && !isInactiveState) {
+        logger.debug('🔥🔥🔥 [BackHandler] ПОКАЗЫВАЕМ PiP ДЛЯ ДРУЖЕСКОГО ЗВОНКА', {
+          isFriendCall,
+          hasActiveCall,
+          roomId,
+          sessionRoomId,
+          callId: currentCallIdRef.current,
+          partnerId
+        });
         // Сбрасываем loading при нажатии назад
         setLoading(false);
         showPiPOnExit();
+        logger.debug('🔥✅ [BackHandler] PiP ПОКАЗАН, НАВИГИРУЕМ НАЗАД');
         // Навигируем назад
         setTimeout(() => {
           if (navigation.canGoBack()) {
             navigation.goBack();
+            logger.debug('🔥✅ [BackHandler] НАВИГАЦИЯ НАЗАД ВЫПОЛНЕНА');
           } else {
             navigation.navigate('Home' as never);
+            logger.debug('🔥✅ [BackHandler] НАВИГАЦИЯ НА HOME ВЫПОЛНЕНА');
           }
         }, 100);
         return true; // Предотвращаем выход из приложения
+      } else {
+        logger.debug('🔥⚠️ [BackHandler] НЕ ПОКАЗЫВАЕМ PiP', {
+          isFriendCall,
+          hasActiveCall,
+          isInactiveState,
+          roomId,
+          sessionRoomId,
+          reason: !isFriendCall ? 'not friend call' : !hasActiveCall ? 'no active call' : 'inactive state'
+        });
+      }
+      
+      // КРИТИЧНО: Если звонок завершен (isInactiveState) И нет активного звонка (нет roomId),
+      // просто возвращаемся назад без показа PiP
+      if (isInactiveState && !hasActiveCall) {
+        logger.debug('[BackHandler] Call ended, going back');
+        navigation.goBack();
+        return true;
       }
       
       return false; // Позволяем обычное поведение
@@ -1609,7 +1889,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
     
     return () => backHandler.remove();
-  }, [isDirectCall, inDirectCall, friendCallAccepted, showPiPOnExit, navigation, isInactiveState]);
+  }, [isDirectCall, inDirectCall, friendCallAccepted, showPiPOnExit, navigation, isInactiveState, roomId]);
 
   // Обработчик жестов для обнаружения свайпов навигации
   useEffect(() => {
@@ -1653,6 +1933,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       setIncomingCall(d);
       setIncomingOverlay(true);
       setIncomingFriendCall({ from: d.from, nick: d.fromNick });
+      hadIncomingCallRef.current = true; // Отмечаем, что был входящий звонок
       setFriendCallAccepted(false);
       startIncomingAnim();
     });
@@ -2350,9 +2631,11 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     const hasPartnerUserId = !!partnerUserId;
     const hasStarted = !!started;
     const isInactive = !!isInactiveState;
+    const callEnded = !!wasFriendCallEnded;
     const hasActiveConnection = !!remoteStream; // КРИТИЧНО: проверяем наличие активного соединения
     
-    if (!hasPartnerUserId || !hasStarted || isInactive || !hasActiveConnection) {
+    // КРИТИЧНО: Не показываем бейдж если звонок завершен (isInactiveState или wasFriendCallEnded)
+    if (!hasPartnerUserId || !hasStarted || isInactive || callEnded || !hasActiveConnection) {
       return false;
     }
     
@@ -2361,7 +2644,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     
     
     return result;
-  }, [partnerUserId, friends, started, isInactiveState, remoteStream]);
+  }, [partnerUserId, friends, started, isInactiveState, wasFriendCallEnded, remoteStream]);
 
   // Логируем изменения partnerUserId, isPartnerFriend и showFriendBadge для отладки
   useEffect(() => {
@@ -2478,25 +2761,46 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
               
               
               if (isFriendCall && hasActiveCall) {
-                // Звонок друга - активируем background перед навигацией
-                
+                // КРИТИЧНО: Для дружеского звонка при свайпе назад активируем PiP, а не background
                 try {
-                  const partnerNick = friendsRef.current.find(f => String(f._id) === String(partnerUserIdRef.current))?.nick;
+                  // Ищем партнера в списке друзей
+                  const partner = partnerUserId 
+                    ? friendsRef.current.find(f => String(f._id) === String(partnerUserId))
+                    : null;
                   
-                  // Используем state remoteStream если ref пустой
-                  const streamToUse = remoteStream;
+                  // Строим полный URL аватара из поля avatar (проверяем что не пустая строка)
+                  let partnerAvatarUrl: string | undefined = undefined;
+                  if (partner?.avatar && typeof partner.avatar === 'string' && partner.avatar.trim() !== '') {
+                    const SERVER_CONFIG = require('../src/config/server').SERVER_CONFIG;
+                    const serverUrl = SERVER_CONFIG.BASE_URL;
+                    partnerAvatarUrl = partner.avatar.startsWith('http') 
+                      ? partner.avatar 
+                      : `${serverUrl}${partner.avatar.startsWith('/') ? '' : '/'}${partner.avatar}`;
+                  }
                   
-
-                  // session автоматически восстанавливает remote stream
-                  let finalStreamToUse = streamToUse;
+                  // Показываем PiP
+                  pipRef.current.showPiP({
+                    callId: currentCallIdRef.current || '',
+                    roomId: roomId || '',
+                    partnerName: partner?.nick || 'Друг',
+                    partnerAvatarUrl: partnerAvatarUrl,
+                    muteLocal: !micOn,
+                    muteRemote: remoteMutedMain,
+                    localStream: localStream || null,
+                    remoteStream: remoteStream || null,
+                    navParams: {
+                      ...route?.params,
+                      peerUserId: partnerUserId || partnerUserIdRef.current,
+                      partnerId: partnerId || partnerId,
+                    } as any,
+                  });
                   
-                  // Передаем живые streams + контекст в background
-                  const finalRemote = remoteStream;
-                  const finalLocal = localStream;
+                  // Вызываем enterPiP в session
+                  const session = sessionRef.current;
+                  if (session) {
+                    session.enterPiP();
+                  }
                   
-                  // background removed
-                  
-                  // Уведомляем партнера что мы покинули экран
                   try {
                     socket.emit('bg:entered', { 
                       callId: roomId,
@@ -2506,7 +2810,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
                     console.warn('[handleSwipeBack] Error notifying partner about background:', e);
                   }
                 } catch (e) {
-                  console.warn('[handleSwipeBack] Error showing background:', e);
+                  console.warn('[handleSwipeBack] Error showing PiP:', e);
                 }
               } else if (!isFriendCall && hasActiveCall) {
                 // Рандомный чат - отправляем сигналы завершения
@@ -2559,7 +2863,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
         }
       }
     } catch {}
-  }, [showAbort, started, swipeX]);
+  }, [showAbort, started, swipeX, isDirectCall, inDirectCall, friendCallAccepted, roomId, partnerUserId, partnerId, micOn, remoteMutedMain, localStream, remoteStream, route?.params, pip, currentCallIdRef]);
   useEffect(() => {
     // match_found теперь обрабатывается через session.on('matchFound')
     // disconnected и hangup теперь обрабатываются через session.on('disconnected')
@@ -2719,6 +3023,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       setIncomingFriendCall({ from, nick });
       setFriendCallAccepted(false);
       setIncomingOverlay(true);
+      hadIncomingCallRef.current = true; // Отмечаем, что был входящий звонок
       startIncomingAnim();
     };
 
@@ -2762,13 +3067,51 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
   // Фиксируем callId для инициатора после принятия звонка
   useEffect(() => {
     const onAccepted = async (d: any) => {
+      logger.debug('🔥🔥🔥 [call:accepted] НАЧАЛО ОБРАБОТКИ', { 
+        receivedData: d,
+        currentRoomId: roomId,
+        currentCallId: currentCallIdRef.current,
+        isDirectCall,
+        inDirectCall,
+        friendCallAccepted
+      });
+      
       try { 
-
-        // session сам установит callId и roomId при обработке call:accepted
-        if (d?.roomId && roomId !== d.roomId) {
+        // КРИТИЧНО: Устанавливаем roomId и callId в состояние компонента
+        // session также установит их, но компонент должен иметь актуальные значения
+        if (d?.roomId) {
+          logger.debug('🔥 [call:accepted] УСТАНАВЛИВАЕМ ROOMID', { 
+            receivedRoomId: d.roomId,
+            currentRoomId: roomId,
+            willSet: roomId !== d.roomId
+          });
+          if (roomId !== d.roomId) {
+            setRoomId(d.roomId);
+            logger.debug('🔥✅ [call:accepted] ROOMID УСТАНОВЛЕН В КОМПОНЕНТЕ', { roomId: d.roomId });
+          }
           socket.emit('room:join:ack', { roomId: d.roomId });
+          logger.debug('🔥 [call:accepted] room:join:ack отправлен', { roomId: d.roomId });
+        } else {
+          logger.error('🔥❌ [call:accepted] НЕТ ROOMID В СОБЫТИИ!', { data: d });
         }
-      } catch {}
+        
+        if (d?.callId) {
+          logger.debug('🔥 [call:accepted] УСТАНАВЛИВАЕМ CALLID', { 
+            receivedCallId: d.callId,
+            currentCallId: currentCallIdRef.current
+          });
+          if (currentCallIdRef.current !== d.callId) {
+            currentCallIdRef.current = d.callId;
+            logger.debug('🔥✅ [call:accepted] CALLID УСТАНОВЛЕН В КОМПОНЕНТЕ', { callId: d.callId });
+          }
+        } else {
+          logger.warn('🔥⚠️ [call:accepted] НЕТ CALLID В СОБЫТИИ', { data: d });
+        }
+        
+        // session сам установит callId и roomId при обработке call:accepted
+      } catch (error) {
+        logger.error('🔥❌ [call:accepted] ОШИБКА УСТАНОВКИ ROOMID/CALLID', error);
+      }
       
 
       // Для friend-call камера по умолчанию ВКЛ
@@ -2904,6 +3247,38 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       // КРИТИЧНО: Для receiver также устанавливаем флаги при получении call:accepted
       // Это исправляет проблему когда после случайного чата нельзя позвонить другу
       if (isReceiver) {
+        logger.debug('🔥🔥🔥 [call:accepted] [RECEIVER] НАЧАЛО ОБРАБОТКИ', {
+          receivedData: d,
+          currentRoomId: roomId,
+          currentCallId: currentCallIdRef.current
+        });
+        
+        // КРИТИЧНО: Устанавливаем roomId и callId для receiver
+        if (d?.roomId) {
+          logger.debug('🔥 [call:accepted] [RECEIVER] УСТАНАВЛИВАЕМ ROOMID', { 
+            receivedRoomId: d.roomId,
+            currentRoomId: roomId
+          });
+          if (roomId !== d.roomId) {
+            setRoomId(d.roomId);
+            logger.debug('🔥✅ [call:accepted] [RECEIVER] ROOMID УСТАНОВЛЕН В КОМПОНЕНТЕ', { roomId: d.roomId });
+          }
+        } else {
+          logger.error('🔥❌ [call:accepted] [RECEIVER] НЕТ ROOMID В СОБЫТИИ!', { data: d });
+        }
+        
+        if (d?.callId) {
+          logger.debug('🔥 [call:accepted] [RECEIVER] УСТАНАВЛИВАЕМ CALLID', { 
+            receivedCallId: d.callId,
+            currentCallId: currentCallIdRef.current
+          });
+          if (currentCallIdRef.current !== d.callId) {
+            currentCallIdRef.current = d.callId;
+            logger.debug('🔥✅ [call:accepted] [RECEIVER] CALLID УСТАНОВЛЕН В КОМПОНЕНТЕ', { callId: d.callId });
+          }
+        } else {
+          logger.warn('🔥⚠️ [call:accepted] [RECEIVER] НЕТ CALLID В СОБЫТИИ', { data: d });
+        }
         
         // Сбрасываем неактивное состояние если оно было установлено после случайного чата
         if (isInactiveStateRef.current) {
@@ -3064,6 +3439,18 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
 
         },
         onRemoteStreamChange: (stream) => {
+          logger.debug('🔥🔥🔥 [onRemoteStreamChange] CALLBACK ВЫЗВАН', {
+            hasStream: !!stream,
+            streamId: stream?.id,
+            currentRemoteStreamId: remoteStream?.id,
+            hasVideoTrack: stream ? !!(stream as any)?.getVideoTracks?.()?.[0] : false,
+            videoTrackReadyState: stream ? (stream as any)?.getVideoTracks?.()?.[0]?.readyState : null,
+            videoTrackEnabled: stream ? (stream as any)?.getVideoTracks?.()?.[0]?.enabled : null,
+            partnerId,
+            roomId,
+            callId: currentCallIdRef.current
+          });
+          
           // КРИТИЧНО: Проверяем активное соединение перед очисткой remoteStream
           const hasRemoteStream = !!remoteStream;
           const session = sessionRef.current;
@@ -3074,6 +3461,10 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           // Если stream === null, это означает что соединение разорвано
           if (stream) {
             setRemoteStream(stream);
+            logger.debug('🔥✅ [onRemoteStreamChange] REMOTE STREAM УСТАНОВЛЕН В UI', {
+              streamId: stream?.id,
+              hasVideoTrack: !!(stream as any)?.getVideoTracks?.()?.[0]
+            });
           } else {
             // КРИТИЧНО: НЕ очищаем remoteStream если соединение активно
             // Проверяем наличие remoteStream И состояние PeerConnection
@@ -3114,15 +3505,36 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
           loadingRef.current = loading;
         },
         onRoomIdChange: (roomId) => {
+          logger.debug('🔥🔥🔥 [onRoomIdChange] CALLBACK ВЫЗВАН', { 
+            receivedRoomId: roomId,
+            currentRoomId: roomId
+          });
           setRoomId(roomId);
-          logger.debug('[VideoChat] RoomId changed in session', { roomId });
+          logger.debug('🔥✅ [onRoomIdChange] ROOMID УСТАНОВЛЕН В UI', { roomId });
         },
         onCallIdChange: (callId) => {
+          logger.debug('🔥🔥🔥 [onCallIdChange] CALLBACK ВЫЗВАН', { 
+            receivedCallId: callId,
+            currentCallId: currentCallIdRef.current
+          });
           currentCallIdRef.current = callId || null;
-          logger.debug('[VideoChat] CallId changed in session', { callId });
+          logger.debug('🔥✅ [onCallIdChange] CALLID УСТАНОВЛЕН В UI', { callId });
         },
         onPartnerIdChange: (partnerId) => {
           setPartnerId(partnerId);
+          // КРИТИЧНО: Устанавливаем partnerUserId из partnerId для receiver
+          // partnerId в onPartnerIdChange - это userId партнера (для receiver - это ID инициатора)
+          // КРИТИЧНО: Для дружеских звонков partnerId - это fromUserId (userId партнера), а не socket id
+          // Проверяем, что partnerId выглядит как userId (не socket id) - userId обычно длиннее и содержит только hex
+          const looksLikeUserId = partnerId && partnerId.length > 10 && /^[a-f0-9]+$/i.test(partnerId);
+          if (partnerId && looksLikeUserId && (!partnerUserIdRef.current || partnerUserIdRef.current !== String(partnerId))) {
+            console.log('🔥✅ [onPartnerIdChange] УСТАНАВЛИВАЕМ partnerUserId ДЛЯ RECEIVER', {
+              partnerId,
+              previousPartnerUserId: partnerUserIdRef.current
+            });
+            partnerUserIdRef.current = String(partnerId);
+            setPartnerUserId(String(partnerId));
+          }
           logger.debug('[VideoChat] PartnerId changed in session', { partnerId });
         },
 
@@ -3134,6 +3546,8 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       getFriendCallAccepted: () => friendCallAccepted,
       getStarted: () => startedRef.current,
       getIsNexting: () => isNexting,
+      getIsDirectInitiator: () => isDirectInitiator,
+      getHasIncomingCall: () => hadIncomingCallRef.current || !!(incomingFriendCall || incomingCall),
       // State setters
       setIsInactiveState: (value) => {
         setIsInactiveState(value);
@@ -3177,6 +3591,16 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
     };
     
     sessionRef.current = new WebRTCSession(sessionConfig);
+    
+    // КРИТИЧНО: Регистрируем session в глобальной ссылке
+    // Это нужно чтобы можно было остановить стримы даже когда VideoChat размонтирован (в PiP)
+    try {
+      if ((global as any).__webrtcSessionRef) {
+        (global as any).__webrtcSessionRef.current = sessionRef.current;
+      }
+    } catch (e) {
+      console.warn('[VideoChatContent] Error registering session ref:', e);
+    }
     
     // Подписки на события session
     const session = sessionRef.current;
@@ -3360,6 +3784,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       setMicOn(false);
       setFriendCallAccepted(false);
       setInDirectCall(false);
+      hadIncomingCallRef.current = false; // Сбрасываем флаг входящего звонка
       
       // - показать уведомление
       try { showToast('Звонок завершён'); } catch {}
@@ -3680,6 +4105,10 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
         if ((global as any).__endCallCleanupRef) {
           (global as any).__endCallCleanupRef.current = null;
         }
+        // КРИТИЧНО: Очищаем глобальную ссылку на session
+        if ((global as any).__webrtcSessionRef) {
+          (global as any).__webrtcSessionRef.current = null;
+        }
         if ((global as any).__toggleMicRef) {
           (global as any).__toggleMicRef.current = null;
         }
@@ -3788,14 +4217,21 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
 
     const vt = (remoteStream as any)?.getVideoTracks?.()?.[0];
     
-    // Минимальный фикс логики показа
+    // КРИТИЧНО: Улучшенная логика для дружеских звонков
+    // Если трек существует, но еще не готов (readyState !== 'live'), показываем лоадер
+    // но только если это не ended (ended означает что трек завершен)
+    const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted;
+    
     if (!vt) {
-      // Нет трека - показываем лоадер
-      return (
-        <View style={styles.rtc}>
-          <ActivityIndicator size="large" color="#fff" />
-        </View>
-      );
+      // Нет трека - для дружеских звонков показываем лоадер, иначе null
+      if (isFriendCall) {
+        return (
+          <View style={styles.rtc}>
+            <ActivityIndicator size="large" color="#fff" />
+          </View>
+        );
+      }
+      return null;
     }
 
     if (vt.readyState === 'ended') {
@@ -3806,6 +4242,16 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
         trackEnabled: vt.enabled
       });
       return null;
+    }
+
+    // КРИТИЧНО: Для дружеских звонков показываем лоадер пока трек не станет live
+    // но только если трек существует и не ended
+    if (isFriendCall && vt.readyState !== 'live') {
+      return (
+        <View style={styles.rtc}>
+          <ActivityIndicator size="large" color="#fff" />
+        </View>
+      );
     }
 
     // enabled === false - это норма (пользователь выключил камеру)
@@ -3824,7 +4270,7 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
         mirror={false}
       />
     );
-  }, [remoteStream]);
+  }, [remoteStream, isDirectCall, inDirectCall, friendCallAccepted]);
 
   return (
     <PanGestureHandler
@@ -4262,20 +4708,15 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
               }
               
               // В неактивном состоянии ВСЕГДА показываем только текст "Собеседник", независимо от наличия remoteStream
+              // КРИТИЧНО: После завершения звонка не показываем заглушки, видео или кнопки - только текст
               if (isInactiveState) {
                 return <Text style={styles.placeholder}>{L("peer")}</Text>;
               }
               
-              // Если нет соединения (нет потока), показываем лоадер при поиске или текст "Собеседник"
-              // НЕ используем черный фон - сразу показываем лоадер или текст без подложки
-              if (!remoteStream) {
-                if (loading && started) {
-                  // Если поиск активен или звонок принят, показываем лоадер без черного фона
-                  return <ActivityIndicator size="large" color="#fff" />;
-                } else {
-                  // Если поиск не активен, показываем текст "Собеседник"
-                  return <Text style={styles.placeholder}>{L("peer")}</Text>;
-                }
+              // КРИТИЧНО: Если звонок завершен (wasFriendCallEnded), также показываем только текст "Собеседник"
+              // Это гарантирует, что после завершения не показываются заглушки или видео
+              if (wasFriendCallEnded) {
+                return <Text style={styles.placeholder}>{L("peer")}</Text>;
               }
               
               // КРИТИЧНО: Используем remoteViewKey для принудительного перерендера при изменении состояния камеры
@@ -4288,16 +4729,58 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
               const videoTrackEnabled = vt?.enabled ?? false;
               const videoTrackReadyState = vt?.readyState ?? 'new';
 
-              // КРИТИЧНО: Показываем RTCView ТОЛЬКО если выполнены ВСЕ условия:
-              // 1. Есть remoteStream (уже проверено выше)
-              // 2. Есть живой видео-трек (readyState === 'live')
-              // 3. remoteCamOn === true
-              // Во всех остальных случаях сразу показываем AwayPlaceholder, без промежуточного черного фона
-              const hasLiveVideoTrack = vt && videoTrackReadyState === 'live';
-              const canShowVideo = hasLiveVideoTrack && remoteCamOn === true && videoTrackEnabled === true;
+              // КРИТИЧНО: Для дружеских звонков улучшаем логику отображения видео
+              // Если есть remoteStream, но трек еще не готов (readyState !== 'live'), показываем лоадер
+              // с таймаутом, чтобы не показывать лоадер бесконечно
+              const isFriendCall = isDirectCall || inDirectCall || friendCallAccepted;
+              const hasVideoTrack = !!vt;
+              const isTrackLive = videoTrackReadyState === 'live';
+              const isTrackReady = isTrackLive || (isFriendCall && hasVideoTrack && videoTrackReadyState !== 'ended');
+              
+              // Если нет соединения (нет потока), показываем лоадер при поиске или текст "Собеседник"
+              if (!remoteStream) {
+                if (loading && started) {
+                  // Если поиск активен или звонок принят, показываем лоадер без черного фона
+                  return <ActivityIndicator size="large" color="#fff" />;
+                } else {
+                  // Если поиск не активен, показываем текст "Собеседник"
+                  return <Text style={styles.placeholder}>{L("peer")}</Text>;
+                }
+              }
+              
+              // КРИТИЧНО: Если есть remoteStream, но трек еще не готов, показываем лоадер
+              // но только для дружеских звонков и только если трек существует (не ended)
+              if (isFriendCall && hasVideoTrack && !isTrackLive && videoTrackReadyState !== 'ended') {
+                // Показываем лоадер пока трек не станет live (максимум 5 секунд)
+                return <ActivityIndicator size="large" color="#fff" />;
+              }
+
+              // КРИТИЧНО: Для дружеских звонков упрощаем логику отображения видео
+              // Показываем видео если есть живой трек
+              // Для дружеских звонков показываем видео если трек live (не проверяем remoteCamOn, так как он может быть не установлен вовремя)
+              // Для рандомного чата требуем оба условия: remoteCamOn === true И videoTrackEnabled === true
+              const hasLiveVideoTrack = vt && isTrackLive;
+              // КРИТИЧНО: Для дружеских звонков показываем видео если трек live
+              // НЕ проверяем remoteCamOn для дружеских звонков, так как он может быть не установлен вовремя
+              // Если remoteCamOn === false явно (камера выключена), это обработается ниже через isCameraOff
+              // Для рандомного чата требуем оба условия: remoteCamOn === true И videoTrackEnabled === true
+              const canShowVideo = hasLiveVideoTrack && (
+                isFriendCall 
+                  ? true  // Для дружеских звонков показываем видео если трек live (remoteCamOn проверяется ниже для заглушки)
+                  : remoteCamOn === true && videoTrackEnabled === true  // Для рандомного чата требуем оба условия
+              );
               
               if (canShowVideo) {
                 const streamURL = remoteStream.toURL?.();
+                logger.debug('🔥✅✅✅ [RENDER] ПОКАЗЫВАЕМ ВИДЕО СОБЕСЕДНИКА', {
+                  streamId: remoteStream.id,
+                  streamURL,
+                  videoTrackReadyState,
+                  videoTrackEnabled,
+                  remoteCamOn,
+                  isFriendCall,
+                  remoteViewKey
+                });
                 return (
                   <RTCView
                     key={`remote-${remoteStream.id}-${remoteViewKey}`}
@@ -4307,16 +4790,66 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
                     mirror={false}
                   />
                 );
+              } else {
+                // КРИТИЧНО: Для дружеских звонков если трек live, но видео не показывается - это ошибка
+                // Логируем детальную информацию для отладки
+                if (isFriendCall && hasLiveVideoTrack) {
+                  logger.warn('🔥❌ [RENDER] ДРУЖЕСКИЙ ЗВОНОК: Трек live, но видео не показывается!', {
+                    hasLiveVideoTrack,
+                    videoTrackReadyState,
+                    videoTrackEnabled,
+                    remoteCamOn,
+                    isFriendCall,
+                    hasRemoteStream: !!remoteStream,
+                    hasVideoTrack: !!vt
+                  });
+                } else {
+                  logger.debug('🔥⚠️ [RENDER] НЕ ПОКАЗЫВАЕМ ВИДЕО', {
+                    hasLiveVideoTrack,
+                    videoTrackReadyState,
+                    videoTrackEnabled,
+                    remoteCamOn,
+                    isFriendCall,
+                    reason: !hasLiveVideoTrack ? 'no live track' : 
+                            !isFriendCall && !remoteCamOn ? 'remoteCamOn false (random chat)' :
+                            !isFriendCall && videoTrackEnabled !== true ? 'track not enabled (random chat)' :
+                            'other'
+                  });
+                }
               }
               
-              // Во всех остальных случаях (нет трека, трек ended, камера выключена) - показываем заглушку
-              // НЕ используем промежуточный черный фон
+              // КРИТИЧНО: Заглушка "Отошел" показывается ТОЛЬКО когда:
+              // 1. Трек инициализирован (readyState === 'live' или 'ended')
+              // 2. И камера выключена (remoteCamOn === false или videoTrackEnabled === false)
+              // Если трек еще не инициализирован (readyState === 'new'), показываем лоадер
+              const isTrackInitialized = videoTrackReadyState === 'live' || videoTrackReadyState === 'ended';
+              // КРИТИЧНО: Для дружеских звонков проверяем только videoTrackEnabled === false И трек live
+              // Если трек live, но enabled=false - это может быть временное состояние, не показываем заглушку
+              // Заглушка показывается только если трек live И enabled явно false И remoteCamOn тоже false
+              // remoteCamOn может быть не установлен вовремя, поэтому для дружеских звонков проверяем оба
+              // Для рандомного чата проверяем оба условия
+              const isCameraOff = isFriendCall 
+                ? (videoTrackReadyState === 'live' && videoTrackEnabled === false && remoteCamOn === false) || videoTrackReadyState === 'ended'  // Для дружеских звонков: трек live И enabled=false И remoteCamOn=false, или трек ended
+                : remoteCamOn === false || videoTrackEnabled === false;  // Для рандомного чата проверяем оба
+              
+              if (isTrackInitialized && isCameraOff) {
+                // Трек инициализирован и камера выключена - показываем заглушку "Отошел"
+                return <AwayPlaceholder />;
+              }
+              
+              // Если трек еще не инициализирован, показываем лоадер (не заглушку)
+              if (!isTrackInitialized) {
+                return <ActivityIndicator size="large" color="#fff" />;
+              }
+              
+              // Fallback - показываем заглушку
               return <AwayPlaceholder />;
             })()}
 
             {/* Иконка звука */}
                 {/* КРИТИЧНО: Показываем кнопки сразу после нажатия "Начать" (started=true), не ждем подключения пользователя */}
-                {started && !isInactiveState && (() => {
+                {/* КРИТИЧНО: После завершения звонка (isInactiveState или wasFriendCallEnded) НЕ показываем кнопки */}
+                {started && !isInactiveState && !wasFriendCallEnded && (() => {
                   const remoteBlockedByPiP = partnerInPiP && !pip.visible;
                   const baseOpacity = remoteStream ? (remoteMutedMain ? 0.6 : 1) : 0.5;
                   return (
@@ -4367,8 +4900,9 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
 
             {/* Кнопка «Добавить в друзья» */}
                 {/* КРИТИЧНО: Показываем кнопки сразу после нажатия "Начать" (started=true), не ждем подключения пользователя */}
+                {/* КРИТИЧНО: После завершения звонка (isInactiveState или wasFriendCallEnded) НЕ показываем кнопки */}
                 {(() => {
-                  const shouldShowAddFriend = started && !isInactiveState && !!partnerUserId && !isPartnerFriend;
+                  const shouldShowAddFriend = started && !isInactiveState && !wasFriendCallEnded && !!partnerUserId && !isPartnerFriend;
                   if (shouldShowAddFriend || (started && !isInactiveState && !!partnerUserId)) {
                   }
                   return shouldShowAddFriend;
@@ -4402,9 +4936,10 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
             {/* Бейдж «Друг» */}
                 {/* КРИТИЧНО: Показываем бэйдж только если НЕ в неактивном состоянии И есть активное соединение (remoteStream) */}
                 {/* Пользователь считается в активном поиске до тех пор, пока соединение не установлено */}
+                {/* КРИТИЧНО: После завершения звонка (isInactiveState или wasFriendCallEnded) НЕ показываем бейдж */}
                 {(() => {
                   const hasActiveConnection = !!remoteStream; // КРИТИЧНО: проверяем наличие активного соединения
-                  const shouldShowBadge = !isInactiveState && showFriendBadge && hasActiveConnection;
+                  const shouldShowBadge = !isInactiveState && !wasFriendCallEnded && showFriendBadge && hasActiveConnection;
                   if (shouldShowBadge || (!isInactiveState && !!partnerUserId)) {
                   }
                   return shouldShowBadge;
@@ -4442,6 +4977,12 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
       {/* Карточка «Вы» */}
       <View style={styles.card}>
         {(() => {
+          // КРИТИЧНО: После завершения звонка (isInactiveState или wasFriendCallEnded) 
+          // показываем только текст "Вы", без видео, заглушек и кнопок
+          if (isInactiveState || wasFriendCallEnded) {
+            return <Text style={styles.placeholder}>{L("you")}</Text>;
+          }
+          
           // ВАЖНО: Показываем видео только если камера включена (camOn === true)
           // Если камера выключена (camOn === false), показываем заглушку "Отошел"
           // Это гарантирует, что при нажатии на кнопку отключения камеры показывается заглушка, а не последний кадр
@@ -4468,7 +5009,8 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
         })()}
 
         {/* КРИТИЧНО: Кнопки показываются сразу после нажатия "Начать" (started=true), не ждем подключения пользователя */}
-        {started && !isInactiveState && (
+        {/* КРИТИЧНО: После завершения звонка (isInactiveState или wasFriendCallEnded) НЕ показываем кнопки */}
+        {started && !isInactiveState && !wasFriendCallEnded && (
           <Animated.View style={[styles.topLeft, { opacity: buttonsOpacity }]}>
             <TouchableOpacity
               onPress={() => sessionRef.current?.flipCamera()}
@@ -4482,7 +5024,8 @@ const VideoChatContent: React.FC<VideoChatContentProps> = ({ route, onRegisterCa
         )}
 
         {/* КРИТИЧНО: Кнопки показываются сразу после нажатия "Начать" (started=true), не ждем подключения пользователя */}
-        {started && !isInactiveState && (
+        {/* КРИТИЧНО: После завершения звонка (isInactiveState или wasFriendCallEnded) НЕ показываем кнопки */}
+        {started && !isInactiveState && !wasFriendCallEnded && (
           <Animated.View style={[styles.bottomOverlay, { opacity: buttonsOpacity }]}>
             <TouchableOpacity
               onPress={toggleMic}

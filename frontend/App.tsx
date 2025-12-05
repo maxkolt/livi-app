@@ -55,6 +55,10 @@ const navRef = createNavigationContainerRef<RootStackParamList>();
 // Это нужно чтобы можно было вызвать очистку даже когда VideoChat размонтирован (в PiP)
 (global as any).__endCallCleanupRef = { current: null as (() => void) | null };
 
+// КРИТИЧНО: Глобальная ссылка на WebRTC session
+// Это нужно чтобы можно было остановить стримы даже когда VideoChat размонтирован (в PiP)
+(global as any).__webrtcSessionRef = { current: null as any };
+
 // КРИТИЧНО: Глобальная ссылка на функцию переключения микрофона из VideoChat
 // Это нужно чтобы можно было запустить startMicMeter даже когда VideoChat размонтирован (в PiP)
 (global as any).__toggleMicRef = { current: null as (() => void) | null };
@@ -871,18 +875,63 @@ export default function App() {
     // КРИТИЧНО: Сначала вызываем локальную очистку (если функция зарегистрирована)
     // Это нужно чтобы очистить PeerConnection, стримы и метр микрофона
     // даже когда VideoChat размонтирован (пользователь в PiP)
+    // onAbortCall в VideoChat вызывает session.endCall(), который отправляет call:end
     try {
       const cleanupFn = (global as any).__endCallCleanupRef?.current;
       if (cleanupFn && typeof cleanupFn === 'function') {
+        console.log('[App] endCallImpl: Calling cleanup function (session.endCall)');
         cleanupFn();
+        // session.endCall() уже отправляет call:end, поэтому не нужно отправлять здесь
+        return;
+      } else {
+        console.warn('[App] endCallImpl: Cleanup function not available (VideoChat may be unmounted)');
       }
     } catch (e) {
       console.warn('[App] Error calling endCall cleanup:', e);
     }
     
-    // Отправляем сигнал завершения звонка на backend
+    // КРИТИЧНО: Если cleanup функция недоступна, пытаемся остановить стримы через глобальную ссылку на session
+    // Это гарантирует, что камера остановится даже когда VideoChat размонтирован
     try {
-      socket.emit('call:end', { roomId: roomId || 'current' });
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (session && typeof session.endCall === 'function') {
+        console.log('[App] endCallImpl: Calling session.endCall() directly (VideoChat unmounted)');
+        session.endCall();
+        // session.endCall() уже отправляет call:end, поэтому не нужно отправлять здесь
+        return;
+      } else {
+        console.warn('[App] endCallImpl: Session not available, will use fallback');
+      }
+    } catch (e) {
+      console.warn('[App] Error calling session.endCall:', e);
+    }
+    
+    // Fallback: Если VideoChat размонтирован и cleanup функция недоступна,
+    // отправляем call:end напрямую на сервер
+    // Это нужно для случая, когда пользователь в PiP и VideoChat размонтирован
+    // КРИТИЧНО: Также пытаемся остановить локальные стримы напрямую через публичный метод
+    try {
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (session && typeof session.stopLocalStream === 'function') {
+        console.log('[App] endCallImpl: Stopping local stream directly (fallback)');
+        session.stopLocalStream(false, true).catch((e: any) => {
+          console.warn('[App] Error stopping local stream in fallback:', e);
+        });
+      }
+    } catch (e) {
+      console.warn('[App] Error stopping local stream in fallback:', e);
+    }
+    
+    try {
+      if (roomId || callId) {
+        socket.emit('call:end', { 
+          roomId: roomId || undefined,
+          callId: callId || undefined
+        });
+        console.log('[App] endCallImpl: call:end sent directly (fallback)', { roomId, callId });
+      } else {
+        console.warn('[App] endCallImpl: No roomId or callId to send call:end');
+      }
     } catch (e) {
       console.warn('[App] Error ending call:', e);
     }
