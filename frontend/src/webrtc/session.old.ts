@@ -5,144 +5,16 @@ import { isValidStream, cleanupStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import socket from '../../sockets/socket';
 
-// ==================== Simple EventEmitter for React Native ====================
+// Импортируем типы из отдельного файла
+import type { CamSide, WebRTCSessionCallbacks, WebRTCSessionConfig } from './types';
+export type { CamSide, WebRTCSessionCallbacks, WebRTCSessionConfig } from './types';
 
-type EventHandler = (...args: any[]) => void;
+// Импортируем SimpleEventEmitter из отдельного файла
+import { SimpleEventEmitter } from './base/SimpleEventEmitter';
 
-class SimpleEventEmitter {
-  private events: Map<string, EventHandler[]> = new Map();
-
-  on(event: string, handler: EventHandler): this {
-    const handlers = this.events.get(event) || [];
-    handlers.push(handler);
-    this.events.set(event, handlers);
-    return this;
-  }
-
-  off(event: string, handler?: EventHandler): this {
-    if (!handler) {
-      this.events.delete(event);
-      return this;
-    }
-    const handlers = this.events.get(event) || [];
-    const filtered = handlers.filter(h => h !== handler);
-    if (filtered.length === 0) {
-      this.events.delete(event);
-    } else {
-      this.events.set(event, filtered);
-    }
-    return this;
-  }
-
-  once(event: string, handler: EventHandler): this {
-    const onceHandler = (...args: any[]) => {
-      handler(...args);
-      this.off(event, onceHandler);
-    };
-    return this.on(event, onceHandler);
-  }
-
-  emit(event: string, ...args: any[]): boolean {
-    const handlers = this.events.get(event) || [];
-    handlers.forEach(handler => {
-      try {
-        handler(...args);
-      } catch (error) {
-        logger.error(`[SimpleEventEmitter] Error in handler for event "${event}":`, error);
-      }
-    });
-    return handlers.length > 0;
-  }
-
-  removeAllListeners(event?: string): this {
-    if (event) {
-      this.events.delete(event);
-    } else {
-      this.events.clear();
-    }
-    return this;
-  }
-}
-
-// ==================== Types ====================
-
-export type CamSide = 'front' | 'back';
-
-export interface WebRTCSessionCallbacks {
-  // Stream callbacks
-  onLocalStreamChange?: (stream: MediaStream | null) => void;
-  onRemoteStreamChange?: (stream: MediaStream | null) => void;
-  
-  // State callbacks
-  onMicStateChange?: (enabled: boolean) => void;
-  onCamStateChange?: (enabled: boolean) => void;
-  onRemoteCamStateChange?: (enabled: boolean) => void;
-  onPcConnectedChange?: (connected: boolean) => void;
-  onLoadingChange?: (loading: boolean) => void;
-  onMicLevelChange?: (level: number) => void; // Уровень микрофона для эквалайзера
-  
-  // Connection callbacks
-  onPartnerIdChange?: (partnerId: string | null) => void;
-  onRoomIdChange?: (roomId: string | null) => void;
-  onCallIdChange?: (callId: string | null) => void;
-  
-  // Error callbacks
-  onError?: (error: Error) => void;
-}
-
-export interface WebRTCSessionConfig {
-  myUserId?: string;
-  callbacks: WebRTCSessionCallbacks;
-  
-  // State getters (для проверки состояния из компонента)
-  getIsInactiveState?: () => boolean;
-  getIsDirectCall?: () => boolean;
-  getInDirectCall?: () => boolean;
-  getFriendCallAccepted?: () => boolean;
-  getStarted?: () => boolean;
-  getIsNexting?: () => boolean;
-  getIsDirectInitiator?: () => boolean;
-  getHasIncomingCall?: () => boolean;
-  
-  // State setters (для обновления состояния из компонента)
-  setIsInactiveState?: (value: boolean) => void;
-  setWasFriendCallEnded?: (value: boolean) => void;
-  setFriendCallAccepted?: (value: boolean) => void;
-  setInDirectCall?: (value: boolean) => void;
-  setStarted?: (value: boolean) => void;
-  setIsNexting?: (value: boolean) => void;
-  setAddBlocked?: (value: boolean) => void;
-  setAddPending?: (value: boolean) => void;
-  
-  // External functions
-  clearDeclinedBlock?: () => void;
-  fetchFriends?: () => Promise<void>;
-  sendCameraState?: (toPartnerId?: string, enabled?: boolean) => void;
-  getDeclinedBlock?: () => { userId?: string; until?: number } | null;
-  getIncomingFriendCall?: () => any;
-  getWasFriendCallEnded?: () => boolean;
-  getFriends?: () => any[];
-  
-  // PiP support
-  getPipLocalStream?: () => MediaStream | null;
-  getPipRemoteStream?: () => MediaStream | null;
-  getResume?: () => boolean;
-  getFromPiP?: () => boolean;
-  
-  // Callbacks shortcuts (для удобства доступа)
-  onLocalStreamChange?: (stream: MediaStream | null) => void;
-  onRemoteStreamChange?: (stream: MediaStream | null) => void;
-  onMicStateChange?: (enabled: boolean) => void;
-  onCamStateChange?: (enabled: boolean) => void;
-  onRemoteCamStateChange?: (enabled: boolean) => void;
-  onPcConnectedChange?: (connected: boolean) => void;
-  onLoadingChange?: (loading: boolean) => void;
-  onMicLevelChange?: (level: number) => void;
-  onPartnerIdChange?: (partnerId: string | null) => void;
-  onRoomIdChange?: (roomId: string | null) => void;
-  onCallIdChange?: (callId: string | null) => void;
-  onError?: (error: Error) => void;
-}
+// Экспортируем фасад как основной класс (для постепенного перехода)
+// Старый класс остается для обратной совместимости
+export { WebRTCSessionFacade as WebRTCSessionNew } from './session-facade';
 
 // ==================== WebRTCSession Class ====================
 

@@ -62,30 +62,45 @@ function makeRoomId(aSid: string, bSid: string) {
 }
 function clearPartner(io: Server, me: AuthedSocket, notifyOther: boolean, reason: 'next'|'stop'|'disconnect') {
   const otherSid = me.data.partnerSid as string | undefined;
-  if (!otherSid) return;
-
-  const other = safeGet(io, otherSid);
-  if (other) {
-    other.data.partnerSid = undefined;
-    other.data.inCall = false;
-    if (notifyOther) {
-      if (reason === 'disconnect') other.emit('disconnected');
-      else other.emit('peer:stopped');
-    }
-    markBusy(io, other, false);
-    unlockPair(other.id);
-  }
-
+  
+  // КРИТИЧНО: Всегда очищаем состояние текущего сокета, даже если партнера нет
+  // Это важно для случаев, когда партнер уже отключился или очистил свое состояние
   me.data.partnerSid = undefined;
   me.data.inCall = false;
   unlockPair(me.id);
+
+  // Если партнер существует, очищаем и его состояние
+  if (otherSid) {
+    const other = safeGet(io, otherSid);
+    if (other) {
+      other.data.partnerSid = undefined;
+      other.data.inCall = false;
+      if (notifyOther) {
+        if (reason === 'disconnect') other.emit('disconnected');
+        else other.emit('peer:stopped');
+      }
+      markBusy(io, other, false);
+      unlockPair(other.id);
+    }
+  }
 }
 
 // === Матчинг ================================================================
 function tryMatch(io: Server, socket: AuthedSocket) {
   logger.debug('Attempting match', { socketId: socket.id, queueSize: waitQueue.length });
-  if (socket.data.partnerSid || socket.data.inCall || pairLock.has(socket.id)) {
-    logger.debug('Socket already matched/busy', { socketId: socket.id });
+  
+  // КРИТИЧНО: Детальное логирование состояния сокета для диагностики
+  const hasPartnerSid = !!socket.data.partnerSid;
+  const hasInCall = !!socket.data.inCall;
+  const hasPairLock = pairLock.has(socket.id);
+  
+  if (hasPartnerSid || hasInCall || hasPairLock) {
+    logger.debug('Socket already matched/busy', { 
+      socketId: socket.id,
+      partnerSid: socket.data.partnerSid,
+      inCall: socket.data.inCall,
+      inPairLock: hasPairLock
+    });
     return false;
   }
 
@@ -103,6 +118,9 @@ function tryMatch(io: Server, socket: AuthedSocket) {
       logger.debug('Skipping self-match by userId', { socketId: socket.id, userId: myUserId, otherSocketId: sid });
       return false;
     }
+    
+    // КРИТИЧНО: Друзья могут попадаться в рандомном чате - это нормально и не блокирует работу
+    // Проверка на дружбу НЕ выполняется здесь, так как друзья имеют право общаться в рандомном чате
     
     // Если в очереди только 2 пользователя, разрешаем матч даже если они в бане
     if (waitQueue.length <= 2) {
@@ -154,12 +172,26 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
 
   // === START ================================================================
   socket.on('start', () => {
-    if (socket.data.partnerSid) return;
+    // КРИТИЧНО: Если уже есть партнер, не добавляем в очередь
+    // Но если партнер есть, это означает что состояние не очищено - очищаем его
+    if (socket.data.partnerSid) {
+      logger.warn('Start requested but socket has partner, cleaning up', {
+        socketId: socket.id,
+        partnerSid: socket.data.partnerSid
+      });
+      // Очищаем состояние перед добавлением в очередь
+      socket.data.partnerSid = undefined;
+      socket.data.inCall = false;
+      unlockPair(socket.id);
+    }
+    
+    // КРИТИЧНО: Всегда очищаем состояние перед добавлением в очередь
     socket.rooms.forEach(r => { if (r !== socket.id) socket.leave(r); });
     socket.data.partnerSid = undefined;
     socket.data.roomId = undefined;
     socket.data.busy = false;
     socket.data.inCall = false;
+    unlockPair(socket.id);
 
     markBusy(io, socket, true);
     pushToQueue(socket.id);
@@ -191,31 +223,58 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     logger.debug('Next requested', { socketId: socket.id });
     socket.data.isNexting = true;
 
-    // разрываем пару перед очисткой
+    // ПРОСТАЯ ЛОГИКА: Полностью очищаем все состояние синхронно
+    // 1. Разрываем пару с предыдущим партнером
     const prevPartner = socket.data.partnerSid as string | undefined;
     if (prevPartner) {
       const other = safeGet(io, prevPartner);
-      if (other) banPair(socket.id, other.id);
-      clearPartner(io, socket, true, 'next');
+      if (other) {
+        banPair(socket.id, other.id);
+        // КРИТИЧНО: Полностью очищаем состояние партнера
+        other.data.partnerSid = undefined;
+        other.data.inCall = false;
+        unlockPair(other.id);
+        // КРИТИЧНО: Удаляем партнера из очереди и очищаем комнаты
+        removeFromQueue(other.id);
+        other.rooms.forEach(r => { if (r !== other.id) other.leave(r); });
+        other.data.roomId = undefined;
+        // ЧАТРУЛЕТКА: Отправляем peer:left партнеру (он нажал "Далее", значит партнер должен начать новый поиск)
+        other.emit('peer:left');
+        // КРИТИЧНО: Автоматически возвращаем партнера в очередь для нового поиска
+        // Это гарантирует, что он сразу начнет искать нового собеседника
+        markBusy(io, other, true);
+        setTimeout(() => {
+          // Еще раз проверяем и очищаем перед добавлением в очередь
+          other.data.partnerSid = undefined;
+          other.data.inCall = false;
+          unlockPair(other.id);
+          pushToQueue(other.id);
+          logger.debug('Partner re-added to queue after next', { socketId: other.id });
+          tryMatch(io, other);
+        }, 100); // Небольшая задержка для синхронизации
+      }
     }
 
-    // сбрасываем состояние
+    // 2. Полностью очищаем состояние текущего сокета
     removeFromQueue(socket.id);
     socket.rooms.forEach(r => { if (r !== socket.id) socket.leave(r); });
     socket.data.roomId = undefined;
-    // КРИТИЧНО: НЕ убираем busy здесь - пользователь продолжает поиск, значит остается busy
-    // busy будет установлен в true при добавлении в очередь и попытке матча
-    // socket.data.busy = false; // УБРАНО - пользователь остается busy пока ищет
+    socket.data.partnerSid = undefined;
     socket.data.inCall = false;
+    unlockPair(socket.id);
     
-    // КРИТИЧНО: Устанавливаем busy = true сразу, ДО setTimeout
-    // чтобы бэйдж "занято" оставался видимым друзьям сразу при автопоиске
-    // Пользователь продолжает поиск, значит остается busy
+    // 3. Устанавливаем busy (пользователь продолжает поиск)
     markBusy(io, socket, true);
 
+    // 4. Через небольшую задержку добавляем в очередь и запускаем поиск
     setTimeout(() => {
-      pushToQueue(socket.id);
+      // КРИТИЧНО: Еще раз проверяем и очищаем перед добавлением в очередь
+      socket.data.partnerSid = undefined;
+      socket.data.inCall = false;
+      unlockPair(socket.id);
       socket.data.isNexting = false;
+      
+      pushToQueue(socket.id);
       logger.debug('Socket re-added to queue', { socketId: socket.id });
       tryMatch(io, socket);
     }, 400);

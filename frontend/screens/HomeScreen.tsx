@@ -28,7 +28,7 @@ import * as ImagePicker from 'expo-image-picker';
 import SplashLoader from '../components/SplashLoader';
 import { Swipeable } from 'react-native-gesture-handler';
 import { Avatar, Divider, IconButton, List, Surface, Portal, Dialog, Button } from 'react-native-paper';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, getAvatarKey, forceImageRefresh } from '../utils/imageOptimization';
 import AvatarImage from '../components/AvatarImage';
@@ -2538,21 +2538,28 @@ const handleClearNick = useCallback(async () => {
             <Text style={styles.busyText}>Занято</Text>
           </Animated.View>
         )}
-        <IconButton
-          icon="video"
-          size={22}
-          iconColor={busy ? 'rgba(255,255,255,0.5)' : LIVI.white}
-          style={[styles.inviteBtn, busy ? styles.inviteBtnDisabled : null]}
-          disabled={busy}
-          onPress={() => {
-            setMissedByUser((prev) => {
-              const next = { ...prev, [friend.id]: 0 };
-              AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(()=>{});
-              return next;
-            });
-            handleStartVideoCall(friend);
-          }}
-        />
+        <View style={{ position: 'relative' }}>
+          <IconButton
+            icon="video"
+            size={22}
+            iconColor={busy ? '#ddd' : LIVI.white}
+            style={[styles.inviteBtn, busy ? styles.inviteBtnDisabled : null]}
+            disabled={busy}
+            onPress={() => {
+              setMissedByUser((prev) => {
+                const next = { ...prev, [friend.id]: 0 };
+                AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(()=>{});
+                return next;
+              });
+              handleStartVideoCall(friend);
+            }}
+          />
+          {busy && Platform.OS === 'android' && (
+            <View style={styles.videoIconOverlay}>
+              <MaterialIcons name="videocam" size={22} color="rgba(136, 136, 136, 0.3)" />
+            </View>
+          )}
+        </View>
         {missedCount > 0 && (
           <View style={[styles.badgeBubble, { right: -2 }]}> 
             <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>
@@ -3305,10 +3312,18 @@ const styles = StyleSheet.create({
   rightWrap: { width: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
   inviteBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
   inviteBtnDisabled: { 
-    opacity: 0.5, 
     backgroundColor: LIVI.glass,
-    // КРИТИЧНО: На Android disabled кнопки могут быть не видны, поэтому явно устанавливаем opacity
-    // и сохраняем backgroundColor для видимости
+    opacity: 0.5,
+  },
+  videoIconOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    pointerEvents: 'none',
   },
   busyBadge: {
     backgroundColor: 'rgba(255,90,103,0.25)',

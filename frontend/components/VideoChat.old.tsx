@@ -1,3 +1,19 @@
+/**
+ * ⚠️ РЕЗЕРВНАЯ КОПИЯ - НЕ ИСПОЛЬЗУЕТСЯ ⚠️
+ * 
+ * Этот файл переименован в VideoChat.old.tsx как резервная копия старого монолитного компонента.
+ * 
+ * НОВАЯ СТРУКТУРА:
+ * - /components/VideoChat/index.tsx - роутер компонент (используется)
+ * - /components/VideoChat/RandomChat.tsx - компонент для рандомного чата
+ * - /components/VideoChat/VideoCall.tsx - компонент для видеозвонка другу
+ * - /components/VideoChat/shared/ - общие компоненты
+ * 
+ * Этот файл можно удалить после успешного тестирования новой структуры.
+ * 
+ * Дата создания резервной копии: 2024-12-06
+ */
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -39,7 +55,7 @@ import { t, loadLang, defaultLang } from '../utils/i18n';
 import type { Lang } from '../utils/i18n';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../utils/keepAwake';
 import { isValidStream, cleanupStream } from '../utils/streamUtils';
-import { WebRTCSession, WebRTCSessionConfig } from '../src/webrtc/session';
+import { WebRTCSession, WebRTCSessionConfig } from '../src/webrtc/session.old';
 
 // === sockets (ваш проект) ===
 import socket, {
