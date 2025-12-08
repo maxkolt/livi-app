@@ -160,19 +160,10 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       // КРИТИЧНО: Для прямых звонков используем roomId для гарантированной доставки
       // КРИТИЧНО: Используем socket.to() вместо io.to(), чтобы исключить отправителя из получателей
       if (roomId) {
-        const room = io.sockets.adapter.rooms.get(roomId);
-        const roomSize = room ? room.size : 0;
         const isSenderInRoom = socket.rooms.has(roomId);
         
-        logger.info(`[forward ${event}] 📨 Sending to room`, { 
-          roomId, 
-          roomSize,
-          socketId: socket.id,
-          event,
-          isSenderInRoom
-        });
-        
         // КРИТИЧНО: Проверяем, что отправитель находится в комнате
+        // Делаем это ПЕРЕД получением roomSize, чтобы размер был актуальным
         if (!isSenderInRoom) {
           logger.warn(`[forward ${event}] ⚠️ Sender not in room, joining room first`, {
             roomId,
@@ -181,22 +172,39 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
           socket.join(roomId);
         }
         
+        // КРИТИЧНО: Получаем roomSize ПОСЛЕ присоединения отправителя к комнате
+        // Это гарантирует актуальный размер комнаты для проверки доставки
+        const room = io.sockets.adapter.rooms.get(roomId);
+        const roomSize = room ? room.size : 0;
+        
+        logger.info(`[forward ${event}] 📨 Sending to room`, { 
+          roomId, 
+          roomSize,
+          socketId: socket.id,
+          event,
+          isSenderInRoom: socket.rooms.has(roomId)
+        });
+        
         // КРИТИЧНО: socket.to() исключает отправителя, io.to() включает всех в комнате
         socket.to(roomId).emit(event, envelope);
         delivered = true;
         
-        // Проверяем что событие действительно отправлено
+        // КРИТИЧНО: Проверяем что событие действительно отправлено
+        // Используем актуальный roomSize после присоединения отправителя
+        // socket.to() исключает отправителя, поэтому для доставки нужно минимум 2 участника
         if (roomSize <= 1) {
           logger.warn(`[forward ${event}] ⚠️ Room has only ${roomSize} socket(s), event may not be delivered`, {
             roomId,
-            socketId: socket.id
+            socketId: socket.id,
+            note: 'socket.to() excludes sender, so at least 2 participants needed for delivery'
           });
         } else {
           // Логируем успешную доставку для важных событий
           if (event === 'offer' || event === 'answer') {
             logger.info(`[forward ${event}] ✅ Event sent to room with ${roomSize} participant(s)`, {
               roomId,
-              socketId: socket.id
+              socketId: socket.id,
+              actualRecipients: roomSize - 1 // -1 потому что socket.to() исключает отправителя
             });
           }
         }

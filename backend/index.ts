@@ -882,13 +882,20 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.debug('Initiator joined room', { socketId: sock.id, roomId, callId });
       } catch {}
       
-      // Устанавливаем busy флаг для обоих участников при инициации звонка
+      // КРИТИЧНО: Устанавливаем busy флаг и состояние звонка для ОБОИХ участников при инициации
+      // Это гарантирует консистентность состояния, даже если инициатор отключится до принятия
+      // Инициатор
       (sock as any).data = (sock as any).data || {};
       (sock as any).data.busy = true;
       (sock as any).data.roomId = roomId;
       (sock as any).data.partnerSid = peerSocket.id;
+      
+      // КРИТИЧНО: Получатель также должен иметь roomId и partnerSid
+      // Это позволяет восстановить состояние звонка, если инициатор отключится
       (peerSocket as any).data = (peerSocket as any).data || {};
       (peerSocket as any).data.busy = true;
+      (peerSocket as any).data.roomId = roomId;
+      (peerSocket as any).data.partnerSid = sock.id;
       
       // Рассылаем presence:update
       io.emit("presence:update", { userId: me, busy: true });
