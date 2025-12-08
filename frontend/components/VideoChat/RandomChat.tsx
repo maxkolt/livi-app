@@ -952,10 +952,16 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             // ВАЖНО: Показываем видео только если камера включена (camOn === true)
             if (shouldShowLocalVideo) {
               if (localStream && isValidStream(localStream)) {
+                // Безопасно получаем streamURL с проверкой на null/undefined
+                const localStreamURL = localStream.toURL?.();
+                if (!localStreamURL) {
+                  return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
+                }
+                
                 return (
                   <RTCView
                     key={`local-video-${localRenderKey}`}
-                    streamURL={localStream.toURL()}
+                    streamURL={localStreamURL}
                     style={styles.rtc}
                     objectFit="cover"
                     mirror

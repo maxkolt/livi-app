@@ -3,22 +3,23 @@
   "compilerOptions": {
     "strict": true,
     "isolatedModules": true,
-    "skipLibCheck": true,         // ✅ игнорим кривые типы из node_modules
-    "noEmit": true,               // не генерировать .js файлы
-    "jsx": "react-native",        // правильный JSX для RN
-    "types": ["react", "react-native", "node"], // типы для RN и React
+    "skipLibCheck": true,
+    "noEmit": true,
+    "jsx": "react-native",
+    "types": ["react", "react-native", "node"],
     "typeRoots": ["./node_modules/@types", "./"]
   },
   "exclude": [
-    "node_modules",               // не проверяем типы внутри зависимостей
-    "babel.config.js",            // конфиги не нужны для TS
-    "metro.config.js"
+    "node_modules",
+    "babel.config.js",
+    "metro.config.js",
+    "**/*.old.tsx"
   ],
   "include": [
-    "src",                        // твой код
-    "components",                 // компоненты
-    "utils",                      // утилиты
-    "App.tsx",                    // главный вход
+    "src",
+    "components",
+    "utils",
+    "App.tsx",
     "global.d.ts"
   ]
 }

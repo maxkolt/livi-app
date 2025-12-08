@@ -680,14 +680,19 @@ export async function createUser() {
     try {
       console.log(`[createUser] Attempt ${attempt}/5...`);
       
-      // Используем нормальную логику через identity:attach вместо create-test
+      // Используем identity:attach для создания пользователя
       const installId = await getInstallId();
-      await attachUserId(installId);
+      const response = await identityAttach({ installId });
       
-      // Проверяем, что пользователь был создан
-      if (currentUserId) {
-        console.log('[createUser] User created successfully:', currentUserId);
-        return currentUserId;
+      if (response?.ok && response?.userId) {
+        // Устанавливаем userId после успешного создания
+        setCurrentUserId(response.userId);
+        await applyAuthAndConnect();
+        
+        console.log('[createUser] User created successfully:', response.userId);
+        return response.userId;
+      } else {
+        throw new Error(response?.error || 'Failed to create user');
       }
       
     } catch (e) {

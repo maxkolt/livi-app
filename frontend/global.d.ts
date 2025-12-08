@@ -26,4 +26,13 @@ declare global {
   };
 }
 
+/**
+ * Декларации типов для исправления ошибок в @cometchat/chat-uikit-react-native
+ */
+declare module '@cometchat/chat-uikit-react-native/src/shared/helper/functions' {
+  const functions: any;
+  export default functions;
+  export { functions };
+}
+
 

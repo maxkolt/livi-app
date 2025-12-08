@@ -119,22 +119,24 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
 
       // Логирование для отладки
       if (payload?.offer?.sdp) {
-        logger.debug(`[forward ${event}] Forwarding offer`, { 
+        logger.info(`[forward ${event}] 📤 Forwarding offer`, { 
           socketId: socket.id, 
           roomId, 
           to, 
           targetId,
           hasRoomId: !!roomId,
-          hasTo: !!to
+          hasTo: !!to,
+          sdpLength: payload.offer.sdp?.length || 0
         });
       } else if (payload?.answer?.sdp) {
-        logger.debug(`[forward ${event}] Forwarding answer`, { 
+        logger.info(`[forward ${event}] 📥 Forwarding answer`, { 
           socketId: socket.id, 
           roomId, 
           to, 
           targetId,
           hasRoomId: !!roomId,
-          hasTo: !!to
+          hasTo: !!to,
+          sdpLength: payload.answer.sdp?.length || 0
         });
       } else if (payload?.candidate) {
         // ICE кандидаты слишком частые, не логируем
@@ -160,40 +162,93 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       if (roomId) {
         const room = io.sockets.adapter.rooms.get(roomId);
         const roomSize = room ? room.size : 0;
-        logger.debug(`[forward ${event}] Sending to room`, { 
+        const isSenderInRoom = socket.rooms.has(roomId);
+        
+        logger.info(`[forward ${event}] 📨 Sending to room`, { 
           roomId, 
           roomSize,
-          socketId: socket.id 
+          socketId: socket.id,
+          event,
+          isSenderInRoom
         });
+        
+        // КРИТИЧНО: Проверяем, что отправитель находится в комнате
+        if (!isSenderInRoom) {
+          logger.warn(`[forward ${event}] ⚠️ Sender not in room, joining room first`, {
+            roomId,
+            socketId: socket.id
+          });
+          socket.join(roomId);
+        }
+        
         // КРИТИЧНО: socket.to() исключает отправителя, io.to() включает всех в комнате
         socket.to(roomId).emit(event, envelope);
         delivered = true;
+        
+        // Проверяем что событие действительно отправлено
+        if (roomSize <= 1) {
+          logger.warn(`[forward ${event}] ⚠️ Room has only ${roomSize} socket(s), event may not be delivered`, {
+            roomId,
+            socketId: socket.id
+          });
+        } else {
+          // Логируем успешную доставку для важных событий
+          if (event === 'offer' || event === 'answer') {
+            logger.info(`[forward ${event}] ✅ Event sent to room with ${roomSize} participant(s)`, {
+              roomId,
+              socketId: socket.id
+            });
+          }
+        }
       }
       
       // Также отправляем напрямую по to для совместимости
+      // КРИТИЧНО: to может быть как socketId, так и userId
       if (to) {
-        const targetSocket = io.sockets.sockets.get(to);
+        // Сначала пытаемся найти по socketId
+        let targetSocket = io.sockets.sockets.get(to);
+        
+        // Если не нашли по socketId, пытаемся найти по userId
+        if (!targetSocket) {
+          targetSocket = Array.from(io.sockets.sockets.values()).find(
+            (s) => (s as any)?.data?.userId === to
+          ) as AuthedSocket | undefined;
+        }
+        
         if (targetSocket) {
           logger.debug(`[forward ${event}] Sending directly to socket`, { 
             to, 
             socketId: socket.id,
+            targetSocketId: targetSocket.id,
             targetExists: true
           });
           targetSocket.emit(event, envelope);
           delivered = true;
         } else {
-          logger.warn(`[forward ${event}] Target socket not found`, { 
-            to, 
-            socketId: socket.id 
-          });
+          // Не логируем как ошибку, если событие уже доставлено через roomId
+          if (!delivered) {
+            logger.warn(`[forward ${event}] Target socket not found (neither by socketId nor userId)`, { 
+              to, 
+              socketId: socket.id 
+            });
+          }
         }
       }
       
       if (!delivered) {
-        logger.error(`[forward ${event}] Failed to deliver event`, { 
+        logger.error(`[forward ${event}] ❌ Failed to deliver event`, { 
           socketId: socket.id, 
           roomId, 
-          to 
+          to,
+          event,
+          hasRoomId: !!roomId,
+          hasTo: !!to
+        });
+      } else {
+        logger.info(`[forward ${event}] ✅ Event delivered successfully`, {
+          event,
+          roomId: roomId || undefined,
+          to: to || undefined
         });
       }
       // Доп. гарантия доставки для завершения вызова: шлем во все общие комнаты сокета

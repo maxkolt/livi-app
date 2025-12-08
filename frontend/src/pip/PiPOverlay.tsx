@@ -144,12 +144,9 @@ export default function PiPOverlay() {
       ]}
       {...panResponder.panHandlers}
     >
-      {remoteStream ? (
-        <RTCView 
-          streamURL={remoteStream.toURL ? remoteStream.toURL() : `RTCMediaStream:${remoteStream.id || 'unknown'}`} 
-          style={styles.hidden} 
-        />
-      ) : null}
+      {/* КРИТИЧНО: Убрали скрытый RTCView, так как он может конфликтовать с основным отображением видео
+          и потреблять ресурсы стрима. Если нужен для какой-то цели, можно вернуть, но лучше избегать
+          множественных RTCView для одного стрима */}
 
       <View style={styles.card}>
         {/* header (нажатие по шапке = вернуться в звонок) */}

@@ -726,7 +726,7 @@ function AppContent() {
           >
             <Stack.Navigator screenOptions={{ 
               headerShown: false,
-              cardStyle: { backgroundColor: 'transparent' },
+              contentStyle: { backgroundColor: 'transparent' },
             }}>
               <Stack.Screen name="Home" component={HomeScreen} />
               <Stack.Screen
@@ -737,7 +737,6 @@ function AppContent() {
                   gestureEnabled: true,
                   animation: 'slide_from_right' as any,
                   contentStyle: { backgroundColor: 'transparent' },
-                  cardStyle: { backgroundColor: 'transparent' },
                 }}
               />
               <Stack.Screen name="Chat" component={ChatScreen} />

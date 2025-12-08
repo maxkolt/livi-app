@@ -1,5 +1,5 @@
 // frontend/utils/logger.ts
-const LOG_LEVEL = process.env.LOG_LEVEL || 'warn'; // debug, info, warn, error
+const LOG_LEVEL = process.env.LOG_LEVEL || 'info'; // debug, info, warn, error
 
 const levels = {
   debug: 0,

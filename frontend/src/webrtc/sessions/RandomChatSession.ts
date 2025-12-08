@@ -21,9 +21,9 @@ export class RandomChatSession extends BaseWebRTCSession {
    */
   async ensurePcWithLocal(stream: MediaStream): Promise<RTCPeerConnection | null> {
     // Защита от множественного создания PC
-    if (this.pcCreationInProgressRef) {
+    if (this.pcLifecycleManager.isPcCreationInProgress()) {
       let attempts = 0;
-      while (this.pcCreationInProgressRef && attempts < 50) {
+      while (this.pcLifecycleManager.isPcCreationInProgress() && attempts < 50) {
         await new Promise(resolve => setTimeout(resolve, 100));
         attempts++;
       }
@@ -99,13 +99,13 @@ export class RandomChatSession extends BaseWebRTCSession {
         }
         
         (global as any).__pcCreationLock = Date.now();
-        this.pcCreationInProgressRef = true;
+        this.pcLifecycleManager.setPcCreationInProgress(true);
         
         try {
           pc = new RTCPeerConnection(iceConfig);
           this.peerRef = pc;
           (global as any).__pcCreationLock = null;
-          this.pcCreationInProgressRef = false;
+          this.pcLifecycleManager.setPcCreationInProgress(false);
           
           this.incrementPcToken(true);
           this.markPcWithToken(pc);
@@ -115,42 +115,97 @@ export class RandomChatSession extends BaseWebRTCSession {
           this.attachRemoteHandlers(pc, this.partnerIdRef || undefined);
         } catch (createError: any) {
           (global as any).__pcCreationLock = null;
-          this.pcCreationInProgressRef = false;
+          this.pcLifecycleManager.setPcCreationInProgress(false);
           logger.error('[RandomChatSession] RTCPeerConnection constructor failed:', createError);
           (global as any).__lastPcClosedAt = Date.now();
           throw createError;
         }
       } catch (e) {
         (global as any).__pcCreationLock = null;
-        this.pcCreationInProgressRef = false;
+        this.pcLifecycleManager.setPcCreationInProgress(false);
         logger.error('[RandomChatSession] Failed to create PeerConnection:', e);
         (global as any).__lastPcClosedAt = Date.now();
         return null;
       }
     }
     
-    // Добавляем треки в PC
-    const senders: RTCRtpSender[] = (pc.getSenders?.() || []) as any;
-    const audioTracks = stream?.getAudioTracks?.() || [];
-    const videoTracks = stream?.getVideoTracks?.() || [];
+    // КРИТИЧНО: Добавляем локальные треки в PeerConnection
+    // Это ОБЯЗАТЕЛЬНО для отправки аудио/видео собеседнику
+    // Без этого треки никуда не отправляются → собеседник слышит/видит НОЛЬ
+    const allTracks = stream?.getTracks?.() || [];
+    const tracksAdded: string[] = [];
+    const tracksFailed: string[] = [];
     
-    for (const track of [...audioTracks, ...videoTracks]) {
-      if (track && (track as any).readyState !== 'ended') {
-        const sameKind = senders.find((s: any) => s?.track?.kind === (track as any).kind);
-        if (sameKind) {
-          try {
-            sameKind.replaceTrack(track as any);
-          } catch (e) {
-            logger.error('[RandomChatSession] Error replacing track:', e);
-          }
-        } else {
-          try {
-            (pc as any).addTrack?.(track as any, stream as any);
-          } catch (e) {
-            logger.error('[RandomChatSession] Error adding track:', e);
-          }
+    logger.info('[RandomChatSession] 🔧 Добавляем локальные треки в PeerConnection', {
+      streamId: stream.id,
+      totalTracks: allTracks.length,
+      audioTracks: stream?.getAudioTracks?.()?.length || 0,
+      videoTracks: stream?.getVideoTracks?.()?.length || 0
+    });
+    
+    // КРИТИЧНО: Простой и надежный способ - добавляем все треки через addTrack
+    allTracks.forEach((track: any) => {
+      if (track && track.readyState !== 'ended') {
+        try {
+          // КРИТИЧНО: Используем стандартный метод addTrack с stream
+          // Это гарантирует, что треки будут отправляться собеседнику
+          (pc as any).addTrack(track, stream);
+          tracksAdded.push(track.id);
+          
+          logger.info('[RandomChatSession] ✅ Трек добавлен в PC', {
+            trackId: track.id,
+            trackKind: track.kind || (track as any).type,
+            trackEnabled: track.enabled,
+            trackReadyState: track.readyState
+          });
+        } catch (e) {
+          tracksFailed.push(track.id);
+          logger.error('[RandomChatSession] ❌ Ошибка добавления трека в PC', {
+            trackId: track.id,
+            trackKind: track.kind || (track as any).type,
+            error: e
+          });
         }
+      } else {
+        logger.warn('[RandomChatSession] Пропускаем трек - ended или null', {
+          trackId: track?.id,
+          readyState: track?.readyState
+        });
       }
+    });
+    
+    // КРИТИЧНО: Проверяем, что треки действительно добавлены
+    const finalSenders = pc.getSenders?.() || [];
+    const finalSendersCount = finalSenders.length;
+    
+    logger.info('[RandomChatSession] 📊 Итоговое состояние треков в PC', {
+      tracksAdded: tracksAdded.length,
+      tracksFailed: tracksFailed.length,
+      sendersInPc: finalSendersCount,
+      expectedTracks: allTracks.length,
+      tracksAddedIds: tracksAdded,
+      tracksFailedIds: tracksFailed,
+      sendersDetails: finalSenders.map((s: any) => ({
+        trackId: s.track?.id,
+        trackKind: s.track?.kind || (s.track as any)?.type,
+        trackEnabled: s.track?.enabled,
+        trackReadyState: s.track?.readyState
+      }))
+    });
+    
+    // КРИТИЧНО: Если треки не добавлены - это критическая ошибка
+    if (finalSendersCount === 0 && allTracks.length > 0) {
+      logger.error('[RandomChatSession] ❌❌❌ КРИТИЧЕСКАЯ ОШИБКА: Треки НЕ добавлены в PC! Собеседник не услышит и не увидит!', {
+        streamId: stream.id,
+        totalTracks: allTracks.length,
+        sendersCount: finalSendersCount
+      });
+    } else if (finalSendersCount < allTracks.length) {
+      logger.warn('[RandomChatSession] ⚠️ Не все треки добавлены в PC', {
+        expected: allTracks.length,
+        actual: finalSendersCount,
+        missing: allTracks.length - finalSendersCount
+      });
     }
     
     return pc;
@@ -337,12 +392,7 @@ export class RandomChatSession extends BaseWebRTCSession {
     this.stopMicMeter();
     
     // 4. Очищаем трекеры offer/answer
-    this.processingOffersRef.clear();
-    this.processedOffersRef.clear();
-    this.processingAnswersRef.clear();
-    this.processedAnswersRef.clear();
-    this.offerCounterByKeyRef.clear();
-    this.answerCounterByKeyRef.clear();
+    this.iceAndSignalingManager.reset();
     
     // 5. Очищаем partnerId и roomId (комната полностью очищается)
     this.config.setStarted?.(false);
@@ -373,12 +423,7 @@ export class RandomChatSession extends BaseWebRTCSession {
     }
     
     // 2. Очищаем трекеры offer/answer
-    this.processingOffersRef.clear();
-    this.processedOffersRef.clear();
-    this.processingAnswersRef.clear();
-    this.processedAnswersRef.clear();
-    this.offerCounterByKeyRef.clear();
-    this.answerCounterByKeyRef.clear();
+    this.iceAndSignalingManager.reset();
     
     // 3. Останавливаем удаленный стрим
     this.stopRemoteStreamInternal();
@@ -402,10 +447,7 @@ export class RandomChatSession extends BaseWebRTCSession {
     this.stopRandomChat();
     this.removeAllListeners();
     
-    if (this.appStateSubscription) {
-      this.appStateSubscription.remove();
-      this.appStateSubscription = null;
-    }
+    this.appStateHandler.removeAppStateListener();
     
     if (this.autoSearchTimeoutRef) {
       clearTimeout(this.autoSearchTimeoutRef);
@@ -520,13 +562,11 @@ export class RandomChatSession extends BaseWebRTCSession {
     }
     
     // Сбрасываем состояние камеры (покажем заглушку пока не придет видео)
-    this.remoteCamOnRef = false;
-    this.remoteForcedOffRef = false;
+    this.remoteStateManager.setRemoteCamOn(false, (event, ...args) => this.emit(event, ...args));
+    this.remoteStateManager.setRemoteForcedOff(false);
     this.camToggleSeenRef = false;
-    this.config.callbacks.onRemoteCamStateChange?.(false);
-    this.config.onRemoteCamStateChange?.(false);
+    this.remoteStateManager.setPendingCamToggle(null);
     this.emitRemoteState();
-    this.pendingCamToggleRef = null;
     
     // Устанавливаем partnerId и roomId
     this.setPartnerId(partnerId);
@@ -559,7 +599,7 @@ export class RandomChatSession extends BaseWebRTCSession {
     
     // Создаем PC и подключаемся
     if (partnerId && !this.peerRef) {
-      let stream = this.localStreamRef;
+      let stream = this.streamManager.getLocalStream();
       if (!stream || !isValidStream(stream)) {
         stream = await this.startLocalStream('front');
         if (!stream || !isValidStream(stream)) {
@@ -594,7 +634,7 @@ export class RandomChatSession extends BaseWebRTCSession {
    */
   handleRandomDisconnected(source: 'server' | 'local'): void {
     const hasActiveConnection = !!this.partnerIdRef || !!this.roomIdRef;
-    const hasRemoteStream = !!this.remoteStreamRef;
+    const hasRemoteStream = !!this.streamManager.getRemoteStream();
     const pc = this.peerRef;
     
     // КРИТИЧНО: НЕ обрабатываем handleRandomDisconnected если соединение активно
@@ -627,7 +667,7 @@ export class RandomChatSession extends BaseWebRTCSession {
     }
     
     // 2. Чистим remoteStream
-    if (this.remoteStreamRef) {
+    if (this.streamManager.getRemoteStream()) {
       this.stopRemoteStreamInternal();
     }
     
@@ -674,13 +714,6 @@ export class RandomChatSession extends BaseWebRTCSession {
       return;
     }
     
-    // КРИТИЧНО: Защита от множественных вызовов для одного и того же PC
-    const answerKey = `answer_${from}_${this.pcToken}`;
-    if (this.processingAnswersRef.has(answerKey) || this.processedAnswersRef.has(answerKey)) {
-      logger.warn('[RandomChatSession] Answer already being processed or processed for this PC', { from, answerKey });
-      return;
-    }
-    
     // КРИТИЧНО: Проверяем что localDescription еще не установлен
     const hasLocalDesc = !!(pc as any)?.localDescription;
     if (hasLocalDesc) {
@@ -688,41 +721,48 @@ export class RandomChatSession extends BaseWebRTCSession {
       return;
     }
     
-    this.processingAnswersRef.add(answerKey);
-    
     try {
       // Проверяем состояние
       if (pc.signalingState !== 'have-remote-offer') {
-        this.processingAnswersRef.delete(answerKey);
         return;
       }
       
       // КРИТИЧНО: Проверяем pcToken и что PC не закрыт
       if (!this.isPcValid(pc)) {
         logger.warn('[RandomChatSession] Cannot create answer - PC is closed or token invalid');
-        this.processingAnswersRef.delete(answerKey);
         return;
       }
       
       // Создаем answer
       const answer = await pc.createAnswer();
       
+      // КРИТИЧНО: Защита от множественных вызовов для одного и того же PC
+      const currentPcToken = this.pcLifecycleManager.getPcToken();
+      const answerSdp = answer?.sdp || '';
+      const answerKey = this.iceAndSignalingManager.createAnswerKey(from, currentPcToken, answerSdp);
+      if (this.iceAndSignalingManager.isProcessingAnswer(answerKey) || this.iceAndSignalingManager.isAnswerProcessed(answerKey)) {
+        logger.warn('[RandomChatSession] Answer already being processed or processed for this PC', { from, answerKey });
+        return;
+      }
+      
+      this.iceAndSignalingManager.markAnswerProcessing(answerKey);
+      
       // КРИТИЧНО: Проверяем что answer валиден
       if (!answer) {
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: Answer is NULL!');
-        this.processingAnswersRef.delete(answerKey);
+        logger.error('[RandomChatSession] CRITICAL: Answer is NULL!');
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
         return;
       }
       
       if (!answer.sdp) {
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: Answer has no SDP!');
-        this.processingAnswersRef.delete(answerKey);
+        logger.error('[RandomChatSession] CRITICAL: Answer has no SDP!');
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
         return;
       }
       
       if (answer.type !== 'answer') {
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: Answer type is not "answer"!', { type: answer.type });
-        this.processingAnswersRef.delete(answerKey);
+        logger.error('[RandomChatSession] CRITICAL: Answer type is not "answer"!', { type: answer.type });
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
         return;
       }
       
@@ -735,21 +775,21 @@ export class RandomChatSession extends BaseWebRTCSession {
           signalingState: pc.signalingState,
           expectedState: 'have-remote-offer'
         });
-        this.processingAnswersRef.delete(answerKey);
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
         return;
       }
       
       // КРИТИЧНО: Проверяем что PC все еще валиден
       if (!this.isPcValid(pc)) {
         logger.warn('[RandomChatSession] PC became invalid before setLocalDescription for answer');
-        this.processingAnswersRef.delete(answerKey);
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
         return;
       }
       
       // КРИТИЧНО: Проверяем что answer все еще валиден перед setLocalDescription
       if (!answer || !answer.sdp || answer.type !== 'answer') {
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: Answer became invalid before setLocalDescription!');
-        this.processingAnswersRef.delete(answerKey);
+        logger.error('[RandomChatSession] CRITICAL: Answer became invalid before setLocalDescription!');
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
         return;
       }
       
@@ -757,7 +797,7 @@ export class RandomChatSession extends BaseWebRTCSession {
       const hasLocalDescBefore = !!(pc as any)?.localDescription;
       if (hasLocalDescBefore) {
         logger.warn('[RandomChatSession] Local description already set, skipping answer creation');
-        this.processingAnswersRef.delete(answerKey);
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
         return;
       }
       
@@ -835,11 +875,10 @@ export class RandomChatSession extends BaseWebRTCSession {
       await this.flushIceFor(from);
       
       // Помечаем answer как обработанный
-      this.processedAnswersRef.add(answerKey);
-      this.processingAnswersRef.delete(answerKey);
+      this.iceAndSignalingManager.markAnswerProcessed(answerKey);
     } catch (e) {
       logger.error('[RandomChatSession] Error creating/sending answer:', e);
-      this.processingAnswersRef.delete(answerKey);
+      // answerKey может быть не определен, если ошибка произошла до создания answer
     }
   }
   
@@ -848,8 +887,7 @@ export class RandomChatSession extends BaseWebRTCSession {
    * Используем to (socket.id) для рандомного чата
    */
   protected async createAndSendOffer(toPartnerId: string, roomId?: string): Promise<void> {
-    // КРИТИЧНО: Объявляем offerKey вне try, чтобы он был доступен в catch
-    const offerKey = `offer_${toPartnerId}_${this.pcToken}`;
+    let offerKey: string | undefined;
     
     try {
       const pc = this.getPeerConnection();
@@ -857,10 +895,8 @@ export class RandomChatSession extends BaseWebRTCSession {
         logger.warn('[RandomChatSession] Cannot create offer - no PC');
         return;
       }
-      if (this.processingOffersRef.has(offerKey) || this.processedOffersRef.has(offerKey)) {
-        logger.warn('[RandomChatSession] Offer already being processed or processed for this PC', { toPartnerId, offerKey });
-        return;
-      }
+      
+      const currentPcToken = this.pcLifecycleManager.getPcToken();
       
       // КРИТИЧНО: Проверяем что localDescription еще не установлен
       const hasLocalDesc = !!(pc as any)?.localDescription;
@@ -869,16 +905,13 @@ export class RandomChatSession extends BaseWebRTCSession {
         return;
       }
       
-      this.processingOffersRef.add(offerKey);
-      
       // КРИТИЧНО: Проверяем pcToken и что PC не закрыт
       if (!this.isPcValid(pc)) {
         logger.warn('[RandomChatSession] Cannot create offer - PC is closed or token invalid', {
           pcToken: (pc as any)?._pcToken,
-          currentToken: this.pcToken,
+          currentToken: currentPcToken,
           signalingState: pc.signalingState
         });
-        this.processingOffersRef.delete(offerKey);
         return;
       }
       
@@ -894,7 +927,6 @@ export class RandomChatSession extends BaseWebRTCSession {
           hasRemoteDesc,
           expectedState: 'stable (no descriptions)'
         });
-        this.processingOffersRef.delete(offerKey);
         return;
       }
       
@@ -909,14 +941,12 @@ export class RandomChatSession extends BaseWebRTCSession {
           hasLocalDesc: currentHasLocalDesc,
           hasRemoteDesc: currentHasRemoteDesc
         });
-        this.processingOffersRef.delete(offerKey);
         return;
       }
       
       // Проверка на завершенный звонок
       const isInactiveState = this.config.getIsInactiveState?.() ?? false;
       if (isInactiveState) {
-        this.processingOffersRef.delete(offerKey);
         return;
       }
       
@@ -930,7 +960,7 @@ export class RandomChatSession extends BaseWebRTCSession {
       const endedAudioTracks = audioSenders.filter((s: any) => s?.track?.readyState === 'ended');
       const endedVideoTracks = videoSenders.filter((s: any) => s?.track?.readyState === 'ended');
       if (endedAudioTracks.length > 0 || endedVideoTracks.length > 0) {
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: Tracks are ended before createOffer!', {
+        logger.error('[RandomChatSession] CRITICAL: Tracks are ended before createOffer!', {
           endedAudioCount: endedAudioTracks.length,
           endedVideoCount: endedVideoTracks.length,
           totalAudioSenders: audioSenders.length,
@@ -939,7 +969,7 @@ export class RandomChatSession extends BaseWebRTCSession {
       }
       
       if (sendersBeforeOffer.length === 0) {
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: No tracks in PC before createOffer! This will result in sendonly!');
+        logger.error('[RandomChatSession] CRITICAL: No tracks in PC before createOffer! This will result in sendonly!');
       }
       
       // КРИТИЧНО: offerToReceiveAudio и offerToReceiveVideo должны быть true
@@ -951,22 +981,32 @@ export class RandomChatSession extends BaseWebRTCSession {
         voiceActivityDetection: false, // Отключаем VAD для уменьшения задержки
       } as any);
       
+      const offerSdp = offer?.sdp || '';
+      offerKey = this.iceAndSignalingManager.createOfferKey(toPartnerId, currentPcToken, offerSdp);
+      
+      if (this.iceAndSignalingManager.isProcessingOffer(offerKey) || this.iceAndSignalingManager.isOfferProcessed(offerKey)) {
+        logger.warn('[RandomChatSession] Offer already being processed or processed for this PC', { toPartnerId, offerKey });
+        return;
+      }
+      
+      this.iceAndSignalingManager.markOfferProcessing(offerKey);
+      
       // КРИТИЧНО: Проверяем что offer валиден
       if (!offer) {
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: Offer is NULL!');
-        this.processingOffersRef.delete(offerKey);
+        logger.error('[RandomChatSession] CRITICAL: Offer is NULL!');
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
         return;
       }
       
       if (!offer.sdp) {
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: Offer has no SDP!');
-        this.processingOffersRef.delete(offerKey);
+        logger.error('[RandomChatSession] CRITICAL: Offer has no SDP!');
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
         return;
       }
       
       if (offer.type !== 'offer') {
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: Offer type is not "offer"!', { type: offer.type });
-        this.processingOffersRef.delete(offerKey);
+        logger.error('[RandomChatSession] CRITICAL: Offer type is not "offer"!', { type: offer.type });
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
         return;
       }
       
@@ -975,10 +1015,10 @@ export class RandomChatSession extends BaseWebRTCSession {
       const hasSendOnly = offer.sdp.includes('a=sendonly');
       const hasRecvOnly = offer.sdp.includes('a=recvonly');
       if (hasSendOnly && !hasSendRecv) {
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: Offer has sendonly instead of sendrecv! This means remote video will not work!');
+        logger.error('[RandomChatSession] CRITICAL: Offer has sendonly instead of sendrecv! This means remote video will not work!');
       }
       if (!hasSendRecv && !hasSendOnly && !hasRecvOnly) {
-        logger.warn('[RandomChatSession] ⚠️ Offer SDP has no explicit direction - may default to sendonly');
+        logger.warn('[RandomChatSession] Offer SDP has no explicit direction - may default to sendonly');
       }
       
       // КРИТИЧНО: Для рандомного чата НЕ используем оптимизацию SDP
@@ -996,21 +1036,21 @@ export class RandomChatSession extends BaseWebRTCSession {
           finalHasLocalDesc,
           finalHasRemoteDesc
         });
-        this.processingOffersRef.delete(offerKey);
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
         return;
       }
       
       // КРИТИЧНО: Проверяем что PC все еще валиден
       if (!this.isPcValid(pc)) {
         logger.warn('[RandomChatSession] PC became invalid before setLocalDescription');
-        this.processingOffersRef.delete(offerKey);
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
         return;
       }
       
       // КРИТИЧНО: Проверяем что offer все еще валиден перед setLocalDescription
       if (!offer || !offer.sdp || offer.type !== 'offer') {
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: Offer became invalid before setLocalDescription!');
-        this.processingOffersRef.delete(offerKey);
+        logger.error('[RandomChatSession] CRITICAL: Offer became invalid before setLocalDescription!');
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
         return;
       }
       
@@ -1024,11 +1064,11 @@ export class RandomChatSession extends BaseWebRTCSession {
         
         if (errorState === 'have-remote-offer' || errorHasRemoteDesc) {
           logger.warn('[RandomChatSession] PC state changed to have-remote-offer during setLocalDescription');
-          this.processingOffersRef.delete(offerKey);
+          this.iceAndSignalingManager.markOfferProcessed(offerKey);
           return;
         }
         
-        logger.error('[RandomChatSession] ❌❌❌ CRITICAL: setLocalDescription failed!', {
+        logger.error('[RandomChatSession] CRITICAL: setLocalDescription failed!', {
           error: errorMsg,
           offerType: offer.type,
           hasSdp: !!offer.sdp,
@@ -1039,7 +1079,7 @@ export class RandomChatSession extends BaseWebRTCSession {
           sendersCount: (pc.getSenders?.() || []).length
         });
         
-        this.processingOffersRef.delete(offerKey);
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
         throw setLocalError;
       }
       
@@ -1061,11 +1101,14 @@ export class RandomChatSession extends BaseWebRTCSession {
       socket.emit('offer', offerPayload);
       
       // Помечаем offer как обработанный
-      this.processedOffersRef.add(offerKey);
-      this.processingOffersRef.delete(offerKey);
+      if (offerKey) {
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
+      }
     } catch (e) {
       logger.error('[RandomChatSession] Error creating/sending offer:', e);
-      this.processingOffersRef.delete(offerKey);
+      if (offerKey) {
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
+      }
     }
   }
 }

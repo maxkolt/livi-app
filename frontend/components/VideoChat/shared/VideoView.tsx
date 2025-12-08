@@ -33,10 +33,16 @@ export const VideoView: React.FC<VideoViewProps> = ({
   // Показываем видео только если камера включена
   if (showVideo) {
     if (stream && isValidStream(stream)) {
+      // Безопасно получаем streamURL с проверкой на null/undefined
+      const streamURL = stream.toURL?.();
+      if (!streamURL) {
+        return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
+      }
+      
       return (
         <RTCView
           key={`${isLocal ? 'local' : 'remote'}-video-${renderKey}`}
-          streamURL={stream.toURL()}
+          streamURL={streamURL}
           style={styles.rtc}
           objectFit="cover"
           mirror={isLocal}

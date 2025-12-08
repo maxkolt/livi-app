@@ -872,16 +872,34 @@ io.on('connection', async (sock: AuthedSocket) => {
       callOfUser.set(me, { with: peerId, callId });
       callOfUser.set(peerId, { with: me, callId });
 
+      // КРИТИЧНО: Создаем комнату при инициации звонка (инициатором)
+      const sorted = [sock.id, peerSocket.id].sort();
+      const roomId = `room_${sorted[0]}_${sorted[1]}`;
+      
+      // Инициатор сразу присоединяется к комнате
+      try { 
+        sock.join(roomId);
+        logger.debug('Initiator joined room', { socketId: sock.id, roomId, callId });
+      } catch {}
+      
       // Устанавливаем busy флаг для обоих участников при инициации звонка
       (sock as any).data = (sock as any).data || {};
       (sock as any).data.busy = true;
+      (sock as any).data.roomId = roomId;
+      (sock as any).data.partnerSid = peerSocket.id;
       (peerSocket as any).data = (peerSocket as any).data || {};
       (peerSocket as any).data.busy = true;
       
       // Рассылаем presence:update
       io.emit("presence:update", { userId: me, busy: true });
       io.emit("presence:update", { userId: peerId, busy: true });
-      logger.debug('Call initiated', { from: me, to: peerId, callId });
+      logger.debug('Call initiated', { from: me, to: peerId, callId, roomId });
+      
+      // КРИТИЧНО: Отправляем инициатору roomId для немедленного использования
+      try {
+        sock.emit('call:room:created', { callId, roomId, partnerId: peerId });
+        logger.debug('Room created event sent to initiator', { socketId: sock.id, roomId, callId });
+      } catch {}
 
       // таймаут 20с
       const timer = setTimeout(() => {
@@ -960,21 +978,36 @@ io.on('connection', async (sock: AuthedSocket) => {
     const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b) as AuthedSocket | undefined;
     
     if (aSock && bSock) {
-      // УПРОЩЕНО: Создаем простую комнату 1-на-1
+      // КРИТИЧНО: Комната уже создана инициатором при call:initiate
+      // Получаем roomId из данных инициатора или создаем по той же логике
       const sorted = [aSock.id, bSock.id].sort();
-      const roomId = `room_${sorted[0]}_${sorted[1]}`;
+      const roomId = (aSock as any)?.data?.roomId || (bSock as any)?.data?.roomId || `room_${sorted[0]}_${sorted[1]}`;
       
-      // Добавляем в комнату с правильным roomId
-      try { aSock.join(roomId); } catch {}
-      try { bSock.join(roomId); } catch {}
+      // КРИТИЧНО: Принимающий ОБЯЗАТЕЛЬНО присоединяется к комнате
+      try { 
+        aSock.join(roomId);
+        logger.debug('Participant A joined room', { socketId: aSock.id, roomId, callId: id });
+      } catch {}
+      try { 
+        bSock.join(roomId);
+        logger.debug('Participant B joined room', { socketId: bSock.id, roomId, callId: id });
+      } catch {}
+      
       try { activeCallBySocket.set(aSock.id, id); } catch {}
       try { activeCallBySocket.set(bSock.id, id); } catch {}
       
       // Устанавливаем busy для обоих
       (aSock as any).data = (aSock as any).data || {};
       (aSock as any).data.busy = true;
+      (aSock as any).data.roomId = roomId;
+      (aSock as any).data.partnerSid = bSock.id;
+      (aSock as any).data.inCall = true;
+      
       (bSock as any).data = (bSock as any).data || {};
       (bSock as any).data.busy = true;
+      (bSock as any).data.roomId = roomId;
+      (bSock as any).data.partnerSid = aSock.id;
+      (bSock as any).data.inCall = true;
       
       // Рассылаем presence:update
       if (link.a) {
@@ -984,22 +1017,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         io.emit("presence:update", { userId: link.b, busy: true });
       }
       
-      // КРИТИЧНО: Устанавливаем partnerSid и roomId для обоих участников
-      // чтобы WebRTC события могли быть пересланы
-      if (aSock) {
-        (aSock as any).data = (aSock as any).data || {};
-        (aSock as any).data.partnerSid = bSock.id;
-        (aSock as any).data.roomId = roomId;
-        (aSock as any).data.inCall = true;
-      }
-      if (bSock) {
-        (bSock as any).data = (bSock as any).data || {};
-        (bSock as any).data.partnerSid = aSock.id;
-        (bSock as any).data.roomId = roomId;
-        (bSock as any).data.inCall = true;
-      }
-      
-      // Отправляем call:accepted с socket.id в from (не userId!)
+      // Отправляем call:accepted с socket.id в from (не userId!) и roomId
       if (aSock) {
         try {
           aSock.emit('call:accepted', { callId: id, from: bSock.id, fromUserId: link.b, roomId });
@@ -1021,7 +1039,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       try { io.to(aSock.id).emit('match_found', { roomId, id: bSock.id, userId: link.b }); } catch {}
       try { io.to(bSock.id).emit('match_found', { roomId, id: aSock.id, userId: link.a }); } catch {}
       
-      logger.debug('Direct call room created', { roomId, callId: id });
+      logger.debug('Direct call room established', { roomId, callId: id, participants: 2 });
     }
     
     cleanupCall(id, 'accepted');

@@ -1,170 +1,138 @@
 import { RTCPeerConnection, MediaStream, mediaDevices } from 'react-native-webrtc';
-import { AppState, Platform } from 'react-native';
-import { getIceConfiguration, getEnvFallbackConfiguration } from '../../../utils/iceConfig';
+import { Platform } from 'react-native';
 import { isValidStream } from '../../../utils/streamUtils';
 import { logger } from '../../../utils/logger';
 import socket from '../../../sockets/socket';
 import { SimpleEventEmitter } from './SimpleEventEmitter';
 import type { CamSide, WebRTCSessionConfig } from '../types';
 
+import { PcLifecycleManager } from './managers/PcLifecycleManager';
+import { IceAndSignalingManager } from './managers/IceAndSignalingManager';
+import { StreamManager } from './managers/StreamManager';
+import { MicMeter } from './managers/MicMeter';
+import { PiPManager } from './managers/PiPManager';
+import { AppStateHandler } from './managers/AppStateHandler';
+import { RemoteStateManager } from './managers/RemoteStateManager';
+import { ConnectionStateManager } from './managers/ConnectionStateManager';
+import { hashString } from './utils/hashUtils';
+
 /**
  * Базовый класс для WebRTC сессий
- * Содержит общую логику для работы с PeerConnection, стримами, ICE
+ * Содержит общую логику для работы с PeerConnection, стримами, ICE, signaling
  * Наследуется VideoCallSession и RandomChatSession
  */
 export abstract class BaseWebRTCSession extends SimpleEventEmitter {
-  // PeerConnection
+  // PeerConnection references
   protected peerRef: RTCPeerConnection | null = null;
   protected preCreatedPcRef: RTCPeerConnection | null = null;
-  
-  // Streams
-  protected localStreamRef: MediaStream | null = null;
-  protected remoteStreamRef: MediaStream | null = null;
   
   // Connection identifiers
   protected partnerIdRef: string | null = null;
   protected roomIdRef: string | null = null;
   protected callIdRef: string | null = null;
   
-  // ICE Configuration
-  protected iceConfigRef: RTCConfiguration | null = null;
-  protected iceCandidateQueue: Map<string, any[]> = new Map();
-  protected pendingIceByFromRef: Record<string, any[]> = {};
-  protected outgoingIceCache: any[] = [];
-  
-  // Offer/Answer processing
-  protected processingOffersRef: Set<string> = new Set();
-  protected processingAnswersRef: Set<string> = new Set();
-  protected processedOffersRef: Set<string> = new Set();
-  protected processedAnswersRef: Set<string> = new Set();
-  protected offerCounterByKeyRef: Map<string, number> = new Map();
-  protected answerCounterByKeyRef: Map<string, number> = new Map();
-  protected iceRestartInProgressRef: boolean = false;
-  protected restartCooldownRef: number = 0;
-  protected isInPiPRef: boolean = false;
-  
-  // PC creation lock
-  protected pcCreationInProgressRef: boolean = false;
-  protected roomJoinedRef: Set<string> = new Set();
-  protected callAcceptedProcessingRef: boolean = false;
-  
-  // PC token protection
-  protected pcToken: number = 0;
-  
-  // Connection state management
-  protected isConnectedRef: boolean = false;
-  protected reconnectTimerRef: ReturnType<typeof setTimeout> | null = null;
-  protected connectionCheckIntervalRef: ReturnType<typeof setInterval> | null = null;
-  
-  // Remote camera state management
-  protected remoteCamOnRef: boolean = true;
-  protected remoteForcedOffRef: boolean = false;
-  protected camToggleSeenRef: boolean = false;
-  protected remoteViewKeyRef: number = 0;
-  protected trackCheckIntervalRef: ReturnType<typeof setInterval> | null = null;
-  protected connectionEstablishedAtRef: number = 0;
-  protected pendingCamToggleRef: { enabled: boolean; from: string; timestamp: number } | null = null;
-  protected remoteStreamEstablishedAtRef: number = 0;
-  protected endedStreamIgnoredAtRef: number = 0;
-  protected endedStreamTimeoutRef: ReturnType<typeof setTimeout> | null = null;
-  
-  // Remote audio state management
-  protected remoteMutedRef: boolean = false;
-  
-  // Remote PiP state management
-  protected remoteInPiPRef: boolean = false;
-  
-  // PiP state management
-  protected pipPrevCamOnRef: boolean | null = null;
-  
-  // Mic meter management
-  protected micStatsTimerRef: ReturnType<typeof setInterval> | null = null;
-  protected energyRef: number | null = null;
-  protected durRef: number | null = null;
-  protected lowLevelCountRef: number = 0;
-  
   // Auto-search management (для рандомного чата)
   protected autoSearchTimeoutRef: ReturnType<typeof setTimeout> | null = null;
   protected lastAutoSearchRef: number = 0;
   protected manuallyRequestedNextRef: boolean = false;
+  protected roomJoinedRef: Set<string> = new Set();
+  protected callAcceptedProcessingRef: boolean = false;
+  protected iceRestartInProgressRef: boolean = false;
+  protected camToggleSeenRef: boolean = false;
+  protected endedStreamIgnoredAtRef: number = 0;
+  protected endedStreamTimeoutRef: ReturnType<typeof setTimeout> | null = null;
   
-  // AppState management
-  protected appStateSubscription: any = null;
-  protected wasInBackgroundRef: boolean = false;
+  // Managers
+  protected pcLifecycleManager: PcLifecycleManager;
+  protected iceAndSignalingManager: IceAndSignalingManager;
+  protected streamManager: StreamManager;
+  protected micMeter: MicMeter;
+  protected pipManager: PiPManager;
+  protected appStateHandler: AppStateHandler;
+  protected remoteStateManager: RemoteStateManager;
+  protected connectionStateManager: ConnectionStateManager;
   
   protected config: WebRTCSessionConfig;
   
   constructor(config: WebRTCSessionConfig) {
     super();
     this.config = config;
-    this.loadIceConfiguration();
+    
+    this.pcLifecycleManager = new PcLifecycleManager();
+    this.iceAndSignalingManager = new IceAndSignalingManager();
+    this.streamManager = new StreamManager(config);
+    this.micMeter = new MicMeter(config);
+    this.pipManager = new PiPManager(config);
+    this.appStateHandler = new AppStateHandler();
+    this.remoteStateManager = new RemoteStateManager(config);
+    this.connectionStateManager = new ConnectionStateManager(config);
+    
     this.startTrackChecker();
-    this.setupAppStateListener();
+    this.appStateHandler.setupAppStateListener(
+      () => this.handleForeground(),
+      () => this.handleBackground()
+    );
   }
   
   // ==================== ICE Configuration ====================
   
-  protected async loadIceConfiguration() {
-    try {
-      const config = await getIceConfiguration();
-      this.iceConfigRef = config;
-      
-      // КРИТИЧНО: Проверяем наличие TURN серверов для отладки
-      const hasTurn = config.iceServers?.some((server: any) => {
-        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-        return urls.some((u: string) => u && u.startsWith('turn:'));
-      }) ?? false;
-      
-      if (!hasTurn) {
-        logger.warn('[BaseWebRTCSession] ⚠️ NO TURN SERVER in ICE configuration - NAT traversal may fail!');
-      } else {
-        logger.info('[BaseWebRTCSession] ✅ TURN server found in ICE configuration');
-      }
-    } catch (error) {
-      logger.error('[BaseWebRTCSession] Failed to load ICE configuration:', error);
-      this.iceConfigRef = getEnvFallbackConfiguration();
-      
-      // Проверяем fallback конфигурацию
-      const hasTurn = this.iceConfigRef.iceServers?.some((server: any) => {
-        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-        return urls.some((u: string) => u && u.startsWith('turn:'));
-      }) ?? false;
-      
-      if (!hasTurn) {
-        logger.warn('[BaseWebRTCSession] ⚠️ NO TURN SERVER in fallback configuration - NAT traversal may fail!');
-      }
-    }
+  /**
+   * Загрузить ICE конфигурацию
+   */
+  protected async loadIceConfiguration(): Promise<void> {
+    await this.iceAndSignalingManager.loadIceConfiguration();
   }
   
+  /**
+   * Получить ICE конфигурацию
+   */
   protected getIceConfig(): RTCConfiguration {
-    if (this.iceConfigRef) {
-      return this.iceConfigRef;
-    }
-    return getEnvFallbackConfiguration();
+    return this.iceAndSignalingManager.getIceConfig();
   }
   
   // ==================== Stream Management ====================
   
   /**
    * Создать локальный стрим
-   * Общая логика для всех типов сессий
+   * Проверяет PiP стрим, существующий стрим, затем создает новый с fallback стратегией
    */
   async startLocalStream(side: CamSide = 'front'): Promise<MediaStream | null> {
-    // Проверка PiP стрима
+    const pipStream = this.tryGetPiPStream();
+    if (pipStream) {
+      return pipStream;
+    }
+    
+    const existingStream = this.tryGetExistingStream();
+    if (existingStream) {
+      return existingStream;
+    }
+    
+    return this.createNewLocalStream();
+  }
+
+  /**
+   * Попытаться получить стрим из PiP
+   */
+  private tryGetPiPStream(): MediaStream | null {
     const resume = this.config.getResume?.() ?? false;
     const fromPiP = this.config.getFromPiP?.() ?? false;
     const pipLocalStream = this.config.getPipLocalStream?.();
     
     if (resume && fromPiP && pipLocalStream && isValidStream(pipLocalStream)) {
-      this.localStreamRef = pipLocalStream;
-      this.config.callbacks.onLocalStreamChange?.(pipLocalStream);
-      this.config.onLocalStreamChange?.(pipLocalStream);
+      this.streamManager.setLocalStream(pipLocalStream);
       this.emit('localStream', pipLocalStream);
       return pipLocalStream;
     }
     
-    // Проверка существующего стрима
-    const existingStream = this.localStreamRef;
+    return null;
+  }
+
+  /**
+   * Попытаться использовать существующий стрим
+   */
+  private tryGetExistingStream(): MediaStream | null {
+    const existingStream = this.streamManager.getLocalStream();
+    
     if (existingStream && isValidStream(existingStream)) {
       const tracks = existingStream.getTracks?.() || [];
       const activeTracks = tracks.filter((t: any) => t.readyState === 'live');
@@ -175,35 +143,59 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         this.emit('localStream', existingStream);
         return existingStream;
       } else {
-        // Очищаем неактивный стрим
-        try {
-          tracks.forEach((t: any) => {
-            try { t.stop(); } catch {}
-          });
-        } catch {}
-        this.localStreamRef = null;
-        this.config.callbacks.onLocalStreamChange?.(null);
-        this.config.onLocalStreamChange?.(null);
+        this.cleanupStream(existingStream);
+        this.streamManager.setLocalStream(null);
         this.emit('localStream', null);
       }
-    }
-    
-    // Очистка невалидного стрима
-    if (existingStream && !isValidStream(existingStream)) {
-      try {
-        const tracks = existingStream.getTracks?.() || [];
-        tracks.forEach((t: any) => {
-          try { t.stop(); } catch {}
-        });
-      } catch {}
-      this.localStreamRef = null;
-      this.config.callbacks.onLocalStreamChange?.(null);
-      this.config.onLocalStreamChange?.(null);
+    } else if (existingStream && !isValidStream(existingStream)) {
+      this.cleanupStream(existingStream);
+      this.streamManager.setLocalStream(null);
       this.emit('localStream', null);
     }
     
-    // Создание нового стрима
-    const audioConstraints: any = {
+    return null;
+  }
+
+  /**
+   * Очистить стрим (остановить все треки)
+   */
+  private cleanupStream(stream: MediaStream): void {
+    try {
+      const tracks = stream.getTracks?.() || [];
+      tracks.forEach((t: any) => {
+        try { t.stop(); } catch {}
+      });
+    } catch {}
+  }
+
+  /**
+   * Создать новый локальный стрим
+   * Использует fallback стратегию: сначала общий запрос, затем с facingMode, затем с deviceId
+   */
+  private async createNewLocalStream(): Promise<MediaStream> {
+    const audioConstraints = this.getAudioConstraints();
+    
+    const stream = await this.tryGetUserMediaWithFallback(audioConstraints);
+    
+    if (!stream || !isValidStream(stream)) {
+      if (stream) {
+        this.cleanupStream(stream);
+      }
+      throw new Error('Failed to create valid media stream');
+    }
+    
+    this.enableStreamTracks(stream);
+    this.streamManager.setLocalStream(stream);
+    this.emitStreamState(stream);
+    
+    return stream;
+  }
+
+  /**
+   * Получить аудио констрейнты
+   */
+  private getAudioConstraints(): any {
+    return {
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
@@ -211,27 +203,35 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       googNoiseSuppression: true,
       googAutoGainControl: true,
     };
-    
-    const try1 = () => mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
-    const try2 = () => mediaDevices.getUserMedia({ audio: audioConstraints, video: { facingMode: 'user' as any } });
-    const try3 = async () => {
-      const devs = await mediaDevices.enumerateDevices();
-      const cams = (devs as any[]).filter(d => d.kind === 'videoinput');
-      const front = cams.find(d => /front|user/i.test(d.facing || d.label || '')) || cams[0];
-      return mediaDevices.getUserMedia({ audio: audioConstraints, video: { deviceId: (front as any)?.deviceId } as any });
-    };
-    
-    let stream: MediaStream | null = null;
+  }
+
+  /**
+   * Попытаться получить медиа с fallback стратегией
+   */
+  private async tryGetUserMediaWithFallback(audioConstraints: any): Promise<MediaStream | null> {
     try {
-      stream = await try1();
-      if (!stream || !(stream as any)?.getVideoTracks?.()?.[0]) throw new Error('No video track from try1');
+      const stream = await mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
+      if (stream && (stream as any)?.getVideoTracks?.()?.[0]) {
+        return stream;
+      }
     } catch (e1) {
       try {
-        stream = await try2();
-        if (!stream || !(stream as any)?.getVideoTracks?.()?.[0]) throw new Error('No video track from try2');
+        const stream = await mediaDevices.getUserMedia({ 
+          audio: audioConstraints, 
+          video: { facingMode: 'user' as any } 
+        });
+        if (stream && (stream as any)?.getVideoTracks?.()?.[0]) {
+          return stream;
+        }
       } catch (e2) {
         try {
-          stream = await try3();
+          const devs = await mediaDevices.enumerateDevices();
+          const cams = (devs as any[]).filter(d => d.kind === 'videoinput');
+          const front = cams.find(d => /front|user/i.test(d.facing || d.label || '')) || cams[0];
+          return await mediaDevices.getUserMedia({ 
+            audio: audioConstraints, 
+            video: { deviceId: (front as any)?.deviceId } as any 
+          });
         } catch (e3) {
           logger.error('[BaseWebRTCSession] All getUserMedia attempts failed:', e3);
           throw new Error(`All getUserMedia attempts failed. Last error: ${e3 instanceof Error ? e3.message : String(e3)}`);
@@ -239,93 +239,57 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       }
     }
     
-    if (!stream) {
-      throw new Error('Failed to get media stream from all attempts');
+    return null;
+  }
+
+  /**
+   * Включить треки стрима и настроить их
+   */
+  private enableStreamTracks(stream: MediaStream): void {
+    const audioTracks = (stream as any)?.getAudioTracks?.() || [];
+    const videoTracks = (stream as any)?.getVideoTracks?.() || [];
+    const audioTrack = audioTracks[0];
+    const videoTrack = videoTracks[0];
+    
+    if (audioTrack) {
+      audioTrack.enabled = true;
+      try { (audioTrack as any).contentHint = 'speech'; } catch {}
     }
     
-    // Проверяем валидность стрима
-    if (!isValidStream(stream)) {
-      try {
-        const tracks = (stream as any)?.getTracks?.() || [];
-        tracks.forEach((t: any) => {
-          try { t.stop(); } catch {}
-        });
-      } catch {}
-      throw new Error('Stream is not valid');
-    }
-    
-    // Убеждаемся что камера включена
-    const videoTrack = (stream as any)?.getVideoTracks?.()?.[0];
     if (videoTrack) {
       videoTrack.enabled = true;
     }
-    
-    // Убеждаемся что микрофон включен
-    const audioTrack = (stream as any)?.getAudioTracks?.()?.[0];
-    if (audioTrack) {
-      audioTrack.enabled = true;
-    }
-    
+  }
+
+  /**
+   * Отправить состояние стрима через callbacks и events
+   */
+  private emitStreamState(stream: MediaStream): void {
     const audioTracks = (stream as any)?.getAudioTracks?.() || [];
     const videoTracks = (stream as any)?.getVideoTracks?.() || [];
-    const a = audioTracks[0];
-    const v = videoTracks[0];
+    const audioTrack = audioTracks[0];
+    const videoTrack = videoTracks[0];
     
-    if (a) {
-      a.enabled = true;
-      try { (a as any).contentHint = 'speech'; } catch {}
-    }
-    if (v) {
-      v.enabled = true;
-    }
+    // КРИТИЧНО: Для локального стрима всегда считаем камеру включенной если трек live
+    // Это гарантирует, что при создании стрима камера показывается как включенная
+    const micEnabled = !!audioTrack?.enabled;
+    const isVideoTrackLive = videoTrack?.readyState === 'live';
+    // Если трек live, считаем камеру включенной даже если enabled=false (временное состояние)
+    const camEnabled = isVideoTrackLive ? true : !!videoTrack?.enabled;
     
-    this.localStreamRef = stream;
-    
-    // КРИТИЧНО: Сначала устанавливаем стрим, потом состояние камеры
-    this.config.callbacks.onLocalStreamChange?.(stream);
-    this.config.onLocalStreamChange?.(stream);
-    
-    // Затем устанавливаем состояние микрофона и камеры
-    const micEnabled = !!a?.enabled;
-    const camEnabled = !!v?.enabled;
     this.config.callbacks.onMicStateChange?.(micEnabled);
     this.config.callbacks.onCamStateChange?.(camEnabled);
     this.config.onMicStateChange?.(micEnabled);
-    this.config.onCamStateChange?.(!!v?.enabled);
+    this.config.onCamStateChange?.(camEnabled);
     this.emit('localStream', stream);
-    
-    return stream;
   }
   
   /**
    * Остановить локальный стрим (приватный метод)
+   * @param force - принудительно остановить стрим даже если PC активен (для завершения звонка)
    */
-  protected stopLocalStreamInternal(): void {
-    if (!this.localStreamRef) {
-      return;
-    }
-    
-    try {
-      const tracks = this.localStreamRef.getTracks?.() || [];
-      tracks.forEach((t: any) => {
-        try {
-          if (t && t.readyState !== 'ended' && t.readyState !== null) {
-            t.enabled = false;
-            t.stop();
-            try { (t as any).release?.(); } catch {}
-          }
-        } catch (e) {
-          logger.warn('[BaseWebRTCSession] Error stopping track:', e);
-        }
-      });
-    } catch (e) {
-      logger.error('[BaseWebRTCSession] Error in stopLocalStreamInternal:', e);
-    }
-    
-    this.localStreamRef = null;
-    this.config.callbacks.onLocalStreamChange?.(null);
-    this.config.onLocalStreamChange?.(null);
-    this.emit('localStream', null);
+  protected stopLocalStreamInternal(force: boolean = false): void {
+    this.streamManager.stopLocalStreamInternal(this.peerRef, (event, ...args) => this.emit(event, ...args), force);
   }
   
   /**
@@ -339,137 +303,67 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Остановить удаленный стрим (приватный метод)
    */
   protected stopRemoteStreamInternal(): void {
-    const pc = this.peerRef;
-    
-    // КРИТИЧНО: НЕ очищаем remoteStream если соединение активно
-    if (this.remoteStreamRef && pc && pc.signalingState !== 'closed' && (pc as any).connectionState !== 'closed') {
-      const isPcActive = pc.iceConnectionState === 'checking' || 
-                        pc.iceConnectionState === 'connected' || 
-                        pc.iceConnectionState === 'completed' ||
-                        (pc as any).connectionState === 'connecting' ||
-                        (pc as any).connectionState === 'connected';
-      
-      if (isPcActive) {
-        return;
-      }
-    }
-    
-    // Останавливаем метры
     this.stopMicMeter();
-    
-    // Останавливаем треки удаленного потока
-    if (this.remoteStreamRef) {
-      try {
-        const tracks = (this.remoteStreamRef as any)?.getTracks?.() || [];
-        tracks.forEach((t: any) => {
-          try {
-            t.enabled = false;
-            t.stop();
-            try { (t as any).release?.(); } catch {}
-          } catch {}
-        });
-      } catch {}
-    }
-    
-    this.remoteStreamRef = null;
-    this.remoteStreamEstablishedAtRef = 0;
-    this.config.callbacks.onRemoteStreamChange?.(null);
-    this.config.onRemoteStreamChange?.(null);
-    this.emit('remoteStream', null);
-    
-    // Сбрасываем состояние remoteCamOn
-    this.remoteCamOnRef = false;
-    this.remoteForcedOffRef = false;
-    this.camToggleSeenRef = false;
-    this.remoteViewKeyRef = 0;
-    this.remoteMutedRef = false;
-    this.remoteInPiPRef = false;
-    this.config.callbacks.onRemoteCamStateChange?.(false);
-    this.config.onRemoteCamStateChange?.(false);
-    this.emit('remoteCamStateChanged', false);
-    this.emit('remoteViewKeyChanged', 0);
-    this.emitRemoteState();
-    
-    // Останавливаем track checker
+    this.streamManager.stopRemoteStreamInternal(this.peerRef, (event, ...args) => this.emit(event, ...args));
+    this.remoteStateManager.reset((event, ...args) => this.emit(event, ...args));
     this.stopTrackChecker();
   }
   
   // ==================== PC Token Management ====================
   
+  /**
+   * Инкрементировать токен PC
+   */
   protected incrementPcToken(forceReset: boolean = true): void {
-    if (forceReset) {
-      this.pcToken = 0;
-    }
-    this.pcToken++;
+    this.pcLifecycleManager.incrementPcToken(forceReset);
   }
   
+  /**
+   * Пометить PC токеном
+   */
   protected markPcWithToken(pc: RTCPeerConnection): void {
-    (pc as any)._pcToken = this.pcToken;
+    this.pcLifecycleManager.markPcWithToken(pc);
   }
   
+  /**
+   * Проверить валидность токена PC
+   */
   protected isPcTokenValid(pc: RTCPeerConnection | null): boolean {
-    if (!pc) return false;
-    const token = (pc as any)?._pcToken;
-    return token === this.pcToken;
+    return this.pcLifecycleManager.isPcTokenValid(pc);
   }
   
+  /**
+   * Проверить валидность PC (не закрыт и имеет правильный токен)
+   */
   protected isPcValid(pc: RTCPeerConnection | null): boolean {
-    if (!pc) return false;
-    if (pc.signalingState === 'closed' || (pc as any).connectionState === 'closed') return false;
-    return this.isPcTokenValid(pc);
+    return this.pcLifecycleManager.isPcValid(pc, this.pcLifecycleManager.getPcToken());
   }
   
   // ==================== PeerConnection Cleanup ====================
   
+  /**
+   * Очистить PeerConnection
+   */
   protected cleanupPeer(pc?: RTCPeerConnection | null): void {
-    if (!pc) return;
-    
-    try {
-      // Удаляем все треки из senders
-      const senders = pc.getSenders();
-      senders.forEach((sender: any) => {
-        try {
-          if (sender.track) {
-            sender.track.stop();
-          }
-          pc.removeTrack(sender);
-        } catch (e) {
-          logger.warn('[BaseWebRTCSession] Error removing sender:', e);
-        }
-      });
-      
-      // Закрываем соединение
-      if (pc.signalingState !== 'closed' && (pc as any).connectionState !== 'closed') {
-        pc.close();
-      }
-    } catch (e) {
-      logger.warn('[BaseWebRTCSession] Error cleaning up peer:', e);
-    }
+    this.pcLifecycleManager.cleanupPeer(pc);
   }
   
   // ==================== Track Checker ====================
   
+  /**
+   * Запустить проверку удаленного видео трека
+   */
   protected startTrackChecker(): void {
-    // Останавливаем предыдущий интервал если есть
-    if (this.trackCheckIntervalRef) {
-      clearInterval(this.trackCheckIntervalRef);
-      this.trackCheckIntervalRef = null;
-    }
-    
-    // Проверяем сразу
-    this.checkRemoteVideoTrack();
-    
-    // Проверяем каждые 150ms для быстрого переключения
-    this.trackCheckIntervalRef = setInterval(() => {
-      this.checkRemoteVideoTrack();
-    }, 150);
+    const isFriendCall = this.isFriendCall();
+    this.streamManager.startTrackChecker(() => this.checkRemoteVideoTrack(), isFriendCall);
   }
   
   /**
    * Проверка удаленного видео трека
+   * Обновляет состояние камеры на основе фактического состояния трека
    */
   checkRemoteVideoTrack(): void {
-    const remoteStream = this.remoteStreamRef;
+    const remoteStream = this.streamManager.getRemoteStream();
     if (!remoteStream || (this.config.getIsInactiveState?.() ?? false)) {
       return;
     }
@@ -480,57 +374,59 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         return;
       }
       
-      // Обновляем состояние на основе фактического состояния трека
-      const isTrackActive = videoTrack.readyState !== 'ended';
+      if (this.remoteStateManager.isRemoteForcedOff()) {
+        return;
+      }
       
-      if (isTrackActive) {
-        const isCameraEnabled = videoTrack.enabled === true;
-        
-        // НЕ перезаписываем remoteCamOn если он был установлен через cam-toggle
-        if (this.remoteForcedOffRef) {
-          return;
-        }
-        
-        const now = Date.now();
-        const streamAge = this.remoteStreamEstablishedAtRef ? now - this.remoteStreamEstablishedAtRef : Infinity;
-        const isNewTrack = streamAge < 250;
-        
-        let shouldBeEnabled: boolean;
-        
-        if (this.isFriendCall()) {
-          // Для дружеских звонков показываем видео если трек live
-          shouldBeEnabled = videoTrack.readyState === 'live';
-        } else {
-          // Для рандомного чата используем реальное состояние enabled
-          shouldBeEnabled = isCameraEnabled;
-          
-          // Игнорируем enabled=false для новых треков
-          if (!isCameraEnabled && isNewTrack && videoTrack.readyState === 'live') {
-            return;
-          }
-        }
-        
-        if (this.remoteCamOnRef !== shouldBeEnabled) {
-          this.remoteForcedOffRef = false;
-          this.remoteCamOnRef = shouldBeEnabled;
-          this.remoteViewKeyRef = Date.now();
-          this.config.callbacks.onRemoteCamStateChange?.(shouldBeEnabled);
-          this.config.onRemoteCamStateChange?.(shouldBeEnabled);
-          this.emit('remoteCamStateChanged', shouldBeEnabled);
-          this.emit('remoteViewKeyChanged', this.remoteViewKeyRef);
-          this.emitRemoteState();
-        }
+      const shouldBeEnabled = this.determineCameraState(videoTrack);
+      if (shouldBeEnabled === null) {
+        return;
+      }
+      
+      if (this.remoteStateManager.isRemoteCamOn() !== shouldBeEnabled) {
+        this.remoteStateManager.setRemoteForcedOff(false);
+        this.remoteStateManager.setRemoteCamOn(shouldBeEnabled, (event, ...args) => this.emit(event, ...args));
+        this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
+        this.remoteStateManager.emitRemoteState((event, ...args) => this.emit(event, ...args), this.pipManager.isRemoteInPiP());
       }
     } catch (e) {
       logger.error('[BaseWebRTCSession] Error checking remote video track:', e);
     }
+  }
+
+  /**
+   * Определить состояние камеры на основе трека
+   * Возвращает null если состояние не должно обновляться
+   */
+  private determineCameraState(videoTrack: any): boolean | null {
+    const isFriendCall = this.isFriendCall();
+    const isCameraEnabled = videoTrack.enabled === true;
+    const isTrackEnded = videoTrack.readyState === 'ended';
+    
+    if (isFriendCall) {
+      // КРИТИЧНО: Для дружеских звонков считаем камеру включенной если трек существует и не ended
+      // даже если readyState еще не live (это может быть временное состояние)
+      return !isTrackEnded;
+    }
+    
+    const now = Date.now();
+    const streamAge = this.streamManager.getRemoteStreamEstablishedAt() 
+      ? now - this.streamManager.getRemoteStreamEstablishedAt() 
+      : Infinity;
+    const isNewTrack = streamAge < 250;
+    
+    if (!isCameraEnabled && isNewTrack && videoTrack.readyState === 'live') {
+      return null;
+    }
+    
+    return isCameraEnabled;
   }
   
   /**
    * Установить состояние PiP
    */
   setInPiP(inPiP: boolean): void {
-    this.isInPiPRef = inPiP;
+    this.pipManager.setInPiP(inPiP);
   }
   
   /**
@@ -551,29 +447,40 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
   
   /**
    * Войти в режим Picture-in-Picture
-   * Выключает локальную камеру и отправляет pip:state партнеру
+   * НЕ выключает камеру - она остается в режиме ожидания/сна
    */
   enterPiP(): void {
-    const isFriendCall = this.isFriendCall();
-    
-    if (!isFriendCall || !this.roomIdRef) {
-      return;
-    }
-    
-    // Сохраняем состояние камеры перед входом в PiP
-    const localStream = this.localStreamRef;
+    this.pipManager.enterPiP(
+      () => this.isFriendCall(),
+      this.roomIdRef,
+      this.partnerIdRef,
+      this.streamManager.getLocalStream(),
+      (event, ...args) => this.emit(event, ...args)
+    );
+  }
+  
+  /**
+   * Выключить камеру при сворачивании приложения (AppState === 'background')
+   * Это отличается от PiP - при сворачивании камера выключается и показывается "Отошел"
+   * Микрофон (звук) НЕ выключается - продолжает работать в фоне
+   */
+  handleAppBackground(): void {
+    const localStream = this.streamManager.getLocalStream();
     if (localStream) {
       const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
-      if (videoTrack) {
-        this.pipPrevCamOnRef = videoTrack.enabled;
+      const audioTrack = (localStream as any)?.getAudioTracks?.()?.[0];
+      
+      // Выключаем только камеру, микрофон остается включенным
+      if (videoTrack && videoTrack.enabled) {
+        // Сохраняем состояние камеры перед выключением
+        this.pipManager['pipPrevCamOnRef'] = true;
+        // Выключаем камеру при сворачивании приложения
+        videoTrack.enabled = false;
+        this.config.callbacks.onCamStateChange?.(false);
+        this.config.onCamStateChange?.(false);
         
-        // Выключаем локальную камеру
-        if (videoTrack.enabled) {
-          videoTrack.enabled = false;
-          this.config.callbacks.onCamStateChange?.(false);
-          this.config.onCamStateChange?.(false);
-          
-          // Отправляем cam-toggle(false) партнеру
+        // Отправляем cam-toggle(false) партнеру - показываем "Отошел"
+        if (this.roomIdRef) {
           try {
             const payload: any = { enabled: false, from: socket.id };
             if (this.roomIdRef) {
@@ -581,113 +488,53 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
             }
             socket.emit('cam-toggle', payload);
           } catch (e) {
-            logger.warn('[BaseWebRTCSession] Error emitting cam-toggle on enterPiP:', e);
+            logger.warn('[BaseWebRTCSession] Error emitting cam-toggle on background:', e);
           }
         }
-      }
-    }
-    
-    // Устанавливаем флаг PiP
-    this.setInPiP(true);
-    
-    // Эмитим событие изменения PiP состояния
-    this.emit('pipStateChanged', { inPiP: true });
-    
-    // Отправляем событие через сокет
-    try {
-      const payload: any = {
-        inPiP: true,
-        roomId: this.roomIdRef,
-        from: socket.id
-      };
-      if (this.partnerIdRef) {
-        payload.to = this.partnerIdRef;
-      }
-      socket.emit('pip:state', payload);
-      // Дублируем отправку для надежности
-      setTimeout(() => {
-        try { socket.emit('pip:state', payload); } catch {}
-      }, 300);
-    } catch (e) {
-      logger.warn('[BaseWebRTCSession] Error emitting pip:state on enterPiP:', e);
-    }
-  }
-  
-  /**
-   * Возобновить из PiP
-   * Должен быть переопределен в наследниках для специфичной логики
-   */
-  async resumeFromPiP(): Promise<void> {
-    // Базовая реализация - восстановление стримов
-    const pipLocalStream = this.config.getPipLocalStream?.();
-    const pipRemoteStream = this.config.getPipRemoteStream?.();
-    
-    if (pipLocalStream && isValidStream(pipLocalStream)) {
-      this.localStreamRef = pipLocalStream;
-      this.config.callbacks.onLocalStreamChange?.(pipLocalStream);
-      this.config.onLocalStreamChange?.(pipLocalStream);
-      this.emit('localStream', pipLocalStream);
-    }
-    
-    if (pipRemoteStream && isValidStream(pipRemoteStream)) {
-      this.remoteStreamRef = pipRemoteStream;
-      this.config.callbacks.onRemoteStreamChange?.(pipRemoteStream);
-      this.config.onRemoteStreamChange?.(pipRemoteStream);
-      this.emit('remoteStream', pipRemoteStream);
-    }
-    
-    this.isInPiPRef = false;
-  }
-  
-  /**
-   * Выйти из режима Picture-in-Picture
-   * Восстанавливает локальную камеру и отправляет pip:state партнеру
-   */
-  exitPiP(): void {
-    const isFriendCall = this.isFriendCall();
-    
-    if (!isFriendCall || !this.roomIdRef) {
-      return;
-    }
-    
-    // Сбрасываем флаг PiP
-    this.setInPiP(false);
-    
-    // Эмитим событие изменения PiP состояния
-    this.emit('pipStateChanged', { inPiP: false });
-    
-    // Отправляем событие через сокет
-    try {
-      const payload: any = {
-        inPiP: false,
-        roomId: this.roomIdRef,
-        from: socket.id
-      };
-      if (this.partnerIdRef) {
-        payload.to = this.partnerIdRef;
-      }
-      socket.emit('pip:state', payload);
-      // Дублируем отправку для надежности
-      setTimeout(() => {
-        try { socket.emit('pip:state', payload); } catch {}
-      }, 300);
-    } catch (e) {
-      logger.warn('[BaseWebRTCSession] Error emitting pip:state on exitPiP:', e);
-    }
-    
-    // Восстанавливаем локальную камеру если она была включена
-    const localStream = this.localStreamRef;
-    if (localStream && this.pipPrevCamOnRef !== null) {
-      const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
-      if (videoTrack) {
-        const shouldEnable = this.pipPrevCamOnRef !== false;
         
-        if (shouldEnable && !videoTrack.enabled) {
-          videoTrack.enabled = true;
-          this.config.callbacks.onCamStateChange?.(true);
-          this.config.onCamStateChange?.(true);
-          
-          // Отправляем cam-toggle(true) партнеру
+        // Отправляем bg:entered
+        try {
+          socket.emit('bg:entered', {
+            callId: this.callIdRef || this.roomIdRef,
+            partnerId: this.partnerIdRef
+          });
+        } catch (e) {
+          logger.warn('[BaseWebRTCSession] Error emitting bg:entered:', e);
+        }
+        
+        logger.info('[BaseWebRTCSession] Камера выключена при сворачивании приложения', {
+          audioTrackEnabled: audioTrack?.enabled,
+          audioTrackState: audioTrack?.readyState
+        });
+      }
+      
+      // Убеждаемся, что микрофон остается включенным
+      if (audioTrack && !audioTrack.enabled) {
+        audioTrack.enabled = true;
+        logger.info('[BaseWebRTCSession] Микрофон включен при сворачивании приложения (должен работать в фоне)');
+      }
+    }
+  }
+  
+  /**
+   * Восстановить камеру при возврате из фона (AppState === 'active')
+   * Микрофон уже работает в фоне, его не нужно восстанавливать
+   */
+  handleAppForeground(): void {
+    const localStream = this.streamManager.getLocalStream();
+    if (localStream) {
+      const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
+      const audioTrack = (localStream as any)?.getAudioTracks?.()?.[0];
+      const pipManager = this.pipManager as any;
+      
+      // Восстанавливаем камеру если она была включена перед сворачиванием
+      if (videoTrack && !videoTrack.enabled && pipManager.pipPrevCamOnRef === true) {
+        videoTrack.enabled = true;
+        this.config.callbacks.onCamStateChange?.(true);
+        this.config.onCamStateChange?.(true);
+        
+        // Отправляем cam-toggle(true) партнеру
+        if (this.roomIdRef) {
           try {
             const payload: any = { enabled: true, from: socket.id };
             if (this.roomIdRef) {
@@ -695,280 +542,180 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
             }
             socket.emit('cam-toggle', payload);
           } catch (e) {
-            logger.warn('[BaseWebRTCSession] Error emitting cam-toggle on exitPiP:', e);
+            logger.warn('[BaseWebRTCSession] Error emitting cam-toggle on foreground:', e);
           }
-        } else if (!shouldEnable && videoTrack.enabled) {
-          videoTrack.enabled = false;
-          this.config.callbacks.onCamStateChange?.(false);
-          this.config.onCamStateChange?.(false);
         }
         
-        // Сбрасываем сохраненное состояние
-        this.pipPrevCamOnRef = null;
+        pipManager.pipPrevCamOnRef = null;
+        logger.info('[BaseWebRTCSession] Камера восстановлена при возврате из фона', {
+          audioTrackEnabled: audioTrack?.enabled,
+          audioTrackState: audioTrack?.readyState
+        });
       }
-    }
-    
-    // Восстанавливаем remote stream если нужно
-    const pipRemoteStream = this.config.getPipRemoteStream?.();
-    if (pipRemoteStream && isValidStream(pipRemoteStream)) {
-      this.remoteStreamRef = pipRemoteStream;
-      this.config.callbacks.onRemoteStreamChange?.(pipRemoteStream);
-      this.config.onRemoteStreamChange?.(pipRemoteStream);
-      this.emit('remoteStream', pipRemoteStream);
+      
+      // Убеждаемся, что микрофон остается включенным при возврате из фона
+      if (audioTrack && !audioTrack.enabled) {
+        audioTrack.enabled = true;
+        logger.info('[BaseWebRTCSession] Микрофон включен при возврате из фона');
+      }
     }
   }
   
+  /**
+   * Возобновить из PiP
+   * Восстанавливает сохраненные стримы из конфигурации
+   */
+  async resumeFromPiP(): Promise<void> {
+    this.pipManager.resumeFromPiP(
+      (stream) => {
+        this.streamManager.setLocalStream(stream);
+        this.emit('localStream', stream);
+      },
+      (stream) => {
+        this.streamManager.setRemoteStream(stream);
+        this.emit('remoteStream', stream);
+      }
+    );
+  }
+  
+  /**
+   * Выйти из режима Picture-in-Picture
+   * Восстанавливает локальную камеру и отправляет pip:state партнеру
+   */
+  exitPiP(): void {
+    this.pipManager.exitPiP(
+      () => this.isFriendCall(),
+      this.roomIdRef,
+      this.partnerIdRef,
+      this.streamManager.getLocalStream(),
+      (event, ...args) => this.emit(event, ...args),
+      (stream) => {
+        this.streamManager.setLocalStream(stream);
+        this.emit('localStream', stream);
+      },
+      (stream) => {
+        this.streamManager.setRemoteStream(stream);
+        this.emit('remoteStream', stream);
+      }
+    );
+  }
+  
+  /**
+   * Остановить проверку треков
+   */
   protected stopTrackChecker(): void {
-    if (this.trackCheckIntervalRef) {
-      clearInterval(this.trackCheckIntervalRef);
-      this.trackCheckIntervalRef = null;
-    }
+    this.streamManager.stopTrackChecker();
   }
   
   // ==================== Mic Meter ====================
   
+  /**
+   * Запустить измерение уровня микрофона
+   */
   protected startMicMeter(): void {
-    const pc = this.peerRef;
-    if (!pc) {
-      this.stopMicMeter();
-      return;
-    }
+    const isMicReallyOn = () => {
+      const stream = this.streamManager.getLocalStream();
+      const audioTrack = stream?.getAudioTracks?.()?.[0];
+      return !!(audioTrack && audioTrack.enabled && (audioTrack as any).readyState === 'live');
+    };
     
-    const hasActiveCall = !!this.partnerIdRef || !!this.roomIdRef || !!this.callIdRef;
-    const isPcConnected = this.isPcConnected();
-    
-    if (!hasActiveCall && !isPcConnected) {
-      this.stopMicMeter();
-      return;
-    }
-    
-    if (this.micStatsTimerRef) return;
-    
-    this.micStatsTimerRef = setInterval(async () => {
-      try {
-        const currentPc = this.peerRef;
-        if (!currentPc || currentPc.signalingState === 'closed' || (currentPc as any).connectionState === 'closed') {
-          this.stopMicMeter();
-          return;
-        }
-        
-        const isInactiveState = this.config.getIsInactiveState?.() ?? false;
-        if (isInactiveState) {
-          this.stopMicMeter();
-          return;
-        }
-        
-        const hasActiveCall = !!this.partnerIdRef || !!this.roomIdRef || !!this.callIdRef;
-        const isPcConnected = this.isPcConnected();
-        if (!isPcConnected && !hasActiveCall) {
-          this.stopMicMeter();
-          return;
-        }
-        
-        if (!this.isMicReallyOn()) {
-          this.config.callbacks.onMicLevelChange?.(0);
-          this.config.onMicLevelChange?.(0);
-          this.emit('micLevelChanged', 0);
-          return;
-        }
-        
-        const stats: any = await currentPc.getStats();
-        let lvl = 0;
-        
-        stats.forEach((r: any) => {
-          const isAudio =
-            r.kind === 'audio' || r.mediaType === 'audio' || r.type === 'media-source' || r.type === 'track' || r.type === 'outbound-rtp';
-          
-          if (!isAudio) return;
-          
-          // 1) Прямо из audioLevel если есть
-          if (typeof r.audioLevel === 'number') {
-            // На iOS audioLevel может быть в диапазоне 0-127, на Android 0-1
-            const audioLvl = Platform.OS === 'ios' && r.audioLevel > 1 
-              ? r.audioLevel / 127 
-              : r.audioLevel;
-            lvl = Math.max(lvl, audioLvl);
-          }
-          
-          // 2) Fallback: по totalAudioEnergy/totalSamplesDuration
-          if (typeof r.totalAudioEnergy === 'number' && typeof r.totalSamplesDuration === 'number') {
-            const prevE = this.energyRef;
-            const prevD = this.durRef;
-            if (prevE != null && prevD != null) {
-              const dE = r.totalAudioEnergy - prevE;
-              const dD = r.totalSamplesDuration - prevD;
-              if (dD > 0) {
-                const inst = Math.sqrt(Math.max(0, dE / dD));
-                lvl = Math.max(lvl, inst);
-              }
-            }
-            this.energyRef = r.totalAudioEnergy;
-            this.durRef = r.totalSamplesDuration;
-          }
-        });
-        
-        // clamp [0..1]
-        let normalized = Math.max(0, Math.min(1, lvl));
-        
-        // Для iOS - если уровень очень низкий несколько раз подряд, сбрасываем до 0
-        if (Platform.OS === 'ios') {
-          if (normalized < 0.015) {
-            this.lowLevelCountRef += 1;
-            if (this.lowLevelCountRef >= 2) {
-              normalized = 0;
-              this.energyRef = null;
-              this.durRef = null;
-            }
-          } else {
-            this.lowLevelCountRef = 0;
-          }
-        }
-        
-        this.config.callbacks.onMicLevelChange?.(normalized);
-        this.config.onMicLevelChange?.(normalized);
-        this.emit('micLevelChanged', normalized);
-      } catch {
-        this.stopMicMeter();
-      }
-    }, 180);
+    this.micMeter.start(
+      this.peerRef,
+      this.partnerIdRef,
+      this.roomIdRef,
+      this.callIdRef,
+      () => this.isPcConnected(),
+      isMicReallyOn,
+      () => this.config.getIsInactiveState?.() ?? false
+    );
   }
   
-  private isMicReallyOn(): boolean {
-    const stream = this.localStreamRef;
-    const a = stream?.getAudioTracks?.()?.[0];
-    return !!(a && a.enabled && (a as any).readyState === 'live');
-  }
-  
+  /**
+   * Остановить измерение уровня микрофона
+   */
   protected stopMicMeter(): void {
-    if (this.micStatsTimerRef) {
-      clearInterval(this.micStatsTimerRef);
-      this.micStatsTimerRef = null;
-    }
-    this.energyRef = null;
-    this.durRef = null;
-    this.lowLevelCountRef = 0;
-    this.config.callbacks.onMicLevelChange?.(0);
-    this.config.onMicLevelChange?.(0);
-    this.emit('micLevelChanged', 0);
+    this.micMeter.stop();
   }
   
   // ==================== Connection Timers ====================
   
+  /**
+   * Очистить таймер переподключения
+   */
   protected clearReconnectTimer(): void {
-    if (this.reconnectTimerRef) {
-      clearTimeout(this.reconnectTimerRef);
-      this.reconnectTimerRef = null;
-    }
+    this.connectionStateManager.clearReconnectTimer();
   }
   
+  /**
+   * Очистить все таймеры соединения
+   */
   protected clearConnectionTimers(): void {
-    this.clearReconnectTimer();
-    if (this.connectionCheckIntervalRef) {
-      clearInterval(this.connectionCheckIntervalRef);
-      this.connectionCheckIntervalRef = null;
-    }
+    this.connectionStateManager.clearConnectionTimers();
   }
   
+  /**
+   * Запустить периодическую проверку состояния соединения
+   */
   protected startConnectionCheckInterval(pc: RTCPeerConnection): void {
-    // Очищаем предыдущий интервал если есть
-    if (this.connectionCheckIntervalRef) {
-      clearInterval(this.connectionCheckIntervalRef);
-    }
-    
-    // Проверяем состояние каждые 2 секунды
-    this.connectionCheckIntervalRef = setInterval(() => {
-      if (!this.peerRef || this.peerRef !== pc) {
-        this.clearConnectionTimers();
-        return;
+    this.connectionStateManager.startConnectionCheckInterval(
+      pc,
+      this.peerRef,
+      this.partnerIdRef,
+      this.streamManager.getRemoteStream(),
+      () => this.isRandomChat(),
+      (pc) => this.checkReceiversForRemoteStream(pc),
+      () => {
+        const handleConnectionState = (pc as any).onconnectionstatechange;
+        if (handleConnectionState) {
+          handleConnectionState();
+        }
       }
-      
-      try {
-        const st = (pc as any).connectionState || pc.iceConnectionState;
-        if (st === 'closed') {
-          this.clearConnectionTimers();
-          if (this.isConnectedRef) {
-            this.setConnected(false);
-          }
-          return;
-        }
-        
-        const isConnected = st === 'connected' || st === 'completed';
-        
-        // Если соединение установлено, но remoteStream отсутствует, проверяем receivers
-        if (isConnected && this.isRandomChat() && this.partnerIdRef && !this.remoteStreamRef) {
-          this.checkReceiversForRemoteStream(pc);
-        }
-        if (isConnected !== this.isConnectedRef) {
-          const handleConnectionState = (pc as any).onconnectionstatechange;
-          if (handleConnectionState) {
-            handleConnectionState();
-          }
-        }
-      } catch (e) {
-        // PC может быть закрыт
-        this.clearConnectionTimers();
-      }
-    }, 2000);
+    );
   }
   
+  /**
+   * Обработать сбой соединения
+   */
   protected handleConnectionFailure(pc: RTCPeerConnection): void {
-    // Проверка валидности
-    if (!pc || !this.peerRef || this.peerRef !== pc) {
-      return;
-    }
-    
-    // Проверка активного звонка
-    const hasActiveCall = !!this.partnerIdRef || !!this.roomIdRef || !!this.callIdRef;
-    if (!hasActiveCall) {
-      return;
-    }
-    
-    // Проверка неактивного состояния
-    const isInactiveState = this.config.getIsInactiveState?.() ?? false;
-    if (isInactiveState) {
-      return;
-    }
-    
-    // Проверка состояния приложения
-    if (AppState.currentState === 'background' || AppState.currentState === 'inactive') {
-      return;
-    }
-    
-    // Запускаем автоматический reconnection
-    const toId = this.partnerIdRef;
-    if (toId) {
-      this.scheduleReconnection(pc, String(toId));
-    }
+    this.connectionStateManager.handleConnectionFailure(
+      pc,
+      this.peerRef,
+      this.partnerIdRef,
+      this.roomIdRef,
+      this.callIdRef,
+      () => this.config.getIsInactiveState?.() ?? false,
+      (pc, toId) => this.scheduleReconnection(pc, toId)
+    );
   }
   
+  /**
+   * Запланировать переподключение
+   */
   protected scheduleReconnection(pc: RTCPeerConnection, toId: string): void {
-    // Очищаем предыдущий таймер если есть
-    this.clearReconnectTimer();
-    
-    // Проверяем cooldown
-    const now = Date.now();
-    if (this.restartCooldownRef > now) {
-      const delay = this.restartCooldownRef - now;
-      this.reconnectTimerRef = setTimeout(() => {
-        this.scheduleReconnection(pc, toId);
-      }, delay);
-      return;
-    }
-    
-    // Запускаем ICE restart (будет реализован в наследниках или здесь)
-    // this.tryIceRestart(pc, toId);
+    this.connectionStateManager.scheduleReconnection(
+      pc,
+      toId,
+      () => {
+        // ICE restart должен быть реализован в наследниках
+      }
+    );
   }
   
   /**
    * Установка обработчиков соединения (ICE кандидаты, состояние соединения)
    */
   protected bindConnHandlers(pc: RTCPeerConnection, expectedPartnerId?: string): void {
-    // Очищаем предыдущие таймеры если есть
     this.clearConnectionTimers();
-    
-    // Устанавливаем обработчик onicecandidate для отправки ICE-кандидатов
+    this.setupIceCandidateHandler(pc, expectedPartnerId);
+    this.setupConnectionStateHandler(pc);
+    this.startConnectionCheckInterval(pc);
+  }
+
+  /**
+   * Настроить обработчик ICE кандидатов
+   */
+  private setupIceCandidateHandler(pc: RTCPeerConnection, expectedPartnerId?: string): void {
     (pc as any).onicecandidate = (event: any) => {
-      // Проверяем, что PC не закрыт и токен актуален
       if (!this.isPcValid(pc)) {
         return;
       }
@@ -977,23 +724,32 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         const toId = this.partnerIdRef || expectedPartnerId;
         if (toId) {
           const payload: any = { to: toId, candidate: event.candidate };
-          // Для дружеских звонков добавляем roomId
           if (this.isFriendCall() && this.roomIdRef) {
             payload.roomId = this.roomIdRef;
           }
           socket.emit('ice-candidate', payload);
         } else {
-          // Кешируем ICE кандидаты до установки partnerId
-          this.outgoingIceCache.push(event.candidate);
+          this.iceAndSignalingManager.cacheOutgoingIce(event.candidate);
         }
       }
     };
-    
+  }
+
+  /**
+   * Настроить обработчик состояния соединения
+   */
+  private setupConnectionStateHandler(pc: RTCPeerConnection): void {
     const handleConnectionState = () => {
       // Проверка валидности PC
       if (!pc || pc.signalingState === 'closed' || (pc as any).connectionState === 'closed') {
-        if (this.isConnectedRef) {
-          this.setConnected(false);
+        if (this.connectionStateManager.isConnected()) {
+          this.connectionStateManager.setConnected(
+            false,
+            pc,
+            this.partnerIdRef,
+            () => {},
+            () => {}
+          );
         }
         return;
       }
@@ -1006,8 +762,14 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       // Проверка активного звонка
       const hasActiveCall = !!this.partnerIdRef || !!this.roomIdRef || !!this.callIdRef;
       if (!hasActiveCall) {
-        if (this.isConnectedRef) {
-          this.setConnected(false);
+        if (this.connectionStateManager.isConnected()) {
+          this.connectionStateManager.setConnected(
+            false,
+            pc,
+            this.partnerIdRef,
+            () => {},
+            () => {}
+          );
         }
         return;
       }
@@ -1023,9 +785,13 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       const isConnected = st === 'connected' || st === 'completed';
       
       // Обновляем состояние только если оно изменилось
-      if (isConnected !== this.isConnectedRef) {
-        this.setConnected(isConnected);
-      }
+      this.connectionStateManager.setConnected(
+        isConnected,
+        pc,
+        this.partnerIdRef,
+        () => {},
+        () => {}
+      );
       
       // Обработка сбоев и автоматический reconnection
       if (st === 'failed' || st === 'disconnected') {
@@ -1049,7 +815,8 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
   }
   
   /**
-   * Установка обработчиков удаленного стрима (ontrack)
+   * Установка обработчиков удаленного стрима (ontrack и onaddstream)
+   * КРИТИЧНО: Обрабатываем оба события для максимальной совместимости
    */
   protected attachRemoteHandlers(pc: RTCPeerConnection, setToId?: string): void {
     // Проверяем наличие обработчика
@@ -1065,16 +832,103 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       (pc as any)._remoteHandlersAttached = false;
     }
     
+    /**
+     * Обработчик события ontrack
+     * КРИТИЧНО: Это ОБЯЗАТЕЛЬНЫЙ код для приема удаленных треков
+     * Без этого remoteStream всегда пустой → RemoteVideo = чёрный экран и тишина
+     * 
+     * Минимальный обязательный код:
+     * pc.ontrack = (event) => {
+     *   const stream = event.streams[0];
+     *   this.remoteStream = stream;
+     *   this.emit("remoteStream", stream);
+     * };
+     */
     const handleRemote = (e: any) => {
       try {
         // Проверяем, что PC не закрыт и токен актуален
         if (!this.isPcValid(pc)) {
+          logger.warn('[BaseWebRTCSession] PC невалиден, игнорируем ontrack событие');
           return;
         }
         
-        // Получаем стрим из события ontrack
+        // КРИТИЧНО: Получаем стрим из события ontrack (как в минимальном коде)
+        // event.streams[0] - это стандартный способ получения стрима
         const stream = e?.streams?.[0] ?? e?.stream;
         const track = e?.track;
+        
+        logger.info('[BaseWebRTCSession] 📥 ontrack событие получено', {
+          hasStream: !!stream,
+          hasTrack: !!track,
+          streamId: stream?.id,
+          trackId: track?.id,
+          trackKind: track?.kind || (track as any)?.type,
+          streamsCount: e?.streams?.length || 0
+        });
+        
+        // ============================================================
+        // КРИТИЧНО: МИНИМАЛЬНЫЙ ОБЯЗАТЕЛЬНЫЙ КОД для приема удаленных треков
+        // Без этого remoteStream всегда пустой → RemoteVideo = чёрный экран и тишина
+        // ============================================================
+        // 
+        // Минимальный код:
+        // pc.ontrack = (event) => {
+        //   const stream = event.streams[0];
+        //   this.remoteStream = stream;
+        //   this.emit("remoteStream", stream);
+        // };
+        //
+        // ============================================================
+        
+        // КРИТИЧНО: Если stream есть в событии - используем его напрямую (как в минимальном коде)
+        if (stream && isValidStream(stream)) {
+          const videoTracks = (stream as any)?.getVideoTracks?.() || [];
+          const audioTracks = (stream as any)?.getAudioTracks?.() || [];
+          
+          logger.info('[BaseWebRTCSession] ✅ Используем stream из event.streams[0] (МИНИМАЛЬНЫЙ КОД)', {
+            streamId: stream.id,
+            videoTracksCount: videoTracks.length,
+            audioTracksCount: audioTracks.length,
+            hasVideo: videoTracks.length > 0,
+            hasAudio: audioTracks.length > 0
+          });
+          
+          // КРИТИЧНО: Устанавливаем remoteStream (эквивалент: this.remoteStream = stream)
+          // Используем streamManager для централизованного управления
+          this.streamManager.setRemoteStream(stream, (event, ...args) => {
+            logger.info('[BaseWebRTCSession] 📤 Emitting remoteStream event (МИНИМАЛЬНЫЙ КОД)', {
+              event,
+              streamId: stream.id,
+              videoTracksCount: videoTracks.length,
+              audioTracksCount: audioTracks.length
+            });
+            // КРИТИЧНО: Эмитим событие (эквивалент: this.emit("remoteStream", stream))
+            this.emit(event, ...args);
+          });
+          
+          // КРИТИЧНО: Обновляем remoteViewKey для обновления UI
+          this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
+          
+          // Обновляем состояние камеры
+          const videoTrack = videoTracks[0];
+          if (videoTrack) {
+            const isFriendCall = this.isFriendCall();
+            const isTrackEnded = videoTrack.readyState === 'ended';
+            const camEnabled = isFriendCall && !isTrackEnded ? true : videoTrack.enabled && !isTrackEnded;
+            this.remoteStateManager.setRemoteCamOn(camEnabled, (event, ...args) => this.emit(event, ...args));
+          }
+          
+          // Выходим - стрим установлен, как в минимальном коде
+          logger.info('[BaseWebRTCSession] ✅ МИНИМАЛЬНЫЙ КОД выполнен: remoteStream установлен и событие отправлено', {
+            streamId: stream.id
+          });
+          return;
+        }
+        
+        // ============================================================
+        // FALLBACK: Если stream не пришел напрямую в событии (например, на iOS)
+        // Используем unified подход для создания stream из receivers
+        // ============================================================
         
         // КРИТИЧНО: На iOS треки могут приходить отдельно, поэтому используем unified подход
         // Сначала пытаемся использовать stream из события, если он валиден
@@ -1091,11 +945,30 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
                 const { MediaStream } = require('react-native-webrtc');
                 const unifiedStream = new MediaStream();
                 
+                let videoTracksAdded = 0;
+                let audioTracksAdded = 0;
+                
                 receivers.forEach((receiver: any) => {
                   const receiverTrack = receiver.track;
                   if (receiverTrack && receiverTrack.readyState !== 'ended') {
                     try {
+                      // КРИТИЧНО: Добавляем трек в MediaStream
                       (unifiedStream as any).addTrack(receiverTrack);
+                      
+                      // Отслеживаем добавленные треки для логирования
+                      const trackKind = receiverTrack.kind || (receiverTrack as any).type;
+                      if (trackKind === 'video') {
+                        videoTracksAdded++;
+                      } else if (trackKind === 'audio') {
+                        audioTracksAdded++;
+                      }
+                      
+                      logger.info('[BaseWebRTCSession] Track added to unified stream from receiver', {
+                        trackId: receiverTrack.id,
+                        trackKind: trackKind,
+                        trackReadyState: receiverTrack.readyState,
+                        trackEnabled: receiverTrack.enabled
+                      });
                     } catch (e) {
                       logger.warn('[BaseWebRTCSession] Error adding track from receiver:', e);
                     }
@@ -1103,7 +976,35 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
                 });
                 
                 const unifiedTracks = unifiedStream.getTracks?.() || [];
+                const videoTracks = (unifiedStream as any)?.getVideoTracks?.() || [];
+                const audioTracks = (unifiedStream as any)?.getAudioTracks?.() || [];
+                
+                // КРИТИЧНО: Проверяем, что видеотрек действительно добавлен и доступен через getVideoTracks()
+                if (videoTracks.length === 0 && videoTracksAdded > 0) {
+                  logger.error('[BaseWebRTCSession] ВИДЕОТРЕК НЕ ДОСТУПЕН через getVideoTracks() после добавления!', {
+                    videoTracksAdded,
+                    totalTracks: unifiedTracks.length,
+                    trackIds: unifiedTracks.map((t: any) => ({ id: t.id, kind: t.kind || (t as any).type }))
+                  });
+                }
+                
+                logger.info('[BaseWebRTCSession] Unified stream created from receivers in ontrack', {
+                  totalTracks: unifiedTracks.length,
+                  videoTracksCount: videoTracks.length,
+                  audioTracksCount: audioTracks.length,
+                  videoTracksAdded,
+                  audioTracksAdded,
+                  isValid: isValidStream(unifiedStream)
+                });
+                
                 if (unifiedTracks.length > 0 && isValidStream(unifiedStream)) {
+                  // КРИТИЧНО: Финальная проверка - видеотрек должен быть доступен
+                  if (videoTracks.length === 0) {
+                    logger.warn('[BaseWebRTCSession] Unified stream создан, но видеотрек отсутствует', {
+                      totalTracks: unifiedTracks.length,
+                      trackKinds: unifiedTracks.map((t: any) => t.kind || (t as any).type)
+                    });
+                  }
                   rs = unifiedStream;
                 }
               }
@@ -1114,15 +1015,63 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         }
         
         // Если все еще нет валидного stream, используем track из события
+        // КРИТИЧНО: Если есть существующий remoteStream, добавляем трек в него
         if (!rs || !isValidStream(rs)) {
           if (track && track.readyState !== 'ended') {
-            try {
-              const { MediaStream } = require('react-native-webrtc');
-              rs = new MediaStream();
-              (rs as any).addTrack(track);
-            } catch (e) {
-              logger.warn('[BaseWebRTCSession] Error creating stream from track:', e);
-              return;
+            // КРИТИЧНО: Используем StreamManager для добавления трека
+            // Это гарантирует, что трек будет добавлен в существующий стрим или создан новый
+            const existingRemoteStream = this.streamManager.getRemoteStream();
+            if (existingRemoteStream) {
+              logger.info('[BaseWebRTCSession] Adding track to existing remote stream', {
+                trackId: track.id,
+                trackKind: track.kind || (track as any).type,
+                existingStreamId: existingRemoteStream.id
+              });
+              
+              // Добавляем трек в существующий стрим
+              rs = this.streamManager.addTrackToRemoteStream(track, (event, ...args) => {
+                this.emit(event, ...args);
+              });
+              
+              if (!rs) {
+                logger.warn('[BaseWebRTCSession] Failed to add track to existing remote stream');
+                return;
+              }
+            } else {
+              // Создаем новый стрим с треком
+              try {
+                const { MediaStream } = require('react-native-webrtc');
+                rs = new MediaStream();
+                
+                // КРИТИЧНО: Добавляем трек в MediaStream
+                (rs as any).addTrack(track);
+                
+                const trackKind = track.kind || (track as any).type;
+                const videoTracks = (rs as any)?.getVideoTracks?.() || [];
+                const audioTracks = (rs as any)?.getAudioTracks?.() || [];
+                
+                // КРИТИЧНО: Проверяем, что видеотрек действительно добавлен и доступен через getVideoTracks()
+                if (trackKind === 'video' && videoTracks.length === 0) {
+                  logger.error('[BaseWebRTCSession] ВИДЕОТРЕК НЕ ДОСТУПЕН через getVideoTracks() после добавления из события!', {
+                    trackId: track.id,
+                    trackKind: trackKind,
+                    trackReadyState: track.readyState,
+                    totalTracks: rs.getTracks?.()?.length || 0
+                  });
+                }
+                
+                logger.info('[BaseWebRTCSession] Stream created from single track', {
+                  trackId: track.id,
+                  trackKind: trackKind,
+                  trackReadyState: track.readyState,
+                  videoTracksCount: videoTracks.length,
+                  audioTracksCount: audioTracks.length,
+                  isValid: isValidStream(rs)
+                });
+              } catch (e) {
+                logger.warn('[BaseWebRTCSession] Error creating stream from track:', e);
+                return;
+              }
             }
           } else {
             return;
@@ -1136,8 +1085,9 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         // Проверка на локальный stream (только для iOS, для рандомного чата)
         if (Platform.OS !== 'android') {
           try {
-            if (this.localStreamRef && (rs as any)?.id === (this.localStreamRef as any)?.id) {
-              const localVideoTrack = this.localStreamRef?.getVideoTracks?.()?.[0];
+            const localStream = this.streamManager.getLocalStream();
+            if (localStream && (rs as any)?.id === (localStream as any)?.id) {
+              const localVideoTrack = localStream?.getVideoTracks?.()?.[0];
               const remoteVideoTrack = rs?.getVideoTracks?.()?.[0];
               const isSameTrack = localVideoTrack && remoteVideoTrack && localVideoTrack.id === remoteVideoTrack.id;
               
@@ -1151,17 +1101,39 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         }
         
         // Останавливаем старый стрим, если он реально другой
-        const existingRemoteStream = this.remoteStreamRef;
+        const existingRemoteStream = this.streamManager.getRemoteStream();
+        logger.info('[BaseWebRTCSession] Processing ontrack event', {
+          existingStreamId: existingRemoteStream?.id,
+          newStreamId: rs.id,
+          streamsAreSame: existingRemoteStream === rs,
+          streamsHaveSameId: existingRemoteStream?.id === rs.id,
+          existingHasVideo: !!(existingRemoteStream as any)?.getVideoTracks?.()?.[0],
+          existingHasAudio: !!(existingRemoteStream as any)?.getAudioTracks?.()?.[0],
+          newHasVideo: !!(rs as any)?.getVideoTracks?.()?.[0],
+          newHasAudio: !!(rs as any)?.getAudioTracks?.()?.[0]
+        });
+        
         if (existingRemoteStream && existingRemoteStream !== rs) {
-          try {
-            const oldTracks = existingRemoteStream.getTracks?.() || [];
-            oldTracks.forEach((t: any) => {
-              try {
-                t.enabled = false;
-                t.stop();
-              } catch {}
+          // КРИТИЧНО: Проверяем, не является ли новый стрим обновлением старого (с тем же ID)
+          // На iOS треки могут приходить отдельно, но в одном стриме
+          if (existingRemoteStream.id === rs.id) {
+            logger.info('[BaseWebRTCSession] Новый стрим имеет тот же ID - это обновление, не останавливаем старый');
+            // Это обновление существующего стрима, не останавливаем старый
+          } else {
+            logger.warn('[BaseWebRTCSession] Останавливаем старый стрим - это другой стрим', {
+              oldStreamId: existingRemoteStream.id,
+              newStreamId: rs.id
             });
-          } catch {}
+            try {
+              const oldTracks = existingRemoteStream.getTracks?.() || [];
+              oldTracks.forEach((t: any) => {
+                try {
+                  t.enabled = false;
+                  t.stop();
+                } catch {}
+              });
+            } catch {}
+          }
         }
         
         // Проверяем состояние треков
@@ -1169,45 +1141,127 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         const audioTrack = (rs as any)?.getAudioTracks?.()?.[0];
         
         // Предотвращаем множественные emit для одного и того же stream
-        const existingStream = this.remoteStreamRef;
+        const existingStream = this.streamManager.getRemoteStream();
         const isSameStream = existingStream === rs || (existingStream && existingStream.id === rs.id);
         const streamChanged = !isSameStream;
         
+        logger.info('[BaseWebRTCSession] Stream comparison', {
+          isSameStream,
+          streamChanged,
+          existingStreamId: existingStream?.id,
+          newStreamId: rs.id
+        });
+        
         // Если это новый стрим и видео-трек приходит с readyState=ended, игнорируем
         if (streamChanged && videoTrack && videoTrack.readyState === 'ended') {
+          logger.warn('[BaseWebRTCSession] Игнорируем новый стрим с ended видео-треком');
           return;
         }
         
+        // КРИТИЧНО: Проверяем наличие видеотрека перед установкой remoteStream
+        const allTracks = rs.getTracks?.() || [];
+        const videoTracks = (rs as any)?.getVideoTracks?.() || [];
+        const audioTracks = (rs as any)?.getAudioTracks?.() || [];
+        const hasVideoTrack = videoTracks.length > 0;
+        const hasAudioTrack = audioTracks.length > 0;
+        
         // Устанавливаем remoteStream
-        this.remoteStreamRef = rs;
-        this.remoteStreamEstablishedAtRef = Date.now();
-        this.config.callbacks.onRemoteStreamChange?.(rs);
-        this.config.onRemoteStreamChange?.(rs);
-        this.emit('remoteStream', rs);
+        logger.info('[BaseWebRTCSession] ✅ RemoteStream обновлен из ontrack события', {
+          streamId: rs.id,
+          partnerId: this.partnerIdRef,
+          isFriendCall: this.isFriendCall(),
+          allTracksCount: allTracks.length,
+          videoTracksCount: videoTracks.length,
+          audioTracksCount: audioTracks.length,
+          hasVideoTrack: hasVideoTrack,
+          hasAudioTrack: hasAudioTrack,
+          videoTrackId: videoTrack?.id,
+          videoTrackEnabled: videoTrack?.enabled,
+          videoTrackReadyState: videoTrack?.readyState,
+          audioTrackId: audioTrack?.id,
+          audioTrackEnabled: audioTrack?.enabled,
+          audioTrackReadyState: audioTrack?.readyState,
+          trackIds: allTracks.map((t: any) => ({ id: t.id, kind: t.kind || (t as any).type, enabled: t.enabled, readyState: t.readyState }))
+        });
+        
+        // КРИТИЧНО: Проверяем, что видеотрек действительно доступен
+        if (!hasVideoTrack && allTracks.some((t: any) => (t.kind || (t as any).type) === 'video')) {
+          logger.error('[BaseWebRTCSession] ❌ КРИТИЧЕСКАЯ ОШИБКА: Видеотрек есть в getTracks(), но НЕ доступен через getVideoTracks()!', {
+            streamId: rs.id,
+            allTracksCount: allTracks.length,
+            videoTracksCount: videoTracks.length,
+            trackKinds: allTracks.map((t: any) => t.kind || (t as any).type)
+          });
+        }
+        
+        // КРИТИЧНО: Устанавливаем remoteStream перед обновлением состояния камеры
+        // Это гарантирует, что remoteStream будет доступен в компоненте при обновлении remoteCamOn
+        this.streamManager.setRemoteStream(rs, (event, ...args) => {
+          logger.info('[BaseWebRTCSession] 📤 Emitting remoteStream event', {
+            event,
+            streamId: rs.id,
+            hasVideoTrack: hasVideoTrack,
+            hasAudioTrack: hasAudioTrack,
+            videoTracksCount: videoTracks.length,
+            audioTracksCount: audioTracks.length,
+            videoTrackId: videoTrack?.id,
+            videoTrackReadyState: videoTrack?.readyState
+          });
+          this.emit(event, ...args);
+        });
+        
+        // КРИТИЧНО: Обновляем remoteViewKey при установке удаленного стрима
+        // Это гарантирует обновление видео в UI
+        this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
         
         // Обновляем состояние камеры
         if (videoTrack) {
-          const camEnabled = videoTrack.enabled && videoTrack.readyState !== 'ended';
-          this.remoteCamOnRef = camEnabled;
-          this.config.callbacks.onRemoteCamStateChange?.(camEnabled);
-          this.config.onRemoteCamStateChange?.(camEnabled);
-          this.emit('remoteCamStateChanged', camEnabled);
+          // КРИТИЧНО: Для дружеских звонков считаем камеру включенной если трек существует и не ended
+          // даже если enabled=false или readyState еще не live (это может быть временное начальное состояние)
+          const isFriendCall = this.isFriendCall();
+          const isTrackLive = videoTrack.readyState === 'live';
+          const isTrackEnded = videoTrack.readyState === 'ended';
+          
+          // КРИТИЧНО: Для дружеских звонков если трек существует и не ended, устанавливаем remoteCamOn=true
+          // Это гарантирует, что видео показывается сразу при подключении, даже если трек еще не live
+          // enabled может быть false временно при получении трека, readyState может быть 'new' перед 'live'
+          let camEnabled: boolean;
+          if (isFriendCall && !isTrackEnded) {
+            // Для дружеских звонков с существующим треком (не ended) считаем камеру включенной
+            // даже если enabled=false или readyState еще не live (это может быть временное состояние)
+            camEnabled = true;
+            logger.info('[BaseWebRTCSession] Remote camera enabled for friend call with existing track', {
+              videoTrackEnabled: videoTrack.enabled,
+              videoTrackReadyState: videoTrack.readyState,
+              isTrackLive
+            });
+          } else {
+            // Для рандомного чата или если трек ended, используем фактическое состояние
+            camEnabled = videoTrack.enabled && !isTrackEnded;
+          }
+          
+          // КРИТИЧНО: Устанавливаем remoteCamOn и обновляем remoteViewKey для обновления UI
+          this.remoteStateManager.setRemoteCamOn(camEnabled, (event, ...args) => this.emit(event, ...args));
+          this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
+          
+          logger.info('[BaseWebRTCSession] Remote camera state set and view key updated', {
+            camEnabled,
+            isFriendCall,
+            isTrackLive,
+            videoTrackEnabled: videoTrack.enabled
+          });
           
           // КРИТИЧНО: Применяем отложенное состояние cam-toggle, если оно было сохранено
-          if (this.pendingCamToggleRef && this.pendingCamToggleRef.from === setToId) {
-            const pending = this.pendingCamToggleRef;
+          const pendingCamToggle = this.remoteStateManager.getPendingCamToggle();
+          if (pendingCamToggle && pendingCamToggle.from === setToId) {
             if (videoTrack.readyState !== 'ended') {
-              videoTrack.enabled = pending.enabled;
-              this.remoteForcedOffRef = !pending.enabled;
-              this.remoteCamOnRef = pending.enabled;
-              this.remoteViewKeyRef = Date.now();
-              this.config.callbacks.onRemoteCamStateChange?.(pending.enabled);
-              this.config.onRemoteCamStateChange?.(pending.enabled);
-              this.emit('remoteCamStateChanged', pending.enabled);
-              this.emit('remoteViewKeyChanged', this.remoteViewKeyRef);
-              this.emitRemoteState();
+              videoTrack.enabled = pendingCamToggle.enabled;
+              this.remoteStateManager.setRemoteForcedOff(!pendingCamToggle.enabled);
+              this.remoteStateManager.setRemoteCamOn(pendingCamToggle.enabled, (event, ...args) => this.emit(event, ...args));
+              this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
+              this.remoteStateManager.emitRemoteState((event, ...args) => this.emit(event, ...args), this.pipManager.isRemoteInPiP());
             }
-            this.pendingCamToggleRef = null;
+            this.remoteStateManager.setPendingCamToggle(null);
           }
         }
       } catch (e) {
@@ -1215,117 +1269,252 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       }
     };
     
+    /**
+     * Обработчик события onaddstream (устаревший API, но используется для совместимости)
+     * КРИТИЧНО: Некоторые реализации WebRTC могут использовать onaddstream вместо ontrack
+     */
+    const handleAddStream = (e: any) => {
+      try {
+        // Проверяем, что PC не закрыт и токен актуален
+        if (!this.isPcValid(pc)) {
+          return;
+        }
+
+        const stream = e?.stream;
+        if (!stream || !isValidStream(stream)) {
+          return;
+        }
+
+        logger.info('[BaseWebRTCSession] onaddstream event received', {
+          streamId: stream.id,
+          hasVideo: !!(stream as any)?.getVideoTracks?.()?.[0],
+          hasAudio: !!(stream as any)?.getAudioTracks?.()?.[0]
+        });
+
+        // Получаем все треки из стрима и добавляем их
+        const tracks = stream.getTracks?.() || [];
+        let hasNewTracks = false;
+
+        tracks.forEach((track: any) => {
+          if (track && track.readyState !== 'ended') {
+            const existingRemoteStream = this.streamManager.getRemoteStream();
+            if (existingRemoteStream) {
+              // Добавляем трек в существующий стрим
+              const result = this.streamManager.addTrackToRemoteStream(track, (event, ...args) => {
+                this.emit(event, ...args);
+              });
+              if (result) {
+                hasNewTracks = true;
+              }
+            } else {
+              // Если remoteStream не существует, устанавливаем весь стрим
+              this.streamManager.setRemoteStream(stream, (event, ...args) => {
+                this.emit(event, ...args);
+              });
+              hasNewTracks = true;
+              return; // Выходим из цикла, так как установили весь стрим
+            }
+          }
+        });
+
+        if (hasNewTracks) {
+          // Обновляем состояние камеры
+          const videoTrack = (stream as any)?.getVideoTracks?.()?.[0];
+          if (videoTrack) {
+            const isFriendCall = this.isFriendCall();
+            const isTrackEnded = videoTrack.readyState === 'ended';
+            const camEnabled = isFriendCall && !isTrackEnded ? true : videoTrack.enabled && !isTrackEnded;
+            
+            this.remoteStateManager.setRemoteCamOn(camEnabled, (event, ...args) => this.emit(event, ...args));
+            this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
+          }
+        }
+      } catch (e) {
+        logger.error('[BaseWebRTCSession] Error in onaddstream handler:', e);
+      }
+    };
+
+    // ============================================================
+    // КРИТИЧНО: УСТАНОВКА ОБРАБОТЧИКА ontrack (МИНИМАЛЬНЫЙ ОБЯЗАТЕЛЬНЫЙ КОД)
+    // Без этого remoteStream всегда пустой → RemoteVideo = чёрный экран и тишина
+    // ============================================================
+    // 
+    // Минимальный код:
+    // pc.ontrack = (event) => {
+    //   const stream = event.streams[0];
+    //   this.remoteStream = stream;
+    //   this.emit("remoteStream", stream);
+    // };
+    //
+    // ============================================================
+    
+    // КРИТИЧНО: Устанавливаем обработчик ontrack (МИНИМАЛЬНЫЙ ОБЯЗАТЕЛЬНЫЙ КОД)
     (pc as any).ontrack = handleRemote;
+    
+    logger.info('[BaseWebRTCSession] ✅ Обработчик ontrack установлен (МИНИМАЛЬНЫЙ КОД)', {
+      partnerId: setToId,
+      pcSignalingState: pc.signalingState,
+      hasOntrack: !!(pc as any).ontrack,
+      handlerType: typeof handleRemote
+    });
+    
+    // onaddstream - устаревший API, но некоторые реализации могут его использовать
+    try {
+      (pc as any).onaddstream = handleAddStream;
+      logger.info('[BaseWebRTCSession] ✅ Обработчик onaddstream также установлен для совместимости');
+    } catch (e) {
+      // Игнорируем ошибку, если onaddstream не поддерживается
+      logger.debug('[BaseWebRTCSession] onaddstream not supported, using ontrack only');
+    }
+    
     (pc as any)._remoteHandlersAttached = true;
+    
+    // КРИТИЧНО: Проверяем наличие существующего remoteStream и синхронизируем с компонентами
+    // Это гарантирует, что стрим не потеряется при установке обработчиков на новый PC
+    const existingRemoteStream = this.streamManager.getRemoteStream();
+    if (existingRemoteStream && isValidStream(existingRemoteStream)) {
+      const videoTracks = (existingRemoteStream as any)?.getVideoTracks?.() || [];
+      const audioTracks = (existingRemoteStream as any)?.getAudioTracks?.() || [];
+      
+      logger.info('[BaseWebRTCSession] ✅ Обнаружен существующий remoteStream при установке обработчиков, синхронизируем с компонентами', {
+        streamId: existingRemoteStream.id,
+        hasVideo: videoTracks.length > 0,
+        hasAudio: audioTracks.length > 0,
+        videoTracksCount: videoTracks.length,
+        audioTracksCount: audioTracks.length,
+        partnerId: setToId
+      });
+      
+      // КРИТИЧНО: Эмитим событие remoteStream для синхронизации с компонентами
+      // Это гарантирует, что компоненты получат стрим даже после пересоздания PC
+      setTimeout(() => {
+        // Используем setTimeout для асинхронной отправки, чтобы не блокировать установку обработчиков
+        const currentRemoteStream = this.streamManager.getRemoteStream();
+        if (currentRemoteStream === existingRemoteStream) {
+          logger.info('[BaseWebRTCSession] 📤 Emitting existing remoteStream event для синхронизации', {
+            streamId: existingRemoteStream.id,
+            videoTracksCount: videoTracks.length,
+            audioTracksCount: audioTracks.length
+          });
+          this.emit('remoteStream', existingRemoteStream);
+          this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
+        }
+      }, 0);
+    }
+    
+    logger.info('[BaseWebRTCSession] Remote handlers attached', {
+      hasOntrack: true,
+      hasOnaddstream: typeof (pc as any).onaddstream !== 'undefined',
+      partnerId: setToId,
+      hasExistingRemoteStream: !!existingRemoteStream
+    });
   }
   
   /**
    * Проверка receivers для получения удаленного стрима
    */
   protected checkReceiversForRemoteStream(pc: RTCPeerConnection): void {
-    // Проверяем даже если соединение еще не установлено
-    if (!pc || pc.signalingState === 'closed') {
-      return;
-    }
-    
-    const connectionState = (pc as any)?.connectionState || pc.iceConnectionState;
-    if (connectionState === 'closed' || connectionState === 'failed') {
-      return;
-    }
-    
     if (!this.partnerIdRef) {
       return;
     }
     
-    // Проверяем даже если remoteStreamRef уже установлен
-    if (this.remoteStreamRef) {
-      const existingVideoTracks = (this.remoteStreamRef as any)?.getVideoTracks?.() || [];
-      const existingAudioTracks = (this.remoteStreamRef as any)?.getAudioTracks?.() || [];
-      const hasActiveVideoTracks = existingVideoTracks.some((t: any) => t && t.readyState !== 'ended');
-      const hasActiveAudioTracks = existingAudioTracks.some((t: any) => t && t.readyState !== 'ended');
-      
-      if (hasActiveVideoTracks || hasActiveAudioTracks) {
-        return;
-      }
-    }
+    logger.info('[BaseWebRTCSession] 🔍 Проверяем receivers для получения remoteStream', {
+      partnerId: this.partnerIdRef,
+      isFriendCall: this.isFriendCall(),
+      pcSignalingState: pc.signalingState,
+      pcConnectionState: (pc as any).connectionState
+    });
     
-    try {
-      const getReceiversFn = (pc as any).getReceivers;
-      if (typeof getReceiversFn !== 'function') {
-        return;
-      }
-      const receivers: Array<RTCRtpReceiver | any> = getReceiversFn.call(pc);
-      
-      if (!receivers || receivers.length === 0) {
-        return;
-      }
-      
-      // КРИТИЧНО: Создаем unified MediaStream из всех receivers для синхронизации аудио и видео
-      // Это особенно важно на iOS, где треки могут приходить отдельно
-      const { MediaStream } = require('react-native-webrtc');
-      const newStream = new MediaStream();
-      
-      // Собираем все активные треки из receivers
-      receivers.forEach((receiver: any) => {
-        const track = receiver.track;
-        if (track && track.readyState !== 'ended') {
-          try {
-            // Проверяем, что трек еще не добавлен (защита от дубликатов)
-            const existingTracks = newStream.getTracks?.() || [];
-            const alreadyAdded = existingTracks.some((et: any) => et && et.id === track.id);
-            
-            if (!alreadyAdded) {
-              (newStream as any).addTrack(track);
-            }
-          } catch (e) {
-            logger.warn('[BaseWebRTCSession] Error adding track from receiver:', e);
-          }
-        }
-      });
-      
-      // КРИТИЧНО: Проверяем, что unified stream содержит треки перед установкой
-      const unifiedTracks = newStream.getTracks?.() || [];
-      if (unifiedTracks.length > 0 && isValidStream(newStream)) {
-        // Проверяем, что это действительно новый stream или содержит новые треки
-        const existingStream = this.remoteStreamRef;
-        const existingTracks = existingStream?.getTracks?.() || [];
-        const hasNewTracks = unifiedTracks.some((ut: any) => {
-          return !existingTracks.some((et: any) => et && et.id === ut.id);
-        });
-        const isDifferentStream = !existingStream || existingStream !== newStream;
+    this.streamManager.checkReceiversForRemoteStream(
+      pc,
+      () => this.isFriendCall(),
+      (stream) => {
+        // КРИТИЧНО: Проверяем наличие видеотрека перед установкой remoteStream
+        const allTracks = stream.getTracks?.() || [];
+        const videoTracks = (stream as any)?.getVideoTracks?.() || [];
+        const audioTracks = (stream as any)?.getAudioTracks?.() || [];
+        const videoTrack = videoTracks[0];
+        const audioTrack = audioTracks[0];
+        const hasVideoTrack = videoTracks.length > 0;
+        const hasAudioTrack = audioTracks.length > 0;
         
-        if (isDifferentStream || hasNewTracks) {
-          this.remoteStreamRef = newStream;
-          this.remoteStreamEstablishedAtRef = Date.now();
-          this.config.callbacks.onRemoteStreamChange?.(newStream);
-          this.config.onRemoteStreamChange?.(newStream);
-          this.emit('remoteStream', newStream);
+        logger.info('[BaseWebRTCSession] ✅ RemoteStream обновлен из receivers', {
+          streamId: stream.id,
+          partnerId: this.partnerIdRef,
+          isFriendCall: this.isFriendCall(),
+          allTracksCount: allTracks.length,
+          videoTracksCount: videoTracks.length,
+          audioTracksCount: audioTracks.length,
+          hasVideoTrack: hasVideoTrack,
+          hasAudioTrack: hasAudioTrack,
+          videoTrackId: videoTrack?.id,
+          videoTrackEnabled: videoTrack?.enabled,
+          videoTrackReadyState: videoTrack?.readyState,
+          audioTrackId: audioTrack?.id,
+          audioTrackEnabled: audioTrack?.enabled,
+          audioTrackReadyState: audioTrack?.readyState,
+          trackIds: allTracks.map((t: any) => ({ id: t.id, kind: t.kind || (t as any).type, enabled: t.enabled, readyState: t.readyState }))
+        });
+        
+        // КРИТИЧНО: Проверяем, что видеотрек действительно доступен
+        if (!hasVideoTrack && allTracks.some((t: any) => (t.kind || (t as any).type) === 'video')) {
+          logger.error('[BaseWebRTCSession] ❌ КРИТИЧЕСКАЯ ОШИБКА: Видеотрек есть в getTracks(), но НЕ доступен через getVideoTracks()!', {
+            streamId: stream.id,
+            allTracksCount: allTracks.length,
+            videoTracksCount: videoTracks.length,
+            trackKinds: allTracks.map((t: any) => t.kind || (t as any).type)
+          });
+        }
+        
+        // Эмитим событие
+        logger.info('[BaseWebRTCSession] 📤 Emitting remoteStream event из receivers', {
+          streamId: stream.id,
+          hasVideoTrack: hasVideoTrack,
+          hasAudioTrack: hasAudioTrack
+        });
+        this.emit('remoteStream', stream);
+        
+        // КРИТИЧНО: Обновляем remoteViewKey при установке удаленного стрима из receivers
+        // Это гарантирует обновление видео в UI
+        this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
+        
+        // Обновляем состояние камеры если есть видео-трек
+        if (videoTrack) {
+          // КРИТИЧНО: Для дружеских звонков считаем камеру включенной если трек существует и не ended
+          // даже если enabled=false или readyState еще не live (это может быть временное начальное состояние)
+          const isFriendCall = this.isFriendCall();
+          const isTrackLive = videoTrack.readyState === 'live';
+          const isTrackEnded = videoTrack.readyState === 'ended';
           
-          // Обновляем состояние камеры если есть видео-трек
-          const videoTrack = (newStream as any)?.getVideoTracks?.()?.[0];
-          if (videoTrack) {
-            const camEnabled = videoTrack.enabled && videoTrack.readyState !== 'ended';
-            this.remoteCamOnRef = camEnabled;
-            this.config.callbacks.onRemoteCamStateChange?.(camEnabled);
-            this.config.onRemoteCamStateChange?.(camEnabled);
-            this.emit('remoteCamStateChanged', camEnabled);
+          let camEnabled: boolean;
+          if (isFriendCall && !isTrackEnded) {
+            // Для дружеских звонков с существующим треком (не ended) считаем камеру включенной
+            // даже если enabled=false или readyState еще не live (это может быть временное состояние)
+            camEnabled = true;
+            logger.info('[BaseWebRTCSession] Remote camera enabled for friend call with existing track (from receivers)', {
+              videoTrackEnabled: videoTrack.enabled,
+              videoTrackReadyState: videoTrack.readyState,
+              isTrackLive
+            });
+          } else {
+            // Для рандомного чата или если трек ended, используем фактическое состояние
+            camEnabled = videoTrack.enabled && !isTrackEnded;
           }
+          
+          this.remoteStateManager.setRemoteCamOn(camEnabled, (event, ...args) => this.emit(event, ...args));
+          logger.info('[BaseWebRTCSession] Remote camera state updated', { camEnabled, isFriendCall, isTrackLive });
         }
       }
-    } catch (e) {
-      logger.warn('[BaseWebRTCSession] Error checking receivers:', e);
-    }
+    );
   }
   
   // ==================== Remote State ====================
   
   protected emitRemoteState(): void {
-    this.emit('remoteState', {
-      camOn: this.remoteCamOnRef,
-      muted: this.remoteMutedRef,
-      inPiP: this.remoteInPiPRef,
-      remoteViewKey: this.remoteViewKeyRef,
-    });
+    this.remoteStateManager.emitRemoteState(
+      (event, ...args) => this.emit(event, ...args),
+      this.pipManager.isRemoteInPiP()
+    );
   }
   
   protected emitSessionUpdate(): void {
@@ -1333,40 +1522,32 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       partnerId: this.partnerIdRef,
       roomId: this.roomIdRef,
       callId: this.callIdRef,
-      hasLocalStream: !!this.localStreamRef,
-      hasRemoteStream: !!this.remoteStreamRef,
-      isConnected: this.isConnectedRef,
+      hasLocalStream: !!this.streamManager.getLocalStream(),
+      hasRemoteStream: !!this.streamManager.getRemoteStream(),
+      isConnected: this.connectionStateManager.isConnected(),
     });
   }
   
   // ==================== AppState Listener ====================
   
   protected setupAppStateListener(): void {
-    if (this.appStateSubscription) {
-      return;
-    }
-    
-    this.appStateSubscription = AppState.addEventListener('change', (nextAppState) => {
-      this.handleAppStateChange(nextAppState);
-    });
+    // Уже настроено в конструкторе
   }
   
   protected handleAppStateChange(nextAppState: string): void {
-    if (nextAppState === 'active' && this.wasInBackgroundRef) {
-      this.handleForeground();
-    } else if (nextAppState !== 'active') {
-      this.handleBackground();
-    }
+    // Обрабатывается через AppStateHandler
   }
   
   protected handleForeground(): void {
-    this.wasInBackgroundRef = false;
-    // Логика восстановления будет в наследниках
+    // Восстанавливаем камеру при возврате из фона
+    // Это отличается от PiP - при сворачивании приложения камера выключалась
+    this.handleAppForeground();
   }
   
   protected handleBackground(): void {
-    this.wasInBackgroundRef = true;
-    // Логика обработки фона будет в наследниках
+    // Выключаем камеру при сворачивании приложения
+    // Это отличается от PiP - при PiP камера остается включенной
+    this.handleAppBackground();
   }
   
   // ==================== ICE Candidate Queue ====================
@@ -1375,151 +1556,123 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Отправляет кешированные исходящие ICE кандидаты после установки partnerId
    */
   protected flushOutgoingIceCache(): void {
-    if (this.outgoingIceCache.length === 0 || !this.partnerIdRef) {
-      return;
-    }
-    
     const pc = this.peerRef;
     if (pc && !this.isPcValid(pc)) {
-      this.outgoingIceCache = [];
+      this.iceAndSignalingManager.clearOutgoingIceCache();
       return;
     }
     
-    const toId = this.partnerIdRef;
-    
-    // Отправляем все кешированные кандидаты
-    for (const candidate of this.outgoingIceCache) {
-      try {
-        const payload: any = { to: toId, candidate };
-        if (this.isFriendCall() && this.roomIdRef) {
-          payload.roomId = this.roomIdRef;
-        }
-        socket.emit('ice-candidate', payload);
-      } catch (e) {
-        logger.warn('[BaseWebRTCSession] Error sending cached ICE candidate:', e);
-      }
-    }
-    
-    // Очищаем кеш после отправки
-    this.outgoingIceCache = [];
+    this.iceAndSignalingManager.flushOutgoingIceCache(
+      this.partnerIdRef,
+      () => this.isFriendCall(),
+      this.roomIdRef
+    );
   }
   
   protected enqueueIce(from: string, candidate: any): void {
-    const key = String(from || '');
-    if (!this.pendingIceByFromRef[key]) {
-      this.pendingIceByFromRef[key] = [];
-    }
-    this.pendingIceByFromRef[key].push(candidate);
+    this.iceAndSignalingManager.enqueueIce(from, candidate);
   }
   
   protected async flushIceFor(from: string): Promise<void> {
-    const key = String(from || '');
-    const list = this.pendingIceByFromRef[key] || [];
-    const pc = this.peerRef;
-    
-    if (!pc || !list.length) {
-      return;
-    }
-    
-    if (!this.isPcValid(pc)) {
-      delete this.pendingIceByFromRef[key];
-      return;
-    }
-    
-    if (this.partnerIdRef && this.partnerIdRef !== from) {
-      delete this.pendingIceByFromRef[key];
-      return;
-    }
-    
-    const hasRemoteDesc = !!(pc as any).remoteDescription && !!(pc as any).remoteDescription?.type;
-    if (!hasRemoteDesc) {
-      return;
-    }
-    
-    for (const cand of list) {
-      try {
-        await pc.addIceCandidate(cand);
-      } catch (e: any) {
-        // Игнорируем ошибки о дубликатах
-        const errorMsg = String(e?.message || '');
-        if (!errorMsg.includes('InvalidStateError') && 
-            !errorMsg.includes('already exists') && 
-            !errorMsg.includes('closed')) {
-          logger.warn('[BaseWebRTCSession] Error adding queued ICE candidate:', e);
-        }
-      }
-    }
-    
-    delete this.pendingIceByFromRef[key];
+    await this.iceAndSignalingManager.flushIceFor(
+      from,
+      this.peerRef,
+      (pc) => this.isPcValid(pc),
+      this.partnerIdRef
+    );
   }
   
   // ==================== Connection State ====================
   
   protected isPcConnected(): boolean {
-    const pc = this.peerRef;
-    if (!pc) return false;
-    const st = (pc as any).connectionState || pc.iceConnectionState;
-    return st === 'connected' || st === 'completed';
+    return this.connectionStateManager.isPcConnected(this.peerRef);
   }
   
   protected setConnected(connected: boolean): void {
-    if (this.isConnectedRef === connected) {
-      return;
-    }
-    
-    this.isConnectedRef = connected;
-    
-    // Уведомляем через callbacks
-    this.config.callbacks.onPcConnectedChange?.(connected);
-    this.config.onPcConnectedChange?.(connected);
-    
-    if (connected) {
-      // Подключение установлено
-      this.emit('connected');
-      
-      // Устанавливаем время установки соединения
-      this.connectionEstablishedAtRef = Date.now();
-      
-      // Убеждаемся, что обработчик ontrack установлен
-      const pc = this.peerRef;
-      if (pc && this.partnerIdRef) {
-        const hasOntrack = !!(pc as any)?.ontrack;
-        if (!hasOntrack) {
-          const partnerId = this.partnerIdRef;
-          if (partnerId) {
-            this.attachRemoteHandlers(pc, partnerId);
+    this.connectionStateManager.setConnected(
+      connected,
+      this.peerRef,
+      this.partnerIdRef,
+      () => {
+        // Подключение установлено
+        this.emit('connected');
+        
+        // Устанавливаем время установки соединения
+        this.remoteStateManager.setConnectionEstablishedAt(Date.now());
+        
+        // Убеждаемся, что обработчик ontrack установлен
+        const pc = this.peerRef;
+        if (pc && this.partnerIdRef) {
+          const hasOntrack = !!(pc as any)?.ontrack;
+          if (!hasOntrack) {
+            const partnerId = this.partnerIdRef;
+            if (partnerId) {
+              this.attachRemoteHandlers(pc, partnerId);
+            }
+          }
+          
+          // КРИТИЧНО: Проверяем наличие remoteStream и синхронизируем с компонентами
+          const existingRemoteStream = this.streamManager.getRemoteStream();
+          if (existingRemoteStream) {
+            const videoTracks = (existingRemoteStream as any)?.getVideoTracks?.() || [];
+            const audioTracks = (existingRemoteStream as any)?.getAudioTracks?.() || [];
+            
+            logger.info('[BaseWebRTCSession] ✅ Remote stream уже существует при установке соединения, синхронизируем с компонентами', {
+              streamId: existingRemoteStream.id,
+              hasVideo: videoTracks.length > 0,
+              hasAudio: audioTracks.length > 0,
+              videoTracksCount: videoTracks.length,
+              audioTracksCount: audioTracks.length,
+              isFriendCall: this.isFriendCall(),
+              partnerId: this.partnerIdRef
+            });
+            
+            // КРИТИЧНО: Эмитим событие remoteStream для синхронизации с компонентами
+            // Это гарантирует, что компоненты получат стрим даже если событие было пропущено
+            this.emit('remoteStream', existingRemoteStream);
+            
+            // КРИТИЧНО: Обновляем remoteViewKey для принудительного обновления UI
+            this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
+          } else {
+            // Fallback - проверяем receivers напрямую (оптимизировано для быстрого соединения)
+            logger.info('[BaseWebRTCSession] Connection established but no remote stream, checking receivers...', {
+              isFriendCall: this.isFriendCall(),
+              partnerId: this.partnerIdRef
+            });
+            
+            // КРИТИЧНО: Для масштабируемости используем более короткие и оптимизированные задержки
+            // Проверяем сразу и затем с минимальными задержками
+            this.checkReceiversForRemoteStream(pc);
+            
+            const delays = this.isFriendCall() ? [200, 500, 1000] : [500, 1000, 2000];
+            delays.forEach((delay) => {
+              setTimeout(() => {
+                const currentPc = this.peerRef;
+                const currentPartnerId = this.partnerIdRef;
+                
+                if (currentPc === pc && currentPartnerId && !this.streamManager.getRemoteStream()) {
+                  this.checkReceiversForRemoteStream(currentPc);
+                }
+              }, delay);
+            });
           }
         }
         
-        // Fallback - проверяем receivers напрямую
-        if (!this.remoteStreamRef) {
-          const delays = this.isFriendCall() ? [500, 1000, 2000] : [1000, 2000, 3000];
-          delays.forEach((delay) => {
-            setTimeout(() => {
-              const currentPc = this.peerRef;
-              const currentPartnerId = this.partnerIdRef;
-              
-              if (currentPc === pc && currentPartnerId && !this.remoteStreamRef) {
-                this.checkReceiversForRemoteStream(currentPc);
-              }
-            }, delay);
-          });
-        }
+        // Очищаем таймеры reconnection
+        this.connectionStateManager.clearReconnectTimer();
+        
+        // Запускаем метры и обновляем состояние загрузки
+        this.startMicMeter();
+        this.config.callbacks.onLoadingChange?.(false);
+        this.config.onLoadingChange?.(false);
+        this.config.setIsNexting?.(false);
+      },
+      () => {
+        // Подключение потеряно
+        this.emit('disconnected');
+        this.stopMicMeter();
       }
-      
-      // Очищаем таймеры reconnection
-      this.clearReconnectTimer();
-      
-      // Запускаем метры и обновляем состояние загрузки
-      this.startMicMeter();
-      this.config.callbacks.onLoadingChange?.(false);
-      this.config.onLoadingChange?.(false);
-      this.config.setIsNexting?.(false);
-    } else {
-      // Подключение потеряно
-      this.emit('disconnected');
-      this.stopMicMeter();
-    }
+    );
   }
   
   /**
@@ -1541,23 +1694,13 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
   // ==================== SDP Optimization ====================
   
   protected optimizeSdpForFastConnection(sdp: string): string {
-    // Упрощение SDP для быстрого соединения
-    let optimized = sdp;
-    // Удаляем неиспользуемые кодеки
-    optimized = optimized.replace(/a=rtpmap:\d+ (red|ulpfec|rtx|flexfec)/gi, '');
-    return optimized;
+    return this.iceAndSignalingManager.optimizeSdpForFastConnection(sdp);
   }
   
   // ==================== Hash Utility ====================
   
   protected hashString(str: string): string {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32bit integer
-    }
-    return Math.abs(hash).toString(36);
+    return hashString(str);
   }
   
   // ==================== Public Getters ====================
@@ -1566,14 +1709,14 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Получить текущий локальный стрим
    */
   getLocalStream(): MediaStream | null {
-    return this.localStreamRef;
+    return this.streamManager.getLocalStream();
   }
   
   /**
    * Получить текущий удаленный стрим
    */
   getRemoteStream(): MediaStream | null {
-    return this.remoteStreamRef;
+    return this.streamManager.getRemoteStream();
   }
   
   /**
@@ -1608,7 +1751,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Проверить, подключены ли мы
    */
   isConnected(): boolean {
-    return this.isConnectedRef;
+    return this.connectionStateManager.isConnected();
   }
   
   // ==================== Protected Setters ====================
@@ -1649,7 +1792,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Переключить микрофон
    */
   toggleMic(): void {
-    const stream = this.localStreamRef;
+    const stream = this.streamManager.getLocalStream();
     if (!stream) return;
     
     const t = stream?.getAudioTracks?.()[0];
@@ -1672,12 +1815,13 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Переключить камеру
    */
   toggleCam(): void {
-    if (!this.localStreamRef) {
+    const localStream = this.streamManager.getLocalStream();
+    if (!localStream) {
       logger.warn('[BaseWebRTCSession] toggleCam: No local stream');
       return;
     }
     
-    const videoTrack = (this.localStreamRef as any)?.getVideoTracks?.()?.[0];
+    const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
     if (!videoTrack) {
       logger.warn('[BaseWebRTCSession] toggleCam: No video track');
       return;
@@ -1707,7 +1851,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Перевернуть камеру (передняя/задняя)
    */
   async flipCam(): Promise<void> {
-    const ls = this.localStreamRef;
+    const ls = this.streamManager.getLocalStream();
     if (!ls) return;
     
     const videoTrack = ls.getVideoTracks?.()?.[0];
@@ -1752,7 +1896,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Переключить удаленное аудио (динамик)
    */
   toggleRemoteAudio(): void {
-    const stream = this.remoteStreamRef;
+    const stream = this.streamManager.getRemoteStream();
     if (!stream) {
       return;
     }
@@ -1777,7 +1921,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       });
 
       // Обновляем внутреннее состояние
-      this.remoteMutedRef = !newEnabledState;
+      this.remoteStateManager.setRemoteMuted(!newEnabledState);
       
       this.emitRemoteState();
     } catch (e) {
@@ -1792,20 +1936,19 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     logger.warn('[BaseWebRTCSession] restartLocalCamera called - restarting local camera');
     
     // Сохраняем текущее состояние камеры
-    const currentVideoTrack = this.localStreamRef ? (this.localStreamRef as any)?.getVideoTracks?.()?.[0] : null;
+    const localStream = this.streamManager.getLocalStream();
+    const currentVideoTrack = localStream ? (localStream as any)?.getVideoTracks?.()?.[0] : null;
     const wasEnabled = currentVideoTrack?.enabled ?? true;
     
     // Останавливаем старый стрим
-    if (this.localStreamRef) {
+    if (localStream) {
       try {
-        const tracks = (this.localStreamRef as any)?.getTracks?.() || [];
+        const tracks = (localStream as any)?.getTracks?.() || [];
         tracks.forEach((t: any) => {
           try { t.stop(); } catch {}
         });
       } catch {}
-      this.localStreamRef = null;
-      this.config.callbacks.onLocalStreamChange?.(null);
-      this.config.onLocalStreamChange?.(null);
+      this.streamManager.setLocalStream(null);
       this.emit('localStream', null);
     }
     
@@ -1832,7 +1975,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     const started = this.config.getStarted?.() ?? false;
     const isSearching = started && !this.partnerIdRef && !this.roomIdRef;
     const hasActiveConnection = !!this.partnerIdRef || !!this.roomIdRef;
-    const hasStream = !!this.localStreamRef;
+    const hasStream = !!this.streamManager.getLocalStream();
     
     // Не останавливаем стрим если пользователь только что начал поиск
     if (isSearching && !preserveStreamForConnection && !force) {
@@ -1874,7 +2017,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       return;
     }
     
-    const ls = this.localStreamRef;
+    const ls = this.streamManager.getLocalStream();
     if (!ls) {
       try {
         if (this.peerRef || this.preCreatedPcRef) {
@@ -1908,9 +2051,8 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
           this.preCreatedPcRef = null;
         }
       } catch {}
-      this.localStreamRef = null;
-      this.config.callbacks.onLocalStreamChange?.(null);
-      this.config.onLocalStreamChange?.(null);
+      this.streamManager.setLocalStream(null);
+      this.emit('localStream', null);
       return;
     }
     
@@ -1958,9 +2100,8 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     // Очищаем стрим
     const { cleanupStream } = require('../../../utils/streamUtils');
     await cleanupStream(ls);
-    this.localStreamRef = null;
-    this.config.callbacks.onLocalStreamChange?.(null);
-    this.config.onLocalStreamChange?.(null);
+    this.streamManager.setLocalStream(null);
+    this.emit('localStream', null);
   }
   
   // ==================== Socket Handlers ====================
@@ -1973,30 +2114,17 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
   protected async handleOffer({ from, offer, fromUserId, roomId }: { from: string; offer: any; fromUserId?: string; roomId?: string }): Promise<void> {
     // Базовая проверка дубликатов
     const pc = this.peerRef;
-    const currentPcToken = pc ? ((pc as any)?._pcToken ?? this.pcToken) : this.pcToken;
+    const currentPcToken = this.pcLifecycleManager.getPcToken();
     const offerSdp = offer?.sdp || '';
-    const sdpHash = this.hashString(offerSdp);
-    const counterKey = `${from}_${currentPcToken}`;
-    let counter = this.offerCounterByKeyRef.get(counterKey) || 0;
+    const offerKey = this.iceAndSignalingManager.createOfferKey(from, currentPcToken, offerSdp);
     
-    const existingKeyWithSameHash = Array.from(this.processedOffersRef).find(key => 
-      key.startsWith(`offer_${from}_${currentPcToken}_${sdpHash}_`)
-    );
-    
-    if (!existingKeyWithSameHash) {
-      counter++;
-      this.offerCounterByKeyRef.set(counterKey, counter);
-    }
-    
-    const offerKey = `offer_${from}_${currentPcToken}_${sdpHash}_${counter}`;
-    
-    if (this.processingOffersRef.has(offerKey) || this.processedOffersRef.has(offerKey)) {
+    if (this.iceAndSignalingManager.isProcessingOffer(offerKey) || this.iceAndSignalingManager.isOfferProcessed(offerKey)) {
       return;
     }
     
     if (pc) {
-      const pcToken = (pc as any)?._pcToken ?? this.pcToken;
-      if (pcToken !== this.pcToken) {
+      const pcToken = (pc as any)?._pcToken ?? currentPcToken;
+      if (pcToken !== currentPcToken) {
         return;
       }
       
@@ -2010,7 +2138,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       }
     }
     
-    this.processingOffersRef.add(offerKey);
+    this.iceAndSignalingManager.markOfferProcessing(offerKey);
     
     // Устанавливаем roomId если он пришел
     if (roomId && !this.roomIdRef) {
@@ -2024,11 +2152,11 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     }
     
     // Получаем или создаем локальный стрим
-    let stream = this.localStreamRef;
+    let stream = this.streamManager.getLocalStream();
     if (!stream) {
       stream = await this.startLocalStream('front');
       if (!stream || !isValidStream(stream)) {
-        this.processingOffersRef.delete(offerKey);
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
         return;
       }
     }
@@ -2038,28 +2166,38 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     if (!pcForOffer) {
       pcForOffer = await this.ensurePcWithLocal(stream);
       if (!pcForOffer) {
-        this.processingOffersRef.delete(offerKey);
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
         return;
       }
     }
     
     // Проверяем состояние PC
     if (pcForOffer.signalingState === 'closed' || (pcForOffer as any).connectionState === 'closed') {
-      this.processingOffersRef.delete(offerKey);
+      this.iceAndSignalingManager.markOfferProcessed(offerKey);
       return;
     }
     
     if (!this.isPcValid(pcForOffer)) {
-      this.processingOffersRef.delete(offerKey);
+      this.iceAndSignalingManager.markOfferProcessed(offerKey);
       return;
     }
     
     // Устанавливаем remote description
     const hasRemoteDesc = !!(pcForOffer as any).remoteDescription;
     if (!hasRemoteDesc) {
-      // Убеждаемся, что обработчик ontrack установлен
-      if (from && !(pcForOffer as any)?.ontrack) {
-        this.attachRemoteHandlers(pcForOffer, from);
+      // КРИТИЧНО: Убеждаемся, что обработчик ontrack установлен
+      // Проверяем не только наличие обработчика, но и флаг
+      if (from) {
+        const hasHandler = !!(pcForOffer as any)?.ontrack;
+        const hasFlag = (pcForOffer as any)?._remoteHandlersAttached === true;
+        if (!hasHandler || !hasFlag) {
+          logger.info('[BaseWebRTCSession] Устанавливаем обработчики удаленного стрима в handleOffer', {
+            hasHandler,
+            hasFlag,
+            from
+          });
+          this.attachRemoteHandlers(pcForOffer, from);
+        }
       }
       
       try {
@@ -2069,7 +2207,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         }
         
         await pcForOffer.setRemoteDescription(offerDesc as any);
-        this.processedOffersRef.add(offerKey);
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
         
         // Создаем и отправляем answer
         await this.createAndSendAnswer(from, roomId);
@@ -2078,12 +2216,12 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         if (!errorMsg.includes('closed') && !errorMsg.includes('null')) {
           logger.error('[BaseWebRTCSession] Error setting remote description:', error);
         }
-        this.processingOffersRef.delete(offerKey);
+        this.iceAndSignalingManager.markOfferProcessed(offerKey);
         return;
       }
     }
     
-    this.processingOffersRef.delete(offerKey);
+    this.iceAndSignalingManager.markOfferProcessed(offerKey);
   }
   
   /**
@@ -2106,7 +2244,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       
       // Оптимизация SDP
       if (answer.sdp) {
-        answer.sdp = this.optimizeSdpForFastConnection(answer.sdp);
+        answer.sdp = this.iceAndSignalingManager.optimizeSdpForFastConnection(answer.sdp);
       }
       
       // Устанавливаем local description
@@ -2143,24 +2281,21 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       return;
     }
     
-    const currentPcToken = (pc as any)?._pcToken ?? this.pcToken;
-    const answerSdp = answer?.sdp || '';
-    const sdpHash = this.hashString(answerSdp);
-    const counterKey = `${from}_${currentPcToken}`;
-    let counter = this.answerCounterByKeyRef.get(counterKey) || 0;
+    // КРИТИЧНО: Проверяем состояние PC в самом начале - если уже stable, игнорируем answer
+    const initialState = pc.signalingState;
+    const initialHasRemoteDesc = !!(pc as any).remoteDescription;
     
-    const existingKeyWithSameHash = Array.from(this.processedAnswersRef).find(key => 
-      key.startsWith(`answer_${from}_${currentPcToken}_${sdpHash}_`)
-    );
-    
-    if (!existingKeyWithSameHash) {
-      counter++;
-      this.answerCounterByKeyRef.set(counterKey, counter);
+    if (initialState === 'stable' || initialHasRemoteDesc) {
+      // Не логируем - это нормальная ситуация (дубликат answer)
+      return;
     }
     
-    const answerKey = `answer_${from}_${currentPcToken}_${sdpHash}_${counter}`;
+    const currentPcToken = this.pcLifecycleManager.getPcToken();
+    const answerSdp = answer?.sdp || '';
+    const answerKey = this.iceAndSignalingManager.createAnswerKey(from, currentPcToken, answerSdp);
     
-    if (this.processingAnswersRef.has(answerKey) || this.processedAnswersRef.has(answerKey)) {
+    if (this.iceAndSignalingManager.isProcessingAnswer(answerKey) || this.iceAndSignalingManager.isAnswerProcessed(answerKey)) {
+      logger.info('[BaseWebRTCSession] Answer already processed or processing - ignoring duplicate', { from, answerKey });
       return;
     }
     
@@ -2172,7 +2307,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       return;
     }
     
-    this.processingAnswersRef.add(answerKey);
+    this.iceAndSignalingManager.markAnswerProcessing(answerKey);
     
     // Устанавливаем roomId если он пришел
     if (roomId && !this.roomIdRef) {
@@ -2182,25 +2317,103 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     // Проверяем состояние PC
     const hasLocalDesc = !!(pc as any).localDescription;
     const hasRemoteDesc = !!(pc as any).remoteDescription;
+    const currentState = pc.signalingState;
     
-    if (pc.signalingState !== 'have-local-offer' || !hasLocalDesc || hasRemoteDesc) {
-      this.processingAnswersRef.delete(answerKey);
+    // КРИТИЧНО: Если PC уже в stable, оба SDP установлены - не обрабатываем answer
+    if (currentState === 'stable') {
+      logger.info('[BaseWebRTCSession] PC already in stable state - answer already processed, ignoring duplicate', {
+        from,
+        signalingState: currentState,
+        hasLocalDesc,
+        hasRemoteDesc
+      });
+      this.iceAndSignalingManager.markAnswerProcessed(answerKey);
       return;
     }
     
-    // Задержка для снятия гонки
-    await new Promise(res => setTimeout(res, 150));
+    // КРИТИЧНО: Если remoteDescription уже установлен, answer уже обработан
+    if (hasRemoteDesc) {
+      logger.info('[BaseWebRTCSession] remoteDescription already set - answer already processed, ignoring duplicate', {
+        from,
+        signalingState: currentState,
+        hasLocalDesc,
+        hasRemoteDesc
+      });
+      this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+      return;
+    }
+    
+    // КРИТИЧНО: Проверяем что PC в правильном состоянии для обработки answer
+    if (currentState !== 'have-local-offer' || !hasLocalDesc) {
+      logger.warn('[BaseWebRTCSession] Cannot process answer - wrong state', {
+        from,
+        signalingState: currentState,
+        hasLocalDesc,
+        hasRemoteDesc,
+        expectedState: 'have-local-offer'
+      });
+      this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+      return;
+    }
+    
+    // КРИТИЧНО: Убрана задержка для оптимизации производительности
+    // Проверки состояния PC уже достаточно для предотвращения гонок
     
     const currentPc = this.peerRef;
-    if (!currentPc || currentPc !== pc || currentPc.signalingState !== 'have-local-offer') {
-      this.processingAnswersRef.delete(answerKey);
+    if (!currentPc || currentPc !== pc) {
+      logger.warn('[BaseWebRTCSession] PC changed during answer processing');
+      this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+      return;
+    }
+    
+    // КРИТИЧНО: Проверяем состояние еще раз после задержки
+    const finalState = currentPc.signalingState;
+    const finalHasLocalDesc = !!(currentPc as any).localDescription;
+    const finalHasRemoteDesc = !!(currentPc as any).remoteDescription;
+    
+    // КРИТИЧНО: Если PC уже в stable, answer уже был обработан - игнорируем дубликат
+    if (finalState === 'stable') {
+      logger.info('[BaseWebRTCSession] PC already in stable state after delay, answer already processed - ignoring duplicate', {
+        from,
+        signalingState: finalState,
+        hasLocalDesc: finalHasLocalDesc,
+        hasRemoteDesc: finalHasRemoteDesc
+      });
+      this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+      return;
+    }
+    
+    if (finalState !== 'have-local-offer' || !finalHasLocalDesc || finalHasRemoteDesc) {
+      logger.warn('[BaseWebRTCSession] PC state changed during delay', {
+        signalingState: finalState,
+        hasLocalDesc: finalHasLocalDesc,
+        hasRemoteDesc: finalHasRemoteDesc
+      });
+      this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+      return;
+    }
+    
+    // КРИТИЧНО: Проверяем что PC все еще валиден
+    if (!this.isPcValid(currentPc)) {
+      logger.warn('[BaseWebRTCSession] PC became invalid during answer processing');
+      this.iceAndSignalingManager.markAnswerProcessed(answerKey);
       return;
     }
     
     try {
-      // Убеждаемся, что обработчик ontrack установлен
-      if (from && !(currentPc as any)?.ontrack) {
-        this.attachRemoteHandlers(currentPc, from);
+      // КРИТИЧНО: Убеждаемся, что обработчик ontrack установлен
+      // Проверяем не только наличие обработчика, но и флаг
+      if (from) {
+        const hasHandler = !!(currentPc as any)?.ontrack;
+        const hasFlag = (currentPc as any)?._remoteHandlersAttached === true;
+        if (!hasHandler || !hasFlag) {
+          logger.info('[BaseWebRTCSession] Устанавливаем обработчики удаленного стрима в handleAnswer', {
+            hasHandler,
+            hasFlag,
+            from
+          });
+          this.attachRemoteHandlers(currentPc, from);
+        }
       }
       
       // Преобразуем answer в RTCSessionDescription если нужно
@@ -2209,21 +2422,136 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         answerDesc = { type: 'answer', sdp: answer.sdp || answer } as any;
       }
       
+      // КРИТИЧНО: Проверяем состояние еще раз перед setRemoteDescription
+      const stateBeforeSet = currentPc.signalingState;
+      const hasLocalDescBeforeSet = !!(currentPc as any).localDescription;
+      const hasRemoteDescBeforeSet = !!(currentPc as any).remoteDescription;
+      
+      // КРИТИЧНО: Если PC уже в stable, оба SDP установлены - не устанавливаем remoteDescription для answer
+      if (stateBeforeSet === 'stable') {
+        logger.info('[BaseWebRTCSession] PC already in stable before setRemoteDescription for answer - answer already processed, skipping', {
+          from,
+          signalingState: stateBeforeSet,
+          hasLocalDesc: hasLocalDescBeforeSet,
+          hasRemoteDesc: hasRemoteDescBeforeSet
+        });
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+        return;
+      }
+      
+      // КРИТИЧНО: Если remoteDescription уже установлен, не устанавливаем снова
+      if (hasRemoteDescBeforeSet) {
+        logger.info('[BaseWebRTCSession] remoteDescription already set before setRemoteDescription for answer - skipping', {
+          from,
+          signalingState: stateBeforeSet,
+          hasRemoteDesc: hasRemoteDescBeforeSet
+        });
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+        return;
+      }
+      
+      // КРИТИЧНО: Проверяем что PC в правильном состоянии для установки answer
+      if (stateBeforeSet !== 'have-local-offer' || !hasLocalDescBeforeSet) {
+        logger.warn('[BaseWebRTCSession] PC not in have-local-offer state before setRemoteDescription for answer', {
+          signalingState: stateBeforeSet,
+          hasLocalDesc: hasLocalDescBeforeSet,
+          hasRemoteDesc: hasRemoteDescBeforeSet
+        });
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+        return;
+      }
+      
+      // КРИТИЧНО: Финальная проверка непосредственно перед вызовом
+      const finalCheckState = currentPc.signalingState;
+      const finalHasRemoteDesc = !!(currentPc as any).remoteDescription;
+      
+      // КРИТИЧНО: Если PC уже в stable или remoteDescription установлен, не устанавливаем
+      if (finalCheckState === 'stable') {
+        logger.info('[BaseWebRTCSession] PC already in stable at final check - answer already processed, skipping setRemoteDescription', {
+          from,
+          previousState: stateBeforeSet,
+          currentState: finalCheckState,
+          hasRemoteDesc: finalHasRemoteDesc
+        });
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+        return;
+      }
+      
+      if (finalHasRemoteDesc) {
+        logger.info('[BaseWebRTCSession] remoteDescription already set at final check - skipping setRemoteDescription', {
+          from,
+          signalingState: finalCheckState,
+          hasRemoteDesc: finalHasRemoteDesc
+        });
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+        return;
+      }
+      
+      if (finalCheckState !== 'have-local-offer') {
+        logger.warn('[BaseWebRTCSession] PC not in have-local-offer at final check - aborting', {
+          from,
+          previousState: stateBeforeSet,
+          currentState: finalCheckState
+        });
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+        return;
+      }
+      
+      logger.info('[BaseWebRTCSession] 📥 Setting remote description for answer', {
+        from,
+        signalingState: finalCheckState,
+        hasRemoteDesc: finalHasRemoteDesc
+      });
+      
+      // КРИТИЧНО: Последняя проверка прямо перед вызовом (синхронно, без await)
+      const immediateState = currentPc.signalingState;
+      if (immediateState === 'stable' || !!(currentPc as any).remoteDescription) {
+        logger.warn('[BaseWebRTCSession] PC state changed to stable IMMEDIATELY before setRemoteDescription - aborting', {
+          from,
+          stateBeforeSet,
+          finalCheckState,
+          immediateState
+        });
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+        return;
+      }
+      
       await currentPc.setRemoteDescription(answerDesc as any);
-      this.processedAnswersRef.add(answerKey);
+      this.iceAndSignalingManager.markAnswerProcessed(answerKey);
       
       // Прожигаем отложенные ICE кандидаты
       await this.flushIceFor(from);
     } catch (error: any) {
       const errorMsg = String(error?.message || '');
-      if (!errorMsg.includes('closed') && !errorMsg.includes('null')) {
-        logger.error('[BaseWebRTCSession] Error setting remote description for answer:', error);
+      const currentState = currentPc?.signalingState;
+      const hasRemoteDesc = !!(currentPc as any)?.remoteDescription;
+      
+      // КРИТИЧНО: Если ошибка "Called in wrong state: stable", это значит answer уже был обработан
+      if (errorMsg.includes('wrong state') && errorMsg.includes('stable')) {
+        logger.info('[BaseWebRTCSession] Answer already processed (PC in stable) - ignoring error', {
+          from,
+          error: errorMsg,
+          signalingState: currentState,
+          hasRemoteDesc
+        });
+        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
+        return;
       }
-      this.processingAnswersRef.delete(answerKey);
+      
+      if (!errorMsg.includes('closed') && !errorMsg.includes('null')) {
+        logger.error('[BaseWebRTCSession] Error setting remote description for answer:', {
+          from,
+          error: errorMsg,
+          signalingState: currentState,
+          hasRemoteDesc,
+          errorObj: error
+        });
+      }
+      this.iceAndSignalingManager.markAnswerProcessed(answerKey);
       return;
     }
     
-    this.processingAnswersRef.delete(answerKey);
+    this.iceAndSignalingManager.markAnswerProcessed(answerKey);
   }
   
   /**
@@ -2293,7 +2621,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       
       // Оптимизация SDP
       if (offer.sdp) {
-        offer.sdp = this.optimizeSdpForFastConnection(offer.sdp);
+        offer.sdp = this.iceAndSignalingManager.optimizeSdpForFastConnection(offer.sdp);
       }
       
       // Устанавливаем local description
@@ -2340,14 +2668,14 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     
     // Для рандомного чата проверяем фактическое состояние видео трека
     if (!isDirectFriendCall) {
-      const rs = this.remoteStreamRef;
+      const rs = this.streamManager.getRemoteStream();
       if (rs) {
         const vt = (rs as any)?.getVideoTracks?.()?.[0];
         if (vt && vt.readyState !== 'ended' && !enabled) {
           const now = Date.now();
-          const connectionAge = now - this.connectionEstablishedAtRef;
+          const connectionAge = now - this.remoteStateManager.getConnectionEstablishedAt();
           const isRecentConnection = connectionAge < 5000;
-          const streamAge = this.remoteStreamEstablishedAtRef ? now - this.remoteStreamEstablishedAtRef : Infinity;
+          const streamAge = this.streamManager.getRemoteStreamEstablishedAt() ? now - this.streamManager.getRemoteStreamEstablishedAt() : Infinity;
           const isTrackStable = vt.readyState === 'live' && streamAge >= 300;
           
           if ((vt.readyState !== 'live' || !isTrackStable) && isRecentConnection) {
@@ -2356,7 +2684,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         }
       } else if (!enabled) {
         const now = Date.now();
-        const connectionAge = now - this.connectionEstablishedAtRef;
+        const connectionAge = now - this.remoteStateManager.getConnectionEstablishedAt();
         if (connectionAge < 5000) {
           return;
         }
@@ -2366,15 +2694,57 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     // Проверяем, нужно ли обновлять remoteCamOn
     let shouldUpdateRemoteCamOn = true;
     
-    if (!isDirectFriendCall && !enabled) {
+    // КРИТИЧНО: Для дружеских звонков полностью игнорируем cam-toggle(false) сразу после принятия звонка
+    // Это защищает от ложных cam-toggle при автоматическом входе в PiP
+    // Камера должна оставаться включенной при принятии звонка
+    if (!enabled && isDirectFriendCall) {
       const now = Date.now();
-      const connectionAge = now - this.connectionEstablishedAtRef;
-      const isRecentConnection = connectionAge < 5000;
+      const connectionAge = now - this.remoteStateManager.getConnectionEstablishedAt();
+      // КРИТИЧНО: Увеличиваем время игнорирования до 30 секунд для дружеских звонков
+      // Это гарантирует, что камера не выключится при автоматическом входе в PiP
+      const isRecentConnection = connectionAge < 30000; // 30 секунд для дружеских звонков
       
-      const rs = this.remoteStreamRef;
+      const rs = this.streamManager.getRemoteStream();
       if (rs) {
         const vt = (rs as any)?.getVideoTracks?.()?.[0];
-        const streamAge = this.remoteStreamEstablishedAtRef ? now - this.remoteStreamEstablishedAtRef : Infinity;
+        const streamAge = this.streamManager.getRemoteStreamEstablishedAt() ? now - this.streamManager.getRemoteStreamEstablishedAt() : Infinity;
+        const isTrackStable = vt && vt.readyState === 'live' && streamAge >= 1000; // 1 секунда для стабильности трека
+        
+        // КРИТИЧНО: Для дружеских звонков полностью игнорируем cam-toggle(false) если:
+        // 1. Соединение недавно установлено (менее 30 секунд)
+        // 2. Трек еще не стабилен или не live
+        // 3. remoteStream еще не установлен
+        if (isRecentConnection) {
+          if (!vt || vt.readyState !== 'live' || !isTrackStable) {
+            logger.info('[BaseWebRTCSession] Игнорируем cam-toggle(false) для дружеского звонка - соединение недавно установлено', {
+              connectionAge,
+              hasVideoTrack: !!vt,
+              videoTrackReadyState: vt?.readyState,
+              streamAge,
+              isTrackStable
+            });
+            shouldUpdateRemoteCamOn = false;
+            return; // Полностью игнорируем cam-toggle(false) для нестабильных треков
+          }
+        }
+      } else if (isRecentConnection) {
+        // Если remoteStream еще не установлен, игнорируем cam-toggle(false)
+        logger.info('[BaseWebRTCSession] Игнорируем cam-toggle(false) для дружеского звонка - remoteStream еще не установлен', {
+          connectionAge
+        });
+        shouldUpdateRemoteCamOn = false;
+        return;
+      }
+    } else if (!enabled) {
+      // Для рандомного чата используем старую логику
+      const now = Date.now();
+      const connectionAge = now - this.remoteStateManager.getConnectionEstablishedAt();
+      const isRecentConnection = connectionAge < 5000;
+      
+      const rs = this.streamManager.getRemoteStream();
+      if (rs) {
+        const vt = (rs as any)?.getVideoTracks?.()?.[0];
+        const streamAge = this.streamManager.getRemoteStreamEstablishedAt() ? now - this.streamManager.getRemoteStreamEstablishedAt() : Infinity;
         const isTrackStable = vt && vt.readyState === 'live' && streamAge >= 300;
         
         if (isRecentConnection && vt && vt.readyState !== 'ended' && (!isTrackStable || vt.readyState !== 'live')) {
@@ -2387,7 +2757,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     
     // Обновляем состояние трека
     try {
-      const rs = this.remoteStreamRef;
+      const rs = this.streamManager.getRemoteStream();
       const vt = rs ? (rs as any)?.getVideoTracks?.()?.[0] : null;
       const pc = this.peerRef;
       
@@ -2396,7 +2766,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
           // Проверяем стабильность трека перед применением cam-toggle для рандомного чата
           if (!isDirectFriendCall && !enabled) {
             const now = Date.now();
-            const streamAge = this.remoteStreamEstablishedAtRef ? now - this.remoteStreamEstablishedAtRef : Infinity;
+            const streamAge = this.streamManager.getRemoteStreamEstablishedAt() ? now - this.streamManager.getRemoteStreamEstablishedAt() : Infinity;
             const isTrackLive = vt.readyState === 'live';
             const isTrackStable = isTrackLive && streamAge >= 300;
             
@@ -2406,7 +2776,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
           }
           
           vt.enabled = enabled;
-          this.pendingCamToggleRef = null;
+          this.remoteStateManager.setPendingCamToggle(null);
         } else {
           const isPcActive = pc && 
             pc.signalingState !== 'closed' && 
@@ -2414,18 +2784,18 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
           const isPartnerMatch = !this.partnerIdRef || this.partnerIdRef === from;
           
           if (isPcActive && isPartnerMatch) {
-            this.pendingCamToggleRef = null;
+            this.remoteStateManager.setPendingCamToggle(null);
           } else {
             return;
           }
         }
       } else {
         if (!rs) {
-          this.pendingCamToggleRef = {
+          this.remoteStateManager.setPendingCamToggle({
             enabled,
             from,
             timestamp: Date.now()
-          };
+          });
         }
       }
     } catch (e) {
@@ -2434,18 +2804,14 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     
     // Обновляем состояние
     this.camToggleSeenRef = true;
-    this.remoteViewKeyRef = Date.now();
-    this.emit('remoteViewKeyChanged', this.remoteViewKeyRef);
+    this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
     
     if (shouldUpdateRemoteCamOn) {
-      const oldRemoteCamOn = this.remoteCamOnRef;
-      this.remoteForcedOffRef = !enabled;
-      this.remoteCamOnRef = enabled;
+      const oldRemoteCamOn = this.remoteStateManager.isRemoteCamOn();
+      this.remoteStateManager.setRemoteForcedOff(!enabled);
+      this.remoteStateManager.setRemoteCamOn(enabled, (event, ...args) => this.emit(event, ...args));
       
       if (oldRemoteCamOn !== enabled) {
-        this.config.callbacks.onRemoteCamStateChange?.(enabled);
-        this.config.onRemoteCamStateChange?.(enabled);
-        this.emit('remoteCamStateChanged', enabled);
         this.emitRemoteState();
       }
     }
@@ -2456,8 +2822,24 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Должен быть переопределен в наследниках
    */
   protected setupSocketHandlers(): void {
+    // КРИТИЧНО: Логируем регистрацию обработчиков для отладки
+    logger.info('[BaseWebRTCSession] 🔧 Registering socket handlers', {
+      socketId: socket.id,
+      socketConnected: socket.connected,
+      currentRoomId: this.roomIdRef,
+      currentPartnerId: this.partnerIdRef
+    });
+    
     // Базовые обработчики для всех типов сессий
     socket.on('offer', async (data: any) => {
+      logger.info('[BaseWebRTCSession] 📥 Offer received from server', {
+        from: data.from || socket.id,
+        fromUserId: data.fromUserId,
+        roomId: data.roomId,
+        hasOffer: !!data.offer,
+        currentRoomId: this.roomIdRef,
+        currentPartnerId: this.partnerIdRef
+      });
       await this.handleOffer({
         from: data.from || socket.id,
         offer: data.offer,
@@ -2467,6 +2849,13 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     });
     
     socket.on('answer', async (data: any) => {
+      logger.info('[BaseWebRTCSession] 📥 Answer received from server', {
+        from: data.from || socket.id,
+        roomId: data.roomId,
+        hasAnswer: !!data.answer,
+        currentRoomId: this.roomIdRef,
+        currentPartnerId: this.partnerIdRef
+      });
       await this.handleAnswer({
         from: data.from || socket.id,
         answer: data.answer,
@@ -2475,10 +2864,27 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     });
     
     socket.on('ice-candidate', async (data: any) => {
+      // Логируем только первые несколько кандидатов для отладки
+      const candidateCount = (this as any).__iceCandidateCount = ((this as any).__iceCandidateCount || 0) + 1;
+      if (candidateCount <= 3) {
+        logger.info('[BaseWebRTCSession] 📥 ICE candidate received from server', {
+          from: data.from || socket.id,
+          candidateCount,
+          hasCandidate: !!data.candidate,
+          currentRoomId: this.roomIdRef
+        });
+      }
       await this.handleCandidate({
         from: data.from || socket.id,
         candidate: data.candidate
       });
+    });
+    
+    logger.info('[BaseWebRTCSession] ✅ Socket handlers registered', {
+      socketId: socket.id,
+      hasOfferHandler: true,
+      hasAnswerHandler: true,
+      hasIceCandidateHandler: true
     });
     
     socket.on('cam-toggle', (data: { enabled: boolean; from: string; roomId?: string }) => {
@@ -2498,17 +2904,13 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Обработка pip:state события
    */
   protected handlePiPState(data: { inPiP: boolean; from: string; roomId: string }): void {
-    const { inPiP, from, roomId } = data;
-    
-    // Проверяем, что это событие для текущего партнера/комнаты
-    const isCurrentPartner = this.partnerIdRef === from || !this.partnerIdRef;
-    const isCurrentRoom = this.roomIdRef === roomId || !this.roomIdRef;
-    
-    if (isCurrentPartner && isCurrentRoom) {
-      this.remoteInPiPRef = inPiP;
-      this.emit('partnerPiPStateChanged', { inPiP });
-      this.emitRemoteState();
-    }
+    this.pipManager.handlePiPState(
+      data,
+      this.partnerIdRef,
+      this.roomIdRef,
+      (event, ...args) => this.emit(event, ...args)
+    );
+    this.emitRemoteState();
   }
   
   // ==================== Abstract Methods ====================
