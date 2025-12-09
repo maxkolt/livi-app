@@ -664,7 +664,6 @@ export class VideoCallSession extends BaseWebRTCSession {
               }
               t.enabled = false;
               t.stop();
-              try { (t as any).release?.(); } catch {}
             }
           } catch (e) {
             logger.warn('[VideoCallSession] Error force-stopping local track:', e);
@@ -673,6 +672,7 @@ export class VideoCallSession extends BaseWebRTCSession {
       } catch (e) {
         logger.warn('[VideoCallSession] Error force-stopping local stream:', e);
       }
+      
       // Очищаем ссылку на стрим
       this.streamManager.setLocalStream(null);
       this.config.callbacks.onLocalStreamChange?.(null);

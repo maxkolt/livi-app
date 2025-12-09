@@ -1,7 +1,8 @@
 /**
  * RandomChat - Компонент для рандомного видеочата
- * Использует общие компоненты: VideoView, MediaControls, VoiceEqualizerWrapper
+ * Использует компоненты: RTCView (для отображения видео), VoiceEqualizer, AwayPlaceholder
  * Имеет кнопки: Начать/Стоп и Далее
+ * Управление медиа реализовано напрямую через TouchableOpacity
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -28,8 +29,6 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { MediaStream, mediaDevices, RTCView } from 'react-native-webrtc';
 import { RandomChatSession } from '../../src/webrtc/sessions/RandomChatSession';
 import type { WebRTCSessionConfig } from '../../src/webrtc/types';
-import { VideoView } from './shared/VideoView';
-import { MediaControls } from './shared/MediaControls';
 import VoiceEqualizer from '../VoiceEqualizer';
 import AwayPlaceholder from '../AwayPlaceholder';
 import { t, loadLang, defaultLang } from '../../utils/i18n';
@@ -409,6 +408,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setStarted(false);
       setLoading(false);
       loadingRef.current = false;
+      setMicLevel(0);
+      setRemoteMuted(false);
       
       try {
         stopSpeaker(); // Останавливаем спикер
@@ -1272,4 +1273,3 @@ const styles = StyleSheet.create({
 });
 
 export default RandomChat;
-

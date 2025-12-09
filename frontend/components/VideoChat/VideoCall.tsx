@@ -1,6 +1,6 @@
 /**
  * VideoCall - Компонент для видеозвонка другу
- * Использует общие компоненты: VideoView, MediaControls, VoiceEqualizerWrapper
+ * Использует компоненты: RemoteVideo, LocalVideo, MediaControls, VoiceEqualizer, IncomingCallModal
  * Имеет кнопку: Завершить
  */
 
@@ -665,26 +665,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                 if (t && t.readyState !== 'ended' && t.readyState !== null) {
                   const trackKind = t.kind || (t as any).type;
                   
-                  // КРИТИЧНО: Агрессивная остановка для Android
+                  // КРИТИЧНО: Останавливаем трек один раз без dispose/release, чтобы избежать double-dispose
                   t.enabled = false;
                   t.stop();
-                  
-                  // КРИТИЧНО: Дополнительные методы для Android
-                  try {
-                    (t as any).release?.();
-                  } catch {}
-                  
-                  try {
-                    if ((t as any)._stop) {
-                      (t as any)._stop();
-                    }
-                  } catch {}
-                  
-                  try {
-                    if ((t as any).dispose) {
-                      (t as any).dispose();
-                    }
-                  } catch {}
                   
                   logger.info('[VideoCall] ✅ Трек остановлен в cleanupFunction', {
                     trackKind,
@@ -697,7 +680,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                       if (t && t.readyState !== 'ended' && t.readyState !== null) {
                         t.enabled = false;
                         t.stop();
-                        try { (t as any).release?.(); } catch {}
                       }
                     } catch (e) {
                       logger.warn('[VideoCall] Error in delayed track stop in cleanupFunction:', e);
@@ -731,223 +713,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     logger.info('[VideoCall] ✅ Глобальная ссылка на функцию очистки установлена при создании сессии', {
       hasCleanupFn: typeof cleanupFunction === 'function',
       hasSession: !!session
-    });
-    
-    // Подписки на события
-    session.on('localStream', (stream) => {
-      const prevStream = localStream;
-      logger.info('[VideoCall] localStream event received', {
-        hasStream: !!stream,
-        streamId: stream?.id,
-        prevStreamId: prevStream?.id,
-        isNew: prevStream !== stream
-      });
-      setLocalStream(stream);
-      
-      // КРИТИЧНО: ВСЕГДА обновляем localRenderKey при получении нового стрима
-      // Это гарантирует обновление видео в UI
-      if (stream) {
-        // Используем requestAnimationFrame для гарантированного обновления после setState
-        requestAnimationFrame(() => {
-          setLocalRenderKey((k: number) => k + 1);
-          logger.info('[VideoCall] Local stream changed, updating render key', {
-            prevStreamId: prevStream?.id,
-            newStreamId: stream.id
-          });
-          logger.info('[VideoCall] Local stream changed, updating render key', {
-            prevStreamId: prevStream?.id,
-            newStreamId: stream.id
-          });
-        });
-      }
-      
-      // КРИТИЧНО: При создании локального стрима включаем камеру автоматически
-      // Это особенно важно при принятии звонка
-      if (stream && isValidStream(stream)) {
-        const videoTrack = (stream as any)?.getVideoTracks?.()?.[0];
-        if (videoTrack && videoTrack.readyState === 'live') {
-          // Включаем трек если он выключен
-          if (!videoTrack.enabled) {
-            videoTrack.enabled = true;
-          }
-          // Обновляем состояние камеры
-          setCamOn(true);
-          // Отправляем состояние камеры партнеру
-          setTimeout(() => {
-            sendCameraState();
-          }, 100);
-        }
-      }
-    });
-    
-    session.on('remoteStream', (stream) => {
-      // КРИТИЧНО: Используем ref для получения актуального значения, а не замыкание
-      const prevStream = remoteStreamRef.current;
-      
-      // КРИТИЧНО: Получаем актуальное состояние звонка из замыкания
-      const currentWasFriendCallEnded = wasFriendCallEnded;
-      const currentStarted = started;
-      const currentPartnerId = partnerId;
-      const currentRoomId = roomId;
-      const currentCallId = callId;
-      
-      logger.info('[VideoCall] session.on(remoteStream) event received', {
-        prevStreamId: prevStream?.id,
-        newStreamId: stream?.id,
-        prevStreamExists: !!prevStream,
-        newStreamExists: !!stream,
-        wasFriendCallEnded: currentWasFriendCallEnded,
-        started: currentStarted,
-        hasActiveCall: !!(currentPartnerId || currentRoomId || currentCallId)
-      });
-      // КРИТИЧНО: Обновляем ref СИНХРОННО перед setState, чтобы избежать race condition
-      remoteStreamRef.current = stream;
-      
-      if (stream) {
-        const videoTrack = (stream as any)?.getVideoTracks?.()?.[0];
-        const audioTracks = (stream as any)?.getAudioTracks?.() || [];
-        const audioTrack = audioTracks[0];
-        
-        logger.info('[VideoCall] Remote stream received', {
-          streamId: stream.id,
-          hasVideoTracks: !!videoTrack,
-          hasAudioTracks: audioTracks.length > 0,
-          videoTrackEnabled: videoTrack?.enabled,
-          videoTrackReadyState: videoTrack?.readyState,
-          audioTrackEnabled: audioTrack?.enabled,
-          audioTrackReadyState: audioTrack?.readyState,
-          prevStreamId: prevStream?.id,
-          isNewStream: prevStream?.id !== stream.id,
-          currentStarted: started,
-          remoteMuted
-        });
-        
-        // КРИТИЧНО: Устанавливаем стрим сразу
-        logger.info('[VideoCall] Setting remoteStream state', { streamId: stream.id });
-        // КРИТИЧНО: Обновляем ref СИНХРОННО перед setState, чтобы избежать race condition
-        remoteStreamRef.current = stream;
-        setRemoteStream(stream);
-        
-        // КРИТИЧНО: Включаем аудио трек если он есть и не muted
-        // Проверяем все аудио треки и включаем их
-        if (audioTracks.length > 0) {
-          audioTracks.forEach((track: any, index: number) => {
-            if (track && !remoteMuted && !track.enabled) {
-              track.enabled = true;
-              logger.info('[VideoCall] Аудио трек включен при получении remoteStream', {
-                trackId: track.id,
-                trackIndex: index,
-                streamId: stream.id,
-                remoteMuted,
-                wasEnabled: false
-              });
-            } else if (track && remoteMuted && track.enabled) {
-              // Если muted, выключаем трек
-              track.enabled = false;
-              logger.info('[VideoCall] Аудио трек выключен (muted) при получении remoteStream', {
-                trackId: track.id,
-                trackIndex: index,
-                streamId: stream.id
-              });
-            }
-          });
-        }
-        
-        // КРИТИЧНО: Если started еще false, устанавливаем его при получении remoteStream
-        // Это гарантирует, что видео будет показано даже если callAnswered еще не сработал
-        if (!currentStarted) {
-          logger.info('[VideoCall] Устанавливаем started=true при получении remoteStream');
-          setStarted(true);
-          setLoading(false);
-          setIsInactiveState(false);
-        }
-        
-        // КРИТИЧНО: ВСЕГДА обновляем remoteViewKey при получении нового стрима
-        // Это гарантирует обновление видео в UI
-        // Обновляем несколько раз для надежности
-        const updateViewKey = () => {
-          const currentSession = sessionRef.current;
-          if (currentSession) {
-            const remoteViewKeyFromSession = (currentSession as any).getRemoteViewKey?.();
-            if (remoteViewKeyFromSession !== undefined) {
-              setRemoteViewKey(remoteViewKeyFromSession);
-              logger.info('[VideoCall] Remote view key updated from session', {
-                remoteViewKey: remoteViewKeyFromSession,
-                streamId: stream.id
-              });
-            } else {
-              // Если session не предоставляет ключ, обновляем вручную
-              setRemoteViewKey((k: number) => {
-                const newKey = k + 1;
-                logger.info('[VideoCall] Remote view key updated manually', {
-                  newKey,
-                  oldKey: k,
-                  streamId: stream.id
-                });
-                return newKey;
-              });
-            }
-          } else {
-            // Если session еще нет, обновляем вручную
-            setRemoteViewKey((k: number) => {
-              const newKey = k + 1;
-              logger.info('[VideoCall] Remote view key updated manually (no session)', {
-                newKey,
-                oldKey: k,
-                streamId: stream.id
-              });
-              return newKey;
-            });
-          }
-        };
-        
-        // Обновляем сразу и с задержками для гарантии
-        updateViewKey();
-        requestAnimationFrame(updateViewKey);
-        setTimeout(updateViewKey, 50);
-        setTimeout(updateViewKey, 200);
-      } else {
-        // КРИТИЧНО: Обновляем ref СИНХРОННО перед setState
-        remoteStreamRef.current = null;
-        setRemoteStream(null);
-        
-        // КРИТИЧНО: Не показываем предупреждение, если звонок завершается
-        // Это нормальное поведение при endCall() - remoteStream должен стать null
-        // Проверяем несколько условий:
-        // 1. Если звонок уже завершен (wasFriendCallEnded)
-        // 2. Если нет активного звонка (нет partnerId/roomId/callId)
-        // 3. Если started = false (звонок не был начат)
-        // 4. Если prevStream был null (это не удаление, а просто отсутствие стрима)
-        const hasActiveCall = !!partnerId || !!roomId || !!callId;
-        const isCallEnding = wasFriendCallEnded || !started || !hasActiveCall;
-        const wasStreamNull = !prevStream;
-        
-        // КРИТИЧНО: Показываем предупреждение ТОЛЬКО если:
-        // 1. Звонок действительно активен (hasActiveCall = true)
-        // 2. Звонок не завершается (isCallEnding = false)
-        // 3. Был реальный стрим, который удалился (wasStreamNull = false)
-        if (!isCallEnding && hasActiveCall && !wasStreamNull) {
-          // Только если звонок действительно активен и не завершается - показываем предупреждение
-          logger.warn('[VideoCall] ⚠️ Remote stream removed event received during active call', {
-            prevStreamId: prevStream?.id,
-            hasActiveCall,
-            started,
-            wasFriendCallEnded,
-            isCallEnding,
-            wasStreamNull
-          });
-        } else {
-          // Это нормальное поведение - звонок завершается, уже завершен, или стрима не было
-          logger.info('[VideoCall] Remote stream removed event received (normal - call ending/ended or no stream)', {
-            prevStreamId: prevStream?.id,
-            hasActiveCall,
-            started,
-            wasFriendCallEnded,
-            isCallEnding,
-            wasStreamNull
-          });
-        }
-      }
     });
     
     session.on('remoteViewKeyChanged', (key) => {
@@ -995,26 +760,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               if (t && t.readyState !== 'ended' && t.readyState !== null) {
                 const trackKind = t.kind || (t as any).type;
                 
-                // КРИТИЧНО: Агрессивная остановка для Android
+                // КРИТИЧНО: Останавливаем трек без дополнительных dispose/release
                 t.enabled = false;
                 t.stop();
-                
-                // КРИТИЧНО: Дополнительные методы для Android
-                try {
-                  (t as any).release?.();
-                } catch {}
-                
-                try {
-                  if ((t as any)._stop) {
-                    (t as any)._stop();
-                  }
-                } catch {}
-                
-                try {
-                  if ((t as any).dispose) {
-                    (t as any).dispose();
-                  }
-                } catch {}
                 
                 logger.info('[VideoCall] ✅ Трек остановлен в callEnded', {
                   trackKind,
@@ -1027,7 +775,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                     if (t && t.readyState !== 'ended' && t.readyState !== null) {
                       t.enabled = false;
                       t.stop();
-                      try { (t as any).release?.(); } catch {}
                     }
                   } catch (e) {
                     logger.warn('[VideoCall] Error in delayed track stop in callEnded:', e);
@@ -1057,6 +804,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setStarted(false);
       setCamOn(false);
       setMicOn(false);
+      setMicLevel(0);
       setLocalStream(null); // КРИТИЧНО: Очищаем локальный стрим
       // КРИТИЧНО: Обновляем ref СИНХРОННО перед setState
       remoteStreamRef.current = null;
@@ -1276,26 +1024,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                   enabled: t.enabled
                 });
                 
-                // КРИТИЧНО: Агрессивная остановка для Android
+                // КРИТИЧНО: Останавливаем трек без дополнительных dispose/release
                 t.enabled = false;
                 t.stop();
-                
-                // КРИТИЧНО: Дополнительные методы для Android
-                try {
-                  (t as any).release?.();
-                } catch {}
-                
-                try {
-                  if ((t as any)._stop) {
-                    (t as any)._stop();
-                  }
-                } catch {}
-                
-                try {
-                  if ((t as any).dispose) {
-                    (t as any).dispose();
-                  }
-                } catch {}
                 
                 // КРИТИЧНО: Вторая попытка через задержку для Android
                 setTimeout(() => {
@@ -1303,7 +1034,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                     if (t && t.readyState !== 'ended' && t.readyState !== null) {
                       t.enabled = false;
                       t.stop();
-                      try { (t as any).release?.(); } catch {}
                     }
                   } catch (e) {
                     logger.warn('[VideoCall] Error in delayed session track stop:', e);
@@ -1355,26 +1085,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                   enabled: t.enabled
                 });
                 
-                // КРИТИЧНО: Агрессивная остановка для Android
+                // КРИТИЧНО: Останавливаем трек без дополнительных dispose/release
                 t.enabled = false;
                 t.stop();
-                
-                // КРИТИЧНО: Дополнительные методы для Android
-                try {
-                  (t as any).release?.();
-                } catch {}
-                
-                try {
-                  if ((t as any)._stop) {
-                    (t as any)._stop();
-                  }
-                } catch {}
-                
-                try {
-                  if ((t as any).dispose) {
-                    (t as any).dispose();
-                  }
-                } catch {}
                 
                 // КРИТИЧНО: Вторая попытка через задержку для Android
                 setTimeout(() => {
@@ -1382,7 +1095,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                     if (t && t.readyState !== 'ended' && t.readyState !== null) {
                       t.enabled = false;
                       t.stop();
-                      try { (t as any).release?.(); } catch {}
                     }
                   } catch (e) {
                     logger.warn('[VideoCall] Error in delayed local track stop in onAbortCall:', e);
@@ -1408,6 +1120,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setRemoteStream(null);
       setCamOn(false);
       setMicOn(false);
+      setMicLevel(0);
       setIsInactiveState(true);
       
       // КРИТИЧНО: Дополнительная проверка через небольшую задержку
@@ -1419,18 +1132,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           if (remainingStream) {
             logger.warn('[VideoCall] ⚠️ Локальный стрим все еще существует после endCall, принудительная остановка');
             try {
-              const tracks = remainingStream.getTracks?.() || [];
-              tracks.forEach((t: any) => {
-                try {
-                  if (t && t.readyState !== 'ended' && t.readyState !== null) {
-                    t.enabled = false;
-                    t.stop();
-                    try { (t as any).release?.(); } catch {}
-                  }
-                } catch (e) {
-                  logger.warn('[VideoCall] Error force-stopping remaining track:', e);
-                }
-              });
+                  const tracks = remainingStream.getTracks?.() || [];
+                  tracks.forEach((t: any) => {
+                    try {
+                      if (t && t.readyState !== 'ended' && t.readyState !== null) {
+                        t.enabled = false;
+                        t.stop();
+                      }
+                    } catch (e) {
+                      logger.warn('[VideoCall] Error force-stopping remaining track:', e);
+                    }
+                  });
             } catch (e) {
               logger.warn('[VideoCall] Error force-stopping remaining stream:', e);
             }
@@ -2089,4 +1801,3 @@ const styles = StyleSheet.create({
 });
 
 export default VideoCall;
-

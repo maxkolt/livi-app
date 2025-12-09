@@ -45,17 +45,6 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     }
   }, [localStream, onStreamReady]);
 
-  // Если камера выключена, но трек активен, проверяем и включаем камеру
-  useEffect(() => {
-    if (!camOn && isVideoTrackActive && started && hasLocalStream && localStream) {
-      const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
-      if (videoTrack && !videoTrack.enabled) {
-        videoTrack.enabled = true;
-        logger.info('[LocalVideo] Камера включена для отображения локального видео');
-      }
-    }
-  }, [camOn, isVideoTrackActive, started, hasLocalStream, localStream]);
-
   // После завершения звонка показываем черный экран
   if (isInactiveState || wasFriendCallEnded) {
     return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;

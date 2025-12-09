@@ -210,8 +210,7 @@ export class StreamManager {
       }
     }
     
-    // КРИТИЧНО: На Android нужно более агрессивно останавливать треки
-    // Собираем все треки перед остановкой для гарантированной очистки
+      // Собираем все треки перед остановкой для гарантированной очистки
     const allTracks: any[] = [];
     try {
       const tracks = this.localStreamRef.getTracks?.() || [];
@@ -241,7 +240,8 @@ export class StreamManager {
         force
       });
       
-      // КРИТИЧНО: Останавливаем каждый трек несколько раз для гарантии на Android
+      // Останавливаем каждый трек один раз — без дополнительных dispose/release,
+      // чтобы избежать double-dispose и падений MediaStreamTrack has been disposed
       uniqueTracks.forEach((t: any, index: number) => {
         try {
           if (t) {
@@ -249,28 +249,9 @@ export class StreamManager {
             const trackId = t.id;
             const readyState = t.readyState;
             
-            // Первая попытка: стандартная остановка
             if (readyState !== 'ended' && readyState !== null) {
               t.enabled = false;
               t.stop();
-              
-              // КРИТИЧНО: На Android вызываем release() несколько раз для гарантии
-              try {
-                (t as any).release?.();
-              } catch {}
-              
-              // КРИТИЧНО: Дополнительные методы для Android
-              try {
-                if ((t as any)._stop) {
-                  (t as any)._stop();
-                }
-              } catch {}
-              
-              try {
-                if ((t as any).dispose) {
-                  (t as any).dispose();
-                }
-              } catch {}
               
               logger.info('[StreamManager] ✅ Трек остановлен', {
                 index,
@@ -286,20 +267,6 @@ export class StreamManager {
                 readyState
               });
             }
-            
-            // КРИТИЧНО: Вторая попытка через небольшую задержку для Android
-            // На Android треки могут не останавливаться сразу
-            setTimeout(() => {
-              try {
-                if (t && t.readyState !== 'ended' && t.readyState !== null) {
-                  t.enabled = false;
-                  t.stop();
-                  try { (t as any).release?.(); } catch {}
-                }
-              } catch (e) {
-                logger.warn('[StreamManager] Error in delayed track stop:', e);
-              }
-            }, 100);
           }
         } catch (e) {
           logger.warn('[StreamManager] Error stopping track:', e);
@@ -309,7 +276,7 @@ export class StreamManager {
       logger.error('[StreamManager] Error in stopLocalStreamInternal:', e);
     }
     
-    // КРИТИЧНО: Очищаем ссылку на стрим только после остановки всех треков
+    // Очищаем ссылку на стрим после остановки треков
     this.localStreamRef = null;
     this.setLocalStream(null);
     if (emit) {
@@ -594,7 +561,7 @@ export class StreamManager {
 
     // Получаем или создаем targetStream
     let targetStream: MediaStream;
-    
+
     if (this.remoteStreamRef) {
       targetStream = this.remoteStreamRef;
     } else {
@@ -708,4 +675,3 @@ export class StreamManager {
     this.stopTrackChecker();
   }
 }
-
