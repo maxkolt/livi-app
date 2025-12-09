@@ -29,28 +29,20 @@ export class RemoteStateManager {
 
   /**
    * Установить состояние удаленной камеры
-   * Вызывает callbacks только при изменении значения
+   * Вызывает callbacks ТОЛЬКО при изменении значения
+   * УБРАНО: Автоматические callbacks без изменения значения - это вызывало лишние переключения на Android
    */
   setRemoteCamOn(enabled: boolean, emit: (event: string, ...args: any[]) => void): void {
     const oldValue = this.remoteCamOnRef;
-    this.remoteCamOnRef = enabled;
     
-    // КРИТИЧНО: Всегда вызываем callbacks при установке remoteCamOn для дружеских звонков
-    // Это гарантирует, что UI обновляется даже если значение не изменилось
-    // (например, если remoteCamOn уже был true, но UI еще не обновился)
+    // Обновляем значение только если оно изменилось
     if (oldValue !== enabled) {
+      this.remoteCamOnRef = enabled;
       this.config.callbacks.onRemoteCamStateChange?.(enabled);
       this.config.onRemoteCamStateChange?.(enabled);
       emit('remoteCamStateChanged', enabled);
-    } else {
-      // КРИТИЧНО: Если значение не изменилось, но это дружеский звонок и камера включена,
-      // все равно вызываем callbacks для гарантии обновления UI
-      // Это особенно важно при первом получении стрима
-      if (enabled) {
-        this.config.callbacks.onRemoteCamStateChange?.(enabled);
-        this.config.onRemoteCamStateChange?.(enabled);
-      }
     }
+    // УБРАНО: Не вызываем callbacks если значение не изменилось - это предотвращает лишние переключения
   }
 
   /**

@@ -150,15 +150,17 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       }
 
       // Отправка: либо в комнату, либо конкретному сокету
-      // При hangup дополнительно продублируем в обе стороны на всякий случай
+      // КРИТИЧНО: При наличии roomId отправляем ТОЛЬКО в комнату, чтобы избежать дублирования
+      // Дублирование приводит к ошибкам "Called in wrong state" при установке SDP
       const fromUserId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : undefined;
-      // КРИТИЧНО: Включаем roomId в envelope для правильной обработки на клиенте
+      // КРИТИЧНО: Всегда включаем from: socket.id в envelope, чтобы клиент точно знал, от кого сигнал
+      // Это предотвращает ситуацию, когда получатель принимает пакет как "от себя"
       const envelope = { from: socket.id, fromUserId, roomId, ...payload } as any;
       
       let delivered = false;
       
       // КРИТИЧНО: Для прямых звонков используем roomId для гарантированной доставки
-      // КРИТИЧНО: Используем socket.to() вместо io.to(), чтобы исключить отправителя из получателей
+      // КРИТИЧНО: Если есть roomId, отправляем ТОЛЬКО в комнату (не дублируем по to)
       if (roomId) {
         const isSenderInRoom = socket.rooms.has(roomId);
         
@@ -182,10 +184,13 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
           roomSize,
           socketId: socket.id,
           event,
-          isSenderInRoom: socket.rooms.has(roomId)
+          isSenderInRoom: socket.rooms.has(roomId),
+          from: socket.id
         });
         
-        // КРИТИЧНО: socket.to() исключает отправителя, io.to() включает всех в комнате
+        // КРИТИЧНО: Используем socket.to(roomId) вместо io.to(roomId), чтобы исключить самодоставку
+        // socket.to() исключает отправителя, io.to() включает всех в комнате (включая отправителя)
+        // Это гарантирует, что получатель видит корректный from и не принимает пакет как "от себя"
         socket.to(roomId).emit(event, envelope);
         delivered = true;
         
@@ -204,13 +209,18 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
             logger.info(`[forward ${event}] ✅ Event sent to room with ${roomSize} participant(s)`, {
               roomId,
               socketId: socket.id,
+              from: socket.id,
               actualRecipients: roomSize - 1 // -1 потому что socket.to() исключает отправителя
             });
           }
         }
+        
+        // КРИТИЧНО: Возвращаемся, чтобы не отправлять по to (избегаем дублирования)
+        // Дублирование offer/answer приводит к ошибкам "Called in wrong state"
+        return;
       }
       
-      // Также отправляем напрямую по to для совместимости
+      // Если нет roomId, отправляем напрямую по to (для рандомного чата или обратной совместимости)
       // КРИТИЧНО: to может быть как socketId, так и userId
       if (to) {
         // Сначала пытаемся найти по socketId
@@ -228,18 +238,17 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
             to, 
             socketId: socket.id,
             targetSocketId: targetSocket.id,
-            targetExists: true
+            targetExists: true,
+            from: socket.id
           });
+          // КРИТИЧНО: При отправке напрямую также гарантируем наличие from в envelope
           targetSocket.emit(event, envelope);
           delivered = true;
         } else {
-          // Не логируем как ошибку, если событие уже доставлено через roomId
-          if (!delivered) {
-            logger.warn(`[forward ${event}] Target socket not found (neither by socketId nor userId)`, { 
-              to, 
-              socketId: socket.id 
-            });
-          }
+          logger.warn(`[forward ${event}] Target socket not found (neither by socketId nor userId)`, { 
+            to, 
+            socketId: socket.id 
+          });
         }
       }
       
@@ -260,10 +269,11 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
         });
       }
       // Доп. гарантия доставки для завершения вызова: шлем во все общие комнаты сокета
+      // КРИТИЧНО: Используем socket.to() вместо io.to(), чтобы исключить самодоставку
       if (event === 'hangup') {
         socket.rooms.forEach((rid) => {
           if (rid && rid.startsWith('room_')) {
-            io.to(rid).emit('hangup', envelope);
+            socket.to(rid).emit('hangup', envelope);
           }
         });
       }
@@ -283,10 +293,6 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
    *  ========================= */
   socket.on("cam-toggle", (data: { enabled: boolean; from: string; to?: string; roomId?: string }) => {
     const { enabled, from, to, roomId } = data;
-    // Логируем только отключение камеры
-    if (!enabled) {
-      logger.debug('Camera disabled', { socketId: socket.id });
-    }
     
     // Пересылаем событие всем в комнатах, где находится этот сокет
     socket.rooms.forEach((currentRoomId) => {

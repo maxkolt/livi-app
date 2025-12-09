@@ -559,6 +559,8 @@ export class VideoCallSession extends BaseWebRTCSession {
    * Завершить текущий звонок
    */
   endCall(): void {
+    // Фиксируем завершение, блокируем любые последующие авто-включения камеры/мика
+    this.endedRef = true;
     const savedRoomId = this.roomIdRef;
     const savedCallId = this.callIdRef;
     const savedPartnerId = this.partnerIdRef;
@@ -579,16 +581,24 @@ export class VideoCallSession extends BaseWebRTCSession {
       logger.warn('[VideoCallSession] Error emitting call:end:', e);
     }
     
-    // КРИТИЧНО: Сначала закрываем PC, чтобы освободить треки
+    // КРИТИЧНО: Сначала собираем и останавливаем ВСЕ треки из senders
+    // На Android при множественных перезапусках камеры (flipCam/reinit) могут остаться треки
+    // вне localStreamRef, которые нужно явно остановить
+    const allTracksToStop: any[] = [];
+    
+    // Собираем треки из основного PC
     if (this.peerRef) {
       this.incrementPcToken();
       
       try {
-        // Удаляем треки из senders перед закрытием PC
+        // Собираем все треки из senders перед закрытием PC
+        // Это покрывает треки, добавленные при flipCam/reinit
         const senders = this.peerRef.getSenders?.() || [];
         senders.forEach((sender: any) => {
           try {
             if (sender.track) {
+              // Сохраняем трек для последующей остановки
+              allTracksToStop.push(sender.track);
               sender.track.enabled = false;
             }
             sender.replaceTrack(null).catch(() => {});
@@ -607,6 +617,34 @@ export class VideoCallSession extends BaseWebRTCSession {
       this.peerRef = null;
     }
     
+    // КРИТИЧНО: Также собираем треки из preCreatedPcRef (если есть)
+    // Это покрывает случаи, когда PC был создан, но еще не использован
+    if (this.preCreatedPcRef) {
+      try {
+        const preCreatedSenders = this.preCreatedPcRef.getSenders?.() || [];
+        preCreatedSenders.forEach((sender: any) => {
+          try {
+            if (sender.track) {
+              // Сохраняем трек для последующей остановки
+              allTracksToStop.push(sender.track);
+              sender.track.enabled = false;
+            }
+            sender.replaceTrack(null).catch(() => {});
+          } catch (e) {
+            logger.warn('[VideoCallSession] Error removing track from preCreatedPc sender:', e);
+          }
+        });
+        
+        if (this.preCreatedPcRef.signalingState !== 'closed' && (this.preCreatedPcRef as any).connectionState !== 'closed') {
+          this.preCreatedPcRef.close();
+        }
+      } catch (e) {
+        logger.warn('[VideoCallSession] Error closing preCreatedPc:', e);
+      }
+      this.cleanupPeer(this.preCreatedPcRef);
+      this.preCreatedPcRef = null;
+    }
+    
     // КРИТИЧНО: Теперь останавливаем локальный стрим (камера и микрофон)
     // PC уже закрыт, поэтому треки точно можно остановить
     // Используем force=true для гарантированной остановки
@@ -620,6 +658,10 @@ export class VideoCallSession extends BaseWebRTCSession {
         tracks.forEach((t: any) => {
           try {
             if (t && t.readyState !== 'ended') {
+              // Сохраняем трек для последующей остановки
+              if (!allTracksToStop.includes(t)) {
+                allTracksToStop.push(t);
+              }
               t.enabled = false;
               t.stop();
               try { (t as any).release?.(); } catch {}
@@ -636,6 +678,79 @@ export class VideoCallSession extends BaseWebRTCSession {
       this.config.callbacks.onLocalStreamChange?.(null);
       this.config.onLocalStreamChange?.(null);
       this.emit('localStream', null);
+    }
+    
+    // КРИТИЧНО: Останавливаем ВСЕ собранные треки (включая те, что не в localStreamRef)
+    // На Android при множественных перезапусках камеры (flipCam/reinit/restartLocalCamera)
+    // могут остаться треки вне ссылок, которые нужно явно остановить
+    // Собраны треки из:
+    // 1. peerRef senders (треки, добавленные в активный PC)
+    // 2. preCreatedPcRef senders (треки из предсозданного PC)
+    // 3. localStream (треки из текущего локального стрима)
+    // Это покрывает все случаи, включая треки из flipCam/reinit
+    const uniqueTracks = Array.from(new Set(allTracksToStop));
+    uniqueTracks.forEach((track: any) => {
+      try {
+        if (track && track.readyState !== 'ended' && track.readyState !== null) {
+          const trackKind = track.kind || (track as any).type;
+          const trackId = track.id;
+          
+          // КРИТИЧНО: Агрессивная остановка для Android
+          track.enabled = false;
+          track.stop();
+          
+          // КРИТИЧНО: Дополнительные методы для Android
+          try {
+            (track as any).release?.();
+          } catch {}
+          
+          try {
+            if ((track as any)._stop) {
+              (track as any)._stop();
+            }
+          } catch {}
+          
+          try {
+            if ((track as any).dispose) {
+              (track as any).dispose();
+            }
+          } catch {}
+          
+          logger.info('[VideoCallSession] ✅ Orphaned трек остановлен', {
+            trackKind,
+            trackId,
+            readyState: track.readyState
+          });
+          
+          // КРИТИЧНО: Вторая попытка через задержку для Android
+          setTimeout(() => {
+            try {
+              if (track && track.readyState !== 'ended' && track.readyState !== null) {
+                track.enabled = false;
+                track.stop();
+                try { (track as any).release?.(); } catch {}
+              }
+            } catch (e) {
+              logger.warn('[VideoCallSession] Error in delayed orphaned track stop:', e);
+            }
+          }, 100);
+        }
+      } catch (e) {
+        logger.warn('[VideoCallSession] Error stopping orphaned track:', e);
+      }
+    });
+    
+    if (uniqueTracks.length > 0) {
+      logger.info('[VideoCallSession] 🛑 Остановлены все треки (включая orphaned)', {
+        totalTracks: uniqueTracks.length,
+        videoTracks: uniqueTracks.filter((t: any) => t.kind === 'video').length,
+        audioTracks: uniqueTracks.filter((t: any) => t.kind === 'audio').length,
+        sources: {
+          fromPeerRef: allTracksToStop.filter((t: any) => t).length,
+          fromPreCreatedPc: allTracksToStop.filter((t: any) => t).length,
+          fromLocalStream: localStream ? (localStream.getTracks?.() || []).length : 0
+        }
+      });
     }
     
     // Останавливаем удаленный стрим
@@ -678,6 +793,7 @@ export class VideoCallSession extends BaseWebRTCSession {
       this.config.setStarted?.(false);
       
       this.setPartnerId(null);
+      this.setPartnerSocketId(null);
       this.setRoomId(null);
       this.setCallId(null);
       
@@ -698,6 +814,7 @@ export class VideoCallSession extends BaseWebRTCSession {
       this.config.setStarted?.(false);
       
       this.setPartnerId(null);
+      this.setPartnerSocketId(null);
       this.setRoomId(null);
       this.setCallId(null);
     }
@@ -748,6 +865,7 @@ export class VideoCallSession extends BaseWebRTCSession {
     
     // Сбрасываем идентификаторы
     this.setPartnerId(null);
+    this.setPartnerSocketId(null);
     this.setRoomId(null);
     this.setCallId(null);
     
@@ -772,7 +890,35 @@ export class VideoCallSession extends BaseWebRTCSession {
     } else {
       const stream = this.getLocalStream();
       const videoTrack = stream ? (stream as any)?.getVideoTracks?.()?.[0] : null;
-      isEnabled = videoTrack?.enabled ?? true;
+      // КРИТИЧНО: Получаем фактическое состояние трека, а не значение по умолчанию
+      // Это гарантирует правильную отправку состояния камеры
+      isEnabled = videoTrack ? (videoTrack.enabled === true) : true;
+    }
+    
+    // КРИТИЧНО: Логируем отправку состояния для отладки
+    logger.info('[VideoCallSession] sendCameraState', {
+      enabled: isEnabled,
+      passedEnabled: enabled,
+      hasRoomId: !!currentRoomId,
+      roomId: currentRoomId,
+      hasPartnerId: !!targetPartnerId,
+      partnerId: targetPartnerId
+    });
+    
+    // КРИТИЧНО: Не отправляем cam-toggle(false) если звонок только что принят (в течение 30 секунд)
+    // Это предотвращает гашение камеры собеседника сразу после принятия звонка
+    if (!isEnabled) {
+      const connectionEstablishedAt = (this as any).remoteStateManager?.getConnectionEstablishedAt?.();
+      const timeSinceConnection = connectionEstablishedAt ? Date.now() - connectionEstablishedAt : Infinity;
+      const FILTER_DURATION_MS = 30000; // 30 секунд
+      
+      if (timeSinceConnection < FILTER_DURATION_MS) {
+        logger.info('[VideoCallSession] Не отправляем cam-toggle(false) - соединение только что установлено', {
+          timeSinceConnection,
+          roomId: currentRoomId
+        });
+        return; // Не отправляем cam-toggle(false)
+      }
     }
     
     try {
@@ -808,6 +954,7 @@ export class VideoCallSession extends BaseWebRTCSession {
     // КРИТИЧНО: Обработчик для получения roomId инициатором сразу после создания комнаты
     socket.on('call:room:created', (data: any) => {
       try {
+        // КРИТИЧНО: Сохраняем roomId сразу
         if (data.roomId && !this.getRoomId()) {
           this.setRoomId(data.roomId);
           logger.info('[VideoCallSession] RoomId установлен из call:room:created (инициатор)', { roomId: data.roomId });
@@ -822,12 +969,35 @@ export class VideoCallSession extends BaseWebRTCSession {
               logger.error('[VideoCallSession] Ошибка присоединения к комнате (инициатор):', e);
             }
           }
+          
+          // КРИТИЧНО: Отправляем начальное состояние камеры после установки roomId
+          // Это гарантирует, что партнер получит правильное состояние камеры при установке соединения
+          setTimeout(() => {
+            const stream = this.streamManager.getLocalStream();
+            if (stream) {
+              const videoTrack = (stream as any)?.getVideoTracks?.()?.[0];
+              if (videoTrack) {
+                const isEnabled = videoTrack.enabled ?? true;
+                logger.info('[VideoCallSession] Отправляем начальное состояние камеры после установки roomId (инициатор)', {
+                  roomId: data.roomId,
+                  enabled: isEnabled
+                });
+                this.sendCameraState(undefined, isEnabled);
+              }
+            }
+          }, 200);
         }
         
-        // Устанавливаем partnerId если он пришел
+        // КРИТИЧНО: Сохраняем partnerId если он пришел
         if (data.partnerId && !this.getPartnerId()) {
           this.setPartnerId(data.partnerId);
           logger.info('[VideoCallSession] PartnerId установлен из call:room:created', { partnerId: data.partnerId });
+        }
+        
+        // КРИТИЧНО: Сохраняем partnerSocketId если он пришел (для ICE кандидатов)
+        if (data.from && typeof data.from === 'string' && !this.getPartnerSocketId()) {
+          this.setPartnerSocketId(data.from);
+          logger.info('[VideoCallSession] PartnerSocketId установлен из call:room:created', { socketId: data.from });
         }
       } catch (e) {
         logger.error('[VideoCallSession] Ошибка обработки call:room:created:', e);
@@ -852,6 +1022,23 @@ export class VideoCallSession extends BaseWebRTCSession {
               logger.error('[VideoCallSession] Ошибка присоединения к комнате:', e);
             }
           }
+          
+          // КРИТИЧНО: Отправляем начальное состояние камеры после установки roomId
+          // Это гарантирует, что партнер получит правильное состояние камеры при установке соединения
+          setTimeout(() => {
+            const stream = this.streamManager.getLocalStream();
+            if (stream) {
+              const videoTrack = (stream as any)?.getVideoTracks?.()?.[0];
+              if (videoTrack) {
+                const isEnabled = videoTrack.enabled ?? true;
+                logger.info('[VideoCallSession] Отправляем начальное состояние камеры после установки roomId', {
+                  roomId: data.roomId,
+                  enabled: isEnabled
+                });
+                this.sendCameraState(undefined, isEnabled);
+              }
+            }
+          }, 200);
         }
         
         // Устанавливаем callId если он пришел
@@ -863,6 +1050,12 @@ export class VideoCallSession extends BaseWebRTCSession {
         if (data.fromUserId && !this.getPartnerId()) {
           this.setPartnerId(data.fromUserId);
           logger.info('[VideoCallSession] PartnerId установлен из call:accepted', { fromUserId: data.fromUserId });
+        }
+        
+        // КРИТИЧНО: Сохраняем socketId пира для прямых вызовов (для ICE кандидатов)
+        if (data.from && typeof data.from === 'string') {
+          this.setPartnerSocketId(data.from);
+          logger.info('[VideoCallSession] PartnerSocketId установлен из call:accepted', { socketId: data.from });
         }
         
         // КРИТИЧНО: Определяем инициатора ДО использования
@@ -1024,6 +1217,18 @@ export class VideoCallSession extends BaseWebRTCSession {
       // Обработка завершения звонка
       this.endCall();
     });
+    
+    // КРИТИЧНО: Обработчик peer:connected для сохранения socketId пира
+    socket.on('peer:connected', (data: any) => {
+      try {
+        if (data.peerId && typeof data.peerId === 'string') {
+          this.setPartnerSocketId(data.peerId);
+          logger.info('[VideoCallSession] PartnerSocketId установлен из peer:connected', { socketId: data.peerId });
+        }
+      } catch (e) {
+        logger.error('[VideoCallSession] Ошибка обработки peer:connected:', e);
+      }
+    });
   }
   
   /**
@@ -1035,6 +1240,12 @@ export class VideoCallSession extends BaseWebRTCSession {
     if (fromUserId && !this.getPartnerId()) {
       this.setPartnerId(fromUserId);
       logger.info('[VideoCallSession] PartnerId установлен из offer', { fromUserId });
+    }
+    
+    // КРИТИЧНО: Сохраняем socketId пира из offer для ICE кандидатов
+    if (from && typeof from === 'string') {
+      this.setPartnerSocketId(from);
+      logger.info('[VideoCallSession] PartnerSocketId установлен из offer', { socketId: from });
     }
     
     // КРИТИЧНО: Устанавливаем roomId если он пришел в offer
@@ -1052,6 +1263,23 @@ export class VideoCallSession extends BaseWebRTCSession {
           logger.error('[VideoCallSession] Ошибка присоединения к комнате из offer:', e);
         }
       }
+      
+      // КРИТИЧНО: Отправляем начальное состояние камеры после установки roomId
+      // Это гарантирует, что партнер получит правильное состояние камеры при установке соединения
+      setTimeout(() => {
+        const stream = this.streamManager.getLocalStream();
+        if (stream) {
+          const videoTrack = (stream as any)?.getVideoTracks?.()?.[0];
+          if (videoTrack) {
+            const isEnabled = videoTrack.enabled ?? true;
+            logger.info('[VideoCallSession] Отправляем начальное состояние камеры после установки roomId из offer', {
+              roomId,
+              enabled: isEnabled
+            });
+            this.sendCameraState(undefined, isEnabled);
+          }
+        }
+      }, 200);
     }
     
     // Вызываем базовую реализацию
@@ -1067,6 +1295,12 @@ export class VideoCallSession extends BaseWebRTCSession {
     if (roomId && !this.getRoomId()) {
       this.setRoomId(roomId);
       logger.info('[VideoCallSession] RoomId установлен из answer', { roomId });
+    }
+    
+    // КРИТИЧНО: Сохраняем socketId пира из answer для ICE кандидатов
+    if (from && typeof from === 'string') {
+      this.setPartnerSocketId(from);
+      logger.info('[VideoCallSession] PartnerSocketId установлен из answer', { socketId: from });
     }
     
     // Вызываем базовую реализацию
@@ -1536,4 +1770,3 @@ export class VideoCallSession extends BaseWebRTCSession {
     this.cleanup();
   }
 }
-

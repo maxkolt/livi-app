@@ -2,7 +2,6 @@ import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { RTCView, MediaStream } from 'react-native-webrtc';
 import { isValidStream } from '../../../utils/streamUtils';
-import AwayPlaceholder from '../../AwayPlaceholder';
 import { t, type Lang } from '../../../utils/i18n';
 import { logger } from '../../../utils/logger';
 
@@ -57,12 +56,18 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     }
   }, [camOn, isVideoTrackActive, started, hasLocalStream, localStream]);
 
-  // УПРОЩЕННАЯ ЛОГИКА: Показываем видео сразу, если есть стрим и трек live
-  // Убраны все заглушки для упрощения отображения
-
   // После завершения звонка показываем черный экран
   if (isInactiveState || wasFriendCallEnded) {
     return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
+  }
+
+  // КРИТИЧНО: Если камера выключена (camOn === false), показываем заглушку "Вы"
+  if (!camOn) {
+    return (
+      <View style={[styles.rtc, styles.placeholderContainer]}>
+        <Text style={styles.placeholder}>{L('you')}</Text>
+      </View>
+    );
   }
 
   // Показываем видео если есть стрим и трек live
@@ -108,6 +113,11 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: 'black',
+  },
+  placeholderContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(13,14,16,0.85)',
   },
   placeholder: {
     color: 'rgba(237,234,234,0.6)',

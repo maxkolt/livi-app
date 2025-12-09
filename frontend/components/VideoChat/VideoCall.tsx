@@ -480,52 +480,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             });
           }
           
-          const timeSinceAccept = Date.now() - (acceptCallTimeRef.current || 0);
-          // КРИТИЧНО: Увеличиваем время защиты до 30 секунд для предотвращения отключения камеры при входе в PiP
-          const isJustAccepted = timeSinceAccept < 30000; // 30 секунд защита
+          // УБРАНО: Логика игнорирования отключения камеры сразу после принятия звонка
+          // Теперь фильтрация происходит на сервере (в течение 30 секунд после принятия звонка)
           
-          // КРИТИЧНО: Защита от отключения камеры работает в первые 30 секунд после принятия звонка
-          // Это предотвращает отключение камеры при автоматическом входе в PiP
-          // После этого пользователь может свободно включать/выключать камеру
-          if (!enabled && hasActiveCall && !isInactiveState && isJustAccepted) {
-            // Проверяем фактическое состояние трека
-            const currentStream = localStream;
-            if (currentStream) {
-              const videoTrack = (currentStream as any)?.getVideoTracks?.()?.[0];
-              if (videoTrack && videoTrack.readyState === 'live') {
-                // Трек live - принудительно включаем камеру только если звонок только что принят
-                videoTrack.enabled = true;
-                logger.info('[VideoCall] Принудительно включаем камеру при попытке отключения сразу после принятия звонка', {
-                  timeSinceAccept,
-                  friendCallAccepted,
-                  roomId,
-                  callId,
-                  partnerId
-                });
-                setCamOn(true);
-                return; // Не обновляем состояние на false
-              }
-            }
-            
-            // Если звонок только что принят, игнорируем отключение
-            logger.info('[VideoCall] Игнорируем отключение камеры сразу после принятия звонка', {
-              timeSinceAccept,
-              friendCallAccepted,
-              roomId,
-              callId,
-              partnerId
-            });
-            return; // Не обновляем состояние
-          }
-          
-          // КРИТИЧНО: Если камера включается и звонок только что принят, гарантируем включение
-          if (enabled && isJustAccepted && hasActiveCall && !isInactiveState) {
-            logger.info('[VideoCall] Гарантируем включение камеры после принятия звонка');
-            setCamOn(true);
-            return;
-          }
-          
-          // КРИТИЧНО: После 30 секунд после принятия звонка позволяем пользователю свободно управлять камерой
           // Если пользователь выключает камеру вручную (не из PiP или background), отмечаем это
           if (!enabled) {
             const session = sessionRef.current;
@@ -568,12 +525,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             remoteStreamRef.current = streamFromSession;
           }
           
-          // КРИТИЧНО: Для дружеских звонков всегда устанавливаем remoteCamOn=true при получении стрима
-          // Это гарантирует, что видео будет показано
-          if (enabled && !remoteCamOn && remoteStream) {
-            logger.info('[VideoCall] ⚠️ Устанавливаем remoteCamOn=true при получении стрима для дружеского звонка');
-          }
-          
+          // УБРАНО: Автоматическая установка remoteCamOn=true при получении стрима
+          // Теперь используем только фактическое состояние из события
+          // Это предотвращает лишние переключения remoteCamOn на Android без реальной причины
+          // remoteCamOn будет обновляться только при реальных изменениях (cam-toggle, wasFriendCallEnded, переворот камеры)
           setRemoteCamOn(enabled);
         },
         onMicLevelChange: (level) => {
@@ -611,6 +566,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     
     const session = new VideoCallSession(config);
     sessionRef.current = session;
+    
+    // КРИТИЧНО: Устанавливаем глобальную ссылку на сессию сразу при создании
+    // Это нужно чтобы можно было остановить камеру даже когда VideoChat размонтирован (в PiP/фоне)
+    (global as any).__webrtcSessionRef.current = session;
+    logger.info('[VideoCall] ✅ Глобальная ссылка на сессию установлена при создании', {
+      hasSession: !!session,
+      sessionType: session.constructor.name
+    });
     
     // Восстановление состояния звонка при возврате из PiP или при инициации
     if (resume && fromPiP) {
@@ -662,6 +625,113 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         isFromBackground: false,
       });
     }
+    
+    // КРИТИЧНО: Создаем функцию очистки, которая вызывает session.endCall() и полную очистку
+    // Это нужно для глобальной ссылки __endCallCleanupRef
+    // Функция должна работать даже когда VideoChat размонтирован (в PiP/фоне)
+    const cleanupFunction = () => {
+      logger.info('[VideoCall] 🔥 cleanupFunction вызвана из глобальной ссылки (PiP/фон)');
+      const currentSession = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+      
+      if (currentSession) {
+        try {
+          // КРИТИЧНО: Сначала останавливаем локальные стримы напрямую
+          // Это гарантирует, что камера остановится даже если компонент размонтирован
+          const localStream = currentSession.getLocalStream?.();
+          if (localStream) {
+            logger.info('[VideoCall] Останавливаем локальный стрим из cleanupFunction');
+            
+            const tracks = localStream.getTracks?.() || [];
+            const videoTracks = (localStream as any)?.getVideoTracks?.() || [];
+            const audioTracks = (localStream as any)?.getAudioTracks?.() || [];
+            
+            // Собираем все треки из разных источников
+            const allTracks: any[] = [...tracks];
+            videoTracks.forEach((t: any) => {
+              if (t && !allTracks.includes(t)) {
+                allTracks.push(t);
+              }
+            });
+            audioTracks.forEach((t: any) => {
+              if (t && !allTracks.includes(t)) {
+                allTracks.push(t);
+              }
+            });
+            
+            const uniqueTracks = Array.from(new Set(allTracks));
+            
+            uniqueTracks.forEach((t: any) => {
+              try {
+                if (t && t.readyState !== 'ended' && t.readyState !== null) {
+                  const trackKind = t.kind || (t as any).type;
+                  
+                  // КРИТИЧНО: Агрессивная остановка для Android
+                  t.enabled = false;
+                  t.stop();
+                  
+                  // КРИТИЧНО: Дополнительные методы для Android
+                  try {
+                    (t as any).release?.();
+                  } catch {}
+                  
+                  try {
+                    if ((t as any)._stop) {
+                      (t as any)._stop();
+                    }
+                  } catch {}
+                  
+                  try {
+                    if ((t as any).dispose) {
+                      (t as any).dispose();
+                    }
+                  } catch {}
+                  
+                  logger.info('[VideoCall] ✅ Трек остановлен в cleanupFunction', {
+                    trackKind,
+                    trackId: t.id
+                  });
+                  
+                  // КРИТИЧНО: Вторая попытка через задержку для Android
+                  setTimeout(() => {
+                    try {
+                      if (t && t.readyState !== 'ended' && t.readyState !== null) {
+                        t.enabled = false;
+                        t.stop();
+                        try { (t as any).release?.(); } catch {}
+                      }
+                    } catch (e) {
+                      logger.warn('[VideoCall] Error in delayed track stop in cleanupFunction:', e);
+                    }
+                  }, 100);
+                }
+              } catch (e) {
+                logger.warn('[VideoCall] Error stopping track in cleanupFunction:', e);
+              }
+            });
+          }
+          
+          // КРИТИЧНО: Вызываем session.endCall() для полной очистки
+          if (typeof currentSession.endCall === 'function') {
+            logger.info('[VideoCall] Вызываем session.endCall() из cleanupFunction');
+            currentSession.endCall();
+          } else {
+            logger.warn('[VideoCall] session.endCall недоступен в cleanupFunction');
+          }
+        } catch (e) {
+          logger.error('[VideoCall] Error in cleanupFunction:', e);
+        }
+      } else {
+        logger.warn('[VideoCall] Session не найдена в cleanupFunction');
+      }
+    };
+    
+    // КРИТИЧНО: Устанавливаем глобальную ссылку на функцию очистки сразу после создания сессии
+    // Это нужно чтобы можно было вызвать очистку даже когда VideoChat размонтирован (в PiP/фоне)
+    (global as any).__endCallCleanupRef.current = cleanupFunction;
+    logger.info('[VideoCall] ✅ Глобальная ссылка на функцию очистки установлена при создании сессии', {
+      hasCleanupFn: typeof cleanupFunction === 'function',
+      hasSession: !!session
+    });
     
     // Подписки на события
     session.on('localStream', (stream) => {
@@ -785,7 +855,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         
         // КРИТИЧНО: Если started еще false, устанавливаем его при получении remoteStream
         // Это гарантирует, что видео будет показано даже если callAnswered еще не сработал
-        if (!started) {
+        if (!currentStarted) {
           logger.info('[VideoCall] Устанавливаем started=true при получении remoteStream');
           setStarted(true);
           setLoading(false);
@@ -892,16 +962,77 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
       
       // КРИТИЧНО: Останавливаем локальный стрим (камера и микрофон)
-      // Останавливаем все треки локального стрима
+      // На Android нужно более агрессивно останавливать треки
       if (localStream) {
         try {
           const tracks = localStream.getTracks?.() || [];
-          tracks.forEach((t: any) => {
+          const videoTracks = (localStream as any)?.getVideoTracks?.() || [];
+          const audioTracks = (localStream as any)?.getAudioTracks?.() || [];
+          
+          // Собираем все треки из разных источников
+          const allTracks: any[] = [...tracks];
+          videoTracks.forEach((t: any) => {
+            if (t && !allTracks.includes(t)) {
+              allTracks.push(t);
+            }
+          });
+          audioTracks.forEach((t: any) => {
+            if (t && !allTracks.includes(t)) {
+              allTracks.push(t);
+            }
+          });
+          
+          const uniqueTracks = Array.from(new Set(allTracks));
+          
+          logger.info('[VideoCall] 🛑 Останавливаем локальный стрим в callEnded', {
+            totalTracks: uniqueTracks.length,
+            videoTracks: uniqueTracks.filter((t: any) => (t.kind || (t as any).type) === 'video').length,
+            audioTracks: uniqueTracks.filter((t: any) => (t.kind || (t as any).type) === 'audio').length
+          });
+          
+          uniqueTracks.forEach((t: any) => {
             try {
-              if (t && t.readyState !== 'ended') {
+              if (t && t.readyState !== 'ended' && t.readyState !== null) {
+                const trackKind = t.kind || (t as any).type;
+                
+                // КРИТИЧНО: Агрессивная остановка для Android
                 t.enabled = false;
                 t.stop();
-                try { (t as any).release?.(); } catch {}
+                
+                // КРИТИЧНО: Дополнительные методы для Android
+                try {
+                  (t as any).release?.();
+                } catch {}
+                
+                try {
+                  if ((t as any)._stop) {
+                    (t as any)._stop();
+                  }
+                } catch {}
+                
+                try {
+                  if ((t as any).dispose) {
+                    (t as any).dispose();
+                  }
+                } catch {}
+                
+                logger.info('[VideoCall] ✅ Трек остановлен в callEnded', {
+                  trackKind,
+                  trackId: t.id
+                });
+                
+                // КРИТИЧНО: Вторая попытка через задержку для Android
+                setTimeout(() => {
+                  try {
+                    if (t && t.readyState !== 'ended' && t.readyState !== null) {
+                      t.enabled = false;
+                      t.stop();
+                      try { (t as any).release?.(); } catch {}
+                    }
+                  } catch (e) {
+                    logger.warn('[VideoCall] Error in delayed track stop in callEnded:', e);
+                  }
+                }, 100);
               }
             } catch (e) {
               logger.warn('[VideoCall] Error stopping local track in callEnded:', e);
@@ -930,6 +1061,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       // КРИТИЧНО: Обновляем ref СИНХРОННО перед setState
       remoteStreamRef.current = null;
       setRemoteStream(null); // КРИТИЧНО: Очищаем удаленный стрим
+      
+      // КРИТИЧНО: НЕ очищаем глобальные ссылки при callEnded
+      // Сессия может еще использоваться для восстановления или PiP
+      // Очистка произойдет только при размонтировании компонента
     });
     
     session.on('callAnswered', () => {
@@ -1033,8 +1168,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             session.removeAllListeners();
             session.destroy();
             sessionRef.current = null;
+            
+            // КРИТИЧНО: Очищаем глобальные ссылки при размонтировании
+            (global as any).__webrtcSessionRef.current = null;
+            (global as any).__endCallCleanupRef.current = null;
           } else {
             logger.info('[VideoCall] Keeping session alive for active call or PiP');
+            // КРИТИЧНО: Даже если сессия остается живой, очищаем cleanup функцию
+            // так как компонент размонтирован и onAbortCall больше не доступен
+            (global as any).__endCallCleanupRef.current = null;
+            // Но оставляем ссылку на сессию для прямого вызова session.endCall()
           }
         }
       }
@@ -1102,19 +1245,70 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           });
           
           const tracks = sessionLocalStream.getTracks?.() || [];
-          tracks.forEach((t: any, index: number) => {
+          const videoTracks = (sessionLocalStream as any)?.getVideoTracks?.() || [];
+          const audioTracks = (sessionLocalStream as any)?.getAudioTracks?.() || [];
+          
+          // Собираем все треки из разных источников
+          const allTracks: any[] = [...tracks];
+          videoTracks.forEach((t: any) => {
+            if (t && !allTracks.includes(t)) {
+              allTracks.push(t);
+            }
+          });
+          audioTracks.forEach((t: any) => {
+            if (t && !allTracks.includes(t)) {
+              allTracks.push(t);
+            }
+          });
+          
+          const uniqueTracks = Array.from(new Set(allTracks));
+          
+          uniqueTracks.forEach((t: any, index: number) => {
             try {
               if (t && t.readyState !== 'ended' && t.readyState !== null) {
+                const trackKind = t.kind || (t as any).type;
+                
                 logger.info('[VideoCall] Останавливаем трек из session', {
                   trackId: t.id,
                   trackIndex: index,
-                  kind: t.kind,
+                  trackKind,
                   readyState: t.readyState,
                   enabled: t.enabled
                 });
+                
+                // КРИТИЧНО: Агрессивная остановка для Android
                 t.enabled = false;
                 t.stop();
-                try { (t as any).release?.(); } catch {}
+                
+                // КРИТИЧНО: Дополнительные методы для Android
+                try {
+                  (t as any).release?.();
+                } catch {}
+                
+                try {
+                  if ((t as any)._stop) {
+                    (t as any)._stop();
+                  }
+                } catch {}
+                
+                try {
+                  if ((t as any).dispose) {
+                    (t as any).dispose();
+                  }
+                } catch {}
+                
+                // КРИТИЧНО: Вторая попытка через задержку для Android
+                setTimeout(() => {
+                  try {
+                    if (t && t.readyState !== 'ended' && t.readyState !== null) {
+                      t.enabled = false;
+                      t.stop();
+                      try { (t as any).release?.(); } catch {}
+                    }
+                  } catch (e) {
+                    logger.warn('[VideoCall] Error in delayed session track stop:', e);
+                  }
+                }, 100);
               }
             } catch (e) {
               logger.warn('[VideoCall] Error stopping session track:', e);
@@ -1130,19 +1324,70 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (localStream) {
         try {
           const tracks = localStream.getTracks?.() || [];
-          tracks.forEach((t: any, index: number) => {
+          const videoTracks = (localStream as any)?.getVideoTracks?.() || [];
+          const audioTracks = (localStream as any)?.getAudioTracks?.() || [];
+          
+          // Собираем все треки из разных источников
+          const allTracks: any[] = [...tracks];
+          videoTracks.forEach((t: any) => {
+            if (t && !allTracks.includes(t)) {
+              allTracks.push(t);
+            }
+          });
+          audioTracks.forEach((t: any) => {
+            if (t && !allTracks.includes(t)) {
+              allTracks.push(t);
+            }
+          });
+          
+          const uniqueTracks = Array.from(new Set(allTracks));
+          
+          uniqueTracks.forEach((t: any, index: number) => {
             try {
               if (t && t.readyState !== 'ended' && t.readyState !== null) {
+                const trackKind = t.kind || (t as any).type;
+                
                 logger.info('[VideoCall] Останавливаем трек из localStream state', {
                   trackId: t.id,
                   trackIndex: index,
-                  kind: t.kind,
+                  trackKind,
                   readyState: t.readyState,
                   enabled: t.enabled
                 });
+                
+                // КРИТИЧНО: Агрессивная остановка для Android
                 t.enabled = false;
                 t.stop();
-                try { (t as any).release?.(); } catch {}
+                
+                // КРИТИЧНО: Дополнительные методы для Android
+                try {
+                  (t as any).release?.();
+                } catch {}
+                
+                try {
+                  if ((t as any)._stop) {
+                    (t as any)._stop();
+                  }
+                } catch {}
+                
+                try {
+                  if ((t as any).dispose) {
+                    (t as any).dispose();
+                  }
+                } catch {}
+                
+                // КРИТИЧНО: Вторая попытка через задержку для Android
+                setTimeout(() => {
+                  try {
+                    if (t && t.readyState !== 'ended' && t.readyState !== null) {
+                      t.enabled = false;
+                      t.stop();
+                      try { (t as any).release?.(); } catch {}
+                    }
+                  } catch (e) {
+                    logger.warn('[VideoCall] Error in delayed local track stop in onAbortCall:', e);
+                  }
+                }, 100);
               }
             } catch (e) {
               logger.warn('[VideoCall] Error stopping local track in onAbortCall:', e);
@@ -1200,18 +1445,84 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }
   }, [isInactiveState, roomId, callId, localStream]);
   
+  // КРИТИЧНО: Обновляем глобальные ссылки при изменении сессии или функции очистки
+  // Это гарантирует, что ссылки всегда актуальны
+  // Основные ссылки устанавливаются при создании сессии выше, здесь только обновляем
+  useEffect(() => {
+    const session = sessionRef.current;
+    
+    // Обновляем ссылку на сессию (на случай если она изменилась)
+    if (session) {
+      (global as any).__webrtcSessionRef.current = session;
+    }
+    
+    // Обновляем ссылку на функцию очистки
+    // Основная функция очистки устанавливается при создании сессии выше
+    // Здесь обновляем только если onAbortCall изменился (как дополнительная опция)
+    // Но приоритет у cleanupFunction, установленной при создании сессии
+    if (typeof onAbortCall === 'function' && !(global as any).__endCallCleanupRef?.current) {
+      // Если cleanupFunction еще не установлена, используем onAbortCall
+      (global as any).__endCallCleanupRef.current = onAbortCall;
+      logger.info('[VideoCall] Установлена cleanup функция из onAbortCall (fallback)');
+    }
+    
+    logger.info('[VideoCall] Глобальные ссылки обновлены в useEffect', {
+      hasSession: !!session,
+      hasCleanupFn: typeof onAbortCall === 'function',
+      __webrtcSessionRef: !!(global as any).__webrtcSessionRef?.current,
+      __endCallCleanupRef: !!(global as any).__endCallCleanupRef?.current
+    });
+    
+    // Очищаем ссылки при размонтировании или если сессия удалена
+    return () => {
+      // Очищаем только если сессия действительно удалена
+      if (!sessionRef.current) {
+        (global as any).__webrtcSessionRef.current = null;
+        (global as any).__endCallCleanupRef.current = null;
+        logger.info('[VideoCall] Глобальные ссылки очищены (сессия удалена)');
+      }
+    };
+  }, [onAbortCall]);
+  
   const toggleMic = useCallback(() => {
-    sessionRef.current?.toggleMic();
+    const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+    if (session && typeof session.toggleMic === 'function') {
+      session.toggleMic();
+    } else {
+      logger.warn('[VideoCall] Session не найдена для toggleMic');
+    }
   }, []);
   
   const toggleCam = useCallback(() => {
-    sessionRef.current?.toggleCam();
+    const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+    if (session && typeof session.toggleCam === 'function') {
+      session.toggleCam();
+    } else {
+      logger.warn('[VideoCall] Session не найдена для toggleCam');
+    }
   }, []);
   
   const toggleRemoteAudio = useCallback(() => {
-    sessionRef.current?.toggleRemoteAudio();
-    setRemoteMuted(prev => !prev);
+    const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+    if (session && typeof session.toggleRemoteAudio === 'function') {
+      session.toggleRemoteAudio();
+      setRemoteMuted(prev => !prev);
+    } else {
+      logger.warn('[VideoCall] Session не найдена для toggleRemoteAudio');
+    }
   }, []);
+  
+  // КРИТИЧНО: Устанавливаем глобальные ссылки на функции управления для PiP
+  // Это нужно чтобы можно было управлять микрофоном и динамиком из PiP
+  useEffect(() => {
+    (global as any).__toggleMicRef.current = toggleMic;
+    (global as any).__toggleRemoteAudioRef.current = toggleRemoteAudio;
+    
+    return () => {
+      (global as any).__toggleMicRef.current = null;
+      (global as any).__toggleRemoteAudioRef.current = null;
+    };
+  }, [toggleMic, toggleRemoteAudio]);
   
   // Вычисляемые значения
   const hasActiveCall = !!partnerId || !!roomId || !!callId;

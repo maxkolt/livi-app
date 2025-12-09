@@ -1705,20 +1705,20 @@ PODS:
     - React-jsiexecutor
     - React-RCTFBReactNativeSpec
     - ReactCommon/turbomodule/core
-  - react-native-cometchat-ui-kit (5.2.2):
+  - react-native-cometchat-ui-kit (5.2.3):
     - React-Core
-    - react-native-cometchat-ui-kit/Video (= 5.2.2)
-    - react-native-cometchat-ui-kit/VideoCaching (= 5.2.2)
-  - react-native-cometchat-ui-kit/Video (5.2.2):
+    - react-native-cometchat-ui-kit/Video (= 5.2.3)
+    - react-native-cometchat-ui-kit/VideoCaching (= 5.2.3)
+  - react-native-cometchat-ui-kit/Video (5.2.3):
     - React-Core
-  - react-native-cometchat-ui-kit/VideoCaching (5.2.2):
+  - react-native-cometchat-ui-kit/VideoCaching (5.2.3):
     - DVAssetLoaderDelegate (~> 0.3.1)
     - React-Core
     - react-native-cometchat-ui-kit/Video
     - SPTPersistentCache (~> 1.1.0)
   - react-native-get-random-values (1.11.0):
     - React-Core
-  - react-native-keyboard-controller (1.19.5):
+  - react-native-keyboard-controller (1.20.1):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1733,7 +1733,7 @@ PODS:
     - React-hermes
     - React-ImageManager
     - React-jsi
-    - react-native-keyboard-controller/common (= 1.19.5)
+    - react-native-keyboard-controller/common (= 1.20.1)
     - React-NativeModulesApple
     - React-RCTFabric
     - React-renderercss
@@ -1743,7 +1743,7 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
-  - react-native-keyboard-controller/common (1.19.5):
+  - react-native-keyboard-controller/common (1.20.1):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1846,7 +1846,7 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
-  - react-native-video (6.17.0):
+  - react-native-video (6.18.0):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1861,7 +1861,7 @@ PODS:
     - React-hermes
     - React-ImageManager
     - React-jsi
-    - react-native-video/Video (= 6.17.0)
+    - react-native-video/Video (= 6.18.0)
     - React-NativeModulesApple
     - React-RCTFabric
     - React-renderercss
@@ -1871,7 +1871,7 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
-  - react-native-video/Fabric (6.17.0):
+  - react-native-video/Fabric (6.18.0):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1895,7 +1895,7 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
-  - react-native-video/Video (6.17.0):
+  - react-native-video/Video (6.18.0):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -3106,13 +3106,13 @@ SPEC CHECKSUMS:
   React-logger: 1426d04b594a2e68b0ac2add21d45422d06397a3
   React-Mapbuffer: 70a29536f84ddffca4a91097651d2b8f194f7c67
   React-microtasksnativemodule: ff05e894231c44c21135d1d23a82b87656d98eeb
-  react-native-cometchat-ui-kit: a3ed74fa24e7c668d2dd72afbe66db2887a18efa
+  react-native-cometchat-ui-kit: 5a343829aa7dfb459fea1104d8963b8e41087be6
   react-native-get-random-values: d16467cf726c618e9c7a8c3c39c31faa2244bbba
-  react-native-keyboard-controller: fbe295fd2dbadde0300fa5b01dec8deb3ec6b021
+  react-native-keyboard-controller: 0faec0497327d901a610bd3f5810525a41a17bf1
   react-native-netinfo: cec9c4e86083cb5b6aba0e0711f563e2fbbff187
   react-native-pip-android: 4132a11014293fd7a90cead371eab58acd65c4d8
   react-native-safe-area-context: 562163222d999b79a51577eda2ea8ad2c32b4d06
-  react-native-video: fccfd55807cbe814c2b9e505c1bc3fc0b9fd9e25
+  react-native-video: 1f5605e948f042fa137f0b2c97f5776675952783
   react-native-webrtc: e8f0ce746353adc2744a2b933645e1aeb41eaa74
   react-native-webview: 520bcb79c3f2af91e157cdd695732a34ab5f25c8
   React-NativeModulesApple: d94850b316446b0c39a82eb278d6efaa1a634055

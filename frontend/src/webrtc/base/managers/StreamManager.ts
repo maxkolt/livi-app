@@ -210,14 +210,96 @@ export class StreamManager {
       }
     }
     
+    // КРИТИЧНО: На Android нужно более агрессивно останавливать треки
+    // Собираем все треки перед остановкой для гарантированной очистки
+    const allTracks: any[] = [];
     try {
       const tracks = this.localStreamRef.getTracks?.() || [];
-      tracks.forEach((t: any) => {
+      const videoTracks = (this.localStreamRef as any)?.getVideoTracks?.() || [];
+      const audioTracks = (this.localStreamRef as any)?.getAudioTracks?.() || [];
+      
+      // Собираем все треки из разных источников для гарантии
+      allTracks.push(...tracks);
+      videoTracks.forEach((t: any) => {
+        if (t && !allTracks.includes(t)) {
+          allTracks.push(t);
+        }
+      });
+      audioTracks.forEach((t: any) => {
+        if (t && !allTracks.includes(t)) {
+          allTracks.push(t);
+        }
+      });
+      
+      // Удаляем дубликаты
+      const uniqueTracks = Array.from(new Set(allTracks));
+      
+      logger.info('[StreamManager] 🛑 Останавливаем локальный стрим', {
+        totalTracks: uniqueTracks.length,
+        videoTracks: uniqueTracks.filter((t: any) => (t.kind || (t as any).type) === 'video').length,
+        audioTracks: uniqueTracks.filter((t: any) => (t.kind || (t as any).type) === 'audio').length,
+        force
+      });
+      
+      // КРИТИЧНО: Останавливаем каждый трек несколько раз для гарантии на Android
+      uniqueTracks.forEach((t: any, index: number) => {
         try {
-          if (t && t.readyState !== 'ended' && t.readyState !== null) {
-            t.enabled = false;
-            t.stop();
-            try { (t as any).release?.(); } catch {}
+          if (t) {
+            const trackKind = t.kind || (t as any).type;
+            const trackId = t.id;
+            const readyState = t.readyState;
+            
+            // Первая попытка: стандартная остановка
+            if (readyState !== 'ended' && readyState !== null) {
+              t.enabled = false;
+              t.stop();
+              
+              // КРИТИЧНО: На Android вызываем release() несколько раз для гарантии
+              try {
+                (t as any).release?.();
+              } catch {}
+              
+              // КРИТИЧНО: Дополнительные методы для Android
+              try {
+                if ((t as any)._stop) {
+                  (t as any)._stop();
+                }
+              } catch {}
+              
+              try {
+                if ((t as any).dispose) {
+                  (t as any).dispose();
+                }
+              } catch {}
+              
+              logger.info('[StreamManager] ✅ Трек остановлен', {
+                index,
+                trackKind,
+                trackId,
+                readyState: t.readyState
+              });
+            } else {
+              logger.info('[StreamManager] Трек уже остановлен', {
+                index,
+                trackKind,
+                trackId,
+                readyState
+              });
+            }
+            
+            // КРИТИЧНО: Вторая попытка через небольшую задержку для Android
+            // На Android треки могут не останавливаться сразу
+            setTimeout(() => {
+              try {
+                if (t && t.readyState !== 'ended' && t.readyState !== null) {
+                  t.enabled = false;
+                  t.stop();
+                  try { (t as any).release?.(); } catch {}
+                }
+              } catch (e) {
+                logger.warn('[StreamManager] Error in delayed track stop:', e);
+              }
+            }, 100);
           }
         } catch (e) {
           logger.warn('[StreamManager] Error stopping track:', e);
@@ -227,11 +309,16 @@ export class StreamManager {
       logger.error('[StreamManager] Error in stopLocalStreamInternal:', e);
     }
     
+    // КРИТИЧНО: Очищаем ссылку на стрим только после остановки всех треков
     this.localStreamRef = null;
     this.setLocalStream(null);
     if (emit) {
       emit('localStream', null);
     }
+    
+    logger.info('[StreamManager] ✅ Локальный стрим остановлен и очищен', {
+      tracksStopped: allTracks.length
+    });
   }
 
   /**

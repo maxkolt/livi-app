@@ -27,7 +27,8 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
   protected preCreatedPcRef: RTCPeerConnection | null = null;
   
   // Connection identifiers
-  protected partnerIdRef: string | null = null;
+  protected partnerIdRef: string | null = null; // userId партнера
+  protected partnerSocketIdRef: string | null = null; // socket.id партнера (для ICE кандидатов)
   protected roomIdRef: string | null = null;
   protected callIdRef: string | null = null;
   
@@ -41,6 +42,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
   protected camToggleSeenRef: boolean = false;
   protected endedStreamIgnoredAtRef: number = 0;
   protected endedStreamTimeoutRef: ReturnType<typeof setTimeout> | null = null;
+  protected endedRef: boolean = false; // Флаг завершенного звонка, блокирует авто-переключения после endCall
   
   // Managers
   protected pcLifecycleManager: PcLifecycleManager;
@@ -97,6 +99,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Проверяет PiP стрим, существующий стрим, затем создает новый с fallback стратегией
    */
   async startLocalStream(side: CamSide = 'front'): Promise<MediaStream | null> {
+    if (this.endedRef) return null; // Не создаем стрим после завершения звонка
     const pipStream = this.tryGetPiPStream();
     if (pipStream) {
       return pipStream;
@@ -403,11 +406,17 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     const isCameraEnabled = videoTrack.enabled === true;
     const isTrackEnded = videoTrack.readyState === 'ended';
     
-    if (isFriendCall) {
-      // КРИТИЧНО: Для дружеских звонков считаем камеру включенной если трек существует и не ended
-      // даже если readyState еще не live (это может быть временное состояние)
-      return !isTrackEnded;
+    // УБРАНО: Автоматическое возвращение true для дружеских звонков
+    // Теперь используем только фактическое состояние трека (enabled)
+    // Это предотвращает лишние переключения remoteCamOn на Android без реальной причины
+    // remoteCamOn будет обновляться только при реальных изменениях (cam-toggle, wasFriendCallEnded, переворот камеры)
+    
+    if (isTrackEnded) {
+      return false;
     }
+    
+    // Используем только фактическое состояние трека
+    return isCameraEnabled;
     
     const now = Date.now();
     const streamAge = this.streamManager.getRemoteStreamEstablishedAt() 
@@ -465,6 +474,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Микрофон (звук) НЕ выключается - продолжает работать в фоне
    */
   handleAppBackground(): void {
+    if (this.endedRef) return; // После завершения звонка ничего не трогаем
     const localStream = this.streamManager.getLocalStream();
     if (localStream) {
       const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
@@ -479,16 +489,29 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         this.config.callbacks.onCamStateChange?.(false);
         this.config.onCamStateChange?.(false);
         
-        // Отправляем cam-toggle(false) партнеру - показываем "Отошел"
-        if (this.roomIdRef) {
-          try {
-            const payload: any = { enabled: false, from: socket.id };
-            if (this.roomIdRef) {
-              payload.roomId = this.roomIdRef;
+        // КРИТИЧНО: Не отправляем cam-toggle(false) если звонок только что принят (в течение 30 секунд)
+        // Это предотвращает гашение камеры собеседника сразу после принятия звонка
+        const connectionEstablishedAt = this.remoteStateManager.getConnectionEstablishedAt();
+        const timeSinceConnection = connectionEstablishedAt ? Date.now() - connectionEstablishedAt : Infinity;
+        const FILTER_DURATION_MS = 30000; // 30 секунд
+        
+        if (timeSinceConnection < FILTER_DURATION_MS) {
+          logger.info('[BaseWebRTCSession] Не отправляем cam-toggle(false) - соединение только что установлено', {
+            timeSinceConnection,
+            roomId: this.roomIdRef
+          });
+        } else {
+          // Отправляем cam-toggle(false) партнеру - показываем "Отошел"
+          if (this.roomIdRef) {
+            try {
+              const payload: any = { enabled: false, from: socket.id };
+              if (this.roomIdRef) {
+                payload.roomId = this.roomIdRef;
+              }
+              socket.emit('cam-toggle', payload);
+            } catch (e) {
+              logger.warn('[BaseWebRTCSession] Error emitting cam-toggle on background:', e);
             }
-            socket.emit('cam-toggle', payload);
-          } catch (e) {
-            logger.warn('[BaseWebRTCSession] Error emitting cam-toggle on background:', e);
           }
         }
         
@@ -521,6 +544,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Микрофон уже работает в фоне, его не нужно восстанавливать
    */
   handleAppForeground(): void {
+    if (this.endedRef) return; // После завершения звонка не восстанавливаем камеру
     const localStream = this.streamManager.getLocalStream();
     if (localStream) {
       const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
@@ -713,6 +737,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
 
   /**
    * Настроить обработчик ICE кандидатов
+   * КРИТИЧНО: Кеширует исходящие кандидаты, если нет partnerSocketId/roomId
    */
   private setupIceCandidateHandler(pc: RTCPeerConnection, expectedPartnerId?: string): void {
     (pc as any).onicecandidate = (event: any) => {
@@ -721,14 +746,58 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       }
       
       if (event.candidate) {
-        const toId = this.partnerIdRef || expectedPartnerId;
-        if (toId) {
-          const payload: any = { to: toId, candidate: event.candidate };
-          if (this.isFriendCall() && this.roomIdRef) {
-            payload.roomId = this.roomIdRef;
+        // КРИТИЧНО: Для видеозвонков используем roomId или partnerSocketId
+        // Для рандомного чата используем partnerId
+        const isFriendCall = this.isFriendCall();
+        const hasRoomId = !!this.roomIdRef;
+        const hasPartnerSocketId = !!this.partnerSocketIdRef;
+        const hasPartnerId = !!this.partnerIdRef || !!expectedPartnerId;
+        
+        // КРИТИЧНО: Если нет идентификаторов, кешируем кандидат
+        if (isFriendCall) {
+          // Для видеозвонков требуем roomId или partnerSocketId
+          if (!hasRoomId && !hasPartnerSocketId) {
+            this.iceAndSignalingManager.cacheOutgoingIce(event.candidate);
+            const cacheCount = (this as any).__outgoingIceCacheCount = ((this as any).__outgoingIceCacheCount || 0) + 1;
+            if (cacheCount <= 3) {
+              logger.debug('[BaseWebRTCSession] Outgoing ICE candidate cached (no roomId/partnerSocketId)', {
+                cacheCount,
+                hasRoomId,
+                hasPartnerSocketId
+              });
+            }
+            return;
           }
+        } else {
+          // Для рандомного чата требуем partnerId
+          if (!hasPartnerId) {
+            this.iceAndSignalingManager.cacheOutgoingIce(event.candidate);
+            const cacheCount = (this as any).__outgoingIceCacheCount = ((this as any).__outgoingIceCacheCount || 0) + 1;
+            if (cacheCount <= 3) {
+              logger.debug('[BaseWebRTCSession] Outgoing ICE candidate cached (no partnerId)', {
+                cacheCount
+              });
+            }
+            return;
+          }
+        }
+        
+        // Отправляем кандидат
+        const toId = this.partnerIdRef || expectedPartnerId;
+        if (toId || hasRoomId || hasPartnerSocketId) {
+          const payload: any = { candidate: event.candidate };
+          
+          // КРИТИЧНО: Для видеозвонков используем roomId (приоритет)
+          if (isFriendCall && hasRoomId) {
+            payload.roomId = this.roomIdRef;
+          } else if (toId) {
+            // Для рандомного чата или если нет roomId, используем to
+            payload.to = toId;
+          }
+          
           socket.emit('ice-candidate', payload);
         } else {
+          // Если нет ни одного идентификатора, кешируем
           this.iceAndSignalingManager.cacheOutgoingIce(event.candidate);
         }
       }
@@ -909,14 +978,10 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
           // КРИТИЧНО: Обновляем remoteViewKey для обновления UI
           this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
           
-          // Обновляем состояние камеры
-          const videoTrack = videoTracks[0];
-          if (videoTrack) {
-            const isFriendCall = this.isFriendCall();
-            const isTrackEnded = videoTrack.readyState === 'ended';
-            const camEnabled = isFriendCall && !isTrackEnded ? true : videoTrack.enabled && !isTrackEnded;
-            this.remoteStateManager.setRemoteCamOn(camEnabled, (event, ...args) => this.emit(event, ...args));
-          }
+          // УБРАНО: Автоматическое обновление remoteCamOn при получении стрима
+          // Используем только фактическое состояние трека (enabled/readyState)
+          // Это предотвращает лишние переключения remoteCamOn на Android без реальной причины
+          // remoteCamOn будет обновляться только при реальных изменениях (cam-toggle, wasFriendCallEnded, переворот камеры)
           
           // Выходим - стрим установлен, как в минимальном коде
           logger.info('[BaseWebRTCSession] ✅ МИНИМАЛЬНЫЙ КОД выполнен: remoteStream установлен и событие отправлено', {
@@ -1222,27 +1287,22 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
           const isTrackLive = videoTrack.readyState === 'live';
           const isTrackEnded = videoTrack.readyState === 'ended';
           
-          // КРИТИЧНО: Для дружеских звонков если трек существует и не ended, устанавливаем remoteCamOn=true
-          // Это гарантирует, что видео показывается сразу при подключении, даже если трек еще не live
-          // enabled может быть false временно при получении трека, readyState может быть 'new' перед 'live'
-          let camEnabled: boolean;
-          if (isFriendCall && !isTrackEnded) {
-            // Для дружеских звонков с существующим треком (не ended) считаем камеру включенной
-            // даже если enabled=false или readyState еще не live (это может быть временное состояние)
-            camEnabled = true;
-            logger.info('[BaseWebRTCSession] Remote camera enabled for friend call with existing track', {
-              videoTrackEnabled: videoTrack.enabled,
-              videoTrackReadyState: videoTrack.readyState,
-              isTrackLive
-            });
-          } else {
-            // Для рандомного чата или если трек ended, используем фактическое состояние
-            camEnabled = videoTrack.enabled && !isTrackEnded;
-          }
+          // УБРАНО: Автоматическая установка remoteCamOn=true для дружеских звонков
+          // Теперь используем только фактическое состояние трека (enabled/readyState)
+          // Это предотвращает лишние переключения remoteCamOn на Android без реальной причины
+          // remoteCamOn будет обновляться только при реальных изменениях (cam-toggle, wasFriendCallEnded, переворот камеры)
+          const camEnabled = videoTrack.enabled && !isTrackEnded;
           
-          // КРИТИЧНО: Устанавливаем remoteCamOn и обновляем remoteViewKey для обновления UI
-          this.remoteStateManager.setRemoteCamOn(camEnabled, (event, ...args) => this.emit(event, ...args));
-          this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
+          // КРИТИЧНО: Устанавливаем remoteCamOn ТОЛЬКО если значение изменилось
+          // Это предотвращает лишние переключения на Android
+          const currentRemoteCamOn = this.remoteStateManager.isRemoteCamOn();
+          if (currentRemoteCamOn !== camEnabled) {
+            this.remoteStateManager.setRemoteCamOn(camEnabled, (event, ...args) => this.emit(event, ...args));
+            this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
+          } else {
+            // Если значение не изменилось, обновляем только remoteViewKey для обновления UI
+            this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
+          }
           
           logger.info('[BaseWebRTCSession] Remote camera state set and view key updated', {
             camEnabled,
@@ -1255,9 +1315,29 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
           const pendingCamToggle = this.remoteStateManager.getPendingCamToggle();
           if (pendingCamToggle && pendingCamToggle.from === setToId) {
             if (videoTrack.readyState !== 'ended') {
-              videoTrack.enabled = pendingCamToggle.enabled;
-              this.remoteStateManager.setRemoteForcedOff(!pendingCamToggle.enabled);
-              this.remoteStateManager.setRemoteCamOn(pendingCamToggle.enabled, (event, ...args) => this.emit(event, ...args));
+              // КРИТИЧНО: Не устанавливаем enabled=false, если трек readyState === 'live' и камера не выключена пользователем
+              // Используем фактическое состояние трека вместо внешнего флага
+              const isTrackLive = videoTrack.readyState === 'live';
+              const isTrackCurrentlyEnabled = videoTrack.enabled === true;
+              
+              // Если трек live и включен, и мы получаем cam-toggle(false), не выключаем трек
+              // Используем фактическое состояние трека - если трек live и enabled, значит камера работает
+              if (!pendingCamToggle.enabled && isTrackLive && isTrackCurrentlyEnabled) {
+                logger.info('[BaseWebRTCSession] Не применяем отложенное enabled=false для live трека - используем фактическое состояние', {
+                  readyState: videoTrack.readyState,
+                  currentEnabled: videoTrack.enabled
+                });
+                // Не устанавливаем enabled=false - трек остается enabled=true, так как это фактическое состояние
+                // Используем фактическое состояние трека для UI
+                this.remoteStateManager.setRemoteForcedOff(false);
+                this.remoteStateManager.setRemoteCamOn(true, (event, ...args) => this.emit(event, ...args)); // Используем фактическое состояние
+              } else {
+                // Устанавливаем enabled только если трек не live или уже выключен
+                videoTrack.enabled = pendingCamToggle.enabled;
+                this.remoteStateManager.setRemoteForcedOff(!pendingCamToggle.enabled);
+                this.remoteStateManager.setRemoteCamOn(pendingCamToggle.enabled, (event, ...args) => this.emit(event, ...args));
+              }
+              
               this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
               this.remoteStateManager.emitRemoteState((event, ...args) => this.emit(event, ...args), this.pipManager.isRemoteInPiP());
             }
@@ -1323,9 +1403,11 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
           if (videoTrack) {
             const isFriendCall = this.isFriendCall();
             const isTrackEnded = videoTrack.readyState === 'ended';
-            const camEnabled = isFriendCall && !isTrackEnded ? true : videoTrack.enabled && !isTrackEnded;
-            
-            this.remoteStateManager.setRemoteCamOn(camEnabled, (event, ...args) => this.emit(event, ...args));
+            // УБРАНО: Автоматическое обновление remoteCamOn при получении стрима через onaddstream
+            // Используем только фактическое состояние трека (enabled/readyState)
+            // Это предотвращает лишние переключения remoteCamOn на Android без реальной причины
+            // remoteCamOn будет обновляться только при реальных изменениях (cam-toggle, wasFriendCallEnded, переворот камеры)
+            // Обновляем только remoteViewKey для обновления UI
             this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
           }
         }
@@ -1569,8 +1651,8 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     );
   }
   
-  protected enqueueIce(from: string, candidate: any): void {
-    this.iceAndSignalingManager.enqueueIce(from, candidate);
+  protected enqueueIce(from: string, candidate: any, roomId?: string | null): void {
+    this.iceAndSignalingManager.enqueueIce(from, candidate, roomId);
   }
   
   protected async flushIceFor(from: string): Promise<void> {
@@ -1580,6 +1662,128 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       (pc) => this.isPcValid(pc),
       this.partnerIdRef
     );
+  }
+  
+  /**
+   * Прожечь буфер кандидатов после получения идентификаторов
+   * Вызывается после сохранения partnerSocketId/partnerUserId/roomId
+   * КРИТИЧНО: Кандидаты кешируются по ключу from (socket.id), поэтому прожигаем
+   * по partnerSocketIdRef в первую очередь. partnerIdRef (userId) используется
+   * как fallback для обратной совместимости.
+   */
+  protected async flushBufferedCandidates(): Promise<void> {
+    const pc = this.peerRef;
+    if (!pc || !this.isPcValid(pc)) {
+      return;
+    }
+    
+    // Проверяем наличие remoteDescription
+    const hasRemoteDesc = !!(pc as any).remoteDescription && !!(pc as any).remoteDescription?.type;
+    if (!hasRemoteDesc) {
+      return;
+    }
+    
+    // КРИТИЧНО: Прожигаем кандидаты для всех возможных ключей
+    // Если remoteDescription установлен, это означает, что мы уже знаем партнера
+    // (offer/answer пришли от конкретного партнера), поэтому безопасно обрабатывать
+    // ВСЕ ключи в очереди - все кандидаты на момент установки remoteDescription
+    // должны быть от этого партнера
+    const allPendingKeys = this.iceAndSignalingManager.getAllPendingKeys();
+    const keysToFlush: string[] = [];
+    
+    // Сначала добавляем известные ключи (приоритет)
+    if (this.partnerSocketIdRef) {
+      keysToFlush.push(this.partnerSocketIdRef);
+    }
+    if (this.partnerIdRef) {
+      keysToFlush.push(this.partnerIdRef);
+    }
+    if (this.roomIdRef) {
+      keysToFlush.push(this.roomIdRef);
+    }
+    
+    // КРИТИЧНО: Если remoteDescription установлен, но идентификаторы ещё не установлены,
+    // обрабатываем ВСЕ ключи в очереди. Это безопасно, т.к. remoteDescription устанавливается
+    // только после получения offer/answer от конкретного партнера, и все кандидаты в очереди
+    // на этот момент должны быть от этого партнера
+    const hasAnyIdentifier = this.partnerSocketIdRef || this.partnerIdRef || this.roomIdRef;
+    
+    if (!hasAnyIdentifier) {
+      // Идентификаторы ещё не установлены, но remoteDescription есть
+      // Обрабатываем все ключи в очереди
+      for (const key of allPendingKeys) {
+        if (!keysToFlush.includes(key)) {
+          keysToFlush.push(key);
+        }
+      }
+    } else {
+      // Идентификаторы установлены - проверяем соответствие
+      for (const key of allPendingKeys) {
+        const isPartnerSocket = this.partnerSocketIdRef && this.partnerSocketIdRef === key;
+        const isPartnerId = this.partnerIdRef && this.partnerIdRef === key;
+        const isRoomId = this.roomIdRef && this.roomIdRef === key;
+        
+        // Если ключ соответствует одному из идентификаторов, добавляем его
+        if (isPartnerSocket || isPartnerId || isRoomId) {
+          if (!keysToFlush.includes(key)) {
+            keysToFlush.push(key);
+          }
+        }
+      }
+    }
+    
+    // Убираем дубликаты ключей
+    const uniqueKeys = Array.from(new Set(keysToFlush));
+    
+    // КРИТИЧНО: Дедуплицируем кандидаты перед добавлением
+    // Один и тот же кандидат может быть в разных ключах (from и roomId),
+    // поэтому собираем все уникальные кандидаты и добавляем их один раз
+    const allUniqueCandidates = this.iceAndSignalingManager.getAllUniqueCandidates(uniqueKeys);
+    
+    if (allUniqueCandidates.length > 0) {
+      const pc = this.peerRef;
+      if (pc && this.isPcValid(pc)) {
+        const hasRemoteDesc = !!(pc as any).remoteDescription && !!(pc as any).remoteDescription?.type;
+        if (hasRemoteDesc) {
+          logger.debug('[BaseWebRTCSession] Flushing unique ICE candidates', {
+            totalKeys: uniqueKeys.length,
+            uniqueCandidates: allUniqueCandidates.length,
+            keys: uniqueKeys
+          });
+          
+          // Добавляем все уникальные кандидаты
+          for (const candidate of allUniqueCandidates) {
+            try {
+              await pc.addIceCandidate(candidate);
+            } catch (e: any) {
+              const errorMsg = String(e?.message || '');
+              if (!errorMsg.includes('InvalidStateError') && 
+                  !errorMsg.includes('already exists') && 
+                  !errorMsg.includes('closed')) {
+                logger.warn('[BaseWebRTCSession] Error adding unique ICE candidate:', e);
+              }
+            }
+          }
+          
+          // Удаляем очереди для всех обработанных ключей
+          this.iceAndSignalingManager.deletePendingQueues(uniqueKeys);
+        }
+      }
+    }
+    
+    // КРИТИЧНО: Прожигаем кеш исходящих ICE кандидатов
+    this.iceAndSignalingManager.flushOutgoingIceCache(
+      this.partnerIdRef,
+      () => this.isFriendCall(),
+      this.roomIdRef
+    );
+    
+    logger.debug('[BaseWebRTCSession] Flushed buffered candidates', {
+      keysFlushed: uniqueKeys.length,
+      partnerSocketId: this.partnerSocketIdRef,
+      partnerId: this.partnerIdRef,
+      roomId: this.roomIdRef
+    });
   }
   
   // ==================== Connection State ====================
@@ -1760,20 +1964,56 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Установить partnerId
    */
   protected setPartnerId(partnerId: string | null): void {
+    const wasNull = !this.partnerIdRef;
     this.partnerIdRef = partnerId;
     this.config.callbacks.onPartnerIdChange?.(partnerId);
     this.config.onPartnerIdChange?.(partnerId);
     this.emit('partnerId', partnerId);
+    // КРИТИЧНО: Если идентификатор установлен впервые, прожигаем буфер кандидатов
+    if (wasNull && partnerId) {
+      this.flushBufferedCandidates().catch((e) => {
+        logger.warn('[BaseWebRTCSession] Error flushing buffered candidates after setPartnerId:', e);
+      });
+    }
+  }
+  
+  /**
+   * Установить partnerSocketId (socket.id партнера для ICE кандидатов)
+   */
+  protected setPartnerSocketId(socketId: string | null): void {
+    const wasNull = !this.partnerSocketIdRef;
+    this.partnerSocketIdRef = socketId;
+    logger.debug('[BaseWebRTCSession] PartnerSocketId установлен', { socketId });
+    // КРИТИЧНО: Если идентификатор установлен впервые, прожигаем буфер кандидатов
+    if (wasNull && socketId) {
+      this.flushBufferedCandidates().catch((e) => {
+        logger.warn('[BaseWebRTCSession] Error flushing buffered candidates after setPartnerSocketId:', e);
+      });
+    }
+  }
+  
+  /**
+   * Получить partnerSocketId
+   */
+  protected getPartnerSocketId(): string | null {
+    return this.partnerSocketIdRef;
   }
   
   /**
    * Установить roomId
    */
   protected setRoomId(roomId: string | null): void {
+    const wasNull = !this.roomIdRef;
     this.roomIdRef = roomId;
     this.config.callbacks.onRoomIdChange?.(roomId);
     this.config.onRoomIdChange?.(roomId);
     this.emit('roomId', roomId);
+    // КРИТИЧНО: Если идентификатор установлен впервые, прожигаем буфер кандидатов
+    if (wasNull && roomId) {
+      this.flushBufferedCandidates().catch((e) => {
+        logger.warn('[BaseWebRTCSession] Error flushing buffered candidates after setRoomId:', e);
+      });
+    }
   }
   
   /**
@@ -1874,6 +2114,8 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       });
       
       const newVideoTrack = (newStream as any)?.getVideoTracks?.()?.[0];
+      const newAudioTracks = (newStream as any)?.getAudioTracks?.() || [];
+      
       if (newVideoTrack && this.peerRef) {
         const sender = this.peerRef
           ?.getSenders()
@@ -1882,10 +2124,31 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         
         (ls as any).addTrack(newVideoTrack);
         
-        setTimeout(() => {
-          try { (ls as any).removeTrack(videoTrack); } catch {}
-          try { videoTrack.stop(); } catch {}
-        }, 50);
+        // КРИТИЧНО: Останавливаем старый трек немедленно, а не через setTimeout
+        // Это предотвращает накопление "висячих" треков на Android
+        try {
+          (ls as any).removeTrack(videoTrack);
+          videoTrack.enabled = false;
+          videoTrack.stop();
+          try { (videoTrack as any).release?.(); } catch {}
+        } catch (e) {
+          logger.warn('[BaseWebRTCSession] Error stopping old video track in flipCam:', e);
+        }
+      } else {
+        // Если новый трек не удалось использовать, останавливаем весь новый стрим
+        // чтобы не оставлять "висячие" треки
+        try {
+          const allNewTracks = newStream.getTracks?.() || [];
+          allNewTracks.forEach((t: any) => {
+            try {
+              t.enabled = false;
+              t.stop();
+              try { (t as any).release?.(); } catch {}
+            } catch {}
+          });
+        } catch (e) {
+          logger.warn('[BaseWebRTCSession] Error stopping unused new stream in flipCam:', e);
+        }
       }
     } catch (err) {
       logger.warn('[BaseWebRTCSession] flipCam fallback error', err);
@@ -2209,6 +2472,10 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         await pcForOffer.setRemoteDescription(offerDesc as any);
         this.iceAndSignalingManager.markOfferProcessed(offerKey);
         
+        // КРИТИЧНО: Прожигаем отложенные ICE кандидаты после установки remoteDescription
+        // На Android offer/answer ставятся позже, поэтому первые кандидаты ждут
+        await this.flushBufferedCandidates();
+        
         // Создаем и отправляем answer
         await this.createAndSendAnswer(from, roomId);
       } catch (error: any) {
@@ -2519,8 +2786,10 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       await currentPc.setRemoteDescription(answerDesc as any);
       this.iceAndSignalingManager.markAnswerProcessed(answerKey);
       
-      // Прожигаем отложенные ICE кандидаты
-      await this.flushIceFor(from);
+      // КРИТИЧНО: Прожигаем отложенные ICE кандидаты после установки remoteDescription
+      // На Android offer/answer ставятся позже, поэтому первые кандидаты ждут
+      // Используем flushBufferedCandidates вместо flushIceFor для обработки всех ключей
+      await this.flushBufferedCandidates();
     } catch (error: any) {
       const errorMsg = String(error?.message || '');
       const currentState = currentPc?.signalingState;
@@ -2556,23 +2825,82 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
   
   /**
    * Обработка ICE candidate (базовая логика)
+   * КРИТИЧНО: Буферизует все входящие кандидаты, если нет идентификаторов или PC не создан
    */
-  protected async handleCandidate({ from, candidate }: { from: string; candidate: any }): Promise<void> {
+  protected async handleCandidate({ from, candidate, fromUserId, roomId }: { from: string; candidate: any; fromUserId?: string; roomId?: string }): Promise<void> {
     const pc = this.peerRef;
     
+    // КРИТИЧНО: Если PC не создан или невалиден, буферизуем кандидат
     if (!pc || !this.isPcValid(pc)) {
+      this.enqueueIce(from, candidate, roomId);
+      const bufferCount = (this as any).__iceBufferCount = ((this as any).__iceBufferCount || 0) + 1;
+      if (bufferCount <= 3) {
+        logger.debug('[BaseWebRTCSession] ICE candidate buffered (no PC)', {
+          from,
+          fromUserId,
+          roomId,
+          bufferCount
+        });
+      }
       return;
     }
     
-    // Проверяем partnerId
-    if (this.partnerIdRef && this.partnerIdRef !== from) {
+    // КРИТИЧНО: Проверяем наличие идентификаторов
+    // Если нет ни одного идентификатора, буферизуем все кандидаты
+    const hasAnyIdentifier = this.partnerSocketIdRef || this.partnerIdRef || this.roomIdRef;
+    
+    if (!hasAnyIdentifier) {
+      // Нет идентификаторов - буферизуем все кандидаты
+      this.enqueueIce(from, candidate, roomId);
+      const bufferCount = (this as any).__iceBufferCount = ((this as any).__iceBufferCount || 0) + 1;
+      if (bufferCount <= 3) {
+        logger.debug('[BaseWebRTCSession] ICE candidate buffered (no identifiers)', {
+          from,
+          fromUserId,
+          roomId,
+          bufferCount
+        });
+      }
+      return;
+    }
+    
+    // КРИТИЧНО: Максимально гибкий фильтр ICE
+    // Принимаем кандидаты, если совпадает хотя бы одно:
+    // 1. from == partnerSocketIdRef (socket.id партнера)
+    // 2. from == partnerIdRef (userId партнера, для обратной совместимости)
+    // 3. roomId == roomIdRef
+    // 4. fromUserId == partnerIdRef
+    const isFromPartnerSocket = this.partnerSocketIdRef && this.partnerSocketIdRef === from;
+    const isFromPartnerUserId = this.partnerIdRef && this.partnerIdRef === from;
+    const isFromSameRoom = roomId && this.roomIdRef && roomId === this.roomIdRef;
+    const isFromPartnerByUserId = fromUserId && this.partnerIdRef && fromUserId === this.partnerIdRef;
+    
+    // КРИТИЧНО: Если фильтр не прошёл, НЕ делаем жёсткий return - буферизуем
+    if (!isFromPartnerSocket && !isFromPartnerUserId && !isFromSameRoom && !isFromPartnerByUserId) {
+      // Буферизуем кандидат на случай, если идентификаторы появятся позже
+      this.enqueueIce(from, candidate, roomId);
+      const bufferCount = (this as any).__iceBufferCount = ((this as any).__iceBufferCount || 0) + 1;
+      if (bufferCount <= 3) {
+        logger.debug('[BaseWebRTCSession] ICE candidate buffered (filter not passed, waiting for identifiers)', {
+          from,
+          fromUserId,
+          roomId,
+          partnerSocketIdRef: this.partnerSocketIdRef,
+          partnerIdRef: this.partnerIdRef,
+          roomIdRef: this.roomIdRef,
+          isFromPartnerSocket,
+          isFromPartnerUserId,
+          isFromSameRoom,
+          isFromPartnerByUserId
+        });
+      }
       return;
     }
     
     // Если remoteDescription еще не установлен, кешируем кандидат
     const hasRemoteDesc = !!(pc as any).remoteDescription && !!(pc as any).remoteDescription?.type;
     if (!hasRemoteDesc) {
-      this.enqueueIce(from, candidate);
+      this.enqueueIce(from, candidate, roomId);
       return;
     }
     
@@ -2692,51 +3020,12 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     }
     
     // Проверяем, нужно ли обновлять remoteCamOn
+    // КРИТИЧНО: Для friend-call всегда обновляем remoteCamOn, чтобы UI сразу реагировал на изменения
+    // Для рандом-чата оставляем защиту от преждевременного обновления
     let shouldUpdateRemoteCamOn = true;
     
-    // КРИТИЧНО: Для дружеских звонков полностью игнорируем cam-toggle(false) сразу после принятия звонка
-    // Это защищает от ложных cam-toggle при автоматическом входе в PiP
-    // Камера должна оставаться включенной при принятии звонка
-    if (!enabled && isDirectFriendCall) {
-      const now = Date.now();
-      const connectionAge = now - this.remoteStateManager.getConnectionEstablishedAt();
-      // КРИТИЧНО: Увеличиваем время игнорирования до 30 секунд для дружеских звонков
-      // Это гарантирует, что камера не выключится при автоматическом входе в PiP
-      const isRecentConnection = connectionAge < 30000; // 30 секунд для дружеских звонков
-      
-      const rs = this.streamManager.getRemoteStream();
-      if (rs) {
-        const vt = (rs as any)?.getVideoTracks?.()?.[0];
-        const streamAge = this.streamManager.getRemoteStreamEstablishedAt() ? now - this.streamManager.getRemoteStreamEstablishedAt() : Infinity;
-        const isTrackStable = vt && vt.readyState === 'live' && streamAge >= 1000; // 1 секунда для стабильности трека
-        
-        // КРИТИЧНО: Для дружеских звонков полностью игнорируем cam-toggle(false) если:
-        // 1. Соединение недавно установлено (менее 30 секунд)
-        // 2. Трек еще не стабилен или не live
-        // 3. remoteStream еще не установлен
-        if (isRecentConnection) {
-          if (!vt || vt.readyState !== 'live' || !isTrackStable) {
-            logger.info('[BaseWebRTCSession] Игнорируем cam-toggle(false) для дружеского звонка - соединение недавно установлено', {
-              connectionAge,
-              hasVideoTrack: !!vt,
-              videoTrackReadyState: vt?.readyState,
-              streamAge,
-              isTrackStable
-            });
-            shouldUpdateRemoteCamOn = false;
-            return; // Полностью игнорируем cam-toggle(false) для нестабильных треков
-          }
-        }
-      } else if (isRecentConnection) {
-        // Если remoteStream еще не установлен, игнорируем cam-toggle(false)
-        logger.info('[BaseWebRTCSession] Игнорируем cam-toggle(false) для дружеского звонка - remoteStream еще не установлен', {
-          connectionAge
-        });
-        shouldUpdateRemoteCamOn = false;
-        return;
-      }
-    } else if (!enabled) {
-      // Для рандомного чата используем старую логику
+    if (!isDirectFriendCall && !enabled) {
+      // Для рандомного чата используем защиту от преждевременного обновления
       const now = Date.now();
       const connectionAge = now - this.remoteStateManager.getConnectionEstablishedAt();
       const isRecentConnection = connectionAge < 5000;
@@ -2775,7 +3064,32 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
             }
           }
           
-          vt.enabled = enabled;
+          // Для дружеских звонков всегда применяем cam-toggle напрямую к треку,
+          // чтобы показать заглушку "Отошел" у собеседника.
+          // Для рандомных оставляем защиту от преждевременного выключения.
+          if (isDirectFriendCall) {
+            // Для friend-call всегда применяем vt.enabled = enabled
+            vt.enabled = enabled;
+          } else {
+            // Для рандом-чата оставляем защиту
+            const isTrackLive = vt.readyState === 'live';
+            const isTrackCurrentlyEnabled = vt.enabled === true;
+            
+            if (!enabled && isTrackLive && isTrackCurrentlyEnabled) {
+              logger.info('[BaseWebRTCSession] Не устанавливаем enabled=false для live трека - используем фактическое состояние', {
+                readyState: vt.readyState,
+                currentEnabled: vt.enabled,
+                isDirectFriendCall
+              });
+              // Не устанавливаем enabled=false - трек остается enabled=true, так как это фактическое состояние
+              // Используем фактическое состояние трека для UI
+              shouldUpdateRemoteCamOn = false; // Не обновляем remoteCamOn, так как трек фактически включен
+            } else {
+              // Устанавливаем enabled для рандом-чата
+              vt.enabled = enabled;
+            }
+          }
+          
           this.remoteStateManager.setPendingCamToggle(null);
         } else {
           const isPcActive = pc && 
@@ -2869,14 +3183,20 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       if (candidateCount <= 3) {
         logger.info('[BaseWebRTCSession] 📥 ICE candidate received from server', {
           from: data.from || socket.id,
+          fromUserId: data.fromUserId,
+          roomId: data.roomId,
           candidateCount,
           hasCandidate: !!data.candidate,
-          currentRoomId: this.roomIdRef
+          currentRoomId: this.roomIdRef,
+          currentPartnerId: this.partnerIdRef,
+          currentPartnerSocketId: this.partnerSocketIdRef
         });
       }
       await this.handleCandidate({
         from: data.from || socket.id,
-        candidate: data.candidate
+        candidate: data.candidate,
+        fromUserId: data.fromUserId,
+        roomId: data.roomId
       });
     });
     
@@ -2927,4 +3247,3 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    */
   abstract ensurePcWithLocal(stream: MediaStream): Promise<RTCPeerConnection | null>;
 }
-

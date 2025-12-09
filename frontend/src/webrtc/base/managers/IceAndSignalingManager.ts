@@ -126,18 +126,97 @@ export class IceAndSignalingManager {
   /**
    * Поставить в очередь входящий ICE кандидат
    * Кандидаты кешируются до установки remoteDescription
+   * КРИТИЧНО: Кладём кандидаты как по from (socket.id), так и по roomId (если есть),
+   * чтобы они были доступны при флашинге по любому из этих ключей
    */
-  enqueueIce(from: string, candidate: any): void {
-    const key = String(from || '');
-    if (!this.pendingIceByFromRef[key]) {
-      this.pendingIceByFromRef[key] = [];
+  enqueueIce(from: string, candidate: any, roomId?: string | null): void {
+    const fromKey = String(from || '');
+    if (!this.pendingIceByFromRef[fromKey]) {
+      this.pendingIceByFromRef[fromKey] = [];
     }
-    this.pendingIceByFromRef[key].push(candidate);
+    this.pendingIceByFromRef[fromKey].push(candidate);
+    
+    // КРИТИЧНО: Также кладём по roomId, если он есть
+    // Это позволяет найти кандидаты даже если partnerSocketIdRef ещё не установлен
+    if (roomId) {
+      const roomKey = String(roomId);
+      if (!this.pendingIceByFromRef[roomKey]) {
+        this.pendingIceByFromRef[roomKey] = [];
+      }
+      // Кладём тот же кандидат по ключу roomId
+      this.pendingIceByFromRef[roomKey].push(candidate);
+    }
+  }
+  
+  /**
+   * Получить все ключи из очереди отложенных кандидатов
+   * Используется для проверки всех возможных ключей при флашинге
+   */
+  getAllPendingKeys(): string[] {
+    return Object.keys(this.pendingIceByFromRef);
+  }
+  
+  /**
+   * Получить все уникальные кандидаты из указанных ключей
+   * Дедуплицирует кандидаты по их строковому представлению
+   * КРИТИЧНО: Один и тот же кандидат может быть в разных ключах (from и roomId),
+   * поэтому нужно дедуплицировать перед добавлением в PC
+   */
+  getAllUniqueCandidates(keys: string[]): any[] {
+    const candidateMap = new Map<string, any>();
+    
+    for (const key of keys) {
+      const candidates = this.pendingIceByFromRef[key] || [];
+      for (const candidate of candidates) {
+        // Создаем уникальный ключ для кандидата
+        // Используем строку кандидата и его индексы для идентификации
+        const candidateKey = this.getCandidateKey(candidate);
+        if (!candidateMap.has(candidateKey)) {
+          candidateMap.set(candidateKey, candidate);
+        }
+      }
+    }
+    
+    return Array.from(candidateMap.values());
+  }
+  
+  /**
+   * Создать уникальный ключ для кандидата
+   * Используется для дедупликации
+   */
+  private getCandidateKey(candidate: any): string {
+    // Используем строку кандидата и его индексы для уникальной идентификации
+    const candidateStr = candidate?.candidate || '';
+    const sdpMLineIndex = candidate?.sdpMLineIndex ?? '';
+    const sdpMid = candidate?.sdpMid || '';
+    return `${candidateStr}_${sdpMLineIndex}_${sdpMid}`;
+  }
+  
+  /**
+   * Удалить очередь кандидатов по ключу
+   * Используется после успешной обработки всех кандидатов
+   */
+  deletePendingQueue(key: string): void {
+    delete this.pendingIceByFromRef[key];
+  }
+  
+  /**
+   * Удалить очереди кандидатов по нескольким ключам
+   * Используется после успешной обработки всех кандидатов из нескольких ключей
+   */
+  deletePendingQueues(keys: string[]): void {
+    for (const key of keys) {
+      delete this.pendingIceByFromRef[key];
+    }
   }
 
   /**
    * Обработать отложенные ICE кандидаты для партнера
    * Добавляет все кешированные кандидаты в PC после установки remoteDescription
+   * КРИТИЧНО: Не удаляем очередь из-за несовпадения идентификаторов.
+   * В прямых звонках partnerId - это userId, а from - это socket.id, поэтому они никогда не совпадают.
+   * Кандидаты должны приниматься по ключу from (socket.id) или по совпадению roomId, а не по partnerId.
+   * Удаляем очередь только после успешного добавления всех кандидатов в PC.
    */
   async flushIceFor(
     from: string,
@@ -152,21 +231,33 @@ export class IceAndSignalingManager {
       return;
     }
     
+    // Если PC невалиден, удаляем очередь (PC больше не будет использоваться)
     if (!isPcValid(pc)) {
-      delete this.pendingIceByFromRef[key];
+      this.deletePendingQueue(key);
       return;
     }
     
-    if (partnerId && partnerId !== from) {
-      delete this.pendingIceByFromRef[key];
-      return;
-    }
+    // КРИТИЧНО: НЕ удаляем очередь из-за несовпадения идентификаторов
+    // В прямых звонках partnerId - это userId, а from - это socket.id,
+    // поэтому они никогда не совпадают. Кандидаты должны приниматься по ключу from (socket.id)
+    // или по совпадению roomId, а не по partnerId.
+    // Старая проверка "if (partnerId && partnerId !== from)" удаляла все кандидаты и не давала ICE установиться.
     
+    // Если remoteDescription еще не установлен, не удаляем очередь - попробуем позже
     const hasRemoteDesc = !!(pc as any).remoteDescription && !!(pc as any).remoteDescription?.type;
     if (!hasRemoteDesc) {
       return;
     }
     
+    logger.debug('[IceAndSignalingManager] Flushing ICE candidates', {
+      key,
+      count: list.length,
+      partnerId,
+      from,
+      note: 'Accepting candidates by socket.id key, not by userId comparison'
+    });
+    
+    // Добавляем все кандидаты в PC
     for (const cand of list) {
       try {
         await pc.addIceCandidate(cand);
@@ -180,7 +271,8 @@ export class IceAndSignalingManager {
       }
     }
     
-    delete this.pendingIceByFromRef[key];
+    // Удаляем очередь только после успешного добавления всех кандидатов
+    this.deletePendingQueue(key);
   }
 
   // ==================== Offer/Answer Key Management ====================

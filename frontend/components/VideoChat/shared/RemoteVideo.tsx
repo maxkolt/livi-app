@@ -1,8 +1,8 @@
 import React from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { RTCView, MediaStream } from 'react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
-import AwayPlaceholder from '../../AwayPlaceholder';
+import AwayPlaceholder from '../../../components/AwayPlaceholder';
 import { t, type Lang } from '../../../utils/i18n';
 import { logger } from '../../../utils/logger';
 
@@ -460,9 +460,31 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
   }
 
-  // КРИТИЧНО: Для 1-на-1 звонков показываем видео, если есть стрим и видео трек
+  // КРИТИЧНО: Если камера собеседника выключена (remoteCamOn === false), показываем заглушку "Отошёл..."
+  if (!remoteCamOn && hasVideoTrack) {
+    logger.info('[RemoteVideo] Камера собеседника выключена, показываем заглушку "Отошёл..."', {
+      remoteCamOn,
+      hasVideoTrack,
+      streamId: streamToUse?.id
+    });
+    return (
+      <View style={styles.videoContainer}>
+        <AwayPlaceholder />
+        {/* Бейдж "Друг" */}
+        {showFriendBadge && (
+          <View style={styles.friendBadge}>
+            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  // КРИТИЧНО: Для 1-на-1 звонков показываем видео, если камера включена (remoteCamOn === true), есть стрим и видео трек
   // Не требуем, чтобы трек был 'live' - показываем сразу, как только есть трек
-  if (hasVideoTrack) {
+  // КРИТИЧНО: Проверяем remoteCamOn === true, чтобы гарантировать корректное переключение между видео и заглушкой
+  if (remoteCamOn && hasVideoTrack) {
     const streamURL = streamToUse.toURL?.();
     
     logger.info('[RemoteVideo] Есть видео трек, проверяем streamURL', {
@@ -471,13 +493,18 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       streamURL: streamURL ? streamURL.substring(0, 50) + '...' : null,
       videoTrackReadyState,
       videoTrackEnabled,
-      remoteViewKey
+      remoteViewKey,
+      remoteCamOn
     });
 
     if (streamURL) {
       // КРИТИЧНО: Формируем уникальный key для принудительного обновления RTCView
       // Используем stream.id, remoteViewKey и forceUpdate для гарантированного обновления
       const rtcViewKey = `remote-${streamToUse.id}-${remoteViewKey}-${forceUpdate}`;
+      
+      // КРИТИЧНО: Дополнительная диагностика для отладки проблемы с отображением
+      const videoTrack = (streamToUse as any)?.getVideoTracks?.()?.[0];
+      const allTracks = streamToUse.getTracks?.() || [];
       
       logger.info('[RemoteVideo] ✅ Показываем удаленное видео', {
         streamId: streamToUse.id,
@@ -487,19 +514,44 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         streamURL: streamURL.substring(0, 50) + '...',
         videoTrackReadyState,
         videoTrackEnabled,
-        hasStreamURL: !!streamURL
+        hasStreamURL: !!streamURL,
+        videoTrackId: videoTrack?.id,
+        allTracksCount: allTracks.length,
+        allTracksKinds: allTracks.map((t: any) => ({ id: t.id, kind: t.kind || (t as any).type, enabled: t.enabled, readyState: t.readyState })),
+        platform: Platform.OS,
+        // КРИТИЧНО: Проверяем, что streamURL действительно валиден
+        streamURLType: typeof streamURL,
+        streamURLLength: streamURL?.length,
+        // КРИТИЧНО: Проверяем, что стрим не является локальным (для отладки конфликтов)
+        streamHasToURL: typeof streamToUse.toURL === 'function',
       });
+
+      // КРИТИЧНО: Для iOS может потребоваться дополнительная настройка RTCView
+      // Используем Platform-specific оптимизации для надежного отображения удаленного видео
+      const rtcViewProps: any = {
+        streamURL: streamURL,
+        style: styles.rtc,
+        objectFit: "cover" as const,
+        mirror: false,
+        zOrder: 0,
+      };
+      
+      // КРИТИЧНО: На iOS иногда требуется явно указать renderToTexture
+      // Это может помочь с отображением удаленного видео
+      if (Platform.OS === 'ios') {
+        // Попробуем использовать renderToTexture для более надежного рендеринга
+        // (если библиотека поддерживает)
+        try {
+          // Некоторые версии react-native-webrtc поддерживают renderToTexture
+          // но это не стандартный prop, поэтому используем условно
+        } catch (e) {
+          logger.warn('[RemoteVideo] Error setting iOS-specific props:', e);
+        }
+      }
 
       return (
         <View style={styles.videoContainer}>
-          <RTCView
-            key={rtcViewKey}
-            streamURL={streamURL}
-            style={styles.rtc}
-            objectFit="cover"
-            mirror={false}
-            zOrder={0}
-          />
+          <RTCView key={rtcViewKey} {...rtcViewProps} />
           {/* Бейдж "Друг" */}
           {showFriendBadge && (
             <View style={styles.friendBadge}>
@@ -538,6 +590,11 @@ const styles = StyleSheet.create({
     bottom: 0,
     width: '100%',
     height: '100%',
+    // КРИТИЧНО: Убираем overflow: hidden, так как это может обрезать RTCView на iOS
+    // overflow: 'hidden' может мешать отображению видео
+    overflow: 'visible',
+    // КРИТИЧНО: Убеждаемся, что контейнер не перекрывает видео
+    zIndex: 0,
   },
   rtc: {
     position: 'absolute',
@@ -548,6 +605,10 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     backgroundColor: 'black',
+    // КРИТИЧНО: На iOS иногда требуется явно указать overflow
+    overflow: 'hidden',
+    // КРИТИЧНО: Убеждаемся, что RTCView имеет правильный z-index
+    zIndex: 1,
   },
   placeholder: {
     color: 'rgba(237,234,234,0.6)',

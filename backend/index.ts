@@ -597,17 +597,17 @@ io.on('connection', async (sock: AuthedSocket) => {
         userId: (sock as any)?.data?.userId
       });
       
-      // КРИТИЧНО: Для дружеских звонков используем roomId, если он передан
-      // Если roomId не передан, используем callId или fallback из activeCallBySocket
-      const fallback = activeCallBySocket.get(sock.id);
-      const id = String(roomId || callId || fallback || '');
+      // КРИТИЧНО: Приоритетно берем roomId из параметров, затем из сокет-данных, затем из activeCallBySocket, и только потом callId
+      const resolvedRoomId = roomId || (sock as any)?.data?.roomId || activeCallBySocket.get(sock.id);
+      const id = String(resolvedRoomId || callId || '');
       
       logger.debug('📥 [call:end] Resolved call identifier', {
         finalId: id,
         usedRoomId: !!roomId,
-        usedCallId: !!callId && !roomId,
-        usedFallback: !!fallback && !roomId && !callId,
-        fallbackValue: fallback
+        usedSocketDataRoomId: !!(sock as any)?.data?.roomId && !roomId,
+        usedActiveCallBySocket: !!activeCallBySocket.get(sock.id) && !roomId && !(sock as any)?.data?.roomId,
+        usedCallId: !!callId && !resolvedRoomId,
+        resolvedRoomId: resolvedRoomId || null
       });
       
       if (!id) {
@@ -615,7 +615,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           socketId: sock.id,
           receivedRoomId: roomId,
           receivedCallId: callId,
-          fallback
+          resolvedRoomId: resolvedRoomId || null
         });
         return;
       }
@@ -629,20 +629,26 @@ io.on('connection', async (sock: AuthedSocket) => {
         socketIds: room ? Array.from(room) : []
       });
       
-      // Снимаем busy со всех участников
+      // Снимаем busy со всех участников и очищаем состояние
       if (room) {
         room.forEach((sid) => {
           const peerSocket = io.sockets.sockets.get(sid);
           if (peerSocket) {
             const peerUserId = (peerSocket as any)?.data?.userId;
             (peerSocket as any).data = (peerSocket as any).data || {};
-            (peerSocket as any).data.busy = false;
             
-            logger.debug('📥 [call:end] Setting busy=false for participant', {
+            // КРИТИЧНО: Очищаем все состояние участника звонка
+            (peerSocket as any).data.busy = false;
+            delete (peerSocket as any).data.roomId;
+            delete (peerSocket as any).data.partnerSid;
+            delete (peerSocket as any).data.inCall;
+            
+            logger.debug('📥 [call:end] Cleaning up participant state', {
               socketId: sid,
               userId: peerUserId
             });
             
+            // Снимаем presence
             if (peerUserId) {
               io.emit("presence:update", { userId: peerUserId, busy: false });
             }
@@ -903,9 +909,10 @@ io.on('connection', async (sock: AuthedSocket) => {
       logger.debug('Call initiated', { from: me, to: peerId, callId, roomId });
       
       // КРИТИЧНО: Отправляем инициатору roomId для немедленного использования
+      // Включаем from (socket.id получателя) для сохранения partnerSocketId
       try {
-        sock.emit('call:room:created', { callId, roomId, partnerId: peerId });
-        logger.debug('Room created event sent to initiator', { socketId: sock.id, roomId, callId });
+        sock.emit('call:room:created', { callId, roomId, partnerId: peerId, from: peerSocket.id });
+        logger.debug('Room created event sent to initiator', { socketId: sock.id, roomId, callId, from: peerSocket.id });
       } catch {}
 
       // таймаут 20с
@@ -1000,8 +1007,9 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.debug('Participant B joined room', { socketId: bSock.id, roomId, callId: id });
       } catch {}
       
-      try { activeCallBySocket.set(aSock.id, id); } catch {}
-      try { activeCallBySocket.set(bSock.id, id); } catch {}
+      // КРИТИЧНО: Сохраняем roomId в activeCallBySocket, а не callId, чтобы fallback для call:end всегда был корректным именем комнаты
+      try { activeCallBySocket.set(aSock.id, roomId); } catch {}
+      try { activeCallBySocket.set(bSock.id, roomId); } catch {}
       
       // Устанавливаем busy для обоих
       (aSock as any).data = (aSock as any).data || {};
