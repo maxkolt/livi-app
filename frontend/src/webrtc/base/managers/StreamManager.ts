@@ -592,31 +592,36 @@ export class StreamManager {
       hasExistingRemoteStream: !!this.remoteStreamRef
     });
 
-    let targetStream = this.remoteStreamRef;
-
-    // Если remoteStream не существует, создаем новый
-    if (!targetStream) {
+    // Получаем или создаем targetStream
+    let targetStream: MediaStream;
+    
+    if (this.remoteStreamRef) {
+      targetStream = this.remoteStreamRef;
+    } else {
       const { MediaStream } = require('react-native-webrtc');
-      targetStream = new MediaStream();
+      targetStream = new MediaStream() as MediaStream;
       logger.info('[StreamManager] Created new remote stream for track', {
         trackId: track.id,
         trackKind: trackKind
       });
     }
 
+    // TypeScript теперь знает, что targetStream не null
+    const nonNullTargetStream: MediaStream = targetStream;
+
     // Проверяем, не добавлен ли уже этот трек
-    const existingTracks = targetStream.getTracks?.() || [];
+    const existingTracks = nonNullTargetStream.getTracks?.() || [];
     const alreadyAdded = existingTracks.some((et: any) => et && et.id === track.id);
 
     if (!alreadyAdded) {
       try {
         // КРИТИЧНО: Добавляем трек в MediaStream
-        (targetStream as any).addTrack(track);
+        (nonNullTargetStream as any).addTrack(track);
 
         // Проверяем, что трек действительно добавлен
-        const tracksAfterAdd = targetStream.getTracks?.() || [];
-        const videoTracks = (targetStream as any)?.getVideoTracks?.() || [];
-        const audioTracks = (targetStream as any)?.getAudioTracks?.() || [];
+        const tracksAfterAdd = nonNullTargetStream.getTracks?.() || [];
+        const videoTracks = (nonNullTargetStream as any)?.getVideoTracks?.() || [];
+        const audioTracks = (nonNullTargetStream as any)?.getAudioTracks?.() || [];
 
         // КРИТИЧНО: Проверяем, что видеотрек доступен через getVideoTracks()
         if (trackKind === 'video' && videoTracks.length === 0) {
@@ -640,22 +645,22 @@ export class StreamManager {
         // Если это новый стрим, устанавливаем его
         if (!this.remoteStreamRef) {
           logger.info('[StreamManager] ✅ Устанавливаем новый remoteStream с добавленным треком', {
-            streamId: targetStream.id,
+            streamId: nonNullTargetStream.id,
             trackId: track.id,
             trackKind: trackKind,
-            allTracksCount: targetStream.getTracks?.()?.length || 0,
-            videoTracksCount: (targetStream as any)?.getVideoTracks?.()?.length || 0,
-            audioTracksCount: (targetStream as any)?.getAudioTracks?.()?.length || 0
+            allTracksCount: nonNullTargetStream.getTracks?.()?.length || 0,
+            videoTracksCount: (nonNullTargetStream as any)?.getVideoTracks?.()?.length || 0,
+            audioTracksCount: (nonNullTargetStream as any)?.getAudioTracks?.()?.length || 0
           });
-          this.setRemoteStream(targetStream, emit);
+          this.setRemoteStream(nonNullTargetStream, emit);
         } else {
           // Если это существующий стрим, просто обновляем callbacks
-          const allTracks = targetStream.getTracks?.() || [];
-          const videoTracks = (targetStream as any)?.getVideoTracks?.() || [];
-          const audioTracks = (targetStream as any)?.getAudioTracks?.() || [];
+          const allTracks = nonNullTargetStream.getTracks?.() || [];
+          const videoTracks = (nonNullTargetStream as any)?.getVideoTracks?.() || [];
+          const audioTracks = (nonNullTargetStream as any)?.getAudioTracks?.() || [];
           
           logger.info('[StreamManager] ✅ Трек добавлен в существующий remoteStream', {
-            streamId: targetStream.id,
+            streamId: nonNullTargetStream.id,
             trackId: track.id,
             trackKind: trackKind,
             allTracksCount: allTracks.length,
@@ -665,11 +670,11 @@ export class StreamManager {
             hasAudioTrack: audioTracks.length > 0
           });
           
-          this.config.callbacks.onRemoteStreamChange?.(targetStream);
-          this.config.onRemoteStreamChange?.(targetStream);
+          this.config.callbacks.onRemoteStreamChange?.(nonNullTargetStream);
+          this.config.onRemoteStreamChange?.(nonNullTargetStream);
           if (emit) {
             logger.info('[StreamManager] 📤 Emitting remoteStream event после добавления трека', {
-              streamId: targetStream.id,
+              streamId: nonNullTargetStream.id,
               trackId: track.id,
               trackKind: trackKind
             });

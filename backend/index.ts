@@ -17,7 +17,7 @@ import meRouter from './routes/me';
 import appSettingsRouter from './routes/app-settings';
 import uploadRouter from './routes/upload';
 import registerFriendSockets from './sockets/friends';
-import registerIdentitySockets from './sockets/identity';
+import registerIdentitySockets, { bindUser as bindUserIdentity } from './sockets/identity';
 import registerMessageSockets from './sockets/messagesReliable';
 import { socketHandler } from './sockets/handler';
 import { bindAvatarSockets } from './sockets/avatar';
@@ -545,8 +545,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
       
       // Привязываем пользователя к сокету
-      const { bindUser } = require('./sockets/identity');
-      bindUser(io, sock, userId);
+      bindUserIdentity(io, sock, userId);
       emitPresence(io);
       
       logger.debug('User reauthorized successfully', userId);
@@ -581,9 +580,8 @@ io.on('connection', async (sock: AuthedSocket) => {
   }
   
   if (bindUid) {
-    // Импортируем bindUser из identity.ts
-    const { bindUser } = require('./sockets/identity');
-    bindUser(io, sock, String(bindUid));
+    // Привязываем пользователя к сокету
+    bindUserIdentity(io, sock, String(bindUid));
     emitPresence(io);
   }
 
@@ -690,8 +688,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     const uid = String(payload?.userId || '').trim();
 
     if (uid && isOid(uid) && (await User.exists({ _id: uid }))) {
-      const { bindUser } = require('./sockets/identity');
-      bindUser(io, sock, uid);
+      bindUserIdentity(io, sock, uid);
       emitPresence(io);
       return ack?.({ ok: true, userId: uid });
     }
@@ -1224,6 +1221,11 @@ function printLanUrls(port: number) {
       }
     })
   );
+  if (urls.length > 0) {
+    logger.info('Server running on:', urls.join(', '));
+  } else {
+    logger.info(`Server running on http://${HOST}:${port}`);
+  }
 }
 
 server.listen(PORT, HOST, () => printLanUrls(PORT));

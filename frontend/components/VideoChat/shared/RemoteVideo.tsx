@@ -373,7 +373,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
             logger.info('[RemoteVideo] 🔇 Аудио трек выключен (muted)', {
               trackId: track.id,
               trackIndex: index,
-              streamId: remoteStream.id
+              streamId: actualRemoteStreamForAudio.id
             });
           } else {
             logger.info('[RemoteVideo] Аудио трек уже в правильном состоянии', {
