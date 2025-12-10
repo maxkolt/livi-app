@@ -61,6 +61,12 @@ const CARD_BASE = {
   marginVertical: 7,
 };
 
+const boostMicLevel = (level: number) => {
+  if (!level || level <= 0) return 0;
+  const shaped = Math.pow(level, 0.55) * 2.4;
+  return Math.min(1, shaped);
+};
+
 const RandomChat: React.FC<Props> = ({ route }) => {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
@@ -273,7 +279,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           setLoading(loading);
         },
         onMicLevelChange: (level) => {
-          setMicLevel(level);
+          setMicLevel(boostMicLevel(level));
         },
       },
       getStarted: () => startedRef.current,
@@ -366,8 +372,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     });
     
     return () => {
-      session.cleanup();
-      sessionRef.current = null;
+      const activeSession = sessionRef.current;
+      if (activeSession) {
+        activeSession.cleanup();
+        sessionRef.current = null;
+      }
     };
   }, [route?.params?.myUserId]);
   
@@ -541,7 +550,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const hasActiveCall = !!partnerId || !!roomId;
   const shouldShowLocalVideo = camOn && !isInactiveState;
   const shouldShowRemoteVideo = remoteCamOn && !isInactiveState;
-  const micLevelForEqualizer = hasActiveCall && micOn ? micLevel : 0;
+  const micLevelForEqualizer = micOn && !isInactiveState ? micLevel : 0;
   
   // Показывать ли бейдж "Друг"
   const showFriendBadge = useMemo(() => {
@@ -629,25 +638,37 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     }
   }, [partnerId, roomId, started]);
   
+  const forceStopRandomChat = useCallback(() => {
+    const session = sessionRef.current;
+    try {
+      session?.cleanup?.();
+    } catch (e) {
+      logger.error('[RandomChat] Error cleaning session on leave:', e);
+    }
+    sessionRef.current = null;
+    
+    startedRef.current = false;
+    loadingRef.current = false;
+    setStarted(false);
+    setLoading(false);
+    setIsInactiveState(true);
+    setPartnerId(null);
+    setPartnerUserId(null);
+    setRoomId(null);
+    setRemoteStream(null);
+    setRemoteCamOn(true);
+    setRemoteMuted(false);
+    setCamOn(false);
+    setMicOn(false);
+    stopSpeaker();
+  }, [stopSpeaker]);
+  
   // Обработка AppState - для рандомного чата останавливаем при уходе в фон
   useEffect(() => {
     const sub = AppState.addEventListener('change', async (nextAppState) => {
       if (nextAppState === 'background' || nextAppState === 'inactive') {
-        const isRandomChat = !partnerId && !roomId && startedRef.current;
-        if (isRandomChat) {
-          const session = sessionRef.current;
-          if (session) {
-            try {
-              session.stopRandomChat();
-              session.stopLocalStream(false);
-            } catch (e) {
-              logger.warn('[RandomChat] Error stopping on background:', e);
-            }
-          }
-          setStarted(false);
-          setLoading(false);
-          setIsInactiveState(true);
-          stopSpeaker();
+        if (startedRef.current || loadingRef.current) {
+          forceStopRandomChat();
         }
       } else if (nextAppState === 'active') {
         if (remoteStream) {
@@ -657,7 +678,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     });
     
     return () => sub.remove();
-  }, [partnerId, roomId, remoteStream, forceSpeakerOnHard, stopSpeaker]);
+  }, [remoteStream, forceSpeakerOnHard, forceStopRandomChat]);
   
   // Keep-awake для активного видеозвонка
   useEffect(() => {
@@ -706,46 +727,18 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       leavingRef.current = false;
       
       return () => {
-        // Проверяем, не идет ли процесс начала поиска
-        const justStarted = startedRef.current && !partnerId && !roomId;
-        const isStartingSearch = loadingRef.current || justStarted;
-        
-        if (isStartingSearch && !isInactiveState) {
+        const stillFocused = navigation?.isFocused?.();
+        if (stillFocused) {
           return;
         }
         
         leavingRef.current = true;
         
-        const isRandomChat = !partnerId && !roomId && startedRef.current;
-        
-        if (isRandomChat) {
-          const roomIdToLeave = roomId;
-          
-          // Сброс состояний
-          startedRef.current = false;
-          setStarted(false);
-          setLoading(false);
-          setIsInactiveState(true);
-          
-          // Остановка стрима
-          const session = sessionRef.current;
-          if (session) {
-            session.stopLocalStream(false);
-            session.stopRandomChat();
-            if (roomIdToLeave) {
-              session.leaveRoom(roomIdToLeave);
-            }
-            session.cleanup();
-          }
-          
-          setCamOn(false);
-          setMicOn(false);
-          setPartnerUserId(null);
-          
-          stopSpeaker();
+        if (startedRef.current || loadingRef.current) {
+          forceStopRandomChat();
         }
       };
-    }, [partnerId, roomId, isInactiveState, stopSpeaker])
+    }, [navigation, forceStopRandomChat])
   );
   
   // Обновление NavigationBar для Android
@@ -926,13 +919,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             level={(() => {
               const hasActiveCall = !!partnerId || !!roomId;
               const micReallyOn = micOn;
-              return hasActiveCall && micReallyOn ? micLevel : 0;
+              return micReallyOn && !isInactiveState ? micLevel : 0;
             })()}
             width={220}
             height={30}
             bars={21}
             gap={8}
             minLine={4}
+            threshold={0.006}
+            sensitivity={2.4}
             colors={isDark ? ["#F4FFFF", "#2EE6FF", "#F4FFFF"] : ["#FFE6E6", "rgb(58, 11, 160)", "#FFE6E6"]}
           />
         </View>

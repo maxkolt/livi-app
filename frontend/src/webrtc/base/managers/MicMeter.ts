@@ -91,17 +91,46 @@ export class MicMeter {
   }
 
   /**
+   * Унифицированный обход статистик (Map, массив или объект)
+   */
+  private forEachStatReport(stats: any, cb: (report: any) => void): void {
+    if (!stats || typeof cb !== 'function') {
+      return;
+    }
+    
+    if (typeof stats.forEach === 'function') {
+      stats.forEach(cb);
+      return;
+    }
+    
+    if (Array.isArray(stats)) {
+      stats.forEach(cb);
+      return;
+    }
+    
+    if (typeof stats === 'object') {
+      Object.keys(stats).forEach((key) => {
+        const value = (stats as any)[key];
+        if (value && typeof value === 'object') {
+          cb(value);
+        }
+      });
+    }
+  }
+
+  /**
    * Вычислить уровень микрофона из WebRTC stats
    */
   private async calculateMicLevel(pc: RTCPeerConnection): Promise<number> {
-    const stats: any = await pc.getStats();
     let lvl = 0;
     
-    stats.forEach((r: any) => {
+    const processReport = (r: any) => {
       const isAudio =
         r.kind === 'audio' || r.mediaType === 'audio' || r.type === 'media-source' || r.type === 'track' || r.type === 'outbound-rtp';
       
-      if (!isAudio) return;
+      if (!isAudio) {
+        return;
+      }
       
       if (typeof r.audioLevel === 'number') {
         const audioLvl = Platform.OS === 'ios' && r.audioLevel > 1 
@@ -124,7 +153,33 @@ export class MicMeter {
         this.energyRef = r.totalAudioEnergy;
         this.durRef = r.totalSamplesDuration;
       }
-    });
+    };
+    
+    const collectFrom = (stats: any) => this.forEachStatReport(stats, processReport);
+    
+    // Сначала пробуем получить статистику напрямую с аудио sender
+    try {
+      const senders = typeof pc.getSenders === 'function' ? pc.getSenders() : [];
+      for (const sender of senders) {
+        if (!sender?.track || sender.track.kind !== 'audio') {
+          continue;
+        }
+        if (typeof sender.getStats === 'function') {
+          try {
+            const senderStats = await sender.getStats();
+            collectFrom(senderStats);
+          } catch {}
+        }
+      }
+    } catch {}
+    
+    // Fallback на общую статистику PC (если sender-статы недоступны или дали 0)
+    if (lvl === 0) {
+      try {
+        const stats: any = await pc.getStats();
+        collectFrom(stats);
+      } catch {}
+    }
     
     let normalized = Math.max(0, Math.min(1, lvl));
     
@@ -182,4 +237,3 @@ export class MicMeter {
     this.stop();
   }
 }
-

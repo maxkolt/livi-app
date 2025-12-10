@@ -65,6 +65,12 @@ const CARD_BASE = {
 };
 
 
+const boostMicLevel = (level: number) => {
+  if (!level || level <= 0) return 0;
+  const shaped = Math.pow(level, 0.55) * 2.4;
+  return Math.min(1, shaped);
+};
+
 const VideoCall: React.FC<Props> = ({ route }) => {
   const navigation = useNavigation();
   const { theme, isDark } = useAppTheme();
@@ -532,7 +538,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           setRemoteCamOn(enabled);
         },
         onMicLevelChange: (level) => {
-          setMicLevel(level);
+          setMicLevel(boostMicLevel(level));
         },
         onPcConnectedChange: (connected) => {
           // Обработка изменения состояния подключения
@@ -1240,7 +1246,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const hasActiveCall = !!partnerId || !!roomId || !!callId;
   const shouldShowLocalVideo = camOn && !isInactiveState;
   const shouldShowRemoteVideo = remoteCamOn && !isInactiveState;
-  const micLevelForEqualizer = hasActiveCall && micOn ? micLevel : 0;
+  const micLevelForEqualizer = micOn && !isInactiveState ? micLevel : 0;
   const showControls = hasActiveCall && !isInactiveState;
   
   // Проверка, является ли партнер другом
@@ -1574,13 +1580,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             level={(() => {
               const hasActiveCall = !!partnerId || !!roomId || !!callId;
               const micReallyOn = micOn;
-              return hasActiveCall && micReallyOn ? micLevel : 0;
+              return micReallyOn && !isInactiveState ? micLevel : 0;
             })()}
             width={220}
             height={30}
             bars={21}
             gap={8}
             minLine={4}
+            threshold={0.006}
+            sensitivity={2.4}
             colors={isDark ? ["#F4FFFF", "#2EE6FF", "#F4FFFF"] : ["#FFE6E6", "rgb(58, 11, 160)", "#FFE6E6"]}
           />
         </View>

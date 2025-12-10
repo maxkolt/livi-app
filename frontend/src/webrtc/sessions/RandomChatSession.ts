@@ -236,11 +236,9 @@ export class RandomChatSession extends BaseWebRTCSession {
       throw new Error('Failed to start local stream for random chat');
     }
     
-    // Отправляем событие start для начала поиска
+    // Отправляем событие start для начала поиска (с авто-поиском, как в чат-рулетке)
     try {
-      // Проверяем подключение socket
       if (!socket || !socket.connected) {
-        // Ждем подключения socket
         await new Promise<void>((resolve, reject) => {
           if (socket.connected) {
             resolve();
@@ -256,16 +254,14 @@ export class RandomChatSession extends BaseWebRTCSession {
             resolve();
           };
           socket.on('connect', onConnect);
-          // Пробуем подключиться если не подключен
           if (!socket.connected) {
             try { socket.connect(); } catch {}
           }
         });
       }
-      socket.emit('start');
+      this.autoNext('initial_start');
     } catch (e) {
       logger.error('[RandomChatSession] Error sending start event:', e);
-      // Не бросаем ошибку, чтобы не прерывать процесс
     }
   }
   
@@ -493,6 +489,39 @@ export class RandomChatSession extends BaseWebRTCSession {
   }
   
   /**
+   * Синхронизируем состояние локальной камеры с новым собеседником.
+   * Нужно для случая, когда камера была выключена до подключения партнера.
+   */
+  private syncLocalCamStateWithPartner(partnerId: string | null, attempt: number = 0): void {
+    if (!partnerId) return;
+    
+    const stream = this.getLocalStream();
+    const videoTrack = stream?.getVideoTracks?.()?.[0];
+    
+    if (!videoTrack) {
+      if (attempt < 3) {
+        setTimeout(() => this.syncLocalCamStateWithPartner(partnerId, attempt + 1), 200);
+      }
+      return;
+    }
+    
+    const camEnabled = videoTrack.enabled !== false && (videoTrack as any).readyState !== 'ended';
+    if (camEnabled) {
+      return;
+    }
+    
+    const announce = () => {
+      if (this.partnerIdRef !== partnerId) {
+        return;
+      }
+      this.sendCameraState(partnerId, false);
+    };
+    
+    announce();
+    setTimeout(announce, 200);
+  }
+  
+  /**
    * Настройка обработчиков socket для рандомного чата
    */
   protected setupSocketHandlers(): void {
@@ -570,8 +599,15 @@ export class RandomChatSession extends BaseWebRTCSession {
     
     // Устанавливаем partnerId и roomId
     this.setPartnerId(partnerId);
+    this.syncLocalCamStateWithPartner(partnerId);
     if (roomId) {
       this.setRoomId(roomId);
+      try {
+        socket.emit('room:join:ack', { roomId });
+        logger.info('[RandomChatSession] room:join:ack sent', { roomId, partnerId });
+      } catch (e) {
+        logger.warn('[RandomChatSession] Failed to emit room:join:ack', { roomId, error: e });
+      }
     }
     
     // Отправляем кешированные ICE кандидаты
@@ -676,6 +712,8 @@ export class RandomChatSession extends BaseWebRTCSession {
     // Сбрасываем started только если чат был остановлен пользователем
     if (!wasStarted) {
       this.config.setStarted?.(false);
+    } else {
+      this.autoNext('disconnected');
     }
     
     // 4. Эмитим 'disconnected', чтобы UI мог отреагировать
@@ -856,18 +894,12 @@ export class RandomChatSession extends BaseWebRTCSession {
         }
       }
       
-      // Отправляем answer
+      // Отправляем answer напрямую собеседнику
       const answerPayload: any = {
         to: from,
         answer,
         fromUserId: this.config.myUserId
       };
-      
-      // Для рандомного чата также добавляем roomId если есть
-      const currentRoomId = roomId || this.getRoomId();
-      if (currentRoomId) {
-        answerPayload.roomId = currentRoomId;
-      }
       
       socket.emit('answer', answerPayload);
       
@@ -1085,18 +1117,12 @@ export class RandomChatSession extends BaseWebRTCSession {
       
       this.markPcWithToken(pc);
       
-      // Отправляем offer
-      const currentRoomId = roomId || this.getRoomId();
+      // Отправляем offer напрямую собеседнику
       const offerPayload: any = {
         to: toPartnerId,
         offer,
         fromUserId: this.config.myUserId
       };
-      
-      // Для рандомного чата также добавляем roomId если есть
-      if (currentRoomId) {
-        offerPayload.roomId = currentRoomId;
-      }
       
       socket.emit('offer', offerPayload);
       
@@ -1112,4 +1138,3 @@ export class RandomChatSession extends BaseWebRTCSession {
     }
   }
 }
-

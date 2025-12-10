@@ -312,6 +312,18 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     this.stopTrackChecker();
   }
   
+  /**
+   * Обновить удаленный стрим и гарантировать перезапуск track checker
+   * Track checker мог быть остановлен после предыдущего соединения, поэтому
+   * при появлении нового стрима мы перезапускаем мониторинг состояния камеры
+   */
+  protected applyRemoteStream(stream: MediaStream | null, emit?: (event: string, ...args: any[]) => void): void {
+    this.streamManager.setRemoteStream(stream, emit);
+    if (stream) {
+      this.startTrackChecker();
+    }
+  }
+  
   // ==================== PC Token Management ====================
   
   /**
@@ -596,7 +608,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         this.emit('localStream', stream);
       },
       (stream) => {
-        this.streamManager.setRemoteStream(stream);
+        this.applyRemoteStream(stream);
         this.emit('remoteStream', stream);
       }
     );
@@ -618,7 +630,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         this.emit('localStream', stream);
       },
       (stream) => {
-        this.streamManager.setRemoteStream(stream);
+        this.applyRemoteStream(stream);
         this.emit('remoteStream', stream);
       }
     );
@@ -812,13 +824,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       // Проверка валидности PC
       if (!pc || pc.signalingState === 'closed' || (pc as any).connectionState === 'closed') {
         if (this.connectionStateManager.isConnected()) {
-          this.connectionStateManager.setConnected(
-            false,
-            pc,
-            this.partnerIdRef,
-            () => {},
-            () => {}
-          );
+          this.setConnected(false);
         }
         return;
       }
@@ -832,13 +838,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       const hasActiveCall = !!this.partnerIdRef || !!this.roomIdRef || !!this.callIdRef;
       if (!hasActiveCall) {
         if (this.connectionStateManager.isConnected()) {
-          this.connectionStateManager.setConnected(
-            false,
-            pc,
-            this.partnerIdRef,
-            () => {},
-            () => {}
-          );
+          this.setConnected(false);
         }
         return;
       }
@@ -854,13 +854,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       const isConnected = st === 'connected' || st === 'completed';
       
       // Обновляем состояние только если оно изменилось
-      this.connectionStateManager.setConnected(
-        isConnected,
-        pc,
-        this.partnerIdRef,
-        () => {},
-        () => {}
-      );
+      this.setConnected(isConnected);
       
       // Обработка сбоев и автоматический reconnection
       if (st === 'failed' || st === 'disconnected') {
@@ -964,7 +958,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
           
           // КРИТИЧНО: Устанавливаем remoteStream (эквивалент: this.remoteStream = stream)
           // Используем streamManager для централизованного управления
-          this.streamManager.setRemoteStream(stream, (event, ...args) => {
+          this.applyRemoteStream(stream, (event, ...args) => {
             logger.info('[BaseWebRTCSession] 📤 Emitting remoteStream event (МИНИМАЛЬНЫЙ КОД)', {
               event,
               streamId: stream.id,
@@ -1261,7 +1255,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         
         // КРИТИЧНО: Устанавливаем remoteStream перед обновлением состояния камеры
         // Это гарантирует, что remoteStream будет доступен в компоненте при обновлении remoteCamOn
-        this.streamManager.setRemoteStream(rs, (event, ...args) => {
+        this.applyRemoteStream(rs, (event, ...args) => {
           logger.info('[BaseWebRTCSession] 📤 Emitting remoteStream event', {
             event,
             streamId: rs.id,
@@ -1388,7 +1382,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
               }
             } else {
               // Если remoteStream не существует, устанавливаем весь стрим
-              this.streamManager.setRemoteStream(stream, (event, ...args) => {
+              this.applyRemoteStream(stream, (event, ...args) => {
                 this.emit(event, ...args);
               });
               hasNewTracks = true;
@@ -2994,55 +2988,10 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       this.setPartnerId(from);
     }
     
-    // Для рандомного чата проверяем фактическое состояние видео трека
-    if (!isDirectFriendCall) {
-      const rs = this.streamManager.getRemoteStream();
-      if (rs) {
-        const vt = (rs as any)?.getVideoTracks?.()?.[0];
-        if (vt && vt.readyState !== 'ended' && !enabled) {
-          const now = Date.now();
-          const connectionAge = now - this.remoteStateManager.getConnectionEstablishedAt();
-          const isRecentConnection = connectionAge < 5000;
-          const streamAge = this.streamManager.getRemoteStreamEstablishedAt() ? now - this.streamManager.getRemoteStreamEstablishedAt() : Infinity;
-          const isTrackStable = vt.readyState === 'live' && streamAge >= 300;
-          
-          if ((vt.readyState !== 'live' || !isTrackStable) && isRecentConnection) {
-            return;
-          }
-        }
-      } else if (!enabled) {
-        const now = Date.now();
-        const connectionAge = now - this.remoteStateManager.getConnectionEstablishedAt();
-        if (connectionAge < 5000) {
-          return;
-        }
-      }
-    }
-    
     // Проверяем, нужно ли обновлять remoteCamOn
     // КРИТИЧНО: Для friend-call всегда обновляем remoteCamOn, чтобы UI сразу реагировал на изменения
-    // Для рандом-чата оставляем защиту от преждевременного обновления
+    // Для рандом-чата также доверяем cam-toggle событиям, чтобы мгновенно показать заглушку
     let shouldUpdateRemoteCamOn = true;
-    
-    if (!isDirectFriendCall && !enabled) {
-      // Для рандомного чата используем защиту от преждевременного обновления
-      const now = Date.now();
-      const connectionAge = now - this.remoteStateManager.getConnectionEstablishedAt();
-      const isRecentConnection = connectionAge < 5000;
-      
-      const rs = this.streamManager.getRemoteStream();
-      if (rs) {
-        const vt = (rs as any)?.getVideoTracks?.()?.[0];
-        const streamAge = this.streamManager.getRemoteStreamEstablishedAt() ? now - this.streamManager.getRemoteStreamEstablishedAt() : Infinity;
-        const isTrackStable = vt && vt.readyState === 'live' && streamAge >= 300;
-        
-        if (isRecentConnection && vt && vt.readyState !== 'ended' && (!isTrackStable || vt.readyState !== 'live')) {
-          shouldUpdateRemoteCamOn = false;
-        }
-      } else if (isRecentConnection) {
-        shouldUpdateRemoteCamOn = false;
-      }
-    }
     
     // Обновляем состояние трека
     try {
@@ -3076,17 +3025,18 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
             const isTrackCurrentlyEnabled = vt.enabled === true;
             
             if (!enabled && isTrackLive && isTrackCurrentlyEnabled) {
-              logger.info('[BaseWebRTCSession] Не устанавливаем enabled=false для live трека - используем фактическое состояние', {
+              logger.info('[BaseWebRTCSession] Не отключаем live трек, используем cam-toggle для UI', {
                 readyState: vt.readyState,
                 currentEnabled: vt.enabled,
                 isDirectFriendCall
               });
-              // Не устанавливаем enabled=false - трек остается enabled=true, так как это фактическое состояние
-              // Используем фактическое состояние трека для UI
-              shouldUpdateRemoteCamOn = false; // Не обновляем remoteCamOn, так как трек фактически включен
+              // Даже если сам трек остаётся enabled, фиксируем состояние для UI/отложенных матчей
+              this.remoteStateManager.setRemoteForcedOff(true);
+              this.remoteStateManager.setRemoteCamOn(false, (event, ...args) => this.emit(event, ...args));
             } else {
               // Устанавливаем enabled для рандом-чата
               vt.enabled = enabled;
+              this.remoteStateManager.setRemoteForcedOff(!enabled);
             }
           }
           

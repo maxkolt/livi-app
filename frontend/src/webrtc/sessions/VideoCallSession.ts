@@ -215,7 +215,7 @@ export class VideoCallSession extends BaseWebRTCSession {
             
             // КРИТИЧНО: Устанавливаем remoteStream обратно, чтобы компоненты получили его
             // Это гарантирует синхронизацию с компонентами
-            this.streamManager.setRemoteStream(existingRemoteStream, (event, ...args) => {
+            this.applyRemoteStream(existingRemoteStream, (event, ...args) => {
               logger.info('[VideoCallSession] 📤 Emitting restored remoteStream event', {
                 event,
                 streamId: existingRemoteStreamId,
@@ -799,7 +799,7 @@ export class VideoCallSession extends BaseWebRTCSession {
       
       // КРИТИЧНО: Теперь эмитим remoteStream(null) ПОСЛЕ очистки идентификаторов
       // Это гарантирует, что компонент увидит, что звонок уже завершен
-      this.streamManager.setRemoteStream(null);
+      this.applyRemoteStream(null);
       this.config.callbacks.onRemoteStreamChange?.(null);
       this.config.onRemoteStreamChange?.(null);
       logger.info('[VideoCallSession] ✅ RemoteStream очищен и события отправлены (после очистки идентификаторов)');
