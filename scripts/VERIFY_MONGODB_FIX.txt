@@ -1,0 +1,24 @@
+===========================================
+ПРОВЕРКА: MongoDB replica set работает
+===========================================
+
+В SSH СЕССИИ ВЫПОЛНИТЕ:
+
+# 1. Проверить статус replica set (должно показать "1" = PRIMARY)
+mongosh --eval "rs.status().myState"
+
+# 2. Проверить имя replica set
+mongosh --eval "rs.status().set"
+
+# 3. Проверить свежие логи backend (последние 50 строк)
+pm2 logs livi-backend --lines 50 --nostream
+
+# 4. Проверить, что нет ошибок про транзакции
+pm2 logs livi-backend --err --lines 30 --nostream | grep -i "transaction\|replica"
+
+# 5. Проверить работу API
+curl http://localhost:3000/api/turn-credentials
+
+# 6. Если все хорошо, проверить подключение с локального Mac
+# (выполните на вашем Mac, не на сервере)
+curl http://89.111.152.241:3000/api/turn-credentials

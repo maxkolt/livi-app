@@ -37,8 +37,10 @@ import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
 import InCallManager from 'react-native-incall-manager';
 import { logger } from '../../utils/logger';
-import { fetchFriends, requestFriend, respondFriend, onFriendRequest, onFriendAdded, onFriendAccepted, onFriendDeclined } from '../../sockets/socket';
+import { fetchFriends, requestFriend, respondFriend, onFriendRequest, onFriendAdded, onFriendAccepted, onFriendDeclined, updateProfile } from '../../sockets/socket';
 import socket from '../../sockets/socket';
+import { syncMyStreamProfile } from '../../chat/cometchat';
+import { loadProfileFromStorage } from '../../utils/profileStorage';
 import { MaterialIcons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/keepAwake';
@@ -159,11 +161,23 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       }
     });
     
-    const offAccepted = onFriendAccepted?.(({ userId }) => {
+    const offAccepted = onFriendAccepted?.(async ({ userId }) => {
       setAddPending(false);
       fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
       if (String(userId) === String(partnerUserId)) {
         showToast('Добавили в друзья');
+      }
+      // Обновляем профиль на сервере и синхронизируем с CometChat
+      try {
+        const cached = await loadProfileFromStorage();
+        const nick = cached?.nick || '';
+        const avatarUrl = cached?.avatar || '';
+        if (nick || avatarUrl) {
+          await updateProfile({ nick, avatar: avatarUrl });
+          await syncMyStreamProfile(nick, avatarUrl);
+        }
+      } catch (e) {
+        logger.warn('[RandomChat] Failed to update profile:', e);
       }
     });
     
@@ -190,15 +204,24 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     setAddPending(true);
     try {
       const res: any = await requestFriend(partnerUserId);
-      if (res?.status === 'pending') {
+      if (res?.status === 'pending' || res?.ok) {
         showToast('Заявка отправлена');
+        // Обновляем профиль на сервере и синхронизируем с CometChat
+        try {
+          const cached = await loadProfileFromStorage();
+          const nick = cached?.nick || '';
+          const avatarUrl = cached?.avatar || '';
+          if (nick || avatarUrl) {
+            await updateProfile({ nick, avatar: avatarUrl });
+            await syncMyStreamProfile(nick, avatarUrl);
+          }
+        } catch (e) {
+          logger.warn('[RandomChat] Failed to update profile:', e);
+        }
       } else if (res?.status === 'already') {
         setAddPending(false);
         setAddBlocked(true);
-        try {
-          const r: any = await fetchFriends();
-          setFriends(r?.list || []);
-        } catch {}
+        fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
         showToast('Вы уже друзья');
       } else if (res?.ok === false) {
         setAddPending(false);
@@ -218,6 +241,18 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setFriendModalVisible(false);
       setIncomingFriendFrom(null);
       fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
+      // Обновляем профиль на сервере и синхронизируем с CometChat
+      try {
+        const cached = await loadProfileFromStorage();
+        const nick = cached?.nick || '';
+        const avatarUrl = cached?.avatar || '';
+        if (nick || avatarUrl) {
+          await updateProfile({ nick, avatar: avatarUrl });
+          await syncMyStreamProfile(nick, avatarUrl);
+        }
+      } catch (e) {
+        logger.warn('[RandomChat] Failed to update profile:', e);
+      }
     } catch (e) {
       logger.error('[RandomChat] Error accepting friend:', e);
     }

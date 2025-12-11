@@ -1,0 +1,50 @@
+===========================================
+СКОПИРУЙТЕ И ВЫПОЛНИТЕ В ВАШЕЙ SSH СЕССИИ
+===========================================
+
+# 1. ОЧИСТКА ДИСКА
+apt clean && journalctl --vacuum-time=7d 2>/dev/null || true
+
+# 2. УСТАНОВКА NODE.JS
+node --version || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt install -y nodejs)
+
+# 3. УСТАНОВКА MONGODB
+mongod --version || (curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg --dearmor && echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-7.0.list && apt update && apt install -y mongodb-org && systemctl enable mongod && systemctl start mongod)
+
+# 4. ЗАПУСК MONGODB
+systemctl start mongod && systemctl enable mongod
+
+# 5. УСТАНОВКА PM2
+npm install -g pm2
+
+# 6. СОЗДАНИЕ ДИРЕКТОРИИ И .env
+mkdir -p /opt/livi-app/backend && cd /opt/livi-app/backend && cat > .env << 'EOF'
+PORT=3000
+HOST=0.0.0.0
+MONGO_URI=mongodb://localhost:27017/livi-app
+EOF
+
+# 7. ОТКРЫТИЕ ПОРТА
+ufw allow 3000/tcp || iptables -A INPUT -p tcp --dport 3000 -j ACCEPT || echo "Откройте порт в панели управления"
+
+echo "✅ Настройка завершена! Теперь загрузите файлы."
+
+===========================================
+В НОВОМ ТЕРМИНАЛЕ НА ВАШЕМ КОМПЬЮТЕРЕ:
+===========================================
+
+cd /Users/maximkoltovich/LiVi/livi-app
+scp -r backend/* root@89.111.152.241:/opt/livi-app/backend/
+
+===========================================
+ВЕРНУТЬСЯ В SSH СЕССИЮ И ВЫПОЛНИТЬ:
+===========================================
+
+cd /opt/livi-app/backend
+npm install
+pm2 delete livi-backend 2>/dev/null || true
+pm2 start npm --name "livi-backend" -- run start
+pm2 save
+pm2 startup
+pm2 status
+pm2 logs livi-backend

@@ -4,6 +4,7 @@ import socket from '../../../sockets/socket';
 import { BaseWebRTCSession } from '../base/BaseWebRTCSession';
 import type { WebRTCSessionConfig } from '../types';
 import { isValidStream } from '../../../utils/streamUtils';
+import { Platform } from 'react-native';
 
 /**
  * Сессия для рандомного видеочата
@@ -78,6 +79,24 @@ export class RandomChatSession extends BaseWebRTCSession {
         
         const iceConfig = this.getIceConfig();
         
+        // Логируем ICE конфигурацию для отладки
+        const iceServersCount = iceConfig?.iceServers?.length || 0;
+        const hasTurn = iceConfig?.iceServers?.some((s: any) => 
+          s.urls && (
+            (Array.isArray(s.urls) && s.urls.some((u: string) => u.startsWith('turn:'))) ||
+            (typeof s.urls === 'string' && s.urls.startsWith('turn:'))
+          )
+        ) || false;
+        
+        logger.info('[RandomChatSession] 🔧 Создание RTCPeerConnection', {
+          iceServersCount,
+          hasTurn,
+          iceTransportPolicy: iceConfig?.iceTransportPolicy,
+          bundlePolicy: iceConfig?.bundlePolicy,
+          streamId: stream?.id,
+          streamTracks: stream?.getTracks?.()?.length || 0
+        });
+        
         // ОПТИМИЗИРОВАНО: Для рандомного чата - минимальная задержка только если PC был закрыт недавно
         // Уменьшено с 100ms до 50ms для быстрого создания PC
         const lastPcClosedAt = (global as any).__lastPcClosedAt;
@@ -101,24 +120,115 @@ export class RandomChatSession extends BaseWebRTCSession {
         (global as any).__pcCreationLock = Date.now();
         this.pcLifecycleManager.setPcCreationInProgress(true);
         
-        try {
-          pc = new RTCPeerConnection(iceConfig);
-          this.peerRef = pc;
+        // Retry механизм для Android и iOS
+        let retryCount = 0;
+        const maxRetries = Platform.OS === 'ios' ? 5 : 3; // Больше попыток для iOS
+        // На Android нужна большая задержка из-за особенностей нативного модуля
+        const retryDelay = Platform.OS === 'android' ? 500 : 300; // 500ms для Android, 300ms для iOS
+        const isAndroid = Platform.OS === 'android';
+        const isIOS = Platform.OS === 'ios';
+        
+        // КРИТИЧНО: На iOS добавляем дополнительную задержку, особенно если нет TURN
+        if (isIOS) {
+          const iosDelay = hasTurn ? 200 : 500; // Больше задержка если нет TURN
+          logger.info(`[RandomChatSession] iOS: добавляем задержку ${iosDelay}ms перед созданием PC (hasTurn: ${hasTurn})`);
+          await new Promise(resolve => setTimeout(resolve, iosDelay));
+        }
+        
+        // На Android добавляем дополнительную задержку перед первой попыткой
+        if (isAndroid && !lastPcClosedAt) {
+          logger.info('[RandomChatSession] Android: добавляем задержку перед созданием PC');
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+        
+        while (retryCount < maxRetries && !pc) {
+          try {
+            if (retryCount > 0) {
+              logger.warn(`[RandomChatSession] Retry ${retryCount}/${maxRetries} создания RTCPeerConnection`);
+              // На Android увеличиваем задержку с каждой попыткой
+              const delay = isAndroid ? retryDelay * (retryCount + 1) : retryDelay * retryCount;
+              await new Promise(resolve => setTimeout(resolve, delay));
+            }
+            
+            // На Android проверяем, что прошло достаточно времени с последнего закрытия PC
+            if (isAndroid && lastPcClosedAt) {
+              const timeSinceClose = Date.now() - lastPcClosedAt;
+              const minDelayAndroid = 300; // Минимум 300ms на Android
+              if (timeSinceClose < minDelayAndroid) {
+                const waitTime = minDelayAndroid - timeSinceClose;
+                logger.info(`[RandomChatSession] Android: ждем ${waitTime}ms после закрытия предыдущего PC`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+              }
+            }
+            
+            // КРИТИЧНО: На iOS проверяем ICE конфигурацию перед созданием PC
+            if (isIOS && !hasTurn && iceConfig.iceTransportPolicy === 'relay') {
+              logger.warn('[RandomChatSession] ⚠️ iOS: relay режим без TURN сервера! Изменяем на "all"');
+              iceConfig.iceTransportPolicy = 'all';
+            }
+            
+            // КРИТИЧНО: Упрощаем ICE конфигурацию на iOS при проблемах
+            if (isIOS && retryCount > 0) {
+              // При повторных попытках используем минимальную конфигурацию
+              const simplifiedConfig = {
+                ...iceConfig,
+                iceServers: iceConfig.iceServers?.slice(0, 3) || [], // Только первые 3 сервера
+                iceCandidatePoolSize: 0, // Отключаем предварительный сбор кандидатов
+              };
+              logger.info('[RandomChatSession] iOS: используем упрощенную ICE конфигурацию при retry');
+              pc = new RTCPeerConnection(simplifiedConfig);
+            } else {
+              pc = new RTCPeerConnection(iceConfig);
+            }
+            this.peerRef = pc;
+            (global as any).__pcCreationLock = null;
+            this.pcLifecycleManager.setPcCreationInProgress(false);
+            
+            this.incrementPcToken(true);
+            this.markPcWithToken(pc);
+            
+            // Устанавливаем обработчики
+            this.bindConnHandlers(pc, this.partnerIdRef || undefined);
+            this.attachRemoteHandlers(pc, this.partnerIdRef || undefined);
+            
+            logger.info('[RandomChatSession] ✅ RTCPeerConnection создан успешно', {
+              retryCount,
+              signalingState: pc.signalingState,
+              connectionState: (pc as any).connectionState
+            });
+            break; // Успешно создан, выходим из цикла
+          } catch (createError: any) {
+            retryCount++;
+            const errorMessage = createError?.message || String(createError);
+            const errorStack = createError?.stack || '';
+            
+            logger.error(`[RandomChatSession] RTCPeerConnection constructor failed (attempt ${retryCount}/${maxRetries}):`, {
+              error: errorMessage,
+              errorStack: errorStack.substring(0, 500), // Первые 500 символов стека
+              iceServersCount,
+              hasTurn,
+              iceConfig: JSON.stringify(iceConfig, null, 2).substring(0, 1000), // Первые 1000 символов конфига
+              streamId: stream?.id,
+              streamTracks: stream?.getTracks?.()?.length || 0
+            });
+            
+            if (retryCount >= maxRetries) {
+              (global as any).__pcCreationLock = null;
+              this.pcLifecycleManager.setPcCreationInProgress(false);
+              (global as any).__lastPcClosedAt = Date.now();
+              throw createError;
+            }
+            // Продолжаем попытки
+          }
+        }
+        
+        // Проверяем, что PC был создан
+        if (!pc) {
           (global as any).__pcCreationLock = null;
           this.pcLifecycleManager.setPcCreationInProgress(false);
-          
-          this.incrementPcToken(true);
-          this.markPcWithToken(pc);
-          
-          // Устанавливаем обработчики
-          this.bindConnHandlers(pc, this.partnerIdRef || undefined);
-          this.attachRemoteHandlers(pc, this.partnerIdRef || undefined);
-        } catch (createError: any) {
-          (global as any).__pcCreationLock = null;
-          this.pcLifecycleManager.setPcCreationInProgress(false);
-          logger.error('[RandomChatSession] RTCPeerConnection constructor failed:', createError);
+          logger.error('[RandomChatSession] Failed to create PeerConnection after all retries');
           (global as any).__lastPcClosedAt = Date.now();
-          throw createError;
+          return null;
         }
       } catch (e) {
         (global as any).__pcCreationLock = null;

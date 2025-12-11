@@ -1,0 +1,45 @@
+===========================================
+ПОЛНАЯ НАСТРОЙКА - ВСЕ ШАГИ
+===========================================
+
+ШАГ 1: ОБНОВИТЬ TURN_SECRET В .env (В SSH СЕССИИ)
+===========================================
+sed -i 's/TURN_SECRET=your_turn_secret_here/TURN_SECRET=8f7d6e5c4b3a291827364554839201a1b2c3d4e5f60718293445566778899a0/' /opt/livi-app/backend/.env
+
+# Проверить:
+cat /opt/livi-app/backend/.env
+
+
+ШАГ 2: ОТКРЫТЬ ПОРТЫ (В SSH СЕССИИ)
+===========================================
+ufw allow 3000/tcp || iptables -A INPUT -p tcp --dport 3000 -j ACCEPT || echo "Откройте порт 3000 в панели управления"
+ufw allow 3478/udp || iptables -A INPUT -p udp --dport 3478 -j ACCEPT || echo "Откройте порт 3478 UDP в панели управления"
+ufw allow 3478/tcp || iptables -A INPUT -p tcp --dport 3478 -j ACCEPT || echo "Откройте порт 3478 TCP в панели управления"
+
+
+ШАГ 3: ЗАГРУЗИТЬ ФАЙЛЫ BACKEND (НА ЛОКАЛЬНОМ КОМПЬЮТЕРЕ)
+===========================================
+# В НОВОМ ТЕРМИНАЛЕ на вашем Mac:
+cd /Users/maximkoltovich/LiVi/livi-app
+scp -r backend/* root@89.111.152.241:/opt/livi-app/backend/
+
+
+ШАГ 4: УСТАНОВИТЬ ЗАВИСИМОСТИ И ЗАПУСТИТЬ (В SSH СЕССИИ)
+===========================================
+cd /opt/livi-app/backend
+npm install
+pm2 delete livi-backend 2>/dev/null || true
+pm2 start npm --name "livi-backend" -- run start
+pm2 save
+pm2 startup
+pm2 status
+pm2 logs livi-backend
+
+
+ШАГ 5: ПРОВЕРКА РАБОТЫ
+===========================================
+# Проверить, что backend запущен:
+curl http://localhost:3000/api/turn-credentials
+
+# Проверить логи:
+pm2 logs livi-backend --lines 50

@@ -1,0 +1,39 @@
+===========================================
+ИСПРАВЛЕНИЕ: MongoDB replica set
+===========================================
+
+В SSH СЕССИИ ВЫПОЛНИТЕ:
+
+# 1. Проверить статус MongoDB
+systemctl status mongod
+
+# 2. Если не запущен, запустить
+systemctl start mongod
+
+# 3. Подождать 5 секунд для полного запуска
+sleep 5
+
+# 4. Проверить, что MongoDB слушает порт
+netstat -tlnp | grep 27017 || ss -tlnp | grep 27017
+
+# 5. Попробовать подключиться
+mongosh --eval "db.adminCommand('ping')"
+
+# 6. Проверить, инициализирован ли уже replica set
+mongosh --eval "rs.status().ok" 2>/dev/null || echo "Replica set не инициализирован"
+
+# 7. Если не инициализирован, инициализировать
+mongosh --eval "rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'localhost:27017'}]})"
+
+# 8. Подождать немного для перехода в PRIMARY
+sleep 3
+
+# 9. Проверить статус replica set
+mongosh --eval "rs.status().myState" | grep -q "1" && echo "✅ PRIMARY" || echo "⏳ Ожидаем..."
+
+# 10. Перезапустить backend
+cd /opt/livi-app/backend
+pm2 restart livi-backend
+
+# 11. Проверить логи
+pm2 logs livi-backend --lines 30

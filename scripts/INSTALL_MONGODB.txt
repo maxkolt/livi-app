@@ -1,0 +1,32 @@
+===========================================
+УСТАНОВКА MONGODB
+===========================================
+
+В SSH СЕССИИ НА СЕРВЕРЕ ВЫПОЛНИТЕ:
+
+# 1. Установить MongoDB
+curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg --dearmor
+echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+apt update
+apt install -y mongodb-org
+
+# 2. Запустить MongoDB
+systemctl start mongod
+
+# 3. Включить автозапуск MongoDB
+systemctl enable mongod
+
+# 4. Проверить статус MongoDB
+systemctl status mongod
+
+# 5. Проверить, что MongoDB слушает на порту 27017
+netstat -tuln | grep 27017 || ss -tuln | grep 27017
+
+# 6. Перезапустить backend
+pm2 restart livi-backend
+
+# 7. Проверить логи backend
+pm2 logs livi-backend --lines 20
+
+# 8. Проверить работу API
+curl http://localhost:3000/api/turn-credentials

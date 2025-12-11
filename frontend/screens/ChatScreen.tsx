@@ -672,9 +672,11 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (s.startsWith('/uploads/')) return `${API_BASE}${s}`;
     return s;
   };
+  // КРИТИЧНО: firstLetter используется ТОЛЬКО для аватара (headerInitial), НЕ для текста
+  // Для текста используем peerNameState (полный никнейм)
   const firstLetter = (s?: string) => (s?.trim()?.[0] || '').toUpperCase();
   const [peerNameState, setPeerNameState] = useState<string>(peerNameParam);
-  const headerInitial = peerNameState ? firstLetter(peerNameState) : '--';
+  const headerInitial = peerNameState ? firstLetter(peerNameState) : '--'; // Только для аватара!
   const headerPlaceholder = '--'; // Всегда показываем -- если нет аватара
 
   const Header = () => (
@@ -747,8 +749,11 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
 
       if (typeof nick === 'string') {
-        setPeerNameState(nick || '—');
-        navigation.setParams({ peerName: nick || '—' });
+        // КРИТИЧНО: Используем полный никнейм для текста, не обрезаем до первой буквы
+        // firstLetter используется только для headerInitial (аватар), не для текста
+        const fullNickname = nick.trim() || '—';
+        setPeerNameState(fullNickname);
+        navigation.setParams({ peerName: fullNickname });
       }
 
       if (typeof avatarVer === 'number') {

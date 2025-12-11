@@ -133,6 +133,40 @@ export default function registerFriendSockets(io: Server) {
           await (User as any).updateOne({ _id: me },  { $addToSet: { friends: from } });
           await (User as any).updateOne({ _id: from }, { $addToSet: { friends: me } });
           clearFriendshipCache(me); clearFriendshipCache(from);
+
+          // Отправляем актуальную информацию о профиле друг другу
+          try {
+            // Получаем профиль "me" для отправки "from"
+            const meProfile = await User.findById(me).select('nick avatar avatarVer avatarThumbB64').lean();
+            if (meProfile) {
+              const mePayload = {
+                userId: me,
+                nick: String((meProfile as any).nick || '').trim(),
+                avatar: String((meProfile as any).avatar || ''),
+                avatarVer: (meProfile as any).avatarVer || 0,
+                avatarThumbB64: String((meProfile as any).avatarThumbB64 || ''),
+              };
+              // Отправляем профиль "me" пользователю "from"
+              io.to(`u:${String(from)}`).emit('friend:profile', mePayload);
+            }
+
+            // Получаем профиль "from" для отправки "me"
+            const fromProfile = await User.findById(from).select('nick avatar avatarVer avatarThumbB64').lean();
+            if (fromProfile) {
+              const fromPayload = {
+                userId: from,
+                nick: String((fromProfile as any).nick || '').trim(),
+                avatar: String((fromProfile as any).avatar || ''),
+                avatarVer: (fromProfile as any).avatarVer || 0,
+                avatarThumbB64: String((fromProfile as any).avatarThumbB64 || ''),
+              };
+              // Отправляем профиль "from" пользователю "me"
+              io.to(`u:${String(me)}`).emit('friend:profile', fromPayload);
+            }
+          } catch (profileError: any) {
+            logger.warn('Failed to send profile on friend accept:', profileError);
+            // Не прерываем процесс, если не удалось отправить профиль
+          }
         }
 
         // Уведомления

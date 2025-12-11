@@ -1,0 +1,38 @@
+===========================================
+НАСТРОЙКА MONGODB REPLICA SET
+===========================================
+
+В SSH СЕССИИ НА СЕРВЕРЕ ВЫПОЛНИТЕ:
+
+# 1. Остановить MongoDB
+systemctl stop mongod
+
+# 2. Отредактировать конфиг MongoDB
+nano /etc/mongod.conf
+
+# 3. Добавить в секцию replication:
+# replication:
+#   replSetName: "rs0"
+
+# Или выполнить команду для автоматического добавления:
+sed -i '/^#replication:/a replication:\n  replSetName: "rs0"' /etc/mongod.conf
+
+# 4. Если строка уже есть, раскомментировать:
+sed -i 's/^#replication:/replication:/' /etc/mongod.conf
+sed -i 's/^#  replSetName:/  replSetName:/' /etc/mongod.conf
+
+# 5. Запустить MongoDB
+systemctl start mongod
+
+# 6. Инициализировать replica set
+mongosh --eval "rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'localhost:27017'}]})"
+
+# 7. Проверить статус replica set
+mongosh --eval "rs.status()"
+
+# 8. Перезапустить backend
+cd /opt/livi-app/backend
+pm2 restart livi-backend
+
+# 9. Проверить логи
+pm2 logs livi-backend --lines 20

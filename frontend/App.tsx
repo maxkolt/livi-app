@@ -18,13 +18,42 @@ import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, onReq
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
-import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from './utils/keepAwake';
 import HomeScreen from "./screens/HomeScreen";
 import VideoChat from "./components/VideoChat";
 import ChatScreen from "./screens/ChatScreen";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
 import { ensureCometChatReady } from "./chat/cometchat";
+
+// Импорт expo-keep-awake с безопасной загрузкой
+let activateKeepAwakeAsync: (() => Promise<void>) | null = null;
+let deactivateKeepAwakeAsync: (() => Promise<void>) | null = null;
+
+try {
+  const keepAwakeModule = require("expo-keep-awake");
+  // КРИТИЧНО: Используем асинхронные версии (activateKeepAwakeAsync вместо activateKeepAwake)
+  activateKeepAwakeAsync = keepAwakeModule.activateKeepAwakeAsync;
+  deactivateKeepAwakeAsync = keepAwakeModule.deactivateKeepAwakeAsync;
+  // Fallback: если async версии нет, пробуем синхронные (для обратной совместимости)
+  if (!activateKeepAwakeAsync && keepAwakeModule.activateKeepAwake) {
+    activateKeepAwakeAsync = async () => { keepAwakeModule.activateKeepAwake(); };
+  }
+  if (!deactivateKeepAwakeAsync && keepAwakeModule.deactivateKeepAwake) {
+    deactivateKeepAwakeAsync = async () => { keepAwakeModule.deactivateKeepAwake(); };
+  }
+} catch (e) {
+  logger.warn("expo-keep-awake module not available, using fallback", e);
+  // Fallback функции если модуль недоступен
+  activateKeepAwakeAsync = async () => {
+    logger.debug("keep-awake activate (fallback - module not available)");
+  };
+  deactivateKeepAwakeAsync = async () => {
+    logger.debug("keep-awake deactivate (fallback - module not available)");
+  };
+}
+
+// Экспортируем функции для использования в других компонентах
+export { activateKeepAwakeAsync, deactivateKeepAwakeAsync };
 
 try { (React as any).useInsertionEffect = (React as any).useEffect; } catch {}
 
@@ -850,8 +879,8 @@ function AppContent() {
             </View>
           )}
 
-          {/* Глобальный PiP оверлей - виден на всех страницах кроме VideoChat */}
-          {routeName !== 'VideoChat' && <PiPOverlay />}
+          {/* Глобальный PiP оверлей - виден на всех страницах когда pip.visible === true */}
+          <PiPOverlay />
 
         </PaperProvider>
       </SafeAreaProvider>
@@ -861,7 +890,7 @@ function AppContent() {
 export default function App() {
   // Навигация в «вернуться к звонку»:
   const navigateToCall = (callId: string | null, roomId: string | null) => {
-    console.warn('[App] navigateToCall', { callId, roomId });
+    console.log('[App] navigateToCall called with:', { callId, roomId });
     // возвращаем ровно на экран друга, НЕ на «Начать/Далее»
     if (navRef.isReady()) {
       navRef.navigate('VideoChat', {
@@ -878,72 +907,26 @@ export default function App() {
     // КРИТИЧНО: Сначала вызываем локальную очистку (если функция зарегистрирована)
     // Это нужно чтобы очистить PeerConnection, стримы и метр микрофона
     // даже когда VideoChat размонтирован (пользователь в PiP)
-    // onAbortCall в VideoChat вызывает session.endCall(), который отправляет call:end
     try {
       const cleanupFn = (global as any).__endCallCleanupRef?.current;
       if (cleanupFn && typeof cleanupFn === 'function') {
-        console.log('[App] endCallImpl: Calling cleanup function (session.endCall)');
         cleanupFn();
-        // session.endCall() уже отправляет call:end, поэтому не нужно отправлять здесь
-        return;
-      } else {
-        console.warn('[App] endCallImpl: Cleanup function not available (VideoChat may be unmounted)');
       }
     } catch (e) {
       console.warn('[App] Error calling endCall cleanup:', e);
     }
     
-    // КРИТИЧНО: Если cleanup функция недоступна, пытаемся остановить стримы через глобальную ссылку на session
-    // Это гарантирует, что камера остановится даже когда VideoChat размонтирован
+    // Отправляем сигнал завершения звонка на backend
     try {
-      const session = (global as any).__webrtcSessionRef?.current;
-      if (session && typeof session.endCall === 'function') {
-        console.log('[App] endCallImpl: Calling session.endCall() directly (VideoChat unmounted)');
-        session.endCall();
-        // session.endCall() уже отправляет call:end, поэтому не нужно отправлять здесь
-        return;
-      } else {
-        console.warn('[App] endCallImpl: Session not available, will use fallback');
-      }
+      socket.emit('call:end', { roomId: roomId || 'current' });
     } catch (e) {
-      console.warn('[App] Error calling session.endCall:', e);
-    }
-    
-    // Fallback: Если VideoChat размонтирован и cleanup функция недоступна,
-    // отправляем call:end напрямую на сервер
-    // Это нужно для случая, когда пользователь в PiP и VideoChat размонтирован
-    // КРИТИЧНО: Также пытаемся остановить локальные стримы напрямую через публичный метод
-    try {
-      const session = (global as any).__webrtcSessionRef?.current;
-      if (session && typeof session.stopLocalStream === 'function') {
-        console.log('[App] endCallImpl: Stopping local stream directly (fallback)');
-        session.stopLocalStream(false, true).catch((e: any) => {
-          console.warn('[App] Error stopping local stream in fallback:', e);
-        });
-      }
-    } catch (e) {
-      console.warn('[App] Error stopping local stream in fallback:', e);
-    }
-    
-    try {
-      if (roomId || callId) {
-        socket.emit('call:end', { 
-          roomId: roomId || undefined,
-          callId: callId || undefined
-        });
-        console.log('[App] endCallImpl: call:end sent directly (fallback)', { roomId, callId });
-      } else {
-        console.warn('[App] endCallImpl: No roomId or callId to send call:end');
-      }
-    } catch (e) {
-      console.warn('[App] Error ending call:', e);
+      console.log('[App] Error ending call:', e);
     }
   };
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
-        {/* УБРАНО: WebRTCProvider - не используется, useWebRTC нигде не вызывается */}
         <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
           <AppContent />
         </PiPProvider>

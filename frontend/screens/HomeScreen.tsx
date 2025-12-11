@@ -86,8 +86,10 @@ import socket, {
   attachIdentity,
   getCurrentUserId,
   setCurrentUserId,
+  clearCurrentUserId,
   checkUserExists,
   clearAllUserData,
+  createUser,
   API_BASE,
   startCall,
   cancelCall,
@@ -145,9 +147,14 @@ const displayAvatarLetter = (name?: string) => {
 };
 
 const mapToFriend = (u: any): Friend => {
+  // КРИТИЧНО: Используем полный никнейм, не обрезаем до первой буквы
+  // Логика: берем никнейм из u.nick, u.name или u.username, обрезаем только пробелы
+  const rawNick = u.nick || u.name || u.username || '';
+  const fullNickname = typeof rawNick === 'string' ? rawNick.trim() : '';
+  
   const mapped = {
     id: String(u._id ?? u.id ?? ''),
-    name: u.nick || u.name || u.username || '',
+    name: fullNickname, // Полный никнейм, не обрезаем до первой буквы
     avatar: u.avatar || u.image || '',
     avatarVer: typeof u.avatarVer === 'number' ? u.avatarVer : 0,
     avatarThumbB64: u.avatarThumbB64 || '', // data URI миниатюры
@@ -739,13 +746,23 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (cleaned) return; cleaned = true;
         logger.debug('Call accepted', { callId });
         // Приняли прямой звонок — сбрасываем бейдж пропущенных для этого друга
+        // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) и УДАЛЯЕМ ключ вместо установки в 0
         try {
+          const friendIdStr = String(friend.id);
           setMissedByUser((prev) => {
-            const next = { ...prev, [friend.id]: 0 };
+            const next = { ...prev };
+            // Удаляем ключ вместо установки в 0, чтобы не было нулевых значений в объекте
+            if (next[friendIdStr] !== undefined) {
+              delete next[friendIdStr];
+            }
+            // Сохраняем очищенный объект (без нулевых значений)
             AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(() => {});
+            logger.debug('[HomeScreen] Reset missed calls for accepted call (removed key)', { friendId: friendIdStr });
             return next;
           });
-        } catch {}
+        } catch (e) {
+          logger.warn('[HomeScreen] Error resetting missed calls for accepted call:', e);
+        }
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
         // Переход в экран видеочата (мы инициатор) с передачей callId
@@ -826,14 +843,56 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       try {
         try { await waitSocketConnected(); } catch {}
         const res = await fetchFriends?.();
+        
+        // КРИТИЧНО: Убираем avatarThumbB64 из логов (очень большой base64)
+        const logRes = res ? {
+          ...res,
+          list: res.list?.map((f: any) => ({
+            ...f,
+            avatarThumbB64: f.avatarThumbB64 ? `[base64: ${f.avatarThumbB64.length} chars]` : undefined
+          }))
+        } : res;
+        console.log('[loadFriends] Response from backend:', JSON.stringify(logRes));
+        
         const incoming = Array.isArray(res?.list) ? res.list : [];
+        console.log('[loadFriends] Incoming friends:', incoming.length);
         const fresh = incoming.map(mapToFriend);
         setFriends((prev) => {
           const merged: Friend[] = fresh.map((f) => {
             const prevOne = prev.find((p) => p.id === f.id) as any;
+            // КРИТИЧНО: Используем полный никнейм из нового списка, не обрезаем
+            // Если в новом списке есть имя - используем его, иначе старое, иначе пустое
+            const finalName = (f.name && f.name.trim()) || (prevOne?.name && prevOne.name.trim()) || '';
+            
+            // Проверяем, что никнейм не обрезан до одной буквы
+            if (finalName && finalName.length === 1 && finalName !== '—' && f.name && f.name.trim().length > 1) {
+              logger.error('[loadFriends] ❌ КРИТИЧЕСКАЯ ОШИБКА: никнейм обрезан до одной буквы!', {
+                friendId: f.id,
+                newName: f.name,
+                newNameLength: f.name.length,
+                prevName: prevOne?.name,
+                prevNameLength: prevOne?.name?.length || 0,
+                finalName,
+                finalNameLength: finalName.length
+              });
+              // Исправляем: используем полный никнейм из нового списка
+              const correctedName = f.name.trim();
+              logger.info('[loadFriends] Исправляем: используем полный никнейм', { correctedName });
+              return {
+                ...f,
+                name: correctedName,
+                avatar: f.avatar || prevOne?.avatar || '',
+                avatarThumbB64: f.avatarThumbB64 || prevOne?.avatarThumbB64 || '',
+                online: !!f.online,
+                isBusy: !!f.isBusy,
+                isRandomBusy: !!prevOne?.isRandomBusy,
+                inCall: !!prevOne?.inCall,
+              } as any;
+            }
+            
             return {
               ...f,
-              name: f.name || prevOne?.name || '',
+              name: finalName,
               avatar: f.avatar || prevOne?.avatar || '',
               avatarThumbB64: f.avatarThumbB64 || prevOne?.avatarThumbB64 || '',
               online: !!f.online,
@@ -1238,10 +1297,21 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         try {
           console.log(`[HomeScreen] Loading profile attempt ${attempt}/5...`);
           const profileResponse = await getMyProfile();
+          // КРИТИЧНО: Убираем avatarB64 и avatarThumbB64 из логов (очень большие base64)
+          const logProfile = profileResponse ? {
+            ...profileResponse,
+            profile: profileResponse.profile ? {
+              ...profileResponse.profile,
+              avatarB64: profileResponse.profile.avatarB64 ? `[base64: ${profileResponse.profile.avatarB64.length} chars]` : undefined,
+              avatarThumbB64: profileResponse.profile.avatarThumbB64 ? `[base64: ${profileResponse.profile.avatarThumbB64.length} chars]` : undefined
+            } : profileResponse.profile
+          } : profileResponse;
+          console.log('[HomeScreen] Profile response from backend:', JSON.stringify(logProfile));
           
           // Проверяем что профиль не пустой (должен быть хотя бы nick или avatar)
           if (profileResponse?.ok && profileResponse.profile) {
             const profile = profileResponse.profile;
+            console.log('[HomeScreen] Profile data:', { nick: profile.nick, hasAvatar: !!profile.avatarB64, hasAvatarThumb: !!profile.avatarThumbB64, avatarVer: profile.avatarVer });
             logger.debug('Loaded profile from backend', { nick: profile.nick, hasAvatar: !!profile.avatarB64 });
             
             // Обновляем никнейм из backend
@@ -1280,18 +1350,21 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               setMyAvatarVer(profile.avatarVer);
             }
             
-            // Проверяем что данные реально установлены перед сохранением
-            // Сохраняем в локальный кэш только если есть реальные данные
+            // Сохраняем профиль даже если он пустой (для нового пользователя это нормально)
+            // Важно: сохраняем ответ от backend, даже если все поля пустые
+            await saveProfileToStorage({
+              nick: profile.nick || '',
+              avatar: profile.avatarB64 ? `data:image/jpeg;base64,${profile.avatarB64}` : (profile.avatarThumbB64 ? `data:image/jpeg;base64,${profile.avatarThumbB64}` : '')
+            });
+            
+            // Если есть реальные данные (nick или avatar), отмечаем как успешную загрузку
             if (hasActualData || (profile.nick && profile.nick.trim()) || profile.avatarB64 || profile.avatarThumbB64) {
-              await saveProfileToStorage({
-                nick: profile.nick || '',
-                avatar: profile.avatarB64 ? `data:image/jpeg;base64,${profile.avatarB64}` : ''
-              });
-              
               profileLoadedSuccess = true;
               console.log('[HomeScreen] Profile loaded successfully with data');
             } else {
-              console.warn('[HomeScreen] Profile response received but no actual data (empty profile)');
+              // Пустой профиль - это нормально для нового пользователя, но не выходим из цикла
+              console.log('[HomeScreen] Profile loaded (empty profile for new user)');
+              profileLoadedSuccess = true; // Принимаем пустой профиль как валидный ответ
             }
             
             // Выходим из цикла только если получили реальные данные
@@ -1344,13 +1417,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
       }
 
-      // Устанавливаем profileLoaded только если есть реальные данные
-      if (hasRealData || profileLoadedSuccess) {
-        console.log('[HomeScreen] Profile loading complete, has data:', { hasNick: !!(finalNick && finalNick.trim()), hasAvatar: !!(finalAvatar && finalAvatar.trim()) });
+      // Устанавливаем profileLoaded если есть реальные данные ИЛИ если пользователь новый (нет данных, но userId существует)
+      // КРИТИЧНО: Для нового пользователя без данных profileLoaded должен быть true, чтобы показать экран создания профиля
+      const isNewUser = !hasRealData && !profileLoadedSuccess && currentUserId;
+      if (hasRealData || profileLoadedSuccess || isNewUser) {
+        console.log('[HomeScreen] Profile loading complete', { 
+          hasData: hasRealData || profileLoadedSuccess,
+          isNewUser,
+          hasNick: !!(finalNick && finalNick.trim()), 
+          hasAvatar: !!(finalAvatar && finalAvatar.trim()) 
+        });
         setProfileLoaded(true);
       } else {
-        console.warn('[HomeScreen] Profile loading complete but no data found');
-        // Не устанавливаем profileLoaded = true, чтобы SplashLoader оставался видимым
+        console.warn('[HomeScreen] Profile loading complete but no data found and not a new user');
+        // Не устанавливаем profileLoaded = true только если это не новый пользователь
       }
 
       // Всегда устанавливаем dataLoaded = true после попытки загрузки
@@ -1389,18 +1469,48 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       //
       await loadFriends();
       // Инициализация пропущенных видеозвонков из хранилища
+      // КРИТИЧНО: Нормализуем ключи (преобразуем в строки) для корректной работы
       try {
         const rawMissed = await AsyncStorage.getItem(MISSED_CALLS_KEY);
-        setMissedByUser(rawMissed ? JSON.parse(rawMissed) : {});
+        const parsed = rawMissed ? JSON.parse(rawMissed) : {};
+        // Нормализуем ключи: преобразуем все ключи в строки
+        const normalized: Record<string, number> = {};
+        if (parsed && typeof parsed === 'object') {
+          Object.keys(parsed).forEach(key => {
+            const value = parsed[key];
+            if (typeof value === 'number' && value > 0) {
+              normalized[String(key)] = value;
+            }
+          });
+        }
+        setMissedByUser(normalized);
         setMissedLoaded(true);
-      } catch {}
+        logger.debug('[HomeScreen] Loaded missed calls from storage', { count: Object.keys(normalized).length, normalized });
+      } catch (e) {
+        logger.warn('[HomeScreen] Error loading missed calls:', e);
+      }
     })();
   }, [syncUserData, ensureIdentity, loadFriends]);
 
   // Сохраняем пропущенные вызовы при изменении
+  // КРИТИЧНО: Очищаем ключи с нулевыми значениями перед сохранением
+  // НЕ обновляем состояние здесь, чтобы избежать бесконечного цикла
   useEffect(() => {
     if (!missedLoaded) return;
-    try { AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(missedByUser)).catch(() => {}); } catch {}
+    try {
+      // Фильтруем только ключи с значениями > 0
+      const cleaned: Record<string, number> = {};
+      Object.keys(missedByUser).forEach(key => {
+        const value = missedByUser[key];
+        if (typeof value === 'number' && value > 0) {
+          cleaned[key] = value;
+        }
+      });
+      // Сохраняем только очищенные данные (без нулевых значений)
+      AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(cleaned)).catch(() => {});
+    } catch (e) {
+      logger.warn('[HomeScreen] Error saving missed calls:', e);
+    }
   }, [missedByUser, missedLoaded]);
 
   /* ===== reconnect handling ===== */
@@ -1594,13 +1704,33 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [navigation]);
 
   // Обновляем пропущенные видеозвонки из AsyncStorage при возврате на экран (iOS/Android)
+  // КРИТИЧНО: Нормализуем ключи (преобразуем в строки) и фильтруем только значения > 0
   useEffect(() => {
     const unsub = navigation?.addListener?.('focus', async () => {
       try {
         const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
-        if (parsed && typeof parsed === 'object') { setMissedByUser(parsed); setMissedLoaded(true); }
-      } catch {}
+        // Нормализуем ключи: преобразуем все ключи в строки и фильтруем только значения > 0
+        const normalized: Record<string, number> = {};
+        if (parsed && typeof parsed === 'object') {
+          Object.keys(parsed).forEach(key => {
+            const value = parsed[key];
+            // КРИТИЧНО: Добавляем только значения > 0, игнорируем нулевые
+            if (typeof value === 'number' && value > 0) {
+              normalized[String(key)] = value;
+            }
+          });
+        }
+        setMissedByUser(normalized);
+        setMissedLoaded(true);
+        logger.debug('[HomeScreen] Reloaded missed calls on focus', { 
+          count: Object.keys(normalized).length,
+          total: Object.keys(parsed).length,
+          normalized 
+        });
+      } catch (e) {
+        logger.warn('[HomeScreen] Error reloading missed calls on focus:', e);
+      }
     });
     return () => { try { unsub?.(); } catch {} };
   }, [navigation]);
@@ -1611,7 +1741,22 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const offReq = onRequestCloseIncoming(() => {
       setCalling({ visible: false, friend: null, callId: null });
     });
-    const offAccepted = onFriendAccepted?.(() => void loadFriends());
+    const offAccepted = onFriendAccepted?.(async () => {
+      // КРИТИЧНО: Обновляем профиль на сервере и синхронизируем с CometChat
+      try {
+        const currentNick = savedNick || nick || '';
+        const currentAvatar = avatarUri || savedAvatarUrl || '';
+        if (currentNick || currentAvatar) {
+          // Обновляем профиль на сервере
+          await updateProfile({ nick: currentNick, avatar: currentAvatar });
+          // Синхронизируем с CometChat
+          await syncMyStreamProfile(currentNick, currentAvatar);
+        }
+      } catch (e) {
+        logger.warn('[HomeScreen] Failed to update profile after friend accepted:', e);
+      }
+      void loadFriends();
+    });
     const offPresence = onPresenceUpdate?.((data: any) => {
       // Обрабатываем оба формата: массив (для online) и объект (для busy)
       if (Array.isArray(data)) {
@@ -1657,12 +1802,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         return;
       }
 
-      // Проверяем, что userId действительно в списке друзей
-      const isFriend = friendsRef.current.some(f => String(f.id) === String(userId));
-      if (!isFriend) {
-        return;
-      }
-
       // Кэшируем миниатюру если пришла
       if (avatarThumbB64 && avatarVer) {
         try {
@@ -1673,19 +1812,47 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
 
       // Обновляем ТОЛЬКО список друзей, НЕ затрагивая собственный профиль
-      setFriends((prev) =>
-        prev.map((f) =>
-          String(f.id) === String(userId)
-            ? { 
-                ...f, 
-                name: typeof nick === 'string' ? nick : f.name, 
-                avatar: typeof avatar === 'string' ? avatar : f.avatar,
-                avatarVer: typeof avatarVer === 'number' ? avatarVer : f.avatarVer,
-                avatarThumbB64: typeof avatarThumbB64 === 'string' ? avatarThumbB64 : f.avatarThumbB64
-              }
-            : f
-        )
-      );
+      // Если друга нет в списке, добавляем его (может быть только что подружились)
+      setFriends((prev) => {
+        const existingIndex = prev.findIndex(f => String(f.id) === String(userId));
+        if (existingIndex >= 0) {
+          // Обновляем существующего друга
+          // КРИТИЧНО: Используем полный никнейм, не обрезаем до первой буквы
+          const oldName = prev[existingIndex]?.name || '';
+          // Если пришел новый никнейм - используем его полностью, иначе оставляем старый
+          const updatedName = typeof nick === 'string' && nick.trim() ? nick.trim() : oldName;
+          
+          return prev.map((f) =>
+            String(f.id) === String(userId)
+              ? { 
+                  ...f, 
+                  name: updatedName, // Полный никнейм, не обрезаем
+                  avatar: typeof avatar === 'string' ? avatar : f.avatar,
+                  avatarVer: typeof avatarVer === 'number' ? avatarVer : f.avatarVer,
+                  avatarThumbB64: typeof avatarThumbB64 === 'string' ? avatarThumbB64 : f.avatarThumbB64
+                }
+              : f
+          );
+        } else {
+          // Добавляем нового друга (только что подружились)
+          // КРИТИЧНО: Используем полный никнейм, не обрезаем до первой буквы
+          const newName = typeof nick === 'string' && nick.trim() ? nick.trim() : '—';
+          return [
+            ...prev,
+            {
+              id: userId,
+              name: newName, // Полный никнейм, не обрезаем
+              avatar: typeof avatar === 'string' ? avatar : '',
+              avatarVer: typeof avatarVer === 'number' ? avatarVer : 0,
+              avatarThumbB64: typeof avatarThumbB64 === 'string' ? avatarThumbB64 : '',
+              online: false,
+              isBusy: false,
+              isRandomBusy: false,
+              inCall: false,
+            }
+          ];
+        }
+      });
 
       // Мгновенная предзагрузка нового аватара (warmAvatar теперь no-op)
       if (typeof avatarVer === 'number' && avatarVer > 0) {
@@ -1899,10 +2066,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, []);
 
   // Мгновенное обновление бейджа при инкременте в App.tsx (главная/меню)
+  // КРИТИЧНО: Обновляем состояние и сохраняем в AsyncStorage синхронно
   useEffect(() => {
-    const off = onMissedIncrement(({ userId }) => {
+    const off = onMissedIncrement(async ({ userId }) => {
       if (!userId) return;
-      setMissedByUser((prev) => ({ ...prev, [userId]: (prev[userId] || 0) + 1 }));
+      const userIdStr = String(userId);
+      setMissedByUser((prev) => {
+        const next = { ...prev, [userIdStr]: (prev[userIdStr] || 0) + 1 };
+        // КРИТИЧНО: Сохраняем в AsyncStorage сразу после обновления состояния
+        AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(() => {});
+        logger.debug('[HomeScreen] Missed call incremented', { userId: userIdStr, count: next[userIdStr] });
+        return next;
+      });
     });
     return () => off?.();
   }, []);
@@ -2403,19 +2578,51 @@ const handleClearNick = useCallback(async () => {
       // 3. Жёсткий локальный сброс (очищает AsyncStorage и кэши)
       await hardLocalReset();
       
-      // 4. Сбрасываем React state
+      // 4. КРИТИЧНО: Сбрасываем currentUserId в socket.ts, чтобы createUser() мог создать нового пользователя
+      clearCurrentUserId();
+      
+      // 5. Сбрасываем React state
       resetAllState();
 
-      // 5. Сбрасываем installId
+      // 6. Сбрасываем флаги загрузки, чтобы показать экран создания нового профиля
+      setProfileLoaded(false);
+      setDataLoaded(false);
+      setNick('');
+      setSavedNickDebug('');
+      setSavedAvatarUrl('');
+      setAvatarUri('');
+
+      // 7. Сбрасываем installId
       await resetInstallId();
       const newId = await getInstallId();
       setInstallId(newId);
 
-      // 6. Attach с новым installId (создаст нового пользователя)
-      await attachIdentitySafe({ installId: newId, profile: {} });
+      // 8. КРИТИЧНО: Создаем нового пользователя после удаления старого
+      // После clearCurrentUserId() createUser() создаст нового пользователя с новым installId
+      const newUserId = await createUser();
+      if (!newUserId) {
+        throw new Error('Failed to create new user after account wipe');
+      }
+      logger.info('[handleWipeAccount] New user created:', { userId: newUserId, installId: newId });
+
+      // 9. КРИТИЧНО: Устанавливаем флаги загрузки ПОСЛЕ создания пользователя
+      // Для нового пользователя без данных profileLoaded должен быть true, чтобы показать экран создания профиля
+      // Устанавливаем dataLoaded первым, затем profileLoaded
+      setDataLoaded(true);
+      setProfileLoaded(true);
+      logger.info('[handleWipeAccount] Flags set, should show profile creation screen');
+      
+      // 10. КРИТИЧНО: Принудительно обновляем profileKey, чтобы loadProfileSync не вызывался снова
+      // Это предотвращает сброс флагов после установки
+      setProfileKey(prev => prev + 1);
     } catch (e: any) {
       showNotice(`${t('wipeFailed', lang)}: ${e?.message || e}`, 'error', 2600);
-    } finally { setWiping(false); }
+      // При ошибке также устанавливаем флаги, чтобы не зависнуть на SplashLoader
+      setProfileLoaded(true);
+      setDataLoaded(true);
+    } finally { 
+      setWiping(false); 
+    }
   }, [wiping, installId, askConfirm, showNotice, attachIdentitySafe, wipeAccountOnServer, lang, resetAllState]);
 
 
@@ -2433,10 +2640,18 @@ const handleClearNick = useCallback(async () => {
       /^ph:\/\//i.test(s);
   
     const handlePress = React.useCallback(() => {
+      // КРИТИЧНО: Передаем полный никнейм, не обрезаем до первой буквы
+      const fullNickname = (friend.name && friend.name.trim()) || '—';
+      logger.info('[ChatButton] Открываем чат', {
+        friendId: friend.id,
+        friendName: friend.name,
+        fullNickname,
+        nameLength: friend.name?.length || 0
+      });
       // Просто открываем чат с CometChat
       navigation.navigate('Chat', {
         peerId: friend.id,
-        peerName: friend.name || '—',
+        peerName: fullNickname,
         peerAvatarVer: friend.avatarVer || 0,
         peerAvatarThumbB64: friend.avatarThumbB64 || '',
         peerOnline: friend.online,
@@ -2489,15 +2704,23 @@ const handleClearNick = useCallback(async () => {
   };
 
   const getFriendDisplay = (f: Friend) => {
+    // Логика отображения:
+    // 1. Если нет аватара, но есть никнейм - показываем первую букву в круге аватара, но сам никнейм полностью
+    // 2. Если есть аватар, но нет никнейма - вместо никнейма показываем "—"
+    // 3. Если есть и аватар и никнейм - показываем и то и то
+    // 4. Если нет ни того ни того - показываем "—"
+    
     const rawNick = (f.name || '').trim();
     const hasNick = rawNick.length > 0;
     // Проверяем не только версию, но и наличие самой миниатюры
     const hasAvatar = !!(f.avatarVer && f.avatarVer > 0 && f.avatarThumbB64);
 
-    // Имя: ник, иначе «—»
+    // Имя для текста: полный никнейм, иначе «—»
+    // КРИТИЧНО: НЕ используем slice(0, 1) для displayName - это только для avatarLetter
     const displayName = hasNick ? rawNick : '—';
 
-    // Буква: показываем если нет изображения, но есть ник
+    // Буква для аватара: показываем первую букву только если нет аватара, но есть никнейм
+    // Это используется только для fallbackText в AvatarImage, НЕ для текста!
     const avatarLetter = !hasAvatar && hasNick ? rawNick.slice(0, 1).toUpperCase() : '';
 
     return { displayName, avatarLetter, hasAvatar };
@@ -2508,7 +2731,9 @@ const handleClearNick = useCallback(async () => {
     if (!friend.online) return null;
 
     const { displayName } = getFriendDisplay(friend);
-    const missedCount = missedByUser[friend.id] || 0;
+    // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) для корректной работы с пропущенными звонками
+    const friendIdStr = String(friend.id);
+    const missedCount = missedByUser[friendIdStr] || 0;
 
     // УПРОЩЕНО: Определяем статус "Занято" для 1-на-1
     const isOnline = friend.online;
@@ -2546,9 +2771,17 @@ const handleClearNick = useCallback(async () => {
             style={[styles.inviteBtn, busy ? styles.inviteBtnDisabled : null]}
             disabled={busy}
             onPress={() => {
+              // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) и УДАЛЯЕМ ключ вместо установки в 0
+              const friendIdStr = String(friend.id);
               setMissedByUser((prev) => {
-                const next = { ...prev, [friend.id]: 0 };
+                const next = { ...prev };
+                // Удаляем ключ вместо установки в 0, чтобы не было нулевых значений в объекте
+                if (next[friendIdStr] !== undefined) {
+                  delete next[friendIdStr];
+                }
+                // Сохраняем очищенный объект (без нулевых значений)
                 AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(()=>{});
+                logger.debug('[HomeScreen] Reset missed calls for friend (removed key)', { friendId: friendIdStr });
                 return next;
               });
               handleStartVideoCall(friend);
@@ -2611,6 +2844,8 @@ const handleClearNick = useCallback(async () => {
             
             title={() => {
               const { displayName } = getFriendDisplay(item);
+              // КРИТИЧНО: Используем displayName (полный никнейм) для текста
+              // avatarLetter используется только для fallbackText в аватаре (первая буква)
               return (
                 <View style={styles.nameCol}>
                   <Text style={styles.friendName}>{displayName}</Text>
@@ -2815,12 +3050,16 @@ const handleClearNick = useCallback(async () => {
 
   // Старый обработчик удален - используем новую систему статусов
 
-  // Показываем SplashLoader пока данные не загружены
-  // Проверяем что данные реально установлены перед скрытием
+  // Показываем SplashLoader только пока данные загружаются
+  // Если данные загружены (dataLoaded = true) и профиль загружен (profileLoaded = true),
+  // но нет ника и аватара (hasRealData = false), то показываем экран создания профиля
   const currentNick = savedNick || nick || '';
   const currentAvatar = avatarUri || savedAvatarUrl || '';
   const hasRealData = (currentNick && currentNick.trim()) || (currentAvatar && currentAvatar.trim());
-  const shouldShowSplash = !profileLoaded || (profileLoaded && !hasRealData);
+  // КРИТИЧНО: Показываем SplashLoader только если данные еще загружаются
+  // Если данные загружены (dataLoaded = true) И профиль загружен (profileLoaded = true),
+  // то показываем домашнюю страницу (даже если нет данных - показываем экран создания профиля)
+  const shouldShowSplash = !dataLoaded || (dataLoaded && !profileLoaded);
   
   if (shouldShowSplash) {
     return (
@@ -2831,8 +3070,9 @@ const handleClearNick = useCallback(async () => {
           hasNick={!!(currentNick && currentNick.trim())}
           hasAvatar={!!(currentAvatar && currentAvatar.trim())}
           onComplete={() => {
-            // Устанавливаем profileLoaded только если есть данные
-            if (hasRealData) {
+            // Устанавливаем profileLoaded после завершения анимации SplashLoader
+            // Это нужно для плавного перехода к экрану создания профиля
+            if (dataLoaded) {
               setProfileLoaded(true);
             }
           }} 
@@ -2876,7 +3116,28 @@ const handleClearNick = useCallback(async () => {
             ]} 
             onPress={() => setMenuOpen(true)} 
           />
-          {(Object.values(unreadByUser).some((n) => n > 0) || Object.values(missedByUser).some((n) => n > 0)) && <View style={styles.menuDot} />}
+          {(() => {
+            // КРИТИЧНО: Проверяем наличие непрочитанных сообщений или пропущенных видеозвонков
+            // Фильтруем только значения > 0, игнорируем нулевые и отрицательные
+            const unreadValues = Object.values(unreadByUser).filter((n) => typeof n === 'number' && n > 0);
+            const missedValues = Object.values(missedByUser).filter((n) => typeof n === 'number' && n > 0);
+            const hasUnread = unreadValues.length > 0;
+            const hasMissed = missedValues.length > 0;
+            const shouldShow = hasUnread || hasMissed;
+            
+            // Логируем только если есть проблема (показываем когда не должно или наоборот)
+            if (shouldShow) {
+              logger.debug('[HomeScreen] Showing menu dot notification', { 
+                hasUnread, 
+                hasMissed, 
+                unreadCount: unreadValues.length,
+                missedCount: missedValues.length,
+                totalMissedKeys: Object.keys(missedByUser).length,
+                missedByUser 
+              });
+            }
+            return shouldShow ? <View style={styles.menuDot} /> : null;
+          })()}
         </View>
       </View>
 

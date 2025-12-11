@@ -1,0 +1,32 @@
+===========================================
+ИСПРАВЛЕНИЕ ОШИБКИ ts-node
+===========================================
+
+В SSH СЕССИИ НА СЕРВЕРЕ ВЫПОЛНИТЕ:
+
+# 1. Остановить backend
+pm2 stop livi-backend
+
+# 2. Перейти в директорию backend
+cd /opt/livi-app/backend
+
+# 3. Удалить node_modules и package-lock.json
+rm -rf node_modules package-lock.json
+
+# 4. Переустановить зависимости
+npm install
+
+# 5. Проверить, что ts-node установлен правильно
+ls -la node_modules/.bin/ts-node
+
+# 6. Перезапустить backend
+pm2 restart livi-backend
+
+# 7. Проверить логи
+pm2 logs livi-backend --lines 30
+
+# 8. Проверить статус
+pm2 status
+
+# 9. Проверить работу API
+curl http://localhost:3000/api/turn-credentials

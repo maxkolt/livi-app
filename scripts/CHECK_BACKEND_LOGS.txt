@@ -1,0 +1,26 @@
+===========================================
+ПРОВЕРКА ЛОГОВ BACKEND
+===========================================
+
+В SSH СЕССИИ ВЫПОЛНИТЕ:
+
+# 1. Подключиться к серверу
+ssh root@89.111.152.241
+# Пароль: y4IDFbSuHPqVRd2U
+
+# 2. Перейти в директорию backend
+cd /opt/livi-app/backend
+
+# 3. Проверить последние логи backend (ищем запросы friends и profile)
+pm2 logs livi-backend --lines 200 --nostream | grep -iE "friends|profile|unauthorized|userId" | tail -50
+
+# 4. Или посмотреть все последние логи
+pm2 logs livi-backend --lines 100 --nostream | tail -50
+
+# 5. Открыть логи в реальном времени (затем в приложении попробуйте загрузить друзей)
+pm2 logs livi-backend --lines 0
+
+# В логах должны появиться сообщения:
+# - "Friends fetched" - если запрос успешен
+# - "Unauthorized friends fetch" - если проблема с авторизацией
+# - "profile:me" - запрос профиля

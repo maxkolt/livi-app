@@ -168,6 +168,7 @@ export default function registerIdentitySockets(io: Server) {
         const inst = await Install.findOne({ installId }).lean();
         if (inst) {
           const userId = String((inst as any).user);
+          console.log(`[identity] Install found for ${installId}, checking user: ${userId}`);
           const exists = await User.exists({ _id: userId });
 
           if (!exists) {
@@ -175,15 +176,22 @@ export default function registerIdentitySockets(io: Server) {
             const incomingProfile = payload?.profile || {};
             const hasIncomingData = !!(incomingProfile.nick || incomingProfile.avatar);
 
-            if (hasIncomingData) {}
-
-            await User.create({
+            console.log(`[identity] User ${userId} not found, creating new user...`);
+            
+            const newUser = await User.create({
               _id: userId,
               nick: '', // ВСЕГДА пустой для нового пользователя
               avatar: '', // ВСЕГДА пустой для нового пользователя
               friends: [],
             });
+            console.log(`[identity] ✅ User created (recovered): ${userId}`, {
+              _id: String(newUser._id),
+              nick: newUser.nick,
+              friendsCount: newUser.friends?.length || 0,
+              dbName: mongoose.connection.db?.databaseName
+            });
           } else {
+            console.log(`[identity] User ${userId} already exists, skipping creation`);
             // Пользователь существует - можно обновлять профиль
             const $set = buildSetFromProfile(payload?.profile || undefined);
             if (Object.keys($set).length) {
@@ -207,14 +215,14 @@ export default function registerIdentitySockets(io: Server) {
         const incomingProfile = payload?.profile || {};
         const hasIncomingData = !!(incomingProfile.nick || incomingProfile.avatar);
 
-        if (hasIncomingData) {}
+        console.log(`[identity] Creating new user for installId: ${installId}, newUserId: ${newUserId}`);
 
         let session: ClientSession | null = null;
         try { session = await mongoose.startSession(); } catch {}
 
         const work = async (s?: ClientSession) => {
           const opt = s ? { session: s } : undefined;
-          await User.create(
+          const [newUser] = await User.create(
             [{
               _id: newUserId,
               nick: '', // ВСЕГДА пустой для нового пользователя
@@ -223,7 +231,19 @@ export default function registerIdentitySockets(io: Server) {
             }],
             opt as any
           );
-          await Install.create([{ installId, user: newUserId }], opt as any);
+          const [newInstall] = await Install.create([{ installId, user: newUserId }], opt as any);
+          console.log(`[identity] ✅ User created (new): ${newUserId}`, {
+            _id: String(newUser._id),
+            nick: newUser.nick,
+            friendsCount: newUser.friends?.length || 0,
+            installId: newInstall.installId,
+            dbName: mongoose.connection.db?.databaseName,
+            collection: 'users'
+          });
+          
+          // Дополнительная проверка - считаем пользователей после создания
+          const totalUsers = await User.countDocuments();
+          console.log(`[identity] 📊 Total users in database after creation: ${totalUsers}`);
         };
 
         if (session) {
@@ -245,7 +265,12 @@ export default function registerIdentitySockets(io: Server) {
         setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
         return;
       } catch (e: any) {
-        console.error(`[identity] attach error:`, e?.message || e);
+        console.error(`[identity] ❌ attach error:`, {
+          error: e?.message || String(e),
+          stack: e?.stack?.substring(0, 500),
+          installId,
+          socketId: sock.id
+        });
         ack?.({ ok: false, error: e?.message || 'server_error' });
         // Очищаем кэш при ошибке
         setTimeout(() => attachRequestCache.delete(cacheKey), 1000);

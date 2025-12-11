@@ -2,8 +2,25 @@
 import { MediaStream } from 'react-native-webrtc';
 
 export const isValidStream = (stream?: MediaStream | null): boolean => {
+  if (!stream) return false;
+  
   try {
-    return !!stream && typeof (stream as any).toURL === 'function' && (stream as any).getTracks?.().length > 0;
+    // КРИТИЧНО: На Android проверяем, что стрим не disposed перед использованием
+    // Нативный код может выбросить IllegalStateException если стрим уже disposed
+    try {
+      const streamId = stream.id;
+      if (!streamId) return false;
+    } catch (streamError: any) {
+      // Если стрим уже disposed, нативный код выбросит ошибку
+      if (streamError?.message?.includes('disposed') || streamError?.message?.includes('MediaStream')) {
+        return false;
+      }
+      // Пробрасываем другие ошибки
+      throw streamError;
+    }
+    
+    // Проверяем базовые свойства стрима
+    return typeof (stream as any).toURL === 'function' && (stream as any).getTracks?.().length > 0;
   } catch {
     return false;
   }

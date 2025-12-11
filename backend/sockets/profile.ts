@@ -11,16 +11,30 @@ export function registerProfileSockets(io: Server, socket: Socket) {
   socket.on('profile:me', async (_: any, ack?: Ack) => {
     try {
       const userId = socket.data.userId as string | undefined;
-      if (!userId) return ack?.({ ok: true, profile: {} }); // гость
+      console.log('[profile:me] Request received', { userId: userId || 'guest' });
+      if (!userId) {
+        console.log('[profile:me] No userId, returning empty profile for guest');
+        return ack?.({ ok: true, profile: {} }); // гость
+      }
       const u = await User.findById(userId).select('nick avatar avatarVer avatarB64 avatarThumbB64').lean();
-      ack?.({ ok: true, profile: u ? { 
+      const profile = u ? { 
         nick: u.nick, 
-        avatarUrl: u.avatar,
+        avatar: u.avatar, // Используем avatar вместо avatarUrl для совместимости
+        avatarUrl: u.avatar, // Оставляем для обратной совместимости
         avatarVer: (u as any).avatarVer || 0,
         avatarB64: (u as any).avatarB64 || '',
         avatarThumbB64: (u as any).avatarThumbB64 || ''
-      } as { nick?: string; avatarUrl?: string; avatarVer?: number; avatarB64?: string; avatarThumbB64?: string } : undefined });
+      } as { nick?: string; avatar?: string; avatarUrl?: string; avatarVer?: number; avatarB64?: string; avatarThumbB64?: string } : undefined;
+      console.log('[profile:me] Profile found', { 
+        userId, 
+        hasUser: !!u, 
+        nick: profile?.nick || '', 
+        hasAvatar: !!(profile?.avatarB64 || profile?.avatarThumbB64),
+        avatarVer: profile?.avatarVer || 0
+      });
+      ack?.({ ok: true, profile });
     } catch (e: any) {
+      console.error('[profile:me] Error:', e?.message || e);
       ack?.({ ok: true, profile: undefined }); // НЕ возвращаем ошибку, возвращаем undefined для профиля
     }
   });

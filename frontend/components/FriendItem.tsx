@@ -65,9 +65,11 @@ export default function FriendItem({ friend }: { friend: Friend }) {
   return (
     <TouchableOpacity
       onPress={() => {
+        // КРИТИЧНО: Передаем полный никнейм, не обрезаем до первой буквы
+        const fullNickname = (friend.nick && friend.nick.trim()) || '—';
         const navParams = {
           peerId: friend._id,
-          peerName: friend.nick,
+          peerName: fullNickname,
           peerAvatarVer: friend.avatarVer || 0, // передаем версию
           peerAvatarThumbB64: friend.avatarThumbB64 || '', // передаем миниатюру
           peerOnline: friend.online,

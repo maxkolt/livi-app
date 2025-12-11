@@ -124,6 +124,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     muteRemote?: boolean;
     navParams?: any; // ← кто нас вызвал (для корректного возврата)
   }) => {
+    console.log('[PiPContext] 🔥 showPiP вызван', {
+      callId: p.callId,
+      roomId: p.roomId,
+      partnerName: p.partnerName,
+      hasLocalStream: !!p.localStream,
+      hasRemoteStream: !!p.remoteStream,
+      muteLocal: p.muteLocal,
+      muteRemote: p.muteRemote
+    });
+    
     setCallId(p.callId);
     setRoomId(p.roomId);
     setPartnerName(p.partnerName || 'Друг');
@@ -140,6 +150,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (typeof p.muteRemote === 'boolean') setIsRemoteMuted(!!p.muteRemote);
     setLastNavParams(p.navParams); // сохраняем navParams для возврата
     setVisible(true);
+    
+    console.log('[PiPContext] ✅ PiP состояние установлено, visible=true');
   }, []);
 
   const hidePiP = useCallback(() => {
@@ -183,10 +195,29 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   }, []);
 
   const toggleRemoteAudio = useCallback(() => {
-    const audioTracks = remoteStreamRef.current?.getAudioTracks?.() ?? [];
-    const nextMuted = !isRemoteMuted;
-    audioTracks.forEach((t: any) => (t.enabled = !nextMuted));
-    setIsRemoteMuted(nextMuted);
+    // КРИТИЧНО: Вызываем функцию toggleRemoteAudio из VideoChat напрямую (как в эталонном файле)
+    // VideoChat.toggleRemoteAudio переключит трек и обновит состояние PiP
+    // Это нужно чтобы избежать конфликта между локальным переключением и переключением в VideoChat
+    try {
+      const toggleRemoteAudioFn = (global as any).__toggleRemoteAudioRef?.current;
+      if (toggleRemoteAudioFn && typeof toggleRemoteAudioFn === 'function') {
+        toggleRemoteAudioFn();
+        // Состояние isRemoteMuted обновится через pip.updatePiPState в VideoChat.toggleRemoteAudio
+      } else {
+        // Fallback: переключаем локально если функция не зарегистрирована
+        const audioTracks = remoteStreamRef.current?.getAudioTracks?.() ?? [];
+        const nextMuted = !isRemoteMuted;
+        audioTracks.forEach((t: any) => (t.enabled = !nextMuted));
+        setIsRemoteMuted(nextMuted);
+      }
+    } catch (e) {
+      console.warn('[PiPContext] Error calling VideoChat toggleRemoteAudio:', e);
+      // Fallback при ошибке
+      const audioTracks = remoteStreamRef.current?.getAudioTracks?.() ?? [];
+      const nextMuted = !isRemoteMuted;
+      audioTracks.forEach((t: any) => (t.enabled = !nextMuted));
+      setIsRemoteMuted(nextMuted);
+    }
   }, [isRemoteMuted]);
 
   const returnToCall = useCallback(() => {
@@ -198,59 +229,70 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       return;
     }
 
-    // КРИТИЧНО: Всегда используем onReturnToCall для навигации
-    // Это гарантирует правильную навигацию через App.tsx
-    if (callId && roomId) {
-      console.log('🔥 [PiPContext] Вызываем onReturnToCall', { callId, roomId });
-      navigatingRef.current = true;
-      
-      // Вызываем onReturnToCall который правильно навигирует через App.tsx
-      onReturnToCall?.(callId, roomId);
-      
-      // Скрываем PiP после небольшой задержки, чтобы навигация успела произойти
-      setTimeout(() => {
-        hidePiP();
-        navigatingRef.current = false;
-      }, 100);
-    } else {
-      console.warn('[PiPContext] returnToCall: No callId or roomId', { callId, roomId });
-      
-      // Fallback: пытаемся использовать навигацию напрямую
-      const nav = (global as any).__navRef;
-      if (nav && nav.isReady && nav.isReady()) {
-        try {
-          const params = {
-            ...lastNavParams,
-            resume: true,
-            fromPiP: true,
-            directCall: true,
-            directInitiator: undefined,
-            callId: callId || undefined,
-            roomId: roomId || undefined,
-          };
-          
-          navigatingRef.current = true;
-          nav.dispatch(
-            CommonActions.reset({
-              index: 1,
-              routes: [{ name: 'Home' as any }, { name: 'VideoChat' as any, params }],
-            })
-          );
-          
-          setTimeout(() => {
-            hidePiP();
-            navigatingRef.current = false;
-          }, 100);
-        } catch (e) {
-          console.error('[PiPContext] Navigation error:', e);
-          navigatingRef.current = false;
-          hidePiP();
-        }
-      } else {
-        console.warn('[PiPContext] Navigation not available, cannot return to call');
+    // КРИТИЧНО: Используем навигацию напрямую через глобальную ссылку (как в эталонном файле)
+    // Это гарантирует правильную навигацию с параметрами resume и fromPiP
+    const nav = (global as any).__navRef;
+    if (!nav || !callId || !roomId) {
+      // Fallback: используем onReturnToCall если navRef недоступен
+      if (callId && roomId) {
+        onReturnToCall?.(callId, roomId);
         hidePiP();
       }
+      return;
     }
+
+    // КРИТИЧНО: Проверяем что навигация готова перед использованием
+    if (!nav.isReady || !nav.isReady()) {
+      console.warn('[PiPContext] Navigation not ready, using onReturnToCall fallback');
+      if (callId && roomId) {
+        onReturnToCall?.(callId, roomId);
+        hidePiP();
+      }
+      return;
+    }
+
+    navigatingRef.current = true;
+
+    // КРИТИЧНО: Используем параметры из lastNavParams для правильного восстановления звонка
+    // Это гарантирует, что все параметры (peerUserId, partnerId и т.д.) будут восстановлены
+    const params = {
+      ...lastNavParams,
+      resume: true,
+      fromPiP: true,
+      directCall: true,
+      directInitiator: undefined,
+      callId: callId,
+      roomId: roomId,
+    };
+
+    // КРИТИЧНО: Используем CommonActions.reset для навигации (как в эталонном файле)
+    // стек: [Home, VideoChat], активен VideoChat
+    try {
+      nav.dispatch(
+        CommonActions.reset({
+          index: 1,
+          routes: [{ name: 'Home' as any }, { name: 'VideoChat' as any, params }],
+        })
+      );
+      console.log('[PiPContext] ✅ Navigated to VideoChat with resume params', { params });
+    } catch (e) {
+      console.error('[PiPContext] Navigation error:', e);
+      navigatingRef.current = false;
+      // Fallback на onReturnToCall при ошибке
+      if (callId && roomId) {
+        onReturnToCall?.(callId, roomId);
+      }
+      hidePiP();
+      return;
+    }
+
+    // КРИТИЧНО: НЕ скрываем PiP мгновенно - даём VideoChat фокус → он сам вызовет hidePiP()
+    // Это важно для правильного восстановления состояния звонка
+    // Скрываем PiP через небольшую задержку, чтобы навигация успела произойти
+    setTimeout(() => {
+      hidePiP();
+      navigatingRef.current = false;
+    }, 200);
   }, [callId, roomId, lastNavParams, onReturnToCall, hidePiP]);
 
   const endCall = useCallback(() => {

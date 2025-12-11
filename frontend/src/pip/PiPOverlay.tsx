@@ -16,6 +16,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePiP } from './PiPContext';
 import VoiceEqualizer from '../../components/VoiceEqualizer';
+import { logger } from '../../utils/logger';
 
 const UI = {
   bg: 'rgba(25,32,46,0.95)',  // LiVi dark
@@ -30,9 +31,12 @@ const UI = {
 export default function PiPOverlay() {
   const {
     visible,
+    callId,
+    roomId,
     partnerName,
     partnerAvatarUrl,
     remoteStream,
+    localStream,
     isMuted,
     isRemoteMuted,
     returnToCall,
@@ -125,9 +129,25 @@ export default function PiPOverlay() {
 
   // Убрали избыточное логирование для уменьшения шума
 
+  // КРИТИЧНО: Логируем показ PiP для отладки (до проверки visible)
+  useEffect(() => {
+    if (visible) {
+      logger.info('[PiPOverlay] ✅ Показываем PiP оверлей', {
+        visible,
+        callId,
+        roomId,
+        partnerName,
+        hasRemoteStream: !!remoteStream,
+        hasLocalStream: !!localStream
+      });
+    }
+  }, [visible, callId, roomId, partnerName, remoteStream, localStream]);
+  
   // ВАЖНО: Все хуки должны вызываться до раннего возврата
   // Если visible === false, возвращаем null, но только после всех хуков
-  if (!visible) return null;
+  if (!visible) {
+    return null;
+  }
 
   // Проверяем валидность URL аватара
   const hasValidAvatar = partnerAvatarUrl && 

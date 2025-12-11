@@ -1,0 +1,40 @@
+===========================================
+ОЧИСТКА ДИСКА И УСТАНОВКА NPM
+===========================================
+
+В SSH СЕССИИ ВЫПОЛНИТЕ:
+
+# 1. Очистить кэш apt
+apt clean
+apt autoclean
+
+# 2. Очистить старые логи
+journalctl --vacuum-time=3d
+journalctl --vacuum-size=100M
+
+# 3. Удалить неиспользуемые пакеты
+apt autoremove -y
+
+# 4. Проверить свободное место
+df -h
+
+# 5. Теперь установить npm (должно быть достаточно места)
+apt install -y npm
+
+# 6. Проверить npm
+npm --version
+
+# 7. Установить PM2
+npm install -g pm2
+
+# 8. Проверить PM2
+pm2 --version
+
+# 9. Запустить backend
+cd /opt/livi-app/backend
+npm install
+pm2 delete livi-backend 2>/dev/null || true
+pm2 start npm --name "livi-backend" -- run start
+pm2 save
+pm2 startup
+pm2 status

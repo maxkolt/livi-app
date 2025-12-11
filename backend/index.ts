@@ -25,6 +25,7 @@ import { setIoInstance } from './utils/ioInstance';
 import User from './models/User';
 import Install from './models/Install';
 import createChatRouter from './routes/chat';
+import { buildAvatarDataUris } from './utils/avatars';
 
 
 /* ========= Типы ========= */
@@ -54,7 +55,7 @@ if (!MONGO_URI) {
 
 // TURN/STUN configuration (for ephemeral credentials)
 const TURN_SECRET = process.env.TURN_SECRET || process.env.TURN_SHARED_SECRET || '';
-const TURN_HOST = (process.env.TURN_HOST || '79.174.84.108').trim();
+const TURN_HOST = (process.env.TURN_HOST || '89.111.152.241').trim();
 const TURN_PORT = Number(process.env.TURN_PORT || 3478);
 const STUN_HOST = (process.env.STUN_HOST || TURN_HOST).trim();
 const TURN_ENABLE_TCP = String(process.env.TURN_ENABLE_TCP || '1') === '1';
@@ -305,10 +306,38 @@ app.get('/api/exists/:userId', async (req, res) => {
 mongoose
   .connect(MONGO_URI)
   .then(async () => {
-    logger.info('MongoDB connected successfully');
+    const dbName = mongoose.connection.db?.databaseName;
+    logger.info('MongoDB connected successfully', {
+      uri: MONGO_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'), // Скрываем пароль
+      dbName: dbName,
+      readyState: mongoose.connection.readyState,
+      host: mongoose.connection.host,
+      port: mongoose.connection.port
+    });
+    
+    // Проверяем количество пользователей при старте
+    try {
+      const User = (await import('./models/User')).default;
+      const userCount = await User.countDocuments();
+      logger.info(`[MongoDB] Current users count in database "${dbName}": ${userCount}`);
+      
+      // Также проверяем коллекцию напрямую
+      const directCount = await mongoose.connection.db.collection('users').countDocuments();
+      logger.info(`[MongoDB] Direct collection count (users): ${directCount}`);
+      
+      if (userCount === 0 && directCount === 0) {
+        logger.warn('[MongoDB] ⚠️  База данных пуста - пользователей нет!');
+        logger.warn('[MongoDB] Убедитесь, что используется правильная БД:', dbName);
+      }
+    } catch (e) {
+      logger.warn('[MongoDB] Could not check user count:', e);
+    }
   })
   .catch((err) => {
-    logger.error('MongoDB connection failed:', err);
+    logger.error('MongoDB connection failed:', {
+      error: err?.message || String(err),
+      uri: MONGO_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')
+    });
     process.exit(1);
   });
 
@@ -698,7 +727,9 @@ io.on('connection', async (sock: AuthedSocket) => {
   // ВОТ ЗДЕСЬ: читаем профиль (ник + нормализованный https-аватар)
   sock.on('profile:me', async (_: any, ack?: Function) => {
     const me = String((sock as any).data?.userId || '');
+    console.log('[profile:me] Request received (index.ts)', { userId: me || 'guest' });
     if (!me) {
+      console.log('[profile:me] No userId, returning empty profile for guest');
       return ack?.({ ok: true, profile: {} }); // гость
     }
     const u = (await User.findById(me).select('nick avatar avatarVer avatarB64 avatarThumbB64').lean()) as any;
@@ -706,7 +737,15 @@ io.on('connection', async (sock: AuthedSocket) => {
     const avatarVer = u?.avatarVer || 0;
     const avatarB64 = u?.avatarB64 || '';
     const avatarThumbB64 = u?.avatarThumbB64 || '';
-    ack?.({ ok: true, profile: u ? { nick: u.nick || '', avatar: rawAvatar, avatarVer, avatarB64, avatarThumbB64 } : {} });
+    const profile = u ? { nick: u.nick || '', avatar: rawAvatar, avatarVer, avatarB64, avatarThumbB64 } : {};
+    console.log('[profile:me] Profile found (index.ts)', { 
+      userId: me, 
+      hasUser: !!u, 
+      nick: profile.nick || '', 
+      hasAvatar: !!(avatarB64 || avatarThumbB64),
+      avatarVer 
+    });
+    ack?.({ ok: true, profile });
   });
 
   // ВОТ ЗДЕСЬ: обновление профиля (Ник/Аватар)
@@ -721,7 +760,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       // текущий документ
       const current = (await User.findById(me)
-        .select('nick avatar avatarVer friends')
+        .select('nick avatar avatarVer avatarB64 avatarThumbB64 friends')
         .lean()) as any;
       if (!current) {
         if (typeof ack === 'function') ack({ ok: false, error: 'not_found' });
@@ -729,15 +768,17 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
 
       const $set: Record<string, any> = {};
+      const $inc: Record<string, number> = {};
       let changed = false;
 
       if (Object.prototype.hasOwnProperty.call(patch, 'nick')) {
-        $set.nick = String(patch.nick ?? '').trim();
+        const newNick = String(patch.nick ?? '').trim();
+        if (newNick !== (current.nick || '')) {
+          $set.nick = newNick;
+          changed = true;
+        }
       }
 
-      let wantsUnsetImage = false;
-      let streamImage: string | undefined;
-      
       // Обрабатываем только поле avatar
       const avatarField = Object.prototype.hasOwnProperty.call(patch, 'avatar') ? 'avatar' : null;
       
@@ -746,34 +787,79 @@ io.on('connection', async (sock: AuthedSocket) => {
         const raw = typeof rawIn === 'string' ? rawIn.trim() : '';
         const isHttp = /^https?:\/\//i.test(raw);
         const isEmpty = rawIn === '' || rawIn === null;
+        const currentAvatar = String(current.avatar || '');
       
         if (isEmpty) {
           // явное удаление аватара
-          $set.avatar = '';
-          wantsUnsetImage = true;
-        } else if (isHttp) {
-          // сохраняем только https
-          $set.avatar = raw;
-          streamImage = raw;
+          if (currentAvatar !== '' || current.avatarB64 || current.avatarThumbB64) {
+            $set.avatar = '';
+            $set.avatarB64 = '';
+            $set.avatarThumbB64 = '';
+            $inc.avatarVer = 1;
+            changed = true;
+          }
+        } else if (isHttp && raw !== currentAvatar) {
+          // новый HTTPS URL - скачиваем и обрабатываем
+          try {
+            // Скачиваем изображение с таймаутом
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            
+            const response = await fetch(raw, { 
+              signal: controller.signal,
+              headers: { 'User-Agent': 'LiVi-App/1.0' }
+            } as any);
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+              throw new Error(`Failed to download avatar: ${response.status}`);
+            }
+
+            const arrayBuffer = await response.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            const base64 = buffer.toString('base64');
+            
+            // Обрабатываем изображение и создаем миниатюры
+            const { fullB64, thumbB64 } = await buildAvatarDataUris(base64);
+            
+            $set.avatar = raw;
+            $set.avatarB64 = fullB64;
+            $set.avatarThumbB64 = thumbB64;
+            $inc.avatarVer = 1;
+            changed = true;
+          } catch (downloadError: any) {
+            logger.error('Failed to download/process avatar:', { 
+              userId: me, 
+              url: raw, 
+              error: downloadError?.message || downloadError 
+            });
+            // Если не удалось скачать, все равно сохраняем URL, но не обновляем версию
+            // Это позволит пользователю видеть URL, но друзья не получат обновление
+            $set.avatar = raw;
+            changed = true;
+          }
         } else {
           // file://, ph://, content://, data: — игнорируем
         }
       }
 
-      if (Object.keys($set).length) {
-        await User.updateOne({ _id: me }, { $set });
-        changed = true;
+      // Обновляем базу данных
+      if (Object.keys($set).length > 0 || Object.keys($inc).length > 0) {
+        const updateOp: any = {};
+        if (Object.keys($set).length > 0) updateOp.$set = $set;
+        if (Object.keys($inc).length > 0) updateOp.$inc = $inc;
+        await User.updateOne({ _id: me }, updateOp);
       }
 
+      // Получаем свежие данные после обновления
       const fresh = (changed
-        ? await User.findById(me).select('nick avatar avatarVer avatarThumbB64 friends').lean()
+        ? await User.findById(me).select('nick avatar avatarVer avatarB64 avatarThumbB64 friends').lean()
         : current) as any;
 
       const rawOut = String(fresh?.avatar || '');
       const avatarVer = fresh?.avatarVer || 0;
       const avatarThumbB64 = fresh?.avatarThumbB64 || '';
-
-      // Stream sync убран - больше не используется
 
       if (typeof ack === 'function') {
         const response = { ok: true, profile: { nick: fresh?.nick || '', avatar: rawOut, avatarVer, avatarThumbB64 } };
@@ -782,7 +868,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.debug('Profile update called without ack function', { socketId: sock.id, userId: me });
       }
 
-      // пушим друзьям
+      // Отправляем обновление друзьям (при изменении никнейма или аватара)
       if (changed && Array.isArray(fresh?.friends) && (fresh!.friends as any[]).length) {
         for (const fid of fresh!.friends as any[]) {
           try {

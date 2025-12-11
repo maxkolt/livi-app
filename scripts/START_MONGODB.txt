@@ -1,0 +1,32 @@
+===========================================
+ЗАПУСК MONGODB
+===========================================
+
+В SSH СЕССИИ НА СЕРВЕРЕ ВЫПОЛНИТЕ:
+
+# 1. Проверить статус MongoDB
+systemctl status mongod
+
+# 2. Запустить MongoDB
+systemctl start mongod
+
+# 3. Включить автозапуск MongoDB
+systemctl enable mongod
+
+# 4. Проверить, что MongoDB запущен
+systemctl status mongod
+
+# 5. Проверить, что MongoDB слушает на порту 27017
+netstat -tuln | grep 27017 || ss -tuln | grep 27017
+
+# 6. Перезапустить backend (чтобы он подключился к MongoDB)
+pm2 restart livi-backend
+
+# 7. Проверить логи backend
+pm2 logs livi-backend --lines 20
+
+# 8. Проверить работу API
+curl http://localhost:3000/api/turn-credentials
+
+# 9. Проверить доступность снаружи (с вашего компьютера)
+# curl http://89.111.152.241:3000/api/turn-credentials

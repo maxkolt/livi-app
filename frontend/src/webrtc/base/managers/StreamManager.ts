@@ -293,6 +293,8 @@ export class StreamManager {
    * Не очищает стрим если соединение активно
    */
   stopRemoteStreamInternal(pc: RTCPeerConnection | null, emit?: (event: string, ...args: any[]) => void): void {
+    // КРИТИЧНО: На Android не удаляем стрим, если PC еще активен
+    // Нативный код может обрабатывать событие ontrack асинхронно после удаления стрима
     if (this.remoteStreamRef && pc && pc.signalingState !== 'closed' && (pc as any).connectionState !== 'closed') {
       const isPcActive = pc.iceConnectionState === 'checking' || 
                         pc.iceConnectionState === 'connected' || 
@@ -307,12 +309,29 @@ export class StreamManager {
     
     if (this.remoteStreamRef) {
       try {
-        const tracks = (this.remoteStreamRef as any)?.getTracks?.() || [];
+        // КРИТИЧНО: На Android проверяем, что стрим еще не удален перед остановкой треков
+        // Нативный код может выбросить IllegalStateException если стрим уже disposed
+        let tracks: any[] = [];
+        try {
+          tracks = (this.remoteStreamRef as any)?.getTracks?.() || [];
+        } catch (streamError: any) {
+          // Если стрим уже disposed, просто очищаем ссылку
+          if (streamError?.message?.includes('disposed') || streamError?.message?.includes('MediaStream')) {
+            this.remoteStreamRef = null;
+            this.remoteStreamEstablishedAtRef = 0;
+            this.setRemoteStream(null, emit);
+            return;
+          }
+          throw streamError; // Пробрасываем другие ошибки
+        }
+        
         tracks.forEach((t: any) => {
           try {
-            t.enabled = false;
-            t.stop();
-            try { (t as any).release?.(); } catch {}
+            if (t && t.readyState !== 'ended') {
+              t.enabled = false;
+              t.stop();
+              try { (t as any).release?.(); } catch {}
+            }
           } catch {}
         });
       } catch {}

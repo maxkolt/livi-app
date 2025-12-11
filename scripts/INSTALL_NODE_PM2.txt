@@ -1,0 +1,32 @@
+===========================================
+УСТАНОВКА NODE.JS И PM2
+===========================================
+
+В SSH СЕССИИ ВЫПОЛНИТЕ:
+
+# 1. Проверить, установлен ли Node.js
+which node
+node --version
+
+# 2. Если не установлен, установить Node.js
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt install -y nodejs
+
+# 3. Проверить установку
+node --version
+npm --version
+
+# 4. Установить PM2 глобально
+npm install -g pm2
+
+# 5. Проверить PM2
+pm2 --version
+
+# 6. Теперь можно установить зависимости и запустить backend
+cd /opt/livi-app/backend
+npm install
+pm2 delete livi-backend 2>/dev/null || true
+pm2 start npm --name "livi-backend" -- run start
+pm2 save
+pm2 startup
+pm2 status

@@ -176,11 +176,19 @@ export const useIncomingCall = ({
 
   // Обработка call:declined через socket
   useEffect(() => {
-    const handleDeclined = () => {
+    const handleDeclined = async (d?: any) => {
       // ВАЖНО: Это событие ТОЛЬКО для звонков друзей, НЕ для рандомного чата
       const isFriendCall = !!routeParams?.directCall || friendCallAccepted || !!currentCallIdRef.current;
       if (!isFriendCall) {
         return;
+      }
+
+      // КРИТИЧНО: Увеличиваем счетчик пропущенных только если отменил инициатор, а не мы сами
+      // (как в эталонном файле)
+      const from = d?.from ? String(d.from) : undefined;
+      if (from && from !== String(myUserId || '')) {
+        await incMissed(from);
+        logger.info('[useIncomingCall] call:declined - увеличили счетчик пропущенных (отменил инициатор)', { from });
       }
 
       setIncomingOverlay(false);
@@ -193,7 +201,7 @@ export const useIncomingCall = ({
     return () => {
       socket.off('call:declined', handleDeclined);
     };
-  }, [routeParams?.directCall, friendCallAccepted, currentCallIdRef]);
+  }, [routeParams?.directCall, friendCallAccepted, myUserId, incMissed, currentCallIdRef]);
 
   // Обработка события incomingCall из session
   // Используем ref для session, чтобы не пересоздавать подписки при каждом изменении

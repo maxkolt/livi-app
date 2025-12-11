@@ -484,9 +484,22 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Выключить камеру при сворачивании приложения (AppState === 'background')
    * Это отличается от PiP - при сворачивании камера выключается и показывается "Отошел"
    * Микрофон (звук) НЕ выключается - продолжает работать в фоне
+   * КРИТИЧНО: PiP НЕ показывается в фоне - только аудиозвонок продолжается
    */
   handleAppBackground(): void {
-    if (this.endedRef) return; // После завершения звонка ничего не трогаем
+    if (this.endedRef) {
+      logger.debug('[BaseWebRTCSession] handleAppBackground: звонок завершен, игнорируем');
+      return; // После завершения звонка ничего не трогаем
+    }
+    
+    logger.info('[BaseWebRTCSession] 🔄 Переход в фоновый режим', {
+      roomId: this.roomIdRef,
+      callId: this.callIdRef,
+      partnerId: this.partnerIdRef,
+      isInPiP: this.pipManager.isInPiP(),
+      timestamp: Date.now()
+    });
+    
     const localStream = this.streamManager.getLocalStream();
     if (localStream) {
       const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
@@ -521,6 +534,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
                 payload.roomId = this.roomIdRef;
               }
               socket.emit('cam-toggle', payload);
+              logger.info('[BaseWebRTCSession] ✅ Отправлен cam-toggle(false) в фоне - показываем статус "Отошёл"');
             } catch (e) {
               logger.warn('[BaseWebRTCSession] Error emitting cam-toggle on background:', e);
             }
@@ -533,21 +547,26 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
             callId: this.callIdRef || this.roomIdRef,
             partnerId: this.partnerIdRef
           });
+          logger.info('[BaseWebRTCSession] ✅ Отправлено bg:entered - партнер увидит статус "Отошёл"');
         } catch (e) {
           logger.warn('[BaseWebRTCSession] Error emitting bg:entered:', e);
         }
         
-        logger.info('[BaseWebRTCSession] Камера выключена при сворачивании приложения', {
+        logger.info('[BaseWebRTCSession] ✅ Камера выключена при сворачивании приложения - аудиозвонок продолжается', {
           audioTrackEnabled: audioTrack?.enabled,
-          audioTrackState: audioTrack?.readyState
+          audioTrackState: audioTrack?.readyState,
+          videoDisabled: true,
+          audioContinues: true
         });
       }
       
       // Убеждаемся, что микрофон остается включенным
       if (audioTrack && !audioTrack.enabled) {
         audioTrack.enabled = true;
-        logger.info('[BaseWebRTCSession] Микрофон включен при сворачивании приложения (должен работать в фоне)');
+        logger.info('[BaseWebRTCSession] ✅ Микрофон включен при сворачивании приложения (должен работать в фоне)');
       }
+    } else {
+      logger.warn('[BaseWebRTCSession] handleAppBackground: нет локального стрима');
     }
   }
   
@@ -556,7 +575,18 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
    * Микрофон уже работает в фоне, его не нужно восстанавливать
    */
   handleAppForeground(): void {
-    if (this.endedRef) return; // После завершения звонка не восстанавливаем камеру
+    if (this.endedRef) {
+      logger.debug('[BaseWebRTCSession] handleAppForeground: звонок завершен, игнорируем');
+      return; // После завершения звонка не восстанавливаем камеру
+    }
+    
+    logger.info('[BaseWebRTCSession] 🔄 Возврат из фонового режима', {
+      roomId: this.roomIdRef,
+      callId: this.callIdRef,
+      partnerId: this.partnerIdRef,
+      timestamp: Date.now()
+    });
+    
     const localStream = this.streamManager.getLocalStream();
     if (localStream) {
       const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
@@ -569,7 +599,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         this.config.callbacks.onCamStateChange?.(true);
         this.config.onCamStateChange?.(true);
         
-        // Отправляем cam-toggle(true) партнеру
+        // Отправляем cam-toggle(true) партнеру - убираем статус "Отошёл"
         if (this.roomIdRef) {
           try {
             const payload: any = { enabled: true, from: socket.id };
@@ -577,6 +607,7 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
               payload.roomId = this.roomIdRef;
             }
             socket.emit('cam-toggle', payload);
+            logger.info('[BaseWebRTCSession] ✅ Отправлен cam-toggle(true) при возврате из фона - убираем статус "Отошёл"');
           } catch (e) {
             logger.warn('[BaseWebRTCSession] Error emitting cam-toggle on foreground:', e);
           }
@@ -915,15 +946,50 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
           return;
         }
         
+        // КРИТИЧНО: Проверяем состояние PC перед обработкой события
+        // На Android нативный код может пытаться получить ID из уже удаленного стрима
+        if (pc.signalingState === 'closed' || (pc as any).connectionState === 'closed') {
+          logger.warn('[BaseWebRTCSession] PC закрыт, игнорируем ontrack событие');
+          return;
+        }
+        
         // КРИТИЧНО: Получаем стрим из события ontrack (как в минимальном коде)
         // event.streams[0] - это стандартный способ получения стрима
         const stream = e?.streams?.[0] ?? e?.stream;
         const track = e?.track;
         
+        // КРИТИЧНО: На Android проверяем, что стрим не удален перед использованием
+        // Нативный код может пытаться получить ID из уже disposed стрима
+        if (stream && Platform.OS === 'android') {
+          try {
+            // Проверяем доступность стрима через try-catch
+            const streamId = stream.id;
+            if (!streamId) {
+              logger.warn('[BaseWebRTCSession] Стрим не имеет ID, возможно уже удален');
+              return;
+            }
+          } catch (streamError: any) {
+            // Если стрим уже disposed, нативный код выбросит IllegalStateException
+            if (streamError?.message?.includes('disposed') || streamError?.message?.includes('MediaStream')) {
+              logger.warn('[BaseWebRTCSession] Стрим уже удален (disposed), игнорируем ontrack событие');
+              return;
+            }
+            throw streamError; // Пробрасываем другие ошибки
+          }
+        }
+        
+        // КРИТИЧНО: Безопасно получаем ID стрима для логов (на Android может быть disposed)
+        let safeStreamId: string | undefined;
+        try {
+          safeStreamId = stream?.id;
+        } catch {
+          safeStreamId = undefined;
+        }
+        
         logger.info('[BaseWebRTCSession] 📥 ontrack событие получено', {
           hasStream: !!stream,
           hasTrack: !!track,
-          streamId: stream?.id,
+          streamId: safeStreamId,
           trackId: track?.id,
           trackKind: track?.kind || (track as any)?.type,
           streamsCount: e?.streams?.length || 0
@@ -1542,13 +1608,16 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
           });
         }
         
-        // Эмитим событие
-        logger.info('[BaseWebRTCSession] 📤 Emitting remoteStream event из receivers', {
-          streamId: stream.id,
-          hasVideoTrack: hasVideoTrack,
-          hasAudioTrack: hasAudioTrack
+        // КРИТИЧНО: Устанавливаем remoteStream через streamManager для централизованного управления
+        this.applyRemoteStream(stream, (event, ...args) => {
+          logger.info('[BaseWebRTCSession] 📤 Emitting remoteStream event из receivers', {
+            event,
+            streamId: stream.id,
+            hasVideoTrack: hasVideoTrack,
+            hasAudioTrack: hasAudioTrack
+          });
+          this.emit(event, ...args);
         });
-        this.emit('remoteStream', stream);
         
         // КРИТИЧНО: Обновляем remoteViewKey при установке удаленного стрима из receivers
         // Это гарантирует обновление видео в UI
@@ -2421,8 +2490,22 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
     // Создаем или получаем PC
     let pcForOffer = this.peerRef;
     if (!pcForOffer) {
-      pcForOffer = await this.ensurePcWithLocal(stream);
+      // На Android может потребоваться больше времени для создания PC
+      // Пробуем несколько раз с увеличивающейся задержкой
+      let attempts = 0;
+      const maxAttempts = 3;
+      while (!pcForOffer && attempts < maxAttempts) {
+        if (attempts > 0) {
+          const delay = 500 * (attempts + 1); // 500ms, 1000ms, 1500ms
+          logger.info(`[BaseWebRTCSession] Retry ${attempts}/${maxAttempts} создания PC для offer, задержка ${delay}ms`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        pcForOffer = await this.ensurePcWithLocal(stream);
+        attempts++;
+      }
+      
       if (!pcForOffer) {
+        logger.error('[BaseWebRTCSession] Не удалось создать PC для обработки offer после всех попыток');
         this.iceAndSignalingManager.markOfferProcessed(offerKey);
         return;
       }
@@ -2472,6 +2555,18 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
         
         // Создаем и отправляем answer
         await this.createAndSendAnswer(from, roomId);
+        
+        // КРИТИЧНО: После установки answer проверяем receivers для remote stream
+        // У принимающего звонок remote stream может быть уже в PC после setRemoteDescription,
+        // но ontrack может еще не сработать или сработать позже
+        // Проверяем через небольшую задержку, чтобы дать время на установку соединения
+        setTimeout(() => {
+          const existingRemoteStream = this.streamManager.getRemoteStream();
+          if (!existingRemoteStream && pcForOffer.signalingState !== 'closed' && (pcForOffer as any).connectionState !== 'closed') {
+            logger.info('[BaseWebRTCSession] Проверяем receivers для remote stream после обработки offer (принимающий звонок)');
+            this.checkReceiversForRemoteStream(pcForOffer);
+          }
+        }, 300);
       } catch (error: any) {
         const errorMsg = String(error?.message || '');
         if (!errorMsg.includes('closed') && !errorMsg.includes('null')) {
@@ -2526,6 +2621,17 @@ export abstract class BaseWebRTCSession extends SimpleEventEmitter {
       
       // Прожигаем отложенные ICE кандидаты
       await this.flushIceFor(from);
+      
+      // КРИТИЧНО: После установки answer проверяем receivers для remote stream
+      // У принимающего звонок remote stream может быть уже в PC, но не установлен в streamManager
+      // Это происходит если offer был обработан до acceptCall или если ontrack еще не сработал
+      setTimeout(() => {
+        const existingRemoteStream = this.streamManager.getRemoteStream();
+        if (!existingRemoteStream && pc.signalingState !== 'closed' && (pc as any).connectionState !== 'closed') {
+          logger.info('[BaseWebRTCSession] Проверяем receivers для remote stream после установки answer (базовый класс)');
+          this.checkReceiversForRemoteStream(pc);
+        }
+      }, 200);
     } catch (e) {
       logger.error('[BaseWebRTCSession] Error creating/sending answer:', e);
     }

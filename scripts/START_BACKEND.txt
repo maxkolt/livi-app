@@ -1,0 +1,27 @@
+===========================================
+ЗАПУСК BACKEND
+===========================================
+
+В SSH СЕССИИ (вы уже в /opt/livi-app/backend):
+
+# 1. Установить зависимости
+npm install
+
+# 2. Запустить backend через PM2
+pm2 delete livi-backend 2>/dev/null || true
+pm2 start npm --name "livi-backend" -- run start
+
+# 3. Сохранить конфигурацию PM2
+pm2 save
+
+# 4. Настроить автозапуск при перезагрузке
+pm2 startup
+
+# 5. Проверить статус
+pm2 status
+
+# 6. Посмотреть логи
+pm2 logs livi-backend --lines 50
+
+# 7. Проверить работу API
+curl http://localhost:3000/api/turn-credentials

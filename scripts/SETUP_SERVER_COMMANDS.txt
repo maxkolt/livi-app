@@ -1,0 +1,78 @@
+===========================================
+КОМАНДЫ ДЛЯ ВЫПОЛНЕНИЯ НА СЕРВЕРЕ
+===========================================
+
+Выполните эти команды по порядку в вашей SSH сессии (root@89.111.152.241):
+
+
+1. ОЧИСТКА ДИСКА (важно - диск заполнен на 95.8%):
+   apt clean
+   journalctl --vacuum-time=7d
+   docker system prune -a -f 2>/dev/null || true
+
+
+2. УСТАНОВКА NODE.JS:
+   node --version || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt install -y nodejs)
+
+
+3. УСТАНОВКА MONGODB:
+   mongod --version || (curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg --dearmor && echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-7.0.list && apt update && apt install -y mongodb-org && systemctl enable mongod && systemctl start mongod)
+
+
+4. ЗАПУСК MONGODB:
+   systemctl start mongod
+   systemctl enable mongod
+
+
+5. УСТАНОВКА PM2:
+   npm install -g pm2
+
+
+6. СОЗДАНИЕ ДИРЕКТОРИИ:
+   mkdir -p /opt/livi-app/backend
+   cd /opt/livi-app/backend
+
+
+7. СОЗДАНИЕ .env ФАЙЛА:
+   cat > /opt/livi-app/backend/.env << 'EOF'
+PORT=3000
+HOST=0.0.0.0
+MONGO_URI=mongodb://localhost:27017/livi-app
+EOF
+
+
+8. ОТКРЫТИЕ ПОРТА 3000:
+   ufw allow 3000/tcp || iptables -A INPUT -p tcp --dport 3000 -j ACCEPT || echo "Откройте порт вручную в панели управления"
+
+
+===========================================
+ЗАГРУЗКА ФАЙЛОВ BACKEND
+===========================================
+
+Теперь в НОВОМ терминале на вашем компьютере выполните:
+
+cd /Users/maximkoltovich/LiVi/livi-app
+scp -r backend/* root@89.111.152.241:/opt/livi-app/backend/
+
+
+===========================================
+УСТАНОВКА ЗАВИСИМОСТЕЙ И ЗАПУСК
+===========================================
+
+Вернитесь в SSH сессию и выполните:
+
+cd /opt/livi-app/backend
+npm install
+pm2 delete livi-backend 2>/dev/null || true
+pm2 start npm --name "livi-backend" -- run start
+pm2 save
+pm2 startup
+
+
+===========================================
+ПРОВЕРКА
+===========================================
+
+pm2 status
+pm2 logs livi-backend
+curl http://localhost:3000

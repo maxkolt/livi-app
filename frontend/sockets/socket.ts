@@ -45,9 +45,13 @@ import { Platform } from "react-native";
 import { getInstallId } from "../utils/installId";
 
 /* ========= Server URL ========= */
-import { SERVER_CONFIG } from '../src/config/server';
+// Получаем BASE_URL из переменных окружения
+// Приоритет: платформо-специфичная переменная > общая переменная > fallback
+const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
+const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
+const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
 
-export const API_BASE = SERVER_CONFIG.BASE_URL;
+export const API_BASE = (Platform.OS === 'android' ? ANDROID_URL : IOS_URL).replace(/\/+$/, '');
 
 /* ========= helpers ========= */
 const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(s);
@@ -167,6 +171,12 @@ async function boot() {
         logger.debug('Reauth successful');
       } else {
         logger.warn('Reauth failed:', reauthResponse?.error);
+        // Если пользователь не найден на сервере - очищаем локальный userId и создаем нового
+        if (reauthResponse?.error === 'user_not_found') {
+          logger.warn('User not found on server, clearing local userId and creating new user...');
+          clearCurrentUserId();
+          await createUser();
+        }
       }
     } catch (e) {
       logger.warn('Reauth error:', e);
@@ -193,6 +203,12 @@ socket.on("connect", async () => {
         console.log('[socket] Reauth successful after connect');
       } else {
         console.warn('[socket] Reauth failed after connect:', reauthResponse?.error);
+        // Если пользователь не найден на сервере - очищаем локальный userId и создаем нового
+        if (reauthResponse?.error === 'user_not_found') {
+          console.warn('[socket] User not found on server, clearing local userId and creating new user...');
+          clearCurrentUserId();
+          await createUser();
+        }
       }
     } catch (e) {
       console.warn('[socket] Reauth error after connect:', e);
@@ -604,6 +620,9 @@ export async function attachUserId(userId: string) {
 const userExistsCache = new Map<string, { result: boolean; timestamp: number }>();
 const USER_EXISTS_CACHE_DURATION = 30000; // 30 секунд
 
+// Защита от одновременных вызовов для одного userId
+const pendingChecks = new Map<string, Promise<boolean | null>>();
+
 // Функция для проверки существования пользователя с retry и кэшированием
 export async function checkUserExists(userId: string): Promise<boolean | null> {
   // Проверяем кэш
@@ -613,56 +632,123 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
     return cached.result;
   }
   
+  // Защита от одновременных вызовов - если уже есть запрос для этого userId, ждем его
+  const pending = pendingChecks.get(userId);
+  if (pending) {
+    console.log('[checkUserExists] Waiting for pending check for:', userId);
+    return pending;
+  }
+  
+  // Создаем новый запрос
+  const checkPromise = (async () => {
+    try {
   console.log('[checkUserExists] Checking user:', userId);
   
-  // Retry до 2 раз с задержкой (уменьшили с 3 до 2)
+      // ПРИОРИТЕТ: Используем socket.io если подключен, иначе HTTP
+      if (socketInstance?.connected) {
+        try {
+          const socketResult = await checkUserExistsSocket(userId);
+          if (socketResult?.ok !== undefined) {
+            const exists = socketResult.exists ?? false;
+            userExistsCache.set(userId, { result: exists, timestamp: Date.now() });
+            console.log('[checkUserExists] User exists (via socket):', exists);
+            return exists;
+          }
+        } catch (socketError) {
+          // Не логируем как warning - это нормально если socket временно недоступен
+          console.log('[checkUserExists] Socket check failed, falling back to HTTP');
+        }
+      }
+      
+      // Fallback: HTTP запрос с retry (только если socket не работает)
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      console.log(`[checkUserExists] Attempt ${attempt}/2...`);
+          // Логируем только первую попытку, чтобы не засорять логи
+          if (attempt === 1) {
+            console.log(`[checkUserExists] Attempt ${attempt}/2 (HTTP)...`);
+          }
+          
+          // Создаем AbortController для timeout (fallback для старых версий)
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000);
       
       const response = await fetch(`${API_BASE}/api/exists/${userId}`, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal
       });
+          
+          clearTimeout(timeoutId);
       
       if (!response.ok) {
-        console.warn(`[checkUserExists] Attempt ${attempt} failed, status:`, response.status);
+            if (attempt === 2) {
+              console.warn(`[checkUserExists] HTTP failed after ${attempt} attempts, status:`, response.status);
+            }
         if (attempt < 2) {
-          await new Promise(resolve => setTimeout(resolve, 500)); // Уменьшили задержку до 500мс
+              await new Promise(resolve => setTimeout(resolve, 500));
           continue;
         }
-        // Если все попытки провалились - возвращаем null (неизвестно)
         return null;
       }
       
       const data = await response.json();
       if (data.ok) {
-        console.log('[checkUserExists] User exists:', data.exists);
-        // Сохраняем в кэш
+            console.log('[checkUserExists] User exists (via HTTP):', data.exists);
         userExistsCache.set(userId, { result: data.exists, timestamp: Date.now() });
         return data.exists;
       }
-    } catch (e) {
-      console.warn(`[checkUserExists] Attempt ${attempt} error:`, e);
+        } catch (e: any) {
+          // Логируем только финальную ошибку, не каждую попытку
+          if (attempt === 2) {
+            const errorMsg = e?.message || String(e);
+            // Не логируем как warning если это просто network error - это нормально для мобильных
+            if (errorMsg.includes('Network request failed') || errorMsg.includes('timeout')) {
+              console.log(`[checkUserExists] Network unavailable (attempt ${attempt}/2), will retry later`);
+            } else {
+              console.warn(`[checkUserExists] HTTP error (attempt ${attempt}/2):`, errorMsg);
+            }
+          }
       if (attempt < 2) {
-        await new Promise(resolve => setTimeout(resolve, 500)); // Уменьшили задержку до 500мс
+            await new Promise(resolve => setTimeout(resolve, 500));
         continue;
       }
     }
   }
   
-  console.warn('[checkUserExists] All attempts failed, server not ready');
+      // Не логируем как warning - это нормальная ситуация когда сервер временно недоступен
+      console.log('[checkUserExists] All attempts failed, server temporarily unavailable');
   return null; // null = неизвестно (сервер не готов)
+    } finally {
+      // Удаляем из pending после завершения
+      pendingChecks.delete(userId);
+    }
+  })();
+  
+  // Сохраняем promise для защиты от дубликатов
+  pendingChecks.set(userId, checkPromise);
+  
+  return checkPromise;
 }
 
 // Функция для создания пользователя с retry
 export async function createUser() {
   console.log('[createUser] Creating user...');
   
-  // Защита от создания пользователя если уже есть currentUserId
+  // КРИТИЧНО: Проверяем существование пользователя на сервере перед пропуском создания
   if (currentUserId) {
-    console.log('[createUser] User already exists:', currentUserId, 'skipping creation');
-    return currentUserId;
+    try {
+      const exists = await checkUserExists(currentUserId);
+      if (exists) {
+        console.log('[createUser] User already exists on server:', currentUserId, 'skipping creation');
+        return currentUserId;
+      } else {
+        console.warn('[createUser] User exists locally but not on server, clearing and creating new...');
+        clearCurrentUserId();
+      }
+    } catch (e) {
+      console.warn('[createUser] Failed to check user existence, clearing local userId:', e);
+      clearCurrentUserId();
+    }
   }
   
   // Очищаем старый userId и все локальные данные из AsyncStorage
@@ -717,6 +803,13 @@ export function setCurrentUserId(userId: string) {
   currentUserId = userId;
   // Сохраняем в AsyncStorage без переподключения
   AsyncStorage.setItem("userId", userId).catch(e => console.warn('Failed to save userId to storage:', e));
+}
+
+// КРИТИЧНО: Функция для сброса currentUserId (нужна после удаления профиля)
+export function clearCurrentUserId() {
+  currentUserId = undefined;
+  AsyncStorage.removeItem("userId").catch(e => console.warn('Failed to remove userId from storage:', e));
+  console.log('[clearCurrentUserId] Cleared currentUserId');
 }
 
 /* ========= REST API для получения userId (как в старой версии) ========= */

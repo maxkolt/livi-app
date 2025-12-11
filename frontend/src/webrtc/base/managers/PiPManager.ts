@@ -98,9 +98,12 @@ export class PiPManager {
     
     this.setInPiP(true);
     emit('pipStateChanged', { inPiP: true });
-    // Отправляем только pip:state, НЕ отправляем cam-toggle(false)
-    // Это позволяет партнеру знать, что мы в PiP, но камера работает
+    // Отправляем pip:state и cam-toggle(false) чтобы показать статус "Отошёл"
+    // Камера остается включенной локально, но партнеру показываем "Отошёл"
     this.sendPiPState(true, roomId, partnerId);
+    // КРИТИЧНО: Отправляем cam-toggle(false) при входе в PiP для показа статуса "Отошёл"
+    this.sendCamToggle(false, roomId);
+    logger.info('[PiPManager] Отправлен cam-toggle(false) при входе в PiP - показываем статус "Отошёл"');
   }
 
   /**
@@ -124,6 +127,12 @@ export class PiPManager {
     this.setInPiP(false);
     emit('pipStateChanged', { inPiP: false });
     this.sendPiPState(false, roomId, partnerId);
+    // КРИТИЧНО: Отправляем cam-toggle(true) при выходе из PiP чтобы убрать статус "Отошёл"
+    // Только если камера была включена перед входом в PiP
+    if (this.pipPrevCamOnRef === true) {
+      this.sendCamToggle(true, roomId);
+      logger.info('[PiPManager] Отправлен cam-toggle(true) при выходе из PiP - убираем статус "Отошёл"');
+    }
     
     // Восстанавливаем локальный стрим из PiP контекста если он есть
     // Приоритет: PiP стрим > текущий стрим (PiP стрим более актуален)

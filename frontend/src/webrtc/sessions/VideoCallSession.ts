@@ -10,6 +10,13 @@ import { isValidStream } from '../../../utils/streamUtils';
  * Наследуется от BaseWebRTCSession и добавляет логику специфичную для прямых звонков
  */
 export class VideoCallSession extends BaseWebRTCSession {
+  /**
+   * Флаг, что сейчас уже идет создание/отправка offer
+   * Нужен, чтобы не запускать параллельно несколько createOffer/setLocalDescription
+   * и не получать ошибку "Called in wrong state: have-remote-offer"
+   */
+  private offerInProgressRef: boolean = false;
+
   constructor(config: WebRTCSessionConfig) {
     super(config);
     this.setupSocketHandlers();
@@ -177,18 +184,6 @@ export class VideoCallSession extends BaseWebRTCSession {
           hasExistingRemoteStream: !!existingRemoteStream
         });
         
-        // КРИТИЧНО: Минимальная задержка только если PC был закрыт совсем недавно
-        // Для масштабируемости уменьшаем задержку до 200ms (было 2000ms)
-        const lastPcClosedAt = (global as any).__lastPcClosedAt;
-        if (lastPcClosedAt) {
-          const timeSinceClose = Date.now() - lastPcClosedAt;
-          const PC_CREATION_DELAY = 200; // Оптимизировано для быстрого соединения
-          if (timeSinceClose < PC_CREATION_DELAY) {
-            const delay = PC_CREATION_DELAY - timeSinceClose;
-            await new Promise(resolve => setTimeout(resolve, delay));
-          }
-        }
-        
         this.pcLifecycleManager.setPcCreationInProgress(true);
 
         try {
@@ -199,33 +194,9 @@ export class VideoCallSession extends BaseWebRTCSession {
           this.incrementPcToken(true);
           this.markPcWithToken(pc);
           
-          // КРИТИЧНО: Восстанавливаем remoteStream после создания нового PC
-          // Это гарантирует, что компоненты получат стрим даже после пересоздания PC
+          // Восстанавливаем remoteStream после создания нового PC
           if (existingRemoteStream && isValidStream(existingRemoteStream)) {
-            const restoredVideoTracks = (existingRemoteStream as any)?.getVideoTracks?.() || [];
-            const restoredAudioTracks = (existingRemoteStream as any)?.getAudioTracks?.() || [];
-            
-            logger.info('[VideoCallSession] ✅ Восстанавливаем remoteStream после создания нового PC', {
-              streamId: existingRemoteStreamId,
-              videoTracksCount: restoredVideoTracks.length,
-              audioTracksCount: restoredAudioTracks.length,
-              videoTrackIds: restoredVideoTracks.map((t: any) => t.id),
-              audioTrackIds: restoredAudioTracks.map((t: any) => t.id)
-            });
-            
-            // КРИТИЧНО: Устанавливаем remoteStream обратно, чтобы компоненты получили его
-            // Это гарантирует синхронизацию с компонентами
-            this.applyRemoteStream(existingRemoteStream, (event, ...args) => {
-              logger.info('[VideoCallSession] 📤 Emitting restored remoteStream event', {
-                event,
-                streamId: existingRemoteStreamId,
-                videoTracksCount: restoredVideoTracks.length,
-                audioTracksCount: restoredAudioTracks.length
-              });
-              this.emit(event, ...args);
-            });
-            
-            // КРИТИЧНО: Обновляем remoteViewKey для принудительного обновления UI
+            this.applyRemoteStream(existingRemoteStream, (event, ...args) => this.emit(event, ...args));
             this.remoteStateManager.updateRemoteViewKey((event, ...args) => this.emit(event, ...args));
           }
           
@@ -235,7 +206,6 @@ export class VideoCallSession extends BaseWebRTCSession {
         } catch (createError: any) {
           this.pcLifecycleManager.setPcCreationInProgress(false);
           logger.error('[VideoCallSession] RTCPeerConnection constructor failed:', createError);
-          (global as any).__lastPcClosedAt = Date.now();
           throw createError;
         }
       } catch (e) {
@@ -332,6 +302,7 @@ export class VideoCallSession extends BaseWebRTCSession {
    * Позвонить другу
    */
   async callFriend(friendId: string): Promise<void> {
+    this.endedRef = false;
     this.config.setIsInactiveState?.(false);
     this.config.setWasFriendCallEnded?.(false);
     this.config.setFriendCallAccepted?.(true);
@@ -393,6 +364,7 @@ export class VideoCallSession extends BaseWebRTCSession {
    * Принять входящий звонок
    */
   async acceptCall(callId?: string, fromUserId?: string): Promise<void> {
+    this.endedRef = false;
     this.config.setIsInactiveState?.(false);
     this.config.setWasFriendCallEnded?.(false);
     this.config.setFriendCallAccepted?.(true);
@@ -462,6 +434,19 @@ export class VideoCallSession extends BaseWebRTCSession {
           partnerId: this.partnerIdRef
         });
         this.attachRemoteHandlers(pc, this.partnerIdRef);
+      }
+      
+      // КРИТИЧНО: Проверяем, есть ли уже remote stream в PC (если offer был обработан до acceptCall)
+      // Это важно для принимающего звонок - remote stream может быть уже в PC, но не установлен в streamManager
+      const existingRemoteStream = this.streamManager.getRemoteStream();
+      if (!existingRemoteStream && pc && pc.signalingState !== 'closed' && (pc as any).connectionState !== 'closed') {
+        logger.info('[VideoCallSession] Проверяем receivers для remote stream в acceptCall (offer мог быть обработан до acceptCall)');
+        const currentPc = pc; // Сохраняем ссылку для использования в setTimeout
+        setTimeout(() => {
+          if (currentPc) {
+            this.checkReceiversForRemoteStream(currentPc);
+          }
+        }, 200);
       }
     }
     
@@ -904,22 +889,6 @@ export class VideoCallSession extends BaseWebRTCSession {
       hasPartnerId: !!targetPartnerId,
       partnerId: targetPartnerId
     });
-    
-    // КРИТИЧНО: Не отправляем cam-toggle(false) если звонок только что принят (в течение 30 секунд)
-    // Это предотвращает гашение камеры собеседника сразу после принятия звонка
-    if (!isEnabled) {
-      const connectionEstablishedAt = (this as any).remoteStateManager?.getConnectionEstablishedAt?.();
-      const timeSinceConnection = connectionEstablishedAt ? Date.now() - connectionEstablishedAt : Infinity;
-      const FILTER_DURATION_MS = 30000; // 30 секунд
-      
-      if (timeSinceConnection < FILTER_DURATION_MS) {
-        logger.info('[VideoCallSession] Не отправляем cam-toggle(false) - соединение только что установлено', {
-          timeSinceConnection,
-          roomId: currentRoomId
-        });
-        return; // Не отправляем cam-toggle(false)
-      }
-    }
     
     try {
       const payload: any = { 
@@ -1417,6 +1386,18 @@ export class VideoCallSession extends BaseWebRTCSession {
           logger.error('[VideoCallSession] ❌❌❌ CRITICAL: localDescription is NULL after setLocalDescription for answer!');
           return;
         }
+        
+        // КРИТИЧНО: После установки answer проверяем receivers для remote stream
+        // У принимающего звонок remote stream может быть уже в PC, но не установлен в streamManager
+        // Это происходит если offer был обработан до acceptCall или если ontrack еще не сработал
+        const currentPc = pc; // Сохраняем ссылку для использования в setTimeout
+        setTimeout(() => {
+          const existingRemoteStream = this.streamManager.getRemoteStream();
+          if (!existingRemoteStream && currentPc) {
+            logger.info('[VideoCallSession] Проверяем receivers для remote stream после установки answer (принимающий звонок)');
+            this.checkReceiversForRemoteStream(currentPc);
+          }
+        }, 100);
       } catch (setError: any) {
         const errorMsg = String(setError?.message || '');
         const errorState = pc.signalingState;
@@ -1467,19 +1448,27 @@ export class VideoCallSession extends BaseWebRTCSession {
    * Используем roomId для видеозвонков
    */
   protected async createAndSendOffer(toPartnerId: string, roomId?: string): Promise<void> {
+    // КРИТИЧНО: Не допускаем параллельных createOffer/setLocalDescription
+    if (this.offerInProgressRef) {
+      logger.warn('[VideoCallSession] Skip createAndSendOffer - offer already in progress');
+      return;
+    }
+
     const pc = this.getPeerConnection();
     if (!pc) {
       logger.warn('[VideoCallSession] No PC for createAndSendOffer');
       return;
     }
-    
-    // КРИТИЧНО: Проверяем что PC валиден
-    if (!this.isPcValid(pc)) {
-      logger.warn('[VideoCallSession] PC is invalid for createAndSendOffer');
-      return;
-    }
-    
+
+    this.offerInProgressRef = true;
+
     try {
+      // КРИТИЧНО: Проверяем что PC валиден
+      if (!this.isPcValid(pc)) {
+        logger.warn('[VideoCallSession] PC is invalid for createAndSendOffer');
+        return;
+      }
+
       // Проверяем состояние PC
       const state = pc.signalingState;
       const hasLocalDesc = !!(pc as any)?.localDescription;
@@ -1629,6 +1618,20 @@ export class VideoCallSession extends BaseWebRTCSession {
         }
       } catch (setError: any) {
         const errorMsg = String(setError?.message || '');
+
+        // КРИТИЧНО: если во время setLocalDescription PC уже перешел в состояние
+        // have-remote-offer / wrong state, значит удаленная сторона уже инициировала
+        // свою renegotiation и этот локальный offer нужно безопасно проигнорировать
+        if (errorMsg.includes('have-remote-offer') || errorMsg.includes('Called in wrong state')) {
+          logger.info('[VideoCallSession] Remote offer in progress, skipping local offer', {
+            error: errorMsg,
+            signalingState: pc.signalingState,
+            hasLocalDesc: !!(pc as any).localDescription,
+            hasRemoteDesc: !!(pc as any).remoteDescription
+          });
+          return;
+        }
+
         if (errorMsg.includes('NULL') || errorMsg.includes('SessionDescription')) {
           logger.error('[VideoCallSession] ❌❌❌ CRITICAL: setLocalDescription failed with NULL error!', setError);
           
@@ -1683,6 +1686,9 @@ export class VideoCallSession extends BaseWebRTCSession {
       logger.info('[VideoCallSession] ✅ Offer sent successfully', { to: toPartnerId, roomId: currentRoomId });
     } catch (e) {
       logger.error('[VideoCallSession] Error creating/sending offer:', e);
+    } finally {
+      // КРИТИЧНО: Разрешаем следующую renegotiation после завершения текущей
+      this.offerInProgressRef = false;
     }
   }
   

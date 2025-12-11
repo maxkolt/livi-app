@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { RTCView, MediaStream } from 'react-native-webrtc';
 import { isValidStream } from '../../../utils/streamUtils';
 import { t, type Lang } from '../../../utils/i18n';
@@ -37,6 +37,38 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   const hasLocalStream = localStream && isValidStream(localStream);
   const videoTrack = hasLocalStream ? (localStream as any)?.getVideoTracks?.()?.[0] : null;
   const isVideoTrackActive = videoTrack && videoTrack.readyState === 'live';
+  
+  // Логирование для отладки на Android
+  useEffect(() => {
+    if (Platform.OS === 'android' && localStream) {
+      logger.info('[LocalVideo] Local stream state', {
+        streamId: localStream.id,
+        hasVideoTrack: !!videoTrack,
+        isVideoTrackActive,
+        hasStreamURL: typeof localStream.toURL === 'function',
+        streamURL: localStream.toURL?.()?.substring(0, 50) + '...'
+      });
+    }
+  }, [localStream?.id, isVideoTrackActive]);
+
+  // КРИТИЧНО: На Android нужен force-update для RTCView при изменении стрима
+  const [forceUpdateKey, setForceUpdateKey] = useState(0);
+  
+  useEffect(() => {
+    if (Platform.OS === 'android' && localStream && isValidStream(localStream)) {
+      const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
+      // На Android используем stream prop, поэтому проверяем только наличие трека
+      if (videoTrack && videoTrack.readyState === 'live') {
+        setForceUpdateKey(prev => prev + 1);
+        logger.info('[LocalVideo] Android: force-update RTCView', {
+          streamId: localStream.id,
+          trackId: videoTrack.id,
+          trackEnabled: videoTrack.enabled,
+          key: forceUpdateKey + 1
+        });
+      }
+    }
+  }, [localStream?.id, localRenderKey, localStream]);
 
   // Уведомляем о готовности стрима
   useEffect(() => {
@@ -45,13 +77,8 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     }
   }, [localStream, onStreamReady]);
 
-  // После завершения звонка показываем черный экран
+  // После завершения звонка показываем надпись "Вы"
   if (isInactiveState || wasFriendCallEnded) {
-    return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
-  }
-
-  // КРИТИЧНО: Если камера выключена (camOn === false), показываем заглушку "Вы"
-  if (!camOn) {
     return (
       <View style={[styles.rtc, styles.placeholderContainer]}>
         <Text style={styles.placeholder}>{L('you')}</Text>
@@ -59,34 +86,58 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     );
   }
 
-  // Показываем видео если есть стрим и трек live
+  // КРИТИЧНО: Показываем видео если есть готовый трек, даже если camOn еще не обновлен
+  // camOn может обновиться позже через onCamStateChange
   if (hasLocalStream && isVideoTrackActive) {
+    // КРИТИЧНО: На Android используем prop `stream` напрямую вместо `streamURL`
+    // Это более надежный способ для react-native-webrtc на Android
     const localStreamURL = localStream.toURL?.();
-    if (!localStreamURL) {
-      logger.warn('[LocalVideo] Local stream URL is null, cannot show video', {
-        streamId: localStream.id,
+    const rtcViewKey = Platform.OS === 'android'
+      ? `local-video-${localRenderKey}-${forceUpdateKey}`
+      : `local-video-${localRenderKey}`;
+    
+    logger.info('[LocalVideo] ✅ Рендерим RTCView', {
+      platform: Platform.OS,
+      streamURL: localStreamURL ? localStreamURL.substring(0, 50) + '...' : 'null',
+      key: rtcViewKey,
+      isVideoTrackActive,
+      streamId: localStream.id,
+      usingStreamProp: Platform.OS === 'android'
+    });
+
+    // КРИТИЧНО: На Android используем prop `stream` напрямую, на iOS - `streamURL`
+    // На iOS проверяем, что streamURL существует
+    if (Platform.OS === 'ios' && (!localStreamURL || localStreamURL.length === 0)) {
+      logger.warn('[LocalVideo] ⚠️ На iOS нет streamURL или он пустой', { 
+        streamId: localStream?.id,
         hasToURL: typeof localStream.toURL === 'function',
-        hasVideoTrack: !!(localStream as any)?.getVideoTracks?.()?.[0]
+        streamURL: localStreamURL
       });
       return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
     }
-
-    logger.info('[LocalVideo] ✅ Showing local video', {
-      streamId: localStream.id,
-      localRenderKey,
-      streamURL: localStreamURL.substring(0, 50) + '...',
-      hasStreamURL: !!localStreamURL
-    });
+    
+    const rtcViewProps = Platform.OS === 'android' 
+      ? { stream: localStream } // Android: используем stream напрямую
+      : { streamURL: localStreamURL! }; // iOS: используем streamURL (уже проверили выше)
 
     return (
       <RTCView
-        key={`local-video-${localRenderKey}`}
-        streamURL={localStreamURL}
+        key={rtcViewKey}
+        {...rtcViewProps}
         style={styles.rtc}
         objectFit="cover"
         mirror
         zOrder={0}
       />
+    );
+  }
+
+  // Камера явно выключена И нет готового трека — показываем заглушку "Вы"
+  if (!camOn && !isVideoTrackActive) {
+    return (
+      <View style={[styles.rtc, styles.placeholderContainer]}>
+        <Text style={styles.placeholder}>{L('you')}</Text>
+      </View>
     );
   }
 

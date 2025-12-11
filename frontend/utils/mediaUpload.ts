@@ -3,23 +3,13 @@ import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import { logger } from './logger';
 
-// Определяем URL в зависимости от платформы
-// Для Android эмулятора: 10.0.2.2 (специальный адрес для localhost)
-// Для iOS симулятора: localhost
-// Для физических устройств: IP адрес компьютера
-const getApiBaseUrl = () => {
-  // Для Android всегда используем IP (работает и на эмуляторе через 10.0.2.2, и на устройстве через LAN)
-  if (Platform.OS === 'android') {
-    // В эмуляторе можно попробовать 10.0.2.2, но IP адрес универсальнее
-    return 'http://192.168.1.12:3000';
-  }
-  
-  // Для iOS: localhost для симулятора, IP для устройства
-  // В dev режиме Expo обычно на симуляторе, в production - на устройстве
-  return 'http://192.168.1.12:3000'; // Используем IP для надежности
-};
+// Получаем BASE_URL из переменных окружения
+// Приоритет: платформо-специфичная переменная > общая переменная > fallback
+const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
+const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
+const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
 
-const API_BASE_URL = getApiBaseUrl();
+const API_BASE_URL = (Platform.OS === 'android' ? ANDROID_URL : IOS_URL).replace(/\/+$/, '');
 
 /**
  * Конвертирует локальный файл в dataUri

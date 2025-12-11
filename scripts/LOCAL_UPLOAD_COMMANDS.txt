@@ -1,0 +1,19 @@
+===========================================
+КОМАНДЫ ДЛЯ ЗАГРУЗКИ ФАЙЛОВ
+(ВЫПОЛНИТЕ НА ВАШЕМ ЛОКАЛЬНОМ КОМПЬЮТЕРЕ)
+===========================================
+
+# Перейдите в директорию проекта
+cd /Users/maximkoltovich/LiVi/livi-app
+
+# Загрузите все файлы backend на сервер
+scp -r backend/* root@89.111.152.241:/opt/livi-app/backend/
+
+# После загрузки вернитесь в SSH сессию и выполните:
+# cd /opt/livi-app/backend
+# npm install
+# pm2 delete livi-backend 2>/dev/null || true
+# pm2 start npm --name "livi-backend" -- run start
+# pm2 save
+# pm2 startup
+# pm2 status
