@@ -11,7 +11,7 @@ import {
   Image,
   Platform,
 } from 'react-native';
-import { RTCView } from 'react-native-webrtc';
+import { RTCView } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePiP } from './PiPContext';

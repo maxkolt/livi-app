@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
-import { RTCView, MediaStream } from 'react-native-webrtc';
+import { View, Text, StyleSheet, Platform } from 'react-native';
+import { RTCView, MediaStream } from '@livekit/react-native-webrtc';
 import { isValidStream } from '../../../utils/streamUtils';
 import { t, type Lang } from '../../../utils/i18n';
 import { logger } from '../../../utils/logger';
@@ -36,7 +36,10 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   // Проверяем готовность стрима
   const hasLocalStream = localStream && isValidStream(localStream);
   const videoTrack = hasLocalStream ? (localStream as any)?.getVideoTracks?.()?.[0] : null;
-  const isVideoTrackActive = videoTrack && videoTrack.readyState === 'live';
+  const isVideoTrackLive = !!videoTrack && videoTrack.readyState === 'live';
+  const isVideoTrackEnabled = !!videoTrack && (videoTrack.enabled ?? true) === true;
+  const isVideoTrackMuted = !!videoTrack && (videoTrack.muted ?? false) === true;
+  const canRenderVideo = isVideoTrackLive && isVideoTrackEnabled && !isVideoTrackMuted;
   
   // Логирование для отладки на Android
   useEffect(() => {
@@ -44,12 +47,14 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       logger.info('[LocalVideo] Local stream state', {
         streamId: localStream.id,
         hasVideoTrack: !!videoTrack,
-        isVideoTrackActive,
+        isVideoTrackLive,
+        isVideoTrackEnabled,
+        isVideoTrackMuted,
         hasStreamURL: typeof localStream.toURL === 'function',
         streamURL: localStream.toURL?.()?.substring(0, 50) + '...'
       });
     }
-  }, [localStream?.id, isVideoTrackActive]);
+  }, [localStream?.id, isVideoTrackLive, isVideoTrackEnabled, isVideoTrackMuted]);
 
   // КРИТИЧНО: На Android нужен force-update для RTCView при изменении стрима
   const [forceUpdateKey, setForceUpdateKey] = useState(0);
@@ -59,16 +64,20 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
       // На Android используем stream prop, поэтому проверяем только наличие трека
       if (videoTrack && videoTrack.readyState === 'live') {
-        setForceUpdateKey(prev => prev + 1);
-        logger.info('[LocalVideo] Android: force-update RTCView', {
-          streamId: localStream.id,
-          trackId: videoTrack.id,
-          trackEnabled: videoTrack.enabled,
-          key: forceUpdateKey + 1
+        setForceUpdateKey((prev) => {
+          const next = prev + 1;
+          logger.info('[LocalVideo] Android: force-update RTCView', {
+            streamId: localStream.id,
+            trackId: videoTrack.id,
+            trackEnabled: videoTrack.enabled,
+            trackMuted: videoTrack.muted,
+            key: next,
+          });
+          return next;
         });
       }
     }
-  }, [localStream?.id, localRenderKey, localStream]);
+  }, [localStream?.id, localRenderKey]);
 
   // Уведомляем о готовности стрима
   useEffect(() => {
@@ -88,19 +97,21 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
 
   // КРИТИЧНО: Показываем видео если есть готовый трек, даже если camOn еще не обновлен
   // camOn может обновиться позже через onCamStateChange
-  if (hasLocalStream && isVideoTrackActive) {
+  if (hasLocalStream && canRenderVideo) {
     // КРИТИЧНО: На Android используем prop `stream` напрямую вместо `streamURL`
-    // Это более надежный способ для react-native-webrtc на Android
+    // Это более надежный способ для @livekit/react-native-webrtc на Android, но добавляем streamURL как fallback
     const localStreamURL = localStream.toURL?.();
     const rtcViewKey = Platform.OS === 'android'
-      ? `local-video-${localRenderKey}-${forceUpdateKey}`
-      : `local-video-${localRenderKey}`;
+      ? `local-video-${localStream.id}-${localRenderKey}-${forceUpdateKey}`
+      : `local-video-${localStream.id}-${localRenderKey}`;
     
     logger.info('[LocalVideo] ✅ Рендерим RTCView', {
       platform: Platform.OS,
       streamURL: localStreamURL ? localStreamURL.substring(0, 50) + '...' : 'null',
       key: rtcViewKey,
-      isVideoTrackActive,
+      isVideoTrackLive,
+      isVideoTrackEnabled,
+      isVideoTrackMuted,
       streamId: localStream.id,
       usingStreamProp: Platform.OS === 'android'
     });
@@ -117,7 +128,12 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     }
     
     const rtcViewProps = Platform.OS === 'android' 
-      ? { stream: localStream } // Android: используем stream напрямую
+      ? { 
+          stream: localStream, 
+          streamURL: localStreamURL, 
+          renderToHardwareTextureAndroid: true, 
+          zOrderMediaOverlay: true 
+        } // Android: пробрасываем оба и форсим рендер на GPU
       : { streamURL: localStreamURL! }; // iOS: используем streamURL (уже проверили выше)
 
     return (
@@ -133,7 +149,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   }
 
   // Камера явно выключена И нет готового трека — показываем заглушку "Вы"
-  if (!camOn && !isVideoTrackActive) {
+  if (!camOn && !canRenderVideo) {
     return (
       <View style={[styles.rtc, styles.placeholderContainer]}>
         <Text style={styles.placeholder}>{L('you')}</Text>
@@ -141,7 +157,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     );
   }
 
-  // Если нет стрима или трек не live - показываем черный экран
+  // Если стрим есть, но трек еще не ready/замьючен - показываем черный экран
   return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
 };
 

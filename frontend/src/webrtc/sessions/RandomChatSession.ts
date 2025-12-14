@@ -1,1250 +1,1265 @@
-import { RTCPeerConnection, MediaStream } from 'react-native-webrtc';
-import { logger } from '../../../utils/logger';
+import { MediaStream } from '@livekit/react-native-webrtc';
+import {
+  Room,
+  RoomEvent,
+  Track,
+  type RemoteParticipant,
+  type RemoteTrack,
+  type RemoteTrackPublication,
+  type LocalTrack,
+  LocalAudioTrack,
+  LocalVideoTrack,
+  createLocalTracks,
+} from 'livekit-client';
+import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
+import type { WebRTCSessionConfig, CamSide } from '../types';
 import socket from '../../../sockets/socket';
-import { BaseWebRTCSession } from '../base/BaseWebRTCSession';
-import type { WebRTCSessionConfig } from '../types';
-import { isValidStream } from '../../../utils/streamUtils';
-import { Platform } from 'react-native';
+import { logger } from '../../../utils/logger';
 
-/**
- * Сессия для рандомного видеочата
- * Наследуется от BaseWebRTCSession и добавляет логику специфичную для рандомного чата
- */
-export class RandomChatSession extends BaseWebRTCSession {
+const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
+
+type MatchPayload = {
+  id: string;
+  roomId?: string;
+  userId?: string | null;
+  livekitToken?: string | null;
+  livekitRoomName?: string | null;
+};
+
+export class RandomChatSession extends SimpleEventEmitter {
+  private config: WebRTCSessionConfig;
+  private room: Room | null = null;
+  private localVideoTrack: LocalVideoTrack | null = null;
+  private localAudioTrack: LocalAudioTrack | null = null;
+  private localStream: MediaStream | null = null;
+  private remoteStream: MediaStream | null = null;
+  private currentRemoteParticipant: RemoteParticipant | null = null;
+  private remoteAudioTrack: RemoteTrack | null = null;
+  private remoteVideoTrack: RemoteTrack | null = null;
+  private remoteViewKey = 0;
+  private started = false;
+  private camSide: CamSide = 'front';
+  private isMicOn = true;
+  private isCamOn = true;
+  private remoteAudioMuted = false;
+  private remoteCamEnabled = false;
+  private lastAutoSearchAt = 0;
+  private socketOffs: Array<() => void> = [];
+  private connectRequestId = 0;
+  private disconnectReason: 'user' | 'server' | 'unknown' = 'unknown';
+  private isDisconnecting = false;
+  private disconnectHandled = false;
+  private micLevelInterval: NodeJS.Timeout | null = null;
+  private audioContext: AudioContext | null = null;
+  private analyser: AnalyserNode | null = null;
+  private micLevelSource: MediaStreamAudioSourceNode | null = null;
+
   constructor(config: WebRTCSessionConfig) {
-    super(config);
+    super();
+    this.config = config;
     this.setupSocketHandlers();
   }
-  
-  /**
-   * Создать PeerConnection с локальным стримом
-   * Для рандомного чата создаем PC немедленно, без задержек
-   */
-  async ensurePcWithLocal(stream: MediaStream): Promise<RTCPeerConnection | null> {
-    // Защита от множественного создания PC
-    if (this.pcLifecycleManager.isPcCreationInProgress()) {
-      let attempts = 0;
-      while (this.pcLifecycleManager.isPcCreationInProgress() && attempts < 50) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        attempts++;
-      }
-      if (this.peerRef && this.peerRef.signalingState !== 'closed') {
-        return this.peerRef;
-      }
-    }
-    
-    let pc = this.peerRef;
-    
-    // Проверка существующего PC
-    if (pc) {
-      try {
-        const state = pc.signalingState;
-        const hasLocalDesc = !!(pc as any)?.currentLocalDescription || !!(pc as any)?.localDescription;
-        const hasRemoteDesc = !!(pc as any)?.currentRemoteDescription || !!(pc as any)?.remoteDescription;
-        const hasNoDescriptions = !hasLocalDesc && !hasRemoteDesc;
-        const isInitial = state === 'stable' && hasNoDescriptions;
-        const isClosed = state === 'closed' || (pc as any).connectionState === 'closed';
-        
-        if (isClosed) {
-          try {
-            this.cleanupPeer(pc);
-          } catch (e) {
-            logger.warn('[RandomChatSession] Error cleaning up closed PC:', e);
-          }
-          pc = null;
-          this.peerRef = null;
-        } else if (!isInitial) {
-          // Переиспользуем существующий PC
-          this.markPcWithToken(pc);
-          return pc;
-        }
-      } catch (e) {
-        logger.warn('[RandomChatSession] Cannot access PC state, creating new one:', e);
-        try {
-          this.cleanupPeer(pc);
-        } catch {}
-        pc = null;
-        this.peerRef = null;
-        (global as any).__lastPcClosedAt = Date.now();
-      }
-    }
-    
-    // Создание нового PC
-    if (!pc) {
-      try {
-        if (!stream || !isValidStream(stream)) {
-          logger.error('[RandomChatSession] Cannot create PC - stream is invalid');
-          return null;
-        }
-        
-        const iceConfig = this.getIceConfig();
-        
-        // Логируем ICE конфигурацию для отладки
-        const iceServersCount = iceConfig?.iceServers?.length || 0;
-        const hasTurn = iceConfig?.iceServers?.some((s: any) => 
-          s.urls && (
-            (Array.isArray(s.urls) && s.urls.some((u: string) => u.startsWith('turn:'))) ||
-            (typeof s.urls === 'string' && s.urls.startsWith('turn:'))
-          )
-        ) || false;
-        
-        logger.info('[RandomChatSession] 🔧 Создание RTCPeerConnection', {
-          iceServersCount,
-          hasTurn,
-          iceTransportPolicy: iceConfig?.iceTransportPolicy,
-          bundlePolicy: iceConfig?.bundlePolicy,
-          streamId: stream?.id,
-          streamTracks: stream?.getTracks?.()?.length || 0
-        });
-        
-        // ОПТИМИЗИРОВАНО: Для рандомного чата - минимальная задержка только если PC был закрыт недавно
-        // Уменьшено с 100ms до 50ms для быстрого создания PC
-        const lastPcClosedAt = (global as any).__lastPcClosedAt;
-        if (lastPcClosedAt) {
-          const timeSinceClose = Date.now() - lastPcClosedAt;
-          const MIN_DELAY = 50; // Минимальная задержка 50ms для рандомного чата (было 100ms)
-          if (timeSinceClose < MIN_DELAY) {
-            const delay = MIN_DELAY - timeSinceClose;
-            await new Promise(resolve => setTimeout(resolve, delay));
-          }
-        }
-        
-        // ОПТИМИЗИРОВАНО: Защита от одновременного создания - уменьшено с 500ms до 200ms
-        const pcCreationLock = (global as any).__pcCreationLock;
-        const lockTimeout = 200; // Для рандомного чата 200ms (было 500ms)
-        if (pcCreationLock && (Date.now() - pcCreationLock) < lockTimeout) {
-          const waitTime = lockTimeout - (Date.now() - pcCreationLock);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        }
-        
-        (global as any).__pcCreationLock = Date.now();
-        this.pcLifecycleManager.setPcCreationInProgress(true);
-        
-        // Retry механизм для Android и iOS
-        let retryCount = 0;
-        const maxRetries = Platform.OS === 'ios' ? 5 : 3; // Больше попыток для iOS
-        // На Android нужна большая задержка из-за особенностей нативного модуля
-        const retryDelay = Platform.OS === 'android' ? 500 : 300; // 500ms для Android, 300ms для iOS
-        const isAndroid = Platform.OS === 'android';
-        const isIOS = Platform.OS === 'ios';
-        
-        // КРИТИЧНО: На iOS добавляем дополнительную задержку, особенно если нет TURN
-        if (isIOS) {
-          const iosDelay = hasTurn ? 200 : 500; // Больше задержка если нет TURN
-          logger.info(`[RandomChatSession] iOS: добавляем задержку ${iosDelay}ms перед созданием PC (hasTurn: ${hasTurn})`);
-          await new Promise(resolve => setTimeout(resolve, iosDelay));
-        }
-        
-        // На Android добавляем дополнительную задержку перед первой попыткой
-        if (isAndroid && !lastPcClosedAt) {
-          logger.info('[RandomChatSession] Android: добавляем задержку перед созданием PC');
-          await new Promise(resolve => setTimeout(resolve, 300));
-        }
-        
-        while (retryCount < maxRetries && !pc) {
-          try {
-            if (retryCount > 0) {
-              logger.warn(`[RandomChatSession] Retry ${retryCount}/${maxRetries} создания RTCPeerConnection`);
-              // На Android увеличиваем задержку с каждой попыткой
-              const delay = isAndroid ? retryDelay * (retryCount + 1) : retryDelay * retryCount;
-              await new Promise(resolve => setTimeout(resolve, delay));
-            }
-            
-            // На Android проверяем, что прошло достаточно времени с последнего закрытия PC
-            if (isAndroid && lastPcClosedAt) {
-              const timeSinceClose = Date.now() - lastPcClosedAt;
-              const minDelayAndroid = 300; // Минимум 300ms на Android
-              if (timeSinceClose < minDelayAndroid) {
-                const waitTime = minDelayAndroid - timeSinceClose;
-                logger.info(`[RandomChatSession] Android: ждем ${waitTime}ms после закрытия предыдущего PC`);
-                await new Promise(resolve => setTimeout(resolve, waitTime));
-              }
-            }
-            
-            // КРИТИЧНО: На iOS проверяем ICE конфигурацию перед созданием PC
-            if (isIOS && !hasTurn && iceConfig.iceTransportPolicy === 'relay') {
-              logger.warn('[RandomChatSession] ⚠️ iOS: relay режим без TURN сервера! Изменяем на "all"');
-              iceConfig.iceTransportPolicy = 'all';
-            }
-            
-            // КРИТИЧНО: Упрощаем ICE конфигурацию на iOS при проблемах
-            if (isIOS && retryCount > 0) {
-              // При повторных попытках используем минимальную конфигурацию
-              const simplifiedConfig = {
-                ...iceConfig,
-                iceServers: iceConfig.iceServers?.slice(0, 3) || [], // Только первые 3 сервера
-                iceCandidatePoolSize: 0, // Отключаем предварительный сбор кандидатов
-              };
-              logger.info('[RandomChatSession] iOS: используем упрощенную ICE конфигурацию при retry');
-              pc = new RTCPeerConnection(simplifiedConfig);
-            } else {
-              pc = new RTCPeerConnection(iceConfig);
-            }
-            this.peerRef = pc;
-            (global as any).__pcCreationLock = null;
-            this.pcLifecycleManager.setPcCreationInProgress(false);
-            
-            this.incrementPcToken(true);
-            this.markPcWithToken(pc);
-            
-            // Устанавливаем обработчики
-            this.bindConnHandlers(pc, this.partnerIdRef || undefined);
-            this.attachRemoteHandlers(pc, this.partnerIdRef || undefined);
-            
-            logger.info('[RandomChatSession] ✅ RTCPeerConnection создан успешно', {
-              retryCount,
-              signalingState: pc.signalingState,
-              connectionState: (pc as any).connectionState
-            });
-            break; // Успешно создан, выходим из цикла
-          } catch (createError: any) {
-            retryCount++;
-            const errorMessage = createError?.message || String(createError);
-            const errorStack = createError?.stack || '';
-            
-            logger.error(`[RandomChatSession] RTCPeerConnection constructor failed (attempt ${retryCount}/${maxRetries}):`, {
-              error: errorMessage,
-              errorStack: errorStack.substring(0, 500), // Первые 500 символов стека
-              iceServersCount,
-              hasTurn,
-              iceConfig: JSON.stringify(iceConfig, null, 2).substring(0, 1000), // Первые 1000 символов конфига
-              streamId: stream?.id,
-              streamTracks: stream?.getTracks?.()?.length || 0
-            });
-            
-            if (retryCount >= maxRetries) {
-              (global as any).__pcCreationLock = null;
-              this.pcLifecycleManager.setPcCreationInProgress(false);
-              (global as any).__lastPcClosedAt = Date.now();
-              throw createError;
-            }
-            // Продолжаем попытки
-          }
-        }
-        
-        // Проверяем, что PC был создан
-        if (!pc) {
-          (global as any).__pcCreationLock = null;
-          this.pcLifecycleManager.setPcCreationInProgress(false);
-          logger.error('[RandomChatSession] Failed to create PeerConnection after all retries');
-          (global as any).__lastPcClosedAt = Date.now();
-          return null;
-        }
-      } catch (e) {
-        (global as any).__pcCreationLock = null;
-        this.pcLifecycleManager.setPcCreationInProgress(false);
-        logger.error('[RandomChatSession] Failed to create PeerConnection:', e);
-        (global as any).__lastPcClosedAt = Date.now();
-        return null;
-      }
-    }
-    
-    // КРИТИЧНО: Добавляем локальные треки в PeerConnection
-    // Это ОБЯЗАТЕЛЬНО для отправки аудио/видео собеседнику
-    // Без этого треки никуда не отправляются → собеседник слышит/видит НОЛЬ
-    const allTracks = stream?.getTracks?.() || [];
-    const tracksAdded: string[] = [];
-    const tracksFailed: string[] = [];
-    
-    logger.info('[RandomChatSession] 🔧 Добавляем локальные треки в PeerConnection', {
-      streamId: stream.id,
-      totalTracks: allTracks.length,
-      audioTracks: stream?.getAudioTracks?.()?.length || 0,
-      videoTracks: stream?.getVideoTracks?.()?.length || 0
-    });
-    
-    // КРИТИЧНО: Простой и надежный способ - добавляем все треки через addTrack
-    allTracks.forEach((track: any) => {
-      if (track && track.readyState !== 'ended') {
-        try {
-          // КРИТИЧНО: Используем стандартный метод addTrack с stream
-          // Это гарантирует, что треки будут отправляться собеседнику
-          (pc as any).addTrack(track, stream);
-          tracksAdded.push(track.id);
-          
-          logger.info('[RandomChatSession] ✅ Трек добавлен в PC', {
-            trackId: track.id,
-            trackKind: track.kind || (track as any).type,
-            trackEnabled: track.enabled,
-            trackReadyState: track.readyState
-          });
-        } catch (e) {
-          tracksFailed.push(track.id);
-          logger.error('[RandomChatSession] ❌ Ошибка добавления трека в PC', {
-            trackId: track.id,
-            trackKind: track.kind || (track as any).type,
-            error: e
-          });
-        }
-      } else {
-        logger.warn('[RandomChatSession] Пропускаем трек - ended или null', {
-          trackId: track?.id,
-          readyState: track?.readyState
-        });
-      }
-    });
-    
-    // КРИТИЧНО: Проверяем, что треки действительно добавлены
-    const finalSenders = pc.getSenders?.() || [];
-    const finalSendersCount = finalSenders.length;
-    
-    logger.info('[RandomChatSession] 📊 Итоговое состояние треков в PC', {
-      tracksAdded: tracksAdded.length,
-      tracksFailed: tracksFailed.length,
-      sendersInPc: finalSendersCount,
-      expectedTracks: allTracks.length,
-      tracksAddedIds: tracksAdded,
-      tracksFailedIds: tracksFailed,
-      sendersDetails: finalSenders.map((s: any) => ({
-        trackId: s.track?.id,
-        trackKind: s.track?.kind || (s.track as any)?.type,
-        trackEnabled: s.track?.enabled,
-        trackReadyState: s.track?.readyState
-      }))
-    });
-    
-    // КРИТИЧНО: Если треки не добавлены - это критическая ошибка
-    if (finalSendersCount === 0 && allTracks.length > 0) {
-      logger.error('[RandomChatSession] ❌❌❌ КРИТИЧЕСКАЯ ОШИБКА: Треки НЕ добавлены в PC! Собеседник не услышит и не увидит!', {
-        streamId: stream.id,
-        totalTracks: allTracks.length,
-        sendersCount: finalSendersCount
-      });
-    } else if (finalSendersCount < allTracks.length) {
-      logger.warn('[RandomChatSession] ⚠️ Не все треки добавлены в PC', {
-        expected: allTracks.length,
-        actual: finalSendersCount,
-        missing: allTracks.length - finalSendersCount
-      });
-    }
-    
-    return pc;
-  }
-  
-  /**
-   * Начать рандомный чат
-   */
+
+  /* ===================== Public API ===================== */
+
   async startRandomChat(): Promise<void> {
-    // Сбрасываем неактивное состояние ПЕРЕД созданием стрима
+    this.started = true;
+    this.isCamOn = true;
+    this.isMicOn = true;
     this.config.setIsInactiveState?.(false);
-    this.config.setWasFriendCallEnded?.(false);
-    
-    // КРИТИЧНО: Устанавливаем started и эмитим searching ДО создания стрима
-    // Это гарантирует, что лоадер показывается сразу при нажатии "Начать"
     this.config.setStarted?.(true);
     this.config.callbacks.onLoadingChange?.(true);
     this.config.onLoadingChange?.(true);
     this.emit('searching');
-    
-    // Создаем локальный стрим
-    const stream = await this.startLocalStream('front');
-    if (!stream) {
-      // Откатываем состояние при ошибке
-      this.config.setStarted?.(false);
-      this.config.callbacks.onLoadingChange?.(false);
-      this.config.onLoadingChange?.(false);
-      throw new Error('Failed to start local stream for random chat');
-    }
-    
-    // Отправляем событие start для начала поиска (с авто-поиском, как в чат-рулетке)
-    try {
-      if (!socket || !socket.connected) {
-        await new Promise<void>((resolve, reject) => {
-          if (socket.connected) {
-            resolve();
-            return;
-          }
-          const timeout = setTimeout(() => {
-            socket.off('connect', onConnect);
-            reject(new Error('Socket connection timeout'));
-          }, 5000);
-          const onConnect = () => {
-            clearTimeout(timeout);
-            socket.off('connect', onConnect);
-            resolve();
-          };
-          socket.on('connect', onConnect);
-          if (!socket.connected) {
-            try { socket.connect(); } catch {}
-          }
-        });
-      }
-      this.autoNext('initial_start');
-    } catch (e) {
-      logger.error('[RandomChatSession] Error sending start event:', e);
-    }
+    await this.ensureLocalTracks();
+    this.autoNext('initial_start');
   }
-  
-  /**
-   * Остановить рандомный чат
-   * ПРОСТАЯ ЛОГИКА: Полностью очищаем все соединения и комнаты, отправляем stop на сервер
-   */
+
   stopRandomChat(): void {
-    // 1. Сбрасываем started
+    this.started = false;
     this.config.setStarted?.(false);
-    
-    // 2. Останавливаем локальный стрим (камера выключится)
-    this.stopLocalStream(false, true).catch(() => {});
-    
-    // 3. Полностью очищаем все соединения и комнаты
-    this.handleStop();
-    
-    // 4. Отправляем stop на сервер (сброс busy статуса, выход из очереди)
+    this.config.callbacks.onLoadingChange?.(false);
+    this.config.onLoadingChange?.(false);
+    void this.disconnectRoom('user');
+    this.stopLocalTracks();
+    this.resetRemoteState();
+    this.config.callbacks.onPartnerIdChange?.(null);
+    this.config.onPartnerIdChange?.(null);
+    this.config.callbacks.onRoomIdChange?.(null);
+    this.config.onRoomIdChange?.(null);
+    this.config.callbacks.onMicLevelChange?.(0);
+    this.config.onMicLevelChange?.(0);
     try {
       socket.emit('stop');
     } catch (e) {
-      logger.warn('[RandomChatSession] Error emitting stop:', e);
+      logger.warn('[RandomChatSession] Error emitting stop', e);
     }
-    
-    // 5. Сбрасываем loading и эмитим событие
-    this.config.callbacks.onLoadingChange?.(false);
-    this.config.onLoadingChange?.(false);
-    this.lastAutoSearchRef = 0;
     this.emit('stopped');
+    // Сбрасываем флаги после остановки
+    this.disconnectHandled = false;
   }
-  
-  /**
-   * Перейти к следующему собеседнику
-   * ПРОСТАЯ ЛОГИКА: Очищаем все, отправляем next на сервер, запускаем новый поиск
-   */
-  next(): void {
-    // 1. Отправляем next на сервер (другой пользователь получит peer:left и начнет поиск)
-    try {
-      socket.emit('next');
-    } catch (e) {
-      logger.warn('[RandomChatSession] Error emitting next:', e);
-    }
-    
-    // 2. Полностью очищаем текущее соединение (комната, стримы, PC)
-    this.handleNext(true);
-    
-    // 3. Запускаем новый поиск
-    this.config.setStarted?.(true);
-    this.autoNext('manual_next');
-  }
-  
-  /**
-   * Автоматический поиск следующего собеседника
-   * ПРОСТАЯ ЛОГИКА: Защита от спама, затем сразу запускаем поиск
-   */
-  autoNext(reason?: string): void {
-    const now = Date.now();
-    const timeSinceLastSearch = now - this.lastAutoSearchRef;
-    
-    // Защита от спама (минимум 200ms между запросами)
-    if (timeSinceLastSearch < 200) {
+
+  async next(): Promise<void> {
+    // КРИТИЧНО: Защита от множественных вызовов next
+    if (this.isDisconnecting) {
+      logger.debug('[RandomChatSession] next: already disconnecting, skipping');
       return;
     }
     
-    // Отменяем предыдущий таймер если есть
-    if (this.autoSearchTimeoutRef) {
-      clearTimeout(this.autoSearchTimeoutRef);
-      this.autoSearchTimeoutRef = null;
-    }
-    
-    this.lastAutoSearchRef = now;
-    
-    // Обновляем состояние и запускаем поиск
-    this.config.setStarted?.(true);
-    this.config.onLoadingChange?.(true);
-    this.config.setIsInactiveState?.(false);
+    // КРИТИЧНО: Локальные треки НЕ останавливаем при next() - они должны продолжать работать
+    // Останавливаем только удаленное соединение и сбрасываем состояние удаленного стрима
     
     try {
-      socket.emit('start');
-      this.config.callbacks.onLoadingChange?.(true);
-      this.config.onLoadingChange?.(true);
-      this.emit('searching');
+      socket.emit('next');
     } catch (e) {
-      logger.error('[RandomChatSession] autoNext error:', e);
+      logger.warn('[RandomChatSession] Error emitting next', e);
     }
-  }
-  
-  /**
-   * Отменить автоматический поиск
-   */
-  cancelAutoNext(): void {
-    if (this.autoSearchTimeoutRef) {
-      clearTimeout(this.autoSearchTimeoutRef);
-      this.autoSearchTimeoutRef = null;
-    }
-  }
-  
-  /**
-   * Обработка остановки
-   * ПРОСТАЯ ЛОГИКА: Полностью очищаем все соединения, комнаты, стримы, PC
-   */
-  protected handleStop(force: boolean = false): void {
-    // 1. Закрываем и очищаем PC
-    if (this.peerRef) {
-      this.incrementPcToken();
-      try {
-        if (this.peerRef.signalingState !== 'closed' && (this.peerRef as any).connectionState !== 'closed') {
-          this.peerRef.close();
+    
+    // Отключаем только комнату, локальные треки остаются активными
+    await this.disconnectRoom('user');
+    this.resetRemoteState();
+    
+    // КРИТИЧНО: Добавляем задержку перед обновлением UI, чтобы комната успела отключиться
+    // Backend сам возвращает обоих в очередь и запускает tryMatch, поэтому тут НЕ шлем start,
+    // иначе получаем дубликаты match_found и разрывы LiveKit комнаты.
+    if (this.started) {
+      setTimeout(() => {
+        if (this.started && !this.isDisconnecting) {
+          this.emit('searching');
+          this.config.callbacks.onLoadingChange?.(true);
+          this.config.onLoadingChange?.(true);
         }
-      } catch (e) {
-        logger.warn('[RandomChatSession] Error closing PC:', e);
-      }
-      this.cleanupPeer(this.peerRef);
-      this.peerRef = null;
-    }
-    
-    // 2. Останавливаем все стримы
-    this.stopLocalStreamInternal();
-    this.stopRemoteStreamInternal();
-    
-    // 3. Очищаем таймеры
-    this.clearConnectionTimers();
-    this.stopTrackChecker();
-    this.stopMicMeter();
-    
-    // 4. Очищаем трекеры offer/answer
-    this.iceAndSignalingManager.reset();
-    
-    // 5. Очищаем partnerId и roomId (комната полностью очищается)
-    this.config.setStarted?.(false);
-    this.setPartnerId(null);
-    this.setRoomId(null);
-    
-    // 6. Эмитим событие
-    this.emit('stopped');
-  }
-  
-  /**
-   * Обработка перехода к следующему
-   * ПРОСТАЯ ЛОГИКА: Полностью очищаем соединение, комнату, стримы, PC
-   */
-  protected handleNext(force: boolean = false): void {
-    // 1. Закрываем и очищаем PC
-    if (this.peerRef) {
-      this.incrementPcToken();
-      try {
-        if (this.peerRef.signalingState !== 'closed' && (this.peerRef as any).connectionState !== 'closed') {
-          this.peerRef.close();
-        }
-      } catch (e) {
-        logger.warn('[RandomChatSession] Error closing PC:', e);
-      }
-      this.cleanupPeer(this.peerRef);
-      this.peerRef = null;
-    }
-    
-    // 2. Очищаем трекеры offer/answer
-    this.iceAndSignalingManager.reset();
-    
-    // 3. Останавливаем удаленный стрим
-    this.stopRemoteStreamInternal();
-    
-    // 4. Очищаем таймеры
-    this.clearConnectionTimers();
-    this.stopTrackChecker();
-    
-    // 5. Очищаем partnerId и roomId (комната очищается)
-    this.setPartnerId(null);
-    this.setRoomId(null);
-    
-    // 6. Эмитим событие для UI
-    this.emit('next');
-  }
-  
-  /**
-   * Очистка ресурсов
-   */
-  cleanup(): void {
-    this.stopRandomChat();
-    this.removeAllListeners();
-    
-    this.appStateHandler.removeAppStateListener();
-    
-    if (this.autoSearchTimeoutRef) {
-      clearTimeout(this.autoSearchTimeoutRef);
-      this.autoSearchTimeoutRef = null;
+      }, 300);
     }
   }
-  
-  /**
-   * Отправить состояние камеры партнеру (для рандомного чата используем partnerId)
-   */
-  sendCameraState(toPartnerId?: string, enabled?: boolean): void {
-    const targetPartnerId = toPartnerId || this.getPartnerId();
-    
-    if (!targetPartnerId) {
-      logger.warn('[RandomChatSession] sendCameraState: No partner ID available', {
-        toPartnerId,
-        currentPartnerId: this.getPartnerId()
+
+  autoNext(_reason?: string): void {
+    // КРИТИЧНО: Не запускаем поиск если идет отключение или уже есть комната
+    if (this.isDisconnecting || this.room) {
+      logger.debug('[RandomChatSession] autoNext: skipping (disconnecting or room exists)', {
+        isDisconnecting: this.isDisconnecting,
+        hasRoom: !!this.room
       });
       return;
     }
     
-    // Определяем текущее состояние камеры
-    let isEnabled: boolean;
-    if (enabled !== undefined) {
-      isEnabled = enabled;
-    } else {
-      const stream = this.getLocalStream();
-      const videoTrack = stream ? (stream as any)?.getVideoTracks?.()?.[0] : null;
-      isEnabled = videoTrack?.enabled ?? true;
-    }
-    
+    const now = Date.now();
+    if (now - this.lastAutoSearchAt < 200) return;
+    this.lastAutoSearchAt = now;
     try {
-      const payload: any = { 
-        enabled: isEnabled, 
-        from: socket.id,
-        to: targetPartnerId
-      };
-      
-      socket.emit('cam-toggle', payload);
+      socket.emit('start');
+      this.emit('searching');
+      this.config.callbacks.onLoadingChange?.(true);
+      this.config.onLoadingChange?.(true);
     } catch (e) {
-      logger.warn('[RandomChatSession] Error sending camera state:', e);
+      logger.error('[RandomChatSession] autoNext error', e);
     }
   }
-  
-  /**
-   * Синхронизируем состояние локальной камеры с новым собеседником.
-   * Нужно для случая, когда камера была выключена до подключения партнера.
-   */
-  private syncLocalCamStateWithPartner(partnerId: string | null, attempt: number = 0): void {
-    if (!partnerId) return;
-    
-    const stream = this.getLocalStream();
-    const videoTrack = stream?.getVideoTracks?.()?.[0];
-    
-    if (!videoTrack) {
-      if (attempt < 3) {
-        setTimeout(() => this.syncLocalCamStateWithPartner(partnerId, attempt + 1), 200);
-      }
-      return;
-    }
-    
-    const camEnabled = videoTrack.enabled !== false && (videoTrack as any).readyState !== 'ended';
-    if (camEnabled) {
-      return;
-    }
-    
-    const announce = () => {
-      if (this.partnerIdRef !== partnerId) {
-        return;
-      }
-      this.sendCameraState(partnerId, false);
-    };
-    
-    announce();
-    setTimeout(announce, 200);
-  }
-  
-  /**
-   * Настройка обработчиков socket для рандомного чата
-   */
-  protected setupSocketHandlers(): void {
-    // Вызываем базовую реализацию
-    super.setupSocketHandlers();
-    
-    // Добавляем специфичные обработчики для рандомного чата
-    socket.on('match_found', async (data: { id: string; userId?: string | null; roomId?: string }) => {
-      await this.handleMatchFound(data);
-    });
-    
-    socket.on('peer:stopped', () => {
-      // Партнер нажал "Стоп" или "Далее" - по принципу чатрулетки всегда запускаем новый поиск
-      // если чат был запущен (started = true)
-      const wasStarted = this.config.getStarted?.() ?? false;
-      
-      if (wasStarted) {
-        // ЧАТРУЛЕТКА: Очищаем соединение и сразу запускаем новый поиск
-        this.handleNext(true);
-        this.autoNext('peer_stopped');
-      } else {
-        // Чат не запущен - просто очищаем
-        this.handleStop();
-      }
-    });
-    
-    socket.on('peer:left', () => {
-      // Партнер нажал "Далее" - по принципу чатрулетки всегда запускаем новый поиск
-      // если чат был запущен (started = true)
-      const wasStarted = this.config.getStarted?.() ?? false;
-      
-      if (wasStarted) {
-        // ЧАТРУЛЕТКА: Очищаем соединение и сразу запускаем новый поиск
-        this.handleNext(true);
-        this.autoNext('partner_left');
-      } else {
-        // Чат не запущен - очищаем и запускаем поиск (на случай если чат был остановлен)
-        this.handleNext(true);
-        this.autoNext('partner_left_no_started');
-      }
-    });
-    
-    socket.on('disconnected', () => {
-      this.handleRandomDisconnected('server');
-    });
-    
-    socket.on('hangup', () => {
-      this.handleRandomDisconnected('server');
-    });
-  }
-  
-  /**
-   * Обработка match_found для рандомного чата
-   * ПРОСТАЯ ЛОГИКА: Нашли собеседника - сразу подключаемся
-   */
-  private async handleMatchFound(data: { id: string; userId?: string | null; roomId?: string }): Promise<void> {
-    const partnerId = data.id;
-    const roomId = data.roomId;
-    const { userId } = data;
-    
-    // Защита от дубликатов
-    if (this.partnerIdRef === partnerId && this.peerRef) {
-      const pc = this.peerRef;
-      if (pc.signalingState !== 'closed' && (pc as any).connectionState !== 'closed') {
-        return;
-      }
-    }
-    
-    // Сбрасываем состояние камеры (покажем заглушку пока не придет видео)
-    this.remoteStateManager.setRemoteCamOn(false, (event, ...args) => this.emit(event, ...args));
-    this.remoteStateManager.setRemoteForcedOff(false);
-    this.camToggleSeenRef = false;
-    this.remoteStateManager.setPendingCamToggle(null);
-    this.emitRemoteState();
-    
-    // Устанавливаем partnerId и roomId
-    this.setPartnerId(partnerId);
-    this.syncLocalCamStateWithPartner(partnerId);
-    if (roomId) {
-      this.setRoomId(roomId);
+
+  toggleMic(): void {
+    this.isMicOn = !this.isMicOn;
+    if (this.room) {
+      this.room.localParticipant.setMicrophoneEnabled(this.isMicOn).catch((e) => {
+        logger.warn('[RandomChatSession] Failed to toggle microphone', e);
+      });
+    } else if (this.localAudioTrack) {
       try {
-        socket.emit('room:join:ack', { roomId });
-        logger.info('[RandomChatSession] room:join:ack sent', { roomId, partnerId });
-      } catch (e) {
-        logger.warn('[RandomChatSession] Failed to emit room:join:ack', { roomId, error: e });
-      }
+        this.isMicOn ? this.localAudioTrack.unmute() : this.localAudioTrack.mute();
+      } catch {}
     }
-    
-    // Отправляем кешированные ICE кандидаты
-    this.flushOutgoingIceCache();
-    this.flushIceFor(partnerId).catch(() => {});
-    
-    // Закрываем старый PC если есть
-    if (this.peerRef) {
-      const pc = this.peerRef;
-      const isClosed = pc.signalingState === 'closed' || (pc as any).connectionState === 'closed';
-      const isForDifferentPartner = this.partnerIdRef && this.partnerIdRef !== partnerId;
-      
-      if (isClosed || isForDifferentPartner) {
-        try {
-          if (!isClosed) pc.close();
-        } catch {}
-        this.cleanupPeer(pc);
-        this.peerRef = null;
-      } else {
-        // PC уже для этого партнера - не создаем новый
-        this.emit('matchFound', { partnerId, roomId: roomId || null, userId: userId ?? null });
-        return;
-      }
-    }
-    
-    // Создаем PC и подключаемся
-    if (partnerId && !this.peerRef) {
-      let stream = this.streamManager.getLocalStream();
-      if (!stream || !isValidStream(stream)) {
-        stream = await this.startLocalStream('front');
-        if (!stream || !isValidStream(stream)) {
-          logger.error('[RandomChatSession] Failed to start local stream');
-          return;
-        }
-      }
-      
-      const pc = await this.ensurePcWithLocal(stream);
-      if (!pc) {
-        logger.error('[RandomChatSession] Failed to create PC');
-        return;
-      }
-      
-      // Устанавливаем обработчик ontrack
-      this.attachRemoteHandlers(pc, partnerId);
-      
-      // Создаем и отправляем offer
-      await this.createAndSendOffer(partnerId, roomId);
-    }
-    
-    // Эмитим событие
-    this.emit('matchFound', {
-      partnerId,
-      roomId: roomId || null,
-      userId: userId ?? null,
-    });
+    this.config.callbacks.onMicStateChange?.(this.isMicOn);
+    this.config.onMicStateChange?.(this.isMicOn);
   }
-  
-  /**
-   * Обработка отключения для рандомного чата (публичный метод)
-   */
-  handleRandomDisconnected(source: 'server' | 'local'): void {
-    const hasActiveConnection = !!this.partnerIdRef || !!this.roomIdRef;
-    const hasRemoteStream = !!this.streamManager.getRemoteStream();
-    const pc = this.peerRef;
-    
-    // КРИТИЧНО: НЕ обрабатываем handleRandomDisconnected если соединение активно
-    // Проверяем наличие remoteStream И состояние PeerConnection
-    if (hasRemoteStream && pc && pc.signalingState !== 'closed' && (pc as any).connectionState !== 'closed') {
-      const isPcActive = pc.iceConnectionState === 'checking' || 
-                        pc.iceConnectionState === 'connected' || 
-                        pc.iceConnectionState === 'completed' ||
-                        (pc as any).connectionState === 'connecting' ||
-                        (pc as any).connectionState === 'connected';
-      
-      if (isPcActive) {
-        return;
-      }
-    }
-    
-    // КРИТИЧНО: Инкрементируем токен перед очисткой, чтобы отложенные события игнорировались
-    if (this.peerRef) {
-      this.incrementPcToken();
-    }
-    
-    // КРИТИЧНО: Проверяем, был ли чат запущен перед обработкой disconnected
-    // Если чат был запущен (started=true), НЕ сбрасываем его, чтобы поиск продолжался
-    const wasStarted = this.config.getStarted?.() ?? false;
-    
-    // 1. Останавливаем локальный стрим, но НЕ трогаем autoNext и friend-call флаги
-    // КРИТИЧНО: НЕ останавливаем локальный стрим если чат был запущен - он нужен для продолжения поиска
-    if (!wasStarted) {
-      this.stopLocalStreamInternal();
-    }
-    
-    // 2. Чистим remoteStream
-    if (this.streamManager.getRemoteStream()) {
-      this.stopRemoteStreamInternal();
-    }
-    
-    // 3. КРИТИЧНО: НЕ сбрасываем started если чат был запущен
-    // Это позволяет продолжить поиск после disconnected
-    // Сбрасываем started только если чат был остановлен пользователем
-    if (!wasStarted) {
-      this.config.setStarted?.(false);
-    } else {
-      this.autoNext('disconnected');
-    }
-    
-    // 4. Эмитим 'disconnected', чтобы UI мог отреагировать
-    this.emit('disconnected');
-  }
-  
-  /**
-   * Переопределяем handleOffer для рандомного чата
-   * Добавляем специфичную логику для рандомного чата
-   */
-  protected async handleOffer({ from, offer, fromUserId, roomId }: { from: string; offer: any; fromUserId?: string; roomId?: string }): Promise<void> {
-    // Для рандомного чата используем from (socket.id) как partnerId
-    if (from && !this.getPartnerId()) {
-      this.setPartnerId(from);
-    }
-    
-    // Вызываем базовую реализацию
-    await super.handleOffer({ from, offer, fromUserId, roomId });
-  }
-  
-  /**
-   * Переопределяем handleAnswer для рандомного чата
-   */
-  protected async handleAnswer({ from, answer, roomId }: { from: string; answer: any; roomId?: string }): Promise<void> {
-    // Вызываем базовую реализацию
-    await super.handleAnswer({ from, answer, roomId });
-  }
-  
-  /**
-   * Переопределяем createAndSendAnswer для рандомного чата
-   * НЕ используем оптимизацию SDP, так как она может вызвать ошибку "SessionDescription is NULL"
-   */
-  protected async createAndSendAnswer(from: string, roomId?: string): Promise<void> {
-    const pc = this.getPeerConnection();
-    if (!pc) {
-      return;
-    }
-    
-    // КРИТИЧНО: Проверяем что localDescription еще не установлен
-    const hasLocalDesc = !!(pc as any)?.localDescription;
-    if (hasLocalDesc) {
-      logger.warn('[RandomChatSession] Answer already set for this PC', { from });
-      return;
-    }
-    
-    try {
-      // Проверяем состояние
-      if (pc.signalingState !== 'have-remote-offer') {
-        return;
-      }
-      
-      // КРИТИЧНО: Проверяем pcToken и что PC не закрыт
-      if (!this.isPcValid(pc)) {
-        logger.warn('[RandomChatSession] Cannot create answer - PC is closed or token invalid');
-        return;
-      }
-      
-      // Создаем answer
-      const answer = await pc.createAnswer();
-      
-      // КРИТИЧНО: Защита от множественных вызовов для одного и того же PC
-      const currentPcToken = this.pcLifecycleManager.getPcToken();
-      const answerSdp = answer?.sdp || '';
-      const answerKey = this.iceAndSignalingManager.createAnswerKey(from, currentPcToken, answerSdp);
-      if (this.iceAndSignalingManager.isProcessingAnswer(answerKey) || this.iceAndSignalingManager.isAnswerProcessed(answerKey)) {
-        logger.warn('[RandomChatSession] Answer already being processed or processed for this PC', { from, answerKey });
-        return;
-      }
-      
-      this.iceAndSignalingManager.markAnswerProcessing(answerKey);
-      
-      // КРИТИЧНО: Проверяем что answer валиден
-      if (!answer) {
-        logger.error('[RandomChatSession] CRITICAL: Answer is NULL!');
-        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
-        return;
-      }
-      
-      if (!answer.sdp) {
-        logger.error('[RandomChatSession] CRITICAL: Answer has no SDP!');
-        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
-        return;
-      }
-      
-      if (answer.type !== 'answer') {
-        logger.error('[RandomChatSession] CRITICAL: Answer type is not "answer"!', { type: answer.type });
-        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
-        return;
-      }
-      
-      // КРИТИЧНО: Для рандомного чата НЕ используем оптимизацию SDP
-      // Оптимизация может нарушить структуру SDP и вызвать ошибку "SessionDescription is NULL"
-      
-      // Проверяем состояние перед setLocalDescription
-      if (pc.signalingState !== 'have-remote-offer') {
-        logger.warn('[RandomChatSession] PC state changed before setLocalDescription for answer', {
-          signalingState: pc.signalingState,
-          expectedState: 'have-remote-offer'
-        });
-        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
-        return;
-      }
-      
-      // КРИТИЧНО: Проверяем что PC все еще валиден
-      if (!this.isPcValid(pc)) {
-        logger.warn('[RandomChatSession] PC became invalid before setLocalDescription for answer');
-        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
-        return;
-      }
-      
-      // КРИТИЧНО: Проверяем что answer все еще валиден перед setLocalDescription
-      if (!answer || !answer.sdp || answer.type !== 'answer') {
-        logger.error('[RandomChatSession] CRITICAL: Answer became invalid before setLocalDescription!');
-        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
-        return;
-      }
-      
-      // КРИТИЧНО: Проверяем что localDescription еще не установлен (защита от race condition)
-      const hasLocalDescBefore = !!(pc as any)?.localDescription;
-      if (hasLocalDescBefore) {
-        logger.warn('[RandomChatSession] Local description already set, skipping answer creation');
-        this.iceAndSignalingManager.markAnswerProcessed(answerKey);
-        return;
-      }
-      
+
+  async toggleCam(): Promise<void> {
+    this.isCamOn = !this.isCamOn;
+    if (this.room && this.localVideoTrack) {
       try {
-        // Используем оригинальный answer без оптимизации
-        await pc.setLocalDescription(answer);
-      } catch (setLocalError: any) {
-        const errorState = pc.signalingState;
-        const errorHasRemoteDesc = !!(pc as any)?.remoteDescription;
-        const errorMsg = String(setLocalError?.message || '');
-        
-        if (errorState !== 'have-remote-offer' || errorHasRemoteDesc) {
-          logger.warn('[RandomChatSession] PC state changed during setLocalDescription for answer', {
-            errorState,
-            errorHasRemoteDesc
-          });
-          return;
-        }
-        
-        if (errorMsg.includes('NULL') || errorMsg.includes('null')) {
-          logger.error('[RandomChatSession] ❌❌❌ CRITICAL: setLocalDescription failed with NULL error for answer!', {
-            error: errorMsg,
-            answerType: answer.type,
-            hasSdp: !!answer.sdp,
-            sdpLength: answer.sdp?.length,
-            signalingState: pc.signalingState,
-            hasLocalDesc: !!(pc as any)?.localDescription,
-            hasRemoteDesc: !!(pc as any)?.remoteDescription
-          });
-          
-          // RETRY: Пробуем создать answer заново
-          logger.warn('[RandomChatSession] Retrying answer creation...');
-          try {
-            // Проверяем состояние еще раз
-            if (pc.signalingState === 'have-remote-offer' && !(pc as any)?.localDescription) {
-              const retryAnswer = await pc.createAnswer();
-              
-              if (!retryAnswer || !retryAnswer.sdp || retryAnswer.type !== 'answer') {
-                throw new Error('Retry answer is invalid');
-              }
-              
-              await pc.setLocalDescription(retryAnswer);
-              logger.warn('[RandomChatSession] ✅ Successfully set local description with retry answer');
-              // Используем retry answer для отправки
-              answer.sdp = retryAnswer.sdp;
-              answer.type = retryAnswer.type;
-            } else {
-              throw new Error('PC state changed during retry');
-            }
-          } catch (retryError: any) {
-            logger.error('[RandomChatSession] ❌ Retry answer creation also failed:', retryError);
-            throw setLocalError; // Бросаем оригинальную ошибку
+        // Для LiveKit важнее сохранять publication, иначе приходят quality update для "unknown track"
+        // Поэтому камеру не отписываем, а просто включаем/выключаем capture.
+        const hasSid = !!this.localVideoTrack.sid;
+        if (hasSid) {
+          if (this.isCamOn && this.localVideoTrack.isMuted) {
+            this.localVideoTrack.unmute();
+          } else if (!this.isCamOn && !this.localVideoTrack.isMuted) {
+            this.localVideoTrack.mute();
           }
         } else {
-          throw setLocalError;
+          // Если трек еще не опубликован (нет sid), не дергаем LiveKit mute/unmute — просто включаем/выключаем трек локально
+          const mediaTrack = this.localVideoTrack.mediaStreamTrack;
+          if (mediaTrack) {
+            mediaTrack.enabled = this.isCamOn;
+          }
+        }
+
+        // Убеждаемся, что трек опубликован (при включении) — иначе LiveKit не найдет publication
+        const publications = this.room.localParticipant.videoTrackPublications;
+        let isPublished = false;
+
+        if (publications && typeof publications.values === 'function') {
+          for (const pub of publications.values()) {
+            if (pub.track === this.localVideoTrack || pub.trackSid === this.localVideoTrack.sid) {
+              isPublished = true;
+              break;
+            }
+          }
+        } else if (Array.isArray(publications)) {
+          isPublished = publications.some(
+            (pub) => pub.track === this.localVideoTrack || pub.trackSid === this.localVideoTrack.sid
+          );
+        }
+
+        if (this.isCamOn && !isPublished) {
+          await this.room.localParticipant.publishTrack(this.localVideoTrack);
+          logger.info('[RandomChatSession] Video track published after camera toggle on');
+        }
+
+        await this.room.localParticipant.setCameraEnabled(this.isCamOn);
+      } catch (e) {
+        logger.warn('[RandomChatSession] Failed to toggle camera', e);
+        // Fallback: используем только setCameraEnabled
+        try {
+          await this.room.localParticipant.setCameraEnabled(this.isCamOn);
+        } catch (e2) {
+          logger.warn('[RandomChatSession] Failed to setCameraEnabled', e2);
         }
       }
-      
-      // Отправляем answer напрямую собеседнику
-      const answerPayload: any = {
-        to: from,
-        answer,
-        fromUserId: this.config.myUserId
-      };
-      
-      socket.emit('answer', answerPayload);
-      
-      // Прожигаем отложенные ICE кандидаты
-      await this.flushIceFor(from);
-      
-      // Помечаем answer как обработанный
-      this.iceAndSignalingManager.markAnswerProcessed(answerKey);
-    } catch (e) {
-      logger.error('[RandomChatSession] Error creating/sending answer:', e);
-      // answerKey может быть не определен, если ошибка произошла до создания answer
+    } else if (this.localVideoTrack) {
+      // Если нет комнаты, просто mute/unmute трек
+      try {
+        const hasSid = !!this.localVideoTrack.sid;
+        if (hasSid) {
+          if (this.isCamOn) {
+            this.localVideoTrack.unmute();
+          } else {
+            this.localVideoTrack.mute();
+          }
+        } else if (this.localVideoTrack.mediaStreamTrack) {
+          this.localVideoTrack.mediaStreamTrack.enabled = this.isCamOn;
+        }
+      } catch {}
+    }
+    
+    // КРИТИЧНО: При включении камеры убеждаемся что трек есть в localStream
+    if (this.isCamOn && this.localStream && this.localVideoTrack?.mediaStreamTrack) {
+      const videoTracks = this.localStream.getVideoTracks();
+      const hasVideoTrack = videoTracks.some(t => t.id === this.localVideoTrack.mediaStreamTrack?.id);
+      if (!hasVideoTrack) {
+        // Добавляем видео трек обратно в localStream если его нет
+        this.localStream.addTrack(this.localVideoTrack.mediaStreamTrack as any);
+      }
+    }
+    
+    // КРИТИЧНО: Эмитим localStream для обновления UI
+    // КРИТИЧНО: НЕ эмитим remoteStream, так как локальное состояние камеры не влияет на удаленное видео
+    if (this.localStream) {
+      this.emit('localStream', this.localStream);
+      this.config.callbacks.onLocalStreamChange?.(this.localStream);
+      this.config.onLocalStreamChange?.(this.localStream);
+    }
+    
+    // КРИТИЧНО: Обновляем только локальное состояние камеры
+    // Удаленное видео не должно быть затронуто
+    this.config.callbacks.onCamStateChange?.(this.isCamOn);
+    this.config.onCamStateChange?.(this.isCamOn);
+  }
+
+  toggleRemoteAudio(): void {
+    this.remoteAudioMuted = !this.remoteAudioMuted;
+    if (this.remoteAudioTrack) {
+      try {
+        this.remoteAudioTrack.setMuted(this.remoteAudioMuted);
+      } catch (e) {
+        logger.warn('[RandomChatSession] Failed to toggle remote audio', e);
+      }
+    }
+    this.emit('remoteState', { muted: this.remoteAudioMuted });
+  }
+
+  async flipCam(): Promise<void> {
+    this.camSide = this.camSide === 'front' ? 'back' : 'front';
+    await this.restartLocalCamera();
+  }
+
+  async restartLocalCamera(): Promise<void> {
+    await this.ensureLocalTracks(true);
+    if (this.room && this.localVideoTrack) {
+      try {
+        // Отписываем старый трек если он опубликован
+        const publications = this.room.localParticipant.videoTrackPublications;
+        let existingPub = null;
+        
+        if (publications && typeof publications.values === 'function') {
+          // Это Map - проверяем через values()
+          for (const pub of publications.values()) {
+            if (pub.track === this.localVideoTrack || pub.trackSid === this.localVideoTrack.sid) {
+              existingPub = pub;
+              break;
+            }
+          }
+        } else if (Array.isArray(publications)) {
+          // Это массив - используем find
+          existingPub = publications.find(
+            pub => pub.track === this.localVideoTrack || pub.trackSid === this.localVideoTrack.sid
+          );
+        }
+        
+        if (existingPub) {
+          await this.room.localParticipant.unpublishTrack(this.localVideoTrack);
+        }
+        // Публикуем новый трек
+        await this.room.localParticipant.publishTrack(this.localVideoTrack);
+        logger.info('[RandomChatSession] Camera restarted and republished');
+      } catch (e) {
+        logger.warn('[RandomChatSession] Failed to republish camera after restart', e);
+      }
     }
   }
-  
-  /**
-   * Переопределяем createAndSendOffer для рандомного чата
-   * Используем to (socket.id) для рандомного чата
-   */
-  protected async createAndSendOffer(toPartnerId: string, roomId?: string): Promise<void> {
-    let offerKey: string | undefined;
+
+  handleRandomDisconnected(_: 'server' | 'local'): void {
+    // КРИТИЧНО: Защита от множественных вызовов
+    if (this.isDisconnecting || this.disconnectHandled) {
+      logger.debug('[RandomChatSession] handleRandomDisconnected already in progress, skipping');
+      return;
+    }
+    this.disconnectHandled = true;
     
-    try {
-      const pc = this.getPeerConnection();
-      if (!pc) {
-        logger.warn('[RandomChatSession] Cannot create offer - no PC');
-        return;
-      }
-      
-      const currentPcToken = this.pcLifecycleManager.getPcToken();
-      
-      // КРИТИЧНО: Проверяем что localDescription еще не установлен
-      const hasLocalDesc = !!(pc as any)?.localDescription;
-      if (hasLocalDesc) {
-        logger.warn('[RandomChatSession] Offer already set for this PC', { toPartnerId });
-        return;
-      }
-      
-      // КРИТИЧНО: Проверяем pcToken и что PC не закрыт
-      if (!this.isPcValid(pc)) {
-        logger.warn('[RandomChatSession] Cannot create offer - PC is closed or token invalid', {
-          pcToken: (pc as any)?._pcToken,
-          currentToken: currentPcToken,
-          signalingState: pc.signalingState
-        });
-        return;
-      }
-      
-      // Проверяем состояние PC - должно быть 'stable' без localDescription и remoteDescription
-      const signalingState = pc.signalingState;
-      const hasLocalDescCheck = !!(pc as any)?.localDescription;
-      const hasRemoteDesc = !!(pc as any)?.remoteDescription;
-      
-      if (signalingState !== 'stable' || hasLocalDescCheck || hasRemoteDesc) {
-        logger.warn('[RandomChatSession] PC not in stable state (without descriptions) for offer creation', {
-          signalingState,
-          hasLocalDesc: hasLocalDescCheck,
-          hasRemoteDesc,
-          expectedState: 'stable (no descriptions)'
-        });
-        return;
-      }
-      
-      // Проверяем еще раз перед созданием
-      const currentState = pc.signalingState;
-      const currentHasLocalDesc = !!(pc as any)?.localDescription;
-      const currentHasRemoteDesc = !!(pc as any)?.remoteDescription;
-      
-      if (currentState !== 'stable' || currentHasLocalDesc || currentHasRemoteDesc) {
-        logger.warn('[RandomChatSession] PC state changed before offer creation', {
-          signalingState: currentState,
-          hasLocalDesc: currentHasLocalDesc,
-          hasRemoteDesc: currentHasRemoteDesc
-        });
-        return;
-      }
-      
-      // Проверка на завершенный звонок
-      const isInactiveState = this.config.getIsInactiveState?.() ?? false;
-      if (isInactiveState) {
-        return;
-      }
-      
-      // КРИТИЧНО: Проверяем что треки добавлены в PC перед созданием offer
-      // Без треков может получиться sendonly вместо sendrecv
-      const sendersBeforeOffer = pc.getSenders?.() || [];
-      const audioSenders = sendersBeforeOffer.filter((s: any) => s?.track?.kind === 'audio');
-      const videoSenders = sendersBeforeOffer.filter((s: any) => s?.track?.kind === 'video');
-      
-      // КРИТИЧНО: Проверяем, что треки не ended
-      const endedAudioTracks = audioSenders.filter((s: any) => s?.track?.readyState === 'ended');
-      const endedVideoTracks = videoSenders.filter((s: any) => s?.track?.readyState === 'ended');
-      if (endedAudioTracks.length > 0 || endedVideoTracks.length > 0) {
-        logger.error('[RandomChatSession] CRITICAL: Tracks are ended before createOffer!', {
-          endedAudioCount: endedAudioTracks.length,
-          endedVideoCount: endedVideoTracks.length,
-          totalAudioSenders: audioSenders.length,
-          totalVideoSenders: videoSenders.length
-        });
-      }
-      
-      if (sendersBeforeOffer.length === 0) {
-        logger.error('[RandomChatSession] CRITICAL: No tracks in PC before createOffer! This will result in sendonly!');
-      }
-      
-      // КРИТИЧНО: offerToReceiveAudio и offerToReceiveVideo должны быть true
-      // Иначе получится sendonly вместо sendrecv
-      // Оптимизация: используем voiceActivityDetection: false для уменьшения задержки
-      const offer = await pc.createOffer({ 
-        offerToReceiveAudio: true, 
-        offerToReceiveVideo: true,
-        voiceActivityDetection: false, // Отключаем VAD для уменьшения задержки
-      } as any);
-      
-      const offerSdp = offer?.sdp || '';
-      offerKey = this.iceAndSignalingManager.createOfferKey(toPartnerId, currentPcToken, offerSdp);
-      
-      if (this.iceAndSignalingManager.isProcessingOffer(offerKey) || this.iceAndSignalingManager.isOfferProcessed(offerKey)) {
-        logger.warn('[RandomChatSession] Offer already being processed or processed for this PC', { toPartnerId, offerKey });
-        return;
-      }
-      
-      this.iceAndSignalingManager.markOfferProcessing(offerKey);
-      
-      // КРИТИЧНО: Проверяем что offer валиден
-      if (!offer) {
-        logger.error('[RandomChatSession] CRITICAL: Offer is NULL!');
-        this.iceAndSignalingManager.markOfferProcessed(offerKey);
-        return;
-      }
-      
-      if (!offer.sdp) {
-        logger.error('[RandomChatSession] CRITICAL: Offer has no SDP!');
-        this.iceAndSignalingManager.markOfferProcessed(offerKey);
-        return;
-      }
-      
-      if (offer.type !== 'offer') {
-        logger.error('[RandomChatSession] CRITICAL: Offer type is not "offer"!', { type: offer.type });
-        this.iceAndSignalingManager.markOfferProcessed(offerKey);
-        return;
-      }
-      
-      // КРИТИЧНО: Проверяем SDP на наличие sendrecv
-      const hasSendRecv = offer.sdp.includes('a=sendrecv');
-      const hasSendOnly = offer.sdp.includes('a=sendonly');
-      const hasRecvOnly = offer.sdp.includes('a=recvonly');
-      if (hasSendOnly && !hasSendRecv) {
-        logger.error('[RandomChatSession] CRITICAL: Offer has sendonly instead of sendrecv! This means remote video will not work!');
-      }
-      if (!hasSendRecv && !hasSendOnly && !hasRecvOnly) {
-        logger.warn('[RandomChatSession] Offer SDP has no explicit direction - may default to sendonly');
-      }
-      
-      // КРИТИЧНО: Для рандомного чата НЕ используем оптимизацию SDP
-      // Оптимизация может нарушить структуру SDP и вызвать ошибку "SessionDescription is NULL"
-      // Используем оригинальный offer напрямую
-      
-      // Проверяем состояние еще раз перед setLocalDescription
-      const finalState = pc.signalingState;
-      const finalHasLocalDesc = !!(pc as any)?.localDescription;
-      const finalHasRemoteDesc = !!(pc as any)?.remoteDescription;
-      
-      if (finalState !== 'stable' || finalHasLocalDesc || finalHasRemoteDesc) {
-        logger.warn('[RandomChatSession] PC state changed between createOffer and setLocalDescription', {
-          finalState,
-          finalHasLocalDesc,
-          finalHasRemoteDesc
-        });
-        this.iceAndSignalingManager.markOfferProcessed(offerKey);
-        return;
-      }
-      
-      // КРИТИЧНО: Проверяем что PC все еще валиден
-      if (!this.isPcValid(pc)) {
-        logger.warn('[RandomChatSession] PC became invalid before setLocalDescription');
-        this.iceAndSignalingManager.markOfferProcessed(offerKey);
-        return;
-      }
-      
-      // КРИТИЧНО: Проверяем что offer все еще валиден перед setLocalDescription
-      if (!offer || !offer.sdp || offer.type !== 'offer') {
-        logger.error('[RandomChatSession] CRITICAL: Offer became invalid before setLocalDescription!');
-        this.iceAndSignalingManager.markOfferProcessed(offerKey);
-        return;
-      }
-      
+    // Асинхронно отключаем комнату и затем запускаем поиск
+    void (async () => {
       try {
-        // КРИТИЧНО: Используем оригинальный offer без оптимизации для рандомного чата
-        await pc.setLocalDescription(offer);
-      } catch (setLocalError: any) {
-        const errorState = pc.signalingState;
-        const errorHasRemoteDesc = !!(pc as any)?.remoteDescription;
-        const errorMsg = String(setLocalError?.message || '');
+        await this.disconnectRoom('server');
+        this.resetRemoteState();
         
-        if (errorState === 'have-remote-offer' || errorHasRemoteDesc) {
-          logger.warn('[RandomChatSession] PC state changed to have-remote-offer during setLocalDescription');
-          this.iceAndSignalingManager.markOfferProcessed(offerKey);
+        // КРИТИЧНО: Добавляем задержку перед autoNext, чтобы комната успела полностью отключиться
+        // и избежать конфликтов с новыми подключениями
+        if (this.started) {
+          setTimeout(() => {
+            if (this.started && !this.isDisconnecting) {
+              this.autoNext('disconnected');
+            }
+          }, 500);
+        } else {
+          this.stopLocalTracks();
+        }
+      } finally {
+        // Сбрасываем флаги через небольшую задержку
+        setTimeout(() => {
+          this.disconnectHandled = false;
+        }, 1000);
+      }
+    })();
+  }
+
+  cleanup(): void {
+    this.stopRandomChat();
+    this.socketOffs.forEach((off) => off());
+    this.socketOffs = [];
+  }
+
+  getPeerConnection(): null {
+    return null;
+  }
+
+  setInPiP(_inPiP: boolean): void {}
+
+  // Методы для совместимости с фасадом
+  async startLocalStream(_side: CamSide = 'front'): Promise<MediaStream | null> {
+    await this.ensureLocalTracks();
+    return this.localStream;
+  }
+
+  async stopLocalStream(_preserveStreamForConnection: boolean = false, _force: boolean = false): Promise<void> {
+    this.stopLocalTracks();
+  }
+
+  stopRemoteStream(): void {
+    this.resetRemoteState();
+  }
+
+  checkRemoteVideoTrack(): void {
+    // Проверка удаленного видео трека уже выполняется в handleTrackSubscribed
+  }
+
+  leaveRoom(_roomId?: string): void {
+    void this.disconnectRoom('user');
+  }
+
+  async resumeFromPiP(): Promise<void> {
+    // Для RandomChatSession это не применимо
+  }
+
+  getLocalStream(): MediaStream | null {
+    return this.localStream;
+  }
+
+  getRemoteStream(): MediaStream | null {
+    return this.remoteStream;
+  }
+
+  getPartnerId(): string | null {
+    return this.currentRemoteParticipant?.identity || null;
+  }
+
+  getRoomId(): string | null {
+    return this.room?.name || null;
+  }
+
+  getCallId(): string | null {
+    // Для RandomChatSession нет callId
+    return null;
+  }
+
+  /* ===================== Internal helpers ===================== */
+
+  private setupSocketHandlers(): void {
+    const matchHandler = (data: MatchPayload) => {
+      this.handleMatchFound(data).catch((e) => {
+        logger.error('[RandomChatSession] Failed to handle match_found', e);
+      });
+    };
+    const peerStoppedHandler = () => this.handleRandomDisconnected('server');
+    const peerLeftHandler = () => this.handlePeerLeft();
+    const disconnectedHandler = () => this.handleRandomDisconnected('server');
+
+    socket.on('match_found', matchHandler);
+    socket.on('peer:stopped', peerStoppedHandler);
+    socket.on('peer:left', peerLeftHandler);
+    socket.on('disconnected', disconnectedHandler);
+    socket.on('hangup', disconnectedHandler);
+
+    this.socketOffs = [
+      () => socket.off('match_found', matchHandler),
+      () => socket.off('peer:stopped', peerStoppedHandler),
+      () => socket.off('peer:left', peerLeftHandler),
+      () => socket.off('disconnected', disconnectedHandler),
+      () => socket.off('hangup', disconnectedHandler),
+    ];
+  }
+
+  private async handleMatchFound(data: MatchPayload): Promise<void> {
+    const partnerId = data.id;
+    const roomId = data.roomId ?? null;
+    const userId = data.userId ?? null;
+
+    this.resetRemoteState();
+    this.emit('matchFound', { partnerId, roomId, userId });
+    this.config.callbacks.onPartnerIdChange?.(partnerId);
+    this.config.onPartnerIdChange?.(partnerId);
+    if (roomId) {
+      this.config.callbacks.onRoomIdChange?.(roomId);
+      this.config.onRoomIdChange?.(roomId);
+    }
+
+    if (!LIVEKIT_URL) {
+      logger.error('[RandomChatSession] LiveKit URL is not configured');
+      return;
+    }
+    if (!data.livekitToken || !data.livekitRoomName) {
+      logger.error('[RandomChatSession] Missing LiveKit credentials in match_found payload');
+      return;
+    }
+
+    // Дедуп: backend может отправить match_found несколько раз (особенно вокруг next/start),
+    // а повторный connect приводит к мгновенному disconnect/stream end.
+    if (this.room && this.room.state !== 'disconnected' && this.room.name === data.livekitRoomName) {
+      logger.debug('[RandomChatSession] Duplicate match_found ignored', { partnerId, roomName: data.livekitRoomName });
+      return;
+    }
+
+    const connectRequestId = ++this.connectRequestId;
+    const connected = await this.connectToLiveKit(LIVEKIT_URL, data.livekitToken, connectRequestId);
+    if (!connected) {
+      logger.debug('[RandomChatSession] Match handling aborted (stale request)', {
+        connectRequestId,
+        partnerId,
+      });
+      return;
+    }
+    this.config.callbacks.onLoadingChange?.(false);
+    this.config.onLoadingChange?.(false);
+    this.config.setIsInactiveState?.(false);
+  }
+
+  private handlePeerLeft(): void {
+    // peer:left приходит при "next" партнёра; backend сам возвращает нас в очередь.
+    // Здесь только чистим LiveKit и UI, без повторного socket.emit('start'), чтобы избежать дублей.
+    // КРИТИЧНО: Защита от множественных вызовов
+    if (this.isDisconnecting || this.disconnectHandled) {
+      logger.debug('[RandomChatSession] handlePeerLeft: already disconnecting, skipping');
+      return;
+    }
+    
+    void (async () => {
+      try {
+        await this.disconnectRoom('server');
+        this.resetRemoteState();
+        
+        // КРИТИЧНО: Добавляем задержку перед обновлением UI, чтобы комната успела отключиться
+        setTimeout(() => {
+          if (this.started && !this.isDisconnecting) {
+            this.emit('searching');
+            this.config.callbacks.onLoadingChange?.(true);
+            this.config.onLoadingChange?.(true);
+          }
+        }, 300);
+      } catch (e) {
+        logger.error('[RandomChatSession] Error in handlePeerLeft', e);
+      }
+    })();
+  }
+
+  private async ensureLocalTracks(force = false): Promise<void> {
+    // КРИТИЧНО: Проверяем что треки не только существуют, но и активны
+    const videoActive = this.localVideoTrack && this.localVideoTrack.mediaStreamTrack?.readyState !== 'ended';
+    const audioActive = this.localAudioTrack && this.localAudioTrack.mediaStreamTrack?.readyState !== 'ended';
+    
+    if (videoActive && audioActive && !force) {
+      this.emit('localStream', this.localStream);
+      this.config.callbacks.onLocalStreamChange?.(this.localStream);
+      this.config.onLocalStreamChange?.(this.localStream);
+      return;
+    }
+
+    if (force) {
+      this.stopLocalTracks();
+    }
+
+    const tracks = await createLocalTracks({
+      audio: true,
+      video: {
+        facingMode: this.camSide === 'front' ? 'user' : 'environment',
+        resolution: { width: 1280, height: 720 },
+        frameRate: 30,
+      },
+    }).catch((e) => {
+      logger.error('[RandomChatSession] Failed to create local tracks', e);
+      throw e;
+    });
+
+    tracks.forEach((track) => {
+      if (track.kind === Track.Kind.Video) {
+        this.localVideoTrack = track as LocalVideoTrack;
+      } else if (track.kind === Track.Kind.Audio) {
+        this.localAudioTrack = track as LocalAudioTrack;
+      }
+    });
+
+    const stream = new MediaStream();
+    tracks.forEach((track) => {
+      const mediaTrack = track.mediaStreamTrack;
+      if (mediaTrack) {
+        // LiveKit's MediaStreamTrack is compatible with @livekit/react-native-webrtc's MediaStreamTrack at runtime
+        stream.addTrack(mediaTrack as any);
+      }
+    });
+    this.localStream = stream;
+    this.config.callbacks.onLocalStreamChange?.(stream);
+    this.config.onLocalStreamChange?.(stream);
+    this.emit('localStream', stream);
+    this.config.callbacks.onCamStateChange?.(this.isCamOn);
+    this.config.onCamStateChange?.(this.isCamOn);
+    this.config.callbacks.onMicStateChange?.(this.isMicOn);
+    this.config.onMicStateChange?.(this.isMicOn);
+    
+    // КРИТИЧНО: Запускаем мониторинг уровня микрофона для эквалайзера
+    this.startMicLevelMonitoring(stream);
+  }
+
+  private stopLocalTracks(): void {
+    // Останавливаем мониторинг уровня микрофона
+    this.stopMicLevelMonitoring();
+    
+    if (this.localAudioTrack) {
+      try {
+        this.localAudioTrack.stop();
+      } catch {}
+      this.localAudioTrack = null;
+    }
+    if (this.localVideoTrack) {
+      try {
+        this.localVideoTrack.stop();
+      } catch {}
+      this.localVideoTrack = null;
+    }
+    this.localStream = null;
+    this.config.callbacks.onLocalStreamChange?.(null);
+    this.config.onLocalStreamChange?.(null);
+    this.emit('localStream', null);
+    this.isCamOn = false;
+    this.isMicOn = false;
+    this.config.callbacks.onCamStateChange?.(false);
+    this.config.onCamStateChange?.(false);
+    this.config.callbacks.onMicStateChange?.(false);
+    this.config.onMicStateChange?.(false);
+  }
+  
+  private startMicLevelMonitoring(stream: MediaStream): void {
+    // Останавливаем предыдущий мониторинг если он был
+    this.stopMicLevelMonitoring();
+    
+    // Проверяем доступность Web Audio API
+    // В React Native может быть недоступен, используем альтернативный подход
+    let AudioContextClass: any = null;
+    
+    if (typeof window !== 'undefined') {
+      AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    }
+    
+    // Также проверяем глобальный объект (для React Native)
+    if (!AudioContextClass && typeof global !== 'undefined') {
+      AudioContextClass = (global as any).AudioContext || (global as any).webkitAudioContext;
+    }
+    
+    if (!AudioContextClass) {
+      logger.warn('[RandomChatSession] Web Audio API not available, using LiveKit getTrackStats fallback');
+      // В React Native Web Audio API обычно недоступен
+      // Используем getTrackStats из LiveKit Room для получения реального уровня аудио
+      this.micLevelInterval = setInterval(async () => {
+        // КРИТИЧНО: Проверяем что микрофон включен и соединение установлено
+        if (!this.isMicOn || !this.room || this.room.state !== 'connected') {
+          this.config.callbacks.onMicLevelChange?.(0);
+          this.config.onMicLevelChange?.(0);
           return;
         }
         
-        logger.error('[RandomChatSession] CRITICAL: setLocalDescription failed!', {
-          error: errorMsg,
-          offerType: offer.type,
-          hasSdp: !!offer.sdp,
-          sdpLength: offer.sdp?.length,
-          signalingState: pc.signalingState,
-          hasLocalDesc: !!(pc as any)?.localDescription,
-          hasRemoteDesc: !!(pc as any)?.remoteDescription,
-          sendersCount: (pc.getSenders?.() || []).length
-        });
+        let audioLevel = 0;
         
-        this.iceAndSignalingManager.markOfferProcessed(offerKey);
-        throw setLocalError;
-      }
+        // Пытаемся получить статистику из LiveKit Room
+        try {
+          const stats = await this.room.localParticipant.getTrackStats();
+          
+          // Ищем статистику для аудио трека
+          for (const stat of stats) {
+            if (stat.kind === 'audio' && this.localAudioTrack) {
+              // Проверяем различные поля статистики
+              const level = (stat as any).audioLevel || 
+                           (stat as any).volume || 
+                           (stat as any).audioEnergy || 
+                           (stat as any).totalAudioEnergy || 0;
+              
+              if (level > 0) {
+                // Нормализуем значение (зависит от формата статистики)
+                // Обычно это 0-127, 0-255, или уже нормализованное 0-1
+                if (level <= 1) {
+                  audioLevel = level;
+                } else if (level <= 127) {
+                  audioLevel = Math.min(1, level / 127);
+                } else {
+                  audioLevel = Math.min(1, level / 255);
+                }
+                break;
+              }
+            }
+          }
+        } catch (e) {
+          // Игнорируем ошибки получения статистики
+          logger.debug('[RandomChatSession] Could not get track stats', e);
+        }
+        
+        // КРИТИЧНО: НЕ используем визуальный эффект - возвращаем только реальные данные
+        // Если нет реальных данных - уровень остается 0 (эквалайзер не двигается)
+        this.config.callbacks.onMicLevelChange?.(audioLevel);
+        this.config.onMicLevelChange?.(audioLevel);
+      }, 100); // Обновляем каждые 100ms
+      return;
+    }
+    
+    try {
+      // Создаем AudioContext
+      this.audioContext = new AudioContextClass();
       
-      this.markPcWithToken(pc);
+      // Создаем AnalyserNode для анализа аудио
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 256; // Размер FFT для частотного анализа
+      this.analyser.smoothingTimeConstant = 0.8; // Сглаживание
       
-      // Отправляем offer напрямую собеседнику
-      const offerPayload: any = {
-        to: toPartnerId,
-        offer,
-        fromUserId: this.config.myUserId
-      };
-      
-      socket.emit('offer', offerPayload);
-      
-      // Помечаем offer как обработанный
-      if (offerKey) {
-        this.iceAndSignalingManager.markOfferProcessed(offerKey);
+      // Подключаем аудио поток к анализатору
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length > 0) {
+        this.micLevelSource = this.audioContext.createMediaStreamSource(stream);
+        this.micLevelSource.connect(this.analyser);
+        
+        // Запускаем периодический опрос уровня
+        this.micLevelInterval = setInterval(() => {
+          // КРИТИЧНО: Проверяем что микрофон включен и соединение установлено
+          if (!this.analyser || !this.isMicOn || !this.room || this.room.state !== 'connected') {
+            this.config.callbacks.onMicLevelChange?.(0);
+            this.config.onMicLevelChange?.(0);
+            return;
+          }
+          
+          // Получаем данные частотного анализа
+          const bufferLength = this.analyser.frequencyBinCount;
+          const dataArray = new Uint8Array(bufferLength);
+          this.analyser.getByteFrequencyData(dataArray);
+          
+          // Вычисляем средний уровень по всем частотам
+          // Используем взвешенное среднее для лучшей чувствительности
+          let sum = 0;
+          let weightedSum = 0;
+          let weightSum = 0;
+          
+          for (let i = 0; i < bufferLength; i++) {
+            const value = dataArray[i];
+            sum += value;
+            // Взвешиваем более высокие частоты (индекс выше = частота выше)
+            const weight = 1 + (i / bufferLength) * 0.5; // Вес от 1.0 до 1.5
+            weightedSum += value * weight;
+            weightSum += weight;
+          }
+          
+          // Используем взвешенное среднее для более точного отображения
+          const average = weightedSum / weightSum;
+          
+          // Нормализуем значение (0-255 -> 0-1) с усилением
+          // Используем квадратный корень для более плавной кривой
+          const normalizedLevel = Math.min(1, Math.sqrt(average / 255) * 1.2);
+          
+          // Обновляем уровень микрофона
+          this.config.callbacks.onMicLevelChange?.(normalizedLevel);
+          this.config.onMicLevelChange?.(normalizedLevel);
+        }, 50); // Обновляем каждые 50ms для плавной анимации
+        
+        logger.info('[RandomChatSession] Mic level monitoring started');
+      } else {
+        logger.warn('[RandomChatSession] No audio tracks in stream for mic level monitoring');
+        this.cleanupAudioContext();
       }
     } catch (e) {
-      logger.error('[RandomChatSession] Error creating/sending offer:', e);
-      if (offerKey) {
-        this.iceAndSignalingManager.markOfferProcessed(offerKey);
+      logger.error('[RandomChatSession] Failed to start mic level monitoring', e);
+      this.cleanupAudioContext();
+    }
+  }
+  
+  private stopMicLevelMonitoring(): void {
+    if (this.micLevelInterval) {
+      clearInterval(this.micLevelInterval);
+      this.micLevelInterval = null;
+    }
+    
+    this.cleanupAudioContext();
+    
+    // Сбрасываем уровень на 0
+    this.config.callbacks.onMicLevelChange?.(0);
+    this.config.onMicLevelChange?.(0);
+  }
+  
+  private cleanupAudioContext(): void {
+    if (this.micLevelSource) {
+      try {
+        this.micLevelSource.disconnect();
+      } catch {}
+      this.micLevelSource = null;
+    }
+    
+    if (this.analyser) {
+      try {
+        this.analyser.disconnect();
+      } catch {}
+      this.analyser = null;
+    }
+    
+    if (this.audioContext) {
+      try {
+        this.audioContext.close();
+      } catch {}
+      this.audioContext = null;
+    }
+  }
+
+  private resetRemoteState(): void {
+    this.remoteStream = null;
+    this.remoteAudioTrack = null;
+    this.remoteVideoTrack = null;
+    this.currentRemoteParticipant = null;
+    this.remoteCamEnabled = false;
+    this.emit('remoteStream', null);
+    this.config.callbacks.onRemoteStreamChange?.(null);
+    this.config.onRemoteStreamChange?.(null);
+    this.config.callbacks.onRemoteCamStateChange?.(false);
+    this.config.onRemoteCamStateChange?.(false);
+    this.remoteAudioMuted = false;
+    this.emit('remoteState', { muted: false });
+    this.remoteViewKey = Date.now();
+    this.emit('remoteViewKeyChanged', this.remoteViewKey);
+  }
+
+  private async connectToLiveKit(url: string, token: string, connectRequestId: number): Promise<boolean> {
+    // КРИТИЧНО: Отключаем предыдущую комнату перед подключением к новой
+    await this.disconnectRoom('user');
+    
+    // КРИТИЧНО: Небольшая задержка после отключения, чтобы избежать конфликтов
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
+    // КРИТИЧНО: Убеждаемся что локальные треки существуют и активны
+    // Если треки были остановлены (чего не должно быть при next()), пересоздаем их
+    if (!this.localVideoTrack || !this.localAudioTrack) {
+      logger.info('[RandomChatSession] Local tracks missing, recreating...');
+      await this.ensureLocalTracks();
+    } else {
+      // КРИТИЧНО: Проверяем что треки не остановлены
+      // Если треки остановлены, пересоздаем их
+      const videoEnded = this.localVideoTrack.mediaStreamTrack?.readyState === 'ended';
+      const audioEnded = this.localAudioTrack.mediaStreamTrack?.readyState === 'ended';
+      
+      if (videoEnded || audioEnded) {
+        logger.warn('[RandomChatSession] Local tracks ended, recreating...', { videoEnded, audioEnded });
+        await this.ensureLocalTracks();
+      } else {
+        // Треки активны, убеждаемся что они включены
+        if (this.localVideoTrack.isMuted !== !this.isCamOn) {
+          if (this.isCamOn) {
+            this.localVideoTrack.unmute();
+          } else {
+            this.localVideoTrack.mute();
+          }
+        }
+        if (this.localAudioTrack.isMuted !== !this.isMicOn) {
+          if (this.isMicOn) {
+            this.localAudioTrack.unmute();
+          } else {
+            this.localAudioTrack.mute();
+          }
+        }
       }
     }
+    
+    const room = new Room({
+      // Отключаем dynacast/adaptiveStream, чтобы LiveKit не мьютил треки и не слал quality updates для "unknown track"
+      adaptiveStream: false,
+      dynacast: false,
+      publishDefaults: {
+        videoEncoding: { maxBitrate: 1200_000, maxFramerate: 30 },
+        videoSimulcastLayers: [],
+      },
+    });
+    this.room = room;
+    this.registerRoomEvents(room);
+
+    try {
+      await room.connect(url, token, { autoSubscribe: true });
+    } catch (e) {
+      if (this.room === room) {
+        this.room = null;
+      }
+      if (this.connectRequestId !== connectRequestId || this.room !== room) {
+        // Подключение отменено (например, пользователь нажал «Далее»)
+        return false;
+      }
+      throw e;
+    }
+
+    if (this.connectRequestId !== connectRequestId || this.room !== room) {
+      await this.safeDisconnect(room);
+      return false;
+    }
+
+    // КРИТИЧНО: Публикуем локальные треки после подключения к комнате
+    // Убеждаемся что треки активны перед публикацией
+    // КРИТИЧНО: Добавляем небольшую задержку перед публикацией, чтобы комната полностью подключилась
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
+    // КРИТИЧНО: Публикуем треки напрямую - LiveKit сам обработает дубликаты
+    // Не проверяем наличие публикаций, так как это может вызвать ошибки с Map API
+    if (this.localVideoTrack && this.localVideoTrack.mediaStreamTrack?.readyState !== 'ended') {
+      try {
+        // Если трек еще не опубликован (sid нет), не дергаем mute/unmute LiveKit — только включаем/выключаем mediaTrack
+        if (!this.localVideoTrack.sid && this.localVideoTrack.mediaStreamTrack) {
+          this.localVideoTrack.mediaStreamTrack.enabled = this.isCamOn;
+        } else {
+          // КРИТИЧНО: Убеждаемся что трек включен перед публикацией
+          if (this.isCamOn && this.localVideoTrack.isMuted) {
+            this.localVideoTrack.unmute();
+          } else if (!this.isCamOn && !this.localVideoTrack.isMuted) {
+            this.localVideoTrack.mute();
+          }
+        }
+        await room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
+          // Игнорируем ошибки дубликатов - LiveKit может вернуть ошибку если трек уже опубликован
+          if (!e?.message?.includes('already') && !e?.message?.includes('duplicate')) {
+            throw e;
+          }
+        });
+        logger.info('[RandomChatSession] Video track published', {
+          trackId: this.localVideoTrack.sid || this.localVideoTrack.mediaStreamTrack?.id,
+          isMuted: this.localVideoTrack.isMuted,
+        });
+      } catch (e) {
+        logger.warn('[RandomChatSession] Failed to publish video track', e);
+        // Не блокируем успех подключения - трек может быть опубликован позже
+      }
+    }
+    
+    if (this.localAudioTrack && this.localAudioTrack.mediaStreamTrack?.readyState !== 'ended') {
+      try {
+        // КРИТИЧНО: Убеждаемся что трек включен перед публикацией
+        if (this.isMicOn && this.localAudioTrack.isMuted) {
+          this.localAudioTrack.unmute();
+        } else if (!this.isMicOn && !this.localAudioTrack.isMuted) {
+          this.localAudioTrack.mute();
+        }
+        await room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
+          // Игнорируем ошибки дубликатов - LiveKit может вернуть ошибку если трек уже опубликован
+          if (!e?.message?.includes('already') && !e?.message?.includes('duplicate')) {
+            throw e;
+          }
+        });
+        logger.info('[RandomChatSession] Audio track published', {
+          trackId: this.localAudioTrack.sid || this.localAudioTrack.mediaStreamTrack?.id,
+          isMuted: this.localAudioTrack.isMuted,
+        });
+      } catch (e) {
+        logger.warn('[RandomChatSession] Failed to publish audio track', e);
+        // Не блокируем успех подключения - трек может быть опубликован позже
+      }
+    }
+
+    // Обновляем состояние камеры и микрофона
+    this.config.callbacks.onMicStateChange?.(this.isMicOn);
+    this.config.onMicStateChange?.(this.isMicOn);
+    this.config.callbacks.onCamStateChange?.(this.isCamOn);
+    this.config.onCamStateChange?.(this.isCamOn);
+    
+    // КРИТИЧНО: Скрываем лоадер после успешного подключения и публикации треков
+    this.config.callbacks.onLoadingChange?.(false);
+    this.config.onLoadingChange?.(false);
+    this.config.setIsInactiveState?.(false);
+    
+    return true;
+  }
+
+  private async disconnectRoom(reason: 'user' | 'server' = 'user'): Promise<void> {
+    // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
+    if (this.isDisconnecting) {
+      logger.debug('[RandomChatSession] disconnectRoom already in progress, skipping');
+      return;
+    }
+    
+    const room = this.room;
+    if (!room) {
+      logger.debug('[RandomChatSession] disconnectRoom: no room to disconnect');
+      return;
+    }
+    
+    // Проверяем, не отключена ли комната уже
+    if (room.state === 'disconnected') {
+      logger.debug('[RandomChatSession] disconnectRoom: room already disconnected');
+      this.room = null;
+      return;
+    }
+    
+    this.isDisconnecting = true;
+    this.disconnectReason = reason;
+    
+    // КРИТИЧНО: НЕ отписываем треки перед disconnect - LiveKit сам корректно обработает отключение
+    // Отписка треков может привести к их остановке или зависанию
+    // LiveKit сам управляет треками при disconnect()
+    
+    // Увеличиваем connectRequestId, чтобы остановить отложенные подключения
+    this.connectRequestId++;
+    this.room = null;
+    
+    // КРИТИЧНО: НЕ вызываем room.removeAllListeners() перед disconnect()
+    // Это удаляет внутренние обработчики LiveKit (ping/pong, корректное завершение),
+    // что приводит к "ping timeout" и "connection state mismatch" ошибкам.
+    // room.disconnect() сам корректно завершит соединение и очистит ресурсы.
+    // КРИТИЧНО: Локальные треки НЕ останавливаем - они должны продолжать работать для следующего соединения
+    
+    try {
+      await room.disconnect();
+    } catch (e) {
+      logger.warn('[RandomChatSession] Error disconnecting room', e);
+    }
+    this.disconnectReason = 'unknown';
+    this.isDisconnecting = false;
+  }
+
+  private async safeDisconnect(room: Room): Promise<void> {
+    if (!room) return;
+    if (room.state === 'disconnected') {
+      return;
+    }
+    try {
+      await room.disconnect();
+    } catch (e) {
+      logger.warn('[RandomChatSession] Error disconnecting stale room', e);
+    }
+  }
+
+  private registerRoomEvents(room: Room): void {
+    room
+      .on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        this.handleTrackSubscribed(track, publication, participant);
+      })
+      .on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
+        // КРИТИЧНО: Проверяем тип участника перед обработкой
+        // Локальные треки не должны влиять на remoteStream
+        if (participant.isLocal) {
+          logger.debug('[RandomChatSession] Ignoring TrackUnsubscribed for local participant', {
+            kind: publication.kind,
+            trackSid: publication.trackSid,
+          });
+          return;
+        }
+        // КРИТИЧНО: Приводим к RemoteParticipant для типизации
+        this.handleTrackUnsubscribed(publication, participant as RemoteParticipant);
+      })
+      .on(RoomEvent.TrackMuted, (pub, participant) => {
+        if (!participant.isLocal && pub.kind === Track.Kind.Video) {
+          logger.info('[RandomChatSession] Remote video track muted', {
+            trackId: pub.trackSid,
+            participantId: participant.identity,
+          });
+          this.remoteCamEnabled = false;
+          // КРИТИЧНО: Обновляем remoteViewKey для принудительного обновления UI
+          this.remoteViewKey = Date.now();
+          this.emit('remoteViewKeyChanged', this.remoteViewKey);
+          // КРИТИЧНО: Обновляем remoteStream для отображения заглушки
+          if (this.remoteStream) {
+            this.emit('remoteStream', this.remoteStream);
+            this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
+            this.config.onRemoteStreamChange?.(this.remoteStream);
+          }
+          this.config.callbacks.onRemoteCamStateChange?.(false);
+          this.config.onRemoteCamStateChange?.(false);
+        }
+      })
+      .on(RoomEvent.TrackUnmuted, (pub, participant) => {
+        if (!participant.isLocal && pub.kind === Track.Kind.Video) {
+          logger.info('[RandomChatSession] Remote video track unmuted', {
+            trackId: pub.trackSid,
+            participantId: participant.identity,
+          });
+          this.remoteCamEnabled = true;
+          // КРИТИЧНО: Обновляем remoteViewKey для принудительного обновления UI
+          this.remoteViewKey = Date.now();
+          this.emit('remoteViewKeyChanged', this.remoteViewKey);
+          // КРИТИЧНО: Обновляем remoteStream для отображения видео
+          if (this.remoteStream) {
+            this.emit('remoteStream', this.remoteStream);
+            this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
+            this.config.onRemoteStreamChange?.(this.remoteStream);
+          }
+          this.config.callbacks.onRemoteCamStateChange?.(true);
+          this.config.onRemoteCamStateChange?.(true);
+        }
+      })
+      .on(RoomEvent.ParticipantDisconnected, (participant) => {
+        if (participant === this.currentRemoteParticipant) {
+          // КРИТИЧНО: Проверяем, не отключаемся ли мы уже
+          if (!this.isDisconnecting && !this.disconnectHandled) {
+            this.handleRandomDisconnected('server');
+          }
+        }
+      })
+      .once(RoomEvent.Disconnected, () => {
+        // КРИТИЧНО: Убираем циклический вызов handleRandomDisconnected
+        // Если комната отключилась по причине 'server', это уже обработано в ParticipantDisconnected
+        // или в других обработчиках. Здесь только сбрасываем флаги.
+        logger.debug('[RandomChatSession] Room disconnected', { 
+          reason: this.disconnectReason, 
+          started: this.started,
+          isDisconnecting: this.isDisconnecting 
+        });
+        this.disconnectReason = 'unknown';
+        this.isDisconnecting = false;
+      });
+  }
+
+  private handleTrackSubscribed(
+    track: RemoteTrack,
+    publication: RemoteTrackPublication,
+    participant: RemoteParticipant
+  ): void {
+    // КРИТИЧНО: Обрабатываем только треки удаленного участника
+    // Локальные треки (participant.isLocal === true) не должны влиять на remoteStream
+    if (participant.isLocal) {
+      logger.debug('[RandomChatSession] Ignoring subscription of local track', {
+        kind: publication.kind,
+        trackId: track.sid,
+      });
+      return;
+    }
+    
+    logger.info('[RandomChatSession] Remote track subscribed', {
+      kind: publication.kind,
+      trackId: track.sid,
+      participantId: participant.identity,
+      isMuted: track.isMuted,
+      trackReady: track.mediaStreamTrack?.readyState,
+    });
+    
+    this.currentRemoteParticipant = participant;
+    
+    // КРИТИЧНО: Для видео трека проверяем, изменился ли трек
+    const isVideoTrack = publication.kind === Track.Kind.Video;
+    const oldVideoTrackSid = this.remoteVideoTrack?.sid;
+    const wasVideoTrackChanged = isVideoTrack && oldVideoTrackSid && oldVideoTrackSid !== track.sid;
+    
+    // КРИТИЧНО: Для видео трека создаем новый MediaStream если трек изменился
+    // Это гарантирует, что RTCView обновится при изменении трека
+    const shouldCreateNewStream = isVideoTrack && wasVideoTrackChanged;
+    
+    if (shouldCreateNewStream) {
+      // Создаем новый MediaStream для нового видео трека
+      const oldStream = this.remoteStream;
+      this.remoteStream = new MediaStream();
+      logger.debug('[RandomChatSession] Created new remote MediaStream for changed video track', {
+        oldStreamId: oldStream?.id,
+        newStreamId: this.remoteStream.id,
+        oldTrackId: oldVideoTrackSid,
+        newTrackId: track.sid,
+      });
+      
+      // Переносим аудио трек в новый stream если он был
+      if (oldStream && this.remoteAudioTrack) {
+        const audioTracks = oldStream.getAudioTracks();
+        audioTracks.forEach((audioTrack) => {
+          try {
+            this.remoteStream.addTrack(audioTrack as any);
+            logger.debug('[RandomChatSession] Transferred audio track to new stream');
+          } catch {}
+        });
+      }
+    } else if (!this.remoteStream) {
+      this.remoteStream = new MediaStream();
+      logger.debug('[RandomChatSession] Created new remote MediaStream');
+    }
+    
+    const mediaTrack = track.mediaStreamTrack;
+    const trackAlreadyInStream = mediaTrack && this.remoteStream.getTracks().includes(mediaTrack as any);
+    
+    if (mediaTrack && !trackAlreadyInStream) {
+      // LiveKit's MediaStreamTrack is compatible with @livekit/react-native-webrtc's MediaStreamTrack at runtime
+      this.remoteStream.addTrack(mediaTrack as any);
+      logger.debug('[RandomChatSession] Added track to remote stream', {
+        kind: publication.kind,
+        streamId: this.remoteStream.id,
+        tracksCount: this.remoteStream.getTracks().length,
+        hasToURL: typeof this.remoteStream.toURL === 'function',
+        trackId: track.sid,
+      });
+    }
+    
+    if (publication.kind === Track.Kind.Audio) {
+      this.remoteAudioTrack = track;
+    } else if (publication.kind === Track.Kind.Video) {
+      const wasMutedStateChanged = this.remoteVideoTrack && (this.remoteVideoTrack.isMuted !== track.isMuted);
+      this.remoteVideoTrack = track;
+      this.remoteCamEnabled = !track.isMuted;
+      
+      // КРИТИЧНО: Если состояние muted изменилось, обновляем remoteViewKey
+      if (wasMutedStateChanged) {
+        logger.debug('[RandomChatSession] Video track muted state changed', {
+          wasMuted: this.remoteVideoTrack?.isMuted,
+          isMuted: track.isMuted,
+        });
+        this.remoteViewKey = Date.now();
+      }
+      
+      this.config.callbacks.onRemoteCamStateChange?.(!track.isMuted);
+      this.config.onRemoteCamStateChange?.(!track.isMuted);
+    }
+    
+    // КРИТИЧНО: Всегда эмитим remoteStream даже если трек уже был добавлен
+    // Это гарантирует обновление UI при изменении треков
+    // КРИТИЧНО: Обновляем remoteViewKey при каждом изменении треков для принудительного обновления RTCView
+    // Для видео трека обновляем ключ более агрессивно, особенно если трек изменился
+    if (isVideoTrack) {
+      // Для видео трека всегда обновляем ключ, чтобы гарантировать обновление RTCView
+      // Это особенно важно при первом получении видео трека
+      this.remoteViewKey = Date.now();
+      logger.debug('[RandomChatSession] Updated remoteViewKey for video track', {
+        remoteViewKey: this.remoteViewKey,
+        trackId: track.sid,
+        wasVideoTrackChanged,
+        streamId: this.remoteStream.id,
+        trackReady: track.mediaStreamTrack?.readyState,
+        trackMuted: track.isMuted,
+      });
+    } else if (publication.kind === Track.Kind.Audio && !this.remoteVideoTrack) {
+      // Для аудио трека обновляем ключ только если видео трека еще нет
+      this.remoteViewKey = Date.now();
+    }
+    
+    // КРИТИЧНО: Эмитим события в правильном порядке - сначала remoteViewKeyChanged, потом remoteStream
+    // Это гарантирует, что компонент обновится с правильным ключом
+    // КРИТИЧНО: Эмитим события синхронно для немедленного обновления RTCView
+    // Задержка была удалена, так как она вызывала зависание видео
+    this.emit('remoteViewKeyChanged', this.remoteViewKey);
+    this.emit('remoteStream', this.remoteStream);
+    this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
+    this.config.onRemoteStreamChange?.(this.remoteStream);
+    
+    logger.info('[RandomChatSession] Remote stream updated after track subscription', {
+      streamId: this.remoteStream.id,
+      tracksCount: this.remoteStream.getTracks().length,
+      hasVideoTrack: !!this.remoteVideoTrack,
+      hasAudioTrack: !!this.remoteAudioTrack,
+      remoteCamEnabled: this.remoteCamEnabled,
+      remoteViewKey: this.remoteViewKey,
+    });
+  }
+
+  private handleTrackUnsubscribed(
+    publication: RemoteTrackPublication,
+    participant: RemoteParticipant
+  ): void {
+    // КРИТИЧНО: Обрабатываем только треки удаленного участника
+    // Локальные треки (participant.isLocal === true) не должны влиять на remoteStream
+    if (participant.isLocal) {
+      logger.debug('[RandomChatSession] Ignoring unsubscription of local track', {
+        kind: publication.kind,
+        trackSid: publication.trackSid,
+      });
+      return;
+    }
+    
+    if (participant !== this.currentRemoteParticipant) {
+      return;
+    }
+
+    logger.info('[RandomChatSession] Remote track unsubscribed', {
+      kind: publication.kind,
+      trackSid: publication.trackSid,
+      participantId: participant.identity,
+    });
+
+    if (publication.kind === Track.Kind.Audio && this.remoteAudioTrack) {
+      const mediaTrack = this.remoteAudioTrack.mediaStreamTrack;
+      if (mediaTrack && this.remoteStream) {
+        this.remoteStream.removeTrack(mediaTrack as any);
+      }
+      this.remoteAudioTrack = null;
+    }
+    if (publication.kind === Track.Kind.Video && this.remoteVideoTrack) {
+      const mediaTrack = this.remoteVideoTrack.mediaStreamTrack;
+      if (mediaTrack && this.remoteStream) {
+        this.remoteStream.removeTrack(mediaTrack as any);
+      }
+      this.remoteVideoTrack = null;
+      this.remoteCamEnabled = false;
+      // КРИТИЧНО: Обновляем remoteViewKey для принудительного обновления UI
+      this.remoteViewKey = Date.now();
+      this.emit('remoteViewKeyChanged', this.remoteViewKey);
+      this.config.callbacks.onRemoteCamStateChange?.(false);
+      this.config.onRemoteCamStateChange?.(false);
+    }
+
+    const tracksCount = this.remoteStream?.getTracks().length ?? 0;
+    if (this.remoteStream && tracksCount === 0) {
+      this.remoteStream = null;
+      this.emit('remoteStream', null);
+      this.config.callbacks.onRemoteStreamChange?.(null);
+      this.config.onRemoteStreamChange?.(null);
+    } else if (this.remoteStream) {
+      // КРИТИЧНО: Эмитим обновленный remoteStream если остались другие треки
+      this.emit('remoteStream', this.remoteStream);
+      this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
+      this.config.onRemoteStreamChange?.(this.remoteStream);
+    }
+
+    this.remoteViewKey = Date.now();
+    this.emit('remoteViewKeyChanged', this.remoteViewKey);
   }
 }

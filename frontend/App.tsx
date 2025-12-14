@@ -5,6 +5,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Provider as PaperProvider } from "react-native-paper";
 import { Platform } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import * as NavigationBar from "expo-navigation-bar";
 import { NavigationContainer, createNavigationContainerRef, CommonActions, DefaultTheme } from "@react-navigation/native";
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -19,11 +20,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
 import HomeScreen from "./screens/HomeScreen";
-import VideoChat from "./components/VideoChat";
+import VideoCallScreen from "./screens/VideoCallScreen";
+import RandomChatScreen from "./screens/RandomChatScreen";
 import ChatScreen from "./screens/ChatScreen";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
 import { ensureCometChatReady } from "./chat/cometchat";
+import type { RootStackParamList } from "./navigation/types";
+import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native';
 
 // Импорт expo-keep-awake с безопасной загрузкой
 let activateKeepAwakeAsync: (() => Promise<void>) | null = null;
@@ -57,22 +61,13 @@ export { activateKeepAwakeAsync, deactivateKeepAwakeAsync };
 
 try { (React as any).useInsertionEffect = (React as any).useEffect; } catch {}
 
+// Регистрация глобальных LiveKit штук один раз при старте приложения
+try {
+  registerLiveKitGlobals();
+} catch (e) {
+  logger.warn('[App] Failed to register LiveKit globals', e);
+}
 
-export type RootStackParamList = {
-  Home: undefined;
-  VideoChat: { 
-    peerUserId?: string; 
-    directCall?: boolean; 
-    directInitiator?: boolean; 
-    returnTo?: { name: keyof RootStackParamList; params?: any };
-    mode?: 'friend';
-    resume?: boolean;
-    callId?: string;
-    roomId?: string;
-    fromPiP?: boolean;
-  } | undefined;
-  Chat: { peerId: string; peerName?: string; peerAvatar?: string };
-};
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const navRef = createNavigationContainerRef<RootStackParamList>();
@@ -80,20 +75,23 @@ const navRef = createNavigationContainerRef<RootStackParamList>();
 // (безопасно: используется только для navigate на Home при разрыве вызова)
 (global as any).__navRef = navRef;
 
-// КРИТИЧНО: Глобальная ссылка на функцию очистки звонка из VideoChat
-// Это нужно чтобы можно было вызвать очистку даже когда VideoChat размонтирован (в PiP)
+const isVideoSessionRoute = (routeName?: string | null) =>
+  routeName === 'VideoCall';
+
+// КРИТИЧНО: Глобальная ссылка на функцию очистки звонка из VideoCall
+// Это нужно чтобы можно было вызвать очистку даже когда экран звонка размонтирован (в PiP)
 (global as any).__endCallCleanupRef = { current: null as (() => void) | null };
 
 // КРИТИЧНО: Глобальная ссылка на WebRTC session
-// Это нужно чтобы можно было остановить стримы даже когда VideoChat размонтирован (в PiP)
+// Это нужно чтобы можно было остановить стримы даже когда экран звонка размонтирован (в PiP)
 (global as any).__webrtcSessionRef = { current: null as any };
 
-// КРИТИЧНО: Глобальная ссылка на функцию переключения микрофона из VideoChat
-// Это нужно чтобы можно было запустить startMicMeter даже когда VideoChat размонтирован (в PiP)
+// КРИТИЧНО: Глобальная ссылка на функцию переключения микрофона из VideoCall
+// Это нужно чтобы можно было запустить startMicMeter даже когда экран звонка размонтирован (в PiP)
 (global as any).__toggleMicRef = { current: null as (() => void) | null };
 
-// КРИТИЧНО: Глобальная ссылка на функцию переключения удаленного аудио из VideoChat
-// Это нужно чтобы можно было переключать динамик даже когда VideoChat размонтирован (в PiP)
+// КРИТИЧНО: Глобальная ссылка на функцию переключения удаленного аудио из VideoCall
+// Это нужно чтобы можно было переключать динамик даже когда экран звонка размонтирован (в PiP)
 (global as any).__toggleRemoteAudioRef = { current: null as (() => void) | null };
 
 function AppContent() {
@@ -104,11 +102,19 @@ function AppContent() {
   const [routeName, setRouteName] = React.useState<string | undefined>(undefined);
 
 
-  // ==== incoming call (global, non-VideoChat screens) ====
+  // ==== incoming call (global, когда не на экране видеозвонка) ====
   const [incoming, setIncoming] = React.useState<{ callId: string; from: string; fromNick?: string } | null>(null);
   const bounce = React.useRef(new Animated.Value(0)).current;
   const wave1 = React.useRef(new Animated.Value(0)).current;
   const wave2 = React.useRef(new Animated.Value(0)).current;
+  
+  // Настройка навигационной панели на Android для edge-to-edge
+  React.useEffect(() => {
+    if (Platform.OS === 'android') {
+      NavigationBar.setBackgroundColorAsync('transparent');
+      NavigationBar.setButtonStyleAsync(isDark ? 'light' : 'dark');
+    }
+  }, [isDark]);
   
   // КРИТИЧНО: Управление яркостью экрана при показе модального окна входящего вызова на Android
   React.useEffect(() => {
@@ -129,7 +135,7 @@ function AppContent() {
       // При закрытии модального окна
       try {
         // Останавливаем InCallManager только если нет активного звонка
-        // Проверяем через routeName - если мы не в VideoChat, то можно остановить
+        // Проверяем через routeName - если мы не на экране видеозвонка, то можно остановить
         let currentRoute: string | undefined = undefined;
         if (navRef.isReady()) {
           currentRoute = navRef.getCurrentRoute()?.name;
@@ -137,7 +143,7 @@ function AppContent() {
           // Fallback на routeName из state, если навигация еще не готова
           currentRoute = routeName;
         }
-        if (currentRoute !== 'VideoChat') {
+        if (!isVideoSessionRoute(currentRoute)) {
           (InCallManager as any).setKeepScreenOn?.(false);
           InCallManager.stop();
           logger.debug('[App] InCallManager stopped after incoming call modal closed');
@@ -201,7 +207,6 @@ function AppContent() {
         logger.error("CometChat init failed:", e);
       }
 
-      
     })();
   }, []);
 
@@ -408,8 +413,8 @@ function AppContent() {
   }, []); // КРИТИЧНО: Не зависим от PiP - keep-awake должен работать ВСЕГДА когда приложение не в фоне
 
   // КРИТИЧНО: Убрана глобальная обработка блокировки экрана из App.tsx
-  // Логика завершения звонков при блокировке экрана теперь полностью обрабатывается в VideoChat.tsx
-  // VideoChat.tsx правильно различает звонки друзьям (не завершаются) и рандомные чаты (завершаются)
+  // Логика завершения звонков при блокировке экрана теперь полностью обрабатывается в VideoCall.tsx
+  // VideoCall.tsx правильно различает звонки друзьям (не завершаются) и рандомные чаты (завершаются)
   // Это предотвращает конфликты и дублирование логики
 
   // КРИТИЧНО: Обработчик входящего звонка - должен быть всегда зарегистрирован
@@ -447,15 +452,15 @@ function AppContent() {
       }
     } catch {}
 
-    // КРИТИЧНО: Показываем модалку если НЕ на VideoChat, или если навигация не готова (безопаснее показать)
-    if (currentRoute !== 'VideoChat' || !currentRoute) {
+    // КРИТИЧНО: Показываем модалку если НЕ на экране видеозвонка, или если навигация не готова (безопаснее показать)
+    if (!isVideoSessionRoute(currentRoute) || !currentRoute) {
       logger.debug('Showing incoming call modal', { callId: d.callId, from: d.from, fromNick: d.fromNick, currentRoute });
       setIncoming(d);
       startAnim();
       // Запомним последнего звонящего для любых экранов
       try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
     } else {
-      logger.debug('Ignoring incoming call - already on VideoChat', { callId: d.callId, from: d.from, currentRoute });
+      logger.debug('Ignoring incoming call - already on video screen', { callId: d.callId, from: d.from, currentRoute });
     }
   }, [routeName, startAnim]);
 
@@ -625,18 +630,18 @@ function AppContent() {
         }
       } catch {}
     });
-    // Если пришло accepted (ответили), синхронно открываем VideoChat у обоих
+    // Если пришло accepted (ответили), синхронно открываем VideoCall у обоих
     const onAccepted = onCallAccepted?.(() => {
       setIncoming(null);
       stopAnim();
       try {
-        if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoChat') {
+        if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
           navRef.dispatch(
             CommonActions.reset({
               index: 1,
               routes: [
                 { name: 'Home' as any },
-                { name: 'VideoChat' as any, params: { directCall: true } },
+                { name: 'VideoCall' as any, params: { directCall: true } },
               ],
             })
           );
@@ -759,8 +764,18 @@ function AppContent() {
             }}>
               <Stack.Screen name="Home" component={HomeScreen} />
               <Stack.Screen
-                name="VideoChat"
-                component={VideoChat}
+                name="RandomChat"
+                component={RandomChatScreen}
+                options={{
+                  presentation: 'card',
+                  gestureEnabled: true,
+                  animation: 'slide_from_right' as any,
+                  contentStyle: { backgroundColor: 'transparent' },
+                }}
+              />
+              <Stack.Screen
+                name="VideoCall"
+                component={VideoCallScreen}
                 options={{
                   presentation: 'card',
                   gestureEnabled: true,
@@ -772,7 +787,7 @@ function AppContent() {
             </Stack.Navigator>
           </NavigationContainer>
 
-          {/* Global incoming call modal (non-VideoChat screens) */}
+          {/* Global incoming call modal (не отображается поверх VideoCall) */}
           {incoming && (
             <View pointerEvents="box-none" style={[StyleSheet.absoluteFill, { zIndex: 9999 }]}>
               <BlurView
@@ -820,7 +835,7 @@ function AppContent() {
             index: 1,
             routes: [
               { name: 'Home' as any },
-              { name: 'VideoChat' as any, params: { peerUserId: incoming.from, directCall: true, directInitiator: false } },
+              { name: 'VideoCall' as any, params: { peerUserId: incoming.from, directCall: true, directInitiator: false } },
             ],
           })
         );
@@ -868,7 +883,7 @@ function AppContent() {
                   <PanGestureHandler onGestureEvent={() => {}} onHandlerStateChange={({ nativeEvent }: any) => {
                     if (nativeEvent.state === 5) {
                       const dx = nativeEvent.translationX || 0;
-                      if (dx > 60) { acceptCall(incoming.callId); setIncoming(null); stopAnim(); if (navRef.isReady()) { navRef.dispatch(CommonActions.reset({ index: 1, routes: [ { name: 'Home' as any }, { name: 'VideoChat' as any, params: { peerUserId: incoming.from, directCall: true, directInitiator: false } } ] })); } }
+                      if (dx > 60) { acceptCall(incoming.callId); setIncoming(null); stopAnim(); if (navRef.isReady()) { navRef.dispatch(CommonActions.reset({ index: 1, routes: [ { name: 'Home' as any }, { name: 'VideoCall' as any, params: { peerUserId: incoming.from, directCall: true, directInitiator: false } } ] })); } }
                       else if (dx < -60) { declineCall(incoming.callId); setIncoming(null); stopAnim(); }
                     }
                   }}>
@@ -893,8 +908,7 @@ export default function App() {
     console.log('[App] navigateToCall called with:', { callId, roomId });
     // возвращаем ровно на экран друга, НЕ на «Начать/Далее»
     if (navRef.isReady()) {
-      navRef.navigate('VideoChat', {
-        mode: 'friend',
+      navRef.navigate('VideoCall', {
         resume: true,
         callId: callId || undefined,
         roomId: roomId || undefined,
@@ -906,7 +920,7 @@ export default function App() {
   const endCallImpl = (callId: string | null, roomId: string | null) => {
     // КРИТИЧНО: Сначала вызываем локальную очистку (если функция зарегистрирована)
     // Это нужно чтобы очистить PeerConnection, стримы и метр микрофона
-    // даже когда VideoChat размонтирован (пользователь в PiP)
+    // даже когда экран звонка размонтирован (пользователь в PiP)
     try {
       const cleanupFn = (global as any).__endCallCleanupRef?.current;
       if (cleanupFn && typeof cleanupFn === 'function') {

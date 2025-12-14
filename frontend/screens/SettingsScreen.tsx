@@ -1,6 +1,7 @@
 // screens/SettingsScreen.tsx
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, View, Platform, ActionSheetIOS, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import SettingsTab from '../components/SettingsTab';
 import { useMe } from '../store/me';
 import { getClient } from '../chat/cometchat';
@@ -470,14 +471,20 @@ export default function SettingsScreen() {
   // Показываем SplashLoader пока данные не загружены
   if (!profileLoaded) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#0D0E10' }}>
+      <SafeAreaView 
+        style={{ flex: 1, backgroundColor: '#0D0E10' }}
+        edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
+      >
         <SplashLoader dataLoaded={dataLoaded} onComplete={() => setProfileLoaded(true)} />
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#0D0E10' }}>
+    <SafeAreaView 
+      style={{ flex: 1, backgroundColor: '#0D0E10' }}
+      edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
+    >
       <SettingsTab
         nick={nick}
         setNick={setNick}
@@ -512,6 +519,6 @@ export default function SettingsScreen() {
           },
         }}
       />
-    </View>
+    </SafeAreaView>
   );
 }

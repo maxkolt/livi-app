@@ -5,7 +5,7 @@ import { AppState } from 'react-native';
 import { CommonActions } from '@react-navigation/native';
 import socket from '../../sockets/socket';
 
-type MediaStreamLike = any; // из react-native-webrtc
+type MediaStreamLike = any; // из @livekit/react-native-webrtc
 
 type PiPState = {
   visible: boolean;
@@ -161,14 +161,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const updatePiPPosition = useCallback((x: number, y: number) => setPipPos({ x, y }), []);
 
   const toggleMic = useCallback(() => {
-    // КРИТИЧНО: Вызываем функцию toggleMic из VideoChat напрямую
-    // VideoChat.toggleMic переключит трек и обновит состояние PiP
-    // Это нужно чтобы избежать конфликта между локальным переключением и переключением в VideoChat
+    // КРИТИЧНО: Вызываем функцию toggleMic из VideoCall напрямую
+    // VideoCall.toggleMic переключит трек и обновит состояние PiP
+    // Это нужно чтобы избежать конфликта между локальным переключением и переключением в VideoCall
     try {
       const toggleMicFn = (global as any).__toggleMicRef?.current;
       if (toggleMicFn && typeof toggleMicFn === 'function') {
         toggleMicFn();
-        // Состояние isMuted обновится через pip.updatePiPState в VideoChat.toggleMic
+        // Состояние isMuted обновится через pip.updatePiPState в VideoCall.toggleMic
       } else {
         // Fallback: переключаем локально если функция не зарегистрирована
         const audioTrack = localStreamRef.current?.getAudioTracks?.()?.[0];
@@ -181,7 +181,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         }
       }
     } catch (e) {
-      console.warn('[PiPContext] Error calling VideoChat toggleMic:', e);
+      console.warn('[PiPContext] Error calling VideoCall toggleMic:', e);
       // Fallback при ошибке
       const audioTrack = localStreamRef.current?.getAudioTracks?.()?.[0];
       if (audioTrack) {
@@ -195,14 +195,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   }, []);
 
   const toggleRemoteAudio = useCallback(() => {
-    // КРИТИЧНО: Вызываем функцию toggleRemoteAudio из VideoChat напрямую (как в эталонном файле)
-    // VideoChat.toggleRemoteAudio переключит трек и обновит состояние PiP
-    // Это нужно чтобы избежать конфликта между локальным переключением и переключением в VideoChat
+    // КРИТИЧНО: Вызываем функцию toggleRemoteAudio из VideoCall напрямую (как в эталонном файле)
+    // VideoCall.toggleRemoteAudio переключит трек и обновит состояние PiP
+    // Это нужно чтобы избежать конфликта между локальным переключением и переключением в VideoCall
     try {
       const toggleRemoteAudioFn = (global as any).__toggleRemoteAudioRef?.current;
       if (toggleRemoteAudioFn && typeof toggleRemoteAudioFn === 'function') {
         toggleRemoteAudioFn();
-        // Состояние isRemoteMuted обновится через pip.updatePiPState в VideoChat.toggleRemoteAudio
+        // Состояние isRemoteMuted обновится через pip.updatePiPState в VideoCall.toggleRemoteAudio
       } else {
         // Fallback: переключаем локально если функция не зарегистрирована
         const audioTracks = remoteStreamRef.current?.getAudioTracks?.() ?? [];
@@ -211,7 +211,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         setIsRemoteMuted(nextMuted);
       }
     } catch (e) {
-      console.warn('[PiPContext] Error calling VideoChat toggleRemoteAudio:', e);
+      console.warn('[PiPContext] Error calling VideoCall toggleRemoteAudio:', e);
       // Fallback при ошибке
       const audioTracks = remoteStreamRef.current?.getAudioTracks?.() ?? [];
       const nextMuted = !isRemoteMuted;
@@ -266,15 +266,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     };
 
     // КРИТИЧНО: Используем CommonActions.reset для навигации (как в эталонном файле)
-    // стек: [Home, VideoChat], активен VideoChat
+    // стек: [Home, VideoCall], активен VideoCall
     try {
       nav.dispatch(
         CommonActions.reset({
           index: 1,
-          routes: [{ name: 'Home' as any }, { name: 'VideoChat' as any, params }],
+          routes: [{ name: 'Home' as any }, { name: 'VideoCall' as any, params }],
         })
       );
-      console.log('[PiPContext] ✅ Navigated to VideoChat with resume params', { params });
+      console.log('[PiPContext] ✅ Navigated to VideoCall with resume params', { params });
     } catch (e) {
       console.error('[PiPContext] Navigation error:', e);
       navigatingRef.current = false;
@@ -286,7 +286,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       return;
     }
 
-    // КРИТИЧНО: НЕ скрываем PiP мгновенно - даём VideoChat фокус → он сам вызовет hidePiP()
+    // КРИТИЧНО: НЕ скрываем PiP мгновенно - даём экрану звонка фокус → он сам вызовет hidePiP()
     // Это важно для правильного восстановления состояния звонка
     // Скрываем PiP через небольшую задержку, чтобы навигация успела произойти
     setTimeout(() => {
@@ -299,7 +299,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     console.log('🔥🔥🔥 [PiPContext] endCall вызван', { callId, roomId });
     
     // КРИТИЧНО: Сначала останавливаем локальные стримы напрямую
-    // Это гарантирует, что камера остановится даже если VideoChat размонтирован
+    // Это гарантирует, что камера остановится даже если экран звонка размонтирован
     try {
       const session = (global as any).__webrtcSessionRef?.current;
       if (session) {

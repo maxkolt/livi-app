@@ -4,8 +4,11 @@ import { API_BASE } from '../sockets/socket';
 
 let cachedConfig: RTCConfiguration | null = null;
 let cacheUntil = 0;
+const RELAY_FALLBACK_WINDOW_MS = 10 * 60 * 1000; // 10 минут принудительного relay после сетевых сбоев
+let forcedRelayUntil = 0;
 
-export function getEnvFallbackConfiguration(): RTCConfiguration {
+export function getEnvFallbackConfiguration(options?: { forceRelayOnly?: boolean }): RTCConfiguration {
+  const forceRelayOnly = !!options?.forceRelayOnly;
   const googleStun = { urls: 'stun:stun.l.google.com:19302' } as any;
   const cloudflareStun = { urls: 'stun:stun.cloudflare.com:3478' } as any;
   const rawTurn = (process.env.EXPO_PUBLIC_TURN_URLS || process.env.EXPO_PUBLIC_TURN_URL || '').trim();
@@ -54,16 +57,12 @@ export function getEnvFallbackConfiguration(): RTCConfiguration {
     }
   }
 
-  // Используем несколько STUN серверов для лучшей надежности
-  const iceServers: any[] = [
-    googleStun,
-    cloudflareStun,
-    { urls: 'stun:stun.stunprotocol.org:3478' } as any,
-    { urls: 'stun:stun.voiparound.com' } as any,
-    { urls: 'stun:stun.voipbuster.com' } as any,
-  ];
+  // ОПТИМИЗИРОВАНО: Приоритет TURN серверам для более быстрого подключения
+  // TURN серверы идут ПЕРВЫМИ, так как они обеспечивают надежное соединение
+  const iceServers: any[] = [];
   
   // КРИТИЧНО: TURN обязателен для пробития NAT в мобильных сетях
+  // Размещаем TURN серверы ПЕРВЫМИ для приоритета при ICE gathering
   if (turnUrls.length) {
     // Каждый TURN URL должен быть отдельным объектом
     turnUrls.forEach(url => {
@@ -75,6 +74,12 @@ export function getEnvFallbackConfiguration(): RTCConfiguration {
       iceServers.push({ urls: url, username, credential });
     });
   }
+  
+  // STUN серверы идут ПОСЛЕ TURN для резервирования
+  // Используем только основные STUN серверы для уменьшения времени подключения
+  iceServers.push(googleStun);
+  iceServers.push(cloudflareStun);
+  // Убраны дополнительные STUN серверы для ускорения подключения
 
   // Логирование для отладки
   const hasTurn = turnUrls.length > 0 || turnTcpUrls.length > 0;
@@ -88,15 +93,17 @@ export function getEnvFallbackConfiguration(): RTCConfiguration {
     warning: !hasTurn ? '⚠️ NO TURN SERVER - NAT traversal may fail!' : undefined,
   });
 
-  const relayOnly = icePolicyEnv === 'relay' || icePolicyEnv === 'relay-only' || process.env.EXPO_PUBLIC_ICE_RELAY_ONLY === '1';
+  const envRelayOnly = icePolicyEnv === 'relay' || icePolicyEnv === 'relay-only' || process.env.EXPO_PUBLIC_ICE_RELAY_ONLY === '1';
+  const shouldForceRelay = envRelayOnly || forceRelayOnly;
   
   // КРИТИЧНО: Если нет TURN сервера, НЕ используем relay-only режим
   // Relay-only требует TURN сервер, иначе RTCPeerConnection не инициализируется
-  // hasTurn уже объявлен выше (строка 68)
-  const finalIceTransportPolicy = (relayOnly && hasTurn) ? 'relay' : 'all';
+  const finalIceTransportPolicy = (shouldForceRelay && hasTurn) ? 'relay' : 'all';
   
-  if (relayOnly && !hasTurn) {
+  if (shouldForceRelay && !hasTurn) {
     console.warn('[ICE Config] ⚠️ relay-only режим запрошен, но TURN сервер отсутствует. Используем "all" режим.');
+  } else if (forceRelayOnly && hasTurn) {
+    console.log('[ICE Config] Relay-only fallback принудительно включен (TURN доступен).');
   }
   
   return {
@@ -104,20 +111,22 @@ export function getEnvFallbackConfiguration(): RTCConfiguration {
     iceTransportPolicy: finalIceTransportPolicy,
     bundlePolicy: 'max-bundle',
     rtcpMuxPolicy: 'require',
-    // Дополнительные оптимизации для мобильных устройств
-    iceCandidatePoolSize: 10,
-    iceGatheringTimeout: 10000,
+    // ОПТИМИЗИРОВАНО: Уменьшены параметры для более быстрого подключения
+    iceCandidatePoolSize: 0, // Отключаем предварительный сбор кандидатов для ускорения
+    iceGatheringTimeout: 5000, // Уменьшено с 10s до 5s для быстрого подключения
   } as any;
 }
 
-export async function getIceConfiguration(forceRefresh = false): Promise<RTCConfiguration> {
+export async function getIceConfiguration(forceRefresh = false, options?: { forceRelayOnly?: boolean }): Promise<RTCConfiguration> {
+  const forceRelayOnly = !!options?.forceRelayOnly;
+  const relayActive = forceRelayOnly || (forcedRelayUntil > Date.now());
   const now = Date.now();
   if (!forceRefresh && cachedConfig && now < cacheUntil) return cachedConfig;
 
-  // Retry логика для iOS (где fetch может падать, особенно с VPN)
-  // Увеличиваем количество попыток и таймаут при VPN
-  const maxRetries = Platform.OS === 'ios' ? 5 : 3; // Больше попыток для iOS (VPN может блокировать)
-  const timeoutMs = Platform.OS === 'ios' ? 15000 : 8000; // Больше таймаут для iOS
+  // ОПТИМИЗИРОВАНО: Уменьшены таймауты для более быстрого подключения
+  // Используем агрессивные таймауты, чтобы быстро переключиться на fallback
+  const maxRetries = 2; // Уменьшено с 3-5 до 2 для быстрого fallback
+  const timeoutMs = 3000; // Уменьшено с 8-15s до 3s для быстрого переключения на fallback
   let lastError: any = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -163,7 +172,7 @@ export async function getIceConfiguration(forceRefresh = false): Promise<RTCConf
           const relayOnly = relayOnlyEnv === 'relay' || relayOnlyEnv === 'relay-only' || process.env.EXPO_PUBLIC_ICE_RELAY_ONLY === '1';
           
           // КРИТИЧНО: Если нет TURN сервера, НЕ используем relay-only режим
-          const finalIceTransportPolicy = (relayOnly && hasTurn) ? 'relay' : 'all';
+          const finalIceTransportPolicy = ((relayOnly || forceRelayOnly || relayActive) && hasTurn) ? 'relay' : 'all';
           
           if (relayOnly && !hasTurn) {
             console.warn('[ICE Config] ⚠️ relay-only режим запрошен, но TURN сервер отсутствует в ответе сервера. Используем "all" режим.');
@@ -174,9 +183,9 @@ export async function getIceConfiguration(forceRefresh = false): Promise<RTCConf
             iceTransportPolicy: finalIceTransportPolicy,
             bundlePolicy: 'max-bundle',
             rtcpMuxPolicy: 'require',
-            // Дополнительные оптимизации для мобильных устройств
-            iceCandidatePoolSize: 10,
-            iceGatheringTimeout: 10000,
+            // ОПТИМИЗИРОВАНО: Уменьшены параметры для более быстрого подключения
+            iceCandidatePoolSize: 0, // Отключаем предварительный сбор кандидатов для ускорения
+            iceGatheringTimeout: 5000, // Уменьшено с 10s до 5s для быстрого подключения
           } as any;
           cachedConfig = cfg;
           const ttlSec = Math.max(60, Math.min(Number(j.ttl || 300), 3600));
@@ -195,9 +204,8 @@ export async function getIceConfiguration(forceRefresh = false): Promise<RTCConf
       const isNetworkError = error?.message?.includes('Network request failed') || error?.message?.includes('Failed to fetch');
       
       if (attempt < maxRetries) {
-        // Увеличиваем задержку с каждой попыткой (особенно для iOS/VPN)
-        const baseDelay = Platform.OS === 'ios' ? 2000 : 1000;
-        const delay = baseDelay * attempt;
+        // ОПТИМИЗИРОВАНО: Уменьшена задержка между попытками для быстрого fallback
+        const delay = 500 * attempt; // Уменьшено с 1000-2000ms до 500ms
         console.warn(`[ICE Config] Fetch failed (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms:`, 
           isAborted ? 'timeout' : isNetworkError ? 'network error (VPN may be blocking)' : error?.message || error);
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -210,13 +218,17 @@ export async function getIceConfiguration(forceRefresh = false): Promise<RTCConf
           isAborted ? 'timeout' : isNetworkError ? 'network error' : error?.message || error,
           vpnWarning);
       }
+      if (isNetworkError) {
+        forcedRelayUntil = Date.now() + RELAY_FALLBACK_WINDOW_MS;
+        console.warn('[ICE Config] Enabling relay-only fallback for the next 10 minutes due to network errors');
+      }
     }
   }
 
   // Используем fallback конфигурацию
   // КРИТИЧНО: При VPN на iOS может быть полезно использовать relay-only режим
   // (только TURN, без прямых P2P соединений)
-  const fallbackConfig = getEnvFallbackConfiguration();
+  const fallbackConfig = getEnvFallbackConfiguration({ forceRelayOnly: forceRelayOnly || relayActive });
   
   // Если на iOS и есть проблемы с сетью, принудительно используем relay-only
   // Это поможет обойти проблемы VPN с UDP трафиком

@@ -17,7 +17,7 @@ import {
   NativeModules,
 } from "react-native";
  
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
 import { onCloseIncoming, emitCloseIncoming } from '../utils/globalEvents';
 import socket from '../sockets/socket';
 import { Ionicons } from "@expo/vector-icons";
@@ -69,21 +69,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
 
-  // Android: красим системную нижнюю панель в цвет текущего экрана,
-  // чтобы убрать синюю полосу поверх контента (светлая/тёмная темы)
-  useEffect(() => {
-    (async () => {
-      if (Platform.OS !== 'android' || !(NativeModules as any)?.ExpoNavigationBar) return;
-      try {
-        const NavigationBar = await import('expo-navigation-bar');
-        await NavigationBar.setBackgroundColorAsync(theme.colors.background as string);
-        try { await NavigationBar.setButtonStyleAsync(isDark ? 'light' : 'dark'); } catch {}
-        try { await NavigationBar.setBehaviorAsync('inset-swipe'); } catch {}
-        try { await NavigationBar.setPositionAsync('relative'); } catch {}
-        try { await NavigationBar.setVisibilityAsync('visible'); } catch {}
-      } catch {}
-    })();
-  }, [theme.colors.background, isDark]);
 
   // Загружаем профиль при инициализации
   useEffect(() => {
@@ -1675,7 +1660,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   });
 
   return (
-    <View style={{ flex: 1, backgroundColor: LIVI.surface }}>
+    <SafeAreaView 
+      style={{ flex: 1, backgroundColor: LIVI.surface }}
+      edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
+    >
       <Header />
       {loading ? (
         <Loading />
@@ -2213,6 +2201,6 @@ export default function ChatScreen({ route, navigation }: Props) {
           </Animated.View>
         </Animated.View>
       )}
-    </View>
+    </SafeAreaView>
   );
 }

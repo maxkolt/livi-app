@@ -16,6 +16,7 @@ import friendsRouter from './routes/friends';
 import meRouter from './routes/me';
 import appSettingsRouter from './routes/app-settings';
 import uploadRouter from './routes/upload';
+import livekitRouter from './routes/livekit';
 import registerFriendSockets from './sockets/friends';
 import registerIdentitySockets, { bindUser as bindUserIdentity } from './sockets/identity';
 import registerMessageSockets from './sockets/messagesReliable';
@@ -26,6 +27,7 @@ import User from './models/User';
 import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
+import { createToken } from './routes/livekit';
 
 
 /* ========= Типы ========= */
@@ -119,7 +121,7 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true,
   },
-  transports: ["websocket"], // 👈 только websocket для продакшена
+  transports: ["websocket", "polling"], // websocket + polling для надежности
   pingInterval: 25000,
   pingTimeout: 30000,
 });
@@ -148,6 +150,7 @@ app.use('/api', appSettingsRouter);
 app.use('/api', meRouter);
 app.use('/api', friendsRouter);
 app.use('/api', uploadRouter);
+app.use('/api', livekitRouter);
 
 // Stream utility убран - больше не используется
 
@@ -210,27 +213,33 @@ app.get('/api/turn-credentials', async (_req, res) => {
     const stunUrl = `stun:${STUN_HOST}:${TURN_PORT}`;
     const turnUdp = `turn:${TURN_HOST}:${TURN_PORT}`;
     const turnTcp = `turn:${TURN_HOST}:${TURN_PORT}?transport=tcp`;
+    // ОПТИМИЗИРОВАНО: Добавляем TURN TCP/443 для обхода строгих firewall
+    const turnTcp443 = `turn:${TURN_HOST}:443?transport=tcp`;
 
-    // КРИТИЧНО: Каждый сервер должен быть отдельным объектом в массиве iceServers
-    // STUN для обнаружения публичных IP
-    // Используем несколько STUN серверов для лучшей надежности
+    // ОПТИМИЗИРОВАНО: Приоритет TURN серверам для более быстрого подключения
+    // TURN серверы идут ПЕРВЫМИ, так как они обеспечивают надежное соединение
     const iceServers: any[] = [
-      // Основной STUN сервер (наш собственный)
-      { urls: stunUrl },
-      // Публичные STUN серверы для резервирования
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun.cloudflare.com:3478' },
-      { urls: 'stun:stun.stunprotocol.org:3478' },
-      { urls: 'stun:stun.voiparound.com' },
-      { urls: 'stun:stun.voipbuster.com' },
-      // TURN серверы с credentials
+      // Основной TURN UDP сервер (приоритет #1)
       { urls: turnUdp, username, credential: hmac },
     ];
     
     // TURN TCP для обхода строгих NAT/firewall
     if (TURN_ENABLE_TCP) {
+      // TURN TCP на стандартном порту (приоритет #2)
       iceServers.push({ urls: turnTcp, username, credential: hmac });
+      // TURN TCP/443 для обхода firewall (приоритет #3)
+      iceServers.push({ urls: turnTcp443, username, credential: hmac });
     }
+    
+    // STUN серверы идут ПОСЛЕ TURN для резервирования
+    // Используем только основные STUN серверы для уменьшения времени подключения
+    iceServers.push(
+      // Основной STUN сервер (наш собственный)
+      { urls: stunUrl },
+      // Публичные STUN серверы для резервирования (только основные)
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+    );
 
     return res.json({
       ok: true,
@@ -463,7 +472,7 @@ const updateFriendRoomState = (io: Server, roomId: string) => {
   } catch {}
 };
 
-const pairAndNotify = (aSid: string, bSid: string) => {
+const pairAndNotify = async (aSid: string, bSid: string): Promise<void> => {
   pair(aSid, bSid);
   const sortedIds = [aSid, bSid].sort();
   const roomId = `room_${sortedIds[0]}_${sortedIds[1]}`;
@@ -477,12 +486,53 @@ const pairAndNotify = (aSid: string, bSid: string) => {
 
   logger.debug('Pairing users', { aSid, bSid, aUserId, bUserId });
 
+  // Создаем roomName на основе userId для LiveKit
+  let livekitTokenA: string | null = null;
+  let livekitTokenB: string | null = null;
+  let livekitRoomName: string = roomId;
+
+  const livekitIdentityA = aUserId || `socket:${aSid}`;
+  const livekitIdentityB = bUserId || `socket:${bSid}`;
+
+  if (aUserId && bUserId) {
+    const sortedUserIds = [aUserId, bUserId].sort();
+    livekitRoomName = `room_${sortedUserIds[0]}_${sortedUserIds[1]}`;
+  }
+
+  try {
+    const [tokenA, tokenB] = await Promise.all([
+      createToken({ identity: livekitIdentityA, roomName: livekitRoomName }),
+      createToken({ identity: livekitIdentityB, roomName: livekitRoomName }),
+    ]);
+    livekitTokenA = tokenA;
+    livekitTokenB = tokenB;
+    logger.debug('LiveKit tokens created', { roomName: livekitRoomName, identityA: livekitIdentityA, identityB: livekitIdentityB });
+  } catch (e: any) {
+    logger.error('Failed to create LiveKit tokens:', e);
+  }
+
   // Отправляем события мгновенно для ускорения соединения
-  try { io.to(aSid).emit('match_found', { roomId, id: bSid, userId: bUserId ?? null }); } catch {}
-  try { io.to(bSid).emit('match_found', { roomId, id: aSid, userId: aUserId ?? null }); } catch {}
+  try { 
+    io.to(aSid).emit('match_found', { 
+      roomId, 
+      id: bSid, 
+      userId: bUserId ?? null,
+      livekitToken: livekitTokenA,
+      livekitRoomName
+    }); 
+  } catch {}
+  try { 
+    io.to(bSid).emit('match_found', { 
+      roomId, 
+      id: aSid, 
+      userId: aUserId ?? null,
+      livekitToken: livekitTokenB,
+      livekitRoomName
+    }); 
+  } catch {}
 };
 
-const tryPairFor = (sock: AuthedSocket): boolean => {
+const tryPairFor = async (sock: AuthedSocket): Promise<boolean> => {
   // Ищем любого другого ожидающего участника, не находящегося в разговоре
   removeFromWaitingQueue(sock.id); // исключаем себя из очереди на время подбора
   const myUserId = String(sock.data.userId || '');
@@ -515,7 +565,7 @@ const tryPairFor = (sock: AuthedSocket): boolean => {
   const otherSid = candidates[idx];
   // Убираем выбранного из очереди и себя повторно не добавляем
   waitingQueue = waitingQueue.filter((sid) => sid !== otherSid && sid !== sock.id);
-  pairAndNotify(sock.id, otherSid);
+  await pairAndNotify(sock.id, otherSid);
   return true;
 };
 
@@ -1063,7 +1113,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
   });
 
-  sock.on('call:accept', ({ callId }: { callId?: string }) => {
+  sock.on('call:accept', async ({ callId }: { callId?: string }) => {
     const id = String(callId || '');
     const link = callsById.get(id);
     if (!link) return;
@@ -1115,27 +1165,76 @@ io.on('connection', async (sock: AuthedSocket) => {
         io.emit("presence:update", { userId: link.b, busy: true });
       }
       
-      // Отправляем call:accepted с socket.id в from (не userId!) и roomId
+      // Создаем LiveKit токены для обоих участников
+      let livekitTokenA: string | null = null;
+      let livekitTokenB: string | null = null;
+      let livekitRoomName: string = roomId;
+      
+      const livekitIdentityA = link.a || `socket:${aSock.id}`;
+      const livekitIdentityB = link.b || `socket:${bSock.id}`;
+      
+      if (link.a && link.b) {
+        const sortedUserIds = [link.a, link.b].sort();
+        livekitRoomName = `room_${sortedUserIds[0]}_${sortedUserIds[1]}`;
+      }
+      
+      try {
+        const [tokenA, tokenB] = await Promise.all([
+          createToken({ identity: livekitIdentityA, roomName: livekitRoomName }),
+          createToken({ identity: livekitIdentityB, roomName: livekitRoomName }),
+        ]);
+        livekitTokenA = tokenA;
+        livekitTokenB = tokenB;
+        logger.debug('LiveKit tokens created for call:accept', { roomName: livekitRoomName, identityA: livekitIdentityA, identityB: livekitIdentityB });
+      } catch (e: any) {
+        logger.error('Failed to create LiveKit tokens for call:accept:', e);
+      }
+      
+      // Отправляем call:accepted с LiveKit credentials
       if (aSock) {
         try {
-          aSock.emit('call:accepted', { callId: id, from: bSock.id, fromUserId: link.b, roomId });
+          aSock.emit('call:accepted', { 
+            callId: id, 
+            from: bSock.id, 
+            fromUserId: link.b, 
+            roomId,
+            livekitToken: livekitTokenA,
+            livekitRoomName
+          });
         } catch {}
       }
       if (bSock) {
         try {
-          bSock.emit('call:accepted', { callId: id, from: aSock.id, fromUserId: link.a, roomId });
+          bSock.emit('call:accepted', { 
+            callId: id, 
+            from: aSock.id, 
+            fromUserId: link.a, 
+            roomId,
+            livekitToken: livekitTokenB,
+            livekitRoomName
+          });
         } catch {}
       }
       
       // Также отправляем через комнаты на случай, если сокеты не найдены напрямую
       try {
-        io.to(`u:${link.a}`).emit('call:accepted', { callId: id, from: bSock.id, fromUserId: link.b, roomId });
-        io.to(`u:${link.b}`).emit('call:accepted', { callId: id, from: aSock.id, fromUserId: link.a, roomId });
+        io.to(`u:${link.a}`).emit('call:accepted', { 
+          callId: id, 
+          from: bSock.id, 
+          fromUserId: link.b, 
+          roomId,
+          livekitToken: livekitTokenA,
+          livekitRoomName
+        });
+        io.to(`u:${link.b}`).emit('call:accepted', { 
+          callId: id, 
+          from: aSock.id, 
+          fromUserId: link.a, 
+          roomId,
+          livekitToken: livekitTokenB,
+          livekitRoomName
+        });
       } catch {}
-      
-      // Отправляем match_found обоим
-      try { io.to(aSock.id).emit('match_found', { roomId, id: bSock.id, userId: link.b }); } catch {}
-      try { io.to(bSock.id).emit('match_found', { roomId, id: aSock.id, userId: link.a }); } catch {}
       
       logger.debug('Direct call room established', { roomId, callId: id, participants: 2 });
     }
@@ -1249,7 +1348,11 @@ io.on('connection', async (sock: AuthedSocket) => {
       setRandomBusy(getUserIdBySid(p), false);
       enqueueWaiting(p);
       const partnerSock = io.sockets.sockets.get(p) as AuthedSocket | undefined;
-      if (partnerSock) tryPairFor(partnerSock);
+      if (partnerSock) {
+        tryPairFor(partnerSock).catch((e: any) => {
+          logger.error('Failed to re-pair partner after disconnect', { socketId: partnerSock.id, error: e?.message || e });
+        });
+      }
     }
     unbindUser(sock);
     emitPresence(io);

@@ -7,9 +7,10 @@ import {
   TouchableOpacity,
   Dimensions,
   StatusBar,
-  SafeAreaView,
   Animated,
+  Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { PinchGestureHandler, State } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -113,7 +114,10 @@ export default function MediaViewer({
       backdropOpacity={1}
     >
       <StatusBar hidden />
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView 
+        style={styles.container}
+        edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
+      >
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={onClose} style={styles.closeButton}>

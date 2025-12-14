@@ -35,7 +35,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": false,
+      "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.CAMERA",
@@ -71,7 +71,6 @@
       [
         "expo-navigation-bar",
         {
-          "backgroundColor": "#151F33",
           "barStyle": "light-content"
         }
       ]

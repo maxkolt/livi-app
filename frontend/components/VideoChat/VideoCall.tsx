@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { useNavigation, useFocusEffect, usePreventRemove } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MediaStream } from 'react-native-webrtc';
+import { MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
 import { VideoCallSession } from '../../src/webrtc/sessions/VideoCallSession';
 import type { WebRTCSessionConfig } from '../../src/webrtc/types';
@@ -181,6 +181,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   // Упрощено: убраны лишние проверки race condition
 
+  const [remoteViewKey, setRemoteViewKey] = useState(0);
+  const [localRenderKey, setLocalRenderKey] = useState(0);
+  const [micLevel, setMicLevel] = useState(0);
+  const [isInactiveState, setIsInactiveState] = useState(false);
+  const [wasFriendCallEnded, setWasFriendCallEnded] = useState(false);
+  const [friendCallAccepted, setFriendCallAccepted] = useState(false);
+  const [buttonsOpacity] = useState(new Animated.Value(1));
+  const incomingCallBounce = useRef(new Animated.Value(0)).current;
+  const incomingWaveA = useRef(new Animated.Value(0)).current;
+  const incomingWaveB = useRef(new Animated.Value(0)).current;
+
   useEffect(() => {
     if (!remoteStream) {
       remoteCamStateKnownRef.current = false;
@@ -212,17 +223,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         setRemoteCamOn(true);
       }
     }
-  }, [remoteStream]);
-  const [remoteViewKey, setRemoteViewKey] = useState(0);
-  const [localRenderKey, setLocalRenderKey] = useState(0);
-  const [micLevel, setMicLevel] = useState(0);
-  const [isInactiveState, setIsInactiveState] = useState(false);
-  const [wasFriendCallEnded, setWasFriendCallEnded] = useState(false);
-  const [friendCallAccepted, setFriendCallAccepted] = useState(false);
-  const [buttonsOpacity] = useState(new Animated.Value(1));
-  const incomingCallBounce = useRef(new Animated.Value(0)).current;
-  const incomingWaveA = useRef(new Animated.Value(0)).current;
-  const incomingWaveB = useRef(new Animated.Value(0)).current;
+  }, [remoteStream, remoteViewKey]);
   
   const currentCallIdRef = useRef<string | null>(route?.params?.callId || null);
   const acceptCallTimeRef = useRef<number>(0);
@@ -576,16 +577,54 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         },
         onRemoteStreamChange: (stream) => {
           const prevStream = remoteStreamRef.current;
+          const prevVideoTrack = prevStream?.getVideoTracks?.()?.[0];
+          const prevVideoId = prevVideoTrack?.id;
+          const prevVideoReady = !!prevVideoTrack && prevVideoTrack.readyState === 'live';
+          const newVideoTrack = stream?.getVideoTracks?.()?.[0];
+          const newVideoId = newVideoTrack?.id;
+          const newVideoReady = !!newVideoTrack && newVideoTrack.readyState === 'live';
+          const sameStreamInstance =
+            !!stream && !!prevStream && prevStream === stream && prevStream.id === stream.id;
+
+          if (sameStreamInstance) {
+            if (!stream) {
+              setRemoteMuted(false);
+              return;
+            }
+
+            const trackChanged = prevVideoId !== newVideoId;
+            const trackBecameLive = !prevVideoReady && newVideoReady;
+
+            if (trackChanged || trackBecameLive) {
+              logger.info('[VideoCall] Remote stream tracks updated without new MediaStream instance', {
+                streamId: stream.id,
+                prevVideoId,
+                newVideoId,
+                prevVideoReady,
+                newVideoReady
+              });
+              setRemoteViewKey((k: number) => k + 1);
+            }
+            remoteStreamRef.current = stream;
+            return;
+          }
+
           remoteStreamRef.current = stream;
           setRemoteStream(stream);
-          // КРИТИЧНО: Всегда обновляем remoteViewKey при изменении стрима для Android
-          if (prevStream !== stream) {
-            setRemoteViewKey((k: number) => k + 1);
-            logger.info('[VideoCall] Remote stream changed - updating view key', {
+          if (stream) {
+            logger.info('[VideoCall] Remote stream event', {
+              streamId: stream.id,
               prevStreamId: prevStream?.id,
-              newStreamId: stream?.id,
-              hasVideoTrack: !!(stream?.getVideoTracks?.()?.[0])
+              hasVideoTrack: !!(stream.getVideoTracks?.()?.[0]),
+              hasAudioTrack: !!(stream.getAudioTracks?.()?.[0])
             });
+            setIsInactiveState(false);
+            setWasFriendCallEnded(false);
+            setStarted(true);
+            setLoading(false);
+            setRemoteViewKey((k: number) => k + 1);
+          } else {
+            setRemoteMuted(false);
           }
         },
         onPartnerIdChange: (id) => {
@@ -685,7 +724,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     sessionRef.current = session;
     
     // КРИТИЧНО: Устанавливаем глобальную ссылку на сессию сразу при создании
-    // Это нужно чтобы можно было остановить камеру даже когда VideoChat размонтирован (в PiP/фоне)
+    // Это нужно чтобы можно было остановить камеру даже когда VideoCall экран размонтирован (в PiP/фоне)
     (global as any).__webrtcSessionRef.current = session;
     logger.info('[VideoCall] ✅ Глобальная ссылка на сессию установлена при создании', {
       hasSession: !!session,
@@ -764,7 +803,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     
     // КРИТИЧНО: Создаем функцию очистки, которая вызывает session.endCall() и полную очистку
     // Это нужно для глобальной ссылки __endCallCleanupRef
-    // Функция должна работать даже когда VideoChat размонтирован (в PiP/фоне)
+    // Функция должна работать даже когда VideoCall экран размонтирован (в PiP/фоне)
     const cleanupFunction = () => {
       logger.info('[VideoCall] 🔥 cleanupFunction вызвана из глобальной ссылки (PiP/фон)');
       const currentSession = sessionRef.current || (global as any).__webrtcSessionRef?.current;
@@ -792,64 +831,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     };
     
     // КРИТИЧНО: Устанавливаем глобальную ссылку на функцию очистки сразу после создания сессии
-    // Это нужно чтобы можно было вызвать очистку даже когда VideoChat размонтирован (в PiP/фоне)
+    // Это нужно чтобы можно было вызвать очистку даже когда VideoCall экран размонтирован (в PiP/фоне)
     (global as any).__endCallCleanupRef.current = cleanupFunction;
     logger.info('[VideoCall] ✅ Глобальная ссылка на функцию очистки установлена при создании сессии', {
       hasCleanupFn: typeof cleanupFunction === 'function',
       hasSession: !!session
     });
     
-    const handleLocalStreamEvent = (stream: MediaStream | null) => {
-      const prevStream = localStreamRef.current;
-      if (prevStream === stream && (!stream || (prevStream && prevStream.id === stream.id))) {
-        return;
-      }
-      localStreamRef.current = stream;
-      setLocalStream(stream);
-      if (stream) {
-        logger.info('[VideoCall] Local stream event', {
-          streamId: stream.id,
-          prevStreamId: prevStream?.id,
-          hasVideoTrack: !!(stream.getVideoTracks?.()?.[0])
-        });
-        setLocalRenderKey((k: number) => k + 1);
-      }
-    };
-    
-    const handleRemoteStreamEvent = (stream: MediaStream | null) => {
-      const prevStream = remoteStreamRef.current;
-      if (prevStream === stream && (!stream || (prevStream && prevStream.id === stream.id))) {
-        if (!stream) {
-          setRemoteMuted(false);
-        }
-        return;
-      }
-      remoteStreamRef.current = stream;
-      setRemoteStream(stream);
-      if (stream) {
-        logger.info('[VideoCall] Remote stream event', {
-          streamId: stream.id,
-          prevStreamId: prevStream?.id,
-          hasVideoTrack: !!(stream.getVideoTracks?.()?.[0]),
-          hasAudioTrack: !!(stream.getAudioTracks?.()?.[0])
-        });
-        // При получении удаленного стрима снимаем состояние неактивности
-        setIsInactiveState(false);
-        setWasFriendCallEnded(false);
-        setStarted(true);
-        setLoading(false);
-        setRemoteViewKey((k: number) => k + 1);
-      } else {
-        setRemoteMuted(false);
-      }
-    };
-    
     const handleRemoteViewKeyChange = (key: number) => {
       setRemoteViewKey(key);
     };
     
-    session.on('localStream', handleLocalStreamEvent);
-    session.on('remoteStream', handleRemoteStreamEvent);
     session.on('remoteViewKeyChanged', handleRemoteViewKeyChange);
     
     const handleCallEnded = () => {
@@ -979,8 +971,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       const activeSession = sessionRef.current;
       
       if (activeSession) {
-        activeSession.off('localStream', handleLocalStreamEvent);
-        activeSession.off('remoteStream', handleRemoteStreamEvent);
         activeSession.off('remoteViewKeyChanged', handleRemoteViewKeyChange);
         activeSession.off('callEnded', handleCallEnded);
         activeSession.off('callAnswered', handleCallAnswered);
@@ -1619,35 +1609,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     ])
   );
   
-  // Обновление NavigationBar для Android
-  useEffect(() => {
-    const applyNavBarForVideo = async () => {
-      if (Platform.OS !== 'android') return;
-      try {
-        const NavigationBar = await import('expo-navigation-bar');
-        const applyOnce = async () => {
-          const bg = isDark ? '#151F33' : (theme.colors.background as string);
-          await NavigationBar.setBackgroundColorAsync(bg);
-          try { await NavigationBar.setBehaviorAsync('inset-swipe'); } catch {}
-          try { await NavigationBar.setPositionAsync('relative'); } catch {}
-          await NavigationBar.setButtonStyleAsync(isDark ? 'light' : 'dark');
-          try { await NavigationBar.setVisibilityAsync('visible'); } catch {}
-        };
-        await applyOnce();
-        setTimeout(applyOnce, 50);
-        setTimeout(applyOnce, 250);
-      } catch {}
-    };
-    applyNavBarForVideo();
-  }, [theme.colors.background, isDark]);
   
   return (
     <SafeAreaView 
       style={[styles.container, { backgroundColor: isDark ? '#151F33' : (theme.colors.background as string) }]}
+      edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
       {...panResponder.panHandlers} // Включено: PiP через свайп
     >
         {/* Карточка "Собеседник" */}
-        <View style={styles.card}>
+        <View
+          style={styles.card}
+          onLayout={(e) => {
+            const { width, height } = e.nativeEvent.layout;
+            logger.info('[VideoCall] Remote card layout', { width, height });
+          }}
+        >
           <RemoteVideo
             remoteStream={currentRemoteStream}
             remoteCamOn={remoteCamOn}
@@ -1747,7 +1723,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         </View>
         
         {/* Карточка "Вы" */}
-        <View style={styles.card}>
+        <View
+          style={styles.card}
+          onLayout={(e) => {
+            const { width, height } = e.nativeEvent.layout;
+            logger.info('[VideoCall] Local card layout', { width, height });
+          }}
+        >
           <LocalVideo
             localStream={localStream}
             camOn={camOn}

@@ -1,4 +1,4 @@
-import { MediaStream } from 'react-native-webrtc';
+import { MediaStream } from '@livekit/react-native-webrtc';
 
 // ==================== Types ====================
 

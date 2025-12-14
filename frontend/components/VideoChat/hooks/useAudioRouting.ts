@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Platform, AppState } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
-import { mediaDevices } from 'react-native-webrtc';
+import { mediaDevices } from '@livekit/react-native-webrtc';
 import { logger } from '../../../utils/logger';
 
 /**
@@ -19,7 +19,7 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
   const configureIOSAudioSession = () => {
     if (Platform.OS !== 'ios') return;
     try {
-      const webrtcMod = require('react-native-webrtc');
+      const webrtcMod = require('@livekit/react-native-webrtc');
       const RTCAudioSession = webrtcMod?.RTCAudioSession;
       if (!RTCAudioSession || typeof RTCAudioSession.sharedInstance !== 'function') return;
       const s = RTCAudioSession.sharedInstance();

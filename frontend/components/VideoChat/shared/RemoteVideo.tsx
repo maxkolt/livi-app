@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
-import { RTCView, MediaStream } from 'react-native-webrtc';
+import { RTCView, MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
 import AwayPlaceholder from '../../../components/AwayPlaceholder';
 import { t, type Lang } from '../../../utils/i18n';
@@ -40,13 +40,20 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   onStreamReady,
 }) => {
   const L = (key: string) => t(key, lang);
+  const logRenderState = useCallback(
+    (reason: string, extra?: Record<string, unknown>) => {
+      logger.info('[RemoteVideo] Render state', { reason, ...extra });
+    },
+    []
+  );
 
-  // Берём актуальный стрим: сначала из пропсов, затем из session (fallback)
+  // Берём актуальный стрим только из пропсов.
+  // Fallback на session часто приводит к рендеру "старого" MediaStream после next/переподключений.
   const streamToUse = useMemo(() => {
-    const stream = remoteStream || (session?.getRemoteStream?.() as MediaStream | null | undefined) || null;
+    const stream = remoteStream || null;
     if (stream) {
       const videoTrack = (stream as any)?.getVideoTracks?.()?.[0];
-      logger.info('[RemoteVideo] streamToUse обновлен', {
+      logger.debug('[RemoteVideo] streamToUse обновлен', {
         platform: Platform.OS,
         streamId: stream.id,
         hasVideoTrack: !!videoTrack,
@@ -56,7 +63,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       });
     }
     return stream;
-  }, [remoteStream, session, remoteViewKey]);
+  }, [remoteStream, remoteViewKey]);
 
 
   // Сообщаем о готовности стрима
@@ -74,16 +81,19 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       const videoTrack = (streamToUse as any)?.getVideoTracks?.()?.[0];
       // На Android используем stream prop, поэтому проверяем только наличие трека
       if (videoTrack && videoTrack.readyState === 'live') {
-        setForceUpdateKey(prev => prev + 1);
-        logger.info('[RemoteVideo] Android: force-update RTCView', {
-          streamId: streamToUse.id,
-          trackId: videoTrack.id,
-          trackEnabled: videoTrack.enabled,
-          key: forceUpdateKey + 1
+        setForceUpdateKey((prev) => {
+          const next = prev + 1;
+          logger.info('[RemoteVideo] Android: force-update RTCView', {
+            streamId: streamToUse.id,
+            trackId: videoTrack.id,
+            trackEnabled: videoTrack.enabled,
+            key: next,
+          });
+          return next;
         });
       }
     }
-  }, [streamToUse?.id, remoteViewKey, streamToUse]);
+  }, [streamToUse?.id, remoteViewKey]);
 
   // Управление аудио треками под mute/unmute
   useEffect(() => {
@@ -103,6 +113,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // Неактивное состояние звонка - показываем надпись "Собеседник" как в эталонном файле
   if (wasFriendCallEnded || isInactiveState) {
+    logRenderState('inactive-call', { remoteCamOn, wasFriendCallEnded, started });
     return (
       <View style={[styles.rtc, styles.placeholderContainer]}>
         <Text style={styles.placeholder}>{L('peer')}</Text>
@@ -113,8 +124,10 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // Нет стрима — показываем лоадер при загрузке или чёрный экран
   if (!streamToUse) {
     if (loading) {
+      logRenderState('no-stream-loading');
       return <ActivityIndicator size="large" color="#fff" />;
     }
+    logRenderState('no-stream-idle');
     return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
   }
 
@@ -122,25 +135,27 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   const hasVideoTrack = !!videoTrack;
   const videoTrackReady = !!videoTrack && videoTrack.readyState === 'live';
   const videoTrackEnabled = !!videoTrack && (videoTrack.enabled ?? true);
-  const hasRenderableVideo = !!videoTrack && videoTrackReady && videoTrackEnabled;
+  const videoTrackMuted = !!videoTrack && (videoTrack.muted ?? false);
+  const hasRenderableVideo = !!videoTrack && videoTrackReady && videoTrackEnabled && !videoTrackMuted;
 
   // КРИТИЧНО: Показываем видео если есть готовый трек, даже если remoteCamOn еще не обновлен
   // remoteCamOn может обновиться позже через onRemoteCamStateChange
   if (hasRenderableVideo) {
     // КРИТИЧНО: На Android используем prop `stream` напрямую вместо `streamURL`
-    // Это более надежный способ для react-native-webrtc на Android
+    // Это более надежный способ для @livekit/react-native-webrtc на Android, но дублируем streamURL как fallback
     const streamURL = streamToUse.toURL?.();
     const rtcViewKey = Platform.OS === 'android' 
       ? `remote-${streamToUse.id}-${remoteViewKey}-${forceUpdateKey}`
       : `remote-${streamToUse.id}-${remoteViewKey}`;
     
-    logger.info('[RemoteVideo] ✅ Рендерим RTCView', {
+    logRenderState('render-video', {
       platform: Platform.OS,
       streamURL: streamURL ? streamURL.substring(0, 50) + '...' : 'null',
       key: rtcViewKey,
       hasVideoTrack,
       videoTrackReady,
       videoTrackEnabled,
+      videoTrackMuted,
       streamId: streamToUse.id,
       usingStreamProp: Platform.OS === 'android'
     });
@@ -156,8 +171,14 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       return <ActivityIndicator size="large" color="#fff" />;
     }
     
+    // На Android пробрасываем и stream, и streamURL (некоторые сборки webrtc требуют streamURL)
     const rtcViewProps = Platform.OS === 'android' 
-      ? { stream: streamToUse } // Android: используем stream напрямую
+      ? { 
+          stream: streamToUse, 
+          streamURL, 
+          renderToHardwareTextureAndroid: true, 
+          zOrderMediaOverlay: true 
+        }
       : { streamURL: streamURL! }; // iOS: используем streamURL (уже проверили выше)
     
     // КРИТИЧНО: На Android RTCView должен быть прямым потомком View без лишних оберток
@@ -183,6 +204,13 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // Камера явно выключена И нет готового трека — показываем заглушку "Отошёл"
   if (!remoteCamOn && !hasRenderableVideo) {
+    logRenderState('remote-cam-off', {
+      streamId: streamToUse.id,
+      hasVideoTrack,
+      videoTrackReady,
+      videoTrackEnabled,
+      videoTrackMuted,
+    });
     return (
       <View style={styles.videoContainer}>
         <AwayPlaceholder />
@@ -196,13 +224,34 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     );
   }
 
-  // Стрим есть, но видеотрек не готов — показываем лоадер
+  // Стрим есть, но видеотрек не готов/замьючен — показываем лоадер (камера не "явно выключена")
   if (streamToUse && hasVideoTrack) {
+    logRenderState('video-track-not-renderable', {
+      streamId: streamToUse.id,
+      videoTrackReady,
+      videoTrackEnabled,
+      videoTrackMuted,
+    });
     return <ActivityIndicator size="large" color="#fff" />;
   }
 
-  // Fallback
-  return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
+  // Нет видеотрека (например, только аудио) — показываем заглушку, если камера "выключена" по состоянию
+  if (!remoteCamOn) {
+    return (
+      <View style={styles.videoContainer}>
+        <AwayPlaceholder />
+        {showFriendBadge && (
+          <View style={styles.friendBadge}>
+            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  // Fallback (стрим есть, но видео не появилось)
+  return <ActivityIndicator size="large" color="#fff" />;
 };
 
 const styles = StyleSheet.create({

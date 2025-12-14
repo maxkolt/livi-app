@@ -1,5 +1,5 @@
 // Утилиты для работы со стримами WebRTC
-import { MediaStream } from 'react-native-webrtc';
+import { MediaStream } from '@livekit/react-native-webrtc';
 
 export const isValidStream = (stream?: MediaStream | null): boolean => {
   if (!stream) return false;

@@ -90,6 +90,7 @@ import socket, {
   checkUserExists,
   clearAllUserData,
   createUser,
+  isCreateUserInProgress,
   API_BASE,
   startCall,
   cancelCall,
@@ -99,6 +100,7 @@ import socket, {
   onCallTimeout,
   onCallRoomFull,
   onDisconnected,
+  waitForCreateUserCompletion,
 } from '../sockets/socket';
 
 
@@ -611,23 +613,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
   }, []);
   
-  // Android: красим системную нижнюю панель под текущий экран/оверлей
-  useEffect(() => {
-    (async () => {
-      if (Platform.OS !== 'android' || !(NativeModules as any)?.ExpoNavigationBar) return;
-      try {
-        const NavigationBar = await import('expo-navigation-bar');
-        // Когда меню (друзья/профиль/ещё) открыто, фон тёмный даже в светлой теме → ставим тёмный цвет,
-        // иначе используем фон темы экрана (светлый/тёмный)
-        const bg = menuOpen ? '#0D0E10' : (theme.colors.background as string);
-        await NavigationBar.setBackgroundColorAsync(bg);
-        try { await NavigationBar.setButtonStyleAsync(menuOpen ? 'light' : (isDark ? 'light' : 'dark')); } catch {}
-        try { await NavigationBar.setBehaviorAsync('inset-swipe'); } catch {}
-        try { await NavigationBar.setPositionAsync(menuOpen ? 'absolute' : 'relative'); } catch {}
-        try { await NavigationBar.setVisibilityAsync('visible'); } catch {}
-      } catch {}
-    })();
-  }, [menuOpen, theme.colors.background, isDark]);
 
 
   /* language */
@@ -766,8 +751,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
         // Переход в экран видеочата (мы инициатор) с передачей callId
-        navigation.navigate('VideoChat', { 
-          callMode: 'friends', 
+        navigation.navigate('VideoCall', { 
           directCall: true, 
           directInitiator: true, 
           peerUserId: friend.id, 
@@ -1062,8 +1046,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (ensureIdentityRef.current) {
       return ensureIdentityRef.current;
     }
-    
+
     const promise = (async () => {
+      // Если createUser уже выполняется (после установки), ждём его завершения, чтобы не слать параллельный attach
+      if (isCreateUserInProgress()) {
+        try {
+          await waitForCreateUserCompletion();
+        } catch (e) {
+          console.warn('[ensureIdentity] Waiting for createUser failed:', e);
+        }
+      }
+
       const localInstallId = await getInstallId();
       setInstallId(localInstallId);
 
@@ -1662,46 +1655,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => sub.remove();
   }, [syncUserData, ensureIdentity, loadFriends]);
 
-  /* ===== navbar color sync when overlay opens ===== */
-  useEffect(() => {
-    if (Platform.OS !== 'android' || !(NativeModules as any)?.ExpoNavigationBar) return;
-    (async () => {
-      try {
-        const NavigationBar = await import('expo-navigation-bar');
-        const applyOnce = async () => {
-          await NavigationBar.setBackgroundColorAsync(menuOpen ? '#0D0E10' : (theme.colors.background as string));
-          try { await NavigationBar.setBehaviorAsync('inset-swipe'); } catch {}
-          try { await NavigationBar.setPositionAsync(menuOpen ? 'absolute' : 'relative'); } catch {}
-          await NavigationBar.setButtonStyleAsync(menuOpen ? 'light' : (isDark ? 'light' : 'dark'));
-        };
-        await applyOnce();
-        setTimeout(applyOnce, 50);
-        setTimeout(applyOnce, 250);
-      } catch {}
-    })();
-  }, [menuOpen, theme.colors.background, isDark]);
 
-  /* ===== enforce navbar on focus (when returning from recents) ===== */
-  useEffect(() => {
-    if (Platform.OS !== 'android' || !(NativeModules as any)?.ExpoNavigationBar) return;
-    const sub = navigation?.addListener?.('focus', async () => {
-      try {
-        const NavigationBar = await import('expo-navigation-bar');
-        const applyOnce = async () => {
-          await NavigationBar.setBackgroundColorAsync(theme.colors.background as string);
-          try { await NavigationBar.setBehaviorAsync('inset-swipe'); } catch {}
-          try { await NavigationBar.setPositionAsync('relative'); } catch {}
-          await NavigationBar.setButtonStyleAsync(isDark ? 'light' : 'dark');
-        };
-        await applyOnce();
-        try { await NavigationBar.setVisibilityAsync('hidden'); } catch {}
-        setTimeout(async () => { try { await NavigationBar.setVisibilityAsync('visible'); } catch {} }, 20);
-        setTimeout(applyOnce, 50);
-        setTimeout(applyOnce, 250);
-      } catch {}
-    });
-    return () => sub && navigation?.removeListener?.('focus', sub);
-  }, [navigation]);
 
   // Обновляем пропущенные видеозвонки из AsyncStorage при возврате на экран (iOS/Android)
   // КРИТИЧНО: Нормализуем ключи (преобразуем в строки) и фильтруем только значения > 0
@@ -3086,11 +3040,11 @@ const handleClearNick = useCallback(async () => {
         style={[
           styles.container,
           {
-            paddingTop: Platform.OS === "android" ? 50 : 0,
+            paddingTop: Platform.OS === "android" ? 20 : 0,
             backgroundColor: theme.colors.background,
           },
         ]}
-        edges={Platform.OS === "android" ? ['bottom','left','right'] : ['bottom','left','right','top']}
+        edges={Platform.OS === "android" ? ['top', 'bottom','left','right'] : ['bottom','left','right','top']}
       >
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
@@ -3152,7 +3106,7 @@ const handleClearNick = useCallback(async () => {
 
       <AnimatedBorderButton
         isDark={isDark}
-        onPress={() => navigation.navigate("VideoChat", { callMode: 'random', returnTo: { name: 'Home' } })}
+        onPress={() => navigation.navigate("RandomChat", { returnTo: { name: 'Home' } })}
         label={L("startSearchBtn")}
         style={{ marginBottom: 60 }}
         backgroundColor={theme.colors.background as string}
@@ -3161,7 +3115,10 @@ const handleClearNick = useCallback(async () => {
       {menuOpen && (
         <View style={styles.overlayMenu}>
           <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
-          <Surface style={[styles.sheetFull, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 8) }]}>
+          <SafeAreaView 
+            style={[styles.sheetFull]}
+            edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
+          >
             <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
               <View style={styles.sheetTopBar}>
                 <TouchableOpacity
@@ -3257,7 +3214,7 @@ const handleClearNick = useCallback(async () => {
                 {tab === 'more' && <MoreTab />}
               </View>
             </KeyboardAvoidingView>
-          </Surface>
+          </SafeAreaView>
         </View>
       )}
 
@@ -3478,7 +3435,7 @@ const handleClearNick = useCallback(async () => {
 
 /* ================= styles ================= */
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: LIVI.bg, paddingHorizontal: 14, paddingBottom: 32, justifyContent: 'center' },
+  container: { flex: 1, backgroundColor: LIVI.bg, paddingHorizontal: 14, paddingBottom: 10, justifyContent: 'center' },
   topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
   brand: { color: LIVI.text, fontSize: Platform.OS === "ios" ? 39 : 30, fontWeight: Platform.OS === "ios" ? '600' : '800', letterSpacing: 0.3, paddingHorizontal: Platform.OS === "android" ? 10 : 0 },
   menuBtn: { backgroundColor: LIVI.glass, borderRadius: 14 },
@@ -3534,7 +3491,7 @@ const styles = StyleSheet.create({
     width,
     height,
     backgroundColor: Platform.OS === "android"
-      ? "#0D0E10"  // Android — тот же цвет, что и у NavigationBar при открытом меню
+      ? "#0D0E10"  // Android — темный фон для меню
       : "rgba(13,14,16,0.72)", // iOS
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: LIVI.border,

@@ -59,6 +59,7 @@ const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(s);
 /* ========= auth state ========= */
 let currentUserId: string | undefined;
 let bootInProgress = false; // Защита от повторного вызова boot()
+let createUserPromise: Promise<string | null> | null = null; // Трекер параллельных createUser
 
 /* ========= socket (singleton) ========= */
 let socketInstance: Socket | null = null;
@@ -596,6 +597,7 @@ export function identityAttach(payload: {
 }
 export const attachIdentity = identityAttach;
 
+
 /* ========= Service ========= */
 export function getSocketId() {
   return socket.id;
@@ -730,8 +732,7 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
   return checkPromise;
 }
 
-// Функция для создания пользователя с retry
-export async function createUser() {
+async function createUserInternal(): Promise<string | null> {
   console.log('[createUser] Creating user...');
   
   // КРИТИЧНО: Проверяем существование пользователя на сервере перед пропуском создания
@@ -761,13 +762,14 @@ export async function createUser() {
     console.warn('[createUser] Failed to clear AsyncStorage:', e);
   }
   
+  const installId = await getInstallId();
+
   // Retry до 5 раз с задержкой
   for (let attempt = 1; attempt <= 5; attempt++) {
     try {
       console.log(`[createUser] Attempt ${attempt}/5...`);
       
       // Используем identity:attach для создания пользователя
-      const installId = await getInstallId();
       const response = await identityAttach({ installId });
       
       if (response?.ok && response?.userId) {
@@ -777,9 +779,19 @@ export async function createUser() {
         
         console.log('[createUser] User created successfully:', response.userId);
         return response.userId;
-      } else {
-        throw new Error(response?.error || 'Failed to create user');
       }
+      
+      if (response?.error === 'duplicate_request') {
+        const existing = await getMyUserId();
+        if (existing) {
+          setCurrentUserId(existing);
+          await applyAuthAndConnect();
+          console.log('[createUser] Existing user restored from installId:', existing);
+          return existing;
+        }
+      }
+      
+      throw new Error(response?.error || 'Failed to create user');
       
     } catch (e) {
       console.warn(`[createUser] Attempt ${attempt} error:`, e);
@@ -792,6 +804,34 @@ export async function createUser() {
   
   console.error('[createUser] All attempts failed');
   return null;
+}
+
+// Функция для создания пользователя с retry
+export async function createUser(): Promise<string | null> {
+  if (createUserPromise) {
+    console.log('[createUser] Creation already in progress, waiting for existing promise');
+    return createUserPromise;
+  }
+
+  createUserPromise = (async () => {
+    try {
+      return await createUserInternal();
+    } catch (error) {
+      throw error;
+    }
+  })();
+
+  try {
+    return await createUserPromise;
+  } finally {
+    createUserPromise = null;
+  }
+}
+
+export const isCreateUserInProgress = () => !!createUserPromise;
+export async function waitForCreateUserCompletion(): Promise<string | null> {
+  if (!createUserPromise) return null;
+  return createUserPromise.catch((error) => { throw error; });
 }
 
 export function getCurrentUserId(): string | undefined {

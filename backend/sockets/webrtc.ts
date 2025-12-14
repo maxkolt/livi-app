@@ -4,18 +4,8 @@ import type { AuthedSocket } from "./types";
 import { logger } from '../utils/logger';
 
 /**
- * Тип полезной нагрузки для сигналинга WebRTC.
- */
-type SignalPayload = {
-  roomId?: string;
-  to?: string;
-  offer?: RTCSessionDescriptionInit;
-  answer?: RTCSessionDescriptionInit;
-  candidate?: RTCIceCandidateInit;
-};
-
-/**
- * Подключает обработчики сигналинга WebRTC к сокету.
+ * Подключает обработчики для LiveKit (сигналинг больше не нужен - LiveKit сам управляет)
+ * Оставлены только вспомогательные события: room:join, connection:established, cam-toggle, PiP
  */
 export function bindWebRTC(io: Server, socket: AuthedSocket) {
   /** =========================
@@ -55,19 +45,9 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       return;
     }
     
-    // УБРАНО: Проверка busy флага в room:join:ack
-    // В рандомном поиске пользователь должен быть busy=true (он в поиске)
-    // busy флаг блокирует только прямые звонки, но не рандомный поиск
-    
-    // Убрано: проверка busy флага для room:join:ack
-    // busy флаг не должен блокировать рандомный поиск
-    
     // Добавляем сокет в комнату
     socket.join(roomId);
     logger.debug('Socket joined room', { socketId: socket.id, roomId });
-    
-    // УДАЛЕНО: установка busy флага - теперь устанавливается через connection:established
-    // когда WebRTC соединение реально установлено (есть remoteStream)
     
     // Отправляем новому участнику peer ID собеседника (максимум 1)
     if (existingPeers.length === 1) {
@@ -92,7 +72,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
    *  Connection established (для установки busy при активном соединении)
    *  ========================= */
   socket.on("connection:established", ({ roomId }: { roomId?: string }) => {
-    logger.debug('WebRTC connection established', { socketId: socket.id, roomId });
+    logger.debug('LiveKit connection established', { socketId: socket.id, roomId });
     
     // Устанавливаем busy флаг для текущего пользователя
     (socket as any).data = (socket as any).data || {};
@@ -104,189 +84,6 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       logger.debug('Set busy for user', { userId: myUserId });
     }
   });
-
-  /** =========================
-   *  Universal forward helper
-   *  ========================= */
-  const forward = (event: "offer" | "answer" | "ice-candidate" | "hangup") => {
-    socket.on(event, (data: SignalPayload) => {
-      const { roomId, to, ...payload } = data;
-      const targetId = roomId || to;
-      if (!targetId) {
-        logger.warn(`[forward ${event}] No targetId (roomId or to) provided`, { socketId: socket.id });
-        return;
-      }
-
-      // Логирование для отладки
-      if (payload?.offer?.sdp) {
-        logger.info(`[forward ${event}] 📤 Forwarding offer`, { 
-          socketId: socket.id, 
-          roomId, 
-          to, 
-          targetId,
-          hasRoomId: !!roomId,
-          hasTo: !!to,
-          sdpLength: payload.offer.sdp?.length || 0
-        });
-      } else if (payload?.answer?.sdp) {
-        logger.info(`[forward ${event}] 📥 Forwarding answer`, { 
-          socketId: socket.id, 
-          roomId, 
-          to, 
-          targetId,
-          hasRoomId: !!roomId,
-          hasTo: !!to,
-          sdpLength: payload.answer.sdp?.length || 0
-        });
-      } else if (payload?.candidate) {
-        // ICE кандидаты слишком частые, не логируем
-      } else {
-        logger.debug(`[forward ${event}] Forwarding event`, { 
-          socketId: socket.id, 
-          roomId, 
-          to, 
-          targetId 
-        });
-      }
-
-      // Отправка: либо в комнату, либо конкретному сокету
-      // КРИТИЧНО: При наличии roomId отправляем ТОЛЬКО в комнату, чтобы избежать дублирования
-      // Дублирование приводит к ошибкам "Called in wrong state" при установке SDP
-      const fromUserId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : undefined;
-      // КРИТИЧНО: Всегда включаем from: socket.id в envelope, чтобы клиент точно знал, от кого сигнал
-      // Это предотвращает ситуацию, когда получатель принимает пакет как "от себя"
-      const envelope = { from: socket.id, fromUserId, roomId, ...payload } as any;
-      
-      let delivered = false;
-      
-      // КРИТИЧНО: Для прямых звонков используем roomId для гарантированной доставки
-      // КРИТИЧНО: Если есть roomId, отправляем ТОЛЬКО в комнату (не дублируем по to)
-      if (roomId) {
-        const isSenderInRoom = socket.rooms.has(roomId);
-        
-        // КРИТИЧНО: Проверяем, что отправитель находится в комнате
-        // Делаем это ПЕРЕД получением roomSize, чтобы размер был актуальным
-        if (!isSenderInRoom) {
-          logger.warn(`[forward ${event}] ⚠️ Sender not in room, joining room first`, {
-            roomId,
-            socketId: socket.id
-          });
-          socket.join(roomId);
-        }
-        
-        // КРИТИЧНО: Получаем roomSize ПОСЛЕ присоединения отправителя к комнате
-        // Это гарантирует актуальный размер комнаты для проверки доставки
-        const room = io.sockets.adapter.rooms.get(roomId);
-        const roomSize = room ? room.size : 0;
-        
-        logger.info(`[forward ${event}] 📨 Sending to room`, { 
-          roomId, 
-          roomSize,
-          socketId: socket.id,
-          event,
-          isSenderInRoom: socket.rooms.has(roomId),
-          from: socket.id
-        });
-        
-        // КРИТИЧНО: Используем socket.to(roomId) вместо io.to(roomId), чтобы исключить самодоставку
-        // socket.to() исключает отправителя, io.to() включает всех в комнате (включая отправителя)
-        // Это гарантирует, что получатель видит корректный from и не принимает пакет как "от себя"
-        socket.to(roomId).emit(event, envelope);
-        delivered = true;
-        
-        // КРИТИЧНО: Проверяем что событие действительно отправлено
-        // Используем актуальный roomSize после присоединения отправителя
-        // socket.to() исключает отправителя, поэтому для доставки нужно минимум 2 участника
-        if (roomSize <= 1) {
-          logger.warn(`[forward ${event}] ⚠️ Room has only ${roomSize} socket(s), event may not be delivered`, {
-            roomId,
-            socketId: socket.id,
-            note: 'socket.to() excludes sender, so at least 2 participants needed for delivery'
-          });
-        } else {
-          // Логируем успешную доставку для важных событий
-          if (event === 'offer' || event === 'answer') {
-            logger.info(`[forward ${event}] ✅ Event sent to room with ${roomSize} participant(s)`, {
-              roomId,
-              socketId: socket.id,
-              from: socket.id,
-              actualRecipients: roomSize - 1 // -1 потому что socket.to() исключает отправителя
-            });
-          }
-        }
-        
-        // КРИТИЧНО: Возвращаемся, чтобы не отправлять по to (избегаем дублирования)
-        // Дублирование offer/answer приводит к ошибкам "Called in wrong state"
-        return;
-      }
-      
-      // Если нет roomId, отправляем напрямую по to (для рандомного чата или обратной совместимости)
-      // КРИТИЧНО: to может быть как socketId, так и userId
-      if (to) {
-        // Сначала пытаемся найти по socketId
-        let targetSocket = io.sockets.sockets.get(to);
-        
-        // Если не нашли по socketId, пытаемся найти по userId
-        if (!targetSocket) {
-          targetSocket = Array.from(io.sockets.sockets.values()).find(
-            (s) => (s as any)?.data?.userId === to
-          ) as AuthedSocket | undefined;
-        }
-        
-        if (targetSocket) {
-          logger.debug(`[forward ${event}] Sending directly to socket`, { 
-            to, 
-            socketId: socket.id,
-            targetSocketId: targetSocket.id,
-            targetExists: true,
-            from: socket.id
-          });
-          // КРИТИЧНО: При отправке напрямую также гарантируем наличие from в envelope
-          targetSocket.emit(event, envelope);
-          delivered = true;
-        } else {
-          logger.warn(`[forward ${event}] Target socket not found (neither by socketId nor userId)`, { 
-            to, 
-            socketId: socket.id 
-          });
-        }
-      }
-      
-      if (!delivered) {
-        logger.error(`[forward ${event}] ❌ Failed to deliver event`, { 
-          socketId: socket.id, 
-          roomId, 
-          to,
-          event,
-          hasRoomId: !!roomId,
-          hasTo: !!to
-        });
-      } else {
-        logger.info(`[forward ${event}] ✅ Event delivered successfully`, {
-          event,
-          roomId: roomId || undefined,
-          to: to || undefined
-        });
-      }
-      // Доп. гарантия доставки для завершения вызова: шлем во все общие комнаты сокета
-      // КРИТИЧНО: Используем socket.to() вместо io.to(), чтобы исключить самодоставку
-      if (event === 'hangup') {
-        socket.rooms.forEach((rid) => {
-          if (rid && rid.startsWith('room_')) {
-            socket.to(rid).emit('hangup', envelope);
-          }
-        });
-      }
-    });
-  };
-
-  /** =========================
-   *  WebRTC events forwarding
-   *  ========================= */
-  forward("offer");
-  forward("answer");
-  forward("ice-candidate");
-  forward("hangup");
 
   /** =========================
    *  Camera toggle forwarding
@@ -303,23 +100,14 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       }
     });
     
-    // Для WebRTC рандомного чата пересылаем событие напрямую по socket.id
+    // Для обратной совместимости пересылаем событие напрямую по socket.id
     const socketData = (socket as any).data;
     
     if (socketData && socketData.partnerSid) {
       const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
       if (partnerSocket) {
-        // КРИТИЧНО: Передаем to при пересылке для правильной обработки на клиенте
         partnerSocket.emit("cam-toggle", { enabled, from, to: partnerSocket.id });
-        // Логируем только при ошибках или отключении камеры
-        if (!enabled) logger.debug('Camera toggle forwarded to WebRTC partner', { partnerId: socketData.partnerSid });
-      } else {
-        logger.debug('Partner socket not found', { partnerId: socketData.partnerSid });
-      }
-    } else {
-      // Логируем только если это не обычная ситуация (когда нет партнера)
-      if (socket.rooms.size > 1) {
-        logger.debug('No partnerSid found', { socketId: socket.id });
+        if (!enabled) logger.debug('Camera toggle forwarded to partner', { partnerId: socketData.partnerSid });
       }
     }
   });
@@ -361,9 +149,6 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     });
   });
 
-  /** =========================
-   *  PiP state forwarding (новое событие для синхронизации состояния PiP)
-   *  ========================= */
   socket.on("pip:state", (data: { inPiP: boolean; roomId: string; from: string }) => {
     const { inPiP, roomId, from } = data;
     
@@ -377,19 +162,19 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       logger.debug('PiP state forwarded to room', { roomId, inPiP });
     }
     
-    // Также пересылаем через partnerSid для рандомного чата (если есть)
+    // Также пересылаем через partnerSid для обратной совместимости
     const socketData = (socket as any).data;
     if (socketData && socketData.partnerSid) {
       const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
       if (partnerSocket) {
         partnerSocket.emit("pip:state", { inPiP, roomId, from: socket.id });
-        logger.debug('PiP state forwarded to WebRTC partner', { partnerId: socketData.partnerSid, inPiP });
+        logger.debug('PiP state forwarded to partner', { partnerId: socketData.partnerSid, inPiP });
       }
     }
   });
 
   /** =========================
-   *  Room leave (УПРОЩЕНО для 1-на-1)
+   *  Room leave
    *  ========================= */
   socket.on("room:leave", ({ roomId }: { roomId: string }) => {
     if (!roomId) return;
@@ -433,22 +218,16 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     
     socket.leave(roomId);
     
-    // КРИТИЧНО: НЕ отправляем call:ended для рандомных чатов (используется peer:stopped)
-    // call:ended только для звонков друзей (с activeCallBySocket)
-    // Для рандомных чатов разрыв обрабатывается через 'stop'/'next' → peer:stopped
-    
-    // УПРОЩЕНО: В комнате максимум 2 участника, если ушел один - уведомляем второго
-    // (но НЕ через call:ended, чтобы не вызывать навигацию в рандомном чате)
+    // Уведомляем оставшегося участника
     if (remainingPeers.length === 1) {
       const remainingId = remainingPeers[0];
-      // Просто уведомляем об уходе партнера без call:ended
       io.to(remainingId).emit("peer:stopped");
       logger.debug('Notified remaining peer', { roomId });
     }
   });
 
   /** =========================
-   *  Disconnect cleanup (УПРОЩЕНО для 1-на-1)
+   *  Disconnect cleanup
    *  ========================= */
   socket.on("disconnect", (reason) => {
     logger.debug('Socket disconnected from webrtc', { socketId: socket.id, reason });
