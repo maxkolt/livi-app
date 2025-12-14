@@ -565,6 +565,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // Обработчики
   const onStartStop = useCallback(async () => {
+    if (!canRunAction()) return;
     const session = sessionRef.current;
     if (!session) return;
     
@@ -627,6 +628,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   }, [requestPermissions]);
   
   const onNext = useCallback(async () => {
+    if (!canRunAction()) return;
     const session = sessionRef.current;
     if (!session) {
       console.warn('[onNext] Session not initialized yet');
@@ -655,6 +657,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // Функция для переключения динамика собеседника
   const toggleRemoteAudio = useCallback(() => {
+    if (!canRunAction()) return;
     // Защита от двойных нажатий
     if (toggleRemoteAudioRef.current) return;
     toggleRemoteAudioRef.current = true;
@@ -710,8 +713,20 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     } finally {
       setTimeout(() => {
         toggleCamRef.current = false;
-      }, 300);
+      }, 400); // чуть больше, чтобы игнорировать даблтап/спам
     }
+  }, []);
+
+  // Дополнительная защита от спама кнопок: минимальный интервал между действиями
+  const lastActionRef = useRef<number>(0);
+  const actionCooldownMs = 250;
+  const canRunAction = useCallback(() => {
+    const now = Date.now();
+    if (now - lastActionRef.current < actionCooldownMs) {
+      return false;
+    }
+    lastActionRef.current = now;
+    return true;
   }, []);
   
   // Вычисляемые значения
