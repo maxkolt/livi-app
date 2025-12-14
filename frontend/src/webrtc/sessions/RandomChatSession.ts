@@ -219,14 +219,14 @@ export class RandomChatSession extends SimpleEventEmitter {
     } else if (this.localVideoTrack) {
       // Если нет комнаты, просто mute/unmute трек
       try {
-        const hasSid = !!this.localVideoTrack.sid;
+        const hasSid = !!this.localVideoTrack?.sid;
         if (hasSid) {
           if (this.isCamOn) {
-            this.localVideoTrack.unmute();
+            this.localVideoTrack?.unmute();
           } else {
-            this.localVideoTrack.mute();
+            this.localVideoTrack?.mute();
           }
-        } else if (this.localVideoTrack.mediaStreamTrack) {
+        } else if (this.localVideoTrack?.mediaStreamTrack) {
           this.localVideoTrack.mediaStreamTrack.enabled = this.isCamOn;
         }
       } catch {}
@@ -941,6 +941,7 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   private async publishVideoTrackIfRoomActive(force = false): Promise<void> {
     if (!this.room || !this.localVideoTrack) return;
+    if (!this.isCamOn && !force) return; // не публикуем если камера выключена
     try {
       const publications = this.room.localParticipant.videoTrackPublications;
       // Удаляем только битые или чужие публикации, чтобы не рвать рабочий трек
@@ -1007,6 +1008,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   }
 
   private async unpublishVideoTrackKeepAlive(): Promise<void> {
+    if (this.isCamOn) return; // не трогаем если камера включена
     if (!this.room) return;
     try {
       const publications = this.room.localParticipant.videoTrackPublications;
@@ -1031,6 +1033,23 @@ export class RandomChatSession extends SimpleEventEmitter {
     } catch (e) {
       logger.warn('[RandomChatSession] Failed to unpublish video track', e);
     }
+
+    // Удаляем видео трек из localStream, чтобы он не перепубликовался автоматически
+    if (this.localVideoTrack?.mediaStreamTrack) {
+      try {
+        this.localVideoTrack.mediaStreamTrack.enabled = false;
+      } catch {}
+    }
+    if (this.localStream) {
+      try {
+        this.localStream.getVideoTracks().forEach((t) => {
+          try {
+            this.localStream?.removeTrack(t as any);
+          } catch {}
+        });
+      } catch {}
+    }
+    // Не стопаем трек здесь, чтобы не ломать быстрый ре-паблиш
   }
 
   private async connectToLiveKit(url: string, token: string, connectRequestId: number): Promise<boolean> {
@@ -1142,7 +1161,7 @@ export class RandomChatSession extends SimpleEventEmitter {
           try {
             this.localVideoTrack.mute();
           } catch {}
-          await this.unpublishVideoTrackKeepAlive();
+          // важный момент: не дергаем unpublish здесь, connectToLiveKit уже сделал disconnectRoom перед этим
         }
       } catch (e) {
         logger.warn('[RandomChatSession] Failed to publish video track', e);
