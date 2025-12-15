@@ -136,6 +136,22 @@ export class RandomChatSession extends SimpleEventEmitter {
           this.config.onLoadingChange?.(true);
         }
       }, 120);
+      
+      // КРИТИЧНО: Fallback - если через 1.5 секунды нет match_found, вызываем start()
+      // Это гарантирует подключение к новому собеседнику даже если backend не вернул в очередь
+      // Backend обычно возвращает в очередь быстро, но если что-то пошло не так, fallback поможет
+      // КРИТИЧНО: Проверяем только started и room, isDisconnecting может быть true если disconnect еще не завершился
+      setTimeout(() => {
+        if (this.started && !this.room) {
+          // Дополнительная проверка - если все еще disconnecting через 1.5 секунды, значит что-то пошло не так
+          if (this.isDisconnecting) {
+            logger.warn('[RandomChatSession] Still disconnecting after 1.5s, forcing reset');
+            this.isDisconnecting = false;
+          }
+          logger.debug('[RandomChatSession] Fallback: no match_found after next(), calling start()');
+          this.autoNext('next_fallback');
+        }
+      }, 1500);
     }
   }
 
@@ -238,12 +254,13 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
     
     // КРИТИЧНО: При включении камеры убеждаемся что трек есть в localStream
-    if (this.isCamOn && this.localStream && this.localVideoTrack?.mediaStreamTrack) {
+    const mediaStreamTrack = this.localVideoTrack?.mediaStreamTrack;
+    if (this.isCamOn && this.localStream && mediaStreamTrack) {
       const videoTracks = this.localStream.getVideoTracks();
-      const hasVideoTrack = videoTracks.some(t => t.id === this.localVideoTrack.mediaStreamTrack?.id);
+      const hasVideoTrack = videoTracks.some(t => t.id === mediaStreamTrack.id);
       if (!hasVideoTrack) {
         // Добавляем видео трек обратно в localStream если его нет
-        this.localStream.addTrack(this.localVideoTrack.mediaStreamTrack as any);
+        this.localStream.addTrack(mediaStreamTrack as any);
       }
     }
     
@@ -284,6 +301,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   async restartLocalCamera(): Promise<void> {
     await this.ensureLocalTracks(true);
     if (this.room && this.localVideoTrack) {
+      const localVideoTrack = this.localVideoTrack;
       try {
         // Отписываем старый трек если он опубликован
         const publications = this.room.localParticipant.videoTrackPublications;
@@ -300,15 +318,15 @@ export class RandomChatSession extends SimpleEventEmitter {
         } else if (Array.isArray(publications)) {
           // Это массив - используем find
           existingPub = publications.find(
-            pub => pub.track === this.localVideoTrack || pub.trackSid === this.localVideoTrack.sid
+            pub => pub.track === localVideoTrack || pub.trackSid === localVideoTrack.sid
           );
         }
         
         if (existingPub) {
-          await this.room.localParticipant.unpublishTrack(this.localVideoTrack);
+          await this.room.localParticipant.unpublishTrack(localVideoTrack);
         }
         // Публикуем новый трек
-        await this.room.localParticipant.publishTrack(this.localVideoTrack);
+        await this.room.localParticipant.publishTrack(localVideoTrack);
         logger.info('[RandomChatSession] Camera restarted and republished');
       } catch (e) {
         logger.warn('[RandomChatSession] Failed to republish camera after restart', e);
@@ -632,7 +650,12 @@ export class RandomChatSession extends SimpleEventEmitter {
         
         // Пытаемся получить статистику из LiveKit Room
         try {
-          const stats = await this.room.localParticipant.getTrackStats();
+          const stats = await (this.room.localParticipant as any)?.getTrackStats?.();
+          if (!stats) {
+            this.config.callbacks.onMicLevelChange?.(audioLevel);
+            this.config.onMicLevelChange?.(audioLevel);
+            return;
+          }
           
           // Ищем статистику для аудио трека
           for (const stat of stats) {
@@ -702,32 +725,36 @@ export class RandomChatSession extends SimpleEventEmitter {
     
     try {
       // Создаем AudioContext
-      this.audioContext = new AudioContextClass();
+      const audioContext = new AudioContextClass();
+      this.audioContext = audioContext;
       
       // Создаем AnalyserNode для анализа аудио
-      this.analyser = this.audioContext.createAnalyser();
-      this.analyser.fftSize = 256; // Размер FFT для частотного анализа
-      this.analyser.smoothingTimeConstant = 0.8; // Сглаживание
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256; // Размер FFT для частотного анализа
+      analyser.smoothingTimeConstant = 0.8; // Сглаживание
+      this.analyser = analyser;
       
       // Подключаем аудио поток к анализатору
       const audioTracks = stream.getAudioTracks();
       if (audioTracks.length > 0) {
-        this.micLevelSource = this.audioContext.createMediaStreamSource(stream);
-        this.micLevelSource.connect(this.analyser);
+        const source = audioContext.createMediaStreamSource(stream as unknown as any);
+        this.micLevelSource = source;
+        source.connect(analyser);
         
         // Запускаем периодический опрос уровня
         this.micLevelInterval = setInterval(() => {
           // КРИТИЧНО: Проверяем что микрофон включен и соединение установлено
-          if (!this.analyser || !this.isMicOn || !this.room || this.room.state !== 'connected') {
+          const activeAnalyser = this.analyser;
+          if (!activeAnalyser || !this.isMicOn || !this.room || this.room.state !== 'connected') {
             this.config.callbacks.onMicLevelChange?.(0);
             this.config.onMicLevelChange?.(0);
             return;
           }
           
           // Получаем данные частотного анализа
-          const bufferLength = this.analyser.frequencyBinCount;
+          const bufferLength = activeAnalyser.frequencyBinCount;
           const dataArray = new Uint8Array(bufferLength);
-          this.analyser.getByteFrequencyData(dataArray);
+          activeAnalyser.getByteFrequencyData(dataArray);
           
           // Вычисляем средний уровень по всем частотам
           // Используем взвешенное среднее для лучшей чувствительности
@@ -950,31 +977,27 @@ export class RandomChatSession extends SimpleEventEmitter {
           const track = pub.track;
           const isSameTrack = track && track === this.localVideoTrack;
           const trackEnded = track?.mediaStreamTrack?.readyState === 'ended';
-          if (!isSameTrack || trackEnded) {
-            try {
-              if (track) {
-                await this.room.localParticipant.unpublishTrack(track, { stopTrack: false });
-              } else if (pub.trackSid) {
-                await this.room.localParticipant.unpublishTrack(pub.trackSid, { stopTrack: false } as any);
+              if (!isSameTrack || trackEnded) {
+                try {
+                  if (track) {
+                    await this.room.localParticipant.unpublishTrack(track, false);
+                  }
+                } catch {}
               }
-            } catch {}
-          }
-        }
-      } else if (Array.isArray(publications)) {
-        for (const pub of publications) {
-          const track = pub.track;
-          const isSameTrack = track && track === this.localVideoTrack;
-          const trackEnded = track?.mediaStreamTrack?.readyState === 'ended';
-          if (!isSameTrack || trackEnded) {
-            try {
-              if (track) {
-                await this.room.localParticipant.unpublishTrack(track, { stopTrack: false });
-              } else if (pub.trackSid) {
-                await this.room.localParticipant.unpublishTrack(pub.trackSid, { stopTrack: false } as any);
+            }
+          } else if (Array.isArray(publications)) {
+            for (const pub of publications) {
+              const track = pub.track;
+              const isSameTrack = track && track === this.localVideoTrack;
+              const trackEnded = track?.mediaStreamTrack?.readyState === 'ended';
+              if (!isSameTrack || trackEnded) {
+                try {
+                  if (track) {
+                    await this.room.localParticipant.unpublishTrack(track, false);
+                  }
+                } catch {}
               }
-            } catch {}
-          }
-        }
+            }
       }
 
       // Включаем mediaTrack если нужна камера
@@ -1015,17 +1038,13 @@ export class RandomChatSession extends SimpleEventEmitter {
       if (publications && typeof publications.values === 'function') {
         for (const pub of publications.values()) {
           if (pub.track) {
-            await this.room.localParticipant.unpublishTrack(pub.track, { stopTrack: false });
-          } else if (pub.trackSid) {
-            await this.room.localParticipant.unpublishTrack(pub.trackSid, { stopTrack: false } as any);
+            await this.room.localParticipant.unpublishTrack(pub.track, false);
           }
         }
       } else if (Array.isArray(publications)) {
         for (const pub of publications) {
           if (pub.track) {
-            await this.room.localParticipant.unpublishTrack(pub.track, { stopTrack: false });
-          } else if (pub.trackSid) {
-            await this.room.localParticipant.unpublishTrack(pub.trackSid, { stopTrack: false } as any);
+            await this.room.localParticipant.unpublishTrack(pub.track, false);
           }
         }
       }
@@ -1061,6 +1080,9 @@ export class RandomChatSession extends SimpleEventEmitter {
     
     // КРИТИЧНО: Убеждаемся что локальные треки существуют и активны
     // Если треки были остановлены (чего не должно быть при next()), пересоздаем их
+    // КРИТИЧНО: Сохраняем текущий localStream ПЕРЕД пересозданием треков, чтобы не было черного экрана
+    const prevLocalStream = this.localStream;
+    
     if (!this.localVideoTrack || !this.localAudioTrack) {
       logger.info('[RandomChatSession] Local tracks missing, recreating...');
       await this.ensureLocalTracks();
@@ -1072,7 +1094,20 @@ export class RandomChatSession extends SimpleEventEmitter {
       
       if (videoEnded || audioEnded) {
         logger.warn('[RandomChatSession] Local tracks ended, recreating...', { videoEnded, audioEnded });
+        // КРИТИЧНО: Сохраняем предыдущий стрим перед пересозданием, чтобы не было черного экрана
+        // Компонент будет использовать предыдущий стрим пока новый не готов
+        const prevStream = this.localStream;
         await this.ensureLocalTracks();
+        // КРИТИЧНО: Если новый стрим не готов, эмитим предыдущий чтобы не было черного экрана
+        // Проверяем что новый стрим валидный (имеет треки)
+        const newStreamValid = this.localStream && 
+          this.localStream.getTracks && 
+          this.localStream.getTracks().length > 0;
+        if (prevStream && (!newStreamValid)) {
+          this.emit('localStream', prevStream);
+          this.config.callbacks.onLocalStreamChange?.(prevStream);
+          this.config.onLocalStreamChange?.(prevStream);
+        }
       } else {
         // Треки активны, убеждаемся что они включены
         if (this.localVideoTrack.isMuted !== !this.isCamOn) {
@@ -1088,6 +1123,13 @@ export class RandomChatSession extends SimpleEventEmitter {
           } else {
             this.localAudioTrack.mute();
           }
+        }
+        // КРИТИЧНО: Если треки активны, эмитим localStream чтобы компонент обновился
+        // Это гарантирует что UI использует актуальный стрим
+        if (this.localStream) {
+          this.emit('localStream', this.localStream);
+          this.config.callbacks.onLocalStreamChange?.(this.localStream);
+          this.config.onLocalStreamChange?.(this.localStream);
         }
       }
     }
@@ -1220,9 +1262,13 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
     
-    // Проверяем, не отключена ли комната уже
-    if (room.state === 'disconnected') {
-      logger.debug('[RandomChatSession] disconnectRoom: room already disconnected');
+    // КРИТИЧНО: Проверяем состояние комнаты - не пытаемся отключиться если комната еще не подключена
+    // или уже отключена. Это предотвращает ошибку "cannot send signal request before connected"
+    const roomState = room.state;
+    if (roomState === 'disconnected' || roomState === 'connecting') {
+      logger.debug('[RandomChatSession] disconnectRoom: room already disconnected or still connecting', { 
+        state: roomState 
+      });
       this.room = null;
       return;
     }
@@ -1230,9 +1276,64 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.isDisconnecting = true;
     this.disconnectReason = reason;
     
-    // КРИТИЧНО: НЕ отписываем треки перед disconnect - LiveKit сам корректно обработает отключение
-    // Отписка треков может привести к их остановке или зависанию
-    // LiveKit сам управляет треками при disconnect()
+    // КРИТИЧНО: Отписываем треки ПЕРЕД disconnect, чтобы LiveKit не останавливал их
+    // Это предотвращает остановку треков (ended) при disconnect, что вызывает черный экран
+    // Отписываем БЕЗ остановки треков (stop: false), чтобы они остались активными
+    // КРИТИЧНО: Делаем отписку асинхронной (не ждем), чтобы не задерживать disconnect
+    // Это гарантирует быстрое отключение и правильную работу backend логики
+    void (async () => {
+      try {
+        const localParticipant = room.localParticipant;
+        if (localParticipant) {
+          // Отписываем все опубликованные треки через публикации
+          // Это более надежно, чем проверка sid, так как трек может быть опубликован без sid
+          const videoPubs = localParticipant.videoTrackPublications;
+          const audioPubs = localParticipant.audioTrackPublications;
+          
+          // Отписываем видео треки
+          if (videoPubs) {
+            const pubs = typeof videoPubs.values === 'function' 
+              ? Array.from(videoPubs.values())
+              : Array.isArray(videoPubs) ? videoPubs : [];
+            
+            for (const pub of pubs) {
+              if (pub.track && (pub.track === this.localVideoTrack || pub.trackSid === this.localVideoTrack?.sid)) {
+                try {
+                  await localParticipant.unpublishTrack(pub.track, false);
+                  logger.debug('[RandomChatSession] Video track unpublished before disconnect');
+                } catch (e) {
+                  logger.debug('[RandomChatSession] Error unpublishing video track', e);
+                }
+              }
+            }
+          }
+          
+          // Отписываем аудио треки
+          if (audioPubs) {
+            const pubs = typeof audioPubs.values === 'function'
+              ? Array.from(audioPubs.values())
+              : Array.isArray(audioPubs) ? audioPubs : [];
+            
+            for (const pub of pubs) {
+              if (pub.track && (pub.track === this.localAudioTrack || pub.trackSid === this.localAudioTrack?.sid)) {
+                try {
+                  await localParticipant.unpublishTrack(pub.track, false);
+                  logger.debug('[RandomChatSession] Audio track unpublished before disconnect');
+                } catch (e) {
+                  logger.debug('[RandomChatSession] Error unpublishing audio track', e);
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        logger.debug('[RandomChatSession] Error unpublishing tracks before disconnect', e);
+      }
+    })();
+    
+    // КРИТИЧНО: Сохраняем ссылку на localStream ПЕРЕД отключением, чтобы не было черного экрана
+    // при пересоздании треков
+    const savedLocalStream = this.localStream;
     
     // Увеличиваем connectRequestId, чтобы остановить отложенные подключения
     this.connectRequestId++;
@@ -1245,9 +1346,16 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: Локальные треки НЕ останавливаем - они должны продолжать работать для следующего соединения
     
     try {
-      await room.disconnect();
-    } catch (e) {
-      logger.warn('[RandomChatSession] Error disconnecting room', e);
+      // КРИТИЧНО: Проверяем состояние еще раз перед disconnect, чтобы избежать ошибки
+      if (room.state !== 'disconnected' && room.state !== 'connecting') {
+        await room.disconnect();
+      }
+    } catch (e: any) {
+      // Игнорируем ошибки отключения если комната уже отключена или еще не подключена
+      const errorMessage = e?.message || String(e || '');
+      if (!errorMessage.includes('before connected') && !errorMessage.includes('already disconnected')) {
+        logger.warn('[RandomChatSession] Error disconnecting room', e);
+      }
     }
     this.disconnectReason = 'unknown';
     this.isDisconnecting = false;
@@ -1370,52 +1478,43 @@ export class RandomChatSession extends SimpleEventEmitter {
     
     this.currentRemoteParticipant = participant;
     
-    // КРИТИЧНО: Для видео трека проверяем, изменился ли трек
     const isVideoTrack = publication.kind === Track.Kind.Video;
     const oldVideoTrackSid = this.remoteVideoTrack?.sid;
+    const mediaTrack = track.mediaStreamTrack;
     const wasVideoTrackChanged = isVideoTrack && oldVideoTrackSid && oldVideoTrackSid !== track.sid;
     
-    // КРИТИЧНО: Для видео трека создаем новый MediaStream если трек изменился
-    // Это гарантирует, что RTCView обновится при изменении трека
-    const shouldCreateNewStream = isVideoTrack && wasVideoTrackChanged;
-    
-    if (shouldCreateNewStream) {
-      // Создаем новый MediaStream для нового видео трека
-      const oldStream = this.remoteStream;
-      this.remoteStream = new MediaStream();
-      logger.debug('[RandomChatSession] Created new remote MediaStream for changed video track', {
-        oldStreamId: oldStream?.id,
-        newStreamId: this.remoteStream.id,
-        oldTrackId: oldVideoTrackSid,
-        newTrackId: track.sid,
-      });
-      
-      // Переносим аудио трек в новый stream если он был
-      if (oldStream && this.remoteAudioTrack) {
-        const audioTracks = oldStream.getAudioTracks();
-        audioTracks.forEach((audioTrack) => {
-          try {
-            this.remoteStream.addTrack(audioTrack as any);
-            logger.debug('[RandomChatSession] Transferred audio track to new stream');
-          } catch {}
-        });
-      }
-    } else if (!this.remoteStream) {
+    // Не пересоздаем stream, чтобы не было мерцаний — создаем один раз и переиспользуем
+    if (!this.remoteStream) {
       this.remoteStream = new MediaStream();
       logger.debug('[RandomChatSession] Created new remote MediaStream');
     }
     
-    const mediaTrack = track.mediaStreamTrack;
-    const trackAlreadyInStream = mediaTrack && this.remoteStream.getTracks().includes(mediaTrack as any);
+    const activeRemoteStream = this.remoteStream;
+    const trackAlreadyInStream = mediaTrack && activeRemoteStream.getTracks().includes(mediaTrack as any);
+    
+    // Если видео трек изменился, удаляем старый из потока перед добавлением нового
+    if (
+      isVideoTrack &&
+      wasVideoTrackChanged &&
+      this.remoteVideoTrack?.mediaStreamTrack &&
+      activeRemoteStream.getTracks().includes(this.remoteVideoTrack.mediaStreamTrack as any)
+    ) {
+      try {
+        activeRemoteStream.removeTrack(this.remoteVideoTrack.mediaStreamTrack as any);
+        logger.debug('[RandomChatSession] Removed previous remote video track from stream', {
+          oldTrackId: oldVideoTrackSid,
+        });
+      } catch {}
+    }
     
     if (mediaTrack && !trackAlreadyInStream) {
       // LiveKit's MediaStreamTrack is compatible with @livekit/react-native-webrtc's MediaStreamTrack at runtime
-      this.remoteStream.addTrack(mediaTrack as any);
+      activeRemoteStream.addTrack(mediaTrack as any);
       logger.debug('[RandomChatSession] Added track to remote stream', {
         kind: publication.kind,
-        streamId: this.remoteStream.id,
-        tracksCount: this.remoteStream.getTracks().length,
-        hasToURL: typeof this.remoteStream.toURL === 'function',
+        streamId: activeRemoteStream.id,
+        tracksCount: activeRemoteStream.getTracks().length,
+        hasToURL: typeof activeRemoteStream.toURL === 'function',
         trackId: track.sid,
       });
     }

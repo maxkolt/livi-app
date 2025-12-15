@@ -797,7 +797,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         callId: route.params.callId || null,
         partnerUserId: route.params.peerUserId || null,
         returnToActiveCall: true,
-        isFromBackground: false,
       });
     }
     
@@ -1434,7 +1433,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             logger.warn('[VideoCall] Error enabling video tracks:', e);
           }
           
-          session.exitPiP();
+          session.exitPiP?.();
           
           // Дополнительная проверка через небольшую задержку
           setTimeout(() => {

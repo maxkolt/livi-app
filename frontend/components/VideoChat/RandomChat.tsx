@@ -92,6 +92,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const [friendModalVisible, setFriendModalVisible] = useState(false);
   const [incomingFriendFrom, setIncomingFriendFrom] = useState<string | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const [camOn, setCamOn] = useState(true);
@@ -99,6 +100,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const [remoteMuted, setRemoteMuted] = useState(false);
   const [remoteViewKey, setRemoteViewKey] = useState(0);
   const [localRenderKey, setLocalRenderKey] = useState(0);
+  const localStreamIdRef = useRef<string | null>(null);
+  const prevCamOnRef = useRef<boolean | null>(null);
   const [micLevel, setMicLevel] = useState(0);
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [buttonsOpacity] = useState(new Animated.Value(0));
@@ -366,7 +369,38 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     
     // Подписки на события
     session.on('localStream', (stream) => {
-      setLocalStream(stream);
+      // КРИТИЧНО: Сохраняем предыдущий стрим в ref для предотвращения мерцания
+      // Если новый стрим null/невалидный, но предыдущий валидный - используем предыдущий
+      const prevStream = localStreamRef.current || localStream;
+      const prevStreamValid = prevStream && isValidStream(prevStream);
+      
+      // Обновляем ref только если новый стрим валидный или явно null
+      if (stream && isValidStream(stream)) {
+        localStreamRef.current = stream;
+        setLocalStream(stream);
+      } else if (stream === null) {
+        // Явно установлен null - обновляем состояние и ref
+        localStreamRef.current = null;
+        setLocalStream(null);
+      } else if (!stream || !isValidStream(stream)) {
+        // Новый стрим невалидный - сохраняем предыдущий в ref если он валидный
+        if (prevStreamValid) {
+          localStreamRef.current = prevStream;
+          // НЕ обновляем state, чтобы не было черного экрана
+          logger.debug('[RandomChat] Keeping previous localStream to prevent flicker', {
+            prevStreamId: prevStream.id,
+            newStreamValid: false,
+            hasPrevStream: !!prevStream,
+          });
+        } else {
+          // Предыдущий стрим тоже невалидный - обновляем state
+          localStreamRef.current = stream;
+          setLocalStream(stream);
+        }
+      } else {
+        localStreamRef.current = stream;
+        setLocalStream(stream);
+      }
     });
     
     session.on('remoteStream', (stream) => {
@@ -588,6 +622,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       try {
         stopSpeaker(); // Останавливаем спикер
         session.stopRandomChat();
+        // КРИТИЧНО: Очищаем ref при остановке для предотвращения использования старого стрима
+        localStreamRef.current = null;
         setLocalRenderKey(k => k + 1);
         setPartnerUserId(null);
       } catch (e) {
@@ -734,16 +770,39 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const shouldShowLocalVideo = camOn && !isInactiveState;
   const micLevelForEqualizer = micOn && !isInactiveState ? micLevel : 0;
   
-  // КРИТИЧНО: Обновляем localRenderKey при изменении camOn или localStream для принудительного обновления RTCView
+  // КРИТИЧНО: Обновляем localRenderKey только при реальном изменении localStream (streamId) или camOn
+  // Это предотвращает мерцание при next() - когда localStream остается тем же объектом
   useEffect(() => {
     if (started && !isInactiveState && localStream) {
-      setLocalRenderKey(k => k + 1);
-      logger.debug('[RandomChat] Updated localRenderKey due to camOn or localStream change', {
-        camOn,
-        hasLocalStream: !!localStream,
-        videoTracksCount: localStream.getVideoTracks().length,
-        streamId: localStream.id,
-      });
+      const currentStreamId = localStream.id;
+      const prevStreamId = localStreamIdRef.current;
+      const prevCamOn = prevCamOnRef.current;
+      
+      // Обновляем localRenderKey только если:
+      // 1. streamId изменился (новый стрим)
+      // 2. camOn изменился (включение/выключение камеры)
+      const streamIdChanged = prevStreamId !== currentStreamId;
+      const camOnChanged = prevCamOn !== camOn;
+      const shouldUpdate = streamIdChanged || camOnChanged || (prevStreamId === null && currentStreamId);
+      
+      if (shouldUpdate) {
+        setLocalRenderKey(k => k + 1);
+        localStreamIdRef.current = currentStreamId;
+        prevCamOnRef.current = camOn;
+        logger.debug('[RandomChat] Updated localRenderKey due to streamId or camOn change', {
+          camOn,
+          hasLocalStream: !!localStream,
+          videoTracksCount: localStream.getVideoTracks().length,
+          streamId: currentStreamId,
+          prevStreamId,
+          streamIdChanged,
+          camOnChanged,
+        });
+      }
+    } else if (!localStream) {
+      // Сбрасываем ref когда стрим удаляется
+      localStreamIdRef.current = null;
+      prevCamOnRef.current = null;
     }
   }, [camOn, localStream, started, isInactiveState]);
   
@@ -1215,26 +1274,36 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             // При выключении камеры используем unpublishTrack(), который полностью останавливает камеру
             // Это убирает индикатор камеры на iPhone
             if (shouldShowLocalVideo) {
-              if (localStream && isValidStream(localStream)) {
+              // КРИТИЧНО: Используем localStream из state, но если он невалидный, пробуем ref
+              // Это предотвращает черный экран во время пересоздания треков при next()
+              const displayStream = (localStream && isValidStream(localStream)) 
+                ? localStream 
+                : (localStreamRef.current && isValidStream(localStreamRef.current))
+                  ? localStreamRef.current
+                  : null;
+              
+              if (displayStream) {
                 // Безопасно получаем streamURL с проверкой на null/undefined
-                const localStreamURL = localStream.toURL?.();
+                const localStreamURL = displayStream.toURL?.();
                 // КРИТИЧНО: Используем комбинацию streamId, camOn и localRenderKey для принудительного обновления
                 // Это гарантирует, что видео обновится при включении камеры
-                const localRtcViewKey = `local-${localStream.id}-${camOn}-${localRenderKey}`;
+                const localRtcViewKey = `local-${displayStream.id}-${camOn}-${localRenderKey}`;
                 
                 logger.debug('[RandomChat] Rendering local video', {
                   camOn,
                   hasLocalStream: !!localStream,
+                  hasLocalStreamRef: !!localStreamRef.current,
+                  usingRef: displayStream === localStreamRef.current && displayStream !== localStream,
                   hasStreamURL: !!localStreamURL,
                   localRenderKey,
-                  streamId: localStream.id,
+                  streamId: displayStream.id,
                 });
                 
                 // КРИТИЧНО: На Android используем prop `stream` для лучшей производительности
                 // На iOS используем streamURL
                 const localRtcViewProps = Platform.OS === 'android' 
                   ? { 
-                      stream: localStream, 
+                      stream: displayStream, 
                       streamURL: localStreamURL, 
                       renderToHardwareTextureAndroid: true, 
                       zOrderMediaOverlay: true 
@@ -1259,7 +1328,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               } else {
                 logger.warn('[RandomChat] Local stream invalid or missing, showing black view', {
                   hasLocalStream: !!localStream,
+                  hasLocalStreamRef: !!localStreamRef.current,
                   isValid: localStream ? isValidStream(localStream) : false,
+                  isValidRef: localStreamRef.current ? isValidStream(localStreamRef.current) : false,
                 });
                 return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
               }
