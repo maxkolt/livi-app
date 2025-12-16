@@ -43,5 +43,3 @@ router.post('/livekit/token', async (req, res) => {
 });
 
 export default router;
-
-
