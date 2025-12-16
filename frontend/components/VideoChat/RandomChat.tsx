@@ -95,6 +95,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const localStreamRef = useRef<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamReceivedAtRef = useRef<number | null>(null);
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
   const [remoteMuted, setRemoteMuted] = useState(false);
@@ -130,6 +131,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     if (!partnerId) {
       remoteStreamRef.current = null;
       setRemoteStream(null);
+      remoteStreamReceivedAtRef.current = null;
       setRemoteViewKey((k) => k + 1);
     }
   }, [partnerId]);
@@ -456,6 +458,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       remoteStreamRef.current = stream || null;
 
       if (stream) {
+        // КРИТИЧНО: Сохраняем время получения нового remoteStream для предотвращения мерцания заглушки
+        if (isNewPartner) {
+          remoteStreamReceivedAtRef.current = Date.now();
+        }
+        
         logger.info('[RandomChat] Remote stream received', {
           streamId: stream.id,
           prevStreamId: prevStream?.id,
@@ -504,6 +511,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       } else {
         setRemoteStream(null);
         setRemoteMuted(false);
+        remoteStreamReceivedAtRef.current = null;
       }
     });
     
@@ -543,6 +551,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       
       remoteStreamRef.current = null;
       setRemoteStream(null);
+      remoteStreamReceivedAtRef.current = null;
       setRemoteMuted(false);
       setRemoteViewKey((k: number) => k + 1);
     });
@@ -1155,12 +1164,31 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               // (трек disabled, muted или не live)
               // КРИТИЧНО: Это происходит ТОЛЬКО когда удаленный пользователь выключил свою камеру
               // Локальное состояние камеры (camOn) НЕ влияет на это решение
+              // КРИТИЧНО: Если трек только что получен (менее 500ms назад), показываем ActivityIndicator
+              // вместо AwayPlaceholder, чтобы дать треку время стать готовым и избежать мерцания
+              const streamReceivedAt = remoteStreamReceivedAtRef.current;
+              const isRecentlyReceived = streamReceivedAt && (Date.now() - streamReceivedAt) < 500;
+              
+              if (isTrackLive && isRecentlyReceived) {
+                // Трек live, но еще не готов (disabled/muted), и это новый стрим - показываем загрузку
+                logRemoteRenderState('video-track-warming-up', {
+                  streamId: remoteStream?.id,
+                  hasStream: !!remoteStream,
+                  isTrackLive,
+                  videoTrackEnabled,
+                  videoTrackMuted,
+                  timeSinceReceived: Date.now() - (streamReceivedAt || 0),
+                });
+                return <ActivityIndicator size="large" color="#fff" />;
+              }
+              
               logRemoteRenderState('video-not-renderable', {
                 streamId: remoteStream?.id,
                 hasStream: !!remoteStream,
                 isTrackLive,
                 videoTrackEnabled,
                 videoTrackMuted,
+                isRecentlyReceived,
               });
               return <AwayPlaceholder />;
             }
