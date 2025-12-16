@@ -35,4 +35,17 @@ declare module '@cometchat/chat-uikit-react-native/src/shared/helper/functions' 
   export { functions };
 }
 
+// Упрощенные типы, чтобы не падала проверка типов из исходников CometChat
+declare module '@cometchat/chat-uikit-react-native' {
+  const CometChatUIKit: any;
+  export default CometChatUIKit;
+  export const CometChat: any;
+  export const UIKitSettingsBuilder: any;
+  export const CometChatUsersWithMessages: any;
+  export const CometChatConversationsWithMessages: any;
+  export const CometChatConversationScreen: any;
+  export const CometChatMessages: any;
+  export const CometChatCallsWithMessages: any;
+  export const CometChatMessageComposer: any;
+}
 

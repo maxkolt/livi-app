@@ -11,6 +11,9 @@ import {
   LocalVideoTrack,
   createLocalTracks,
 } from 'livekit-client';
+import { Buffer } from 'buffer';
+import AudioRecord from 'react-native-audio-record';
+import { Platform } from 'react-native';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, CamSide } from '../types';
 import socket from '../../../sockets/socket';
@@ -53,6 +56,14 @@ export class RandomChatSession extends SimpleEventEmitter {
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private micLevelSource: MediaStreamAudioSourceNode | null = null;
+  private audioRecordBuffer: number[] = [];
+  private audioRecordSubscription: { remove: () => void } | null = null;
+  private eqBarSeeds: number[] = [];
+  private eqPhase = 0;
+  private lastFrequencyLevels: number[] = [];
+  private lastMicLevel = 0;
+  private micMonitorLogCount = 0;
+  private readonly micBarsCount = 21;
   private camToggleInProgress = false;
   private recoveringVideo = false;
   private detachLocalVideoEnded: (() => void) | null = null;
@@ -538,8 +549,11 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
 
+    const targetCamState = this.isCamOn;
+    const targetMicState = this.isMicOn;
+
     if (force) {
-      this.stopLocalTracks();
+      this.stopLocalTracks(false);
     }
 
     const tracks = await createLocalTracks({
@@ -575,10 +589,37 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.config.callbacks.onLocalStreamChange?.(stream);
     this.config.onLocalStreamChange?.(stream);
     this.emit('localStream', stream);
+    // Возвращаем состояние камеры/мика к целевому после пересоздания треков
+    this.isCamOn = targetCamState;
+    this.isMicOn = targetMicState;
     this.config.callbacks.onCamStateChange?.(this.isCamOn);
     this.config.onCamStateChange?.(this.isCamOn);
     this.config.callbacks.onMicStateChange?.(this.isMicOn);
     this.config.onMicStateChange?.(this.isMicOn);
+
+    // Применяем состояния к трекам после восстановления
+    try {
+      if (!this.isCamOn && this.localVideoTrack?.mediaStreamTrack) {
+        this.localVideoTrack.mediaStreamTrack.enabled = false;
+        try {
+          this.localVideoTrack.mute();
+        } catch {}
+      } else if (this.isCamOn && this.localVideoTrack?.mediaStreamTrack) {
+        this.localVideoTrack.mediaStreamTrack.enabled = true;
+        try {
+          this.localVideoTrack.unmute();
+        } catch {}
+      }
+      if (!this.isMicOn && this.localAudioTrack) {
+        try {
+          this.localAudioTrack.mute();
+        } catch {}
+      } else if (this.isMicOn && this.localAudioTrack) {
+        try {
+          this.localAudioTrack.unmute();
+        } catch {}
+      }
+    } catch {}
     
     // КРИТИЧНО: Запускаем мониторинг уровня микрофона для эквалайзера
     this.lastAudioEnergy = 0;
@@ -586,7 +627,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.startMicLevelMonitoring(stream);
   }
 
-  private stopLocalTracks(): void {
+  private stopLocalTracks(resetStates = true): void {
     // Останавливаем мониторинг уровня микрофона
     this.stopMicLevelMonitoring();
     
@@ -609,189 +650,64 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.config.callbacks.onLocalStreamChange?.(null);
     this.config.onLocalStreamChange?.(null);
     this.emit('localStream', null);
-    this.isCamOn = false;
-    this.isMicOn = false;
-    this.config.callbacks.onCamStateChange?.(false);
-    this.config.onCamStateChange?.(false);
-    this.config.callbacks.onMicStateChange?.(false);
-    this.config.onMicStateChange?.(false);
+
+    if (resetStates) {
+      this.isCamOn = false;
+      this.isMicOn = false;
+      this.config.callbacks.onCamStateChange?.(false);
+      this.config.onCamStateChange?.(false);
+      this.config.callbacks.onMicStateChange?.(false);
+      this.config.onMicStateChange?.(false);
+    }
   }
   
   private startMicLevelMonitoring(stream: MediaStream): void {
-    // Останавливаем предыдущий мониторинг если он был
     this.stopMicLevelMonitoring();
     
-    // Проверяем доступность Web Audio API
-    // В React Native может быть недоступен, используем альтернативный подход
+    const logLevel = this.micMonitorLogCount < 2 ? 'info' : 'debug';
+    this.micMonitorLogCount += 1;
+    logger[logLevel]('[RandomChatSession] Starting mic level monitoring, stream:', {
+      id: stream?.id,
+      active: stream?.active,
+      audioTracks: stream?.getAudioTracks?.()?.length || 0,
+    });
+
+    this.lastAudioEnergy = 0;
+    this.lastAudioDuration = 0;
+
+    const barsCount = this.micBarsCount;
+
+    // React Native: читаем PCM из микрофона и считаем FFT вручную
+    if (Platform.OS !== 'web') {
+      try {
+        if (this.startMicLevelMonitoringNativeFFT(barsCount)) {
+          return;
+        }
+      } catch (e) {
+        logger.warn('[RandomChatSession] Native FFT monitoring failed, trying fallbacks', e);
+      }
+    }
+
+    // Web: используем Web Audio API если доступно
     let AudioContextClass: any = null;
-    
     if (typeof window !== 'undefined') {
       AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     }
-    
-    // Также проверяем глобальный объект (для React Native)
     if (!AudioContextClass && typeof global !== 'undefined') {
       AudioContextClass = (global as any).AudioContext || (global as any).webkitAudioContext;
     }
-    
-    if (!AudioContextClass) {
-      logger.warn('[RandomChatSession] Web Audio API not available, using LiveKit getTrackStats fallback');
-      // В React Native Web Audio API обычно недоступен
-      // Используем getTrackStats из LiveKit Room для получения реального уровня аудио
-      this.micLevelInterval = setInterval(async () => {
-        // КРИТИЧНО: Проверяем что микрофон включен и соединение установлено
-        if (!this.isMicOn || !this.room || this.room.state !== 'connected') {
-          this.config.callbacks.onMicLevelChange?.(0);
-          this.config.onMicLevelChange?.(0);
-          return;
-        }
-        
-        let audioLevel = 0;
-        
-        // Пытаемся получить статистику из LiveKit Room
-        try {
-          const stats = await (this.room.localParticipant as any)?.getTrackStats?.();
-          if (!stats) {
-            this.config.callbacks.onMicLevelChange?.(audioLevel);
-            this.config.onMicLevelChange?.(audioLevel);
-            return;
-          }
-          
-          // Ищем статистику для аудио трека
-          for (const stat of stats) {
-            if (stat.kind === 'audio' && this.localAudioTrack) {
-              // Берем показания энергии/длительности, чтобы оценить громкость (на RN часто нет audioLevel)
-              const energy = (stat as any).audioEnergy ?? (stat as any).totalAudioEnergy ?? 0;
-              const duration = (stat as any).audioDuration ?? (stat as any).totalSamplesDuration ?? 0;
-              if (energy > 0 && duration > 0) {
-                const dEnergy = energy - this.lastAudioEnergy;
-                const dDuration = duration - this.lastAudioDuration;
-                this.lastAudioEnergy = energy;
-                this.lastAudioDuration = duration;
-                if (dEnergy > 0 && dDuration > 0) {
-                  const power = dEnergy / dDuration;
-                  // Эмпирическое усиление + sqrt для плавности
-                  audioLevel = Math.min(1, Math.sqrt(power * 5));
-                  break;
-                }
-              }
-
-              const level = (stat as any).audioLevel || (stat as any).volume || 0;
-              if (level > 0) {
-                if (level <= 1) {
-                  audioLevel = level;
-                } else if (level <= 127) {
-                  audioLevel = Math.min(1, level / 127);
-                } else {
-                  audioLevel = Math.min(1, level / 255);
-                }
-                break;
-              }
-            }
-          }
-        } catch (e) {
-          // Игнорируем ошибки получения статистики
-          logger.debug('[RandomChatSession] Could not get track stats', e);
-        }
-
-        // Fallback: если LiveKit stats не дали уровень, пробуем getStats у mediaStreamTrack (react-native-webrtc)
-        if (audioLevel === 0 && this.localAudioTrack?.mediaStreamTrack) {
-          try {
-            const statsReport = await (this.localAudioTrack.mediaStreamTrack as any)?.getStats?.();
-            if (statsReport) {
-              const values = Array.from(statsReport.values ? statsReport.values() : statsReport);
-              for (const v of values) {
-                const energy = (v as any).audioLevel ?? (v as any).totalAudioEnergy ?? 0;
-                const duration = (v as any).totalSamplesDuration ?? (v as any).audioDuration ?? 0;
-                if (energy > 0 && duration > 0) {
-                  const power = energy / duration;
-                  audioLevel = Math.min(1, Math.sqrt(power * 5));
-                  break;
-                }
-              }
-            }
-          } catch (e) {
-            logger.debug('[RandomChatSession] Could not get mediaStreamTrack stats', e);
-          }
-        }
-        
-        // КРИТИЧНО: НЕ используем визуальный эффект - возвращаем только реальные данные
-        // Если нет реальных данных - уровень остается 0 (эквалайзер не двигается)
-        this.config.callbacks.onMicLevelChange?.(audioLevel);
-        this.config.onMicLevelChange?.(audioLevel);
-      }, 100); // Обновляем каждые 100ms
-      return;
-    }
-    
-    try {
-      // Создаем AudioContext
-      const audioContext = new AudioContextClass();
-      this.audioContext = audioContext;
-      
-      // Создаем AnalyserNode для анализа аудио
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256; // Размер FFT для частотного анализа
-      analyser.smoothingTimeConstant = 0.8; // Сглаживание
-      this.analyser = analyser;
-      
-      // Подключаем аудио поток к анализатору
-      const audioTracks = stream.getAudioTracks();
-      if (audioTracks.length > 0) {
-        const source = audioContext.createMediaStreamSource(stream as unknown as any);
-        this.micLevelSource = source;
-        source.connect(analyser);
-        
-        // Запускаем периодический опрос уровня
-        this.micLevelInterval = setInterval(() => {
-          // КРИТИЧНО: Проверяем что микрофон включен и соединение установлено
-          const activeAnalyser = this.analyser;
-          if (!activeAnalyser || !this.isMicOn || !this.room || this.room.state !== 'connected') {
-            this.config.callbacks.onMicLevelChange?.(0);
-            this.config.onMicLevelChange?.(0);
-            return;
-          }
-          
-          // Получаем данные частотного анализа
-          const bufferLength = activeAnalyser.frequencyBinCount;
-          const dataArray = new Uint8Array(bufferLength);
-          activeAnalyser.getByteFrequencyData(dataArray);
-          
-          // Вычисляем средний уровень по всем частотам
-          // Используем взвешенное среднее для лучшей чувствительности
-          let sum = 0;
-          let weightedSum = 0;
-          let weightSum = 0;
-          
-          for (let i = 0; i < bufferLength; i++) {
-            const value = dataArray[i];
-            sum += value;
-            // Взвешиваем более высокие частоты (индекс выше = частота выше)
-            const weight = 1 + (i / bufferLength) * 0.5; // Вес от 1.0 до 1.5
-            weightedSum += value * weight;
-            weightSum += weight;
-          }
-          
-          // Используем взвешенное среднее для более точного отображения
-          const average = weightedSum / weightSum;
-          
-          // Нормализуем значение (0-255 -> 0-1) с усилением
-          // Используем квадратный корень для более плавной кривой
-          const normalizedLevel = Math.min(1, Math.sqrt(average / 255) * 1.2);
-          
-          // Обновляем уровень микрофона
-          this.config.callbacks.onMicLevelChange?.(normalizedLevel);
-          this.config.onMicLevelChange?.(normalizedLevel);
-        }, 50); // Обновляем каждые 50ms для плавной анимации
-        
-        logger.info('[RandomChatSession] Mic level monitoring started');
-      } else {
-        logger.warn('[RandomChatSession] No audio tracks in stream for mic level monitoring');
-        this.cleanupAudioContext();
+    if (AudioContextClass) {
+      try {
+        this.startMicLevelMonitoringWebFFT(stream, AudioContextClass, barsCount);
+        return;
+      } catch (e) {
+        logger.error('[RandomChatSession] Web Audio FFT failed', e);
       }
-    } catch (e) {
-      logger.error('[RandomChatSession] Failed to start mic level monitoring', e);
-      this.cleanupAudioContext();
     }
+
+    // Последний вариант: берем уровень из статистики LiveKit и генерируем полосы на его основе
+    logger.warn('[RandomChatSession] No native FFT available, using stats-based mic monitoring');
+    this.startMicLevelMonitoringStatsFallback(barsCount);
   }
   
   private stopMicLevelMonitoring(): void {
@@ -799,12 +715,19 @@ export class RandomChatSession extends SimpleEventEmitter {
       clearInterval(this.micLevelInterval);
       this.micLevelInterval = null;
     }
-    
+
+    this.cleanupAudioRecorder();
     this.cleanupAudioContext();
-    
-    // Сбрасываем уровень на 0
+    this.audioRecordBuffer = [];
+    this.lastFrequencyLevels = [];
+    this.lastMicLevel = 0;
+    this.eqPhase = 0;
+
+    const emptyLevels = new Array(this.micBarsCount).fill(0);
     this.config.callbacks.onMicLevelChange?.(0);
     this.config.onMicLevelChange?.(0);
+    this.config.callbacks.onMicFrequencyLevelsChange?.(emptyLevels);
+    this.config.onMicFrequencyLevelsChange?.(emptyLevels);
   }
   
   private cleanupAudioContext(): void {
@@ -828,6 +751,406 @@ export class RandomChatSession extends SimpleEventEmitter {
       } catch {}
       this.audioContext = null;
     }
+  }
+
+  private cleanupAudioRecorder(): void {
+    if (this.audioRecordSubscription) {
+      try {
+        this.audioRecordSubscription.remove();
+      } catch {}
+      this.audioRecordSubscription = null;
+    }
+    try {
+      AudioRecord.stop();
+    } catch {}
+  }
+
+  private startMicLevelMonitoringNativeFFT(barsCount: number): boolean {
+    const fftSize = 512;
+    const sampleRate = 16000;
+
+    // Инициализируем запись PCM из микрофона
+    this.cleanupAudioRecorder();
+    this.audioRecordBuffer = [];
+    this.ensureEqSeeds(barsCount);
+
+    AudioRecord.init({
+      sampleRate,
+      channels: 1,
+      bitsPerSample: 16,
+      bufferSize: fftSize * 2,
+      wavFile: 'mic-level.wav',
+    } as any);
+
+    const subscription = AudioRecord.on(
+      'data',
+      this.handlePcmChunk(sampleRate, fftSize, barsCount),
+    );
+    this.audioRecordSubscription = (subscription as unknown as { remove: () => void }) ?? null;
+
+    AudioRecord.start();
+    const startLogLevel = this.micMonitorLogCount <= 2 ? 'info' : 'debug';
+    logger[startLogLevel]('[RandomChatSession] Native PCM recorder started for FFT');
+    return true;
+  }
+
+  private handlePcmChunk(sampleRate: number, fftSize: number, barsCount: number) {
+    return (data: string) => {
+      if (!data) return;
+      try {
+        const chunk = Buffer.from(data, 'base64');
+        const samples = new Int16Array(
+          chunk.buffer,
+          chunk.byteOffset,
+          Math.floor(chunk.length / Int16Array.BYTES_PER_ELEMENT),
+        );
+
+        for (let i = 0; i < samples.length; i++) {
+          // Нормализуем в диапазон [-1, 1]
+          this.audioRecordBuffer.push(samples[i] / 32768);
+        }
+
+        // Ограничиваем размер буфера, чтобы не расти бесконечно
+        const maxBuffer = fftSize * 6;
+        if (this.audioRecordBuffer.length > maxBuffer) {
+          this.audioRecordBuffer.splice(0, this.audioRecordBuffer.length - maxBuffer);
+        }
+
+        while (this.audioRecordBuffer.length >= fftSize) {
+          const frame = this.audioRecordBuffer.splice(0, fftSize);
+          const { audioLevel, frequencyLevels } = this.calculateFrequencyLevels(
+            frame,
+            sampleRate,
+            barsCount,
+          );
+          this.emitMicLevels(audioLevel, frequencyLevels);
+        }
+      } catch (e) {
+        logger.debug('[RandomChatSession] Failed to process mic chunk', e);
+      }
+    };
+  }
+
+  private startMicLevelMonitoringWebFFT(
+    stream: MediaStream,
+    AudioContextClass: any,
+    barsCount: number,
+  ): void {
+    const audioTracks = stream.getAudioTracks();
+    if (!audioTracks.length) {
+      logger.warn('[RandomChatSession] No audio tracks in stream for mic level monitoring');
+      return;
+    }
+
+    const audioContext = new AudioContextClass();
+    this.audioContext = audioContext;
+
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.8;
+    this.analyser = analyser;
+
+    if (!audioContext.createMediaStreamSource) {
+      throw new Error('Web Audio createMediaStreamSource not available');
+    }
+
+    const source = audioContext.createMediaStreamSource(stream as unknown as any);
+    this.micLevelSource = source;
+    source.connect(analyser);
+
+    this.ensureEqSeeds(barsCount);
+
+    this.micLevelInterval = setInterval(() => {
+      const activeAnalyser = this.analyser;
+      if (!activeAnalyser || !this.isMicOn) {
+        const emptyLevels = new Array(barsCount).fill(0);
+        this.emitMicLevels(0, emptyLevels);
+        return;
+      }
+
+      const bufferLength = activeAnalyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      activeAnalyser.getByteFrequencyData(dataArray);
+
+      const magnitudes = new Float32Array(bufferLength);
+      let maxMag = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        magnitudes[i] = dataArray[i];
+        if (dataArray[i] > maxMag) {
+          maxMag = dataArray[i];
+        }
+      }
+
+      const frequencyLevels = this.mapMagnitudesToBars(
+        magnitudes,
+        audioContext.sampleRate || 48000,
+        barsCount,
+        maxMag || 1,
+      );
+      const audioLevel = this.smoothMicLevel(
+        this.computeAverageLevelFromMagnitudes(magnitudes),
+      );
+
+      this.emitMicLevels(audioLevel, frequencyLevels);
+    }, 50);
+
+    logger.info('[RandomChatSession] Web Audio FFT monitoring started');
+  }
+
+  private startMicLevelMonitoringStatsFallback(barsCount: number): void {
+    this.ensureEqSeeds(barsCount);
+    this.micLevelInterval = setInterval(async () => {
+      if (!this.isMicOn || !this.room || this.room.state !== 'connected') {
+        const emptyLevels = new Array(barsCount).fill(0);
+        this.emitMicLevels(0, emptyLevels);
+        return;
+      }
+
+      let audioLevel = 0;
+
+      try {
+        const stats = await (this.room.localParticipant as any)?.getTrackStats?.();
+        if (stats) {
+          for (const stat of stats) {
+            if (stat.kind === 'audio' && this.localAudioTrack) {
+              const energy = (stat as any).audioEnergy ?? (stat as any).totalAudioEnergy ?? 0;
+              const duration = (stat as any).audioDuration ?? (stat as any).totalSamplesDuration ?? 0;
+              if (energy > 0 && duration > 0) {
+                const dEnergy = energy - this.lastAudioEnergy;
+                const dDuration = duration - this.lastAudioDuration;
+                this.lastAudioEnergy = energy;
+                this.lastAudioDuration = duration;
+                if (dEnergy > 0 && dDuration > 0) {
+                  const power = dEnergy / dDuration;
+                  audioLevel = Math.min(1, Math.sqrt(power * 5));
+                  break;
+                }
+              }
+
+              const level = (stat as any).audioLevel || (stat as any).volume || 0;
+              if (level > 0) {
+                if (level <= 1) {
+                  audioLevel = level;
+                } else if (level <= 127) {
+                  audioLevel = Math.min(1, level / 127);
+                } else {
+                  audioLevel = Math.min(1, level / 255);
+                }
+                break;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        logger.debug('[RandomChatSession] Could not get track stats', e);
+      }
+
+      const freqLevels = this.generateFrequencyFromLevel(audioLevel, barsCount);
+      this.emitMicLevels(audioLevel, freqLevels);
+    }, 120);
+  }
+
+  private emitMicLevels(audioLevel: number, frequencyLevels: number[]): void {
+    this.config.callbacks.onMicLevelChange?.(audioLevel);
+    this.config.onMicLevelChange?.(audioLevel);
+    this.config.callbacks.onMicFrequencyLevelsChange?.(frequencyLevels);
+    this.config.onMicFrequencyLevelsChange?.(frequencyLevels);
+  }
+
+  private generateFrequencyFromLevel(audioLevel: number, barsCount: number): number[] {
+    this.ensureEqSeeds(barsCount);
+    const base = Math.min(1, audioLevel * 1.2);
+    const levels: number[] = [];
+    for (let i = 0; i < barsCount; i++) {
+      const seed = this.eqBarSeeds[i];
+      const wave = 0.15 * Math.sin(this.eqPhase + i * 0.6);
+      const jitter = 0.05 * Math.sin(this.eqPhase * 0.5 + i * 1.3);
+      const level = Math.min(
+        1,
+        Math.max(0, base * (0.55 + seed * 0.6) + wave * base + jitter),
+      );
+      levels.push(level);
+    }
+    this.eqPhase += 0.25;
+    return this.smoothFrequencyLevels(levels, barsCount);
+  }
+
+  private ensureEqSeeds(barsCount: number): void {
+    if (this.eqBarSeeds.length === barsCount) return;
+    this.eqBarSeeds = Array.from({ length: barsCount }, (_v, i) => {
+      // Стабильные псевдослучайные коэффициенты для каждой полосы
+      const seed = Math.sin(i * 1.37) * 0.5 + 0.5;
+      return 0.6 + seed * 0.4;
+    });
+  }
+
+  private smoothFrequencyLevels(levels: number[], barsCount: number): number[] {
+    if (this.lastFrequencyLevels.length !== barsCount) {
+      this.lastFrequencyLevels = new Array(barsCount).fill(0);
+    }
+    const smoothing = 0.35;
+    const nextLevels = levels.map((level, index) => {
+      const prev = this.lastFrequencyLevels[index] ?? 0;
+      return Math.min(1, Math.max(0, prev + (level - prev) * smoothing));
+    });
+    this.lastFrequencyLevels = nextLevels;
+    return nextLevels;
+  }
+
+  private smoothMicLevel(level: number): number {
+    const alpha = level > this.lastMicLevel ? 0.35 : 0.25;
+    this.lastMicLevel = this.lastMicLevel + (level - this.lastMicLevel) * alpha;
+    return this.lastMicLevel;
+  }
+
+  private calculateFrequencyLevels(
+    frame: number[],
+    sampleRate: number,
+    barsCount: number,
+  ): { audioLevel: number; frequencyLevels: number[] } {
+    const windowed = this.applyHannWindow(frame);
+    const real = new Float32Array(windowed);
+    const imag = new Float32Array(real.length);
+
+    this.fftRadix2(real, imag);
+
+    const bins = real.length / 2;
+    const magnitudes = new Float32Array(bins);
+    let maxMag = 0;
+    for (let i = 0; i < bins; i++) {
+      const mag = Math.hypot(real[i], imag[i]);
+      magnitudes[i] = mag;
+      if (mag > maxMag) {
+        maxMag = mag;
+      }
+    }
+
+    // RMS уровня для общего показателя громкости
+    let sumSquares = 0;
+    for (let i = 0; i < windowed.length; i++) {
+      sumSquares += windowed[i] * windowed[i];
+    }
+    const rms = Math.sqrt(sumSquares / windowed.length);
+    const audioLevel = this.smoothMicLevel(Math.min(1, Math.pow(rms, 0.85) * 1.6));
+
+    const frequencyLevels = this.mapMagnitudesToBars(
+      magnitudes,
+      sampleRate,
+      barsCount,
+      maxMag || 1,
+    );
+
+    return { audioLevel, frequencyLevels };
+  }
+
+  private applyHannWindow(samples: number[]): Float32Array {
+    const result = new Float32Array(samples.length);
+    const len = samples.length;
+    for (let i = 0; i < len; i++) {
+      const hann = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (len - 1)));
+      result[i] = samples[i] * hann;
+    }
+    return result;
+  }
+
+  private fftRadix2(real: Float32Array, imag: Float32Array): void {
+    const n = real.length;
+    if ((n & (n - 1)) !== 0) {
+      throw new Error('FFT size must be power of two');
+    }
+
+    // битовое разворачивание
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) {
+        j ^= bit;
+      }
+      j ^= bit;
+      if (i < j) {
+        [real[i], real[j]] = [real[j], real[i]];
+        [imag[i], imag[j]] = [imag[j], imag[i]];
+      }
+    }
+
+    for (let len = 2; len <= n; len <<= 1) {
+      const ang = (-2 * Math.PI) / len;
+      const wlenReal = Math.cos(ang);
+      const wlenImag = Math.sin(ang);
+      for (let i = 0; i < n; i += len) {
+        let wReal = 1;
+        let wImag = 0;
+        for (let j = 0; j < len / 2; j++) {
+          const uReal = real[i + j];
+          const uImag = imag[i + j];
+          const vReal = real[i + j + len / 2] * wReal - imag[i + j + len / 2] * wImag;
+          const vImag = real[i + j + len / 2] * wImag + imag[i + j + len / 2] * wReal;
+
+          real[i + j] = uReal + vReal;
+          imag[i + j] = uImag + vImag;
+          real[i + j + len / 2] = uReal - vReal;
+          imag[i + j + len / 2] = uImag - vImag;
+
+          const nextWReal = wReal * wlenReal - wImag * wlenImag;
+          const nextWImag = wReal * wlenImag + wImag * wlenReal;
+          wReal = nextWReal;
+          wImag = nextWImag;
+        }
+      }
+    }
+  }
+
+  private mapMagnitudesToBars(
+    magnitudes: Float32Array,
+    sampleRate: number,
+    barsCount: number,
+    maxMagnitude: number,
+  ): number[] {
+    this.ensureEqSeeds(barsCount);
+    const nyquist = sampleRate / 2;
+    const levels: number[] = [];
+    const safeMax = maxMagnitude || 1e-6;
+
+    for (let i = 0; i < barsCount; i++) {
+      const startFreq = Math.pow(i / barsCount, 1.2) * nyquist;
+      const endFreq = Math.pow((i + 1) / barsCount, 1.2) * nyquist;
+      const startIndex = Math.max(
+        1,
+        Math.floor((startFreq / nyquist) * magnitudes.length),
+      );
+      const endIndex = Math.min(
+        magnitudes.length,
+        Math.max(startIndex + 1, Math.ceil((endFreq / nyquist) * magnitudes.length)),
+      );
+
+      let sum = 0;
+      for (let j = startIndex; j < endIndex; j++) {
+        sum += magnitudes[j];
+      }
+      const avg = sum / (endIndex - startIndex || 1);
+
+      let level = Math.pow(avg / safeMax, 0.65);
+      const seed = this.eqBarSeeds[i];
+      const wave = 0.12 * Math.sin(this.eqPhase + i * 0.85);
+      level = Math.min(
+        1,
+        Math.max(0, level * (0.85 + seed * 0.45) + wave * level + seed * 0.04),
+      );
+
+      levels.push(level);
+    }
+
+    this.eqPhase += 0.45;
+    return this.smoothFrequencyLevels(levels, barsCount);
+  }
+
+  private computeAverageLevelFromMagnitudes(magnitudes: Float32Array): number {
+    if (!magnitudes.length) return 0;
+    let sum = 0;
+    for (let i = 0; i < magnitudes.length; i++) {
+      sum += magnitudes[i];
+    }
+    const avg = sum / magnitudes.length;
+    return Math.min(1, Math.pow(avg / 255, 0.7) * 1.4);
   }
 
   private resetRemoteState(): void {

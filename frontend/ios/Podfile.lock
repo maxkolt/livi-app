@@ -1745,7 +1745,7 @@ PODS:
     - SPTPersistentCache (~> 1.1.0)
   - react-native-get-random-values (1.11.0):
     - React-Core
-  - react-native-keyboard-controller (1.20.1):
+  - react-native-keyboard-controller (1.20.2):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1760,7 +1760,7 @@ PODS:
     - React-hermes
     - React-ImageManager
     - React-jsi
-    - react-native-keyboard-controller/common (= 1.20.1)
+    - react-native-keyboard-controller/common (= 1.20.2)
     - React-NativeModulesApple
     - React-RCTFabric
     - React-renderercss
@@ -1770,7 +1770,7 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
-  - react-native-keyboard-controller/common (1.20.1):
+  - react-native-keyboard-controller/common (1.20.2):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -2293,6 +2293,105 @@ PODS:
     - React-utils (= 0.79.6)
   - ReactNativeIncallManager (4.2.1):
     - React-Core
+  - RNAudioAPI (0.10.3):
+    - DoubleConversion
+    - glog
+    - hermes-engine
+    - RCT-Folly (= 2024.11.18.00)
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - RNAudioAPI/audioapi (= 0.10.3)
+    - Yoga
+  - RNAudioAPI/audioapi (0.10.3):
+    - DoubleConversion
+    - glog
+    - hermes-engine
+    - RCT-Folly (= 2024.11.18.00)
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - RNAudioAPI/audioapi/audioapi_dsp (= 0.10.3)
+    - RNAudioAPI/audioapi/ios (= 0.10.3)
+    - Yoga
+  - RNAudioAPI/audioapi/audioapi_dsp (0.10.3):
+    - DoubleConversion
+    - glog
+    - hermes-engine
+    - RCT-Folly (= 2024.11.18.00)
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - Yoga
+  - RNAudioAPI/audioapi/ios (0.10.3):
+    - DoubleConversion
+    - glog
+    - hermes-engine
+    - RCT-Folly (= 2024.11.18.00)
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - Yoga
   - RNAudioRecord (0.2.2):
     - React
   - RNCAsyncStorage (2.1.2):
@@ -2776,6 +2875,7 @@ DEPENDENCIES:
   - ReactCodegen (from `build/generated/ios`)
   - ReactCommon/turbomodule/core (from `../node_modules/react-native/ReactCommon`)
   - ReactNativeIncallManager (from `../node_modules/react-native-incall-manager`)
+  - RNAudioAPI (from `../node_modules/react-native-audio-api`)
   - RNAudioRecord (from `../node_modules/react-native-audio-record`)
   - "RNCAsyncStorage (from `../node_modules/@react-native-async-storage/async-storage`)"
   - "RNCClipboard (from `../node_modules/@react-native-clipboard/clipboard`)"
@@ -3030,6 +3130,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon"
   ReactNativeIncallManager:
     :path: "../node_modules/react-native-incall-manager"
+  RNAudioAPI:
+    :path: "../node_modules/react-native-audio-api"
   RNAudioRecord:
     :path: "../node_modules/react-native-audio-record"
   RNCAsyncStorage:
@@ -3132,7 +3234,7 @@ SPEC CHECKSUMS:
   React-microtasksnativemodule: ff05e894231c44c21135d1d23a82b87656d98eeb
   react-native-cometchat-ui-kit: 3c72141fdfd229a18988a3ee80310462b0edc0f0
   react-native-get-random-values: d16467cf726c618e9c7a8c3c39c31faa2244bbba
-  react-native-keyboard-controller: 0faec0497327d901a610bd3f5810525a41a17bf1
+  react-native-keyboard-controller: 394dfa7d8e678d835c32f5d1d06cfab494d71d56
   react-native-netinfo: cec9c4e86083cb5b6aba0e0711f563e2fbbff187
   react-native-safe-area-context: 562163222d999b79a51577eda2ea8ad2c32b4d06
   react-native-video: 1f5605e948f042fa137f0b2c97f5776675952783
@@ -3169,6 +3271,7 @@ SPEC CHECKSUMS:
   ReactCodegen: 06cf663b23a161f42a2e14087269753f422885c0
   ReactCommon: 44c86ec3ace664c0f33b7a2ac89aced8304ef25e
   ReactNativeIncallManager: dccd3e7499caa3bb73d3acfedf4fb0360f1a87d5
+  RNAudioAPI: ac8f971f77190866966afeba07ecc1e63d358533
   RNAudioRecord: b253d15d8141c5ef6bc614fc9d9f06577870bfc3
   RNCAsyncStorage: 39c42c1e478e1f5166d1db52b5055e090e85ad66
   RNCClipboard: ea6045252d5c0753cf17f62290f647dc0096f6ac

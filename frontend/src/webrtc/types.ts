@@ -16,6 +16,7 @@ export interface WebRTCSessionCallbacks {
   onPcConnectedChange?: (connected: boolean) => void;
   onLoadingChange?: (loading: boolean) => void;
   onMicLevelChange?: (level: number) => void; // Уровень микрофона для эквалайзера
+  onMicFrequencyLevelsChange?: (levels: number[]) => void; // Уровни частот для полос эквалайзера
   
   // Connection callbacks
   onPartnerIdChange?: (partnerId: string | null) => void;
@@ -74,9 +75,9 @@ export interface WebRTCSessionConfig {
   onPcConnectedChange?: (connected: boolean) => void;
   onLoadingChange?: (loading: boolean) => void;
   onMicLevelChange?: (level: number) => void;
+  onMicFrequencyLevelsChange?: (levels: number[]) => void;
   onPartnerIdChange?: (partnerId: string | null) => void;
   onRoomIdChange?: (roomId: string | null) => void;
   onCallIdChange?: (callId: string | null) => void;
   onError?: (error: Error) => void;
 }
-

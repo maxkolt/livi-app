@@ -105,8 +105,16 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const [micLevel, setMicLevel] = useState(0);
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [buttonsOpacity] = useState(new Animated.Value(0));
+  const renderLogCountRef = useRef(0);
   const logRemoteRenderState = useCallback((reason: string, extra?: Record<string, unknown>) => {
-    logger.info('[RandomChat] Remote render state', { reason, ...extra });
+    const count = renderLogCountRef.current;
+    renderLogCountRef.current = count + 1;
+    // Логируем только первые несколько раз, далее — каждые 40-й в debug, иначе пропускаем
+    if (count < 3) {
+      logger.info('[RandomChat] Remote render state', { reason, ...extra });
+    } else if (count % 40 === 0) {
+      logger.debug('[RandomChat] Remote render state', { reason, ...extra });
+    }
   }, []);
   
   // Toast уведомления
