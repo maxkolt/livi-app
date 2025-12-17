@@ -3114,7 +3114,8 @@ const handleClearNick = useCallback(async () => {
 
       {menuOpen && (
         <View style={styles.overlayMenu}>
-          <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+          <BlurView intensity={Platform.OS === 'ios' ? 80 : 60} tint="dark" style={StyleSheet.absoluteFill} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'ios' ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.6)' }]} />
           <SafeAreaView 
             style={[styles.sheetFull]}
             edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
@@ -3492,7 +3493,7 @@ const styles = StyleSheet.create({
     height,
     backgroundColor: Platform.OS === "android"
       ? "#0D0E10"  // Android — темный фон для меню
-      : "rgba(13,14,16,0.72)", // iOS
+      : "rgba(13,14,16,0.88)", // iOS — затемненный фон
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: LIVI.border,
   },

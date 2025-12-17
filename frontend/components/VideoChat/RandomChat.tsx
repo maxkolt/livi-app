@@ -91,6 +91,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const [addBlocked, setAddBlocked] = useState(false);
   const [friendModalVisible, setFriendModalVisible] = useState(false);
   const [incomingFriendFrom, setIncomingFriendFrom] = useState<string | null>(null);
+  const [incomingFriendNick, setIncomingFriendNick] = useState<string | undefined>(undefined);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -177,6 +178,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     const offReq = onFriendRequest?.(({ from, fromNick }) => {
       setIncomingFriendFrom(from);
+      setIncomingFriendNick(fromNick);
       setFriendModalVisible(true);
     });
     
@@ -268,6 +270,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       await respondFriend(incomingFriendFrom, true);
       setFriendModalVisible(false);
       setIncomingFriendFrom(null);
+      setIncomingFriendNick(undefined);
       fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
       // Обновляем профиль на сервере и синхронизируем с CometChat
       try {
@@ -292,6 +295,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       await respondFriend(incomingFriendFrom, false);
       setFriendModalVisible(false);
       setIncomingFriendFrom(null);
+      setIncomingFriendNick(undefined);
     } catch (e) {
       logger.error('[RandomChat] Error declining friend:', e);
     }
@@ -1466,7 +1470,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         visible={friendModalVisible}
         transparent
         animationType="fade"
-        onRequestClose={() => setFriendModalVisible(false)}
+        onRequestClose={() => {
+          setFriendModalVisible(false);
+          setIncomingFriendNick(undefined);
+        }}
       >
         <View style={styles.modalOverlay}>
           <BlurView intensity={60} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
@@ -1474,7 +1481,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{L('friend_request')}</Text>
             <Text style={styles.modalText}>
-              {L('friend_request_text')} {incomingFriendFrom || ''}
+              {incomingFriendNick 
+                ? `Пользователь ${incomingFriendNick} хочет добавить вас в друзья.`
+                : `Пользователь (${incomingFriendFrom || ''}) хочет добавить вас в друзья.`}
             </Text>
             <View style={{ flexDirection: "row", gap: 12, marginTop: 16 }}>
               <TouchableOpacity

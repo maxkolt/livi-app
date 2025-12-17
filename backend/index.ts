@@ -28,6 +28,23 @@ import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken } from './routes/livekit';
+import * as queueStore from './utils/queueStore';
+import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
+
+// Закрываем Redis соединение при завершении приложения
+process.on('SIGTERM', async () => {
+  logger.info('SIGTERM received, closing Redis connection');
+  stopQueueCleanup();
+  await queueStore.close();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  logger.info('SIGINT received, closing Redis connection');
+  stopQueueCleanup();
+  await queueStore.close();
+  process.exit(0);
+});
 
 
 /* ========= Типы ========= */
@@ -128,6 +145,9 @@ const io = new Server(server, {
 
 // Сохраняем глобально для использования в роутах
 setIoInstance(io);
+
+// Запускаем периодическую очистку устаревших сокетов из очереди матчинга
+startQueueCleanup(io);
 
 
 // пробрасываем io в req ДО подключения роутеров
@@ -380,29 +400,57 @@ function emitPresence(io: Server) {
   io.emit('presence:update', list);
 }
 
-/* ========= Matching (ГЛОБАЛЬНО) ========= */
-const pairs = new Map<string, string>();
-const partnerOf = (id: string) => pairs.get(id) || null;
-const pair = (a: string, b: string) => {
-  pairs.set(a, b);
-  pairs.set(b, a);
-};
-const unpair = (id: string) => {
-  const p = partnerOf(id);
-  if (p) {
-    pairs.delete(id);
-    pairs.delete(p);
+/**
+ * Оптимизированная отправка presence:update только друзьям пользователя
+ * Вместо отправки всем подключенным (io.emit), отправляем только заинтересованным
+ * Это критично для масштабирования: при 100k пользователей вместо 100k отправок - только друзьям (~50)
+ */
+async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boolean) {
+  try {
+    if (!userId) return;
+    
+    // Получаем список друзей пользователя
+    const user = await User.findById(userId).select('friends').lean();
+    if (!user || !Array.isArray(user.friends) || user.friends.length === 0) {
+      // Если друзей нет, отправляем только самому пользователю (для синхронизации состояния)
+      io.to(`u:${userId}`).emit('presence:update', { userId, busy });
+      return;
+    }
+    
+    // Отправляем обновление только друзьям через их комнаты
+    const friends = user.friends.map(f => String(f));
+    for (const friendId of friends) {
+      try {
+        io.to(`u:${friendId}`).emit('presence:update', { userId, busy });
+      } catch {}
+    }
+    
+    // Также отправляем самому пользователю для синхронизации состояния
+    io.to(`u:${userId}`).emit('presence:update', { userId, busy });
+  } catch (e) {
+    // В случае ошибки отправляем только самому пользователю (fallback)
+    try {
+      io.to(`u:${userId}`).emit('presence:update', { userId, busy });
+    } catch {}
   }
-  return p;
+}
+
+/* ========= Matching (ГЛОБАЛЬНО) ========= */
+// Используем распределенное хранилище через queueStore
+const partnerOf = async (id: string) => await queueStore.getPartner(id);
+const pair = async (a: string, b: string) => {
+  await queueStore.setPair(a, b);
+};
+const unpair = async (id: string) => {
+  return await queueStore.removePair(id);
 };
 
-// Очередь ожидания для режима random (start/next/stop)
-let waitingQueue: string[] = [];
-const removeFromWaitingQueue = (sid: string) => {
-  waitingQueue = waitingQueue.filter((x) => x !== sid);
+// Очередь ожидания для режима random (start/next/stop) - через queueStore
+const removeFromWaitingQueue = async (sid: string) => {
+  await queueStore.removeFromQueue(sid);
 };
-const enqueueWaiting = (sid: string) => {
-  if (!waitingQueue.includes(sid)) waitingQueue.push(sid);
+const enqueueWaiting = async (sid: string) => {
+  await queueStore.addToQueue(sid);
 };
 const isConnected = (sid: string) => io.sockets.sockets.has(sid);
 const getUserIdBySid = (sid: string): string | undefined => {
@@ -411,13 +459,11 @@ const getUserIdBySid = (sid: string): string | undefined => {
   return userId;
 };
 
-// Пользователь занят рандом-видеочатом (по userId)
-const randomBusyByUser = new Map<string, boolean>();
-const setRandomBusy = (uid?: string | null, busy?: boolean) => {
+// Пользователь занят рандом-видеочатом (по userId) - через queueStore
+const setRandomBusy = async (uid?: string | null, busy?: boolean) => {
   if (!uid) return;
-  if (busy) randomBusyByUser.set(uid, true);
-  else randomBusyByUser.delete(uid);
-  try { io.emit('presence:update', { userId: uid, busy: !!busy }); } catch {}
+  await queueStore.setBusy(uid, !!busy);
+  await emitPresenceUpdateToFriends(io, uid, !!busy);
 };
 
 // Отслеживание дружеских комнат (roomId -> participants[])
@@ -472,102 +518,8 @@ const updateFriendRoomState = (io: Server, roomId: string) => {
   } catch {}
 };
 
-const pairAndNotify = async (aSid: string, bSid: string): Promise<void> => {
-  pair(aSid, bSid);
-  const sortedIds = [aSid, bSid].sort();
-  const roomId = `room_${sortedIds[0]}_${sortedIds[1]}`;
-
-  // Обновляем busy для обоих участников (по userId)
-  setRandomBusy(getUserIdBySid(aSid), true);
-  setRandomBusy(getUserIdBySid(bSid), true);
-
-  const aUserId = getUserIdBySid(aSid);
-  const bUserId = getUserIdBySid(bSid);
-
-  logger.debug('Pairing users', { aSid, bSid, aUserId, bUserId });
-
-  // Создаем roomName на основе userId для LiveKit
-  let livekitTokenA: string | null = null;
-  let livekitTokenB: string | null = null;
-  let livekitRoomName: string = roomId;
-
-  const livekitIdentityA = aUserId || `socket:${aSid}`;
-  const livekitIdentityB = bUserId || `socket:${bSid}`;
-
-  if (aUserId && bUserId) {
-    const sortedUserIds = [aUserId, bUserId].sort();
-    livekitRoomName = `room_${sortedUserIds[0]}_${sortedUserIds[1]}`;
-  }
-
-  try {
-    const [tokenA, tokenB] = await Promise.all([
-      createToken({ identity: livekitIdentityA, roomName: livekitRoomName }),
-      createToken({ identity: livekitIdentityB, roomName: livekitRoomName }),
-    ]);
-    livekitTokenA = tokenA;
-    livekitTokenB = tokenB;
-    logger.debug('LiveKit tokens created', { roomName: livekitRoomName, identityA: livekitIdentityA, identityB: livekitIdentityB });
-  } catch (e: any) {
-    logger.error('Failed to create LiveKit tokens:', e);
-  }
-
-  // Отправляем события мгновенно для ускорения соединения
-  try { 
-    io.to(aSid).emit('match_found', { 
-      roomId, 
-      id: bSid, 
-      userId: bUserId ?? null,
-      livekitToken: livekitTokenA,
-      livekitRoomName
-    }); 
-  } catch {}
-  try { 
-    io.to(bSid).emit('match_found', { 
-      roomId, 
-      id: aSid, 
-      userId: aUserId ?? null,
-      livekitToken: livekitTokenB,
-      livekitRoomName
-    }); 
-  } catch {}
-};
-
-const tryPairFor = async (sock: AuthedSocket): Promise<boolean> => {
-  // Ищем любого другого ожидающего участника, не находящегося в разговоре
-  removeFromWaitingQueue(sock.id); // исключаем себя из очереди на время подбора
-  const myUserId = String(sock.data.userId || '');
-  
-  const candidates = waitingQueue.filter((sid) => {
-    if (sid === sock.id) return false;
-    if (partnerOf(sid)) return false;
-    if (!isConnected(sid)) return false;
-    
-    // Проверяем, что это не один и тот же пользователь (по userId)
-    // Это важно, если пользователь подключен с нескольких устройств
-    const otherSock = io.sockets.sockets.get(sid) as AuthedSocket | undefined;
-    if (otherSock) {
-      const otherUserId = String(otherSock.data.userId || '');
-      if (myUserId && otherUserId && myUserId === otherUserId) {
-        return false;
-      }
-    }
-    
-    return true;
-  });
-  
-  if (candidates.length === 0) {
-    // Вернём себя в очередь ожидания
-    enqueueWaiting(sock.id);
-    return false;
-  }
-  // Выбираем случайного кандидата
-  const idx = Math.floor(Math.random() * candidates.length);
-  const otherSid = candidates[idx];
-  // Убираем выбранного из очереди и себя повторно не добавляем
-  waitingQueue = waitingQueue.filter((sid) => sid !== otherSid && sid !== sock.id);
-  await pairAndNotify(sock.id, otherSid);
-  return true;
-};
+// tryPairFor и pairAndNotify удалены - теперь используется единая система матчинга через match.ts
+// Все функции матчинга теперь используют tryMatch из match.ts через queueStore
 
 // findRandom/cancelRandom удалены - используется match.ts
 
@@ -665,7 +617,7 @@ io.on('connection', async (sock: AuthedSocket) => {
   }
 
   // === call:end → транслируем call:ended обоим участникам (УПРОЩЕНО для 1-на-1) ===
-  sock.on('call:end', ({ callId, roomId }: { callId?: string; roomId?: string }) => {
+  sock.on('call:end', async ({ callId, roomId }: { callId?: string; roomId?: string }) => {
     try {
       logger.debug('📥 [call:end] Received call:end event', {
         socketId: sock.id,
@@ -708,7 +660,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       
       // Снимаем busy со всех участников и очищаем состояние
       if (room) {
-        room.forEach((sid) => {
+        for (const sid of room) {
           const peerSocket = io.sockets.sockets.get(sid);
           if (peerSocket) {
             const peerUserId = (peerSocket as any)?.data?.userId;
@@ -725,15 +677,15 @@ io.on('connection', async (sock: AuthedSocket) => {
               userId: peerUserId
             });
             
-            // Снимаем presence
+            // Снимаем presence (только друзьям)
             if (peerUserId) {
-              io.emit("presence:update", { userId: peerUserId, busy: false });
+              await emitPresenceUpdateToFriends(io, peerUserId, false);
             }
           }
           
           // Очищаем activeCallBySocket
           try { activeCallBySocket.delete(sid); } catch {}
-        });
+        }
       }
       
       // Отправляем call:ended обоим участникам
@@ -1036,9 +988,9 @@ io.on('connection', async (sock: AuthedSocket) => {
       (peerSocket as any).data.roomId = roomId;
       (peerSocket as any).data.partnerSid = sock.id;
       
-      // Рассылаем presence:update
-      io.emit("presence:update", { userId: me, busy: true });
-      io.emit("presence:update", { userId: peerId, busy: true });
+      // Рассылаем presence:update (только друзьям)
+      await emitPresenceUpdateToFriends(io, me, true);
+      await emitPresenceUpdateToFriends(io, peerId, true);
       logger.debug('Call initiated', { from: me, to: peerId, callId, roomId });
       
       // КРИТИЧНО: Отправляем инициатору roomId для немедленного использования
@@ -1049,7 +1001,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       } catch {}
 
       // таймаут 20с
-      const timer = setTimeout(() => {
+      const timer = setTimeout(async () => {
         const link = callsById.get(callId);
         if (!link) return;
         
@@ -1060,13 +1012,13 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (aSock) {
           (aSock as any).data = (aSock as any).data || {};
           (aSock as any).data.busy = false;
-          io.emit("presence:update", { userId: link.a, busy: false });
+          await emitPresenceUpdateToFriends(io, link.a, false);
         }
         
         if (bSock) {
           (bSock as any).data = (bSock as any).data || {};
           (bSock as any).data.busy = false;
-          io.emit("presence:update", { userId: link.b, busy: false });
+          await emitPresenceUpdateToFriends(io, link.b, false);
         }
         
         // уведомляем инициатора о таймауте
@@ -1157,12 +1109,12 @@ io.on('connection', async (sock: AuthedSocket) => {
       (bSock as any).data.partnerSid = aSock.id;
       (bSock as any).data.inCall = true;
       
-      // Рассылаем presence:update
+      // Рассылаем presence:update (только друзьям)
       if (link.a) {
-        io.emit("presence:update", { userId: link.a, busy: true });
+        await emitPresenceUpdateToFriends(io, link.a, true);
       }
       if (link.b) {
-        io.emit("presence:update", { userId: link.b, busy: true });
+        await emitPresenceUpdateToFriends(io, link.b, true);
       }
       
       // Создаем LiveKit токены для обоих участников
@@ -1242,7 +1194,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     cleanupCall(id, 'accepted');
   });
 
-  sock.on('call:decline', ({ callId }: { callId?: string }) => {
+  sock.on('call:decline', async ({ callId }: { callId?: string }) => {
     const id = String(callId || '');
     const link = callsById.get(id);
     if (!link) return;
@@ -1254,20 +1206,20 @@ io.on('connection', async (sock: AuthedSocket) => {
     if (aSock) {
       (aSock as any).data = (aSock as any).data || {};
       (aSock as any).data.busy = false;
-      io.emit("presence:update", { userId: link.a, busy: false });
+      await emitPresenceUpdateToFriends(io, link.a, false);
     }
     
     if (bSock) {
       (bSock as any).data = (bSock as any).data || {};
       (bSock as any).data.busy = false;
-      io.emit("presence:update", { userId: link.b, busy: false });
+      await emitPresenceUpdateToFriends(io, link.b, false);
     }
     
     try { io.to(`u:${link.a}`).emit('call:declined', { callId: id, from: link.b }); } catch {}
     cleanupCall(id, 'declined');
   });
 
-  sock.on('call:cancel', ({ callId }: { callId?: string }) => {
+  sock.on('call:cancel', async ({ callId }: { callId?: string }) => {
     const id = String(callId || '');
     const link = callsById.get(id);
     if (!link) return;
@@ -1279,13 +1231,13 @@ io.on('connection', async (sock: AuthedSocket) => {
     if (aSock) {
       (aSock as any).data = (aSock as any).data || {};
       (aSock as any).data.busy = false;
-      io.emit("presence:update", { userId: link.a, busy: false });
+      await emitPresenceUpdateToFriends(io, link.a, false);
     }
     
     if (bSock) {
       (bSock as any).data = (bSock as any).data || {};
       (bSock as any).data.busy = false;
-      io.emit("presence:update", { userId: link.b, busy: false });
+      await emitPresenceUpdateToFriends(io, link.b, false);
     }
     
     // уведомим получателя и инициатора одинаковым событием call:cancel,
@@ -1338,18 +1290,25 @@ io.on('connection', async (sock: AuthedSocket) => {
   });
 
   /* ---- disconnect ---- */
-  sock.on('disconnect', (reason: any) => {
+  sock.on('disconnect', async (reason: any) => {
     const userId = (sock as any)?.data?.userId;
     try {} catch {}
-    const p = unpair(sock.id);
+    const p = await unpair(sock.id);
     if (p) {
       io.to(p).emit('disconnected');
       // Партнёр освободился — сбросим busy и попробуем сматчить его с кем-то из очереди
-      setRandomBusy(getUserIdBySid(p), false);
-      enqueueWaiting(p);
+      await setRandomBusy(getUserIdBySid(p), false);
       const partnerSock = io.sockets.sockets.get(p) as AuthedSocket | undefined;
       if (partnerSock) {
-        tryPairFor(partnerSock).catch((e: any) => {
+        // Очищаем состояние партнера перед повторным матчингом
+        partnerSock.data.partnerSid = undefined;
+        partnerSock.data.inCall = false;
+        partnerSock.data.roomId = undefined;
+        partnerSock.data.busy = false;
+        // Добавляем в очередь и пытаемся сматчить через единую систему
+        await enqueueWaiting(p);
+        // Используем единую систему матчинга из match.ts
+        tryMatch(io, partnerSock).catch((e: any) => {
           logger.error('Failed to re-pair partner after disconnect', { socketId: partnerSock.id, error: e?.message || e });
         });
       }
@@ -1357,8 +1316,8 @@ io.on('connection', async (sock: AuthedSocket) => {
     unbindUser(sock);
     emitPresence(io);
     // Удаляем из очереди random и снимаем занятость
-    removeFromWaitingQueue(sock.id);
-    setRandomBusy(String(userId || ''), false);
+    await removeFromWaitingQueue(sock.id);
+    await setRandomBusy(String(userId || ''), false);
     
     // Очищаем дружеские комнаты при дисконнекте
     if (userId) {
@@ -1423,6 +1382,9 @@ server.listen(PORT, HOST, () => printLanUrls(PORT));
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully...');
   
+  // Закрываем Redis соединение
+  await queueStore.close();
+  
   server.close(() => {
     logger.info('Server closed');
     process.exit(0);
@@ -1431,6 +1393,9 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully...');
+  
+  // Закрываем Redis соединение
+  await queueStore.close();
   
   server.close(() => {
     logger.info('Server closed');

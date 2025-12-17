@@ -2,6 +2,41 @@
 import type { Server } from "socket.io";
 import type { AuthedSocket } from "./types";
 import { logger } from '../utils/logger';
+import User from '../models/User';
+
+/**
+ * Оптимизированная отправка presence:update только друзьям пользователя
+ * Вместо отправки всем подключенным (io.emit), отправляем только заинтересованным
+ */
+async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boolean) {
+  try {
+    if (!userId) return;
+    
+    // Получаем список друзей пользователя
+    const user = await User.findById(userId).select('friends').lean();
+    if (!user || !Array.isArray(user.friends) || user.friends.length === 0) {
+      // Если друзей нет, отправляем только самому пользователю (для синхронизации состояния)
+      io.to(`u:${userId}`).emit('presence:update', { userId, busy });
+      return;
+    }
+    
+    // Отправляем обновление только друзьям через их комнаты
+    const friends = user.friends.map(f => String(f));
+    for (const friendId of friends) {
+      try {
+        io.to(`u:${friendId}`).emit('presence:update', { userId, busy });
+      } catch {}
+    }
+    
+    // Также отправляем самому пользователю для синхронизации состояния
+    io.to(`u:${userId}`).emit('presence:update', { userId, busy });
+  } catch (e) {
+    // В случае ошибки отправляем только самому пользователю (fallback)
+    try {
+      io.to(`u:${userId}`).emit('presence:update', { userId, busy });
+    } catch {}
+  }
+}
 
 /**
  * Подключает обработчики для LiveKit (сигналинг больше не нужен - LiveKit сам управляет)
@@ -71,7 +106,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
   /** =========================
    *  Connection established (для установки busy при активном соединении)
    *  ========================= */
-  socket.on("connection:established", ({ roomId }: { roomId?: string }) => {
+  socket.on("connection:established", async ({ roomId }: { roomId?: string }) => {
     logger.debug('LiveKit connection established', { socketId: socket.id, roomId });
     
     // Устанавливаем busy флаг для текущего пользователя
@@ -80,7 +115,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     
     const myUserId = (socket as any)?.data?.userId;
     if (myUserId) {
-      io.emit("presence:update", { userId: myUserId, busy: true });
+      await emitPresenceUpdateToFriends(io, myUserId, true);
       logger.debug('Set busy for user', { userId: myUserId });
     }
   });
@@ -176,7 +211,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
   /** =========================
    *  Room leave
    *  ========================= */
-  socket.on("room:leave", ({ roomId }: { roomId: string }) => {
+  socket.on("room:leave", async ({ roomId }: { roomId: string }) => {
     if (!roomId) return;
     
     logger.debug('Socket leaving room', { socketId: socket.id, roomId });
@@ -197,8 +232,8 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       });
     }
     
-    // Снимаем busy со всех оставшихся
-    remainingPeers.forEach(peerId => {
+    // Снимаем busy со всех оставшихся (только друзьям)
+    for (const peerId of remainingPeers) {
       const peerSocket = io.sockets.sockets.get(peerId) as AuthedSocket;
       if (peerSocket) {
         (peerSocket as any).data = (peerSocket as any).data || {};
@@ -206,14 +241,14 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
         
         const peerUserId = (peerSocket as any)?.data?.userId;
         if (peerUserId) {
-          io.emit("presence:update", { userId: peerUserId, busy: false });
+          await emitPresenceUpdateToFriends(io, peerUserId, false);
         }
       }
-    });
+    }
     
-    // Отправляем presence:update для уходящего
+    // Отправляем presence:update для уходящего (только друзьям)
     if (leavingUserId) {
-      io.emit("presence:update", { userId: leavingUserId, busy: false });
+      await emitPresenceUpdateToFriends(io, leavingUserId, false);
     }
     
     socket.leave(roomId);
@@ -229,7 +264,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
   /** =========================
    *  Disconnect cleanup
    *  ========================= */
-  socket.on("disconnect", (reason) => {
+  socket.on("disconnect", async (reason) => {
     logger.debug('Socket disconnected from webrtc', { socketId: socket.id, reason });
     
     // Если пользователь просто нажал "Next", не чистим очередь
@@ -245,19 +280,19 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       socket.data.busy = false;
     }
     
-    // Отправляем presence:update
+    // Отправляем presence:update (только друзьям)
     if (disconnectedUserId) {
-      io.emit("presence:update", { userId: disconnectedUserId, busy: false });
+      await emitPresenceUpdateToFriends(io, disconnectedUserId, false);
     }
     
     // Оповещаем все комнаты о дисконнекте
-    socket.rooms.forEach((roomId) => {
+    for (const roomId of socket.rooms) {
       if (roomId.startsWith("room_")) {
         // Получаем оставшихся участников
         const room = io.sockets.adapter.rooms.get(roomId);
         if (room && room.size > 0) {
-          // Снимаем busy со всех оставшихся
-          room.forEach(peerId => {
+          // Снимаем busy со всех оставшихся (только друзьям)
+          for (const peerId of room) {
             const peerSocket = io.sockets.sockets.get(peerId) as AuthedSocket;
             if (peerSocket) {
               peerSocket.data = peerSocket.data || {};
@@ -265,10 +300,10 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
               
               const peerUserId = peerSocket.data?.userId;
               if (peerUserId) {
-                io.emit("presence:update", { userId: peerUserId, busy: false });
+                await emitPresenceUpdateToFriends(io, peerUserId, false);
               }
             }
-          });
+          }
           
           // КРИТИЧНО: НЕ отправляем call:ended при disconnect для рандомных чатов
           // Для рандомных чатов дисконнект обрабатывается через событие 'disconnected' в index.ts
@@ -279,6 +314,6 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
           logger.debug('Sent disconnected to room', { roomId });
         }
       }
-    });
+    }
   });
 }
