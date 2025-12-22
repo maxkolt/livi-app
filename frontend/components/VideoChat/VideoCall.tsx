@@ -53,6 +53,8 @@ type Props = {
       returnTo?: { name: string; params?: any };
       resume?: boolean;
       fromPiP?: boolean;
+      isIncoming?: boolean;
+      partnerNick?: string;
     } 
   } 
 };
@@ -64,6 +66,7 @@ const CARD_BASE = {
   alignItems: 'center' as const,
   overflow: 'hidden' as const,
   marginVertical: 7,
+  position: 'relative' as const,
 };
 
 
@@ -157,6 +160,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamReceivedAtRef = useRef<number | null>(null);
   
   // КРИТИЧНО: Синхронизируем ref с state для использования в callbacks
   // Это fallback на случай, если ref не был обновлен синхронно
@@ -186,6 +190,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const [micLevel, setMicLevel] = useState(0);
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [wasFriendCallEnded, setWasFriendCallEnded] = useState(false);
+  
+  // Синхронизируем состояние неактивности с глобальным ref для App.tsx
+  useEffect(() => {
+    (global as any).__isInactiveStateRef = { current: isInactiveState };
+    return () => {
+      (global as any).__isInactiveStateRef = { current: false };
+    };
+  }, [isInactiveState]);
   const [friendCallAccepted, setFriendCallAccepted] = useState(false);
   const [buttonsOpacity] = useState(new Animated.Value(1));
   const incomingCallBounce = useRef(new Animated.Value(0)).current;
@@ -477,6 +489,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       } catch (e) {
         logger.warn('[VideoCall] Error sending presence:update busy:', e);
       }
+    } else {
+      // Сбрасываем статус "busy" когда нет активного общения
+      try {
+        socket.emit('presence:update', { status: 'online' });
+      } catch (e) {
+        logger.warn('[VideoCall] Error sending presence:update online:', e);
+      }
     }
   }, [roomId, callId, partnerId, isInactiveState]);
   
@@ -612,6 +631,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           remoteStreamRef.current = stream;
           setRemoteStream(stream);
           if (stream) {
+            // КРИТИЧНО: Сохраняем время получения remoteStream ВСЕГДА (не только для нового партнера)
+            // Это предотвращает мерцание заглушки "Отошел" при получении треков
+            remoteStreamReceivedAtRef.current = Date.now();
+            
             logger.info('[VideoCall] Remote stream event', {
               streamId: stream.id,
               prevStreamId: prevStream?.id,
@@ -625,6 +648,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             setRemoteViewKey((k: number) => k + 1);
           } else {
             setRemoteMuted(false);
+            remoteStreamReceivedAtRef.current = null;
           }
         },
         onPartnerIdChange: (id) => {
@@ -754,6 +778,29 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
       
       const friendId = route.params.peerUserId;
+      const existingCallId = route.params.callId;
+      
+      // КРИТИЧНО: Если callId уже есть (звонок уже был инициирован с HomeScreen и принят),
+      // то не вызываем callFriend снова, а сразу подключаемся к комнате
+      if (existingCallId) {
+        logger.info('[VideoCall] Инициатор: звонок уже принят, подключаемся к комнате', {
+          friendId,
+          existingCallId
+        });
+        
+        setPartnerUserId(friendId);
+        currentCallIdRef.current = existingCallId;
+        setStarted(true);
+        setLoading(true);
+        
+        // Запрашиваем токен и подключаемся напрямую
+        session.connectAsInitiatorAfterAccepted(existingCallId, friendId).catch((e) => {
+          logger.error('[VideoCall] Error connecting as initiator after accepted:', e);
+          setStarted(false);
+          setLoading(false);
+        });
+        return;
+      }
       
       // КРИТИЧНО: Проверяем что звонок еще не начат (защита от повторных вызовов)
       if (started && (roomId || callId || partnerId)) {
@@ -774,6 +821,28 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       // Запускаем звонок
       session.callFriend(friendId).catch((e) => {
         logger.error('[VideoCall] Error calling friend:', e);
+        setStarted(false);
+        setLoading(false);
+      });
+    } else if (isDirectCall && route?.params?.isIncoming && route?.params?.callId && route?.params?.peerUserId) {
+      // ПРИНЯТИЕ входящего звонка
+      // КРИТИЧНО: acceptCall вызывается ЗДЕСЬ, после создания сессии и установки socket handlers
+      // Это гарантирует, что call:accepted событие будет получено
+      const incomingCallId = route.params.callId;
+      const fromUserId = route.params.peerUserId;
+      
+      logger.info('[VideoCall] Accepting incoming call after session creation', {
+        callId: incomingCallId,
+        fromUserId
+      });
+      
+      setPartnerUserId(fromUserId);
+      currentCallIdRef.current = incomingCallId;
+      setStarted(true);
+      setLoading(true);
+      
+      session.acceptCall(incomingCallId, fromUserId).catch((e) => {
+        logger.error('[VideoCall] Error accepting incoming call:', e);
         setStarted(false);
         setLoading(false);
       });
@@ -889,6 +958,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setLocalStream(null); // КРИТИЧНО: Очищаем локальный стрим
       // КРИТИЧНО: Обновляем ref СИНХРОННО перед setState
       remoteStreamRef.current = null;
+      remoteStreamReceivedAtRef.current = null;
       setRemoteStream(null); // КРИТИЧНО: Очищаем удаленный стрим
       
       logger.info('[VideoCall] ✅ Переход в неактивное состояние завершен - экран остается открытым, можно принимать входящие звонки', {
@@ -910,7 +980,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setIsInactiveState(false);
       setWasFriendCallEnded(false);
       setStarted(true);
-      setLoading(false);
+      // КРИТИЧНО: Устанавливаем loading=true при принятии звонка
+      // loading будет установлен в false в onRemoteStreamChange когда придет стрим
+      setLoading(true);
       incomingCallHook.setIncomingOverlay(false);
       setCamOn(true);
       setMicOn(true);
@@ -1088,6 +1160,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setLocalStream(null);
       // КРИТИЧНО: Обновляем ref СИНХРОННО перед setState
       remoteStreamRef.current = null;
+      remoteStreamReceivedAtRef.current = null;
       setRemoteStream(null);
       setCamOn(false);
       setMicOn(false);
@@ -1185,7 +1258,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const toggleCam = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
     if (session && typeof session.toggleCam === 'function') {
-      session.toggleCam();
+      // Обновляем UI немедленно
+      setCamOn(prev => !prev);
+      session.toggleCam().catch((e: any) => {
+        logger.warn('[VideoCall] toggleCam error:', e);
+      });
     } else {
       logger.warn('[VideoCall] Session не найдена для toggleCam');
     }
@@ -1635,6 +1712,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             showFriendBadge={showFriendBadge}
             lang={lang}
             session={sessionRef.current}
+            remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
           />
           
           {showIncomingFriendOverlay && (
@@ -1849,10 +1927,13 @@ const styles = StyleSheet.create({
     opacity: 0.4,
   },
   incomingOverlayContainer: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     borderRadius: 10,
     overflow: 'hidden',
-    zIndex: 20,
     justifyContent: 'center',
     alignItems: 'center',
   },

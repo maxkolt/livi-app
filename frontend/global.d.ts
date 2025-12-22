@@ -17,6 +17,7 @@ declare global {
       EXPO_PUBLIC_CLOUDINARY_PRESET?: string;
       EXPO_PUBLIC_BOOSTY_URL?: string;
       EXPO_PUBLIC_PATREON_URL?: string;
+      EXPO_PUBLIC_LIVEKIT_URL?: string;
       [key: string]: string | undefined;
     }
   }

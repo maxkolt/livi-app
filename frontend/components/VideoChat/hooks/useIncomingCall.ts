@@ -244,6 +244,8 @@ export const useIncomingCall = ({
     }
 
     // Принимаем вызов через session (используем ref для получения актуального session)
+    // КРИТИЧНО: Вызываем ТОЛЬКО session.acceptCall(), который сам отправляет call:accept
+    // Не вызываем acceptCall() напрямую, чтобы избежать двойной отправки
     const currentSession = sessionRef.current;
     if (currentSession) {
       try {
@@ -252,12 +254,12 @@ export const useIncomingCall = ({
       } catch (e) {
         logger.error('[useIncomingCall] ❌ Ошибка принятия звонка через session:', e);
       }
-    }
-
-    // Также отправляем acceptCall через socket для совместимости
-    if (finalCallId) {
-      acceptCall(finalCallId);
-      logger.info('[useIncomingCall] ✅ call:accept отправлен через socket', { callId: finalCallId });
+    } else {
+      // Fallback: если session нет (не должно происходить), отправляем напрямую
+      if (finalCallId) {
+        acceptCall(finalCallId);
+        logger.info('[useIncomingCall] ✅ call:accept отправлен через socket (fallback)', { callId: finalCallId });
+      }
     }
 
     // Уведомляем друзей что мы заняты

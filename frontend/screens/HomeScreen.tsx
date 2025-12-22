@@ -755,6 +755,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           directCall: true, 
           directInitiator: true, 
           peerUserId: friend.id, 
+          myUserId: currentUserId, // ← ДОБАВЛЕНО: передаём myUserId
           callId: callId, // ← ДОБАВЛЕНО: передаём callId
           returnTo: { name: 'Home', params: { openFriendsMenu: true } } 
         });

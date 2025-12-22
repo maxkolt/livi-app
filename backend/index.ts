@@ -86,6 +86,9 @@ const normalizeAvatar = (s?: string) => {
   const url = String(s || '').trim();
   return /^https?:\/\//i.test(url) ? url : '';
 };
+// КРИТИЧНО: Проверка готовности MongoDB перед операциями
+// readyState: 0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
+const isMongoReady = () => mongoose.connection.readyState === 1;
 
 /* ========= App / HTTP / IO ========= */
 const app = express();
@@ -113,12 +116,18 @@ app.use(async (req, _res, next) => {
 
     if (!uid) {
       const inst = req.header('x-install-id') || '';
-      if (inst) {
-        const rec = (await Install.findOne({ installId: inst }).select('user').lean()) as
-          | { user?: any }
-          | null;
-        if (rec?.user && isOid(String(rec.user))) {
-          uid = String(rec.user);
+      // КРИТИЧНО: Проверяем готовность MongoDB перед использованием моделей
+      // Это предотвращает ошибки буферизации при отсутствии подключения
+      if (inst && mongoose.connection.readyState === 1) {
+        try {
+          const rec = (await Install.findOne({ installId: inst }).select('user').lean()) as
+            | { user?: any }
+            | null;
+          if (rec?.user && isOid(String(rec.user))) {
+            uid = String(rec.user);
+          }
+        } catch (e) {
+          // Игнорируем ошибки MongoDB, продолжаем без userId из installId
         }
       }
     }
@@ -180,6 +189,11 @@ app.post('/chat/ensure-dm', async (req, res) => {
     const peerId = String(req.body?.peerId ?? '').trim();
     if (!isOid(meId) || !isOid(peerId)) {
       return res.status(400).json({ ok: false, error: 'bad_ids' });
+    }
+
+    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+    if (!isMongoReady()) {
+      return res.status(503).json({ ok: false, error: 'database_unavailable' });
     }
 
     const [me, peer] = (await Promise.all([
@@ -277,6 +291,10 @@ app.get('/whoami', async (req, res) => {
   try {
     const installId = String(req.query.installId || '').trim();
     if (!installId) return res.status(400).json({ ok: false, error: 'no_installId' });
+    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+    if (!isMongoReady()) {
+      return res.status(503).json({ ok: false, error: 'database_unavailable' });
+    }
     const inst = (await Install.findOne({ installId }).select('user').lean()) as
       | { user?: any }
       | null;
@@ -296,6 +314,10 @@ app.get('/me', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
+    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+    if (!isMongoReady()) {
+      return res.status(503).json({ ok: false, error: 'database_unavailable' });
+    }
     const user = await User.findById(userId).select('nick avatar avatarVer friends').lean();
     if (!user) {
       return res.status(404).json({ ok: false, error: 'user_not_found' });
@@ -324,6 +346,10 @@ app.get('/api/exists/:userId', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'invalid_userId' });
     }
 
+    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+    if (!isMongoReady()) {
+      return res.json({ ok: true, exists: false }); // Если БД недоступна, считаем что пользователь не существует
+    }
     const exists = await User.exists({ _id: userId });
     return res.json({ ok: true, exists: !!exists });
   } catch (e: any) {
@@ -349,11 +375,16 @@ mongoose
       const User = (await import('./models/User')).default;
       const userCount = await User.countDocuments();
       logger.info(`[MongoDB] Current users count in database "${dbName}": ${userCount}`);
-      
-      // Также проверяем коллекцию напрямую
-      const directCount = await mongoose.connection.db.collection('users').countDocuments();
-      logger.info(`[MongoDB] Direct collection count (users): ${directCount}`);
-      
+
+      // Также проверяем коллекцию напрямую, если соединение с БД существует
+      let directCount = 0;
+      if (mongoose.connection?.db) {
+        directCount = await mongoose.connection.db.collection('users').countDocuments();
+        logger.info(`[MongoDB] Direct collection count (users): ${directCount}`);
+      } else {
+        logger.warn('[MongoDB] Не удалось получить прямое подключение к коллекции users (mongoose.connection.db undefined)');
+      }
+
       if (userCount === 0 && directCount === 0) {
         logger.warn('[MongoDB] ⚠️  База данных пуста - пользователей нет!');
         logger.warn('[MongoDB] Убедитесь, что используется правильная БД:', dbName);
@@ -363,11 +394,14 @@ mongoose
     }
   })
   .catch((err) => {
-    logger.error('MongoDB connection failed:', {
+    // КРИТИЧНО: Не завершаем процесс при ошибке MongoDB
+    // Сервер должен работать даже без MongoDB для WebRTC/LiveKit функций
+    logger.error('MongoDB connection failed (server will continue without DB):', {
       error: err?.message || String(err),
       uri: MONGO_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')
     });
-    process.exit(1);
+    logger.warn('[MongoDB] Server will continue running, but database features will be unavailable');
+    // УБРАНО: process.exit(1) - сервер должен работать даже без MongoDB
   });
 
 /* ========= Presence helpers ========= */
@@ -409,6 +443,12 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
   try {
     if (!userId) return;
     
+    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+    if (!isMongoReady()) {
+      // Если БД недоступна, просто отправляем событие самому пользователю
+      io.to(`u:${userId}`).emit('presence:update', { userId, busy });
+      return;
+    }
     // Получаем список друзей пользователя
     const user = await User.findById(userId).select('friends').lean();
     if (!user || !Array.isArray(user.friends) || user.friends.length === 0) {
@@ -568,6 +608,11 @@ io.on('connection', async (sock: AuthedSocket) => {
         return ack?.({ ok: false, error: 'invalid_userId' });
       }
       
+      // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+      if (!isMongoReady()) {
+        logger.warn('Reauth failed: database unavailable');
+        return ack?.({ ok: false, error: 'database_unavailable' });
+      }
       // Проверяем существует ли пользователь
       const exists = await User.exists({ _id: userId });
       if (!exists) {
@@ -599,14 +644,21 @@ io.on('connection', async (sock: AuthedSocket) => {
     '';
 
   let bindUid: string | null = null;
-  if (isOid(rawUserId) && (await User.exists({ _id: rawUserId }))) {
-    bindUid = String(rawUserId);
-  } else if (rawInstallId.trim()) {
-    const inst = (await Install.findOne({ installId: rawInstallId.trim() })
-      .select('user')
-      .lean()) as { user?: any } | null;
-    if (inst?.user) {
-      bindUid = String(inst.user);
+  // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+  if (isMongoReady()) {
+    if (isOid(rawUserId) && (await User.exists({ _id: rawUserId }))) {
+      bindUid = String(rawUserId);
+    } else if (rawInstallId.trim()) {
+      try {
+        const inst = (await Install.findOne({ installId: rawInstallId.trim() })
+          .select('user')
+          .lean()) as { user?: any } | null;
+        if (inst?.user) {
+          bindUid = String(inst.user);
+        }
+      } catch (e) {
+        // Игнорируем ошибки MongoDB при поиске installId
+      }
     }
   }
   
@@ -714,10 +766,45 @@ io.on('connection', async (sock: AuthedSocket) => {
 
 
 
+  /* ---- presence update от клиента ---- */
+  sock.on('presence:update', async (payload: any) => {
+    try {
+      const userId = String((sock as any).data?.userId || '');
+      if (!userId) return;
+      
+      const status = payload?.status;
+      const busy = status === 'busy';
+      
+      // Обновляем состояние сокета
+      (sock as any).data.busy = busy;
+      if (payload?.roomId) {
+        (sock as any).data.roomId = payload.roomId;
+      } else if (!busy) {
+        delete (sock as any).data.roomId;
+      }
+      
+      // Рассылаем обновление друзьям
+      await emitPresenceUpdateToFriends(io, userId, busy);
+      
+      logger.debug('📍 [presence:update] Status updated', {
+        userId,
+        status,
+        busy,
+        roomId: payload?.roomId
+      });
+    } catch (e) {
+      logger.error('❌ [presence:update] Error:', e);
+    }
+  });
+
   /* ---- профиль ---- */
   sock.on('attach_user', async (payload: any, ack?: Function) => {
     const uid = String(payload?.userId || '').trim();
 
+    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+    if (!isMongoReady()) {
+      return ack?.({ ok: false, error: 'database_unavailable' });
+    }
     if (uid && isOid(uid) && (await User.exists({ _id: uid }))) {
       bindUserIdentity(io, sock, uid);
       emitPresence(io);
@@ -760,6 +847,11 @@ io.on('connection', async (sock: AuthedSocket) => {
         return;
       }
 
+      // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+      if (!isMongoReady()) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'database_unavailable' });
+        return;
+      }
       // текущий документ
       const current = (await User.findById(me)
         .select('nick avatar avatarVer avatarB64 avatarThumbB64 friends')
@@ -964,8 +1056,10 @@ io.on('connection', async (sock: AuthedSocket) => {
       callOfUser.set(peerId, { with: me, callId });
 
       // КРИТИЧНО: Создаем комнату при инициации звонка (инициатором)
-      const sorted = [sock.id, peerSocket.id].sort();
-      const roomId = `room_${sorted[0]}_${sorted[1]}`;
+      // Используем user IDs для имени комнаты, чтобы совпадало с LiveKit roomName
+      const sortedUserIds = [me, peerId].sort();
+      const roomId = `room_${sortedUserIds[0]}_${sortedUserIds[1]}`;
+      console.log('[call:initiate] roomId created', { me, peerId, roomId });
       
       // Инициатор сразу присоединяется к комнате
       try { 
@@ -1038,8 +1132,11 @@ io.on('connection', async (sock: AuthedSocket) => {
       try {
         let fromNick: string | undefined;
         try {
-          const u = await User.findById(me).select('nick').lean();
-          if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+          // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+          if (isMongoReady()) {
+            const u = await User.findById(me).select('nick').lean();
+            if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+          }
         } catch {}
         
         // КРИТИЧНО: Отправляем call:incoming напрямую на все сокеты получателя для гарантированной доставки
@@ -1065,6 +1162,53 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
   });
 
+  // Получение LiveKit токена через сокет
+  sock.on('livekit:token', async ({ roomName }: { roomName?: string }, ack?: (response: { ok: boolean; token?: string; error?: string }) => void) => {
+    try {
+      const me = (sock as any)?.data?.userId;
+      if (!me || !roomName) {
+        logger.warn('[livekit:token] Missing parameters', { hasUserId: !!me, hasRoomName: !!roomName, socketId: sock.id });
+        return ack?.({ ok: false, error: 'missing_user_or_roomName' });
+      }
+      
+      console.log('[livekit:token] 📤 Creating token request', { 
+        userId: me, 
+        roomName, 
+        socketId: sock.id,
+        socketDataUserId: (sock as any)?.data?.userId,
+      });
+      
+      logger.debug('[livekit:token] Creating token', { userId: me, roomName, socketId: sock.id });
+      const token = await createToken({ identity: me, roomName });
+      
+      console.log('[livekit:token] ✅ Token created successfully', { 
+        userId: me, 
+        roomName, 
+        tokenLength: token?.length || 0,
+        identity: me,
+        socketId: sock.id,
+      });
+      
+      logger.debug('[livekit:token] Token created successfully', { userId: me, roomName, tokenLength: token?.length || 0 });
+      return ack?.({ ok: true, token });
+    } catch (e: any) {
+      console.error('[livekit:token] ❌ Error creating token:', {
+        error: e?.message,
+        userId: (sock as any)?.data?.userId,
+        roomName,
+        socketId: sock.id,
+      });
+      logger.error('[livekit:token] Error creating token:', { 
+        error: e?.message, 
+        stack: e?.stack,
+        userId: (sock as any)?.data?.userId,
+        roomName,
+        socketId: sock.id,
+      });
+      return ack?.({ ok: false, error: e?.message || 'server_error' });
+    }
+  });
+
   sock.on('call:accept', async ({ callId }: { callId?: string }) => {
     const id = String(callId || '');
     const link = callsById.get(id);
@@ -1077,10 +1221,19 @@ io.on('connection', async (sock: AuthedSocket) => {
     const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b) as AuthedSocket | undefined;
     
     if (aSock && bSock) {
-      // КРИТИЧНО: Комната уже создана инициатором при call:initiate
-      // Получаем roomId из данных инициатора или создаем по той же логике
-      const sorted = [aSock.id, bSock.id].sort();
-      const roomId = (aSock as any)?.data?.roomId || (bSock as any)?.data?.roomId || `room_${sorted[0]}_${sorted[1]}`;
+      // КРИТИЧНО: Используем user IDs для имени комнаты, чтобы совпадало с LiveKit
+      // Это гарантирует что оба участника подключатся к одной LiveKit комнате
+      let roomId: string;
+      if (link.a && link.b) {
+        const sortedUserIds = [link.a, link.b].sort();
+        roomId = `room_${sortedUserIds[0]}_${sortedUserIds[1]}`;
+        console.log('[call:accept] roomId from user IDs', { linkA: link.a, linkB: link.b, roomId });
+      } else {
+        // Fallback на socket IDs если user IDs недоступны
+        const sorted = [aSock.id, bSock.id].sort();
+        roomId = `room_${sorted[0]}_${sorted[1]}`;
+        console.log('[call:accept] FALLBACK roomId from socket IDs', { aSockId: aSock.id, bSockId: bSock.id, roomId });
+      }
       
       // КРИТИЧНО: Принимающий ОБЯЗАТЕЛЬНО присоединяется к комнате
       try { 
@@ -1130,6 +1283,20 @@ io.on('connection', async (sock: AuthedSocket) => {
         livekitRoomName = `room_${sortedUserIds[0]}_${sortedUserIds[1]}`;
       }
       
+      // КРИТИЧНО: Логируем детали перед созданием токенов
+      console.log('[call:accept] Creating LiveKit tokens', {
+        linkA: link.a,
+        linkB: link.b,
+        aSockId: aSock.id,
+        bSockId: bSock.id,
+        aSockUserId: (aSock as any)?.data?.userId,
+        bSockUserId: (bSock as any)?.data?.userId,
+        livekitIdentityA,
+        livekitIdentityB,
+        livekitRoomName,
+        roomId,
+      });
+      
       try {
         const [tokenA, tokenB] = await Promise.all([
           createToken({ identity: livekitIdentityA, roomName: livekitRoomName }),
@@ -1137,14 +1304,34 @@ io.on('connection', async (sock: AuthedSocket) => {
         ]);
         livekitTokenA = tokenA;
         livekitTokenB = tokenB;
+        // КРИТИЧНО: Используем console.log вместо logger.debug для гарантированного вывода
+        console.log('[call:accept] ✅ LiveKit tokens created successfully', { 
+          roomName: livekitRoomName, 
+          identityA: livekitIdentityA, 
+          identityB: livekitIdentityB,
+          tokenALength: tokenA?.length || 0,
+          tokenBLength: tokenB?.length || 0,
+          linkA: link.a,
+          linkB: link.b,
+        });
         logger.debug('LiveKit tokens created for call:accept', { roomName: livekitRoomName, identityA: livekitIdentityA, identityB: livekitIdentityB });
       } catch (e: any) {
+        console.error('[call:accept] ❌ Failed to create LiveKit tokens:', e);
         logger.error('Failed to create LiveKit tokens for call:accept:', e);
       }
       
       // Отправляем call:accepted с LiveKit credentials
       if (aSock) {
         try {
+          console.log('[call:accept] 📤 Sending call:accepted to participant A', {
+            callId: id,
+            socketId: aSock.id,
+            userId: link.a,
+            hasToken: !!livekitTokenA,
+            roomName: livekitRoomName,
+            tokenLength: livekitTokenA?.length || 0,
+            identity: livekitIdentityA,
+          });
           aSock.emit('call:accepted', { 
             callId: id, 
             from: bSock.id, 
@@ -1153,10 +1340,22 @@ io.on('connection', async (sock: AuthedSocket) => {
             livekitToken: livekitTokenA,
             livekitRoomName
           });
-        } catch {}
+          console.log('[call:accept] ✅ call:accepted sent to participant A');
+        } catch (e) {
+          console.error('[call:accept] ❌ Error sending call:accepted to participant A:', e);
+        }
       }
       if (bSock) {
         try {
+          console.log('[call:accept] 📤 Sending call:accepted to participant B', {
+            callId: id,
+            socketId: bSock.id,
+            userId: link.b,
+            hasToken: !!livekitTokenB,
+            roomName: livekitRoomName,
+            tokenLength: livekitTokenB?.length || 0,
+            identity: livekitIdentityB,
+          });
           bSock.emit('call:accepted', { 
             callId: id, 
             from: aSock.id, 
@@ -1165,27 +1364,35 @@ io.on('connection', async (sock: AuthedSocket) => {
             livekitToken: livekitTokenB,
             livekitRoomName
           });
-        } catch {}
+          console.log('[call:accept] ✅ call:accepted sent to participant B');
+        } catch (e) {
+          console.error('[call:accept] ❌ Error sending call:accepted to participant B:', e);
+        }
       }
       
-      // Также отправляем через комнаты на случай, если сокеты не найдены напрямую
+      // Также отправляем через комнаты ТОЛЬКО если прямых сокетов нет (fallback).
+      // Иначе возникали дубликаты call:accepted -> двойное создание VideoCallSession на клиентах.
       try {
-        io.to(`u:${link.a}`).emit('call:accepted', { 
-          callId: id, 
-          from: bSock.id, 
-          fromUserId: link.b, 
-          roomId,
-          livekitToken: livekitTokenA,
-          livekitRoomName
-        });
-        io.to(`u:${link.b}`).emit('call:accepted', { 
-          callId: id, 
-          from: aSock.id, 
-          fromUserId: link.a, 
-          roomId,
-          livekitToken: livekitTokenB,
-          livekitRoomName
-        });
+        if (!aSock) {
+          io.to(`u:${link.a}`).emit('call:accepted', { 
+            callId: id, 
+            from: bSock?.id, 
+            fromUserId: link.b, 
+            roomId,
+            livekitToken: livekitTokenA,
+            livekitRoomName
+          });
+        }
+        if (!bSock) {
+          io.to(`u:${link.b}`).emit('call:accepted', { 
+            callId: id, 
+            from: aSock?.id, 
+            fromUserId: link.a, 
+            roomId,
+            livekitToken: livekitTokenB,
+            livekitRoomName
+          });
+        }
       } catch {}
       
       logger.debug('Direct call room established', { roomId, callId: id, participants: 2 });
@@ -1341,6 +1548,10 @@ app.get('/whoami', async (req, res) => {
   try {
     const installId = String(req.query.installId || '').trim();
     if (!installId) return res.status(400).json({ ok: false, error: 'no_installId' });
+    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+    if (!isMongoReady()) {
+      return res.status(503).json({ ok: false, error: 'database_unavailable' });
+    }
     const inst = (await Install.findOne({ installId }).select('user').lean()) as
       | { user?: any }
       | null;

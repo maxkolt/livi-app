@@ -76,7 +76,11 @@ const navRef = createNavigationContainerRef<RootStackParamList>();
 (global as any).__navRef = navRef;
 
 const isVideoSessionRoute = (routeName?: string | null) =>
-  routeName === 'VideoCall';
+  routeName === 'VideoCall' || routeName === 'RandomChat';
+
+// КРИТИЧНО: Глобальная ссылка на состояние неактивности экрана видеозвонка/рандомчата
+// Когда true - входящий звонок показывается в блоке собеседник, а не глобально
+(global as any).__isInactiveStateRef = { current: false };
 
 // КРИТИЧНО: Глобальная ссылка на функцию очистки звонка из VideoCall
 // Это нужно чтобы можно было вызвать очистку даже когда экран звонка размонтирован (в PiP)
@@ -452,15 +456,20 @@ function AppContent() {
       }
     } catch {}
 
-    // КРИТИЧНО: Показываем модалку если НЕ на экране видеозвонка, или если навигация не готова (безопаснее показать)
-    if (!isVideoSessionRoute(currentRoute) || !currentRoute) {
+    // КРИТИЧНО: Показываем глобальную модалку если:
+    // 1. НЕ на экране видеозвонка/рандомчата, ИЛИ
+    // 2. Навигация не готова (безопаснее показать)
+    // НЕ показываем если на VideoCall/RandomChat - там модалка в блоке собеседник
+    const isOnVideoScreen = isVideoSessionRoute(currentRoute);
+    
+    if (!isOnVideoScreen || !currentRoute) {
       logger.debug('Showing incoming call modal', { callId: d.callId, from: d.from, fromNick: d.fromNick, currentRoute });
       setIncoming(d);
       startAnim();
       // Запомним последнего звонящего для любых экранов
       try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
     } else {
-      logger.debug('Ignoring incoming call - already on video screen', { callId: d.callId, from: d.from, currentRoute });
+      logger.debug('Skipping global modal - on video/random screen, will show in peer block', { callId: d.callId, from: d.from, currentRoute });
     }
   }, [routeName, startAnim]);
 

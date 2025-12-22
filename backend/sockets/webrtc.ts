@@ -127,18 +127,21 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     const { enabled, from, to, roomId } = data;
     
     // Пересылаем событие всем в комнатах, где находится этот сокет
+    let forwardedViaRoom = false;
     socket.rooms.forEach((currentRoomId) => {
       if (currentRoomId.startsWith("room_")) {
         // КРИТИЧНО: Передаем roomId при пересылке для правильной обработки на клиенте
         socket.to(currentRoomId).emit("cam-toggle", { enabled, from, roomId: currentRoomId });
         if (!enabled) logger.debug('Camera toggle forwarded to room', { roomId: currentRoomId });
+        forwardedViaRoom = true;
       }
     });
     
     // Для обратной совместимости пересылаем событие напрямую по socket.id
+    // ТОЛЬКО если пересылка через комнату не сработала (чтобы избежать дубликатов).
     const socketData = (socket as any).data;
     
-    if (socketData && socketData.partnerSid) {
+    if (!forwardedViaRoom && socketData && socketData.partnerSid) {
       const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
       if (partnerSocket) {
         partnerSocket.emit("cam-toggle", { enabled, from, to: partnerSocket.id });
@@ -188,6 +191,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     const { inPiP, roomId, from } = data;
     
     // Пересылаем событие партнеру в комнате
+    let forwardedViaRoom = false;
     if (roomId && roomId.startsWith("room_")) {
       socket.to(roomId).emit("pip:state", { 
         inPiP, 
@@ -195,11 +199,12 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
         from: socket.id 
       });
       logger.debug('PiP state forwarded to room', { roomId, inPiP });
+      forwardedViaRoom = true;
     }
     
     // Также пересылаем через partnerSid для обратной совместимости
     const socketData = (socket as any).data;
-    if (socketData && socketData.partnerSid) {
+    if (!forwardedViaRoom && socketData && socketData.partnerSid) {
       const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
       if (partnerSocket) {
         partnerSocket.emit("pip:state", { inPiP, roomId, from: socket.id });

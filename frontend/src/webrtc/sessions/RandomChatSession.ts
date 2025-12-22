@@ -516,7 +516,11 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
 
     if (!LIVEKIT_URL) {
-      logger.error('[RandomChatSession] LiveKit URL is not configured');
+      logger.error('[RandomChatSession] LiveKit URL is not configured', {
+        envVar: 'EXPO_PUBLIC_LIVEKIT_URL',
+        value: process.env.EXPO_PUBLIC_LIVEKIT_URL,
+        roomId: data.livekitRoomName,
+      });
       return;
     }
     if (!data.livekitToken || !data.livekitRoomName) {
@@ -1638,11 +1642,26 @@ export class RandomChatSession extends SimpleEventEmitter {
     try {
       // КРИТИЧНО: Новая комната всегда в состоянии 'disconnected' до connect()
       // Проверяем состояние только после попытки подключения
+      logger.info('[RandomChatSession] Attempting to connect to LiveKit', {
+        url,
+        urlHost: url ? new URL(url).hostname : 'unknown',
+        tokenLength: token?.length || 0,
+        tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
+        targetRoomName,
+        roomState: room.state,
+      });
+      
       await room.connect(url, token, { autoSubscribe: true });
       
       // КРИТИЧНО: Проверяем состояние после подключения
       if (room.state !== 'connected') {
-        logger.warn('[RandomChatSession] Room not connected after connect call', { state: room.state });
+        logger.warn('[RandomChatSession] Room not connected after connect call', { 
+          state: room.state,
+          url,
+          targetRoomName,
+          hasToken: !!token,
+          tokenLength: token?.length || 0,
+        });
         if (this.room === room) {
           this.room = null;
           this.currentRoomName = null;
@@ -1650,13 +1669,53 @@ export class RandomChatSession extends SimpleEventEmitter {
         return false;
       }
       
+      logger.info('[RandomChatSession] Successfully connected to LiveKit', {
+        roomName: room.name,
+        state: room.state,
+        targetRoomName,
+      });
+      
       // Сохраняем имя подключенной комнаты для проверки переиспользования
       this.currentRoomName = room.name || targetRoomName || null;
       logger.debug('[RandomChatSession] Room connected, saved room name', {
         roomName: this.currentRoomName,
         roomState: room.state,
       });
-    } catch (e) {
+    } catch (e: any) {
+      const errorMessage = e?.message || String(e);
+      const isInvalidApiKey = errorMessage.includes('invalid API key') || 
+                               errorMessage.includes('401') ||
+                               errorMessage.includes('Unauthorized');
+      
+      logger.error('[RandomChatSession] Error connecting to LiveKit', {
+        error: errorMessage,
+        errorCode: e?.code,
+        errorName: e?.name,
+        url,
+        urlHost: url ? new URL(url).hostname : 'unknown',
+        targetRoomName,
+        hasToken: !!token,
+        tokenLength: token?.length || 0,
+        tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
+        roomState: room?.state,
+        isInvalidApiKey,
+        stack: e?.stack,
+      });
+      
+      // Если ошибка связана с API ключом, логируем дополнительную информацию
+      if (isInvalidApiKey) {
+        logger.error('[RandomChatSession] ⚠️ LiveKit API key validation failed!', {
+          url,
+          possibleCauses: [
+            'API key/secret mismatch between backend and LiveKit server',
+            'LiveKit URL points to wrong server',
+            'Token expired or malformed',
+            'Backend environment variables not set correctly'
+          ],
+          suggestion: 'Check LIVEKIT_API_KEY and LIVEKIT_API_SECRET in backend .env file match LiveKit server credentials'
+        });
+      }
+      
       if (this.room === room) {
         this.room = null;
         this.currentRoomName = null;

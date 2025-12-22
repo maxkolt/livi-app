@@ -77,6 +77,10 @@ export async function bindUser(io: Server, sock: any, userId: string) {
 
 /** Сообщаем друзьям, что профиль userId поменялся */
 export async function broadcastProfileToFriends(io: Server, userId: string) {
+  // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+  if (mongoose.connection.readyState !== 1) {
+    return; // Если БД недоступна, просто выходим
+  }
   const u = await User.findById(userId).select('nick avatar avatarVer avatarThumbB64 friends').lean();
   if (!u) return;
   
@@ -164,11 +168,34 @@ export default function registerIdentitySockets(io: Server) {
         // Сохраняем запрос в кэш
         attachRequestCache.set(cacheKey, { timestamp: now, promise: Promise.resolve() });
 
+        // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+        // readyState: 0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
+        if (mongoose.connection.readyState !== 1) {
+          console.error(`[identity] MongoDB not ready (state: ${mongoose.connection.readyState}), cannot process identity:attach`);
+          ack?.({ ok: false, error: 'database_unavailable' });
+          setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+          return;
+        }
+
         // 1) install уже существует -> пользователь есть/нет
+        // КРИТИЧНО: Проверка готовности уже выполнена выше, но проверяем еще раз для безопасности
+        if (mongoose.connection.readyState !== 1) {
+          console.error(`[identity] MongoDB not ready (state: ${mongoose.connection.readyState}) during Install.findOne`);
+          ack?.({ ok: false, error: 'database_unavailable' });
+          setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+          return;
+        }
         const inst = await Install.findOne({ installId }).lean();
         if (inst) {
           const userId = String((inst as any).user);
           console.log(`[identity] Install found for ${installId}, checking user: ${userId}`);
+          // КРИТИЧНО: Проверяем готовность перед User.exists
+          if (mongoose.connection.readyState !== 1) {
+            console.error(`[identity] MongoDB not ready (state: ${mongoose.connection.readyState}) during User.exists`);
+            ack?.({ ok: false, error: 'database_unavailable' });
+            setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+            return;
+          }
           const exists = await User.exists({ _id: userId });
 
           if (!exists) {
@@ -177,6 +204,14 @@ export default function registerIdentitySockets(io: Server) {
             const hasIncomingData = !!(incomingProfile.nick || incomingProfile.avatar);
 
             console.log(`[identity] User ${userId} not found, creating new user...`);
+            
+            // КРИТИЧНО: Проверяем готовность MongoDB перед User.create
+            if (mongoose.connection.readyState !== 1) {
+              console.error(`[identity] MongoDB not ready (state: ${mongoose.connection.readyState}) during User.create`);
+              ack?.({ ok: false, error: 'database_unavailable' });
+              setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+              return;
+            }
             
             const newUser = await User.create({
               _id: userId,
@@ -193,10 +228,15 @@ export default function registerIdentitySockets(io: Server) {
           } else {
             console.log(`[identity] User ${userId} already exists, skipping creation`);
             // Пользователь существует - можно обновлять профиль
-            const $set = buildSetFromProfile(payload?.profile || undefined);
-            if (Object.keys($set).length) {
-              await User.updateOne({ _id: userId }, { $set });
-              await broadcastProfileToFriends(io, userId);
+            // КРИТИЧНО: Проверяем готовность MongoDB перед User.updateOne
+            if (mongoose.connection.readyState === 1) {
+              const $set = buildSetFromProfile(payload?.profile || undefined);
+              if (Object.keys($set).length) {
+                await User.updateOne({ _id: userId }, { $set });
+                await broadcastProfileToFriends(io, userId);
+              }
+            } else {
+              console.warn(`[identity] MongoDB not ready (state: ${mongoose.connection.readyState}), skipping profile update`);
             }
           }
 
@@ -217,10 +257,22 @@ export default function registerIdentitySockets(io: Server) {
 
         console.log(`[identity] Creating new user for installId: ${installId}, newUserId: ${newUserId}`);
 
+        // КРИТИЧНО: Проверяем готовность MongoDB перед созданием пользователя
+        if (mongoose.connection.readyState !== 1) {
+          console.error(`[identity] MongoDB not ready (state: ${mongoose.connection.readyState}) during user creation`);
+          ack?.({ ok: false, error: 'database_unavailable' });
+          setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+          return;
+        }
+
         let session: ClientSession | null = null;
         try { session = await mongoose.startSession(); } catch {}
 
         const work = async (s?: ClientSession) => {
+          // КРИТИЧНО: Проверяем готовность MongoDB внутри work функции
+          if (mongoose.connection.readyState !== 1) {
+            throw new Error('database_unavailable');
+          }
           const opt = s ? { session: s } : undefined;
           const [newUser] = await User.create(
             [{
@@ -284,6 +336,11 @@ export default function registerIdentitySockets(io: Server) {
         const id = String(userId || '').trim();
         if (!id) return ack?.({ ok: false, error: 'no_userId' });
 
+        // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+        if (mongoose.connection.readyState !== 1) {
+          return ack?.({ ok: true, exists: false }); // Если БД недоступна, считаем что пользователь не существует
+        }
+
         const exists = await User.exists({ _id: id });
         ack?.({ ok: true, exists: !!exists });
       } catch (e: any) {
@@ -298,6 +355,11 @@ export default function registerIdentitySockets(io: Server) {
       try {
         const id = String(installId || '').trim();
         if (!id) return ack?.({ ok: false, error: 'no_installId' });
+
+        // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+        if (mongoose.connection.readyState !== 1) {
+          return ack?.({ ok: false, error: 'database_unavailable' });
+        }
 
         const inst = await Install.findOne({ installId: id }).lean();
         const userId = inst && (inst as any).user ? String((inst as any).user) : '';

@@ -791,6 +791,14 @@ async function createUserInternal(): Promise<string | null> {
         }
       }
       
+      // КРИТИЧНО: Если БД недоступна, не бросаем ошибку сразу - ждем и повторяем
+      // Это позволяет приложению работать даже если БД временно недоступна
+      if (response?.error === 'database_unavailable') {
+        console.warn(`[createUser] Database unavailable on attempt ${attempt}, will retry...`);
+        // Продолжаем цикл retry - следующая попытка будет через 2 секунды
+        throw new Error('database_unavailable');
+      }
+      
       throw new Error(response?.error || 'Failed to create user');
       
     } catch (e) {

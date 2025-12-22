@@ -19,6 +19,7 @@ interface RemoteVideoProps {
   lang: Lang;
   session?: any; // VideoCallSession
   onStreamReady?: (stream: MediaStream) => void;
+  remoteStreamReceivedAt?: number | null; // Время получения remoteStream для предотвращения мерцания
 }
 
 /**
@@ -38,6 +39,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   lang,
   session,
   onStreamReady,
+  remoteStreamReceivedAt,
 }) => {
   const L = (key: string) => t(key, lang);
   const logRenderState = useCallback(
@@ -121,10 +123,12 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     );
   }
 
-  // Нет стрима — показываем лоадер при загрузке или чёрный экран
+  // Нет стрима — показываем лоадер при загрузке или если звонок активен (started)
+  // КРИТИЧНО: При активном звонке (started=true) показываем ActivityIndicator вместо черного экрана
+  // Это предотвращает черный экран при принятии звонка, когда remoteStream еще не установлен
   if (!streamToUse) {
-    if (loading) {
-      logRenderState('no-stream-loading');
+    if (loading || started) {
+      logRenderState('no-stream-loading', { loading, started });
       return <ActivityIndicator size="large" color="#fff" />;
     }
     logRenderState('no-stream-idle');
@@ -203,7 +207,24 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }
 
   // Камера явно выключена И нет готового трека — показываем заглушку "Отошёл"
+  // КРИТИЧНО: Если стрим только что получен (менее 2000ms назад), показываем ActivityIndicator
+  // вместо AwayPlaceholder, чтобы дать треку время стать готовым и избежать мерцания
   if (!remoteCamOn && !hasRenderableVideo) {
+    const isRecentlyReceived = remoteStreamReceivedAt && (Date.now() - remoteStreamReceivedAt) < 2000;
+    
+    if (isRecentlyReceived) {
+      // Стрим только что получен - показываем загрузку вместо заглушки
+      logRenderState('remote-cam-off-recently-received', {
+        streamId: streamToUse.id,
+        hasVideoTrack,
+        videoTrackReady,
+        videoTrackEnabled,
+        videoTrackMuted,
+        timeSinceReceived: Date.now() - (remoteStreamReceivedAt || 0),
+      });
+      return <ActivityIndicator size="large" color="#fff" />;
+    }
+    
     logRenderState('remote-cam-off', {
       streamId: streamToUse.id,
       hasVideoTrack,
