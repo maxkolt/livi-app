@@ -6,7 +6,7 @@
     "prestart": "../scripts/kill-port.sh",
     "start": "ts-node index.ts",
     "predev": "../scripts/kill-port.sh",
-    "dev": "ts-node-dev --respawn --transpile-only index.ts"
+    "dev": "bun --watch index.ts"
   },
   "dependencies": {
     "@types/fluent-ffmpeg": "^2.1.27",

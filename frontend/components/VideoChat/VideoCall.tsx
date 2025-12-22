@@ -656,6 +656,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         },
         onRoomIdChange: (id) => {
           setRoomId(id);
+          // Обновляем partnerUserId из сессии при получении roomId (call:accepted)
+          const session = sessionRef.current;
+          if (session && id && typeof (session as any).getPartnerUserId === 'function') {
+            const partnerUserId = (session as any).getPartnerUserId();
+            if (partnerUserId) {
+              setPartnerUserId(partnerUserId);
+            }
+          }
         },
         onCallIdChange: (id) => {
           setCallId(id);
@@ -1324,7 +1332,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // - Звонок начат (started) ИЛИ есть активный звонок (для принимающего звонок)
     // - Есть активный звонок (partnerId, roomId или callId)
     // - Звонок не завершен
-    const shouldShow = hasPartnerUserId && (hasStarted || hasActiveCall) && !isInactive && !callEnded && hasActiveCall && isPartnerFriend;
+    const shouldShow = hasPartnerUserId && (hasStarted || hasActiveCall) && !isInactive && !callEnded && isPartnerFriend;
     
     if (shouldShow) {
       logger.info('[VideoCall] Показываем бейдж друга', {

@@ -126,13 +126,34 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // Нет стрима — показываем лоадер при загрузке или если звонок активен (started)
   // КРИТИЧНО: При активном звонке (started=true) показываем ActivityIndicator вместо черного экрана
   // Это предотвращает черный экран при принятии звонка, когда remoteStream еще не установлен
+  // КРИТИЧНО: Показываем бейдж друга даже когда нет стрима (для инициатора звонка)
   if (!streamToUse) {
     if (loading || started) {
       logRenderState('no-stream-loading', { loading, started });
-      return <ActivityIndicator size="large" color="#fff" />;
+      return (
+        <View style={styles.videoContainer}>
+          <ActivityIndicator size="large" color="#fff" />
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
     }
     logRenderState('no-stream-idle');
-    return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
+    return (
+      <View style={styles.videoContainer}>
+        <View style={[styles.rtc, { backgroundColor: 'black' }]} />
+        {showFriendBadge && (
+          <View style={styles.friendBadge}>
+            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+          </View>
+        )}
+      </View>
+    );
   }
 
   const videoTrack = (streamToUse as any)?.getVideoTracks?.()?.[0] || null;
@@ -222,7 +243,17 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         videoTrackMuted,
         timeSinceReceived: Date.now() - (remoteStreamReceivedAt || 0),
       });
-      return <ActivityIndicator size="large" color="#fff" />;
+      return (
+        <View style={styles.videoContainer}>
+          <ActivityIndicator size="large" color="#fff" />
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
     }
     
     logRenderState('remote-cam-off', {
@@ -253,7 +284,17 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       videoTrackEnabled,
       videoTrackMuted,
     });
-    return <ActivityIndicator size="large" color="#fff" />;
+    return (
+      <View style={styles.videoContainer}>
+        <ActivityIndicator size="large" color="#fff" />
+        {showFriendBadge && (
+          <View style={styles.friendBadge}>
+            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+          </View>
+        )}
+      </View>
+    );
   }
 
   // Нет видеотрека (например, только аудио) — показываем заглушку, если камера "выключена" по состоянию
@@ -272,7 +313,18 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }
 
   // Fallback (стрим есть, но видео не появилось)
-  return <ActivityIndicator size="large" color="#fff" />;
+  // КРИТИЧНО: Показываем бейдж друга даже когда нет стрима (для инициатора звонка)
+  return (
+    <View style={styles.videoContainer}>
+      <ActivityIndicator size="large" color="#fff" />
+      {showFriendBadge && (
+        <View style={styles.friendBadge}>
+          <MaterialIcons name="check-circle" size={16} color="#0f0" />
+          <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+        </View>
+      )}
+    </View>
+  );
 };
 
 const styles = StyleSheet.create({

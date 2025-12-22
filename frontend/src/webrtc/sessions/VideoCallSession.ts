@@ -61,10 +61,16 @@ export class VideoCallSession extends SimpleEventEmitter {
   private partnerUserId: string | null = null;
   private inPiP = false;
   private currentRoomName: string | null = null; // Имя текущей подключенной комнаты LiveKit
+  private lastProcessedCallAccepted: { callId: string | null; roomName: string | null; timestamp: number } | null = null; // Защита от повторной обработки
 
   constructor(config: WebRTCSessionConfig) {
     super();
     this.config = config;
+    
+    logger.info('[VideoCallSession] 🆕 Constructor called', {
+      myUserId: config.myUserId,
+      hasCallbacks: !!config.callbacks,
+    });
     
     // КРИТИЧНО: Принудительно очищаем предыдущую комнату при создании новой сессии
     // Это решает проблему когда после рандомного чата комната остаётся в состоянии connecting
@@ -81,6 +87,28 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.currentRoomName = null;
     
     this.setupSocketHandlers();
+    
+    // КРИТИЧНО: Проверяем, есть ли сохраненное событие call:accepted, которое пришло до создания сессии
+    // Это решает проблему, когда call:accepted приходит до того, как VideoCallSession создан
+    const pendingCallAccepted = (global as any).__pendingCallAcceptedRef?.current;
+    if (pendingCallAccepted) {
+      logger.info('[VideoCallSession] 🔄 Found pending call:accepted event, processing it now', {
+        callId: pendingCallAccepted.callId,
+        roomId: pendingCallAccepted.roomId,
+        myUserId: config.myUserId,
+      });
+      // Очищаем сохраненное событие
+      (global as any).__pendingCallAcceptedRef.current = null;
+      // Обрабатываем событие асинхронно, чтобы не блокировать конструктор
+      setTimeout(() => {
+        this.handleCallAccepted(pendingCallAccepted).catch((e) => {
+          logger.error('[VideoCallSession] ❌ Failed to handle pending call:accepted', {
+            error: e,
+            callId: pendingCallAccepted.callId,
+          });
+        });
+      }, 100);
+    }
   }
 
   /* ===================== Public API ===================== */
@@ -101,6 +129,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     
     this.partnerUserId = friendUserId;
+    // КРИТИЧНО: partnerId еще нет (будет установлен при получении call:accepted)
+    // Но partnerUserId уже есть, и компонент должен его получить через setPartnerUserId в VideoCall.tsx
+    // Здесь мы только устанавливаем внутреннее состояние, компонент сам устанавливает partnerUserId
     this.config.callbacks.onLoadingChange?.(true);
     this.config.onLoadingChange?.(true);
     await this.ensureLocalTracks();
@@ -563,6 +594,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.callId;
   }
 
+  getPartnerUserId(): string | null {
+    return this.partnerUserId;
+  }
+
   exitPiP?(): void {
     this.setInPiP(false);
   }
@@ -579,9 +614,30 @@ export class VideoCallSession extends SimpleEventEmitter {
   /* ===================== Internal helpers ===================== */
 
   private setupSocketHandlers(): void {
+    logger.info('[VideoCallSession] 🔌 Setting up socket handlers', {
+      myUserId: this.config.myUserId,
+    });
+    
     const callAcceptedHandler = (data: CallAcceptedPayload) => {
+      logger.info('[VideoCallSession] 📡 Socket event call:accepted received in handler', {
+        callId: data.callId,
+        roomId: data.roomId,
+        from: data.from,
+        fromUserId: data.fromUserId,
+        myUserId: this.config.myUserId,
+        hasLivekitToken: !!data.livekitToken,
+        hasLivekitRoomName: !!data.livekitRoomName,
+      });
+      // КРИТИЧНО: Если сессия еще не полностью инициализирована, сохраняем событие
+      // Это может произойти, если событие приходит сразу после создания сессии
+      // Но обычно это не нужно, так как setupSocketHandlers вызывается в конструкторе
       this.handleCallAccepted(data).catch((e) => {
-        logger.error('[VideoCallSession] Failed to handle call:accepted', e);
+        logger.error('[VideoCallSession] ❌ Failed to handle call:accepted', {
+          error: e,
+          callId: data.callId,
+          roomId: data.roomId,
+          myUserId: this.config.myUserId,
+        });
       });
     };
     
@@ -602,6 +658,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     socket.on('call:ended', callEndedHandler);
     socket.on('disconnected', disconnectedHandler);
     socket.on('call:cancel', callEndedHandler);
+    
+    logger.info('[VideoCallSession] ✅ Socket handlers registered', {
+      myUserId: this.config.myUserId,
+    });
 
     this.socketOffs = [
       () => socket.off('call:accepted', callAcceptedHandler),
@@ -613,10 +673,84 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async handleCallAccepted(data: CallAcceptedPayload): Promise<void> {
-    const roomId = data.roomId ?? null;
+    const targetRoomName = data.livekitRoomName ?? data.roomId ?? null;
     const callId = data.callId ?? null;
+    
+    // КРИТИЧНО: Защита от повторной обработки одного и того же события
+    // Проверяем, не обрабатывали ли мы уже это событие
+    if (this.lastProcessedCallAccepted && 
+        this.lastProcessedCallAccepted.callId === callId &&
+        this.lastProcessedCallAccepted.roomName === targetRoomName &&
+        (Date.now() - this.lastProcessedCallAccepted.timestamp) < 5000) {
+      logger.info('[VideoCallSession] ⏭️ Already processed this call:accepted event, skipping', {
+        callId,
+        roomName: targetRoomName,
+        lastProcessed: this.lastProcessedCallAccepted.timestamp,
+        timeSince: Date.now() - this.lastProcessedCallAccepted.timestamp,
+      });
+      return;
+    }
+    
+    logger.info('[VideoCallSession] 📥 Received call:accepted event', {
+      callId: data.callId,
+      roomId: data.roomId,
+      from: data.from,
+      fromUserId: data.fromUserId,
+      hasLivekitToken: !!data.livekitToken,
+      hasLivekitRoomName: !!data.livekitRoomName,
+      myUserId: this.config.myUserId,
+      tokenLength: data.livekitToken?.length || 0,
+      roomName: data.livekitRoomName,
+      currentRoomName: this.currentRoomName,
+      roomState: this.room?.state,
+    });
+
+    const roomId = data.roomId ?? null;
     const partnerId = data.from ?? null;
     const partnerUserId = data.fromUserId ?? null;
+
+    // КРИТИЧНО: Проверяем, не подключены ли уже к этой комнате
+    // Это предотвращает повторное подключение и ошибку "could not establish pc connection"
+    if (this.room && 
+        this.room.state === 'connected' && 
+        this.currentRoomName && 
+        targetRoomName && 
+        this.currentRoomName === targetRoomName) {
+      logger.info('[VideoCallSession] ⏭️ Already connected to this room, skipping reconnection', {
+        roomName: targetRoomName,
+        currentRoomName: this.currentRoomName,
+        roomState: this.room.state,
+        callId: data.callId,
+      });
+      // Обновляем данные о партнере, если они изменились
+      if (partnerUserId && partnerUserId !== this.partnerUserId) {
+        this.partnerUserId = partnerUserId;
+        this.config.callbacks.onPartnerIdChange?.(partnerId);
+        this.config.onPartnerIdChange?.(partnerId);
+      }
+      if (partnerId && partnerId !== this.partnerId) {
+        this.partnerId = partnerId;
+        this.config.callbacks.onPartnerIdChange?.(partnerId);
+        this.config.onPartnerIdChange?.(partnerId);
+      }
+      if (callId && callId !== this.callId) {
+        this.callId = callId;
+        this.config.callbacks.onCallIdChange?.(callId);
+      }
+      if (roomId && roomId !== this.roomId) {
+        this.roomId = roomId;
+        this.config.callbacks.onRoomIdChange?.(roomId);
+        this.config.onRoomIdChange?.(roomId);
+      }
+      this.config.setIsInactiveState?.(false);
+      this.config.setFriendCallAccepted?.(true);
+      // Сохраняем информацию о том, что событие обработано
+      this.lastProcessedCallAccepted = { callId, roomName: targetRoomName, timestamp: Date.now() };
+      return;
+    }
+    
+    // Сохраняем информацию о том, что начинаем обработку события
+    this.lastProcessedCallAccepted = { callId, roomName: targetRoomName, timestamp: Date.now() };
 
     this.roomId = roomId;
     this.callId = callId;
@@ -630,6 +764,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (callId) {
       this.config.callbacks.onCallIdChange?.(callId);
     }
+    
+    // КРИТИЧНО: Уведомляем компонент об изменении partnerUserId для отображения бейджа друга
+    // Для этого нужно передать partnerUserId через callback, но так как нет отдельного callback,
+    // используем существующий механизм через обновление состояния в компоненте
+    // Компонент должен получать partnerUserId из handleCallAccepted через onPartnerIdChange
+    // Но partnerId и partnerUserId - разные вещи, поэтому нужно убедиться, что компонент получает partnerUserId
 
     if (!LIVEKIT_URL) {
       logger.error('[VideoCallSession] LiveKit URL is not configured', {
@@ -642,12 +782,25 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     // Если токен пришел в событии (новый формат)
     if (data.livekitToken && data.livekitRoomName) {
+      logger.info('[VideoCallSession] 🔑 Connecting to LiveKit with token from call:accepted', {
+        roomName: data.livekitRoomName,
+        tokenLength: data.livekitToken.length,
+        myUserId: this.config.myUserId,
+        partnerUserId: partnerUserId,
+      });
       const connectRequestId = ++this.connectRequestId;
       const connected = await this.connectToLiveKit(LIVEKIT_URL, data.livekitToken, connectRequestId, data.livekitRoomName);
       if (!connected) {
-        logger.debug('[VideoCallSession] Call accepted handling aborted (stale request)');
+        logger.warn('[VideoCallSession] ❌ Call accepted handling aborted (stale request or connection failed)', {
+          roomName: data.livekitRoomName,
+          myUserId: this.config.myUserId,
+        });
         return;
       }
+      logger.info('[VideoCallSession] ✅ Successfully connected to LiveKit after call:accepted', {
+        roomName: data.livekitRoomName,
+        myUserId: this.config.myUserId,
+      });
       // КРИТИЧНО: НЕ устанавливаем loading=false сразу - пусть он остается true пока не придет remoteStream
       // loading будет установлен в false в handleTrackSubscribed когда придет remoteStream
       // Это предотвращает черный экран при принятии звонка
@@ -1193,8 +1346,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.currentRoomName = room.name || targetRoomName || null;
       
       // КРИТИЧНО: Логируем детальную информацию о состоянии комнаты
-      const localIdentity = room.localParticipant?.identity;
-      const remoteParticipantsList = Array.from(room.remoteParticipants.values()).map(p => ({
+      const roomLocalIdentity = room.localParticipant?.identity;
+      const roomRemoteParticipantsList = Array.from(room.remoteParticipants.values()).map(p => ({
         identity: p.identity,
         audioTracks: p.audioTrackPublications.size,
         videoTracks: p.videoTrackPublications.size,
@@ -1205,8 +1358,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         roomState: room.state,
         participantsCount: room.remoteParticipants.size,
         localParticipant: !!room.localParticipant,
-        localParticipantIdentity: localIdentity,
-        remoteParticipants: remoteParticipantsList,
+        localParticipantIdentity: roomLocalIdentity,
+        remoteParticipants: roomRemoteParticipantsList,
         myUserId: this.config.myUserId,
         partnerUserId: this.partnerUserId,
         expectedPartnerIdentity: this.partnerUserId,

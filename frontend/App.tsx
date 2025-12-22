@@ -640,11 +640,32 @@ function AppContent() {
       } catch {}
     });
     // Если пришло accepted (ответили), синхронно открываем VideoCall у обоих
-    const onAccepted = onCallAccepted?.(() => {
+    const onAccepted = onCallAccepted?.((data) => {
+      logger.info('[App] 📥 call:accepted received in App.tsx', {
+        callId: data?.callId,
+        from: data?.from,
+        currentRoute: navRef.getCurrentRoute()?.name,
+      });
+      
+      // КРИТИЧНО: Сохраняем событие call:accepted в глобальный ref на случай, если VideoCallSession еще не создан
+      // Это решает проблему, когда call:accepted приходит до того, как VideoCallSession создан
+      if (!(global as any).__pendingCallAcceptedRef) {
+        (global as any).__pendingCallAcceptedRef = { current: null };
+      }
+      (global as any).__pendingCallAcceptedRef.current = data;
+      logger.info('[App] 💾 Saved call:accepted event to global ref', {
+        callId: data?.callId,
+        hasLivekitToken: !!data?.livekitToken,
+        hasLivekitRoomName: !!data?.livekitRoomName,
+      });
+      
       setIncoming(null);
       stopAnim();
       try {
         if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
+          logger.info('[App] 🚀 Navigating to VideoCall screen', {
+            callId: data?.callId,
+          });
           navRef.dispatch(
             CommonActions.reset({
               index: 1,
@@ -654,8 +675,14 @@ function AppContent() {
               ],
             })
           );
+        } else {
+          logger.info('[App] ⏭️ Already on VideoCall screen, skipping navigation', {
+            callId: data?.callId,
+          });
         }
-      } catch {}
+      } catch (e) {
+        logger.error('[App] ❌ Error navigating to VideoCall', { error: e, callId: data?.callId });
+      }
     });
     // Обработчик таймаута
     const offTimeout = onCallTimeout?.(async (d) => {
