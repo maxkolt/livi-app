@@ -37,7 +37,7 @@ import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
 import InCallManager from 'react-native-incall-manager';
 import { logger } from '../../utils/logger';
-import { fetchFriends, requestFriend, respondFriend, onFriendRequest, onFriendAdded, onFriendAccepted, onFriendDeclined, updateProfile } from '../../sockets/socket';
+import { fetchFriends, requestFriend, respondFriend, onFriendRequest, onFriendAdded, onFriendAccepted, onFriendDeclined, updateProfile, onCallIncoming, onCallCanceled, acceptCall, declineCall } from '../../sockets/socket';
 import socket from '../../sockets/socket';
 import { syncMyStreamProfile } from '../../chat/cometchat';
 import { loadProfileFromStorage } from '../../utils/profileStorage';
@@ -61,6 +61,7 @@ const CARD_BASE = {
   alignItems: 'center' as const,
   overflow: 'hidden' as const,
   marginVertical: 7,
+  position: 'relative' as const,
 };
 
 const boostMicLevel = (level: number) => {
@@ -107,6 +108,23 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const [micLevel, setMicLevel] = useState(0);
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [buttonsOpacity] = useState(new Animated.Value(0));
+  
+  // Синхронизируем состояние неактивности с глобальным ref для App.tsx
+  useEffect(() => {
+    (global as any).__isInactiveStateRef = { current: isInactiveState };
+    return () => {
+      (global as any).__isInactiveStateRef = { current: false };
+    };
+  }, [isInactiveState]);
+  
+  // Входящий звонок (когда пользователь в неактивном состоянии)
+  const [incomingCall, setIncomingCall] = useState<{ callId: string; from: string; fromNick?: string } | null>(null);
+  const myUserId = route?.params?.myUserId;
+  
+  // Анимации для входящего звонка (как в App.tsx)
+  const incomingCallBounce = useRef(new Animated.Value(0)).current;
+  const incomingWaveA = useRef(new Animated.Value(0)).current;
+  const incomingWaveB = useRef(new Animated.Value(0)).current;
   const renderLogCountRef = useRef(0);
   const logRemoteRenderState = useCallback((reason: string, extra?: Record<string, unknown>) => {
     const count = renderLogCountRef.current;
@@ -462,10 +480,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       remoteStreamRef.current = stream || null;
 
       if (stream) {
-        // КРИТИЧНО: Сохраняем время получения нового remoteStream для предотвращения мерцания заглушки
-        if (isNewPartner) {
-          remoteStreamReceivedAtRef.current = Date.now();
-        }
+        // КРИТИЧНО: Сохраняем время получения remoteStream ВСЕГДА (не только для нового партнера)
+        // Это предотвращает мерцание заглушки "Отошел" при получении треков
+        remoteStreamReceivedAtRef.current = Date.now();
         
         logger.info('[RandomChat] Remote stream received', {
           streamId: stream.id,
@@ -910,6 +927,13 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       } catch (e) {
         logger.warn('[RandomChat] Error sending presence:update busy:', e);
       }
+    } else {
+      // Сбрасываем статус "busy" когда нет активного общения и не ищем
+      try {
+        socket.emit('presence:update', { status: 'online' });
+      } catch (e) {
+        logger.warn('[RandomChat] Error sending presence:update online:', e);
+      }
     }
   }, [partnerId, roomId, started]);
   
@@ -995,6 +1019,174 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     return () => backHandler.remove();
   }, [started, isInactiveState, onStartStop]);
   
+  // Обработка входящих звонков (когда пользователь в неактивном состоянии)
+  useEffect(() => {
+    // Слушаем входящие звонки только когда в неактивном состоянии
+    const offIncoming = onCallIncoming?.((d) => {
+      if (!started || isInactiveState) {
+        logger.info('[RandomChat] Incoming call received', { callId: d.callId, from: d.from });
+        setIncomingCall(d);
+      }
+    });
+    
+    return () => {
+      offIncoming?.();
+    };
+  }, [started, isInactiveState]);
+  
+  // Обработка отмены входящего звонка
+  useEffect(() => {
+    const offCancel = onCallCanceled?.((d) => {
+      if (incomingCall && d?.callId === incomingCall.callId) {
+        logger.info('[RandomChat] Incoming call canceled', { callId: d.callId });
+        setIncomingCall(null);
+      }
+    });
+    
+    const handleTimeout = () => {
+      if (incomingCall) {
+        logger.info('[RandomChat] Incoming call timeout');
+        setIncomingCall(null);
+      }
+    };
+    
+    const handleDeclined = (d?: any) => {
+      if (incomingCall && d?.callId === incomingCall.callId) {
+        setIncomingCall(null);
+      }
+    };
+    
+    socket.on('call:timeout', handleTimeout);
+    socket.on('call:declined', handleDeclined);
+    
+    return () => {
+      offCancel?.();
+      socket.off('call:timeout', handleTimeout);
+      socket.off('call:declined', handleDeclined);
+    };
+  }, [incomingCall]);
+  
+  // Принятие входящего звонка
+  const handleAcceptIncomingCall = useCallback(async () => {
+    if (!incomingCall) return;
+
+    try {
+      logger.info('[RandomChat] Accepting incoming call', { callId: incomingCall.callId });
+      
+      // КРИТИЧНО: Очищаем текущую сессию рандом-чата перед переходом на VideoCall
+      // Это предотвращает конфликты LiveKit комнат
+      const session = sessionRef.current;
+      if (session) {
+        logger.info('[RandomChat] Cleaning up RandomChatSession before accepting video call');
+        try {
+          session.cleanup?.();
+        } catch (e) {
+          logger.warn('[RandomChat] Error cleaning up session:', e);
+        }
+        sessionRef.current = null;
+      }
+      
+      // КРИТИЧНО: НЕ вызываем acceptCall здесь!
+      // Вместо этого передаем isIncoming: true в VideoCall, который сам вызовет acceptCall
+      // после создания VideoCallSession и установки обработчиков сокетов.
+      // Это гарантирует, что call:accepted событие будет получено.
+
+      // Переходим на страницу видеозвонка
+      (navigation as any).navigate('VideoCall', {
+        myUserId,
+        directCall: true,
+        callId: incomingCall.callId,
+        peerUserId: incomingCall.from, // user ID для показа бейджа друга
+        partnerNick: incomingCall.fromNick,
+        isIncoming: true,
+      });
+      
+      setIncomingCall(null);
+    } catch (e) {
+      logger.error('[RandomChat] Error accepting call:', e);
+      setIncomingCall(null);
+    }
+  }, [incomingCall, navigation, myUserId]);
+  
+  // Отклонение входящего звонка
+  const handleDeclineIncomingCall = useCallback(async () => {
+    if (!incomingCall) return;
+
+    try {
+      logger.info('[RandomChat] Declining incoming call', { callId: incomingCall.callId });
+      await declineCall?.(incomingCall.callId);
+      setIncomingCall(null);
+    } catch (e) {
+      logger.error('[RandomChat] Error declining call:', e);
+      setIncomingCall(null);
+    }
+  }, [incomingCall]);
+
+  // Анимации для входящего звонка
+  const stopIncomingAnim = useCallback(() => {
+    incomingCallBounce.stopAnimation();
+    incomingWaveA.stopAnimation();
+    incomingWaveB.stopAnimation();
+  }, [incomingCallBounce, incomingWaveA, incomingWaveB]);
+
+  const startIncomingAnim = useCallback(() => {
+    stopIncomingAnim();
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(incomingCallBounce, { toValue: 1, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+        Animated.timing(incomingCallBounce, { toValue: -1, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+        Animated.timing(incomingCallBounce, { toValue: 0, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+        Animated.delay(300),
+      ])
+    ).start();
+
+    const loopWave = (val: Animated.Value, delay: number) => {
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(val, { toValue: 1, duration: 1400, useNativeDriver: true }),
+          Animated.timing(val, { toValue: 0, duration: 0, useNativeDriver: true }),
+        ])
+      ).start();
+    };
+    loopWave(incomingWaveA, 0);
+    loopWave(incomingWaveB, 400);
+  }, [incomingCallBounce, incomingWaveA, incomingWaveB, stopIncomingAnim]);
+
+  // Запуск/остановка анимаций при изменении incomingCall
+  useEffect(() => {
+    if (incomingCall && (!started || isInactiveState)) {
+      startIncomingAnim();
+    } else {
+      stopIncomingAnim();
+    }
+    return () => stopIncomingAnim();
+  }, [incomingCall, started, isInactiveState, startIncomingAnim, stopIncomingAnim]);
+
+  const incomingCallIconStyle = useMemo(() => ({
+    transform: [
+      { translateY: incomingCallBounce.interpolate({ inputRange: [-1, 0, 1], outputRange: [-6, 0, -6] }) },
+      { rotate: incomingCallBounce.interpolate({ inputRange: [-1, 1], outputRange: ['-8deg', '8deg'] }) },
+    ],
+  }), [incomingCallBounce]);
+
+  const buildIncomingWaveStyle = useCallback(
+    (value: Animated.Value, direction: 'left' | 'right') => ({
+      position: 'absolute' as const,
+      width: 120,
+      height: 120,
+      borderRadius: 60,
+      borderWidth: 2,
+      borderColor: 'rgba(255,255,255,0.35)',
+      opacity: value.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] }),
+      transform: [
+        { scale: value.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1.35] }) },
+        { translateX: direction === 'left' ? -24 : 24 },
+      ],
+    }),
+    []
+  );
+
   // Cleanup при уходе со страницы
   useFocusEffect(
     useCallback(() => {
@@ -1031,7 +1223,45 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       >
         {/* Карточка "Собеседник" */}
         <View style={styles.card}>
+          {/* Модальное окно входящего звонка в блоке собеседник */}
+          {incomingCall && (!started || isInactiveState) && (
+            <View style={styles.incomingOverlayContainer}>
+              <BlurView intensity={60} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]} />
+              <View style={styles.incomingOverlayContent}>
+                <View style={{ width: 140, height: 140, alignItems: 'center', justifyContent: 'center' }}>
+                  <Animated.View style={buildIncomingWaveStyle(incomingWaveA, 'left')} />
+                  <Animated.View style={buildIncomingWaveStyle(incomingWaveB, 'right')} />
+                  <Animated.View style={incomingCallIconStyle}>
+                    <MaterialIcons name="call" size={48} color="#4FC3F7" />
+                  </Animated.View>
+                </View>
+                <Text style={styles.incomingOverlayTitle}>Входящий вызов</Text>
+                <Text style={styles.incomingOverlayName}>{incomingCall.fromNick || 'Друг'}</Text>
+                <View style={styles.incomingOverlayButtons}>
+                  <TouchableOpacity
+                    onPress={handleAcceptIncomingCall}
+                    style={[styles.btnGlassBase, styles.btnGlassSuccess]}
+                  >
+                    <Text style={styles.modalBtnText}>Принять</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={handleDeclineIncomingCall}
+                    style={[styles.btnGlassBase, styles.btnGlassDanger]}
+                  >
+                    <Text style={styles.modalBtnText}>Отклонить</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+          
           {(() => {
+            // Если показываем модалку входящего звонка - не показываем другой контент
+            if (incomingCall && (!started || isInactiveState)) {
+              return null;
+            }
+            
             // КРИТИЧНО: Если поиск остановлен (started=false), всегда показываем текст "Собеседник"
             if (!started) {
               return <Text style={styles.placeholder}>{L("peer")}</Text>;
@@ -1168,13 +1398,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               // (трек disabled, muted или не live)
               // КРИТИЧНО: Это происходит ТОЛЬКО когда удаленный пользователь выключил свою камеру
               // Локальное состояние камеры (camOn) НЕ влияет на это решение
-              // КРИТИЧНО: Если трек только что получен (менее 500ms назад), показываем ActivityIndicator
+              // КРИТИЧНО: Если трек только что получен (менее 2000ms назад), показываем ActivityIndicator
               // вместо AwayPlaceholder, чтобы дать треку время стать готовым и избежать мерцания
+              // Увеличено время с 500ms до 2000ms для надежного отображения видео без мерцания
               const streamReceivedAt = remoteStreamReceivedAtRef.current;
-              const isRecentlyReceived = streamReceivedAt && (Date.now() - streamReceivedAt) < 500;
+              const isRecentlyReceived = streamReceivedAt && (Date.now() - streamReceivedAt) < 2000;
               
-              if (isTrackLive && isRecentlyReceived) {
-                // Трек live, но еще не готов (disabled/muted), и это новый стрим - показываем загрузку
+              if (isRecentlyReceived) {
+                // Трек только что получен - показываем загрузку вместо заглушки
+                // Это предотвращает мерцание "Отошел" при установке соединения
                 logRemoteRenderState('video-track-warming-up', {
                   streamId: remoteStream?.id,
                   hasStream: !!remoteStream,
@@ -1688,6 +1920,64 @@ const styles = StyleSheet.create({
     right: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',
+  },
+  // Стили для входящего звонка (как в VideoCall/App.tsx)
+  incomingOverlayContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 10,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  incomingOverlayContent: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  incomingOverlayTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '700',
+    marginTop: 10,
+  },
+  incomingOverlayName: {
+    color: '#e5e7eb',
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  incomingOverlayButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 24,
+    width: '100%',
+    paddingHorizontal: 10,
+  },
+  btnGlassBase: {
+    flex: 1,
+    height: 48,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  btnGlassSuccess: {
+    backgroundColor: 'rgba(52,199,89,0.18)',
+    borderColor: 'rgba(36,150,65,0.7)',
+  },
+  btnGlassDanger: {
+    backgroundColor: 'rgba(255,90,103,0.18)',
+    borderColor: 'rgba(200,50,65,0.7)',
+  },
+  modalBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 15,
   },
 });
 

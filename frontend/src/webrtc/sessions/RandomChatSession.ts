@@ -1534,48 +1534,22 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
     
     // КРИТИЧНО: Отключаем предыдущую комнату перед подключением к новой
-    // disconnectRoom теперь ждет полного отключения (включая очистку ping/pong handlers)
-    // Но только если комната подключена к другой комнате или не подключена
+    // Оптимизировано: отключаем только если комната подключена к другой комнате
     if (this.room && 
-        (this.room.state !== 'disconnected' || 
-         !this.currentRoomName || 
-         !targetRoomName || 
-         this.currentRoomName !== targetRoomName)) {
-      await this.disconnectRoom('user');
+        this.room.state !== 'disconnected' && 
+        (!this.currentRoomName || !targetRoomName || this.currentRoomName !== targetRoomName)) {
+      // КРИТИЧНО: Не ждем полного отключения - просто отключаем асинхронно
+      // Это ускоряет подключение к новому собеседнику
+      void this.disconnectRoom('user');
     }
     
-    // КРИТИЧНО: Проверяем, что комната действительно отключена и очищена
-    // Если все еще идет отключение, ждем еще немного (но не блокируем слишком долго)
-    if (this.isDisconnecting || this.room !== null) {
-      logger.warn('[RandomChatSession] Room still disconnecting or not cleared, waiting...', {
-        isDisconnecting: this.isDisconnecting,
-        hasRoom: this.room !== null,
-        roomState: this.room?.state
-      });
-      let waitCount = 0;
-      const maxWait = 30; // 30 * 100ms = 3 секунды максимум
-      while ((this.isDisconnecting || this.room !== null) && waitCount < maxWait) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        waitCount++;
-      }
-      // Если все еще не очищено, принудительно очищаем и продолжаем
-      if (this.isDisconnecting || this.room !== null) {
-        logger.warn('[RandomChatSession] Room still not cleared after waiting, forcing cleanup', {
-          isDisconnecting: this.isDisconnecting,
-          hasRoom: this.room !== null,
-          roomState: this.room?.state
-        });
-        // Принудительно очищаем состояние
-        if (this.room) {
-          try {
-            await this.room.disconnect().catch(() => {});
-          } catch {}
-          this.room = null;
-          this.currentRoomName = null; // Очищаем имя комнаты
-        }
-        this.isDisconnecting = false;
-        this.disconnectPromise = null;
-      }
+    // КРИТИЧНО: Если комната все еще существует, принудительно очищаем состояние
+    // Не ждем полного отключения - это замедляет подключение
+    if (this.room && this.room.state === 'disconnected') {
+      this.room = null;
+      this.currentRoomName = null;
+      this.isDisconnecting = false;
+      this.disconnectPromise = null;
     }
     
     // КРИТИЧНО: Убеждаемся что локальные треки существуют и активны
@@ -1699,10 +1673,8 @@ export class RandomChatSession extends SimpleEventEmitter {
       return false;
     }
 
-    // КРИТИЧНО: Публикуем локальные треки после подключения к комнате
-    // Убеждаемся что треки активны перед публикацией
-    // КРИТИЧНО: Небольшая задержка перед публикацией (сокращена для ускорения коннекта)
-    await new Promise(resolve => setTimeout(resolve, 50));
+    // КРИТИЧНО: Публикуем локальные треки сразу после подключения к комнате
+    // Убрана задержка для ускорения подключения - LiveKit готов принимать треки сразу после connect()
     
     // КРИТИЧНО: Проверяем состояние комнаты перед публикацией треков
     // Это предотвращает попытки создать offer на закрытом peer connection
@@ -1787,12 +1759,7 @@ export class RandomChatSession extends SimpleEventEmitter {
             trackId: this.localAudioTrack.sid || this.localAudioTrack.mediaStreamTrack?.id,
           });
         } else {
-          // КРИТИЧНО: Убеждаемся что трек включен перед публикацией
-          if (this.isMicOn && this.localAudioTrack.isMuted) {
-            this.localAudioTrack.unmute();
-          } else if (!this.isMicOn && !this.localAudioTrack.isMuted) {
-            this.localAudioTrack.mute();
-          }
+          // Публикуем трек сначала
           await room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
             // Игнорируем ошибки дубликатов и закрытых соединений
             const errorMsg = e?.message || String(e || '');
@@ -1805,6 +1772,19 @@ export class RandomChatSession extends SimpleEventEmitter {
             }
             throw e;
           });
+          
+          // КРИТИЧНО: Применяем mute/unmute ПОСЛЕ публикации трека
+          // LiveKit не позволяет изменять статус mute до публикации
+          if (!this.isMicOn && !this.localAudioTrack.isMuted) {
+            try {
+              this.localAudioTrack.mute();
+            } catch {}
+          } else if (this.isMicOn && this.localAudioTrack.isMuted) {
+            try {
+              this.localAudioTrack.unmute();
+            } catch {}
+          }
+          
           logger.info('[RandomChatSession] Audio track published', {
             trackId: this.localAudioTrack.sid || this.localAudioTrack.mediaStreamTrack?.id,
             isMuted: this.localAudioTrack.isMuted,
