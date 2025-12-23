@@ -882,10 +882,12 @@ io.on('connection', async (sock: AuthedSocket) => {
         const isHttp = /^https?:\/\//i.test(raw);
         const isEmpty = rawIn === '' || rawIn === null;
         const currentAvatar = String(current.avatar || '');
+        const isDataMarker = currentAvatar.startsWith('data:image'); // Маркер для base64 аватаров
       
         if (isEmpty) {
           // явное удаление аватара
-          if (currentAvatar !== '' || current.avatarB64 || current.avatarThumbB64) {
+          // НЕ очищаем, если это маркер base64 аватара (аватар загружен через user.uploadAvatar)
+          if (!isDataMarker && (currentAvatar !== '' || current.avatarB64 || current.avatarThumbB64)) {
             $set.avatar = '';
             $set.avatarB64 = '';
             $set.avatarThumbB64 = '';
@@ -962,18 +964,32 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.debug('Profile update called without ack function', { socketId: sock.id, userId: me });
       }
 
-      // Отправляем обновление друзьям (при изменении никнейма или аватара)
+      // КРИТИЧНО: Отправляем обновление друзьям ВСЕГДА при изменении профиля
+      // Это включает случаи: изменение никнейма, удаление никнейма, изменение аватара, удаление аватара
+      // Отправляем даже если значение стало пустым - это важно для синхронизации
       if (changed && Array.isArray(fresh?.friends) && (fresh!.friends as any[]).length) {
         for (const fid of fresh!.friends as any[]) {
           try {
             io.to(`u:${String(fid)}`).emit('friend:profile', {
               userId: me,
-              nick: fresh?.nick || '',
-              avatar: rawOut,
-              avatarVer,
-              avatarThumbB64,
+              nick: fresh?.nick || '', // Может быть пустым - это нормально
+              avatar: rawOut, // Может быть пустым - это нормально
+              avatarVer, // Версия обновляется даже при удалении аватара
+              avatarThumbB64: avatarThumbB64 || '', // Может быть пустым при удалении аватара
             });
-          } catch {}
+            logger.debug('[profile:update] Отправлено обновление профиля другу', {
+              from: me,
+              to: String(fid),
+              nick: fresh?.nick || '(пусто)',
+              hasAvatar: !!(avatarVer && avatarVer > 0)
+            });
+          } catch (e) {
+            logger.warn('[profile:update] Ошибка отправки обновления профиля другу', {
+              from: me,
+              to: String(fid),
+              error: e
+            });
+          }
         }
       }
     } catch (e: any) {

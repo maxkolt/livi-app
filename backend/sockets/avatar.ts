@@ -20,6 +20,7 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
         userId,
         { 
           $set: { 
+            avatar: 'data:image', // Устанавливаем маркер, что аватар есть (хранится в base64)
             avatarB64: fullB64, 
             avatarThumbB64: thumbB64 
           }, 
@@ -76,6 +77,7 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
         userId,
         { 
           $set: { 
+            avatar: '', // Очищаем поле avatar при удалении
             avatarB64: '', 
             avatarThumbB64: '' 
           }, 
