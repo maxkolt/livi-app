@@ -938,40 +938,66 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   }, [partnerId, roomId, started]);
   
   const forceStopRandomChat = useCallback(() => {
-    const session = sessionRef.current;
     try {
-      session?.cleanup?.();
+      const session = sessionRef.current;
+      if (session) {
+        try {
+          // КРИТИЧНО: Останавливаем сессию с защитой от ошибок
+          // Это предотвращает крэши при cleanup, особенно на Android
+          session.cleanup?.();
+        } catch (e) {
+          logger.error('[RandomChat] Error cleaning session on leave:', e);
+        }
+        sessionRef.current = null;
+      }
     } catch (e) {
-      logger.error('[RandomChat] Error cleaning session on leave:', e);
+      logger.error('[RandomChat] Error in forceStopRandomChat:', e);
     }
-    sessionRef.current = null;
     
-    startedRef.current = false;
-    loadingRef.current = false;
-    setStarted(false);
-    setLoading(false);
-    setIsInactiveState(true);
-    setPartnerId(null);
-    setPartnerUserId(null);
-    setRoomId(null);
-    setRemoteStream(null);
-    setRemoteMuted(false);
-    setCamOn(false);
-    setMicOn(false);
-    stopSpeaker();
+    // КРИТИЧНО: Сбрасываем все состояния даже если cleanup упал
+    // Это гарантирует, что UI будет в корректном состоянии
+    try {
+      startedRef.current = false;
+      loadingRef.current = false;
+      setStarted(false);
+      setLoading(false);
+      setIsInactiveState(true);
+      setPartnerId(null);
+      setPartnerUserId(null);
+      setRoomId(null);
+      setRemoteStream(null);
+      setRemoteMuted(false);
+      setCamOn(false);
+      setMicOn(false);
+      stopSpeaker();
+    } catch (e) {
+      logger.error('[RandomChat] Error resetting state in forceStopRandomChat:', e);
+    }
   }, [stopSpeaker]);
   
   // Обработка AppState - для рандомного чата останавливаем при уходе в фон
   useEffect(() => {
     const sub = AppState.addEventListener('change', async (nextAppState) => {
-      if (nextAppState === 'background' || nextAppState === 'inactive') {
-        if (startedRef.current || loadingRef.current) {
-          forceStopRandomChat();
+      try {
+        if (nextAppState === 'background' || nextAppState === 'inactive') {
+          // КРИТИЧНО: При переходе в фон останавливаем чат, чтобы предотвратить
+          // проблемы с WebRTC/LiveKit соединением, которые могут привести к крэшу на Android
+          if (startedRef.current || loadingRef.current) {
+            logger.info('[RandomChat] AppState changed to background/inactive, stopping chat');
+            forceStopRandomChat();
+          }
+        } else if (nextAppState === 'active') {
+          // При возврате в активное состояние включаем динамик если есть удаленный стрим
+          if (remoteStream) {
+            try {
+              forceSpeakerOnHard();
+            } catch (e) {
+              logger.warn('[RandomChat] Error enabling speaker on app active:', e);
+            }
+          }
         }
-      } else if (nextAppState === 'active') {
-        if (remoteStream) {
-          forceSpeakerOnHard();
-        }
+      } catch (e) {
+        logger.error('[RandomChat] Error handling AppState change:', e);
       }
     });
     

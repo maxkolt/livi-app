@@ -782,12 +782,32 @@ async function createUserInternal(): Promise<string | null> {
       }
       
       if (response?.error === 'duplicate_request') {
+        // КРИТИЧНО: Проверяем, существует ли пользователь на сервере
+        // Если пользователь был удален из БД, getMyUserId может вернуть старый userId
         const existing = await getMyUserId();
         if (existing) {
-          setCurrentUserId(existing);
-          await applyAuthAndConnect();
-          console.log('[createUser] Existing user restored from installId:', existing);
-          return existing;
+          const exists = await checkUserExists(existing);
+          if (exists) {
+            // Пользователь существует на сервере - используем его
+            setCurrentUserId(existing);
+            await applyAuthAndConnect();
+            console.log('[createUser] Existing user restored from installId:', existing);
+            return existing;
+          } else {
+            // Пользователь не существует на сервере - очищаем installId и создаем нового
+            console.warn('[createUser] User from duplicate_request does not exist on server, clearing installId and creating new user...');
+            const { resetInstallId } = await import('../utils/installId');
+            await resetInstallId();
+            clearCurrentUserId();
+            // Продолжаем цикл retry с новым installId
+            const newInstallId = await getInstallId();
+            continue;
+          }
+        } else {
+          // Не удалось получить userId - ждем и повторяем
+          console.warn('[createUser] duplicate_request but no userId found, retrying...');
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          continue;
         }
       }
       

@@ -91,6 +91,7 @@ import socket, {
   clearAllUserData,
   createUser,
   isCreateUserInProgress,
+  getMyUserId,
   API_BASE,
   startCall,
   cancelCall,
@@ -755,7 +756,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           directCall: true, 
           directInitiator: true, 
           peerUserId: friend.id, 
-          myUserId: currentUserId, // ← ДОБАВЛЕНО: передаём myUserId
+          myUserId: getCurrentUserId(), // FIX: use getCurrentUserId() instead of currentUserId
           callId: callId, // ← ДОБАВЛЕНО: передаём callId
           returnTo: { name: 'Home', params: { openFriendsMenu: true } } 
         });
@@ -967,6 +968,35 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
             // Примечание: Отправка профиля для новых пользователей обрабатывается в ensureIdentity
             // Там есть доступ к текущему state (nick, avatarUri) который пользователь ввёл СЕЙЧАС
+          } else if (result?.error === 'duplicate_request') {
+            // КРИТИЧНО: duplicate_request означает, что первый запрос уже обрабатывается/обработан
+            // Подождем немного и попробуем получить userId
+            console.log('[attachIdentitySafe] duplicate_request received, waiting for first request to complete...');
+            
+            // Ждем немного, чтобы первый запрос успел обработаться
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Пробуем получить userId
+            const existingUserId = await getMyUserId();
+            
+            if (existingUserId) {
+              // Проверяем, существует ли пользователь на сервере
+              const userExists = await checkUserExists(existingUserId);
+              if (userExists) {
+                // Пользователь существует - возвращаем успешный результат
+                setCurrentUserId(existingUserId);
+                pendingAttachRef.current = null;
+                console.log('[attachIdentitySafe] ✅ User restored after duplicate_request:', existingUserId);
+                return { ok: true, userId: existingUserId };
+              } else {
+                console.warn('[attachIdentitySafe] ⚠️ User from duplicate_request does not exist on server');
+              }
+            } else {
+              console.warn('[attachIdentitySafe] ⚠️ Could not get userId after duplicate_request');
+            }
+            
+            // Если не удалось получить userId, возвращаем ошибку
+            console.error('[attachIdentitySafe] ❌ Attach failed: duplicate_request (could not restore userId)');
           } else {
             console.warn('[attachIdentitySafe] ⚠️ No userId in response!', result);
             if (!result.ok) {
@@ -1717,20 +1747,44 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       if (Array.isArray(data)) {
         // Формат массива: обновление online статуса
         const onlineSet = new Set((data || []).map((it: any) => String(it?._id ?? it)));
-        setFriends((prev) => prev.map((f) => ({ ...f, online: onlineSet.has(String(f.id)) })));
+        setFriends((prev) => {
+          const updated = prev.map((f) => {
+            const wasOnline = f.online;
+            const isOnline = onlineSet.has(String(f.id));
+            if (wasOnline !== isOnline) {
+              console.log('[onPresenceUpdate] 📍 Обновлен статус онлайн друга', {
+                userId: f.id,
+                wasOnline,
+                isOnline
+              });
+            }
+            return { ...f, online: isOnline };
+          });
+          return updated;
+        });
       } else if (data && typeof data === 'object' && data.userId) {
         // Формат объекта: обновление busy статуса
         const userId = String(data.userId);
         const busy = data.busy !== undefined ? !!data.busy : undefined;
         
         if (busy !== undefined) {
-          setFriends((prev) => 
-            prev.map((f) => 
-              String(f.id) === userId 
-                ? { ...f, isBusy: busy } 
-                : f
-            )
-          );
+          setFriends((prev) => {
+            const updated = prev.map((f) => {
+              if (String(f.id) === userId) {
+                const wasBusy = f.isBusy;
+                if (wasBusy !== busy) {
+                  console.log('[onPresenceUpdate] 🔴 Обновлен статус занятости друга', {
+                    userId,
+                    wasBusy,
+                    isBusy: busy
+                  });
+                }
+                return { ...f, isBusy: busy };
+              }
+              return f;
+            });
+            return updated;
+          });
         }
       }
     });
@@ -1757,6 +1811,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         return;
       }
 
+      // Логируем получение обновления профиля друга для диагностики
+      console.log('[onFriendProfile] 📥 Получено обновление профиля друга', {
+        userId,
+        nick: nick || '(пусто)',
+        nickLength: nick?.length || 0,
+        hasAvatar: !!(avatarVer && avatarVer > 0),
+        avatarVer,
+        hasThumb: !!avatarThumbB64
+      });
+
       // Кэшируем миниатюру если пришла
       if (avatarThumbB64 && avatarVer) {
         try {
@@ -1773,18 +1837,45 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (existingIndex >= 0) {
           // Обновляем существующего друга
           // КРИТИЧНО: Используем полный никнейм, не обрезаем до первой буквы
+          // ВАЖНО: Если пришел пустой никнейм (nick === ''), это означает что пользователь удалил никнейм
+          // В этом случае мы должны обновить name на пустую строку, а не оставлять старое значение
           const oldName = prev[existingIndex]?.name || '';
-          // Если пришел новый никнейм - используем его полностью, иначе оставляем старый
-          const updatedName = typeof nick === 'string' && nick.trim() ? nick.trim() : oldName;
+          // Если nick передан (даже если пустой), используем его. Если не передан - оставляем старое
+          const updatedName = typeof nick === 'string' ? nick.trim() : oldName;
+          
+          // Определяем новую версию аватара и миниатюру
+          // ВАЖНО: Если avatarVer === 0 и avatarThumbB64 пустой, это означает что аватар был удален
+          const existingFriend = prev[existingIndex];
+          const newAvatarVer = typeof avatarVer === 'number' ? avatarVer : existingFriend.avatarVer;
+          const newAvatarThumbB64 = typeof avatarThumbB64 === 'string' ? avatarThumbB64 : existingFriend.avatarThumbB64;
+          // Если версия аватара 0 и миниатюра пустая, очищаем аватар
+          const finalAvatarThumbB64 = (newAvatarVer === 0 && !newAvatarThumbB64) ? '' : newAvatarThumbB64;
+          
+          // Логируем обновление для диагностики
+          const nameChanged = updatedName !== oldName;
+          const avatarChanged = newAvatarVer !== existingFriend.avatarVer || finalAvatarThumbB64 !== existingFriend.avatarThumbB64;
+          if (nameChanged || avatarChanged) {
+            console.log('[onFriendProfile] ✅ Обновлен профиль друга', {
+              userId,
+              nameChanged,
+              oldName: oldName || '(пусто)',
+              newName: updatedName || '(пусто)',
+              avatarChanged,
+              oldAvatarVer: existingFriend.avatarVer,
+              newAvatarVer,
+              oldHasThumb: !!existingFriend.avatarThumbB64,
+              newHasThumb: !!finalAvatarThumbB64
+            });
+          }
           
           return prev.map((f) =>
             String(f.id) === String(userId)
               ? { 
                   ...f, 
-                  name: updatedName, // Полный никнейм, не обрезаем
+                  name: updatedName, // Полный никнейм (может быть пустым при удалении)
                   avatar: typeof avatar === 'string' ? avatar : f.avatar,
-                  avatarVer: typeof avatarVer === 'number' ? avatarVer : f.avatarVer,
-                  avatarThumbB64: typeof avatarThumbB64 === 'string' ? avatarThumbB64 : f.avatarThumbB64
+                  avatarVer: newAvatarVer, // Обновляем версию (может быть 0 при удалении)
+                  avatarThumbB64: finalAvatarThumbB64 // Обновляем миниатюру (может быть пустой при удалении)
                 }
               : f
           );
@@ -1792,6 +1883,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           // Добавляем нового друга (только что подружились)
           // КРИТИЧНО: Используем полный никнейм, не обрезаем до первой буквы
           const newName = typeof nick === 'string' && nick.trim() ? nick.trim() : '—';
+          console.log('[onFriendProfile] ➕ Добавлен новый друг', {
+            userId,
+            name: newName || '(пусто)',
+            nameLength: newName.length
+          });
           return [
             ...prev,
             {
@@ -2527,19 +2623,16 @@ const handleClearNick = useCallback(async () => {
       // 1. Удаляем на сервере
       await wipeAccountOnServer(curId);
 
-      // 2. Показываем уведомление ПЕРЕД сбросом состояния
-      showNotice(t('accountWiped', lang), 'success', 2000);
-
-      // 3. Жёсткий локальный сброс (очищает AsyncStorage и кэши)
+      // 2. Жёсткий локальный сброс (очищает AsyncStorage и кэши)
       await hardLocalReset();
       
-      // 4. КРИТИЧНО: Сбрасываем currentUserId в socket.ts, чтобы createUser() мог создать нового пользователя
+      // 3. КРИТИЧНО: Сбрасываем currentUserId в socket.ts, чтобы createUser() мог создать нового пользователя
       clearCurrentUserId();
       
-      // 5. Сбрасываем React state
+      // 4. Сбрасываем React state
       resetAllState();
 
-      // 6. Сбрасываем флаги загрузки, чтобы показать экран создания нового профиля
+      // 5. Сбрасываем флаги загрузки, чтобы показать экран создания нового профиля
       setProfileLoaded(false);
       setDataLoaded(false);
       setNick('');
@@ -2547,12 +2640,12 @@ const handleClearNick = useCallback(async () => {
       setSavedAvatarUrl('');
       setAvatarUri('');
 
-      // 7. Сбрасываем installId
+      // 6. Сбрасываем installId
       await resetInstallId();
       const newId = await getInstallId();
       setInstallId(newId);
 
-      // 8. КРИТИЧНО: Создаем нового пользователя после удаления старого
+      // 7. КРИТИЧНО: Создаем нового пользователя после удаления старого
       // После clearCurrentUserId() createUser() создаст нового пользователя с новым installId
       const newUserId = await createUser();
       if (!newUserId) {
@@ -2560,16 +2653,22 @@ const handleClearNick = useCallback(async () => {
       }
       logger.info('[handleWipeAccount] New user created:', { userId: newUserId, installId: newId });
 
-      // 9. КРИТИЧНО: Устанавливаем флаги загрузки ПОСЛЕ создания пользователя
+      // 8. КРИТИЧНО: Устанавливаем флаги загрузки ПОСЛЕ создания пользователя
       // Для нового пользователя без данных profileLoaded должен быть true, чтобы показать экран создания профиля
       // Устанавливаем dataLoaded первым, затем profileLoaded
       setDataLoaded(true);
       setProfileLoaded(true);
       logger.info('[handleWipeAccount] Flags set, should show profile creation screen');
       
-      // 10. КРИТИЧНО: Принудительно обновляем profileKey, чтобы loadProfileSync не вызывался снова
+      // 9. КРИТИЧНО: Принудительно обновляем profileKey, чтобы loadProfileSync не вызывался снова
       // Это предотвращает сброс флагов после установки
       setProfileKey(prev => prev + 1);
+
+      // 10. Показываем уведомление ПОСЛЕ всех операций сброса и установки флагов
+      // Используем setTimeout, чтобы компонент успел отрендериться после сброса состояния
+      setTimeout(() => {
+        showNotice(t('accountWiped', lang), 'success', 3000);
+      }, 300);
     } catch (e: any) {
       showNotice(`${t('wipeFailed', lang)}: ${e?.message || e}`, 'error', 2600);
       // При ошибке также устанавливаем флаги, чтобы не зависнуть на SplashLoader
