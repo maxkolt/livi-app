@@ -33,8 +33,7 @@ import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { usePiP } from '../../src/pip/PiPContext';
-import { fetchFriends } from '../../sockets/socket';
-import socket from '../../sockets/socket';
+import socket, { fetchFriends, getCurrentUserId } from '../../sockets/socket';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/keepAwake';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
@@ -526,6 +525,18 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   const L = useCallback((key: string) => t(key, lang), [lang]);
   
+  const clearSessionRefs = useCallback(() => {
+    sessionRef.current = null;
+    (global as any).__webrtcSessionRef.current = null;
+    if ((global as any).__endCallCleanupRef) {
+      (global as any).__endCallCleanupRef.current = null;
+    }
+    if ((global as any).__pendingCallAcceptedRef) {
+      (global as any).__pendingCallAcceptedRef.current = null;
+    }
+    currentCallIdRef.current = null;
+  }, []);
+
   // Упрощено: простое восстановление стримов из PiP
   useEffect(() => {
     const resume = !!route?.params?.resume;
@@ -593,6 +604,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       return;
     }
     
+    const pendingCallAccepted = (global as any).__pendingCallAcceptedRef?.current;
+    const pendingCallId = pendingCallAccepted ? String(pendingCallAccepted?.callId || '') : null;
     const isDirectCall = !!route?.params?.directCall;
     const isDirectInitiator = !!route?.params?.directInitiator;
     
@@ -603,8 +616,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       fromPiP
     });
     
+    const resolvedMyUserId = route?.params?.myUserId || getCurrentUserId();
     const config: WebRTCSessionConfig = {
-      myUserId: route?.params?.myUserId,
+      myUserId: resolvedMyUserId,
       callbacks: {
         onLocalStreamChange: (stream) => {
           const prevStream = localStreamRef.current;
@@ -855,6 +869,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         setStarted(true);
         setLoading(true);
         
+        if (pendingCallId && pendingCallId === String(existingCallId)) {
+          logger.info('[VideoCall] Pending call:accepted already queued, skipping connectAsInitiatorAfterAccepted', {
+            existingCallId,
+            friendId,
+          });
+          return;
+        }
+
         // Запрашиваем токен и подключаемся напрямую
         session.connectAsInitiatorAfterAccepted(existingCallId, friendId).catch((e) => {
           logger.error('[VideoCall] Error connecting as initiator after accepted:', e);
@@ -961,9 +983,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           stopStreamTracks(localStream, 'cleanupFunction/sessionLocalStream');
           
           // КРИТИЧНО: Вызываем session.endCall() для полной очистки
-          if (typeof currentSession.endCall === 'function') {
+          if (typeof currentSession.cleanup === 'function') {
+            logger.info('[VideoCall] Вызываем session.cleanup() из cleanupFunction');
+            currentSession.cleanup();
+            clearSessionRefs();
+          } else if (typeof currentSession.endCall === 'function') {
             logger.info('[VideoCall] Вызываем session.endCall() из cleanupFunction');
             currentSession.endCall();
+            clearSessionRefs();
           } else {
             logger.warn('[VideoCall] session.endCall недоступен в cleanupFunction');
           }
@@ -987,7 +1014,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
     // КРИТИЧНО: Убрали зависимости roomId, callId, partnerId чтобы не пересоздавать сессию
     // Сессия создается один раз при монтировании компонента
-  }, [route?.params?.directCall, route?.params?.resume, pip.visible]);
+  }, [route?.params?.directCall, route?.params?.resume, pip.visible, clearSessionRefs]);
   
   // КРИТИЧНО: Отдельный useEffect для установки обработчиков событий
   // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
@@ -1065,6 +1092,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       remoteStreamReceivedAtRef.current = null;
       setRemoteStream(null);
       
+      if (typeof session.cleanup === 'function') {
+        session.cleanup();
+      }
+      clearSessionRefs();
+
       // КРИТИЧНО: Сбрасываем флаг через небольшую задержку, чтобы дать состоянию обновиться
       setTimeout(() => {
         isEndingCallRef.current = false;
@@ -1228,7 +1260,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         logger.info('[VideoCall] Event handlers removed');
       }
     };
-  }, [sessionRef.current, partnerInPiP, remoteStream, remoteCamOn, roomId, callId, partnerId, partnerUserId]);
+  }, [sessionRef.current, partnerInPiP, remoteStream, remoteCamOn, roomId, callId, partnerId, partnerUserId, clearSessionRefs]);
   
   // Keep-awake для активного видеозвонка
   useEffect(() => {
@@ -1325,6 +1357,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setMicOn(false);
       setMicLevel(0);
       
+      if (typeof session.cleanup === 'function') {
+        session.cleanup();
+      }
+      clearSessionRefs();
+
       // КРИТИЧНО: Сбрасываем флаг через небольшую задержку, чтобы дать состоянию обновиться
       setTimeout(() => {
         isEndingCallRef.current = false;
@@ -1417,7 +1454,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     } else {
       logger.warn('[VideoCall] Session не найдена для toggleMic');
     }
-  }, []);
+  }, [clearSessionRefs]);
   
   const toggleCam = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
