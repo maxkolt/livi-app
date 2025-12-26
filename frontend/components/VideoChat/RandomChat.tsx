@@ -1249,45 +1249,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       >
         {/* Карточка "Собеседник" */}
         <View style={styles.card}>
-          {/* Модальное окно входящего звонка в блоке собеседник */}
-          {incomingCall && (!started || isInactiveState) && (
-            <View style={styles.incomingOverlayContainer}>
-              <BlurView intensity={60} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
-              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]} />
-              <View style={styles.incomingOverlayContent}>
-                <View style={{ width: 140, height: 140, alignItems: 'center', justifyContent: 'center' }}>
-                  <Animated.View style={buildIncomingWaveStyle(incomingWaveA, 'left')} />
-                  <Animated.View style={buildIncomingWaveStyle(incomingWaveB, 'right')} />
-                  <Animated.View style={incomingCallIconStyle}>
-                    <MaterialIcons name="call" size={48} color="#4FC3F7" />
-                  </Animated.View>
-                </View>
-                <Text style={styles.incomingOverlayTitle}>Входящий вызов</Text>
-                <Text style={styles.incomingOverlayName}>{incomingCall.fromNick || 'Друг'}</Text>
-                <View style={styles.incomingOverlayButtons}>
-                  <TouchableOpacity
-                    onPress={handleAcceptIncomingCall}
-                    style={[styles.btnGlassBase, styles.btnGlassSuccess]}
-                  >
-                    <Text style={styles.modalBtnText}>Принять</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={handleDeclineIncomingCall}
-                    style={[styles.btnGlassBase, styles.btnGlassDanger]}
-                  >
-                    <Text style={styles.modalBtnText}>Отклонить</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          )}
-          
           {(() => {
-            // Если показываем модалку входящего звонка - не показываем другой контент
-            if (incomingCall && (!started || isInactiveState)) {
-              return null;
-            }
-            
             // КРИТИЧНО: Если поиск остановлен (started=false), всегда показываем текст "Собеседник"
             if (!started) {
               return <Text style={styles.placeholder}>{L("peer")}</Text>;
@@ -1767,6 +1729,39 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           <Text style={styles.toastText}>{toastText}</Text>
         </Animated.View>
       )}
+      
+      {/* Модальное окно входящего звонка поверх всего экрана */}
+      {incomingCall && (!started || isInactiveState) && (
+        <View style={styles.incomingOverlayFullScreen}>
+          <BlurView intensity={60} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.9)' : 'rgba(0,0,0,0.5)' }]} />
+          <View style={styles.incomingOverlayContent}>
+            <View style={{ width: 140, height: 140, alignItems: 'center', justifyContent: 'center' }}>
+              <Animated.View style={buildIncomingWaveStyle(incomingWaveA, 'left')} />
+              <Animated.View style={buildIncomingWaveStyle(incomingWaveB, 'right')} />
+              <Animated.View style={incomingCallIconStyle}>
+                <MaterialIcons name="call" size={48} color="#4FC3F7" />
+              </Animated.View>
+            </View>
+            <Text style={styles.incomingOverlayTitle}>Входящий вызов</Text>
+            <Text style={styles.incomingOverlayName}>{incomingCall.fromNick || 'Друг'}</Text>
+            <View style={styles.incomingOverlayButtons}>
+              <TouchableOpacity
+                onPress={handleAcceptIncomingCall}
+                style={[styles.btnGlassBase, styles.btnGlassSuccess]}
+              >
+                <Text style={styles.modalBtnText}>Принять</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleDeclineIncomingCall}
+                style={[styles.btnGlassBase, styles.btnGlassDanger]}
+              >
+                <Text style={styles.modalBtnText}>Отклонить</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
       </SafeAreaView>
     </>
   );
@@ -1959,6 +1954,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  incomingOverlayFullScreen: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
+    elevation: 9999, // для Android
+  },
   incomingOverlayContent: {
     width: '100%',
     alignItems: 'center',
@@ -1976,34 +1982,35 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     marginTop: 4,
+    marginBottom: 14,
   },
   incomingOverlayButtons: {
     flexDirection: 'row',
-    gap: 12,
-    marginTop: 24,
+    gap: 14,
     width: '100%',
-    paddingHorizontal: 10,
+    paddingHorizontal: 28,
+    marginTop: 16,
   },
   btnGlassBase: {
-    flex: 1,
-    height: 48,
-    borderRadius: 10,
+    borderRadius: 12,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
+    height: 48,
+    flex: 1,
   },
   btnGlassSuccess: {
-    backgroundColor: 'rgba(52,199,89,0.18)',
-    borderColor: 'rgba(36,150,65,0.7)',
+    backgroundColor: 'rgba(76, 175, 80, 0.16)',
+    borderColor: 'rgba(76, 175, 80, 0.65)',
   },
   btnGlassDanger: {
-    backgroundColor: 'rgba(255,90,103,0.18)',
-    borderColor: 'rgba(200,50,65,0.7)',
+    backgroundColor: 'rgba(255,77,77,0.16)',
+    borderColor: 'rgba(255,77,77,0.65)',
   },
   modalBtnText: {
-    color: '#fff',
+    color: '#ffffff',
+    fontSize: 16,
     fontWeight: '700',
-    fontSize: 15,
   },
 });
 

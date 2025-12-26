@@ -53,13 +53,49 @@ export const usePiP = ({
   const navigation = useNavigation();
   const pip = usePiPContext();
   const pipRef = useRef(pip);
+  const pipVisibleRef = useRef(pip.visible);
+  const pipShownDuringSwipeRef = useRef(false); // Флаг, что PiP уже показан во время текущего свайпа
+  
+  // КРИТИЧНО: Используем ref для хранения актуальных значений состояния звонка
+  // Это нужно для PanResponder, который создается один раз и может иметь устаревшие значения в замыкании
+  const isInactiveStateRef = useRef(isInactiveState);
+  const wasFriendCallEndedRef = useRef(wasFriendCallEnded);
   
   useEffect(() => {
     pipRef.current = pip;
-  }, [pip]);
+    pipVisibleRef.current = pip.visible;
+  }, [pip, pip.visible]);
+  
+  useEffect(() => {
+    isInactiveStateRef.current = isInactiveState;
+  }, [isInactiveState]);
+  
+  useEffect(() => {
+    wasFriendCallEndedRef.current = wasFriendCallEnded;
+  }, [wasFriendCallEnded]);
 
   // Функция для входа в PiP
   const enterPiPMode = useCallback(() => {
+    // КРИТИЧНО: Сначала проверяем, завершен ли звонок - если да, НЕ показываем PiP
+    // Это предотвращает появление PiP при свайпе назад после завершения звонка
+    if (isInactiveState || wasFriendCallEnded) {
+      logger.info('[usePiP] enterPiPMode - звонок завершен, НЕ показываем PiP', {
+        isInactiveState,
+        wasFriendCallEnded
+      });
+      
+      // Закрываем PiP если он был открыт
+      if (pip.visible) {
+        logger.info('[usePiP] Закрываем PiP - звонок завершен');
+        pip.hidePiP();
+        const currentSession = session || (global as any).__webrtcSessionRef?.current;
+        if (currentSession && currentSession.exitPiP) {
+          currentSession.exitPiP();
+        }
+      }
+      return;
+    }
+    
     // КРИТИЧНО: Получаем актуальные значения из session если они null в пропсах
     // Это решает проблему когда roomId/callId еще не установлены в state, но есть в session
     // Также проверяем глобальную ссылку на session как fallback
@@ -86,18 +122,13 @@ export const usePiP = ({
 
     logger.info('[usePiP] enterPiPMode - hasActiveCall:', hasActiveCall);
 
-    // Закрываем PiP если звонок завершен
-    if ((isInactiveState || wasFriendCallEnded) && pip.visible) {
-      logger.info('[usePiP] Закрываем PiP - звонок завершен');
-      pip.hidePiP();
-      if (session && session.exitPiP) {
-        session.exitPiP();
-      }
-      return;
-    }
-
-    if (hasActiveCall && !pip.visible) {
-      logger.info('[usePiP] Показываем PiP');
+    // КРИТИЧНО: Показываем PiP если есть активный звонок, даже если он уже видим
+    // Это позволяет показывать PiP повторно при свайпе назад после возврата из PiP
+    if (hasActiveCall) {
+      logger.info('[usePiP] Показываем PiP', {
+        pipVisibleBefore: pip.visible,
+        willUpdate: pip.visible
+      });
       
       // Выключаем видео локально для экономии (как в эталоне)
       try {
@@ -115,10 +146,17 @@ export const usePiP = ({
         ? friends.find(f => String(f._id) === String(partnerUserId))
         : null;
 
+      // КРИТИЧНО: Используем avatarThumbB64 (data URI) для аватара в PiP
+      // Это соответствует тому, как аватары используются в других частях приложения
       let avatarUrl: string | undefined = undefined;
-      if (partner?.avatar && typeof partner.avatar === 'string' && partner.avatar.trim() !== '') {
-        // Получаем BASE_URL из переменных окружения
-        // Приоритет: платформо-специфичная переменная > общая переменная > fallback
+      if (partner?.avatarThumbB64 && typeof partner.avatarThumbB64 === 'string' && partner.avatarThumbB64.trim() !== '') {
+        // Используем data URI напрямую
+        avatarUrl = partner.avatarThumbB64;
+      } else if (partner?.avatarB64 && typeof partner.avatarB64 === 'string' && partner.avatarB64.trim() !== '') {
+        // Fallback: используем полный аватар если миниатюры нет
+        avatarUrl = partner.avatarB64;
+      } else if (partner?.avatar && typeof partner.avatar === 'string' && partner.avatar.trim() !== '') {
+        // Fallback: используем URL аватара если нет base64
         const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
         const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
         const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
@@ -127,6 +165,15 @@ export const usePiP = ({
           ? partner.avatar 
           : `${serverUrl}${partner.avatar.startsWith('/') ? '' : '/'}${partner.avatar}`;
       }
+      
+      logger.info('[usePiP] Аватар для PiP', {
+        hasPartner: !!partner,
+        hasAvatarThumbB64: !!(partner?.avatarThumbB64),
+        hasAvatarB64: !!(partner?.avatarB64),
+        hasAvatar: !!(partner?.avatar),
+        hasAvatarUrl: !!avatarUrl,
+        partnerId: partner?._id
+      });
 
       // КРИТИЧНО: Используем актуальные значения из session
       const finalCallId = actualCallId || callId || '';
@@ -137,6 +184,15 @@ export const usePiP = ({
         finalRoomId,
         actualPartnerId,
         partnerName: partner?.nick || 'Друг'
+      });
+      
+      logger.info('[usePiP] Вызываем pip.showPiP', {
+        finalCallId,
+        finalRoomId,
+        partnerName: partner?.nick || 'Друг',
+        hasLocalStream: !!localStream,
+        hasRemoteStream: !!remoteStream,
+        pipVisibleBefore: pip.visible
       });
       
       pip.showPiP({
@@ -154,20 +210,40 @@ export const usePiP = ({
           partnerId: actualPartnerId || partnerId,
         } as any,
       });
+      
+      // КРИТИЧНО: Проверяем, что PiP действительно показался
+      logger.info('[usePiP] pip.showPiP вызван, проверяем результат', {
+        pipVisibleAfter: pip.visible,
+        pipRefVisible: pipRef.current?.visible
+      });
 
-      // КРИТИЧНО: Вызываем session.enterPiP() который уже отправляет cam-toggle(false) через PiPManager
-      // НЕ дублируем отправку cam-toggle здесь - это делает PiPManager.enterPiP()
+      // КРИТИЧНО: Вызываем session.enterPiP() для отправки pip:state партнеру
       const currentSession = session || (global as any).__webrtcSessionRef?.current;
-      if (currentSession && typeof currentSession.enterPiP === 'function') {
+      if (currentSession) {
         logStateTransition('active_call', 'pip_mode', { roomId: finalRoomId, callId: finalCallId, partnerId: actualPartnerId });
-        // PiPManager.enterPiP() уже отправляет cam-toggle(false) и pip:state
-        // Не нужно дублировать отправку здесь
-        currentSession.enterPiP();
-        logger.info('[usePiP] ✅ Вызван session.enterPiP() - PiPManager отправит cam-toggle(false) и pip:state');
+        // Вызываем enterPiP если метод доступен (может быть опциональным)
+        if (currentSession.enterPiP && typeof currentSession.enterPiP === 'function') {
+          currentSession.enterPiP();
+          logger.info('[usePiP] ✅ Вызван session.enterPiP() - отправлено pip:state=true партнеру');
+        } else {
+          // Fallback: отправляем pip:state напрямую если метод недоступен
+          const currentRoomId = finalRoomId || currentSession.getRoomId?.() || null;
+          if (currentRoomId) {
+            try {
+              socket.emit('pip:state', {
+                inPiP: true,
+                from: socket.id,
+                roomId: currentRoomId,
+              });
+              logger.info('[usePiP] ✅ Отправлено pip:state=true напрямую (fallback)', { roomId: currentRoomId });
+            } catch (e) {
+              logger.warn('[usePiP] Ошибка отправки pip:state:', e);
+            }
+          }
+        }
       } else {
-        logger.warn('[usePiP] ⚠️ Session или enterPiP недоступны', {
+        logger.warn('[usePiP] ⚠️ Session недоступна', {
           hasSession: !!currentSession,
-          hasEnterPiP: !!(currentSession && typeof currentSession.enterPiP === 'function'),
           hasGlobalSession: !!(global as any).__webrtcSessionRef?.current
         });
       }
@@ -189,12 +265,22 @@ export const usePiP = ({
     }
     
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      // КРИТИЧНО: Проверяем актуальное состояние звонка через ref
+      // Это предотвращает показ PiP после завершения звонка
+      if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
+        logger.info('[usePiP] BackHandler (Android): звонок завершен, разрешаем закрытие без PiP', {
+          isInactiveState: isInactiveStateRef.current,
+          wasFriendCallEnded: wasFriendCallEndedRef.current
+        });
+        return false; // Разрешаем закрытие если звонок завершен
+      }
+      
       // КРИТИЧНО: Получаем актуальные значения из session (включая глобальную ссылку)
       const currentSession = session || (global as any).__webrtcSessionRef?.current;
       const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
       const actualCallId = callId || currentSession?.getCallId?.() || null;
       const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
-      const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveState && !wasFriendCallEnded;
+      const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current;
 
       if (hasActiveCall && !pip.visible) {
         logger.info('[usePiP] BackHandler (Android): вход в PiP и возврат назад', {
@@ -228,42 +314,235 @@ export const usePiP = ({
   
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gestureState) => {
-        const { dx, dy } = gestureState;
-        // Уменьшаем минимальный порог для более раннего начала обработки жеста
-        const minDx = Platform.OS === 'ios' ? screenWidth * 0.05 : 10;
-        return Math.abs(dx) > minDx && dx > 0 && Math.abs(dx) > Math.abs(dy);
+      // КРИТИЧНО: На iOS используем Capture фазу для самого раннего перехвата жеста
+      // Это позволяет перехватить жест ДО нативной навигации
+      onStartShouldSetPanResponderCapture: () => {
+        if (Platform.OS === 'ios') {
+          // Проверяем, есть ли активный звонок, используя refs для актуальных значений
+          const currentSession = session || (global as any).__webrtcSessionRef?.current;
+          const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
+          const actualCallId = callId || currentSession?.getCallId?.() || null;
+          const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
+          const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current;
+          
+          if (hasActiveCall) {
+            logger.info('[usePiP] PanResponder: onStartShouldSetPanResponderCapture - захватываем жест в capture фазе (iOS)', {
+              actualRoomId,
+              actualCallId,
+              hasActiveCall,
+              isInactiveState: isInactiveStateRef.current,
+              wasFriendCallEnded: wasFriendCallEndedRef.current
+            });
+            return true; // Захватываем жест в capture фазе на iOS
+          }
+        }
+        return false;
+      },
+      onStartShouldSetPanResponder: () => false, // Не используем обычную фазу, только capture
+      onMoveShouldSetPanResponderCapture: (_, gestureState) => {
+        if (Platform.OS === 'ios') {
+          const { dx, dy } = gestureState;
+          // Уменьшаем минимальный порог для более раннего начала обработки жеста
+          const minDx = screenWidth * 0.05;
+          const shouldCapture = Math.abs(dx) > minDx && dx > 0 && Math.abs(dx) > Math.abs(dy);
+          if (shouldCapture) {
+            logger.info('[usePiP] PanResponder: onMoveShouldSetPanResponderCapture - захватываем жест свайпа в capture фазе', {
+              dx,
+              dy,
+              minDx,
+              platform: Platform.OS
+            });
+          }
+          return shouldCapture;
+        }
+        return false;
+      },
+      onMoveShouldSetPanResponder: () => false, // Не используем обычную фазу, только capture
+      onPanResponderGrant: () => {
+        logger.info('[usePiP] PanResponder: onPanResponderGrant - получили контроль над жестом', {
+          platform: Platform.OS
+        });
+        // Сбрасываем флаг при начале нового жеста
+        pipShownDuringSwipeRef.current = false;
+        
+        // КРИТИЧНО: На iOS показываем PiP сразу в Grant, чтобы он показался до прерывания жеста нативной навигацией
+        // Это гарантирует, что PiP появится даже если onPanResponderMove не успеет сработать
+        if (Platform.OS === 'ios') {
+          // Проверяем, есть ли активный звонок
+          if (!isInactiveStateRef.current && !wasFriendCallEndedRef.current) {
+            const currentSession = session || (global as any).__webrtcSessionRef?.current;
+            const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
+            const actualCallId = callId || currentSession?.getCallId?.() || null;
+            const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
+            const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId);
+            
+            if (hasActiveCall && !pipShownDuringSwipeRef.current) {
+              logger.info('[usePiP] PanResponder: onPanResponderGrant - показываем PiP сразу (iOS)', {
+                actualRoomId,
+                actualCallId,
+                actualPartnerId
+              });
+              enterPiPMode();
+              pipShownDuringSwipeRef.current = true;
+            }
+          }
+        }
+      },
+      onPanResponderMove: (_, gestureState) => {
+        // КРИТИЧНО: На iOS показываем PiP во время движения, если жест достаточно большой
+        // Это гарантирует, что PiP покажется до навигации
+        if (Platform.OS === 'ios' && !pipShownDuringSwipeRef.current) {
+          const { dx, vx } = gestureState;
+          const shouldShowPiP = dx > swipeThreshold * 0.5 || vx > velocityThreshold * 0.5; // 50% от порога для раннего показа
+          
+          if (shouldShowPiP) {
+            // Проверяем, есть ли активный звонок
+            if (!isInactiveStateRef.current && !wasFriendCallEndedRef.current) {
+              const currentSession = session || (global as any).__webrtcSessionRef?.current;
+              const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
+              const actualCallId = callId || currentSession?.getCallId?.() || null;
+              const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
+              const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId);
+              
+              if (hasActiveCall) {
+                logger.info('[usePiP] PanResponder: onPanResponderMove - показываем PiP во время движения', {
+                  dx,
+                  vx,
+                  actualRoomId,
+                  actualCallId
+                });
+                enterPiPMode();
+                pipShownDuringSwipeRef.current = true; // Помечаем, что PiP уже показан
+              }
+            }
+          }
+        }
       },
       onPanResponderRelease: (_, gestureState) => {
         const { dx, vx } = gestureState;
         const shouldTrigger = dx > swipeThreshold || vx > velocityThreshold;
         
+        logger.info('[usePiP] PanResponder: onPanResponderRelease', {
+          dx,
+          vx,
+          swipeThreshold,
+          velocityThreshold,
+          shouldTrigger,
+          platform: Platform.OS
+        });
+        
         if (shouldTrigger) {
+          // КРИТИЧНО: Проверяем актуальное состояние звонка через ref
+          // Это предотвращает показ PiP после завершения звонка
+          if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
+            logger.info('[usePiP] PanResponder: звонок завершен, возвращаемся назад без PiP', {
+              isInactiveState: isInactiveStateRef.current,
+              wasFriendCallEnded: wasFriendCallEndedRef.current
+            });
+            // Звонок завершен - просто возвращаемся назад без PiP
+            requestAnimationFrame(() => {
+              if (navigation.canGoBack && navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate('Home' as never);
+              }
+            });
+            return;
+          }
+          
           // КРИТИЧНО: Получаем актуальные значения из session для проверки активного звонка
           const currentSession = session || (global as any).__webrtcSessionRef?.current;
           const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
           const actualCallId = callId || currentSession?.getCallId?.() || null;
           const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
-          const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveState && !wasFriendCallEnded;
+          const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current;
 
-          // Используем requestAnimationFrame для плавности анимации навигации
-          requestAnimationFrame(() => {
-            if (hasActiveCall && !pip.visible) {
-              // Показываем PiP и возвращаемся на предыдущую страницу
+          // Простая логика: показываем PiP и возвращаемся назад
+          logger.info('[usePiP] PanResponder: проверяем условия для PiP', {
+            hasActiveCall,
+            pipVisible: pip.visible,
+            actualRoomId,
+            actualCallId,
+            actualPartnerId,
+            isInactiveState: isInactiveStateRef.current,
+            wasFriendCallEnded: wasFriendCallEndedRef.current,
+            platform: Platform.OS
+          });
+          
+          // КРИТИЧНО: Показываем PiP если есть активный звонок
+          // Флаг pipShownDuringSwipeRef предотвращает повторный показ только в onPanResponderMove
+          // В onPanResponderRelease всегда показываем PiP, если он еще не показан
+          // После завершения жеста (навигации) флаг сбрасывается, и PiP может показаться снова при следующем свайпе
+          if (hasActiveCall) {
+            // Показываем PiP только если он еще не показан в этом жесте
+            // Это предотвращает двойной показ, если PiP уже показался в onPanResponderMove
+            if (!pipShownDuringSwipeRef.current) {
+              logger.info('[usePiP] PanResponder: показываем PiP перед навигацией', {
+                actualRoomId,
+                actualCallId,
+                pipVisibleBefore: pip.visible,
+                platform: Platform.OS
+              });
+              
+              // Показываем PiP - страница видеозвонка сворачивается в PiP
               enterPiPMode();
-              // Добавляем небольшую задержку для плавности перехода
-              requestAnimationFrame(() => {
-                setTimeout(() => {
-                  if (navigation.canGoBack && navigation.canGoBack()) {
-                    navigation.goBack();
-                  } else {
-                    navigation.navigate('Home' as never);
-                  }
-                }, 50);
+              pipShownDuringSwipeRef.current = true;
+              
+              // КРИТИЧНО: Проверяем, что PiP действительно показался
+              logger.info('[usePiP] PanResponder: enterPiPMode вызван, проверяем результат', {
+                pipVisibleAfter: pip.visible,
+                pipRefVisible: pipRef.current?.visible
               });
             } else {
-              // Нет активного звонка - просто возвращаемся назад
+              logger.info('[usePiP] PanResponder: PiP уже показан в onPanResponderMove, пропускаем повторный показ', {
+                actualRoomId,
+                actualCallId
+              });
+            }
+            
+            // Выполняем навигацию если есть активный звонок (PiP уже показан или только что показан)
+            
+            // На iOS добавляем небольшую задержку, чтобы PiP успел отрендериться перед навигацией
+            // На Android можно делать сразу
+            if (Platform.OS === 'ios') {
+              // Используем несколько requestAnimationFrame для гарантии, что React успеет отрендерить PiP
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  setTimeout(() => {
+                    // Проверяем, что PiP действительно показался перед навигацией
+                    // Используем pipVisibleRef для более надежной проверки
+                    const pipVisibleNow = pip.visible || pipRef.current?.visible || pipVisibleRef.current;
+                    logger.info('[usePiP] PanResponder: выполняем навигацию после показа PiP', {
+                      pipVisibleNow,
+                      pipVisible: pip.visible,
+                      pipRefVisible: pipRef.current?.visible,
+                      pipVisibleRef: pipVisibleRef.current
+                    });
+                    
+                    // КРИТИЧНО: Навигация выполняется независимо от pipVisibleNow,
+                    // так как задержка 200ms должна быть достаточной для рендера PiP
+                    if (navigation.canGoBack && navigation.canGoBack()) {
+                      navigation.goBack();
+                    } else {
+                      navigation.navigate('Home' as never);
+                    }
+                    // Сбрасываем флаг после навигации
+                    pipShownDuringSwipeRef.current = false;
+                  }, 200); // Увеличена задержка для iOS, чтобы PiP успел отрендериться
+                });
+              });
+            } else {
+              // На Android навигация выполняется сразу
+              requestAnimationFrame(() => {
+                if (navigation.canGoBack && navigation.canGoBack()) {
+                  navigation.goBack();
+                } else {
+                  navigation.navigate('Home' as never);
+                }
+                // Сбрасываем флаг после навигации
+                pipShownDuringSwipeRef.current = false;
+              });
+              // На Android делаем навигацию сразу
               requestAnimationFrame(() => {
                 if (navigation.canGoBack && navigation.canGoBack()) {
                   navigation.goBack();
@@ -272,7 +551,83 @@ export const usePiP = ({
                 }
               });
             }
-          });
+          } else {
+            // Нет активного звонка - просто возвращаемся назад
+            requestAnimationFrame(() => {
+              if (navigation.canGoBack && navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate('Home' as never);
+              }
+            });
+          }
+        }
+      },
+      onPanResponderTerminate: (_, gestureState) => {
+        // КРИТИЧНО: Fallback для случаев, когда жест прерывается (например, нативная навигация)
+        // Показываем PiP если он еще не показан, затем выполняем навигацию
+        logger.info('[usePiP] PanResponder: onPanResponderTerminate - жест прерван', {
+          dx: gestureState.dx,
+          vx: gestureState.vx,
+          pipShown: pipShownDuringSwipeRef.current,
+          platform: Platform.OS
+        });
+        
+        if (Platform.OS === 'ios') {
+          // Проверяем, есть ли активный звонок
+          if (!isInactiveStateRef.current && !wasFriendCallEndedRef.current) {
+            const currentSession = session || (global as any).__webrtcSessionRef?.current;
+            const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
+            const actualCallId = callId || currentSession?.getCallId?.() || null;
+            const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
+            const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId);
+            
+            if (hasActiveCall) {
+              // Показываем PiP если он еще не показан
+              if (!pipShownDuringSwipeRef.current) {
+                logger.info('[usePiP] PanResponder: onPanResponderTerminate - показываем PiP перед навигацией', {
+                  actualRoomId,
+                  actualCallId,
+                  actualPartnerId
+                });
+                enterPiPMode();
+                pipShownDuringSwipeRef.current = true;
+              }
+              
+              // Выполняем навигацию после небольшой задержки, чтобы PiP успел отрендериться
+              setTimeout(() => {
+                logger.info('[usePiP] PanResponder: onPanResponderTerminate - выполняем навигацию', {
+                  pipShown: pipShownDuringSwipeRef.current
+                });
+                if (navigation.canGoBack && navigation.canGoBack()) {
+                  navigation.goBack();
+                } else {
+                  navigation.navigate('Home' as never);
+                }
+                pipShownDuringSwipeRef.current = false;
+              }, 200);
+            } else {
+              // Нет активного звонка - просто возвращаемся назад
+              requestAnimationFrame(() => {
+                if (navigation.canGoBack && navigation.canGoBack()) {
+                  navigation.goBack();
+                } else {
+                  navigation.navigate('Home' as never);
+                }
+                pipShownDuringSwipeRef.current = false;
+              });
+            }
+          } else {
+            // Звонок завершен - просто возвращаемся назад
+            requestAnimationFrame(() => {
+              if (navigation.canGoBack && navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate('Home' as never);
+              }
+              pipShownDuringSwipeRef.current = false;
+            });
+          }
         }
       },
     })

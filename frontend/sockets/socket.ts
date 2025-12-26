@@ -375,7 +375,6 @@ export function respondFriend(fromUserId: string, accept: boolean, requestId?: s
 }
 
 export function fetchFriends(page: number = 1, limit: number = 50) {
-  console.log('[fetchFriends] Requesting friends list, page:', page, 'limit:', limit);
   return emitAck<{ 
     ok: boolean; 
     list: FriendListItem[];

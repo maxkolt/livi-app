@@ -223,6 +223,27 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const returnToCall = useCallback(() => {
     console.log('🔥🔥🔥 [PiPContext] returnToCall вызван', { callId, roomId, lastNavParams });
     
+    // КРИТИЧНО: Сразу отправляем pip:state=false партнеру при возврате из PiP
+    // Это гарантирует, что партнер получит уведомление даже если экран еще не получил фокус
+    const session = (global as any).__webrtcSessionRef?.current;
+    if (session && session.exitPiP && typeof session.exitPiP === 'function') {
+      session.exitPiP();
+      console.log('[PiPContext] ✅ Вызван session.exitPiP() при returnToCall');
+    } else if (roomId) {
+      // Fallback: отправляем напрямую если метод недоступен
+      try {
+        const socket = require('../sockets/socket').default;
+        socket.emit('pip:state', {
+          inPiP: false,
+          from: socket.id,
+          roomId: roomId,
+        });
+        console.log('[PiPContext] ✅ Отправлено pip:state=false напрямую при returnToCall');
+      } catch (e) {
+        console.warn('[PiPContext] Ошибка отправки pip:state при returnToCall:', e);
+      }
+    }
+    
     // Guard от двойной навигации
     if (navigatingRef.current) {
       console.log('[PiPContext] returnToCall blocked - already navigating');
@@ -275,6 +296,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         })
       );
       console.log('[PiPContext] ✅ Navigated to VideoCall with resume params', { params });
+      
+      // КРИТИЧНО: Скрываем PiP сразу после навигации, чтобы он не оставался видимым на странице видеозвонка
+      // Навигация уже произошла синхронно через nav.dispatch(), поэтому можно скрывать PiP сразу
+      hidePiP();
+      navigatingRef.current = false;
     } catch (e) {
       console.error('[PiPContext] Navigation error:', e);
       navigatingRef.current = false;
@@ -285,48 +311,26 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       hidePiP();
       return;
     }
-
-    // КРИТИЧНО: НЕ скрываем PiP мгновенно - даём экрану звонка фокус → он сам вызовет hidePiP()
-    // Это важно для правильного восстановления состояния звонка
-    // Скрываем PiP через небольшую задержку, чтобы навигация успела произойти
-    setTimeout(() => {
-      hidePiP();
-      navigatingRef.current = false;
-    }, 200);
   }, [callId, roomId, lastNavParams, onReturnToCall, hidePiP]);
 
   const endCall = useCallback(() => {
     console.log('🔥🔥🔥 [PiPContext] endCall вызван', { callId, roomId });
     
-    // КРИТИЧНО: Сначала останавливаем локальные стримы напрямую
-    // Это гарантирует, что камера остановится даже если экран звонка размонтирован
-    try {
-      const session = (global as any).__webrtcSessionRef?.current;
-      if (session) {
-        console.log('🔥 [PiPContext] Останавливаем локальные стримы через session');
-        // Останавливаем локальный стрим принудительно
-        if (typeof session.stopLocalStream === 'function') {
-          session.stopLocalStream(false, true).catch((e: any) => {
-            console.warn('[PiPContext] Error stopping local stream:', e);
-          });
-        }
-        // Также вызываем endCall для полной очистки
-        if (typeof session.endCall === 'function') {
-          console.log('🔥 [PiPContext] Вызываем session.endCall()');
-          session.endCall();
-        }
-      } else {
-        console.warn('[PiPContext] Session not available in global ref');
-      }
-    } catch (e) {
-      console.warn('[PiPContext] Error stopping streams:', e);
-    }
-    
     // КРИТИЧНО: Вызываем onEndCall (который вызовет session.endCall() через __endCallCleanupRef)
     // Это гарантирует правильное завершение звонка через WebRTC session
     // и отправку call:end на сервер, чтобы завершить звонок у обоих участников
+    // session.endCall() уже остановит локальные стримы и отправит событие на сервер
     if (onEndCall) {
       onEndCall(callId, roomId);
+    } else {
+      // Fallback: если onEndCall не установлен, вызываем session.endCall() напрямую
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (session && typeof session.endCall === 'function') {
+        console.log('🔥 [PiPContext] Вызываем session.endCall() напрямую (onEndCall не установлен)');
+        session.endCall();
+      } else {
+        console.warn('[PiPContext] Session not available and onEndCall not set');
+      }
     }
     
     // Затем очищаем состояние PiP

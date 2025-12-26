@@ -20,6 +20,7 @@ interface RemoteVideoProps {
   session?: any; // VideoCallSession
   onStreamReady?: (stream: MediaStream) => void;
   remoteStreamReceivedAt?: number | null; // Время получения remoteStream для предотвращения мерцания
+  partnerInPiP?: boolean; // Партнер в режиме PiP
 }
 
 /**
@@ -40,6 +41,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   session,
   onStreamReady,
   remoteStreamReceivedAt,
+  partnerInPiP = false,
 }) => {
   const L = (key: string) => t(key, lang);
   const logRenderState = useCallback(
@@ -48,6 +50,34 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     },
     []
   );
+
+  // КРИТИЧНО: Логируем значение partnerInPiP при каждом рендере для отладки
+  useEffect(() => {
+    logger.info('[RemoteVideo] partnerInPiP prop changed', { 
+      partnerInPiP,
+      hasStream: !!remoteStream,
+      remoteCamOn,
+      started,
+      loading,
+      willShowAwayPlaceholder: partnerInPiP === true
+    });
+  }, [partnerInPiP, remoteStream, remoteCamOn, started, loading]);
+  
+  // КРИТИЧНО: Логируем каждый рендер для отладки отображения заглушки
+  useEffect(() => {
+    if (partnerInPiP) {
+      logger.info('[RemoteVideo] 🔴 partnerInPiP=true - заглушка "Отошел" ДОЛЖНА быть видна', {
+        partnerInPiP,
+        hasStream: !!remoteStream,
+        streamId: remoteStream?.id,
+        remoteCamOn,
+        started,
+        loading,
+        isInactiveState,
+        wasFriendCallEnded
+      });
+    }
+  }, [partnerInPiP, remoteStream, remoteCamOn, started, loading, isInactiveState, wasFriendCallEnded]);
 
   // Берём актуальный стрим только из пропсов.
   // Fallback на session часто приводит к рендеру "старого" MediaStream после next/переподключений.
@@ -114,6 +144,40 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }, [streamToUse, remoteMuted]);
 
   // Неактивное состояние звонка - показываем надпись "Собеседник" как в эталонном файле
+  // КРИТИЧНО: Если партнер в PiP, показываем заглушку "Отошел" САМОЕ ПЕРВОЕ
+  // Это гарантирует, что заглушка покажется в любом случае, даже если нет стрима или он еще загружается
+  // Заглушка должна показываться автоматически при уходе партнера в PiP и исчезать при возврате
+  // КРИТИЧНО: Проверка partnerInPiP должна быть ДО всех остальных проверок (wasFriendCallEnded, isInactiveState)
+  if (partnerInPiP) {
+    logger.info('[RemoteVideo] 🔴 ПОКАЗЫВАЕМ ЗАГЛУШКУ "Отошел" - partnerInPiP=true', {
+      partnerInPiP,
+      streamId: streamToUse?.id,
+      hasStream: !!streamToUse,
+      remoteCamOn,
+      started,
+      loading,
+      isInactiveState,
+      wasFriendCallEnded
+    });
+    logRenderState('partner-in-pip', {
+      streamId: streamToUse?.id,
+      partnerInPiP: true,
+      hasStream: !!streamToUse,
+    });
+    return (
+      <View style={styles.videoContainer}>
+        <AwayPlaceholder />
+        {showFriendBadge && (
+          <View style={styles.friendBadge}>
+            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  // Проверка на завершенный звонок (после проверки partnerInPiP)
   if (wasFriendCallEnded || isInactiveState) {
     logRenderState('inactive-call', { remoteCamOn, wasFriendCallEnded, started });
     return (
@@ -132,7 +196,9 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       logRenderState('no-stream-loading', { loading, started });
       return (
         <View style={styles.videoContainer}>
-          <ActivityIndicator size="large" color="#fff" />
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#fff" />
+          </View>
           {showFriendBadge && (
             <View style={styles.friendBadge}>
               <MaterialIcons name="check-circle" size={16} color="#0f0" />
@@ -163,9 +229,29 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   const videoTrackMuted = !!videoTrack && (videoTrack.muted ?? false);
   const hasRenderableVideo = !!videoTrack && videoTrackReady && videoTrackEnabled && !videoTrackMuted;
 
+  // КРИТИЧНО: Если партнер вернулся из PiP (remoteCamOn=true, partnerInPiP=false),
+  // показываем видео даже если трек временно не готов - LiveKit восстановит его
+  const isReturningFromPiP = remoteCamOn && !partnerInPiP && hasVideoTrack;
+  
+  // Логируем состояние для отладки восстановления видео
+  if (isReturningFromPiP) {
+    logger.info('[RemoteVideo] 🔄 Партнер вернулся из PiP - показываем видео для восстановления', {
+      remoteCamOn,
+      partnerInPiP,
+      hasVideoTrack,
+      videoTrackReady,
+      videoTrackEnabled,
+      videoTrackMuted,
+      hasRenderableVideo,
+      streamId: streamToUse?.id,
+    });
+  }
+  
   // КРИТИЧНО: Показываем видео если есть готовый трек, даже если remoteCamOn еще не обновлен
   // remoteCamOn может обновиться позже через onRemoteCamStateChange
-  if (hasRenderableVideo) {
+  // НО: НЕ показываем видео если партнер в PiP (это уже проверено выше, но для безопасности)
+  // ИЛИ: Показываем видео если партнер вернулся из PiP (даже если трек временно не готов)
+  if ((hasRenderableVideo || isReturningFromPiP) && !partnerInPiP) {
     // КРИТИЧНО: На Android используем prop `stream` напрямую вместо `streamURL`
     // Это более надежный способ для @livekit/react-native-webrtc на Android, но дублируем streamURL как fallback
     const streamURL = streamToUse.toURL?.();
@@ -193,7 +279,13 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         hasToURL: typeof streamToUse.toURL === 'function',
         streamURL: streamURL
       });
-      return <ActivityIndicator size="large" color="#fff" />;
+      return (
+        <View style={styles.videoContainer}>
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#fff" />
+          </View>
+        </View>
+      );
     }
     
     // На Android пробрасываем и stream, и streamURL (некоторые сборки webrtc требуют streamURL)
@@ -230,7 +322,8 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // Камера явно выключена И нет готового трека — показываем заглушку "Отошёл"
   // КРИТИЧНО: Если стрим только что получен (менее 2000ms назад), показываем ActivityIndicator
   // вместо AwayPlaceholder, чтобы дать треку время стать готовым и избежать мерцания
-  if (!remoteCamOn && !hasRenderableVideo) {
+  // НО: НЕ показываем заглушку если партнер в PiP (это уже обработано выше)
+  if (!remoteCamOn && !hasRenderableVideo && !partnerInPiP) {
     const isRecentlyReceived = remoteStreamReceivedAt && (Date.now() - remoteStreamReceivedAt) < 2000;
     
     if (isRecentlyReceived) {
@@ -245,7 +338,9 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       });
       return (
         <View style={styles.videoContainer}>
-          <ActivityIndicator size="large" color="#fff" />
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#fff" />
+          </View>
           {showFriendBadge && (
             <View style={styles.friendBadge}>
               <MaterialIcons name="check-circle" size={16} color="#0f0" />
@@ -277,7 +372,8 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }
 
   // Стрим есть, но видеотрек не готов/замьючен — показываем лоадер (камера не "явно выключена")
-  if (streamToUse && hasVideoTrack) {
+  if (streamToUse && hasVideoTrack && !partnerInPiP && !isReturningFromPiP) {
+    // Обычный случай: видеотрек не готов/замьючен - показываем лоадер
     logRenderState('video-track-not-renderable', {
       streamId: streamToUse.id,
       videoTrackReady,
@@ -286,7 +382,9 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     });
     return (
       <View style={styles.videoContainer}>
-        <ActivityIndicator size="large" color="#fff" />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#fff" />
+        </View>
         {showFriendBadge && (
           <View style={styles.friendBadge}>
             <MaterialIcons name="check-circle" size={16} color="#0f0" />
@@ -316,7 +414,9 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // КРИТИЧНО: Показываем бейдж друга даже когда нет стрима (для инициатора звонка)
   return (
     <View style={styles.videoContainer}>
-      <ActivityIndicator size="large" color="#fff" />
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#fff" />
+      </View>
       {showFriendBadge && (
         <View style={styles.friendBadge}>
           <MaterialIcons name="check-circle" size={16} color="#0f0" />
@@ -377,5 +477,15 @@ const styles = StyleSheet.create({
   placeholder: {
     color: 'rgba(237,234,234,0.6)',
     fontSize: 22,
+  },
+  loadingContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'black',
   },
 }); 

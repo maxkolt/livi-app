@@ -838,10 +838,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             avatarThumbB64: f.avatarThumbB64 ? `[base64: ${f.avatarThumbB64.length} chars]` : undefined
           }))
         } : res;
-        console.log('[loadFriends] Response from backend:', JSON.stringify(logRes));
         
         const incoming = Array.isArray(res?.list) ? res.list : [];
-        console.log('[loadFriends] Incoming friends:', incoming.length);
         const fresh = incoming.map(mapToFriend);
         setFriends((prev) => {
           const merged: Friend[] = fresh.map((f) => {
@@ -2111,10 +2109,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // - звонящему, если получатель нажал «Отклонить» (не считаем пропущенным)
       // - получателю, если звонящий нажал «Отменить» (считаем пропущенным)
       setCalling({ visible: false, friend: null, callId: null });
+      stopWaves();
       lastIncomingFromRef.current = null;
     });
     return () => { off?.(); };
-  }, []);
+  }, [stopWaves]);
 
   // Мгновенное обновление бейджа при инкременте в App.tsx (главная/меню)
   // КРИТИЧНО: Обновляем состояние и сохраняем в AsyncStorage синхронно

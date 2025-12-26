@@ -11,7 +11,8 @@ import {
   Image,
   Platform,
 } from 'react-native';
-import { RTCView } from '@livekit/react-native-webrtc';
+// RTCView убран - в PiP не показываем видео, только звук и эквалайзер
+// import { RTCView } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePiP } from './PiPContext';

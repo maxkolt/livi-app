@@ -704,59 +704,151 @@ io.on('connection', async (sock: AuthedSocket) => {
       // Получаем участников комнаты
       const room = io.sockets.adapter.rooms.get(id);
       const participantCount = room ? room.size : 0;
-      logger.debug('📥 [call:end] Room info', {
+      logger.info('📥 [call:end] Room info', {
         roomId: id,
         participants: participantCount,
-        socketIds: room ? Array.from(room) : []
+        socketIds: room ? Array.from(room) : [],
+        roomExists: !!room
       });
       
-      // Снимаем busy со всех участников и очищаем состояние
+      // КРИТИЧНО: Если комната не найдена, все равно отправляем call:ended всем сокетам
+      // которые могут быть в звонке (через activeCallBySocket или socket.data.roomId)
+      const socketsToNotify = new Set<string>();
+      
+      // Добавляем всех участников комнаты
       if (room) {
         for (const sid of room) {
-          const peerSocket = io.sockets.sockets.get(sid);
-          if (peerSocket) {
-            const peerUserId = (peerSocket as any)?.data?.userId;
-            (peerSocket as any).data = (peerSocket as any).data || {};
-            
-            // КРИТИЧНО: Очищаем все состояние участника звонка
-            (peerSocket as any).data.busy = false;
-            delete (peerSocket as any).data.roomId;
-            delete (peerSocket as any).data.partnerSid;
-            delete (peerSocket as any).data.inCall;
-            
-            logger.debug('📥 [call:end] Cleaning up participant state', {
-              socketId: sid,
-              userId: peerUserId
-            });
-            
-            // Снимаем presence (только друзьям)
-            if (peerUserId) {
-              await emitPresenceUpdateToFriends(io, peerUserId, false);
-            }
-          }
-          
-          // Очищаем activeCallBySocket
-          try { activeCallBySocket.delete(sid); } catch {}
+          socketsToNotify.add(sid);
         }
       }
       
-      // Отправляем call:ended обоим участникам
-      logger.debug('📤 [call:end] Sending call:ended to room', {
+      // Добавляем сокеты, которые могут быть в звонке, но не в комнате
+      // (например, если комната была удалена, но звонок еще активен)
+      for (const [socketId, activeRoomId] of activeCallBySocket.entries()) {
+        if (activeRoomId === id) {
+          socketsToNotify.add(socketId);
+          logger.debug('📥 [call:end] Добавлен сокет из activeCallBySocket', {
+            socketId,
+            roomId: id
+          });
+        }
+      }
+      
+      // Также проверяем socket.data.roomId для всех подключенных сокетов
+      // КРИТИЧНО: Это важно для случаев, когда комната не найдена, но звонок активен
+      for (const [socketId, socket] of io.sockets.sockets.entries()) {
+        const socketRoomId = (socket as any)?.data?.roomId;
+        if (socketRoomId === id) {
+          socketsToNotify.add(socketId);
+          logger.debug('📥 [call:end] Добавлен сокет из socket.data.roomId', {
+            socketId,
+            userId: (socket as any)?.data?.userId,
+            roomId: id
+          });
+        }
+      }
+      
+      // КРИТИЧНО: Также проверяем partnerSid для всех сокетов
+      // Если один участник имеет partnerSid другого, значит они в звонке
+      for (const [socketId, socket] of io.sockets.sockets.entries()) {
+        const partnerSid = (socket as any)?.data?.partnerSid;
+        if (partnerSid && socketsToNotify.has(partnerSid)) {
+          // Если партнер уже в списке, добавляем и этого участника
+          socketsToNotify.add(socketId);
+          logger.debug('📥 [call:end] Добавлен сокет через partnerSid', {
+            socketId,
+            partnerSid,
+            userId: (socket as any)?.data?.userId,
+            roomId: id
+          });
+        }
+      }
+      
+      logger.info('📥 [call:end] Sockets to notify', {
         roomId: id,
-        participantCount
+        totalSockets: socketsToNotify.size,
+        socketIds: Array.from(socketsToNotify)
       });
       
-      io.to(id).emit('call:ended', { 
-        callId: id, 
+      // Снимаем busy со всех участников и очищаем состояние
+      for (const sid of socketsToNotify) {
+        const peerSocket = io.sockets.sockets.get(sid);
+        if (peerSocket) {
+          const peerUserId = (peerSocket as any)?.data?.userId;
+          (peerSocket as any).data = (peerSocket as any).data || {};
+          
+          // КРИТИЧНО: Очищаем все состояние участника звонка
+          (peerSocket as any).data.busy = false;
+          delete (peerSocket as any).data.roomId;
+          delete (peerSocket as any).data.partnerSid;
+          delete (peerSocket as any).data.inCall;
+          
+          logger.debug('📥 [call:end] Cleaning up participant state', {
+            socketId: sid,
+            userId: peerUserId
+          });
+          
+          // Снимаем presence (только друзьям)
+          if (peerUserId) {
+            await emitPresenceUpdateToFriends(io, peerUserId, false);
+          }
+        }
+        
+        // Очищаем activeCallBySocket
+        try { activeCallBySocket.delete(sid); } catch {}
+      }
+      
+      // Отправляем call:ended всем участникам
+      logger.info('📤 [call:end] Sending call:ended to all participants', {
         roomId: id,
-        reason: 'ended',
-        scope: 'all'
+        participantCount: socketsToNotify.size,
+        socketIds: Array.from(socketsToNotify)
       });
       
-      logger.debug('✅ [call:end] Call cleanup completed', { 
+      // КРИТИЧНО: Отправляем call:ended ВСЕМ участникам двумя способами для максимальной надежности:
+      // 1. Через комнату (io.to(id).emit) - если комната существует
+      // 2. Напрямую каждому сокету - гарантирует доставку даже если комната не найдена
+      
+      // Способ 1: Отправка через комнату (если комната существует)
+      if (room && room.size > 0) {
+        io.to(id).emit('call:ended', { 
+          callId: id, 
+          roomId: id,
+          reason: 'ended',
+          scope: 'room'
+        });
+        logger.info('📤 [call:end] ✅ Отправлено call:ended через комнату', {
+          roomId: id,
+          participantCount: room.size
+        });
+      }
+      
+      // Способ 2: Отправка напрямую каждому сокету (гарантирует доставку)
+      const notifiedSockets: string[] = [];
+      for (const sid of socketsToNotify) {
+        const socket = io.sockets.sockets.get(sid);
+        if (socket) {
+          socket.emit('call:ended', { 
+            callId: id, 
+            roomId: id,
+            reason: 'ended',
+            scope: 'direct'
+          });
+          notifiedSockets.push(sid);
+          logger.info('📤 [call:end] ✅ Отправлено call:ended напрямую сокету', {
+            socketId: sid,
+            userId: (socket as any)?.data?.userId,
+            roomId: id,
+            callId: id
+          });
+        }
+      }
+      
+      logger.info('✅ [call:end] Call cleanup completed', { 
         callId: id,
         roomId: id,
-        participants: participantCount
+        participants: socketsToNotify.size,
+        notifiedSockets: Array.from(socketsToNotify)
       });
       
     } catch (e) {

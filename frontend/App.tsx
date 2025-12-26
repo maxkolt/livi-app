@@ -655,8 +655,8 @@ function AppContent() {
       (global as any).__pendingCallAcceptedRef.current = data;
       logger.info('[App] 💾 Saved call:accepted event to global ref', {
         callId: data?.callId,
-        hasLivekitToken: !!data?.livekitToken,
-        hasLivekitRoomName: !!data?.livekitRoomName,
+        hasLivekitToken: !!(data as any)?.livekitToken,
+        hasLivekitRoomName: !!(data as any)?.livekitRoomName,
       });
       
       setIncoming(null);
@@ -954,23 +954,34 @@ export default function App() {
   };
 
   const endCallImpl = (callId: string | null, roomId: string | null) => {
+    console.log('[App] 🔥 endCallImpl вызван', { callId, roomId });
+    
     // КРИТИЧНО: Сначала вызываем локальную очистку (если функция зарегистрирована)
     // Это нужно чтобы очистить PeerConnection, стримы и метр микрофона
     // даже когда экран звонка размонтирован (пользователь в PiP)
+    // session.endCall() уже отправит call:end на сервер, поэтому здесь не нужно дублировать
     try {
       const cleanupFn = (global as any).__endCallCleanupRef?.current;
       if (cleanupFn && typeof cleanupFn === 'function') {
+        console.log('[App] Вызываем cleanupFunction из __endCallCleanupRef');
         cleanupFn();
+      } else {
+        // Fallback: если cleanupFunction не установлена, вызываем session.endCall() напрямую
+        const session = (global as any).__webrtcSessionRef?.current;
+        if (session && typeof session.endCall === 'function') {
+          console.log('[App] Вызываем session.endCall() напрямую (cleanupFunction не установлена)');
+          session.endCall();
+        } else {
+          // Последний fallback: отправляем call:end напрямую на сервер
+          console.log('[App] Отправляем call:end напрямую на сервер (fallback)');
+          socket.emit('call:end', { 
+            callId: callId || undefined, 
+            roomId: roomId || undefined 
+          });
+        }
       }
     } catch (e) {
       console.warn('[App] Error calling endCall cleanup:', e);
-    }
-    
-    // Отправляем сигнал завершения звонка на backend
-    try {
-      socket.emit('call:end', { roomId: roomId || 'current' });
-    } catch (e) {
-      console.log('[App] Error ending call:', e);
     }
   };
 
