@@ -190,6 +190,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const [micLevel, setMicLevel] = useState(0);
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [wasFriendCallEnded, setWasFriendCallEnded] = useState(false);
+  const [partnerInPiP, setPartnerInPiP] = useState(false);
+  
+  // КРИТИЧНО: Логируем изменения partnerInPiP для отладки
+  useEffect(() => {
+    logger.info('[VideoCall] partnerInPiP state changed', { 
+      partnerInPiP,
+      roomId,
+      callId,
+      partnerId
+    });
+  }, [partnerInPiP, roomId, callId, partnerId]);
   
   // Синхронизируем состояние неактивности с глобальным ref для App.tsx
   useEffect(() => {
@@ -414,6 +425,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const focusEffectGuardRef = useRef(false);
   const fromPiPProcessedRef = useRef(false);
   const isInactiveStateRef = useRef(false);
+  const isEndingCallRef = useRef(false); // КРИТИЧНО: Флаг для предотвращения повторных вызовов handleCallEnded
   useEffect(() => { isInactiveStateRef.current = isInactiveState; }, [isInactiveState]);
   
   // Дополнительные refs для видеозвонка
@@ -541,16 +553,48 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   // Инициализация session и восстановление состояния звонка
   useEffect(() => {
+    // КРИТИЧНО: При возврате из PiP используем существующую сессию из глобальной ссылки
+    // Это гарантирует, что видеопоток восстановится у обоих участников
+    const fromPiP = !!route?.params?.fromPiP;
+    const resume = !!route?.params?.resume;
+    
+    if (fromPiP && resume) {
+      const globalSession = (global as any).__webrtcSessionRef?.current;
+      if (globalSession && !sessionRef.current) {
+        logger.info('[VideoCall] Возврат из PiP - используем существующую сессию из глобальной ссылки', {
+          hasGlobalSession: !!globalSession,
+          sessionType: globalSession.constructor.name,
+        });
+        sessionRef.current = globalSession;
+        // Восстанавливаем remoteStream из сессии
+        const sessionRemoteStream = globalSession.getRemoteStream?.();
+        if (sessionRemoteStream) {
+          setRemoteStream(sessionRemoteStream);
+          remoteStreamRef.current = sessionRemoteStream as any;
+          remoteStreamReceivedAtRef.current = Date.now();
+          logger.info('[VideoCall] ✅ Восстановлен remoteStream из существующей сессии при возврате из PiP', {
+            streamId: sessionRemoteStream.id,
+          });
+        }
+        // КРИТИЧНО: НЕ возвращаемся здесь - нужно установить обработчики событий
+        // Обработчики будут установлены ниже в этом же useEffect
+      }
+    }
+    
     // Не пересоздаем сессию если она уже существует
-    if (sessionRef.current) {
+    // КРИТИЧНО: НЕ возвращаемся здесь - нужно установить обработчики событий
+    // Обработчики будут установлены ниже в этом же useEffect
+    // Не пересоздаем сессию если она уже существует
+    const existingSession = sessionRef.current;
+    if (existingSession) {
       logger.info('[VideoCall] Session already exists, skipping creation');
+      // КРИТИЧНО: Обработчики событий будут установлены в отдельном useEffect ниже
+      // который зависит от sessionRef.current
       return;
     }
     
     const isDirectCall = !!route?.params?.directCall;
     const isDirectInitiator = !!route?.params?.directInitiator;
-    const resume = !!route?.params?.resume;
-    const fromPiP = !!route?.params?.fromPiP;
     
     logger.info('[VideoCall] Creating new VideoCallSession', {
       isDirectCall,
@@ -716,8 +760,18 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           setCamOn(enabled);
         },
         onRemoteCamStateChange: (enabled) => {
+          logger.info('[VideoCall] onRemoteCamStateChange вызван', { 
+            enabled,
+            previousRemoteCamOn: remoteCamOn,
+            partnerInPiP
+          });
           remoteCamStateKnownRef.current = true;
           setRemoteCamOn(enabled);
+          // КРИТИЧНО: При возврате из PiP обновляем remoteViewKey для принудительной перерисовки
+          if (enabled && !partnerInPiP) {
+            setRemoteViewKey(Date.now());
+            logger.info('[VideoCall] ✅ Обновлен remoteViewKey после onRemoteCamStateChange(true)');
+          }
         },
         onMicLevelChange: (level) => {
           setMicLevel(boostMicLevel(level));
@@ -882,6 +936,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Функция должна работать даже когда VideoCall экран размонтирован (в PiP/фоне)
     const cleanupFunction = () => {
       logger.info('[VideoCall] 🔥 cleanupFunction вызвана из глобальной ссылки (PiP/фон)');
+      
+      // КРИТИЧНО: Защита от повторных вызовов - если уже в неактивном состоянии или звонок завершается, игнорируем
+      if (isInactiveStateRef.current || isEndingCallRef.current) {
+        logger.info('[VideoCall] cleanupFunction вызвана, но уже в неактивном состоянии или звонок завершается - игнорируем повторный вызов', {
+          isInactiveStateRef: isInactiveStateRef.current,
+          isEndingCallRef: isEndingCallRef.current
+        });
+        return;
+      }
+      
+      // КРИТИЧНО: Устанавливаем флаги СИНХРОННО перед вызовом session.endCall()
+      // Это предотвратит повторные вызовы handleCallEnded (особенно важно на iOS)
+      isEndingCallRef.current = true;
+      isInactiveStateRef.current = true;
+      
       const currentSession = sessionRef.current || (global as any).__webrtcSessionRef?.current;
       
       if (currentSession) {
@@ -914,13 +983,43 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       hasSession: !!session
     });
     
+    // КРИТИЧНО: Обработчики событий устанавливаются в отдельном useEffect ниже
+    // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
+    // КРИТИЧНО: Убрали зависимости roomId, callId, partnerId чтобы не пересоздавать сессию
+    // Сессия создается один раз при монтировании компонента
+  }, [route?.params?.directCall, route?.params?.resume, pip.visible]);
+  
+  // КРИТИЧНО: Отдельный useEffect для установки обработчиков событий
+  // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session) {
+      logger.debug('[VideoCall] No session for event handlers setup');
+      return;
+    }
+    
+    logger.info('[VideoCall] Setting up event handlers for existing session', {
+      hasSession: !!session,
+      sessionType: session.constructor.name
+    });
+    
     const handleRemoteViewKeyChange = (key: number) => {
       setRemoteViewKey(key);
     };
     
-    session.on('remoteViewKeyChanged', handleRemoteViewKeyChange);
-    
     const handleCallEnded = () => {
+      // КРИТИЧНО: Защита от повторных вызовов - если уже в неактивном состоянии или звонок завершается, игнорируем
+      if (isInactiveStateRef.current || isEndingCallRef.current) {
+        logger.info('[VideoCall] handleCallEnded вызван, но уже в неактивном состоянии или звонок завершается - игнорируем повторный вызов', {
+          isInactiveStateRef: isInactiveStateRef.current,
+          isEndingCallRef: isEndingCallRef.current
+        });
+        return;
+      }
+      
+      // КРИТИЧНО: Устанавливаем флаг СРАЗУ, чтобы предотвратить повторные вызовы
+      isEndingCallRef.current = true;
+      
       logger.info('[VideoCall] 🔴 callEnded event - переход в неактивное состояние', {
         roomId,
         callId,
@@ -928,6 +1027,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         partnerUserId,
         timestamp: Date.now()
       });
+      
+      // КРИТИЧНО: Устанавливаем ref СИНХРОННО перед setState, чтобы предотвратить повторные вызовы
+      isInactiveStateRef.current = true;
       
       // Закрываем PiP если открыт
       if (pipRef.current.visible) {
@@ -946,12 +1048,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         stopStreamTracks(sessionLocalStream, 'callEnded/sessionLocalStream');
       }
       
-      // КРИТИЧНО: НЕ очищаем входящие звонки - они должны работать даже после завершения звонка
-      // Пользователь должен иметь возможность принимать новые входящие звонки
-      // incomingCallHook.setIncomingOverlay(false);
-      // incomingCallHook.setIncomingFriendCall(null);
-      // incomingCallHook.setIncomingCall(null);
-      
       setIsInactiveState(true);
       setWasFriendCallEnded(true);
       setFriendCallAccepted(false);
@@ -963,24 +1059,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setCamOn(false);
       setMicOn(false);
       setMicLevel(0);
-      setLocalStream(null); // КРИТИЧНО: Очищаем локальный стрим
-      // КРИТИЧНО: Обновляем ref СИНХРОННО перед setState
+      setLocalStream(null);
       remoteStreamRef.current = null;
       remoteStreamReceivedAtRef.current = null;
-      setRemoteStream(null); // КРИТИЧНО: Очищаем удаленный стрим
+      setRemoteStream(null);
       
-      logger.info('[VideoCall] ✅ Переход в неактивное состояние завершен - экран остается открытым, можно принимать входящие звонки', {
-        isInactiveState: true,
-        wasFriendCallEnded: true,
-        canAcceptIncoming: true
-      });
-      
-      // КРИТИЧНО: НЕ очищаем глобальные ссылки при callEnded
-      // Сессия может еще использоваться для восстановления или PiP
-      // Очистка произойдет только при размонтировании компонента
+      // КРИТИЧНО: Сбрасываем флаг через небольшую задержку, чтобы дать состоянию обновиться
+      setTimeout(() => {
+        isEndingCallRef.current = false;
+        logger.info('[VideoCall] isEndingCallRef сброшен в handleCallEnded');
+      }, 1000);
     };
-    
-    session.on('callEnded', handleCallEnded);
     
     const handleCallAnswered = () => {
       acceptCallTimeRef.current = Date.now();
@@ -988,14 +1077,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setIsInactiveState(false);
       setWasFriendCallEnded(false);
       setStarted(true);
-      // КРИТИЧНО: Устанавливаем loading=true при принятии звонка
-      // loading будет установлен в false в onRemoteStreamChange когда придет стрим
       setLoading(true);
       incomingCallHook.setIncomingOverlay(false);
       setCamOn(true);
       setMicOn(true);
       
-      // Включаем камеру в стриме
       const currentLocalStream = sessionRef.current?.getLocalStream?.() || localStreamRef.current;
       if (currentLocalStream) {
         const videoTrack = (currentLocalStream as any)?.getVideoTracks?.()?.[0];
@@ -1010,15 +1096,46 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
     };
     
-    session.on('callAnswered', handleCallAnswered);
-    
     const handleCallDeclined = () => {
+      logger.info('[VideoCall] 🔴 callDeclined event - очистка состояния', {
+        roomId,
+        callId,
+        partnerId,
+        partnerUserId,
+        timestamp: Date.now()
+      });
+      
+      // КРИТИЧНО: Очищаем состояние звонка при отклонении
+      // Это предотвращает конфликты при следующем звонке
       incomingCallHook.setIncomingFriendCall(null);
       incomingCallHook.setIncomingCall(null);
       incomingCallHook.setIncomingOverlay(false);
+      
+      // КРИТИЧНО: Очищаем состояние сессии для инициатора
+      // Если мы инициатор и звонок был отклонен, нужно очистить состояние
+      if (route?.params?.directInitiator) {
+        setStarted(false);
+        setLoading(false);
+        setFriendCallAccepted(false);
+        setIsInactiveState(false);
+        setWasFriendCallEnded(false);
+        setPartnerUserId(null);
+        setCallId(null);
+        setRoomId(null);
+        setPartnerId(null);
+        currentCallIdRef.current = null;
+        
+        // Останавливаем локальные треки если они были созданы
+        const localStreamSnapshot = localStreamRef.current;
+        if (localStreamSnapshot) {
+          stopStreamTracks(localStreamSnapshot, 'callDeclined/localStream');
+        }
+        setLocalStream(null);
+        setCamOn(false);
+        setMicOn(false);
+        setMicLevel(0);
+      }
     };
-    
-    session.on('callDeclined', handleCallDeclined);
     
     const handleRemoteState = ({ muted }: { muted?: boolean }) => {
       const remoteStreamSnapshot = remoteStreamRef.current;
@@ -1029,67 +1146,88 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       });
       
       if (muted !== undefined) {
-        // КРИТИЧНО: Не устанавливаем muted=true если это первый раз и есть remoteStream
-        // Это может быть ошибка - звук должен быть включен по умолчанию
         if (muted && !remoteMutedRef.current && remoteStreamSnapshot) {
           logger.warn('[VideoCall] ⚠️ remoteState пытается установить muted=true при наличии remoteStream - возможно ошибка');
-          // Не устанавливаем muted=true если это первый раз и есть стрим
-          // Звук должен быть включен по умолчанию
         } else {
           setRemoteMuted(muted);
         }
       }
     };
     
-    session.on('remoteState', handleRemoteState);
-    
-    return () => {
-      // КРИТИЧНО: Cleanup только при размонтировании компонента или изменении ключевых параметров
-      // НЕ очищаем сессию при изменении roomId/callId/partnerId во время активного звонка
-      const shouldCleanup = !route?.params?.directCall && !route?.params?.resume;
-      const activeSession = sessionRef.current;
+    const handlePartnerPiPStateChanged = ({ inPiP }: { inPiP: boolean }) => {
+      logger.info('[VideoCall] partnerPiPStateChanged event received', { 
+        inPiP,
+        previousState: partnerInPiP,
+        willUpdate: partnerInPiP !== inPiP,
+        roomId,
+        callId,
+        partnerId
+      });
       
-      if (activeSession) {
-        activeSession.off('remoteViewKeyChanged', handleRemoteViewKeyChange);
-        activeSession.off('callEnded', handleCallEnded);
-        activeSession.off('callAnswered', handleCallAnswered);
-        activeSession.off('callDeclined', handleCallDeclined);
-        activeSession.off('remoteState', handleRemoteState);
-      }
+      // КРИТИЧНО: Всегда обновляем состояние partnerInPiP при получении события
+      // Это гарантирует, что заглушка "Отошел" показывается/скрывается правильно
+      const previousState = partnerInPiP;
+      setPartnerInPiP(inPiP);
+      logger.info('[VideoCall] ✅ Состояние partnerInPiP обновлено', { 
+        newState: inPiP,
+        previousState,
+        roomId,
+        callId,
+        partnerId,
+        willShowAwayPlaceholder: inPiP === true
+      });
       
-      if (shouldCleanup) {
-        try {
-          socket.off('cam-toggle');
-        } catch {}
+      // КРИТИЧНО: Когда партнер возвращается из PiP (inPiP: false), включаем видеотрек обратно
+      if (previousState === true && inPiP === false) {
+        logger.info('[VideoCall] 🔄 Партнер вернулся из PiP - включаем видеотрек обратно', {
+          hasRemoteStream: !!remoteStream,
+          currentRemoteCamOn: remoteCamOn,
+          sessionRemoteStream: !!session?.getRemoteStream?.()
+        });
         
-        if (activeSession) {
-          // Для видеозвонков не уничтожаем session если есть активный звонок и PiP
-          const hasActiveCall = !!roomId || !!callId || !!partnerId;
-          const keepAliveForPiP = hasActiveCall || pip.visible;
-          
-          if (!keepAliveForPiP) {
-            logger.info('[VideoCall] Cleaning up session on unmount');
-            activeSession.removeAllListeners();
-            activeSession.destroy();
-            sessionRef.current = null;
-            
-            // КРИТИЧНО: Очищаем глобальные ссылки при размонтировании
-            (global as any).__webrtcSessionRef.current = null;
-            (global as any).__endCallCleanupRef.current = null;
-          } else {
-            logger.info('[VideoCall] Keeping session alive for active call or PiP');
-            // КРИТИЧНО: Даже если сессия остается живой, очищаем cleanup функцию
-            // так как компонент размонтирован и onAbortCall больше не доступен
-            (global as any).__endCallCleanupRef.current = null;
-            // Но оставляем ссылку на сессию для прямого вызова session.endCall()
-          }
+        const sessionRemoteStream = session?.getRemoteStream?.();
+        if (sessionRemoteStream && (!remoteStream || remoteStream.id !== sessionRemoteStream.id)) {
+          setRemoteStream(sessionRemoteStream);
+          remoteStreamRef.current = sessionRemoteStream as any;
+          remoteStreamReceivedAtRef.current = Date.now();
+          logger.info('[VideoCall] ✅ Восстановлен remoteStream из сессии после возврата партнера из PiP', {
+            streamId: sessionRemoteStream.id,
+            hasVideoTrack: !!(sessionRemoteStream as any)?.getVideoTracks?.()?.[0],
+          });
         }
+        
+        setRemoteCamOn(true);
+        setRemoteViewKey(Date.now());
+        logger.info('[VideoCall] ✅ Обновлен remoteViewKey после возврата партнера из PiP');
       }
     };
-    // КРИТИЧНО: Убрали зависимости roomId, callId, partnerId чтобы не пересоздавать сессию
-    // Сессия создается один раз при монтировании компонента
-  }, [route?.params?.directCall, route?.params?.resume, pip.visible]);
-  
+    
+    // Устанавливаем обработчики событий
+    session.on('remoteViewKeyChanged', handleRemoteViewKeyChange);
+    session.on('callEnded', handleCallEnded);
+    session.on('callAnswered', handleCallAnswered);
+    session.on('callDeclined', handleCallDeclined);
+    session.on('remoteState', handleRemoteState);
+    session.on('partnerPiPStateChanged', handlePartnerPiPStateChanged);
+    
+    logger.info('[VideoCall] ✅ Event handlers установлены для сессии', {
+      hasSession: !!session,
+      handlersCount: 6
+    });
+    
+    return () => {
+      // КРИТИЧНО: Удаляем обработчики при изменении сессии или размонтировании
+      if (session) {
+        session.off('remoteViewKeyChanged', handleRemoteViewKeyChange);
+        session.off('callEnded', handleCallEnded);
+        session.off('callAnswered', handleCallAnswered);
+        session.off('callDeclined', handleCallDeclined);
+        session.off('remoteState', handleRemoteState);
+        session.off('partnerPiPStateChanged', handlePartnerPiPStateChanged);
+        logger.info('[VideoCall] Event handlers removed');
+      }
+    };
+  }, [sessionRef.current, partnerInPiP, remoteStream, remoteCamOn, roomId, callId, partnerId, partnerUserId]);
   
   // Keep-awake для активного видеозвонка
   useEffect(() => {
@@ -1127,8 +1265,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const session = sessionRef.current;
     if (!session) return;
     
-    if (isInactiveState) {
-      logger.info('[VideoCall] onAbortCall вызван в неактивном состоянии - игнорируем');
+    // КРИТИЧНО: Используем ref вместо state для синхронной проверки (важно для iOS)
+    if (isInactiveStateRef.current) {
+      logger.info('[VideoCall] onAbortCall вызван в неактивном состоянии - игнорируем', {
+        isInactiveStateRef: isInactiveStateRef.current,
+        isInactiveState
+      });
       return;
     }
     
@@ -1161,6 +1303,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         stopStreamTracks(localStream, 'onAbortCall/localStreamState');
       }
       
+      // КРИТИЧНО: СНАЧАЛА устанавливаем флаги СИНХРОННО, чтобы предотвратить повторные вызовы handleCallEnded
+      // Это особенно важно на iOS, где события могут обрабатываться быстрее
+      isEndingCallRef.current = true;
+      isInactiveStateRef.current = true;
+      setIsInactiveState(true);
+      setWasFriendCallEnded(true);
+      
       // КРИТИЧНО: Вызываем endCall в session (это также остановит стрим)
       session.endCall();
       
@@ -1173,7 +1322,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setCamOn(false);
       setMicOn(false);
       setMicLevel(0);
-      setIsInactiveState(true);
+      
+      // КРИТИЧНО: Сбрасываем флаг через небольшую задержку, чтобы дать состоянию обновиться
+      setTimeout(() => {
+        isEndingCallRef.current = false;
+        logger.info('[VideoCall] isEndingCallRef сброшен в onAbortCall');
+      }, 1000);
       
       // КРИТИЧНО: Дополнительная проверка через небольшую задержку
       // Убеждаемся, что камера действительно остановлена
@@ -1351,10 +1505,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     return shouldShow;
   }, [partnerUserId, friends, started, isInactiveState, wasFriendCallEnded, partnerId, roomId, callId, isPartnerFriend]);
   
-  // Fallback: Предотвращаем навигацию назад только если есть активный звонок и PiP еще не показан
-  // Основная логика обработки жестов находится в usePiP.ts (PanResponder для iOS, BackHandler для Android)
-  // Этот usePreventRemove остается как fallback на случай, если PanResponder не сработает
+  // КРИТИЧНО: На iOS отключаем usePreventRemove - он мешает нормальному свайпу
+  // PanResponder полностью обрабатывает свайп: показывает PiP и делает навигацию
+  // На Android используем usePreventRemove как fallback для BackHandler
   const shouldPreventRemove = React.useMemo(() => {
+    // На iOS не блокируем навигацию - PanResponder обработает жест
+    if (Platform.OS === 'ios') {
+      return false;
+    }
+    
+    // На Android блокируем навигацию только если есть активный звонок и PiP еще не показан
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
     const actualRoomId = roomId || session?.getRoomId?.() || null;
     const actualCallId = callId || session?.getCallId?.() || null;
@@ -1368,8 +1528,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   usePreventRemove(
     shouldPreventRemove,
     () => {
-      // Fallback: если PanResponder не сработал, показываем PiP и возвращаемся назад
-      if (enterPiPModeRef.current) {
+      // Fallback только для Android: если BackHandler не сработал, показываем PiP и возвращаемся назад
+      if (Platform.OS === 'android' && enterPiPModeRef.current) {
         enterPiPModeRef.current();
         setTimeout(() => {
           if (navigation.canGoBack && navigation.canGoBack()) {
@@ -1407,30 +1567,36 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           const session = sessionRef.current;
           const currentRoomId = roomId || routeRoomId || session?.getRoomId?.() || null;
           
-          // Отправляем партнеру что мы вернулись из PiP
-          const hasActiveCall = !!currentRoomId || !!callId || !!partnerId;
-          if (hasActiveCall && currentRoomId) {
-            try {
-              const payload: any = { 
-                inPiP: false, 
-                from: socket.id,
-                roomId: currentRoomId
-              };
-              if (partnerId) payload.to = partnerId;
-              socket.emit('pip:state', payload);
-              logger.info('[VideoCall] ✅ Sent pip:state=false to partner (returned from PiP):', { payload });
-              
-              // Отправляем повторно через 300мс (гарантия при гонке состояний)
-              setTimeout(() => {
-                try {
-                  socket.emit('pip:state', payload);
-                  logger.info('[VideoCall] ✅ Re-sent pip:state=false (300ms retry)');
-                } catch (e) {
-                  logger.warn('[VideoCall] ❌ Error re-sending pip:state:', e);
-                }
-              }, 300);
-            } catch (e) {
-              logger.warn('[VideoCall] ❌ Error sending pip:state:', e);
+          // КРИТИЧНО: Вызываем exitPiP для отправки pip:state=false партнеру
+          if (session && session.exitPiP && typeof session.exitPiP === 'function') {
+            session.exitPiP();
+            logger.info('[VideoCall] ✅ Вызван session.exitPiP() - отправлено pip:state=false партнеру');
+          } else {
+            // Fallback: отправляем pip:state напрямую если метод недоступен
+            const hasActiveCall = !!currentRoomId || !!callId || !!partnerId;
+            if (hasActiveCall && currentRoomId) {
+              try {
+                const payload: any = { 
+                  inPiP: false, 
+                  from: socket.id,
+                  roomId: currentRoomId
+                };
+                if (partnerId) payload.to = partnerId;
+                socket.emit('pip:state', payload);
+                logger.info('[VideoCall] ✅ Sent pip:state=false to partner (returned from PiP, fallback):', { payload });
+                
+                // Отправляем повторно через 300мс (гарантия при гонке состояний)
+                setTimeout(() => {
+                  try {
+                    socket.emit('pip:state', payload);
+                    logger.info('[VideoCall] ✅ Re-sent pip:state=false (300ms retry)');
+                  } catch (e) {
+                    logger.warn('[VideoCall] ❌ Error re-sending pip:state:', e);
+                  }
+                }, 300);
+              } catch (e) {
+                logger.warn('[VideoCall] ❌ Error sending pip:state:', e);
+              }
             }
           }
         }
@@ -1448,8 +1614,42 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           const pipLocalStream = pip.localStream;
           const pipRemoteStream = pip.remoteStream;
           
-          if (pipLocalStream) {
+          // КРИТИЧНО: Восстанавливаем локальный стрим из сессии (если есть), иначе из PiP контекста
+          // Это гарантирует, что локальное видео восстановится после возврата из PiP
+          const sessionLocalStream = session.getLocalStream?.();
+          if (sessionLocalStream) {
+            setLocalStream(sessionLocalStream);
+            localStreamRef.current = sessionLocalStream as any;
+            // Обновляем localRenderKey чтобы видео обновилось в UI
+            setLocalRenderKey((k: number) => k + 1);
+            
+            // Проверяем и обновляем состояние камеры
+            const videoTrack = (sessionLocalStream as any)?.getVideoTracks?.()?.[0];
+            if (videoTrack) {
+              // При возврате из PiP камера должна быть включена если она была включена
+              // Включаем камеру если трек live, но выключен
+              if (videoTrack.readyState === 'live' && !videoTrack.enabled) {
+                videoTrack.enabled = true;
+                logger.info('[VideoCall] Re-enabled local video track from session');
+              }
+              // КРИТИЧНО: Устанавливаем camOn в true если трек включен при возврате из PiP
+              // Это гарантирует что кнопка камеры остается в правильном состоянии
+              if (videoTrack.enabled) {
+                setCamOn(true);
+                logger.info('[VideoCall] Set camOn=true after PiP return - local video track is enabled');
+              }
+            }
+            
+            logger.info('[VideoCall] ✅ Локальный стрим восстановлен из сессии при возврате из PiP', {
+              streamId: sessionLocalStream.id,
+              hasVideoTrack: !!videoTrack,
+              videoTrackEnabled: videoTrack?.enabled,
+              videoTrackReadyState: videoTrack?.readyState,
+              camOn
+            });
+          } else if (pipLocalStream) {
             setLocalStream(pipLocalStream);
+            localStreamRef.current = pipLocalStream as any;
             // Обновляем localRenderKey чтобы видео обновилось в UI
             setLocalRenderKey((k: number) => k + 1);
             
@@ -1460,7 +1660,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               // Включаем камеру если трек live, но выключен
               if (videoTrack.readyState === 'live' && !videoTrack.enabled) {
                 videoTrack.enabled = true;
-                logger.info('[VideoCall] Re-enabled local video track');
+                logger.info('[VideoCall] Re-enabled local video track from PiP context');
               }
               // КРИТИЧНО: Устанавливаем camOn в true если трек включен при возврате из PiP
               // Это гарантирует что кнопка камеры остается в правильном состоянии
@@ -1470,28 +1670,47 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               }
             }
             
-            logger.info('[VideoCall] Локальный стрим восстановлен из PiP при возврате', {
+            logger.info('[VideoCall] Локальный стрим восстановлен из PiP контекста при возврате', {
               hasVideoTrack: !!videoTrack,
               videoTrackEnabled: videoTrack?.enabled,
               videoTrackReadyState: videoTrack?.readyState,
               camOn
             });
+          } else {
+            logger.warn('[VideoCall] ⚠️ Локальный стрим не найден ни в сессии, ни в PiP контексте при возврате из PiP');
           }
           
-          if (pipRemoteStream) {
+          // КРИТИЧНО: При возврате из PiP восстанавливаем remoteStream из сессии (если есть)
+          // Это гарантирует, что видеопоток восстановится у обоих участников
+          const sessionRemoteStream = session.getRemoteStream?.();
+          if (sessionRemoteStream) {
+            setRemoteStream(sessionRemoteStream);
+            remoteStreamRef.current = sessionRemoteStream as any;
+            remoteStreamReceivedAtRef.current = Date.now();
+            logger.info('[VideoCall] ✅ Удаленный стрим восстановлен из сессии при возврате из PiP', {
+              streamId: sessionRemoteStream.id,
+              hasVideoTrack: !!(sessionRemoteStream as any)?.getVideoTracks?.()?.[0],
+              hasAudioTrack: !!(sessionRemoteStream as any)?.getAudioTracks?.()?.[0],
+            });
+          } else if (pipRemoteStream) {
             setRemoteStream(pipRemoteStream);
             remoteStreamRef.current = pipRemoteStream as any;
-            logger.info('[VideoCall] Удаленный стрим восстановлен из PiP при возврате');
+            remoteStreamReceivedAtRef.current = Date.now();
+            logger.info('[VideoCall] Удаленный стрим восстановлен из PiP контекста при возврате', {
+              streamId: pipRemoteStream.id,
+            });
           }
           
           // Включаем локальные и удалённые видео-треки при возврате на экран
           // КРИТИЧНО: При возврате из PiP состояние кнопки камеры должно оставаться включенной
           try {
-            const lt = (localStream || localStreamRef.current || pipLocalStream)?.getVideoTracks?.()?.[0];
+            // КРИТИЧНО: Используем восстановленный локальный стрим из сессии или PiP контекста
+            const currentLocalStream = sessionLocalStream || pipLocalStream || localStream || localStreamRef.current;
+            const lt = currentLocalStream?.getVideoTracks?.()?.[0];
             if (lt) {
               if (!lt.enabled) {
                 lt.enabled = true;
-                logger.info('[VideoCall] Re-enabled local video track');
+                logger.info('[VideoCall] Re-enabled local video track after PiP return');
               }
               // КРИТИЧНО: Устанавливаем camOn в true если трек включен при возврате из PiP
               // Это гарантирует что кнопка камеры остается в правильном состоянии
@@ -1499,20 +1718,42 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                 setCamOn(true);
                 logger.info('[VideoCall] Set camOn=true after PiP return - local video track is enabled');
               }
+              logger.info('[VideoCall] ✅ Локальный видеотрек обработан после возврата из PiP', {
+                trackId: lt.id,
+                trackEnabled: lt.enabled,
+                trackReady: lt.readyState,
+                trackMuted: lt.muted,
+                streamId: currentLocalStream?.id,
+              });
+            } else {
+              logger.warn('[VideoCall] ⚠️ Локальный видеотрек не найден при возврате из PiP', {
+                hasSessionLocalStream: !!sessionLocalStream,
+                hasPipLocalStream: !!pipLocalStream,
+                hasLocalStream: !!localStream,
+                hasLocalStreamRef: !!localStreamRef.current,
+              });
             }
             
-            // Включаем удалённый видео-трек, если он был отключён для PiP
-            const rt = (remoteStream || remoteStreamRef.current || pipRemoteStream)?.getVideoTracks?.()?.[0];
+            // КРИТИЧНО: Включаем удалённый видео-трек из сессии или из PiP контекста
+            const currentRemoteStream = sessionRemoteStream || remoteStream || remoteStreamRef.current || pipRemoteStream;
+            const rt = currentRemoteStream?.getVideoTracks?.()?.[0];
             if (rt) {
               if (!rt.enabled) {
                 rt.enabled = true;
+                logger.info('[VideoCall] Re-enabled remote video track after PiP return');
               }
               setRemoteCamOn(true);
               setRemoteViewKey(Date.now());
-              logger.info('[VideoCall] Re-enabled remote video track after PiP return');
+              logger.info('[VideoCall] ✅ Включен удаленный видеотрек после возврата из PiP', {
+                trackId: rt.id,
+                trackEnabled: rt.enabled,
+                trackReady: rt.readyState,
+                trackMuted: rt.muted,
+              });
             } else {
               logger.info('[VideoCall] No remote video track found, setting remoteCamOn=true anyway');
               setRemoteCamOn(true);
+              setRemoteViewKey(Date.now());
             }
           } catch (e) {
             logger.warn('[VideoCall] Error enabling video tracks:', e);
@@ -1614,11 +1855,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             ? friendsRef.current.find(f => String(f._id) === String(partnerUserId))
             : null;
           
-          // Строим полный URL аватара
+          // КРИТИЧНО: Используем avatarThumbB64 (data URI) для аватара в PiP
+          // Это соответствует тому, как аватары используются в других частях приложения
           let avatarUrl: string | undefined = undefined;
-          if (partner?.avatar && typeof partner.avatar === 'string' && partner.avatar.trim() !== '') {
-            // Получаем BASE_URL из переменных окружения
-            // Приоритет: платформо-специфичная переменная > общая переменная > fallback
+          if (partner?.avatarThumbB64 && typeof partner.avatarThumbB64 === 'string' && partner.avatarThumbB64.trim() !== '') {
+            // Используем data URI напрямую
+            avatarUrl = partner.avatarThumbB64;
+          } else if (partner?.avatarB64 && typeof partner.avatarB64 === 'string' && partner.avatarB64.trim() !== '') {
+            // Fallback: используем полный аватар если миниатюры нет
+            avatarUrl = partner.avatarB64;
+          } else if (partner?.avatar && typeof partner.avatar === 'string' && partner.avatar.trim() !== '') {
+            // Fallback: используем URL аватара если нет base64
             const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
             const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
             const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
@@ -1627,6 +1874,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               ? partner.avatar 
               : `${serverUrl}${partner.avatar.startsWith('/') ? '' : '/'}${partner.avatar}`;
           }
+          
+          logger.info('[VideoCall] Аватар для PiP', {
+            hasPartner: !!partner,
+            hasAvatarThumbB64: !!(partner?.avatarThumbB64),
+            hasAvatarB64: !!(partner?.avatarB64),
+            hasAvatar: !!(partner?.avatar),
+            hasAvatarUrl: !!avatarUrl,
+            partnerId: partner?._id
+          });
           
           // Показываем PiP
           currentPip.showPiP({
@@ -1721,6 +1977,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             lang={lang}
             session={sessionRef.current}
             remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
+            partnerInPiP={partnerInPiP}
           />
           
           {showIncomingFriendOverlay && (
