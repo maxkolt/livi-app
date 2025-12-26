@@ -347,6 +347,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config.callbacks.onCallIdChange?.(null);
     this.config.callbacks.onLoadingChange?.(false);
     this.config.onLoadingChange?.(false);
+    this.config.setFriendCallAccepted?.(false);
+    this.config.setIsInactiveState?.(true);
+    this.config.setWasFriendCallEnded?.(true);
     this.emit('callEnded');
     logger.info('[VideoCallSession] ✅ Состояние сессии сброшено и callEnded событие отправлено');
   }
@@ -1310,6 +1313,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config.callbacks.onCallIdChange?.(null);
     this.config.callbacks.onLoadingChange?.(false);
     this.config.onLoadingChange?.(false);
+    this.config.setFriendCallAccepted?.(false);
+    this.config.setIsInactiveState?.(true);
+    this.config.setWasFriendCallEnded?.(true);
     
     // Отправляем событие callEnded для компонентов
     // КРИТИЧНО: Это событие должно быть отправлено даже если состояние уже очищено
@@ -1479,6 +1485,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.remoteVideoTrack = null;
     this.currentRemoteParticipant = null;
     this.remoteCamEnabled = false;
+    if (this.partnerInPiP) {
+      this.partnerInPiP = false;
+      this.emit('partnerPiPStateChanged', { inPiP: false });
+    }
     this.emit('remoteStream', null);
     this.config.callbacks.onRemoteStreamChange?.(null);
     this.config.onRemoteStreamChange?.(null);

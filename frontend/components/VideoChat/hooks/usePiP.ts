@@ -55,6 +55,7 @@ export const usePiP = ({
   const pipRef = useRef(pip);
   const pipVisibleRef = useRef(pip.visible);
   const pipShownDuringSwipeRef = useRef(false); // Флаг, что PiP уже показан во время текущего свайпа
+  const startXRef = useRef<number | null>(null);
   
   // КРИТИЧНО: Используем ref для хранения актуальных значений состояния звонка
   // Это нужно для PanResponder, который создается один раз и может иметь устаревшие значения в замыкании
@@ -311,13 +312,15 @@ export const usePiP = ({
   const screenWidth = Dimensions.get('window').width;
   const swipeThreshold = Platform.OS === 'ios' ? screenWidth * 0.25 : 50;
   const velocityThreshold = 0.5;
+  const edgeCaptureWidth = 28;
   
   const panResponder = useRef(
     PanResponder.create({
       // КРИТИЧНО: На iOS используем Capture фазу для самого раннего перехвата жеста
       // Это позволяет перехватить жест ДО нативной навигации
-      onStartShouldSetPanResponderCapture: () => {
+      onStartShouldSetPanResponderCapture: (evt) => {
         if (Platform.OS === 'ios') {
+          startXRef.current = evt.nativeEvent.locationX;
           // Проверяем, есть ли активный звонок, используя refs для актуальных значений
           const currentSession = session || (global as any).__webrtcSessionRef?.current;
           const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
@@ -325,13 +328,14 @@ export const usePiP = ({
           const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
           const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current;
           
-          if (hasActiveCall) {
+          if (hasActiveCall && startXRef.current !== null && startXRef.current <= edgeCaptureWidth) {
             logger.info('[usePiP] PanResponder: onStartShouldSetPanResponderCapture - захватываем жест в capture фазе (iOS)', {
               actualRoomId,
               actualCallId,
               hasActiveCall,
               isInactiveState: isInactiveStateRef.current,
-              wasFriendCallEnded: wasFriendCallEndedRef.current
+              wasFriendCallEnded: wasFriendCallEndedRef.current,
+              startX: startXRef.current
             });
             return true; // Захватываем жест в capture фазе на iOS
           }
@@ -344,7 +348,11 @@ export const usePiP = ({
           const { dx, dy } = gestureState;
           // Уменьшаем минимальный порог для более раннего начала обработки жеста
           const minDx = screenWidth * 0.05;
-          const shouldCapture = Math.abs(dx) > minDx && dx > 0 && Math.abs(dx) > Math.abs(dy);
+          const shouldCapture =
+            (startXRef.current !== null && startXRef.current <= edgeCaptureWidth) &&
+            Math.abs(dx) > minDx &&
+            dx > 0 &&
+            Math.abs(dx) > Math.abs(dy);
           if (shouldCapture) {
             logger.info('[usePiP] PanResponder: onMoveShouldSetPanResponderCapture - захватываем жест свайпа в capture фазе', {
               dx,
@@ -430,6 +438,7 @@ export const usePiP = ({
           shouldTrigger,
           platform: Platform.OS
         });
+        startXRef.current = null;
         
         if (shouldTrigger) {
           // КРИТИЧНО: Проверяем актуальное состояние звонка через ref

@@ -144,10 +144,19 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }, [streamToUse, remoteMuted]);
 
   // Неактивное состояние звонка - показываем надпись "Собеседник" как в эталонном файле
-  // КРИТИЧНО: Если партнер в PiP, показываем заглушку "Отошел" САМОЕ ПЕРВОЕ
+  // КРИТИЧНО: Завершение звонка имеет приоритет над заглушкой "Отошел".
+  if (wasFriendCallEnded || isInactiveState) {
+    logRenderState('inactive-call', { remoteCamOn, wasFriendCallEnded, started });
+    return (
+      <View style={[styles.rtc, styles.placeholderContainer]}>
+        <Text style={styles.placeholder}>{L('peer')}</Text>
+      </View>
+    );
+  }
+
+  // КРИТИЧНО: Если партнер в PiP, показываем заглушку "Отошел"
   // Это гарантирует, что заглушка покажется в любом случае, даже если нет стрима или он еще загружается
   // Заглушка должна показываться автоматически при уходе партнера в PiP и исчезать при возврате
-  // КРИТИЧНО: Проверка partnerInPiP должна быть ДО всех остальных проверок (wasFriendCallEnded, isInactiveState)
   if (partnerInPiP) {
     logger.info('[RemoteVideo] 🔴 ПОКАЗЫВАЕМ ЗАГЛУШКУ "Отошел" - partnerInPiP=true', {
       partnerInPiP,
@@ -173,16 +182,6 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
             <Text style={styles.friendBadgeText}>{L('friend')}</Text>
           </View>
         )}
-      </View>
-    );
-  }
-
-  // Проверка на завершенный звонок (после проверки partnerInPiP)
-  if (wasFriendCallEnded || isInactiveState) {
-    logRenderState('inactive-call', { remoteCamOn, wasFriendCallEnded, started });
-    return (
-      <View style={[styles.rtc, styles.placeholderContainer]}>
-        <Text style={styles.placeholder}>{L('peer')}</Text>
       </View>
     );
   }

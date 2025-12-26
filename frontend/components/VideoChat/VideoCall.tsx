@@ -1050,6 +1050,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       
       setIsInactiveState(true);
       setWasFriendCallEnded(true);
+      setPartnerInPiP(false);
       setFriendCallAccepted(false);
       setPartnerUserId(null);
       setRemoteViewKey(0);
@@ -1309,6 +1310,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       isInactiveStateRef.current = true;
       setIsInactiveState(true);
       setWasFriendCallEnded(true);
+      setPartnerInPiP(false);
       
       // КРИТИЧНО: Вызываем endCall в session (это также остановит стрим)
       session.endCall();
