@@ -34,6 +34,7 @@ import { onFriendProfile, onPresenceUpdate } from '../sockets/socket';
 import { uploadMediaToServer } from '../utils/mediaUpload';
 import MediaViewer from '../components/MediaViewer';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 import { CometChat } from "@cometchat/chat-sdk-react-native";
 import { 
   getMyUserId,
@@ -460,11 +461,25 @@ export default function ChatScreen({ route, navigation }: Props) {
           text: message.text,
           type: message.type,
           uri: message.uri,
+          name: (message as any).name,
+          size: (message as any).size,
           sender: isFromMe ? "me" : "peer",
           from: message.from,
           to: message.to,
           timestamp: new Date(message.timestamp),
         };
+        
+        // КРИТИЧНО: Логируем входящие сообщения с изображениями для отладки
+        if (message.type === 'image') {
+          logger.info('[ChatScreen] Received image message', {
+            messageId: message.id,
+            from: message.from,
+            to: message.to,
+            uri: message.uri,
+            resolvedUri: resolveMediaUri(message.uri),
+            hasUri: !!message.uri,
+          });
+        }
 
         setMessages((prev) => {
           // Проверяем, есть ли уже сообщение с таким ID
@@ -580,17 +595,33 @@ export default function ChatScreen({ route, navigation }: Props) {
         
             if (serverMessages?.ok && serverMessages.messages) {
           // Конвертируем сообщения сервера в формат фронтенда
-          const formattedMessages = serverMessages.messages.map(msg => ({
-            id: msg.id,
-            text: msg.text,
-            type: msg.type,
-            uri: msg.uri,
-            sender: msg.from === currentUserId ? 'me' : 'peer',
-            from: msg.from,
-            to: msg.to,
-            timestamp: new Date(msg.timestamp),
-                read: !!msg.read,
-          }));
+          const formattedMessages = serverMessages.messages.map(msg => {
+            // КРИТИЧНО: Логируем сообщения с изображениями при загрузке истории
+            if (msg.type === 'image') {
+              logger.info('[ChatScreen] Loading image message from history', {
+                messageId: msg.id,
+                from: msg.from,
+                to: msg.to,
+                uri: msg.uri,
+                resolvedUri: resolveMediaUri(msg.uri),
+                hasUri: !!msg.uri,
+              });
+            }
+            
+            return {
+              id: msg.id,
+              text: msg.text,
+              type: msg.type,
+              uri: msg.uri,
+              name: (msg as any).name,
+              size: (msg as any).size,
+              sender: msg.from === currentUserId ? 'me' : 'peer',
+              from: msg.from,
+              to: msg.to,
+              timestamp: new Date(msg.timestamp),
+              read: !!msg.read,
+            };
+          });
           
               setMessages(formattedMessages);
           
@@ -652,9 +683,23 @@ export default function ChatScreen({ route, navigation }: Props) {
     return '';
   };
   const resolveMediaUri = (s?: string) => {
-    if (!s) return '';
-    if (/^https?:\/\//i.test(s)) return s;
-    if (s.startsWith('/uploads/')) return `${API_BASE}${s}`;
+    if (!s) {
+      logger.warn('[ChatScreen] resolveMediaUri: empty URI');
+      return '';
+    }
+    // Если уже полный URL, возвращаем как есть
+    if (/^https?:\/\//i.test(s)) {
+      return s;
+    }
+    // Если относительный путь начинается с /uploads/, добавляем API_BASE
+    if (s.startsWith('/uploads/')) {
+      const fullUrl = `${API_BASE}${s}`;
+      logger.debug('[ChatScreen] resolveMediaUri: resolved relative path', { original: s, resolved: fullUrl });
+      return fullUrl;
+    }
+    // Если путь не начинается с /, возможно это уже полный путь без протокола
+    // Или это может быть base64 или другой формат
+    logger.debug('[ChatScreen] resolveMediaUri: returning as-is', { uri: s });
     return s;
   };
   // КРИТИЧНО: firstLetter используется ТОЛЬКО для аватара (headerInitial), НЕ для текста
@@ -1396,6 +1441,9 @@ export default function ChatScreen({ route, navigation }: Props) {
 
 
   const MessageItem = React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onLongPressMessage }: any) => {
+    const [imageLoadError, setImageLoadError] = React.useState(false);
+    const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
+    const [isDownloading, setIsDownloading] = React.useState(false);
     const effectiveReadStatus = readStatus; // 'sending' | 'delivered' | 'read' | 'failed' | 'sent'
     // Fallback логика для определения отправителя если поле sender отсутствует
     let isMyMessage = item.sender === 'me';
@@ -1406,10 +1454,114 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
 
     const messageUploadStatus = uploadStatus || 'sent';
+    
+    // Сбрасываем ошибку и локальный URI при изменении URI
+    React.useEffect(() => {
+      setImageLoadError(false);
+      setLocalImageUri(null);
+      setIsDownloading(false);
+    }, [item.uri]);
+    
+    // Функция для скачивания изображения через FileSystem (обходит ATS)
+    const downloadImageViaFileSystem = React.useCallback(async (uri: string) => {
+      if (isDownloading || localImageUri) return; // Уже скачивается или уже скачано
+      
+      setIsDownloading(true);
+      try {
+        const fileName = `image_${item.id}_${Date.now()}.jpg`;
+        const targetUri = `${FileSystem.cacheDirectory}${fileName}`;
+        
+        logger.debug('[ChatScreen] MessageItem: downloading image via FileSystem', { 
+          messageId: item.id, 
+          sourceUri: uri,
+          targetUri 
+        });
+        
+        const downloadResult = await FileSystem.downloadAsync(uri, targetUri);
+        
+        if (downloadResult.uri) {
+          logger.debug('[ChatScreen] MessageItem: image downloaded successfully', { 
+            messageId: item.id, 
+            localUri: downloadResult.uri 
+          });
+          setLocalImageUri(downloadResult.uri);
+          setImageLoadError(false);
+        } else {
+          throw new Error('Download failed: no URI returned');
+        }
+      } catch (error: any) {
+        logger.error('[ChatScreen] MessageItem: FileSystem download error', { 
+          messageId: item.id, 
+          uri, 
+          error: error?.message || String(error) 
+        });
+        setImageLoadError(true);
+      } finally {
+        setIsDownloading(false);
+      }
+    }, [item.id, isDownloading, localImageUri]);
 
     const renderContent = () => {
       switch (item.type) {
         case 'image':
+          const imageUri = resolveMediaUri(item.uri);
+          if (!imageUri) {
+            logger.warn('[ChatScreen] MessageItem: image URI is empty', { messageId: item.id, originalUri: item.uri });
+            return (
+              <View style={{
+                width: 200,
+                height: 150,
+                backgroundColor: 'rgba(255,255,255,0.1)',
+                borderRadius: 12,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 1,
+                borderColor: 'rgba(255,255,255,0.2)',
+              }}>
+                <Ionicons name="image-outline" size={32} color="rgba(255,255,255,0.5)" />
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, marginTop: 4 }}>Изображение недоступно</Text>
+              </View>
+            );
+          }
+          
+          logger.debug('[ChatScreen] MessageItem: rendering image', { 
+            messageId: item.id, 
+            originalUri: item.uri, 
+            resolvedUri: imageUri 
+          });
+          
+          // Если была ошибка загрузки, показываем fallback UI
+          if (imageLoadError) {
+            return (
+              <TouchableOpacity 
+                style={{ 
+                  position: 'relative',
+                  backgroundColor: 'rgba(255,255,255,0.1)',
+                  borderRadius: 12,
+                  overflow: 'hidden',
+                  marginBottom: 8,
+                  width: 200,
+                  height: 150,
+                  borderWidth: 1,
+                  borderColor: 'rgba(255,255,255,0.2)',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                onPress={() => {
+                  animateMessagePress(item.id, () => {
+                    onPressImage('image', imageUri, item.name);
+                  });
+                }}
+                activeOpacity={0.9}
+              >
+                <Ionicons name="image-outline" size={40} color="rgba(255,255,255,0.5)" />
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, marginTop: 8, textAlign: 'center', paddingHorizontal: 8 }}>
+                  Нажмите для просмотра
+                </Text>
+              </TouchableOpacity>
+            );
+          }
+          
           return (
             <TouchableOpacity 
               style={{ 
@@ -1433,13 +1585,27 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
               onPress={() => {
                 animateMessagePress(item.id, () => {
-                  onPressImage('image', item.uri, item.name);
+                  onPressImage('image', imageUri, item.name);
                 });
               }}
               activeOpacity={0.9}
             >
+              {isDownloading && (
+                <View style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: 'rgba(0,0,0,0.3)',
+                }}>
+                  <ActivityIndicator size="small" color="#fff" />
+                </View>
+              )}
               <ExpoImage
-                source={{ uri: resolveMediaUri(item.uri) }}
+                source={{ uri: localImageUri || imageUri }}
                 style={{
                   width: '100%',
                   height: '100%',
@@ -1448,9 +1614,84 @@ export default function ChatScreen({ route, navigation }: Props) {
                 contentFit="cover"
                 cachePolicy="memory-disk"
                 transition={200}
-                recyclingKey={`message_image_${item.id}`}
+                recyclingKey={`message_image_${item.id}_${localImageUri ? 'local' : 'remote'}`}
                 allowDownscaling={false}
                 placeholder={null}
+                onError={(error: any) => {
+                  // КРИТИЧНО: Детальное логирование ошибки для диагностики
+                  const errorDetails: any = {
+                    messageId: item.id,
+                    uri: imageUri,
+                    originalUri: item.uri,
+                    errorType: typeof error,
+                    errorString: String(error),
+                  };
+                  
+                  // Пытаемся извлечь больше информации об ошибке
+                  try {
+                    if (error?.nativeEvent) {
+                      errorDetails.nativeEvent = error.nativeEvent;
+                    }
+                    if (error?.message) {
+                      errorDetails.errorMessage = error.message;
+                    }
+                    if (error?.code) {
+                      errorDetails.errorCode = error.code;
+                    }
+                    // Пытаемся сериализовать весь объект ошибки
+                    const errorKeys = Object.keys(error || {});
+                    if (errorKeys.length > 0) {
+                      errorDetails.errorKeys = errorKeys;
+                      errorDetails.errorValues = errorKeys.reduce((acc: any, key: string) => {
+                        try {
+                          acc[key] = String(error[key]);
+                        } catch {
+                          acc[key] = '[unserializable]';
+                        }
+                        return acc;
+                      }, {});
+                    }
+                  } catch (e) {
+                    errorDetails.serializationError = String(e);
+                  }
+                  
+                  logger.error('[ChatScreen] MessageItem: image load error', errorDetails);
+                  console.error('[ChatScreen] Image load error details:', errorDetails);
+                  
+                  // КРИТИЧНО: Если ошибка связана с ATS, пытаемся скачать через FileSystem
+                  const isATSError = errorDetails.errorValues?.error?.includes('App Transport Security') || 
+                                     errorDetails.nativeEvent?.error?.includes('App Transport Security');
+                  
+                  if (isATSError && !localImageUri && !isDownloading) {
+                    logger.info('[ChatScreen] MessageItem: ATS error detected, trying FileSystem download', { 
+                      messageId: item.id, 
+                      uri: imageUri 
+                    });
+                    downloadImageViaFileSystem(imageUri);
+                  } else {
+                    setImageLoadError(true);
+                  }
+                }}
+                onLoadStart={() => {
+                  setImageLoadError(false); // Сбрасываем ошибку при новой попытке загрузки
+                  logger.debug('[ChatScreen] MessageItem: image load started', { 
+                    messageId: item.id, 
+                    uri: imageUri 
+                  });
+                }}
+                onLoad={() => {
+                  setImageLoadError(false); // Успешная загрузка
+                  logger.debug('[ChatScreen] MessageItem: image loaded successfully', { 
+                    messageId: item.id, 
+                    uri: imageUri 
+                  });
+                }}
+                onLoadEnd={() => {
+                  logger.debug('[ChatScreen] MessageItem: image load ended', { 
+                    messageId: item.id, 
+                    uri: imageUri 
+                  });
+                }}
               />
              
               
