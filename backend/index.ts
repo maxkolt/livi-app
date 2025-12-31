@@ -872,6 +872,13 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (payload?.roomId) {
         (sock as any).data.roomId = payload.roomId;
       } else if (!busy) {
+        // КРИТИЧНО: Очищаем roomId только когда пользователь не busy
+        // Если busy: true и roomId не передан, это означает что пользователь ищет (next()),
+        // и roomId должен остаться undefined - не удаляем его явно, так как он уже undefined
+        delete (sock as any).data.roomId;
+      } else {
+        // КРИТИЧНО: Если busy: true и roomId не передан (поиск после next()),
+        // явно очищаем roomId чтобы синхронизировать состояние
         delete (sock as any).data.roomId;
       }
       

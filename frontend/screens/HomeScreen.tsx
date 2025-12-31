@@ -1688,9 +1688,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   // Обновляем пропущенные видеозвонки из AsyncStorage при возврате на экран (iOS/Android)
   // КРИТИЧНО: Нормализуем ключи (преобразуем в строки) и фильтруем только значения > 0
+  // Также обновляем счетчики непрочитанных сообщений при фокусе
   useEffect(() => {
     const unsub = navigation?.addListener?.('focus', async () => {
       try {
+        // Обновляем пропущенные звонки
         const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
         // Нормализуем ключи: преобразуем все ключи в строки и фильтруем только значения > 0
@@ -1711,12 +1713,33 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           total: Object.keys(parsed).length,
           normalized 
         });
+        
+        // КРИТИЧНО: Обновляем счетчики непрочитанных сообщений при фокусе
+        if (friends.length > 0) {
+          const entries: Record<string, number> = {};
+          await Promise.all(friends.map(async (f) => {
+            try { 
+              // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) для корректной работы
+              const friendIdStr = String(f.id);
+              const result = await getUnreadCount(friendIdStr);
+              entries[friendIdStr] = result.ok ? (result.count || 0) : 0;
+            } catch { 
+              const friendIdStr = String(f.id);
+              entries[friendIdStr] = 0; 
+            }
+          }));
+          setUnreadByUser((prev) => ({ ...prev, ...entries }));
+          logger.debug('[HomeScreen] Reloaded unread messages on focus', { 
+            count: Object.keys(entries).length,
+            entries 
+          });
+        }
       } catch (e) {
-        logger.warn('[HomeScreen] Error reloading missed calls on focus:', e);
+        logger.warn('[HomeScreen] Error reloading counters on focus:', e);
       }
     });
     return () => { try { unsub?.(); } catch {} };
-  }, [navigation]);
+  }, [navigation, friends]);
 
   /* ===== presence & friend events ===== */
   useEffect(() => {
@@ -1741,26 +1764,38 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       void loadFriends();
     });
     const offPresence = onPresenceUpdate?.((data: any) => {
+      // КРИТИЧНО: Защита от некорректных типов данных (Date, null, undefined и т.д.)
+      if (!data) return;
+      
       // Обрабатываем оба формата: массив (для online) и объект (для busy)
       if (Array.isArray(data)) {
         // Формат массива: обновление online статуса
-        const onlineSet = new Set((data || []).map((it: any) => String(it?._id ?? it)));
-        setFriends((prev) => {
-          const updated = prev.map((f) => {
-            const wasOnline = f.online;
-            const isOnline = onlineSet.has(String(f.id));
-            if (wasOnline !== isOnline) {
-              console.log('[onPresenceUpdate] 📍 Обновлен статус онлайн друга', {
-                userId: f.id,
-                wasOnline,
-                isOnline
-              });
-            }
-            return { ...f, online: isOnline };
+        // КРИТИЧНО: Дополнительная проверка что все элементы массива валидны
+        try {
+          const onlineSet = new Set((data || []).map((it: any) => {
+            if (it === null || it === undefined) return null;
+            return String(it?._id ?? it);
+          }).filter((id: string | null): id is string => id !== null));
+          
+          setFriends((prev) => {
+            const updated = prev.map((f) => {
+              const wasOnline = f.online;
+              const isOnline = onlineSet.has(String(f.id));
+              if (wasOnline !== isOnline) {
+                console.log('[onPresenceUpdate] 📍 Обновлен статус онлайн друга', {
+                  userId: f.id,
+                  wasOnline,
+                  isOnline
+                });
+              }
+              return { ...f, online: isOnline };
+            });
+            return updated;
           });
-          return updated;
-        });
-      } else if (data && typeof data === 'object' && data.userId) {
+        } catch (e) {
+          console.warn('[onPresenceUpdate] Error processing array data:', e, { dataType: typeof data, isArray: Array.isArray(data) });
+        }
+      } else if (data && typeof data === 'object' && !Array.isArray(data) && data.userId) {
         // Формат объекта: обновление busy статуса
         const userId = String(data.userId);
         const busy = data.busy !== undefined ? !!data.busy : undefined;
@@ -2145,11 +2180,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const entries: Record<string, number> = {};
         await Promise.all(friends.map(async (f) => {
           try { 
+            // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) для корректной работы
+            const friendIdStr = String(f.id);
             // Используем новую функцию getUnreadCount
-            const result = await getUnreadCount(f.id);
-            entries[f.id] = result.ok ? (result.count || 0) : 0;
+            const result = await getUnreadCount(friendIdStr);
+            entries[friendIdStr] = result.ok ? (result.count || 0) : 0;
           } catch { 
-            entries[f.id] = 0; 
+            // КРИТИЧНО: Нормализуем ключ даже при ошибке
+            const friendIdStr = String(f.id);
+            entries[friendIdStr] = 0; 
           }
         }));
         if (!disposed) setUnreadByUser((prev) => ({ ...prev, ...entries }));
@@ -2171,8 +2210,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
     // Слушатель новых сообщений для обновления счетчиков
     const offReceived = onMessageReceived((message) => {
-      if (friends.some(f => f.id === message.from)) {
-        updateOne(message.from);
+      // КРИТИЧНО: Нормализуем ключ для сравнения
+      const messageFromStr = String(message.from);
+      if (friends.some(f => String(f.id) === messageFromStr)) {
+        updateOne(messageFromStr);
       }
     });
 
@@ -2684,7 +2725,9 @@ const handleClearNick = useCallback(async () => {
   const onRefreshFriends = async () => { setRefreshing(true); await loadFriends(); setRefreshing(false); };
 
   const ChatButton = ({ friend }: { friend: Friend }) => {
-    const count = unreadByUser[friend.id] || 0;
+    // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) для корректной работы с счетчиками
+    const friendIdStr = String(friend.id);
+    const count = unreadByUser[friendIdStr] || 0;
   
     const isLocalUri = (s: string) =>
       /^file:\/\//i.test(s) ||

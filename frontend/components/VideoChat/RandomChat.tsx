@@ -84,6 +84,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const isStoppingRef = useRef(false);
   const leavingRef = useRef(false);
   const [isNexting, setIsNexting] = useState(false);
+  const isNextingRef = useRef(false); // КРИТИЧНО: Ref для синхронной проверки состояния
   const [partnerId, setPartnerId] = useState<string | null>(null);
   const [partnerUserId, setPartnerUserId] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
@@ -105,6 +106,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const [localRenderKey, setLocalRenderKey] = useState(0);
   const localStreamIdRef = useRef<string | null>(null);
   const prevCamOnRef = useRef<boolean | null>(null);
+  // КРИТИЧНО для iOS: Timestamp для принудительного обновления RTCView
+  const localStreamTimestampRef = useRef<number>(0);
+  // КРИТИЧНО для iOS: Флаг что был вызван next(), нужно обновить key при следующем localStream
+  const needsIOSUpdateAfterNextRef = useRef<boolean>(false);
+  // КРИТИЧНО: Защита от слишком частых обновлений localRenderKey (предотвращает мерцание)
+  // На iOS обновления могут быть чаще из-за особенностей RTCView, но все равно ограничиваем
+  const lastLocalRenderKeyUpdateRef = useRef<number>(0);
+  const MIN_LOCAL_RENDER_KEY_UPDATE_INTERVAL_MS = Platform.OS === 'ios' ? 150 : 100; // Минимальный интервал между обновлениями key (iOS требует больше времени)
   const [micLevel, setMicLevel] = useState(0);
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [buttonsOpacity] = useState(new Animated.Value(0));
@@ -365,6 +374,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         },
         onPartnerIdChange: (id) => {
           setPartnerId(id);
+          // КРИТИЧНО: Сбрасываем partnerUserId при сбросе partnerId, чтобы скрыть кнопку "Добавить в друзья"
+          if (!id) {
+            setPartnerUserId(null);
+          }
         },
         onRoomIdChange: (id) => {
           setRoomId(id);
@@ -405,15 +418,57 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       // Если новый стрим null/невалидный, но предыдущий валидный - используем предыдущий
       const prevStream = localStreamRef.current || localStream;
       const prevStreamValid = prevStream && isValidStream(prevStream);
+      const prevStreamId = prevStream?.id;
+      const newStreamId = stream?.id;
+      const isNewStreamInstance = prevStreamId !== newStreamId;
       
-      // Обновляем ref только если новый стрим валидный или явно null
+      // КРИТИЧНО для iOS: Проверяем изменение streamURL для принудительного обновления
+      const prevStreamURL = prevStream?.toURL?.() || null;
+      const newStreamURL = stream?.toURL?.() || null;
+      const streamURLChanged = prevStreamURL !== newStreamURL && prevStreamURL !== null && newStreamURL !== null;
+      
+      // КРИТИЧНО: При next() не сбрасываем localStream сразу - это вызывает черный экран
+      // Сохраняем предыдущий стрим до получения нового валидного стрима
       if (stream && isValidStream(stream)) {
+        // Новый стрим валидный - обновляем ref и state
         localStreamRef.current = stream;
         setLocalStream(stream);
+        
+        // КРИТИЧНО для iOS: Обновляем key при любых изменениях streamId, streamURL или после next()
+        if (Platform.OS === 'ios') {
+          const now = Date.now();
+          // Обновляем если: новый streamId, изменился streamURL, был вызван next(), или прошло достаточно времени
+          const shouldUpdate = isNewStreamInstance || streamURLChanged || needsIOSUpdateAfterNextRef.current;
+          const canUpdate = now - lastLocalRenderKeyUpdateRef.current >= MIN_LOCAL_RENDER_KEY_UPDATE_INTERVAL_MS;
+          
+          if (shouldUpdate && (canUpdate || needsIOSUpdateAfterNextRef.current)) {
+            setLocalRenderKey(k => k + 1);
+            localStreamTimestampRef.current = now;
+            lastLocalRenderKeyUpdateRef.current = now;
+            needsIOSUpdateAfterNextRef.current = false;
+            logger.debug('[RandomChat] iOS: Updated localRenderKey', {
+              reason: needsIOSUpdateAfterNextRef.current ? 'next()' : (isNewStreamInstance ? 'newStreamId' : 'streamURLChanged'),
+              streamId: stream.id,
+              streamURL: newStreamURL?.substring(0, 30) + '...',
+            });
+          }
+        }
       } else if (stream === null) {
-        // Явно установлен null - обновляем состояние и ref
-        localStreamRef.current = null;
-        setLocalStream(null);
+        // КРИТИЧНО: При явном null проверяем, не идет ли процесс next()
+        // Если идет next(), сохраняем предыдущий стрим чтобы не было черного экрана
+        if (isNextingRef.current && prevStreamValid) {
+          // Идет next() и есть валидный предыдущий стрим - сохраняем его
+          localStreamRef.current = prevStream;
+          // НЕ обновляем state на null, чтобы не было черного экрана
+          logger.debug('[RandomChat] Keeping previous localStream during next() to prevent flicker', {
+            prevStreamId: prevStream.id,
+            isNexting: isNextingRef.current,
+          });
+        } else {
+          // Не идет next() или нет предыдущего стрима - обновляем на null
+          localStreamRef.current = null;
+          setLocalStream(null);
+        }
       } else if (!stream || !isValidStream(stream)) {
         // Новый стрим невалидный - сохраняем предыдущий в ref если он валидный
         if (prevStreamValid) {
@@ -429,9 +484,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           localStreamRef.current = stream;
           setLocalStream(stream);
         }
-      } else {
-        localStreamRef.current = stream;
-        setLocalStream(stream);
       }
     });
     
@@ -605,6 +657,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       if (userId) {
         setPartnerUserId(userId);
       }
+      
+      // УПРОЩЕНО: Для iOS обновляем key при matchFound (подключение к новой комнате)
+      // Флаг needsIOSUpdateAfterNextRef уже установлен при next(), обновление произойдет при следующем localStream
     });
     
     return () => {
@@ -656,6 +711,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       loadingRef.current = false;
       setMicLevel(0);
       setRemoteMuted(false);
+      // КРИТИЧНО: Сбрасываем флаг isNexting при остановке
+      isNextingRef.current = false;
+      setIsNexting(false);
       
       try {
         stopSpeaker(); // Останавливаем спикер
@@ -663,6 +721,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         // КРИТИЧНО: Очищаем ref при остановке для предотвращения использования старого стрима
         localStreamRef.current = null;
         setLocalRenderKey(k => k + 1);
+        localStreamTimestampRef.current = 0;
+        needsIOSUpdateAfterNextRef.current = false;
         setPartnerUserId(null);
       } catch (e) {
         logger.error('[RandomChat] Error stopping:', e);
@@ -701,33 +761,88 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     }
   }, [requestPermissions]);
   
+  // Дополнительная защита от спама кнопок: минимальный интервал между действиями
+  const lastActionRef = useRef<number>(0);
+  const actionCooldownMs = 250;
+  const canRunAction = useCallback(() => {
+    const now = Date.now();
+    if (now - lastActionRef.current < actionCooldownMs) {
+      return false;
+    }
+    lastActionRef.current = now;
+    return true;
+  }, []);
+  
   const onNext = useCallback(async () => {
-    if (!canRunAction()) return;
+    // УПРОЩЕНО: Объединенные проверки для максимальной производительности
+    // КРИТИЧНО: Защита от нажатий во время подключения/отключения
+    
+    // 1. Cooldown и базовые проверки
+    if (!canRunAction() || isNextingRef.current || isNexting || !started || loading || isStoppingRef.current || isInactiveState) {
+      return;
+    }
+    
+    // 2. Проверка сессии
     const session = sessionRef.current;
-    if (!session) {
-      console.warn('[onNext] Session not initialized yet');
+    if (!session || (session as any).isDisconnecting || (session as any).nextInProgress) {
+      return;
+    }
+    
+    // 3. КРИТИЧНО: Проверка состояния подключения комнаты
+    // Защита от нажатий во время подключения к LiveKit
+    const room = (session as any).room;
+    if (room && (room.state === 'connecting' || room.state === 'reconnecting')) {
+      logger.debug('[RandomChat] onNext: room is connecting/reconnecting, ignoring');
       return;
     }
 
-    // КРИТИЧНО: ЗАЩИТА ОТ ДВОЙНЫХ НАЖАТИЙ - блокируем кнопку если уже идет процесс
-    // ОПТИМИЗИРОВАНО: Уменьшено время блокировки с 1.5 секунд до 800ms для быстрого переключения
-    if (isNexting) return;
+      // Устанавливаем флаги ДО начала операции
+      isNextingRef.current = true;
+      setIsNexting(true);
+      
+      // Для iOS: устанавливаем флаг для обновления key при следующем localStream
+      if (Platform.OS === 'ios') {
+        needsIOSUpdateAfterNextRef.current = true;
+      }
 
-    setIsNexting(true);
-
-    try {
-      // Используем session для перехода к следующему (ручной вызов)
-      await session.next();
-    } catch (e) {
-      logger.error('[RandomChat] Error next:', e);
-      Alert.alert('Ошибка', 'Не удалось перейти к следующему собеседнику');
+      try {
+        // Вызываем next() в сессии
+        await session.next();
+        
+        // КРИТИЧНО для iOS: Устанавливаем флаг для обновления key при следующем localStream
+        // НЕ обновляем key здесь, чтобы избежать конфликтов с обработчиком localStream
+        if (Platform.OS === 'ios') {
+          needsIOSUpdateAfterNextRef.current = true;
+        }
+    } catch (e: any) {
+      // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей на Android
+      const errorMsg = e?.message || String(e || '');
+      logger.error('[RandomChat] Error next:', {
+        error: errorMsg,
+        errorName: e?.name,
+        // Не логируем полный объект ошибки - это может вызвать проблемы на Android
+      });
+      
+      // КРИТИЧНО: Показываем Alert только если это не критическая ошибка
+      // Критические ошибки (например, краши) не должны показывать Alert
+      try {
+        if (!errorMsg.includes('crash') && !errorMsg.includes('fatal')) {
+          Alert.alert('Ошибка', 'Не удалось перейти к следующему собеседнику');
+        }
+      } catch (alertError) {
+        // Игнорируем ошибки показа Alert - это не критично
+        logger.debug('[RandomChat] Error showing alert', alertError);
+      }
     } finally {
-      // ОПТИМИЗИРОВАНО: Уменьшено с 1500ms до 800ms для быстрого переключения между собеседниками
+      // КРИТИЧНО: Увеличено время блокировки до 1500ms для гарантии полного отключения комнаты
+      // Это предотвращает спам нажатий и гарантирует корректное отключение перед новым подключением
+      // Время синхронизировано с NEXT_DEBOUNCE_MS в RandomChatSession
       setTimeout(() => {
+        isNextingRef.current = false;
         setIsNexting(false);
-      }, 800);
+      }, 1500);
     }
-  }, [isNexting, started]);
+  }, [isNexting, started, loading, isInactiveState, canRunAction]);
   
   // Функция для переключения динамика собеседника
   const toggleRemoteAudio = useCallback(() => {
@@ -752,7 +867,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         toggleRemoteAudioRef.current = false;
       }, 300);
     }
-  }, []);
+  }, [canRunAction]);
   
   // КРИТИЧНО: ЗАЩИТА ОТ ДВОЙНЫХ НАЖАТИЙ для всех кнопок управления
   const toggleMicRef = useRef(false);
@@ -789,19 +904,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         toggleCamRef.current = false;
       }, 400); // чуть больше, чтобы игнорировать даблтап/спам
     }
-  }, []);
-
-  // Дополнительная защита от спама кнопок: минимальный интервал между действиями
-  const lastActionRef = useRef<number>(0);
-  const actionCooldownMs = 250;
-  const canRunAction = useCallback(() => {
-    const now = Date.now();
-    if (now - lastActionRef.current < actionCooldownMs) {
-      return false;
-    }
-    lastActionRef.current = now;
-    return true;
-  }, []);
+  }, [canRunAction]);
   
   // Вычисляемые значения
   const hasActiveCall = !!partnerId || !!roomId;
@@ -810,37 +913,54 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // КРИТИЧНО: Обновляем localRenderKey только при реальном изменении localStream (streamId) или camOn
   // Это предотвращает мерцание при next() - когда localStream остается тем же объектом
+  // КРИТИЧНО: На iOS дополнительно проверяем изменение streamURL для принудительного обновления
+  const prevStreamURLRef = useRef<string | null>(null);
+  
   useEffect(() => {
     if (started && !isInactiveState && localStream) {
       const currentStreamId = localStream.id;
       const prevStreamId = localStreamIdRef.current;
       const prevCamOn = prevCamOnRef.current;
+      const currentStreamURL = localStream.toURL?.() || null;
+      const prevStreamURL = prevStreamURLRef.current;
       
       // Обновляем localRenderKey только если:
       // 1. streamId изменился (новый стрим)
       // 2. camOn изменился (включение/выключение камеры)
+      // 3. КРИТИЧНО для iOS: streamURL изменился (важно при пересоздании треков)
+      // 4. КРИТИЧНО для iOS: это новый объект стрима (даже если streamId тот же)
       const streamIdChanged = prevStreamId !== currentStreamId;
       const camOnChanged = prevCamOn !== camOn;
-      const shouldUpdate = streamIdChanged || camOnChanged || (prevStreamId === null && currentStreamId);
+      const streamURLChanged = prevStreamURL !== currentStreamURL;
+      // КРИТИЧНО: На iOS обновляем key при изменении streamURL или новом объекте стрима
+      // Это предотвращает зависание видео при пересоздании треков
+      // На iOS RTCView требует обновления key для корректного обновления streamURL
+      const isIOSUpdate = Platform.OS === 'ios' && 
+        (streamURLChanged || (prevStreamURL === null && currentStreamURL !== null));
+      const shouldUpdate = streamIdChanged || camOnChanged || (prevStreamId === null && currentStreamId) || isIOSUpdate;
       
       if (shouldUpdate) {
-        setLocalRenderKey(k => k + 1);
-        localStreamIdRef.current = currentStreamId;
-        prevCamOnRef.current = camOn;
-        logger.debug('[RandomChat] Updated localRenderKey due to streamId or camOn change', {
-          camOn,
-          hasLocalStream: !!localStream,
-          videoTracksCount: localStream.getVideoTracks().length,
-          streamId: currentStreamId,
-          prevStreamId,
-          streamIdChanged,
-          camOnChanged,
-        });
+        // УПРОЩЕНО: Обновляем key только если прошло достаточно времени или это критичное обновление
+        const now = Date.now();
+        const isCriticalUpdate = streamIdChanged || camOnChanged;
+        if (now - lastLocalRenderKeyUpdateRef.current >= MIN_LOCAL_RENDER_KEY_UPDATE_INTERVAL_MS || isCriticalUpdate) {
+          setLocalRenderKey(k => k + 1);
+          localStreamIdRef.current = currentStreamId;
+          prevCamOnRef.current = camOn;
+          prevStreamURLRef.current = currentStreamURL;
+          lastLocalRenderKeyUpdateRef.current = now;
+          if (Platform.OS === 'ios') {
+            localStreamTimestampRef.current = now;
+          }
+        }
       }
     } else if (!localStream) {
       // Сбрасываем ref когда стрим удаляется
       localStreamIdRef.current = null;
       prevCamOnRef.current = null;
+      prevStreamURLRef.current = null;
+      localStreamTimestampRef.current = 0;
+      needsIOSUpdateAfterNextRef.current = false;
     }
   }, [camOn, localStream, started, isInactiveState]);
   
@@ -959,8 +1079,12 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     try {
       startedRef.current = false;
       loadingRef.current = false;
+      isStoppingRef.current = false;
+      // КРИТИЧНО: Сбрасываем флаг isNexting при принудительной остановке
+      isNextingRef.current = false;
       setStarted(false);
       setLoading(false);
+      setIsNexting(false);
       setIsInactiveState(true);
       setPartnerId(null);
       setPartnerUserId(null);
@@ -969,6 +1093,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setRemoteMuted(false);
       setCamOn(false);
       setMicOn(false);
+      localStreamRef.current = null;
+      localStreamTimestampRef.current = 0;
+      needsIOSUpdateAfterNextRef.current = false;
       stopSpeaker();
     } catch (e) {
       logger.error('[RandomChat] Error resetting state in forceStopRandomChat:', e);
@@ -1298,11 +1425,29 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             // Показываем видео только если трек live, enabled и не muted.
             // КРИТИЧНО: Локальное состояние камеры (camOn) НЕ влияет на показ удаленного видео
             if (!vt) {
-              // Нет видео трека - показываем заглушку "Отошел" только если это действительно отсутствие удаленного видео
+              // Нет видео трека - проверяем время получения стрима
+              // Если стрим получен недавно (< 2000ms), показываем лоадер вместо заглушки
+              // Это предотвращает появление "Отошел?" при установке соединения
+              const streamReceivedAt = remoteStreamReceivedAtRef.current;
+              const isRecentlyReceived = streamReceivedAt && (Date.now() - streamReceivedAt) < 2000;
+              
+              if (isRecentlyReceived) {
+                // Стрим только что получен - показываем загрузку вместо заглушки
+                // Это предотвращает мерцание "Отошел" при установке соединения
+                logRemoteRenderState('no-video-track-warming-up', {
+                  remoteStreamId: remoteStream?.id,
+                  hasRemoteStream: !!remoteStream,
+                  timeSinceReceived: Date.now() - (streamReceivedAt || 0),
+                });
+                return <ActivityIndicator size="large" color="#fff" />;
+              }
+              
+              // Нет видео трека и прошло достаточно времени - показываем заглушку "Отошел"
               // (не из-за выключения локальной камеры)
               logRemoteRenderState('no-video-track', {
                 remoteStreamId: remoteStream?.id,
                 hasRemoteStream: !!remoteStream,
+                timeSinceReceived: streamReceivedAt ? Date.now() - streamReceivedAt : null,
               });
               return <AwayPlaceholder />;
             }
@@ -1547,7 +1692,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 const localStreamURL = displayStream.toURL?.();
                 // КРИТИЧНО: Используем комбинацию streamId, camOn и localRenderKey для принудительного обновления
                 // Это гарантирует, что видео обновится при включении камеры
-                const localRtcViewKey = `local-${displayStream.id}-${camOn}-${localRenderKey}`;
+                // КРИТИЧНО для iOS: Добавляем timestamp в key для гарантированного обновления RTCView
+                const localRtcViewKey = Platform.OS === 'ios' 
+                  ? `local-${displayStream.id}-${camOn}-${localRenderKey}-${localStreamTimestampRef.current}`
+                  : `local-${displayStream.id}-${camOn}-${localRenderKey}`;
                 
                 logger.debug('[RandomChat] Rendering local video', {
                   camOn,
@@ -1674,9 +1822,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             style={[
               styles.bigBtn,
               styles.btnTitan,
-              (!started || isNexting || isInactiveState) && styles.disabled
+              (!started || isNexting || isInactiveState || loading) && styles.disabled
             ]}
-            disabled={!started || isNexting || isInactiveState}
+            disabled={!started || isNexting || isInactiveState || loading}
             onPress={onNext}
           >
             <Text style={styles.bigBtnText}>
@@ -1991,26 +2139,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     marginTop: 16,
   },
-  btnGlassBase: {
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 48,
-    flex: 1,
-  },
   btnGlassSuccess: {
     backgroundColor: 'rgba(76, 175, 80, 0.16)',
     borderColor: 'rgba(76, 175, 80, 0.65)',
-  },
-  btnGlassDanger: {
-    backgroundColor: 'rgba(255,77,77,0.16)',
-    borderColor: 'rgba(255,77,77,0.65)',
-  },
-  modalBtnText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '700',
   },
 });
 

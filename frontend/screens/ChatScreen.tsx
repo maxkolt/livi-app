@@ -667,8 +667,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   const Header = () => (
     <View
       style={{
-        paddingTop: insets.top,
-        height: headerH + insets.top,
+        // КРИТИЧНО: Не добавляем paddingTop, так как SafeAreaView уже обрабатывает safe area
+        // Используем одинаковую высоту для iOS и Android для единообразного стиля
+        height: headerH,
         backgroundColor: LIVI.bg,
         borderBottomWidth: BORDER_WIDTH,
         borderBottomColor: BORDER_COLOR,
@@ -746,6 +747,8 @@ export default function ChatScreen({ route, navigation }: Props) {
         if (avatarThumbB64) {
           try {
             await putThumb(userId, avatarVer, avatarThumbB64);
+            // КРИТИЧНО: Обновляем fullAvatarUri сразу с миниатюрой для мгновенного отображения
+            setFullAvatarUri(avatarThumbB64);
           } catch (e) {
             console.warn('[ChatScreen] Failed to cache thumbnail:', e);
           }
@@ -760,7 +763,10 @@ export default function ChatScreen({ route, navigation }: Props) {
       // Обрабатываем только массив (для online статуса), игнорируем объекты {userId, busy}
       if (Array.isArray(data)) {
         const onlineSet = new Set((data || []).map((it: any) => String((it as any)?._id ?? it)));
-        navigation.setParams({ peerOnline: onlineSet.has(String(peerId)) });
+        const isOnline = onlineSet.has(String(peerId));
+        // КРИТИЧНО: Обновляем и локальное состояние, и navigation params для обновления в реальном времени
+        setPeerOnline(isOnline);
+        navigation.setParams({ peerOnline: isOnline });
       }
     });
     return () => { offProfile?.(); offPresence?.(); };
@@ -782,6 +788,8 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (avatarThumbB64 && avatarVer) {
         try {
           await putThumb(userId, avatarVer, avatarThumbB64);
+          // КРИТИЧНО: Обновляем fullAvatarUri сразу с миниатюрой для мгновенного отображения
+          setFullAvatarUri(avatarThumbB64);
         } catch (e) {
           console.warn('[ChatScreen] Failed to cache thumbnail:', e);
         }
@@ -1662,7 +1670,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   return (
     <SafeAreaView 
       style={{ flex: 1, backgroundColor: LIVI.surface }}
-      edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
+      // КРИТИЧНО: На Android убираем 'bottom' из edges, чтобы избежать белого пробела после скрытия клавиатуры
+      // adjustResize уже обрабатывает изменение размера экрана, SafeAreaView не должен добавлять лишний отступ
+      edges={Platform.OS === 'android' ? ['top', 'left', 'right'] : ['top', 'bottom', 'left', 'right']}
     >
       <Header />
       {loading ? (
@@ -1754,6 +1764,8 @@ export default function ChatScreen({ route, navigation }: Props) {
               backgroundColor: LIVI.bg,
               paddingHorizontal: 16,
               paddingTop: 18,
+              // КРИТИЧНО: Используем одинаковый paddingBottom для iOS и Android для единообразного стиля
+              // SafeAreaView уже обрабатывает safe area, поэтому не добавляем insets.bottom
               paddingBottom: 26,
             }}
             onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
@@ -1823,7 +1835,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           </View>
         </KeyboardAvoidingView>)
       ) : (
-        // Android: FlatList без KeyboardAvoidingView, блок ввода обернут отдельно
+        // Android: Не используем KeyboardAvoidingView, так как adjustResize в манифесте уже обрабатывает клавиатуру
+        // KeyboardAvoidingView оставляет отступы после скрытия клавиатуры, поэтому используем только adjustResize
         (<View style={{ flex: 1 }}>
           <FlatList
             ref={flatListRef}
@@ -1850,8 +1863,13 @@ export default function ChatScreen({ route, navigation }: Props) {
             inverted={!isEmpty}
             maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
             ListHeaderComponent={!isEmpty ? () => (
-              // Отступ под блок ввода; с adjustResize хватит высоты инпута + нижнего инсета
-              <View style={{ height: 70 + insets.bottom }} />
+              // КРИТИЧНО: Отступ под блок ввода - постоянный независимо от состояния клавиатуры
+              // Это обеспечивает одинаковый отступ между сообщениями и блоком ввода в любом состоянии
+              <View style={{ 
+                height: inputHeight > 0 
+                  ? inputHeight + insets.bottom - 130  // Постоянный отступ для обоих состояний
+                  : 100 
+              }} />
             ) : null}
             ListEmptyComponent={() => (
               <View
@@ -1881,26 +1899,29 @@ export default function ChatScreen({ route, navigation }: Props) {
               </View>
             )}
           />
-          {/* Поле ввода для Android - динамическая позиция на основе высоты клавиатуры */}
-          <View
-            style={{
-              position: 'absolute',
-              // С adjustResize система сама ужимает экран под клавиатуру.
-              // Держим инпут у низа, учитывая только safe-area.
-              bottom: insets.bottom,
-              left: 0,
-              right: 0,
-            }}
+          {/* Поле ввода для Android - оборачиваем в KeyboardAvoidingView только блок ввода */}
+          <KeyboardAvoidingView
+            behavior="padding"
+            // КРИТИЧНО: Используем динамический offset на основе реальной высоты клавиатуры для универсальности
+            // Это обеспечит правильную работу на всех Android устройствах с разными размерами клавиатур
+            // Увеличиваем коэффициент и добавляем фиксированное значение для поднятия блока выше
+            keyboardVerticalOffset={keyboardVisible && keyboardHeight > 0 
+              ? Math.max(0, keyboardHeight * 0.12) // 15% от высоты клавиатуры + 20px, минимум 0
+              : 0}
           >
             <View
               style={{
                 borderTopWidth: BORDER_WIDTH,
                 borderTopColor: BORDER_COLOR,
                 backgroundColor: LIVI.bg,
-                paddingHorizontal: 14,
-                paddingTop: 12,
-                paddingBottom: 12,
+              paddingHorizontal: 16,
+              paddingTop: 18,
+              paddingBottom: 22, // Возвращаем исходные размеры
+              // КРИТИЧНО: Уменьшаем marginBottom чтобы поднять блок ввода чуть выше
+              // KeyboardAvoidingView поднимает блок над клавиатурой, marginBottom для отступа от навигации
+              marginBottom: Math.max(0, insets.bottom + 0),
               }}
+              onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
             >
             <View
               style={{
@@ -1909,7 +1930,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 backgroundColor: "rgba(255,255,255,0.06)",
                 borderRadius: 28,
                 paddingHorizontal: 12,
-                paddingVertical: 4,
+               
                 borderWidth: 1,
                 borderColor: BORDER_COLOR,
               }}
@@ -1918,7 +1939,10 @@ export default function ChatScreen({ route, navigation }: Props) {
 
               <TouchableOpacity
                 onPress={handleAttachments}
-                style={{ padding: 2, marginRight: 2 }}
+                style={{
+                  padding: 2,
+                  marginRight: 12,
+                }}
               >
                 <Ionicons name="image" size={28} color={LIVI.titan} />
               </TouchableOpacity>
@@ -1954,7 +1978,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               </TouchableOpacity>
             </View>
           </View>
-          </View>
+          </KeyboardAvoidingView>
         </View>)
       )}
       {/* Полноэкранный просмотр медиа */}
