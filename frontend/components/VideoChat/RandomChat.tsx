@@ -102,6 +102,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
   const [remoteMuted, setRemoteMuted] = useState(false);
+  const [remoteCamEnabled, setRemoteCamEnabled] = useState(false);
   const [remoteViewKey, setRemoteViewKey] = useState(0);
   const [localRenderKey, setLocalRenderKey] = useState(0);
   const localStreamIdRef = useRef<string | null>(null);
@@ -160,6 +161,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       remoteStreamRef.current = null;
       setRemoteStream(null);
       remoteStreamReceivedAtRef.current = null;
+      setRemoteCamEnabled(false);
       setRemoteViewKey((k) => k + 1);
     }
   }, [partnerId]);
@@ -387,11 +389,30 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         },
         onCamStateChange: (enabled) => {
           setCamOn(enabled);
+          // КРИТИЧНО: Обновляем localRenderKey при изменении состояния камеры
+          // Это гарантирует немедленное обновление видео при включении/выключении камеры
+          if (Platform.OS === 'ios') {
+            const now = Date.now();
+            if (now - lastLocalRenderKeyUpdateRef.current >= MIN_LOCAL_RENDER_KEY_UPDATE_INTERVAL_MS) {
+              setLocalRenderKey(k => k + 1);
+              localStreamTimestampRef.current = now;
+              lastLocalRenderKeyUpdateRef.current = now;
+              logger.debug('[RandomChat] Updated localRenderKey on cam state change', { enabled });
+            }
+          } else {
+            // На Android тоже обновляем key для надежности
+            const now = Date.now();
+            if (now - lastLocalRenderKeyUpdateRef.current >= MIN_LOCAL_RENDER_KEY_UPDATE_INTERVAL_MS) {
+              setLocalRenderKey(k => k + 1);
+              lastLocalRenderKeyUpdateRef.current = now;
+              logger.debug('[RandomChat] Updated localRenderKey on cam state change', { enabled });
+            }
+          }
         },
         onRemoteCamStateChange: (enabled) => {
-          // RandomChat (LiveKit): состояние камеры определяется по media tracks, не по отдельному флагу.
-          // Оставляем callback, чтобы не ломать интерфейс WebRTCSessionConfig.
-          void enabled;
+          // КРИТИЧНО: Сохраняем состояние камеры партнера для правильного отображения заглушки
+          setRemoteCamEnabled(enabled);
+          logger.debug('[RandomChat] Remote camera state changed', { enabled });
         },
         onLoadingChange: (loading) => {
           setLoading(loading);
@@ -536,6 +557,12 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         // Это предотвращает мерцание заглушки "Отошел" при получении треков
         remoteStreamReceivedAtRef.current = Date.now();
         
+        // КРИТИЧНО: При получении нового партнера сбрасываем состояние камеры
+        // Оно обновится через onRemoteCamStateChange когда треки будут получены
+        if (isNewPartner) {
+          setRemoteCamEnabled(false);
+        }
+        
         logger.info('[RandomChat] Remote stream received', {
           streamId: stream.id,
           prevStreamId: prevStream?.id,
@@ -584,6 +611,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       } else {
         setRemoteStream(null);
         setRemoteMuted(false);
+        setRemoteCamEnabled(false);
         remoteStreamReceivedAtRef.current = null;
       }
     });
@@ -626,6 +654,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setRemoteStream(null);
       remoteStreamReceivedAtRef.current = null;
       setRemoteMuted(false);
+      setRemoteCamEnabled(false);
       setRemoteViewKey((k: number) => k + 1);
     });
     
@@ -1091,6 +1120,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setRoomId(null);
       setRemoteStream(null);
       setRemoteMuted(false);
+      setRemoteCamEnabled(false);
       setCamOn(false);
       setMicOn(false);
       localStreamRef.current = null;
@@ -1425,35 +1455,67 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             // Показываем видео только если трек live, enabled и не muted.
             // КРИТИЧНО: Локальное состояние камеры (camOn) НЕ влияет на показ удаленного видео
             if (!vt) {
-              // Нет видео трека - проверяем время получения стрима
-              // Если стрим получен недавно (< 2000ms), показываем лоадер вместо заглушки
-              // Это предотвращает появление "Отошел?" при установке соединения
+              // Нет видео трека - проверяем состояние камеры партнера
+              // КРИТИЧНО: Если камера партнера выключена (remoteCamEnabled === false), сразу показываем заглушку
+              // Лоадер показываем только если камера включена, но трек еще не получен (установка соединения)
               const streamReceivedAt = remoteStreamReceivedAtRef.current;
               const isRecentlyReceived = streamReceivedAt && (Date.now() - streamReceivedAt) < 2000;
               
-              if (isRecentlyReceived) {
-                // Стрим только что получен - показываем загрузку вместо заглушки
+              // КРИТИЧНО: Если камера партнера выключена, сразу показываем заглушку
+              // Не ждем 2 секунды, так как видео трека точно не будет
+              if (remoteCamEnabled === false) {
+                logRemoteRenderState('no-video-track-camera-off', {
+                  remoteStreamId: remoteStream?.id,
+                  hasRemoteStream: !!remoteStream,
+                  remoteCamEnabled: false,
+                  timeSinceReceived: streamReceivedAt ? Date.now() - streamReceivedAt : null,
+                });
+                return <AwayPlaceholder />;
+              }
+              
+              // Камера включена, но видео трека еще нет - это может быть при установке соединения
+              // Показываем лоадер только если стрим получен недавно (< 2000ms)
+              if (isRecentlyReceived && remoteStream) {
+                // Стрим только что получен и камера включена - показываем загрузку
                 // Это предотвращает мерцание "Отошел" при установке соединения
                 logRemoteRenderState('no-video-track-warming-up', {
                   remoteStreamId: remoteStream?.id,
                   hasRemoteStream: !!remoteStream,
+                  remoteCamEnabled: true,
                   timeSinceReceived: Date.now() - (streamReceivedAt || 0),
                 });
                 return <ActivityIndicator size="large" color="#fff" />;
               }
               
               // Нет видео трека и прошло достаточно времени - показываем заглушку "Отошел"
-              // (не из-за выключения локальной камеры)
-              logRemoteRenderState('no-video-track', {
+              // Это означает что трек не был получен в течение 2 секунд
+              logRemoteRenderState('no-video-track-timeout', {
                 remoteStreamId: remoteStream?.id,
                 hasRemoteStream: !!remoteStream,
+                remoteCamEnabled,
                 timeSinceReceived: streamReceivedAt ? Date.now() - streamReceivedAt : null,
               });
               return <AwayPlaceholder />;
             }
 
             if (!isTrackLive) {
-              // Трек не live - показываем индикатор загрузки
+              // Трек не live - проверяем, не выключена ли камера
+              // КРИТИЧНО: Если трек muted или disabled, камера выключена - показываем заглушку
+              const isCameraOff = videoTrackMuted === true || videoTrackEnabled === false;
+              
+              if (isCameraOff) {
+                // Камера партнера выключена - сразу показываем заглушку
+                logRemoteRenderState('video-track-not-live-camera-off', {
+                  remoteStreamId: remoteStream?.id,
+                  trackId: vt.id,
+                  readyState: vt.readyState,
+                  videoTrackEnabled,
+                  videoTrackMuted,
+                });
+                return <AwayPlaceholder />;
+              }
+              
+              // Трек не live, но камера включена - показываем индикатор загрузки
               logRemoteRenderState('video-track-not-live', {
                 remoteStreamId: remoteStream?.id,
                 trackId: vt.id,
@@ -1531,14 +1593,31 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               // (трек disabled, muted или не live)
               // КРИТИЧНО: Это происходит ТОЛЬКО когда удаленный пользователь выключил свою камеру
               // Локальное состояние камеры (camOn) НЕ влияет на это решение
-              // КРИТИЧНО: Если трек только что получен (менее 2000ms назад), показываем ActivityIndicator
-              // вместо AwayPlaceholder, чтобы дать треку время стать готовым и избежать мерцания
-              // Увеличено время с 500ms до 2000ms для надежного отображения видео без мерцания
+              // КРИТИЧНО: Если трек muted или disabled, сразу показываем заглушку (камера выключена)
+              // Лоадер показываем только если трек еще не готов (не live) и стрим только что получен
               const streamReceivedAt = remoteStreamReceivedAtRef.current;
               const isRecentlyReceived = streamReceivedAt && (Date.now() - streamReceivedAt) < 2000;
               
-              if (isRecentlyReceived) {
-                // Трек только что получен - показываем загрузку вместо заглушки
+              // КРИТИЧНО: Если трек muted или disabled, это означает что камера выключена
+              // В этом случае сразу показываем заглушку, не ждем
+              const isCameraOff = videoTrackMuted === true || videoTrackEnabled === false;
+              
+              if (isCameraOff) {
+                // Камера партнера выключена - сразу показываем заглушку
+                logRemoteRenderState('video-camera-off', {
+                  streamId: remoteStream?.id,
+                  hasStream: !!remoteStream,
+                  isTrackLive,
+                  videoTrackEnabled,
+                  videoTrackMuted,
+                });
+                return <AwayPlaceholder />;
+              }
+              
+              // Трек не muted и enabled, но не готов к показу
+              // Если трек только что получен и еще не live, показываем лоадер
+              if (isRecentlyReceived && !isTrackLive) {
+                // Трек только что получен и еще не готов - показываем загрузку
                 // Это предотвращает мерцание "Отошел" при установке соединения
                 logRemoteRenderState('video-track-warming-up', {
                   streamId: remoteStream?.id,
@@ -1551,6 +1630,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 return <ActivityIndicator size="large" color="#fff" />;
               }
               
+              // Трек не готов и прошло достаточно времени - показываем заглушку
               logRemoteRenderState('video-not-renderable', {
                 streamId: remoteStream?.id,
                 hasStream: !!remoteStream,

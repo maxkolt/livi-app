@@ -290,11 +290,21 @@ export class RandomChatSession extends SimpleEventEmitter {
   }
 
   autoNext(_reason?: string): void {
-    // КРИТИЧНО: Не запускаем поиск если идет отключение или уже есть комната
-    if (this.isDisconnecting || this.room) {
-      logger.debug('[RandomChatSession] autoNext: skipping (disconnecting or room exists)', {
-        isDisconnecting: this.isDisconnecting,
-        hasRoom: !!this.room
+    // КРИТИЧНО: Не запускаем поиск если идет отключение
+    // КРИТИЧНО: Проверяем состояние комнаты - если она disconnected или null, можно запускать поиск
+    // Это важно для fallback после next(), когда комната уже отключена, но еще не null
+    if (this.isDisconnecting) {
+      logger.debug('[RandomChatSession] autoNext: skipping (disconnecting)', {
+        isDisconnecting: this.isDisconnecting
+      });
+      return;
+    }
+    
+    // КРИТИЧНО: Проверяем состояние комнаты - если она connected или connecting, не запускаем поиск
+    // Но если комната disconnected или null, можно запускать поиск (fallback после next())
+    if (this.room && (this.room.state === 'connected' || this.room.state === 'connecting' || this.room.state === 'reconnecting')) {
+      logger.debug('[RandomChatSession] autoNext: skipping (room is active)', {
+        roomState: this.room.state
       });
       return;
     }
@@ -307,6 +317,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.emit('searching');
       this.config.callbacks.onLoadingChange?.(true);
       this.config.onLoadingChange?.(true);
+      logger.debug('[RandomChatSession] autoNext: emitted start', { reason: _reason });
     } catch (e) {
       logger.error('[RandomChatSession] autoNext error', e);
     }
