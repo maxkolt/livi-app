@@ -56,4 +56,64 @@ router.get('/friends/check/:userId', async (req, res) => {
   }
 });
 
+// Endpoint для обработки реферальных ссылок
+router.get('/invite/:code', async (req, res) => {
+  try {
+    const code = String(req.params.code || '').trim();
+    const me = (req as any)?.userId as string | undefined; // Текущий пользователь (если авторизован)
+    
+    console.log('[friends] /api/invite/:code called', { code, me, url: req.url, path: req.path });
+    
+    // Проверяем валидность кода (должен быть ObjectId)
+    if (!code || !/^[a-f\d]{24}$/i.test(code)) {
+      console.log('[friends] Invalid code format:', code);
+      return res.status(400).json({ ok: false, error: 'invalid_code' });
+    }
+
+    // Ищем пользователя по коду
+    const inviter = await User.findById(code).select('nick avatar avatarVer avatarThumbB64').lean();
+    
+    if (!inviter) {
+      return res.status(404).json({ ok: false, error: 'user_not_found' });
+    }
+
+    // Если пользователь авторизован, проверяем статус дружбы
+    let areFriends = false;
+    let hasPendingRequest = false;
+    
+    if (me && me !== code) {
+      // Проверяем, не являются ли они уже друзьями
+      areFriends = await areFriendsCached(me, code);
+      
+      // Проверяем, есть ли уже заявка в друзья
+      if (!areFriends) {
+        const meUser = await User.findById(me).select('friendRequests').lean();
+        if (meUser && Array.isArray((meUser as any).friendRequests)) {
+          hasPendingRequest = (meUser as any).friendRequests.some((id: any) => String(id) === code);
+        }
+      }
+    }
+
+    const response = {
+      ok: true,
+      inviter: {
+        id: String(inviter._id),
+        nick: inviter.nick || '',
+        avatar: (inviter as any).avatar || '',
+        avatarVer: (inviter as any).avatarVer || 0,
+        avatarThumbB64: (inviter as any).avatarThumbB64 || '',
+      },
+      areFriends,
+      hasPendingRequest,
+      canAdd: me && me !== code && !areFriends && !hasPendingRequest,
+    };
+    
+    console.log('[friends] /api/invite/:code success', { code, hasInviter: !!inviter, areFriends, hasPendingRequest });
+    res.json(response);
+  } catch (e: any) {
+    console.error('[friends] /api/invite/:code error:', e);
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 export default router;

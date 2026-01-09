@@ -935,6 +935,16 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     }
   }, [canRunAction]);
   
+  const handleFlipCamera = useCallback(async () => {
+    if (!sessionRef.current || !canRunAction()) return;
+    
+    try {
+      await sessionRef.current.flipCam();
+    } catch (e) {
+      logger.warn('[RandomChat] Error flipping camera', e);
+    }
+  }, [canRunAction]);
+  
   // Вычисляемые значения
   const hasActiveCall = !!partnerId || !!roomId;
   const shouldShowLocalVideo = camOn && !isInactiveState;
@@ -1134,16 +1144,32 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // Обработка AppState - для рандомного чата останавливаем при уходе в фон
   useEffect(() => {
+    let inactiveTimeout: NodeJS.Timeout | null = null;
     const sub = AppState.addEventListener('change', async (nextAppState) => {
       try {
         if (nextAppState === 'background' || nextAppState === 'inactive') {
           // КРИТИЧНО: При переходе в фон останавливаем чат, чтобы предотвратить
           // проблемы с WebRTC/LiveKit соединением, которые могут привести к крэшу на Android
-          if (startedRef.current || loadingRef.current) {
-            logger.info('[RandomChat] AppState changed to background/inactive, stopping chat');
-            forceStopRandomChat();
+          // КРИТИЧНО: Добавляем небольшую задержку для 'inactive', чтобы не реагировать на временные изменения при переходах между экранами
+          if (nextAppState === 'background') {
+            if (startedRef.current || loadingRef.current) {
+              logger.info('[RandomChat] AppState changed to background, stopping chat');
+              forceStopRandomChat();
+            }
+          } else if (nextAppState === 'inactive') {
+            // Для 'inactive' ждем 500ms - если состояние не вернется в 'active', останавливаем чат
+            inactiveTimeout = setTimeout(() => {
+              if (startedRef.current || loadingRef.current) {
+                logger.info('[RandomChat] AppState stayed inactive, stopping chat');
+                forceStopRandomChat();
+              }
+            }, 500);
           }
         } else if (nextAppState === 'active') {
+          if (inactiveTimeout) {
+            clearTimeout(inactiveTimeout);
+            inactiveTimeout = null;
+          }
           // При возврате в активное состояние включаем динамик если есть удаленный стрим
           if (remoteStream) {
             try {
@@ -1158,7 +1184,12 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       }
     });
     
-    return () => sub.remove();
+    return () => {
+      if (inactiveTimeout) {
+        clearTimeout(inactiveTimeout);
+      }
+      sub.remove();
+    };
   }, [remoteStream, forceSpeakerOnHard, forceStopRandomChat]);
   
   // Keep-awake для активного видеозвонка
@@ -1810,17 +1841,17 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                     />
                   );
                 } else {
-                  logger.warn('[RandomChat] Local streamURL unavailable, showing black view');
-                  return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
+                  logger.debug('[RandomChat] Local streamURL unavailable, showing placeholder');
+                  return <Text style={styles.placeholder}>{L("you")}</Text>;
                 }
               } else {
-                logger.warn('[RandomChat] Local stream invalid or missing, showing black view', {
+                logger.debug('[RandomChat] Local stream not ready yet, showing placeholder', {
                   hasLocalStream: !!localStream,
                   hasLocalStreamRef: !!localStreamRef.current,
                   isValid: localStream ? isValidStream(localStream) : false,
                   isValidRef: localStreamRef.current ? isValidStream(localStreamRef.current) : false,
                 });
-                return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;
+                return <Text style={styles.placeholder}>{L("you")}</Text>;
               }
             } else {
               // КРИТИЧНО: При выключении камеры показываем заглушку "Вы"
@@ -1840,7 +1871,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               {/* Кнопка переворота камеры (слева вверху) */}
               <Animated.View style={[styles.topLeft, { opacity: buttonsOpacity }]}>
                 <TouchableOpacity
-                  onPress={() => sessionRef.current?.flipCam()}
+                  onPress={handleFlipCamera}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   activeOpacity={0.7}
                   style={styles.iconBtn}

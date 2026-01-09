@@ -374,6 +374,14 @@ export function respondFriend(fromUserId: string, accept: boolean, requestId?: s
   );
 }
 
+export function acceptInvite(inviterId: string) {
+  if (!isOid(inviterId)) return Promise.reject(new Error("invalid ObjectId"));
+  return emitAck<{ ok: boolean; status?: string; error?: string }>(
+    "friends:acceptInvite",
+    { inviterId },
+  );
+}
+
 export function fetchFriends(page: number = 1, limit: number = 50) {
   return emitAck<{ 
     ok: boolean; 
@@ -444,6 +452,78 @@ export function onFriendRemoved(cb: (p: { userId: string }) => void): () => void
 export function removeFriend(peerId: string) {
   if (!isOid(peerId)) return Promise.reject(new Error("invalid ObjectId"));
   return emitAck<{ ok: boolean; error?: string }>("friends:remove", { peerId });
+}
+
+// Проверка реферальной ссылки
+export async function checkInviteLink(code: string): Promise<{
+  ok: boolean;
+  inviter?: {
+    id: string;
+    nick: string;
+    avatar: string;
+    avatarVer: number;
+    avatarThumbB64: string;
+  };
+  areFriends?: boolean;
+  hasPendingRequest?: boolean;
+  canAdd?: boolean;
+  error?: string;
+}> {
+  try {
+    if (!isOid(code)) {
+      return { ok: false, error: 'invalid_code' };
+    }
+
+    const userId = getCurrentUserId();
+    const headers: Record<string, string> = {};
+    
+    if (userId) {
+      headers['x-user-id'] = userId;
+    }
+
+    const url = `${API_BASE}/api/invite/${code}`;
+    logger.debug('Checking invite link:', { url, code, userId });
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+    });
+
+    // Проверяем статус ответа
+    if (!response.ok) {
+      const text = await response.text();
+      logger.error('Invite link check failed:', { 
+        status: response.status, 
+        statusText: response.statusText,
+        url,
+        responseText: text.substring(0, 200) // Первые 200 символов для отладки
+      });
+      return { ok: false, error: `http_error_${response.status}` };
+    }
+
+    // Проверяем Content-Type
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      const text = await response.text();
+      logger.error('Invite link check returned non-JSON:', { 
+        contentType,
+        url,
+        responseText: text.substring(0, 200) // Первые 200 символов для отладки
+      });
+      return { ok: false, error: 'invalid_response_format' };
+    }
+
+    const data = await response.json();
+    logger.debug('Invite link check success:', { code, hasInviter: !!data.inviter });
+    return data;
+  } catch (e: any) {
+    logger.error('Failed to check invite link:', { 
+      error: e?.message || e,
+      code,
+      stack: e?.stack 
+    });
+    return { ok: false, error: e?.message || 'network_error' };
+  }
 }
 
 export function checkFriendship(userId: string) {

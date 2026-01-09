@@ -29,8 +29,15 @@
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="livi"/>
+        <data android:scheme="livi" android:host="invite" android:pathPrefix="/"/>
         <data android:scheme="exp+livi-video-chat"/>
+      </intent-filter>
+      <!-- Intent filter для обработки intent:// URLs -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="livi" android:host="invite"/>
       </intent-filter>
       <intent-filter data-generated="true">
         <action android:name="android.intent.action.VIEW"/>

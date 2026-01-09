@@ -118,6 +118,75 @@ export default function registerFriendSockets(io: Server) {
         return ack?.({ ok: false, error: 'server_error' });
       }
     });
+    /** ===== Принятие invite link (сразу добавляет в друзья) ===== */
+    sock.on('friends:acceptInvite', async ({ inviterId }: { inviterId: string }, ack?: Function) => {
+      try {
+        const me = meId();
+        if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
+        if (!isOid(inviterId)) return ack?.({ ok: false, error: 'invalid_inviter' });
+        if (String(me) === String(inviterId)) return ack?.({ ok: false, error: 'self' });
+
+        // Проверяем, уже ли друзья
+        const alreadyFriends = await areFriendsCached(me, inviterId);
+        if (alreadyFriends) return ack?.({ ok: true, status: 'already' });
+
+        // Сразу добавляем дружбу в обе стороны (без заявки)
+        await (User as any).updateOne({ _id: me }, { $addToSet: { friends: inviterId } });
+        await (User as any).updateOne({ _id: inviterId }, { $addToSet: { friends: me } });
+        clearFriendshipCache(me);
+        clearFriendshipCache(inviterId);
+
+        // Удаляем заявку, если она была
+        await (User as any).updateOne({ _id: me }, { $pull: { friendRequests: inviterId } });
+        await (User as any).updateOne({ _id: inviterId }, { $pull: { friendRequests: me } });
+
+        // Отправляем актуальную информацию о профиле друг другу
+        try {
+          const meProfile = await User.findById(me).select('nick avatar avatarVer avatarThumbB64').lean();
+          if (meProfile) {
+            const mePayload = {
+              userId: me,
+              nick: String((meProfile as any).nick || '').trim(),
+              avatar: String((meProfile as any).avatar || ''),
+              avatarVer: (meProfile as any).avatarVer || 0,
+              avatarThumbB64: String((meProfile as any).avatarThumbB64 || ''),
+            };
+            io.to(`u:${String(inviterId)}`).emit('friend:profile', mePayload);
+          }
+
+          const inviterProfile = await User.findById(inviterId).select('nick avatar avatarVer avatarThumbB64').lean();
+          if (inviterProfile) {
+            const inviterPayload = {
+              userId: inviterId,
+              nick: String((inviterProfile as any).nick || '').trim(),
+              avatar: String((inviterProfile as any).avatar || ''),
+              avatarVer: (inviterProfile as any).avatarVer || 0,
+              avatarThumbB64: String((inviterProfile as any).avatarThumbB64 || ''),
+            };
+            io.to(`u:${String(me)}`).emit('friend:profile', inviterPayload);
+          }
+        } catch (profileError: any) {
+          logger.warn('Failed to send profile on invite accept:', profileError);
+        }
+
+        // Уведомления
+        for (const s of io.sockets.sockets.values()) {
+          const uid = String((s as any).data?.userId || '');
+          if (uid === String(me)) {
+            (s as any).emit('friend:accepted', { userId: inviterId });
+          }
+          if (uid === String(inviterId)) {
+            (s as any).emit('friend:accepted', { userId: me });
+          }
+        }
+
+        return ack?.({ ok: true, status: 'accepted' });
+      } catch (e: any) {
+        logger.error('Friends accept invite error:', e);
+        return ack?.({ ok: false, error: 'server_error' });
+      }
+    });
+
     /** ===== Ответ на заявку ===== */
     sock.on('friends:respond', async ({ from, accept, requestId }: { from: string; accept: boolean; requestId?: string }, ack?: Function) => {
       try {

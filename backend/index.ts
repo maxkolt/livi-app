@@ -174,6 +174,43 @@ app.get('/health', (_req, res) => res.json({ ok: true, mongo: mongoose.connectio
 /* ========= Static files ========= */
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 
+// КРИТИЧНО: Обработка веб-версии реферальных ссылок ДО express.static
+// Иначе Express будет искать статический файл /invite/:code и вернет ошибку
+app.get('/invite/:code', (req, res) => {
+  const code = req.params.code;
+  // Проверяем валидность кода
+  if (!code || !/^[a-f\d]{24}$/i.test(code)) {
+    return res.status(400).send('Invalid invite code');
+  }
+  // Отдаем HTML страницу
+  // КРИТИЧНО: После компиляции __dirname указывает на dist/, нужно подняться на уровень выше к корню проекта
+  // Используем абсолютный путь для надежности
+  const fs = require('fs');
+  const projectRoot = path.resolve(__dirname, '..');
+  const htmlPath = path.join(projectRoot, 'public/invite.html');
+  
+  // Проверяем существование файла перед отправкой
+  if (!fs.existsSync(htmlPath)) {
+    logger.error('invite.html not found', { htmlPath, __dirname, projectRoot });
+    return res.status(500).send('Invite page not found');
+  }
+  
+  res.sendFile(htmlPath, (err) => {
+    if (err) {
+      logger.error('Failed to send invite.html:', err, { 
+        htmlPath, 
+        __dirname, 
+        projectRoot,
+        fileExists: fs.existsSync(htmlPath)
+      });
+      res.status(500).send('Error loading invite page');
+    }
+  });
+});
+
+// Статические файлы после специфичных маршрутов
+app.use(express.static(path.join(__dirname, 'public')));
+
 /* ========= REST API ========= */
 app.use('/api', appSettingsRouter);
 app.use('/api', meRouter);

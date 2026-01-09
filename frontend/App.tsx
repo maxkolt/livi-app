@@ -10,11 +10,11 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, checkInviteLink, getCurrentUserId } from "./sockets/socket";
 import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
@@ -213,6 +213,180 @@ function AppContent() {
 
     })();
   }, []);
+
+  // ===== Deep Linking обработка для реферальных ссылок =====
+  const INVITE_LINK_KEY = 'pending_invite_code';
+  React.useEffect(() => {
+    // Обработка ссылки при открытии приложения
+    const handleInitialUrl = async () => {
+      try {
+        const initialUrl = await Linking.getInitialURL();
+        if (initialUrl) {
+          handleInviteLink(initialUrl);
+        }
+      } catch (e) {
+        logger.warn('Failed to get initial URL:', e);
+      }
+    };
+
+    // Обработка ссылки во время работы приложения
+    const handleUrl = (event: { url: string }) => {
+      handleInviteLink(event.url);
+    };
+
+    const subscription = Linking.addEventListener('url', handleUrl);
+    
+    // Проверяем начальную ссылку
+    handleInitialUrl();
+
+    // Проверяем сохраненный код приглашения при старте (с небольшой задержкой для готовности навигации)
+    setTimeout(() => {
+      checkPendingInvite();
+    }, 1000);
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  // Функция обработки реферальной ссылки
+  const handleInviteLink = async (url: string) => {
+    try {
+      logger.info('[App] Processing invite link:', url);
+      
+      // Парсим URL: 
+      // - livi://invite/{code} (custom scheme для тестирования)
+      // - https://livi.app/invite/{code} (Universal Links для продакшена)
+      // - http://livi.app/invite/{code} (fallback)
+      let inviteMatch = url.match(/livi:\/\/invite\/([a-f\d]{24})/i);
+      if (!inviteMatch) {
+        inviteMatch = url.match(/\/invite\/([a-f\d]{24})/i);
+      }
+      
+      if (!inviteMatch) {
+        logger.debug('[App] URL does not match invite pattern');
+        return;
+      }
+
+      const code = inviteMatch[1];
+      logger.info('[App] Extracted invite code:', code);
+
+      const userId = getCurrentUserId();
+      
+      if (!userId) {
+        // Пользователь не авторизован - сохраняем код для обработки после авторизации
+        await AsyncStorage.setItem(INVITE_LINK_KEY, code);
+        logger.info('[App] User not authorized, saved invite code for later');
+        return;
+      }
+
+      // Пользователь авторизован - обрабатываем сразу
+      await processInviteCode(code);
+    } catch (e) {
+      logger.error('[App] Error handling invite link:', e);
+    }
+  };
+
+  // Функция обработки кода приглашения
+  const processInviteCode = async (code: string) => {
+    try {
+      const userId = getCurrentUserId();
+      if (!userId) {
+        logger.warn('[App] Cannot process invite: user not authorized');
+        return;
+      }
+
+      // Проверяем ссылку через API
+      const result = await checkInviteLink(code);
+      
+      if (!result.ok) {
+        logger.warn('[App] Invalid invite link:', result.error);
+        return;
+      }
+
+      if (result.areFriends) {
+        // Пользователи уже друзья - показываем сообщение
+        logger.info('[App] Users are already friends');
+        // Можно показать toast или модалку
+        return;
+      }
+
+      if (result.hasPendingRequest) {
+        // Заявка уже отправлена
+        logger.info('[App] Friend request already pending');
+        return;
+      }
+
+      if (result.canAdd && result.inviter) {
+        // Можно добавить в друзья - сохраняем информацию для показа модалки
+        await AsyncStorage.setItem(INVITE_LINK_KEY, JSON.stringify({
+          code,
+          inviter: result.inviter,
+          timestamp: Date.now(),
+        }));
+        
+        // КРИТИЧНО: Навигация на Home с параметром для показа модалки
+        // Используем reset для гарантированного открытия HomeScreen
+        if (navRef.isReady()) {
+          const currentRoute = navRef.getCurrentRoute()?.name;
+          
+          // Если уже на Home, просто обновляем параметры
+          if (currentRoute === 'Home') {
+            navRef.dispatch(
+              CommonActions.setParams({
+                showInviteModal: true,
+                inviteCode: code,
+              })
+            );
+          } else {
+            // Если на другом экране - сбрасываем навигацию на Home
+            navRef.dispatch(
+              CommonActions.reset({
+                index: 0,
+                routes: [
+                  {
+                    name: 'Home',
+                    params: { showInviteModal: true, inviteCode: code },
+                  },
+                ],
+              })
+            );
+          }
+        } else {
+          // Если навигация еще не готова - сохраняем для обработки позже
+          logger.info('[App] Navigation not ready, will process invite when ready');
+        }
+      }
+    } catch (e) {
+      logger.error('[App] Error processing invite code:', e);
+    }
+  };
+
+  // Проверка сохраненного кода приглашения
+  const checkPendingInvite = async () => {
+    try {
+      const userId = getCurrentUserId();
+      if (!userId) return;
+
+      const saved = await AsyncStorage.getItem(INVITE_LINK_KEY);
+      if (!saved) return;
+
+      // Пытаемся распарсить как JSON (новый формат) или как строку (старый формат)
+      let code: string;
+      try {
+        const parsed = JSON.parse(saved);
+        code = parsed.code || saved;
+      } catch {
+        code = saved;
+      }
+
+      await processInviteCode(code);
+      // Удаляем после обработки
+      await AsyncStorage.removeItem(INVITE_LINK_KEY);
+    } catch (e) {
+      logger.error('[App] Error checking pending invite:', e);
+    }
+  };
 
   // КРИТИЧНО: Поддержание экрана включенным пока приложение активно (не в фоне)
   // ВСЕГДА активируем keep-awake и InCallManager когда приложение не в фоне

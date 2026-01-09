@@ -19,12 +19,15 @@ import {
   NativeModules,
   ActivityIndicator,
   Linking,
+  Share,
 } from 'react-native';
 
 import { syncMyStreamProfile } from '../chat/cometchat';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
+import * as Clipboard from 'expo-clipboard';
+import * as Sharing from 'expo-sharing';
 import SplashLoader from '../components/SplashLoader';
 import { Swipeable } from 'react-native-gesture-handler';
 import { Avatar, Divider, IconButton, List, Surface, Portal, Dialog, Button } from 'react-native-paper';
@@ -102,6 +105,9 @@ import socket, {
   onCallRoomFull,
   onDisconnected,
   waitForCreateUserCompletion,
+  checkInviteLink,
+  requestFriend,
+  acceptInvite,
 } from '../sockets/socket';
 
 
@@ -624,6 +630,25 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // ===== Donate modal =====
   const [donateVisible, setDonateVisible] = useState(false);
   const [pressedButton, setPressedButton] = useState<'boosty' | 'patreon' | null>(null);
+  
+  // ===== Share/Invite modal =====
+  const [shareVisible, setShareVisible] = useState(false);
+  const [inviteLink, setInviteLink] = useState<string>('');
+  
+  // ===== Invite request modal =====
+  const [inviteRequestVisible, setInviteRequestVisible] = useState(false);
+  const [inviteRequestData, setInviteRequestData] = useState<{
+    code: string;
+    inviter: {
+      id: string;
+      nick: string;
+      avatar: string;
+      avatarVer: number;
+      avatarThumbB64: string;
+    };
+    areFriends?: boolean;
+    hasPendingRequest?: boolean;
+  } | null>(null);
   const BOOSTY_URL = process.env.EXPO_PUBLIC_BOOSTY_URL || "https://boosty.to/liviapp/donate";
   const PATREON_URL = process.env.EXPO_PUBLIC_PATREON_URL || "https://www.patreon.com/c/LiViApp";
   const appendUtm = React.useCallback((url: string, params: Record<string, string>) => {
@@ -651,10 +676,170 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
   }, []);
   
+  // ===== Generate invite link =====
+  const generateInviteLink = useCallback(async () => {
+    try {
+      const userId = getCurrentUserId();
+      if (!userId) {
+        showNotice('Ошибка: пользователь не авторизован', 'error', 2000);
+        return;
+      }
+      // Используем веб-ссылку, которая автоматически редиректит на приложение
+      // Это работает и для iOS, и для Android
+      // Определяем правильный URL сервера для генерации ссылки
+      let serverUrl = API_BASE || 'http://192.168.1.12:3000';
+      
+      // Если API_BASE указывает на локальный адрес, но нужен внешний - используем переменную окружения
+      // Или определяем автоматически на основе того, откуда пришел запрос
+      if (serverUrl.includes('192.168.1.12') || serverUrl.includes('localhost')) {
+        // Пробуем использовать переменную окружения для внешнего доступа
+        const externalUrl = process.env.EXPO_PUBLIC_SERVER_URL || 
+                           process.env.EXPO_PUBLIC_SERVER_URL_IOS || 
+                           process.env.EXPO_PUBLIC_SERVER_URL_ANDROID;
+        if (externalUrl && !externalUrl.includes('192.168') && !externalUrl.includes('localhost')) {
+          serverUrl = externalUrl.replace(/\/+$/, '');
+        } else {
+          // Fallback: используем тот же URL что и API_BASE, но можно вручную указать внешний
+          // Для тестирования можно использовать: http://92.242.61.46:3000
+          serverUrl = 'http://92.242.61.46:3000'; // Внешний IP для доступа с других устройств
+        }
+      }
+      
+      const link = `${serverUrl}/invite/${userId}`;
+      setInviteLink(link);
+      setShareVisible(true);
+      await incrCounter('invite_link_generated');
+    } catch (e) {
+      logger.error('Failed to generate invite link:', e);
+      showNotice('Не удалось создать ссылку', 'error', 2000);
+    }
+  }, [showNotice, incrCounter]);
+  
   useEffect(() => { (async () => { setLang(await loadLang()); })(); }, []);
   const openLangPicker  = () => setLangPickerVisible(true);
   const closeLangPicker = () => setLangPickerVisible(false);
   const handleSelectLang = async (code: Lang) => { setLang(code); await saveLang(code); setLangPickerVisible(false); };
+
+  // ===== Обработка реферальной ссылки из route params =====
+  const processedInviteRef = useRef<string | null>(null);
+  
+  useEffect(() => {
+    const checkInviteFromRoute = async () => {
+      const inviteCode = route?.params?.inviteCode as string | undefined;
+      const shouldShow = route?.params?.showInviteModal as boolean | undefined;
+      
+      // Проверяем, не обрабатывали ли мы уже этот код
+      if (!inviteCode || processedInviteRef.current === inviteCode) {
+        return;
+      }
+
+      // Если showInviteModal не установлен, но есть inviteCode - все равно обрабатываем
+      if (!shouldShow && !inviteCode) {
+        return;
+      }
+
+      // Помечаем как обработанный
+      processedInviteRef.current = inviteCode;
+
+      try {
+        const result = await checkInviteLink(inviteCode);
+        
+        if (!result.ok) {
+          showNotice('Неверная ссылка приглашения', 'error', 2000);
+          return;
+        }
+
+        if (result.areFriends) {
+          // Пользователи уже друзья
+          showNotice('Вы уже друзья с этим пользователем', 'info', 2000);
+          return;
+        }
+
+        if (result.hasPendingRequest) {
+          // Заявка уже отправлена
+          showNotice('Заявка в друзья уже отправлена', 'info', 2000);
+          return;
+        }
+
+        if (result.canAdd && result.inviter) {
+          // Показываем модалку приглашения
+          setInviteRequestData({
+            code: inviteCode,
+            inviter: result.inviter,
+            areFriends: result.areFriends,
+            hasPendingRequest: result.hasPendingRequest,
+          });
+          setInviteRequestVisible(true);
+        }
+      } catch (e) {
+        logger.error('Failed to check invite from route:', e);
+        showNotice('Ошибка при обработке ссылки', 'error', 2000);
+        // Сбрасываем флаг обработки при ошибке, чтобы можно было повторить
+        processedInviteRef.current = null;
+      }
+    };
+
+    // Обрабатываем при изменении параметров или при первом монтировании
+    if (route?.params?.inviteCode || route?.params?.showInviteModal) {
+      // Небольшая задержка для гарантии готовности компонента
+      const timer = setTimeout(() => {
+        checkInviteFromRoute();
+      }, 300);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [route?.params?.showInviteModal, route?.params?.inviteCode, showNotice]);
+
+  // ===== Обработка принятия/отклонения приглашения =====
+  const handleAcceptInvite = useCallback(async () => {
+    if (!inviteRequestData) return;
+
+    try {
+      // Используем acceptInvite для немедленного добавления в друзья (без заявки)
+      const result = await acceptInvite(inviteRequestData.inviter.id);
+      
+      if (result?.ok) {
+        if (result.status === 'already') {
+          showNotice('Вы уже друзья', 'info', 2000);
+        } else if (result.status === 'accepted') {
+          showNotice('Пользователь добавлен в друзья', 'success', 2000);
+          // Обновляем список друзей
+          loadFriends();
+        } else {
+          showNotice('Пользователь добавлен в друзья', 'success', 2000);
+          // Обновляем список друзей
+          loadFriends();
+        }
+      } else {
+        showNotice(result?.error || 'Не удалось добавить в друзья', 'error', 2000);
+      }
+      
+      setInviteRequestVisible(false);
+      setInviteRequestData(null);
+      // Сбрасываем флаг обработки
+      if (route?.params?.inviteCode) {
+        processedInviteRef.current = null;
+      }
+    } catch (e) {
+      logger.error('Failed to accept invite:', e);
+      showNotice('Ошибка при добавлении в друзья', 'error', 2000);
+      setInviteRequestVisible(false);
+      setInviteRequestData(null);
+      // Сбрасываем флаг обработки при ошибке
+      if (route?.params?.inviteCode) {
+        processedInviteRef.current = null;
+      }
+    }
+  }, [inviteRequestData, showNotice, loadFriends, route?.params?.inviteCode]);
+
+  const handleDeclineInvite = useCallback(() => {
+    setInviteRequestVisible(false);
+    setInviteRequestData(null);
+    // Сбрасываем флаг обработки, чтобы можно было открыть снова
+    if (route?.params?.inviteCode) {
+      processedInviteRef.current = null;
+    }
+  }, [route?.params?.inviteCode]);
 
   const { showNotice: baseShowNotice, NoticeView } = useLiviNotice();
   const showNotice = useCallback((text: string, kind: NoticeKind = 'info', ms = 1700) => {
@@ -1804,14 +1989,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           setFriends((prev) => {
             const updated = prev.map((f) => {
               if (String(f.id) === userId) {
-                const wasBusy = f.isBusy;
-                if (wasBusy !== busy) {
-                  console.log('[onPresenceUpdate] 🔴 Обновлен статус занятости друга', {
-                    userId,
-                    wasBusy,
-                    isBusy: busy
-                  });
-                }
                 return { ...f, isBusy: busy };
               }
               return f;
@@ -3018,6 +3195,42 @@ const handleClearNick = useCallback(async () => {
         <Text style={{ color: LIVI.text2, marginTop: 6, fontSize: 12 }}>{L('baseLang')}: {defaultLang.toUpperCase()}</Text>
       </View>
 
+      {/* Invite Friends */}
+      <TouchableOpacity 
+        activeOpacity={0.85}
+        onPress={generateInviteLink}
+        style={{ 
+          backgroundColor: 'rgba(77,208,225,0.1)', 
+          borderColor: '#4DD0E1', 
+          borderWidth: StyleSheet.hairlineWidth, 
+          borderRadius: 12, 
+          padding: 14,
+          flexDirection: 'row',
+          alignItems: 'center'
+        }}
+      >
+        <View style={{ 
+          width: 44, 
+          height: 44, 
+          borderRadius: 22, 
+          backgroundColor: '#4DD0E1', 
+          justifyContent: 'center', 
+          alignItems: 'center',
+          marginRight: 14,
+          flexShrink: 0
+        }}>
+          <Ionicons name="share-outline" size={22} color={LIVI.white} />
+        </View>
+        <View style={{ flex: 1, justifyContent: 'center' }}>
+          <Text style={{ color: '#4DD0E1', fontSize: 16, fontWeight: '700', marginBottom: 3, lineHeight: 20 }}>
+            Пригласить друзей
+          </Text>
+          <Text style={{ color: LIVI.text2, fontSize: 13, lineHeight: 17 }}>
+            Пригласите друзей в LiVi — видеочат будущего
+          </Text>
+        </View>
+      </TouchableOpacity>
+
       {/* Donate */}
       <TouchableOpacity 
         activeOpacity={0.85}
@@ -3553,6 +3766,293 @@ const handleClearNick = useCallback(async () => {
                   </Text>
                 </TouchableOpacity>
               </View>
+            </Surface>
+          </View>
+        )}
+
+        {/* Share/Invite Modal */}
+        {shareVisible && (
+          <View style={styles.overlayModal} pointerEvents="box-none">
+            {Platform.OS === 'android' ? (
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.9)' }]} />
+            ) : (
+              <>
+                <BlurView intensity={85} tint="dark" style={StyleSheet.absoluteFill} />
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
+              </>
+            )}
+            <TouchableOpacity
+              onPress={() => setShareVisible(false)}
+              activeOpacity={0.85}
+              style={{
+                position: 'absolute',
+                top: insets.top + (Platform.OS === "android" ? 35 : 16),
+                left: Platform.OS === 'ios' ? 15 : 17,
+                width: Platform.OS === 'ios' ? 40 : 36,
+                height: Platform.OS === 'ios' ? 40 : 36,
+                borderRadius: Platform.OS === 'ios' ? 16 : 14,
+                backgroundColor: 'rgba(255,255,255,0.06)',
+                borderWidth: 1,
+                borderColor: 'rgba(255,255,255,0.12)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10
+              }}
+            >
+              <Ionicons name="arrow-back" size={Platform.OS === 'ios' ? 22 : 20} color={LIVI.titan} />
+            </TouchableOpacity>
+            <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: '#4DD0E1' }]}>
+              <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#4DD0E1' }]}>
+                Пригласить друга
+              </Text>
+              
+              <View style={{ marginBottom: 20 }}>
+                <Text style={{ color: LIVI.text2, fontSize: 14, marginBottom: 8, fontWeight: '600' }}>
+                  Ссылка для приглашения:
+                </Text>
+                <View style={{
+                  backgroundColor: 'rgba(255,255,255,0.05)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(77,208,225,0.3)',
+                  borderRadius: 10,
+                  padding: 12,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 8
+                }}>
+                  <Text 
+                    style={{ 
+                      flex: 1, 
+                      color: LIVI.white, 
+                      fontSize: 13,
+                      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'
+                    }}
+                    numberOfLines={1}
+                    ellipsizeMode="middle"
+                  >
+                    {inviteLink}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={async () => {
+                      try {
+                        await Clipboard.setStringAsync(inviteLink);
+                        showNotice('Ссылка скопирована', 'success', 1500);
+                        await incrCounter('invite_link_copied');
+                      } catch (e) {
+                        logger.error('Failed to copy link:', e);
+                        showNotice('Не удалось скопировать', 'error', 1500);
+                      }
+                    }}
+                    activeOpacity={0.7}
+                    style={{
+                      padding: 8,
+                      borderRadius: 8,
+                      backgroundColor: 'rgba(77,208,225,0.15)'
+                    }}
+                  >
+                    <Ionicons name="copy-outline" size={20} color="#4DD0E1" />
+                  </TouchableOpacity>
+                </View>
+                <Text style={{ color: LIVI.text2, fontSize: 12, marginTop: 8, textAlign: 'center', lineHeight: 16 }}>
+                  При переходе по ссылке приложение LiVi откроется автоматически.{'\n'}
+                  Если приложение не установлено, получатель увидит инструкцию по установке.
+                </Text>
+              </View>
+
+              <View style={{ gap: 12 }}>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      const shareMessage = `Присоединяйся ко мне в LiVi — видеочат будущего!\n\nСсылка: ${inviteLink}\n\nПримечание: Для открытия ссылки необходимо установить приложение LiVi.`;
+                      
+                      // Используем Share из React Native для текстовых ссылок
+                      const result = await Share.share({
+                        message: shareMessage,
+                        url: inviteLink, // Для iOS это будет использовано как URL
+                        title: 'Приглашение в LiVi',
+                      });
+                      
+                      if (result.action === Share.sharedAction) {
+                        await incrCounter('invite_link_shared');
+                        if (result.activityType) {
+                          // Поделились через конкретное приложение
+                          logger.debug('Shared via:', result.activityType);
+                        }
+                      } else if (result.action === Share.dismissedAction) {
+                        // Пользователь отменил
+                        logger.debug('Share dismissed');
+                      }
+                    } catch (e) {
+                      logger.error('Failed to share link:', e);
+                      // Fallback на копирование при ошибке
+                      try {
+                        await Clipboard.setStringAsync(inviteLink);
+                        showNotice('Ссылка скопирована', 'success', 1500);
+                      } catch (copyError) {
+                        showNotice('Не удалось поделиться', 'error', 1500);
+                      }
+                    }
+                  }}
+                  activeOpacity={0.85}
+                  style={{
+                    backgroundColor: '#4DD0E1',
+                    borderColor: '#4DD0E1',
+                    borderWidth: StyleSheet.hairlineWidth,
+                    paddingVertical: 14,
+                    paddingHorizontal: 20,
+                    borderRadius: 10,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10
+                  }}
+                >
+                  <Ionicons name="share-outline" size={20} color={LIVI.white} />
+                  <Text style={{ 
+                    color: LIVI.white, 
+                    fontWeight: '700', 
+                    fontSize: 16 
+                  }}>
+                    Поделиться
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </Surface>
+          </View>
+        )}
+
+        {/* Invite Request Modal */}
+        {inviteRequestVisible && inviteRequestData && (
+          <View style={styles.overlayModal} pointerEvents="box-none">
+            {Platform.OS === 'android' ? (
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.9)' }]} />
+            ) : (
+              <>
+                <BlurView intensity={85} tint="dark" style={StyleSheet.absoluteFill} />
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
+              </>
+            )}
+            <TouchableOpacity
+              onPress={handleDeclineInvite}
+              activeOpacity={0.85}
+              style={{
+                position: 'absolute',
+                top: insets.top + (Platform.OS === "android" ? 35 : 16),
+                left: Platform.OS === 'ios' ? 15 : 17,
+                width: Platform.OS === 'ios' ? 40 : 36,
+                height: Platform.OS === 'ios' ? 40 : 36,
+                borderRadius: Platform.OS === 'ios' ? 16 : 14,
+                backgroundColor: 'rgba(255,255,255,0.06)',
+                borderWidth: 1,
+                borderColor: 'rgba(255,255,255,0.12)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10
+              }}
+            >
+              <Ionicons name="close" size={Platform.OS === 'ios' ? 22 : 20} color={LIVI.titan} />
+            </TouchableOpacity>
+            <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: '#4DD0E1' }]}>
+              <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#4DD0E1' }]}>
+                Приглашение в друзья
+              </Text>
+              
+              {inviteRequestData.areFriends ? (
+                <View style={{ marginBottom: 20 }}>
+                  <Text style={{ color: LIVI.text2, fontSize: 14, textAlign: 'center', marginBottom: 12 }}>
+                    Вы уже друзья с пользователем {inviteRequestData.inviter.nick || 'этим пользователем'}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={handleDeclineInvite}
+                    activeOpacity={0.85}
+                    style={{
+                      backgroundColor: '#4DD0E1',
+                      paddingVertical: 14,
+                      paddingHorizontal: 20,
+                      borderRadius: 10,
+                      alignItems: 'center'
+                    }}
+                  >
+                    <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16 }}>
+                      ОК
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <>
+                  <View style={{ marginBottom: 20, alignItems: 'center' }}>
+                    {inviteRequestData.inviter.avatarThumbB64 ? (
+                      <AvatarImage
+                        userId={inviteRequestData.inviter.id}
+                        avatarVer={inviteRequestData.inviter.avatarVer}
+                        uri={inviteRequestData.inviter.avatarThumbB64}
+                        size={64}
+                        fallbackText={inviteRequestData.inviter.nick?.[0]?.toUpperCase() || '?'}
+                        containerStyle={{ marginBottom: 12 }}
+                      />
+                    ) : (
+                      <View style={{
+                        width: 64,
+                        height: 64,
+                        borderRadius: 32,
+                        backgroundColor: '#4DD0E1',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginBottom: 12
+                      }}>
+                        <Text style={{ color: LIVI.white, fontSize: 24, fontWeight: '800' }}>
+                          {inviteRequestData.inviter.nick?.[0]?.toUpperCase() || '?'}
+                        </Text>
+                      </View>
+                    )}
+                    <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700', marginBottom: 8, textAlign: 'center' }}>
+                      {inviteRequestData.inviter.nick || 'Пользователь'}
+                    </Text>
+                    <Text style={{ color: LIVI.text2, fontSize: 14, textAlign: 'center' }}>
+                      хочет добавить вас в друзья
+                    </Text>
+                  </View>
+
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <TouchableOpacity
+                      onPress={handleDeclineInvite}
+                      activeOpacity={0.85}
+                      style={{
+                        flex: 1,
+                        backgroundColor: 'rgba(255,255,255,0.08)',
+                        borderColor: LIVI.border,
+                        borderWidth: StyleSheet.hairlineWidth,
+                        paddingVertical: 14,
+                        paddingHorizontal: 20,
+                        borderRadius: 10,
+                        alignItems: 'center'
+                      }}
+                    >
+                      <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16 }}>
+                        Отклонить
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={handleAcceptInvite}
+                      activeOpacity={0.85}
+                      style={{
+                        flex: 1,
+                        backgroundColor: '#4DD0E1',
+                        borderColor: '#4DD0E1',
+                        borderWidth: StyleSheet.hairlineWidth,
+                        paddingVertical: 14,
+                        paddingHorizontal: 20,
+                        borderRadius: 10,
+                        alignItems: 'center'
+                      }}
+                    >
+                      <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16 }}>
+                        Принять
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
             </Surface>
           </View>
         )}
