@@ -32,7 +32,6 @@
         <data android:scheme="livi" android:host="invite" android:pathPrefix="/"/>
         <data android:scheme="exp+livi-video-chat"/>
       </intent-filter>
-      <!-- Intent filter для обработки intent:// URLs -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
@@ -42,7 +41,6 @@
       <intent-filter data-generated="true">
         <action android:name="android.intent.action.VIEW"/>
         <data android:scheme="https"/>
-        <data android:scheme="exp+livi-video-chat"/>
         <category android:name="android.intent.category.BROWSABLE"/>
         <category android:name="android.intent.category.DEFAULT"/>
       </intent-filter>
