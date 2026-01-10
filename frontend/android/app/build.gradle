@@ -92,8 +92,8 @@ android {
         applicationId 'com.kolt12max.livi'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0.0"
+        versionCode 3
+        versionName "1.0.2"
     }
     signingConfigs {
     debug {
@@ -103,10 +103,11 @@ android {
         keyPassword 'android'
     }
     release {
-        storeFile file(project.findProperty("LIVI_STORE_FILE"))
-        storePassword project.findProperty("LIVI_STORE_PASSWORD")
-        keyAlias project.findProperty("LIVI_KEY_ALIAS")
-        keyPassword project.findProperty("LIVI_KEY_PASSWORD")
+        // Используем явные значения, так как чтение из gradle.properties не работает корректно
+        storeFile file("livi-release.jks")
+        storePassword "kolt1208"
+        keyAlias "livi"
+        keyPassword "kolt1208"
     }
 }
     buildTypes {
