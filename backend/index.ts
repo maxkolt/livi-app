@@ -73,10 +73,18 @@ if (!MONGO_URI) {
 }
 
 // TURN/STUN configuration (for ephemeral credentials)
+// КРИТИЧНО: В продакшене используйте домен, не IP адрес!
+// Например: TURN_HOST=turn.твойдомен.com или api.твойдомен.com
 const TURN_SECRET = process.env.TURN_SECRET || process.env.TURN_SHARED_SECRET || '';
-const TURN_HOST = (process.env.TURN_HOST || '89.111.152.241').trim();
+const TURN_HOST = (process.env.TURN_HOST || '').trim();
 const TURN_PORT = Number(process.env.TURN_PORT || 3478);
 const STUN_HOST = (process.env.STUN_HOST || TURN_HOST).trim();
+
+// Проверка что TURN_HOST задан (критично для продакшена)
+if (!TURN_HOST) {
+  logger.warn('[TURN] ⚠️ TURN_HOST not configured! TURN credentials will not work.');
+  logger.warn('[TURN] Set TURN_HOST environment variable (use domain, not IP for production)');
+}
 const TURN_ENABLE_TCP = String(process.env.TURN_ENABLE_TCP || '1') === '1';
 const TURN_TTL_SECONDS = Number(process.env.TURN_TTL || 600); // 10 min default
 
@@ -271,6 +279,29 @@ app.get('/api/turn-credentials', async (_req, res) => {
   try {
     if (!TURN_SECRET) {
       return res.status(503).json({ ok: false, error: 'turn_secret_not_configured' });
+    }
+
+    // КРИТИЧНО: Проверяем что TURN_HOST задан
+    if (!TURN_HOST) {
+      logger.warn('[TURN] TURN_HOST not configured, returning fallback STUN only');
+      // Возвращаем только публичные STUN серверы как fallback
+      return res.json({
+        ok: true,
+        username: '',
+        credential: '',
+        ttl: 0,
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' },
+        ],
+      });
+    }
+
+    // Предупреждение если используется IP вместо домена (для продакшена)
+    const isIP = /^\d+\.\d+\.\d+\.\d+$/.test(TURN_HOST);
+    if (isIP) {
+      logger.warn('[TURN] TURN_HOST uses IP address instead of domain:', TURN_HOST);
+      logger.warn('[TURN] For production, use domain (e.g., turn.твойдомен.com)');
     }
 
     const unixNow = Math.floor(Date.now() / 1000);

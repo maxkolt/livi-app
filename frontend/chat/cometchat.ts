@@ -2,17 +2,38 @@
 import { CometChat } from "@cometchat/chat-sdk-react-native";
 import { CometChatUIKit } from "@cometchat/chat-uikit-react-native";
 
-const appID = process.env.EXPO_PUBLIC_COMETCHAT_APP_ID!;
-const region = process.env.EXPO_PUBLIC_COMETCHAT_REGION!;
-const authKey = process.env.EXPO_PUBLIC_COMETCHAT_AUTH_KEY!;
+const appID = process.env.EXPO_PUBLIC_COMETCHAT_APP_ID || '';
+const region = process.env.EXPO_PUBLIC_COMETCHAT_REGION || '';
+const authKey = process.env.EXPO_PUBLIC_COMETCHAT_AUTH_KEY || '';
+
+// Проверка наличия обязательных переменных
+if (!appID || !region || !authKey) {
+  console.warn('⚠️ CometChat variables not configured:', {
+    hasAppID: !!appID,
+    hasRegion: !!region,
+    hasAuthKey: !!authKey
+  });
+}
 
 let isInitialized = false;
 
 /** ====== Init ====== */
 export async function ensureCometChatReady(): Promise<void> {
   if (isInitialized) return;
-  await CometChatUIKit.init({ appId: appID, region });
-  isInitialized = true;
+  
+  // Проверка наличия обязательных переменных перед инициализацией
+  if (!appID || !region) {
+    console.warn('⚠️ CometChat not initialized: missing appID or region');
+    return;
+  }
+  
+  try {
+    await CometChatUIKit.init({ appId: appID, region });
+    isInitialized = true;
+  } catch (error) {
+    console.error('❌ CometChat initialization failed:', error);
+    // Не выбрасываем ошибку - приложение должно работать без CometChat
+  }
 }
 
 /** ====== Создание пользователя в CometChat ====== */

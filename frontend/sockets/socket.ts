@@ -47,9 +47,10 @@ import { getInstallId } from "../utils/installId";
 /* ========= Server URL ========= */
 // Получаем BASE_URL из переменных окружения
 // Приоритет: платформо-специфичная переменная > общая переменная > fallback
-const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
-const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
-const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
+// КРИТИЧНО: В production используйте домены с HTTPS, не IP адреса!
+const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
+const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
+const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
 
 export const API_BASE = (Platform.OS === 'android' ? ANDROID_URL : IOS_URL).replace(/\/+$/, '');
 
@@ -85,18 +86,55 @@ export const socket: Socket = getSocket();
 
 /* ========= auth apply & connect ========= */
 async function applyAuthAndConnect() {
-  const installId = await getInstallId();
-  // @ts-ignore
-  socket.auth = { installId, ...(currentUserId ? { userId: currentUserId } : {}) };
+  try {
+    const installId = await getInstallId();
+    // @ts-ignore
+    socket.auth = { installId, ...(currentUserId ? { userId: currentUserId } : {}) };
 
-  if (!socket.connected) {
-    try {
+    if (!socket.connected) {
+      logger.debug("Connecting socket...");
+      // Socket.connect() не возвращает промис, поэтому используем события
       socket.connect();
-    } catch (err) {
-      logger.warn("Socket connect error:", err);
+      
+      // Ждем подключения с таймаутом
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          socket.off('connect', onConnect);
+          socket.off('connect_error', onError);
+          reject(new Error('Socket connection timeout'));
+        }, 10000); // 10 секунд таймаут
+        
+        const onConnect = () => {
+          clearTimeout(timeout);
+          socket.off('connect', onConnect);
+          socket.off('connect_error', onError);
+          logger.debug("Socket connected");
+          resolve();
+        };
+        
+        const onError = (err: any) => {
+          clearTimeout(timeout);
+          socket.off('connect', onConnect);
+          socket.off('connect_error', onError);
+          logger.warn("Socket connect error:", err);
+          reject(err);
+        };
+        
+        if (socket.connected) {
+          clearTimeout(timeout);
+          resolve();
+        } else {
+          socket.once('connect', onConnect);
+          socket.once('connect_error', onError);
+        }
+      });
+    } else {
+      logger.debug("Socket already connected, skip reconnect");
     }
-  } else {
-    logger.debug("Socket already connected, skip reconnect");
+  } catch (error) {
+    logger.error('[applyAuthAndConnect] Connection failed:', error);
+    // Не выбрасываем ошибку - приложение должно продолжить работу
+    // Socket переподключится автоматически
   }
 }
 
@@ -124,6 +162,7 @@ async function boot() {
       }
       
       // Проверяем профиль пользователя через getMyProfile
+      // КРИТИЧНО: getMyProfile уже имеет таймаут 8 секунд
       try {
         const profileResponse = await getMyProfile();
         if (profileResponse?.ok && profileResponse.profile) {
@@ -188,7 +227,25 @@ async function boot() {
   bootInProgress = false;
   console.log('[boot] Boot process completed');
 }
-void boot();
+
+// КРИТИЧНО: Обертываем boot() в try-catch для предотвращения крашей
+// Запускаем boot с задержкой, чтобы дать приложению время инициализироваться
+setTimeout(() => {
+  (async () => {
+    try {
+      await boot();
+    } catch (error) {
+      logger.error('[boot] Critical error during boot process:', error);
+      // Не выбрасываем ошибку - приложение должно продолжить работу
+      // Попробуем создать пользователя как fallback
+      try {
+        await createUser();
+      } catch (createError) {
+        logger.error('[boot] Failed to create user as fallback:', createError);
+      }
+    }
+  })();
+}, 100); // Небольшая задержка для инициализации модулей
 
 /* ========= logging ========= */
 socket.on("connect", async () => {
@@ -619,6 +676,7 @@ export function onRtcCandidate(
 
 /* ========= Profile ========= */
 export function getMyProfile() {
+  // КРИТИЧНО: Добавляем таймаут 8 секунд для защиты от зависания MongoDB
   return emitAck<{ 
     ok: boolean; 
     profile?: { 
@@ -630,6 +688,7 @@ export function getMyProfile() {
     } 
   }>(
     "profile:me",
+    8000 // 8 секунд таймаут
   );
 }
 export function updateProfile(patch: { nick?: string; avatar?: string }) {
