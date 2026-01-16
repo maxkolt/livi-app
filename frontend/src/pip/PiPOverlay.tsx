@@ -16,7 +16,6 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePiP } from './PiPContext';
-import VoiceEqualizer from '../../components/VoiceEqualizer';
 import { logger } from '../../utils/logger';
 
 const UI = {
@@ -46,8 +45,6 @@ export default function PiPOverlay() {
     endCall,
     pipPos,
     updatePiPPosition,
-    micLevel,
-    micFrequencyLevels,
   } = usePiP();
 
   const insets = useSafeAreaInsets();
@@ -194,23 +191,6 @@ export default function PiPOverlay() {
           </View>
         </Pressable>
 
-        {/* Эквалайзер посередине между надписью и кнопками */}
-        <View style={styles.eqWrapper}>
-          <VoiceEqualizer
-            level={!isMuted ? micLevel : 0}
-            frequencyLevels={!isMuted ? micFrequencyLevels : new Array(21).fill(0)}
-            mode="waveform"
-            width={40}
-            height={30}
-            bars={7}
-            gap={5}
-            minLine={1}
-            threshold={0.01}
-            sensitivity={2.0}
-            colors={["#F4FFFF", "#2EE6FF", "#F4FFFF"]}
-          />
-        </View>
-
         {/* actions */}
         <View style={styles.actions}>
           {/* MUTE */}
@@ -292,14 +272,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(113,91,168,0.22)', borderWidth: 1, borderColor: UI.stroke, alignItems: 'center', justifyContent: 'center',
   },
   name: { color: UI.fg, fontSize: 14, fontWeight: '600', textAlign: 'center', maxWidth: 120 },
-  eqWrapper: {
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-    marginBottom: 8,
-    height: 10,
-  },
   statusRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: UI.success, marginRight: 4 },
   status: { color: UI.subtle, fontSize: 11 },
