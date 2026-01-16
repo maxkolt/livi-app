@@ -1374,6 +1374,11 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.emit('localStream', this.localStream);
       this.config.callbacks.onLocalStreamChange?.(this.localStream);
       this.config.onLocalStreamChange?.(this.localStream);
+      // КРИТИЧНО: Если local tracks уже существуют (например, после reconnection),
+      // гарантируем, что мониторинг микрофона для эквалайзера запущен.
+      if (this.localStream) {
+        this.startMicLevelMonitoring(this.localStream);
+      }
       return;
     }
 
@@ -2574,6 +2579,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.config.onMicStateChange?.(true);
       this.config.callbacks.onCamStateChange?.(true);
       this.config.onCamStateChange?.(true);
+
+      // КРИТИЧНО: После подключения к комнате на iOS может "останавливаться" нативный аудио-рекордер.
+      // Перезапускаем мониторинг микрофона, чтобы эквалайзер продолжал работать как в RandomChat.
+      if (this.localStream) {
+        this.startMicLevelMonitoring(this.localStream);
+      }
       return true;
     } catch (e: any) {
       const errorMessage = e?.message || String(e);
