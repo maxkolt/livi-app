@@ -68,34 +68,42 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
     try { InCallManager.stop(); } catch {}
   };
 
-  // Форсим спикер при активном звонке
+  // КРИТИЧНО: Форсим аудио-сессию/спикер при активном звонке.
+  // Нельзя ждать remoteStream, т.к. на iOS иногда аудио не начинает играть, если аудио-сессия не поднята заранее.
   useEffect(() => {
-    if (!enabled || !remoteStream) {
-      logger.info('[useAudioRouting] Пропускаем forceSpeakerOnHard', {
-        enabled,
-        hasRemoteStream: !!remoteStream,
-        streamId: remoteStream?.id
-      });
+    if (!enabled) {
+      stopSpeaker();
       return;
     }
 
-    logger.info('[useAudioRouting] ✅ Вызываем forceSpeakerOnHard', {
+    logger.info('[useAudioRouting] ✅ Starting call audio routing (pre-remoteStream)', {
       enabled,
-      streamId: remoteStream.id,
-      hasAudioTracks: !!(remoteStream as any)?.getAudioTracks?.()?.[0],
-      audioTrackEnabled: (remoteStream as any)?.getAudioTracks?.()?.[0]?.enabled
+      hasRemoteStream: !!remoteStream,
+      streamId: remoteStream?.id,
     });
-
     forceSpeakerOnHard();
 
-    return () => {
-      stopSpeaker();
-    };
+    return () => stopSpeaker();
+  }, [enabled]);
+
+  // Дополнительный "пинок" когда remoteStream появился/обновился (не останавливаем сессию!)
+  useEffect(() => {
+    if (!enabled) return;
+    if (!remoteStream) {
+      logger.info('[useAudioRouting] remoteStream отсутствует, но звонок активен - routing уже поднят');
+      return;
+    }
+    logger.info('[useAudioRouting] ✅ remoteStream updated - re-kick routing', {
+      streamId: remoteStream.id,
+      hasAudioTracks: !!(remoteStream as any)?.getAudioTracks?.()?.[0],
+      audioTrackEnabled: (remoteStream as any)?.getAudioTracks?.()?.[0]?.enabled,
+    });
+    forceSpeakerOnHard();
   }, [enabled, remoteStream]);
 
   // Обработка AppState - форсим спикер при активном звонке
   useEffect(() => {
-    if (!enabled || !remoteStream) return;
+    if (!enabled) return;
 
     const sub = AppState.addEventListener('change', (st) => {
       if (st === 'active') {

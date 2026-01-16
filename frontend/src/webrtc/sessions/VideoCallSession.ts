@@ -2315,6 +2315,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         partnerUserId: this.partnerUserId,
         expectedPartnerIdentity: this.partnerUserId,
       });
+
+      // КРИТИЧНО: Поднимаем аудио-сессию сразу после подключения к комнате (до прихода remote audio).
+      // Это снижает шанс "тишины" на iOS, когда система не активирует плейбек, пока не будет явного старта.
+      this.ensureAudioPlayoutActive('room-connected');
       
       // КРИТИЧНО: Функция для подписки на все треки участника
       const subscribeToParticipantTracks = (participant: RemoteParticipant, context: string) => {
