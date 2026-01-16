@@ -160,22 +160,34 @@ async function boot() {
       if (!socket.connected) {
         await applyAuthAndConnect();
       }
+
+      // ВАЖНО: гарантируем, что сервер "видит" userId (иначе profile:me вернёт гостевой профиль {})
+      // Не пересоздаём пользователя на временных проблемах сети/авторизации — сначала пробуем reauth.
+      try {
+        if (socket.connected) {
+          await emitAck<{ ok: boolean; userId?: string; error?: string }>('reauth', { userId: saved }, 6000, 1);
+        }
+      } catch (e) {
+        // мягко игнорируем — может быть оффлайн, но userId локально сохраняем
+        logger.warn('[boot] reauth failed (non-critical):', e);
+      }
       
       // Проверяем профиль пользователя через getMyProfile
       // КРИТИЧНО: getMyProfile уже имеет таймаут 8 секунд
       try {
         const profileResponse = await getMyProfile();
-        if (profileResponse?.ok && profileResponse.profile) {
+        if (profileResponse?.ok) {
+          // profile === undefined → userId не найден в БД (реальный кейс "пользователь удалён/сломана база")
+          // profile === {} допустимо (пустой ник/аватар) и НЕ должно приводить к созданию нового userId
+          if (profileResponse.profile === undefined) {
+            logger.info('Profile is missing for saved userId (user not found), creating new user...');
+            await createUser();
+            return;
+          }
+
           const profile = profileResponse.profile;
           logger.debug('Loaded profile from backend:', { nick: profile?.nick });
-          
-          // Если профиль пустой (пользователь удален админом), создаем нового
-          if (!profile.nick && !profile.avatarB64 && !profile.avatarThumbB64) {
-            logger.info('Profile is empty (user deleted by admin), creating new user...');
-            await createUser();
-            return; // Выходим из функции boot
-          }
-          
+
           logger.debug('Using existing user with profile:', saved);
         } else {
           logger.info('Failed to load profile, creating new user...');
