@@ -412,6 +412,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     enterPiPModeRef.current = enterPiPMode;
   }, [enterPiPMode]);
+
+  // iOS: показываем PiP только когда пользователь действительно уходит со страницы (back/swipe-back),
+  // а не на обычные тапы по кнопкам (например, toggle remote audio).
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    const unsub = (navigation as any)?.addListener?.('beforeRemove', () => {
+      const hasActiveCall = (!!partnerId || !!roomId || !!callId) && !isInactiveState && !wasFriendCallEnded;
+      if (!hasActiveCall) return;
+      if (pipRef.current.visible) return;
+      enterPiPModeRef.current?.();
+    });
+    return () => { try { unsub?.(); } catch {} };
+  }, [navigation, partnerId, roomId, callId, isInactiveState, wasFriendCallEnded]);
   
   // Хук для аудио-рутирования
   const hasActiveCallForAudio = !!partnerId || !!roomId || !!callId;
@@ -2004,7 +2017,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     <SafeAreaView 
       style={[styles.container, { backgroundColor: isDark ? '#151F33' : (theme.colors.background as string) }]}
       edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
-      {...panResponder.panHandlers} // Включено: PiP через свайп
     >
         {/* Карточка "Собеседник" */}
         <View

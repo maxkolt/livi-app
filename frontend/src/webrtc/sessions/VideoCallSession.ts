@@ -3086,6 +3086,21 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     if (publication.kind === Track.Kind.Audio) {
       this.remoteAudioTrack = track;
+      // КРИТИЧНО: гарантируем слышимость аудио (иногда track приходит disabled/muted после reconnect)
+      try {
+        // sync with local "mute remote" toggle
+        (this.remoteAudioTrack as any).setMuted?.(this.remoteAudioMuted);
+      } catch {}
+      try {
+        // RN: setVolume влияет на нативный трек через _setVolume
+        (this.remoteAudioTrack as any).setVolume?.(this.remoteAudioMuted ? 0 : 1);
+      } catch {}
+      try {
+        const mt = (this.remoteAudioTrack as any)?.mediaStreamTrack;
+        if (mt && typeof mt.enabled === 'boolean') {
+          mt.enabled = !this.remoteAudioMuted;
+        }
+      } catch {}
     } else if (publication.kind === Track.Kind.Video) {
       const wasMutedStateChanged = this.remoteVideoTrack && (this.remoteVideoTrack.isMuted !== track.isMuted);
       this.remoteVideoTrack = track;
