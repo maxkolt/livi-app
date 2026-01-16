@@ -69,7 +69,7 @@ frontend/android/app/build/outputs/bundle/release/app-release.aab
 3. Включите USB отладку
 4. Выполните:
    ```bash
-   ./debug-crash.sh
+   ./scripts/debug-crash.sh
    ```
 5. Откройте приложение на устройстве
 6. Скопируйте логи с ошибками
