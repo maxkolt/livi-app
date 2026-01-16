@@ -1,195 +1,68 @@
-// backend/utils/friendshipUtils.ts
 import mongoose from 'mongoose';
 import User from '../models/User';
 
-/**
- * Оптимизированная проверка дружбы между двумя пользователями
- * Использует индексы MongoDB для быстрого поиска
- */
-export async function areFriends(userId1: string, userId2: string): Promise<boolean> {
-  try {
-    // Проверяем валидность ObjectId
-    if (!mongoose.Types.ObjectId.isValid(userId1) || !mongoose.Types.ObjectId.isValid(userId2)) {
-      return false;
-    }
+const TTL_MS = 30_000; // 30s cache for dev/perf
 
-    // Используем $in для поиска пользователя, у которого в массиве friends есть userId2
-    const user = await User.findOne(
-      { 
-        _id: userId1,
-        friends: new mongoose.Types.ObjectId(userId2)
-      },
-      { _id: 1 } // Возвращаем только _id для экономии памяти
-    ).lean();
+type CacheEntry<T> = { v: T; exp: number };
+const friendsCache = new Map<string, CacheEntry<boolean>>();
 
-    return !!user;
-  } catch (error) {
-    console.error('[areFriends] Error:', error);
-    return false;
+const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
+
+function key(a: string, b: string) {
+  const [x, y] = [String(a), String(b)].sort();
+  return `${x}_${y}`;
+}
+
+export function clearFriendshipCache(userId?: string) {
+  if (!userId) {
+    friendsCache.clear();
+    return;
+  }
+  const uid = String(userId);
+  for (const k of friendsCache.keys()) {
+    if (k.includes(uid)) friendsCache.delete(k);
   }
 }
 
-/**
- * Проверка дружбы с кэшированием в памяти (для частых запросов)
- */
-const friendshipCache = new Map<string, { result: boolean; timestamp: number }>();
-const CACHE_TTL = 60000; // 1 минута
-
-export async function areFriendsCached(userId1: string, userId2: string): Promise<boolean> {
-  const cacheKey = `${userId1}-${userId2}`;
+export async function areFriendsCached(a: string, b: string): Promise<boolean> {
+  if (!isOid(a) || !isOid(b) || String(a) === String(b)) return false;
+  const k = key(a, b);
   const now = Date.now();
-  
-  // Проверяем кэш
-  const cached = friendshipCache.get(cacheKey);
-  if (cached && (now - cached.timestamp) < CACHE_TTL) {
-    return cached.result;
-  }
+  const hit = friendsCache.get(k);
+  if (hit && hit.exp > now) return hit.v;
 
-  // Если нет в кэше или истек, делаем запрос к БД
-  const result = await areFriends(userId1, userId2);
-  
-  // Сохраняем в кэш
-  friendshipCache.set(cacheKey, { result, timestamp: now });
-  
-  // Очищаем старые записи из кэша
-  if (friendshipCache.size > 1000) {
-    for (const [key, value] of friendshipCache.entries()) {
-      if ((now - value.timestamp) > CACHE_TTL) {
-        friendshipCache.delete(key);
-      }
-    }
-  }
-
-  return result;
+  const doc = await User.findOne({ _id: a, friends: b }).select('_id').lean();
+  const ok = !!doc;
+  friendsCache.set(k, { v: ok, exp: now + TTL_MS });
+  return ok;
 }
 
-/**
- * Получить список друзей пользователя с пагинацией
- * Оптимизировано для работы с тысячами друзей
- */
-export async function getFriendsPaginated(
-  userId: string, 
-  page: number = 1, 
-  limit: number = 50
-): Promise<{ friends: any[]; total: number; hasMore: boolean }> {
-  try {
-    // Убираем избыточное логирование - функция вызывается слишком часто
-    // console.log('[getFriendsPaginated] Request for userId:', userId, 'page:', page, 'limit:', limit);
-    const skip = (page - 1) * limit;
-    
-    // Получаем пользователя с друзьями
-    const user = await User.findById(userId)
-      .select('friends')
-      .lean();
+export async function getFriendsPaginated(userId: string, page = 1, limit = 50): Promise<{ friends: any[]; total: number; hasMore: boolean }> {
+  if (!isOid(userId)) return { friends: [], total: 0, hasMore: false };
+  const p = Math.max(1, Number(page) || 1);
+  const l = Math.min(200, Math.max(1, Number(limit) || 50));
 
-    // Убираем избыточное логирование
-    // console.log('[getFriendsPaginated] User found:', !!user, 'friends count:', user?.friends?.length || 0);
+  const me = await User.findById(userId).select('friends').lean();
+  const ids: string[] = Array.isArray((me as any)?.friends) ? (me as any).friends.map((x: any) => String(x)) : [];
+  const total = ids.length;
 
-    if (!user || !user.friends) {
-      // Убираем избыточное логирование
-      // console.log('[getFriendsPaginated] No user or friends, returning empty');
-      return { friends: [], total: 0, hasMore: false };
-    }
+  const start = (p - 1) * l;
+  const slice = ids.slice(start, start + l);
+  if (slice.length === 0) return { friends: [], total, hasMore: start + l < total };
 
-    const totalFriends = user.friends.length;
-    const friendsIds = user.friends.slice(skip, skip + limit);
-    
-    // Получаем информацию о друзьях
-    const friends = await User.find(
-      { _id: { $in: friendsIds } },
-      { _id: 1, nick: 1, avatar: 1, avatarVer: 1, avatarThumbB64: 1 }
-    ).lean();
+  // Загружаем профили друзей
+  const friends = await User.find({ _id: { $in: slice } })
+    .select('_id nick avatar avatarVer avatarThumbB64')
+    .lean();
 
-    return {
-      friends: friends.map(friend => ({
-        _id: friend._id,
-        nick: friend.nick || '',
-        avatar: (friend as any).avatar || '',
-        avatarVer: (friend as any).avatarVer || 0,
-        avatarThumbB64: (friend as any).avatarThumbB64 || ''
-      })),
-      total: totalFriends,
-      hasMore: skip + limit < totalFriends
-    };
-  } catch (error) {
-    console.error('[getFriendsPaginated] Error:', error);
-    return { friends: [], total: 0, hasMore: false };
-  }
+  // Стабильный порядок как в slice
+  const byId = new Map(friends.map((f: any) => [String(f._id), f]));
+  const ordered = slice.map((id) => byId.get(String(id))).filter(Boolean);
+
+  return {
+    friends: ordered,
+    total,
+    hasMore: start + l < total,
+  };
 }
 
-/**
- * Проверить, является ли пользователь другом любого из списка пользователей
- * Полезно для проверки прав доступа к групповым чатам
- */
-export async function isFriendOfAny(userId: string, targetUserIds: string[]): Promise<boolean> {
-  try {
-    if (targetUserIds.length === 0) return false;
-    
-    const user = await User.findOne(
-      { 
-        _id: userId,
-        friends: { $in: targetUserIds }
-      },
-      { _id: 1 }
-    ).lean();
-
-    return !!user;
-  } catch (error) {
-    console.error('[isFriendOfAny] Error:', error);
-    return false;
-  }
-}
-
-/**
- * Получить статистику дружбы пользователя
- */
-export async function getFriendshipStats(userId: string): Promise<{
-  totalFriends: number;
-  onlineFriends: number;
-  recentFriends: number;
-}> {
-  try {
-    const user = await User.findById(userId)
-      .select('friends')
-      .lean();
-
-    if (!user || !user.friends) {
-      return { totalFriends: 0, onlineFriends: 0, recentFriends: 0 };
-    }
-
-    const totalFriends = user.friends.length;
-    
-    // Здесь можно добавить логику для подсчета онлайн друзей
-    // и недавно добавленных друзей
-    const onlineFriends = 0; // TODO: реализовать проверку онлайн статуса
-    const recentFriends = 0; // TODO: реализовать проверку недавно добавленных
-
-    return {
-      totalFriends,
-      onlineFriends,
-      recentFriends
-    };
-  } catch (error) {
-    console.error('[getFriendshipStats] Error:', error);
-    return { totalFriends: 0, onlineFriends: 0, recentFriends: 0 };
-  }
-}
-
-/**
- * Очистить кэш дружбы для пользователя
- * Вызывается при изменении списка друзей
- */
-export function clearFriendshipCache(userId: string): void {
-  for (const [key] of friendshipCache.entries()) {
-    if (key.includes(userId)) {
-      friendshipCache.delete(key);
-    }
-  }
-}
-
-/**
- * Очистить весь кэш дружбы
- */
-export function clearAllFriendshipCache(): void {
-  friendshipCache.clear();
-}

@@ -1,17 +1,35 @@
 import sharp from 'sharp';
 
-// вход: либо data-uri, либо сырое base64 (jpeg/png/webp)
-// выход: два data-uri jpeg: full (<=512px) и thumb (<=96px)
-export async function buildAvatarDataUris(base64Input: string) {
-  const buf = base64Input.startsWith('data:')
-    ? Buffer.from(base64Input.split(',')[1], 'base64')
-    : Buffer.from(base64Input, 'base64');
+/**
+ * Принимает base64 (с data-uri или без) и возвращает:
+ * - fullB64: data:image/jpeg;base64,...
+ * - thumbB64: data:image/jpeg;base64,...
+ */
+export async function buildAvatarDataUris(inputBase64: string): Promise<{ fullB64: string; thumbB64: string }> {
+  const raw = String(inputBase64 || '').trim();
+  if (!raw) return { fullB64: '', thumbB64: '' };
 
-  const full = await sharp(buf).rotate().resize({ width: 512, height: 512, fit: 'inside' }).jpeg({ quality: 80 }).toBuffer();
-  const thumb = await sharp(buf).rotate().resize({ width: 96, height: 96, fit: 'cover' }).jpeg({ quality: 70 }).toBuffer();
+  const m = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  const b64 = m ? m[2] : raw;
+  const buf = Buffer.from(b64, 'base64');
 
-  const fullB64 = `data:image/jpeg;base64,${full.toString('base64')}`;
-  const thumbB64 = `data:image/jpeg;base64,${thumb.toString('base64')}`;
-  return { fullB64, thumbB64 };
+  // Full: max 512x512, jpg
+  const full = await sharp(buf)
+    .rotate()
+    .resize(512, 512, { fit: 'cover' })
+    .jpeg({ quality: 80 })
+    .toBuffer();
+
+  // Thumb: max 128x128, jpg
+  const thumb = await sharp(buf)
+    .rotate()
+    .resize(128, 128, { fit: 'cover' })
+    .jpeg({ quality: 70 })
+    .toBuffer();
+
+  return {
+    fullB64: `data:image/jpeg;base64,${full.toString('base64')}`,
+    thumbB64: `data:image/jpeg;base64,${thumb.toString('base64')}`,
+  };
 }
 

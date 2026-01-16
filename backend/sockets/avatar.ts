@@ -14,13 +14,21 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
     }
 
     try {
+      const raw = String(base64 || '').trim();
+      if (!raw) {
+        return cb?.({ ok: false, error: 'empty_image' });
+      }
       const { fullB64, thumbB64 } = await buildAvatarDataUris(base64);
+      if (!fullB64 || !thumbB64) {
+        return cb?.({ ok: false, error: 'empty_image' });
+      }
 
       const updated = await User.findByIdAndUpdate(
         userId,
         { 
           $set: { 
-            avatar: 'data:image', // Устанавливаем маркер, что аватар есть (хранится в base64)
+            // Marker used by profile:update to avoid wiping base64 avatars on avatar === ''
+            avatar: 'data:image',
             avatarB64: fullB64, 
             avatarThumbB64: thumbB64 
           }, 
@@ -77,7 +85,7 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
         userId,
         { 
           $set: { 
-            avatar: '', // Очищаем поле avatar при удалении
+            avatar: '',
             avatarB64: '', 
             avatarThumbB64: '' 
           }, 

@@ -1,0 +1,22 @@
+[Unit]
+Description=LiVi Backend Server
+After=network.target mongodb.service
+
+[Service]
+Type=simple
+User=your_user
+WorkingDirectory=/path/to/livi-app/backend
+Environment=NODE_ENV=production
+EnvironmentFile=/path/to/livi-app/backend/.env
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Ограничения ресурсов (опционально)
+LimitNOFILE=65536
+MemoryLimit=2G
+
+[Install]
+WantedBy=multi-user.target

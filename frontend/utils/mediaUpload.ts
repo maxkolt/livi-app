@@ -5,9 +5,10 @@ import { logger } from './logger';
 
 // Получаем BASE_URL из переменных окружения
 // Приоритет: платформо-специфичная переменная > общая переменная > fallback
-const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
-const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
-const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
+// КРИТИЧНО: В production используйте домен с HTTPS, не IP адреса!
+const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
+const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
+const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
 
 const API_BASE_URL = (Platform.OS === 'android' ? ANDROID_URL : IOS_URL).replace(/\/+$/, '');
 

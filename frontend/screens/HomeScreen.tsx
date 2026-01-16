@@ -687,21 +687,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Используем веб-ссылку, которая автоматически редиректит на приложение
       // Это работает и для iOS, и для Android
       // Определяем правильный URL сервера для генерации ссылки
-      let serverUrl = API_BASE || 'http://192.168.1.12:3000';
+      // КРИТИЧНО: В production используйте домен с HTTPS, не IP адреса!
+      let serverUrl = API_BASE || 'https://api.liviapp.com';
       
-      // Если API_BASE указывает на локальный адрес, но нужен внешний - используем переменную окружения
-      // Или определяем автоматически на основе того, откуда пришел запрос
-      if (serverUrl.includes('192.168.1.12') || serverUrl.includes('localhost')) {
+      // Если API_BASE указывает на локальный адрес или IP - используем переменную окружения
+      if (serverUrl.includes('192.168') || serverUrl.includes('localhost') || serverUrl.includes('127.0.0.1') || /^http:\/\/\d+\.\d+\.\d+\.\d+/.test(serverUrl)) {
         // Пробуем использовать переменную окружения для внешнего доступа
         const externalUrl = process.env.EXPO_PUBLIC_SERVER_URL || 
                            process.env.EXPO_PUBLIC_SERVER_URL_IOS || 
                            process.env.EXPO_PUBLIC_SERVER_URL_ANDROID;
-        if (externalUrl && !externalUrl.includes('192.168') && !externalUrl.includes('localhost')) {
+        if (externalUrl && !externalUrl.includes('192.168') && !externalUrl.includes('localhost') && !externalUrl.includes('127.0.0.1') && !/^http:\/\/\d+\.\d+\.\d+\.\d+/.test(externalUrl)) {
           serverUrl = externalUrl.replace(/\/+$/, '');
         } else {
-          // Fallback: используем тот же URL что и API_BASE, но можно вручную указать внешний
-          // Для тестирования можно использовать: http://92.242.61.46:3000
-          serverUrl = 'http://92.242.61.46:3000'; // Внешний IP для доступа с других устройств
+          // Fallback: используем production домен
+          serverUrl = 'https://api.liviapp.com';
         }
       }
       

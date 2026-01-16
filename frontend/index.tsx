@@ -2,6 +2,7 @@ import './shims/nativeEventEmitterShim';
 import 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
+import { Alert } from 'react-native';
 import { registerRootComponent } from 'expo';
 import App from './App';
 
@@ -21,6 +22,18 @@ try {
       isFatal,
       name: error?.name
     });
+
+    // Показываем понятную ошибку на устройстве (иначе часто виден просто чёрный экран)
+    try {
+      // Защита от спама алертами
+      const msg = String(error?.message || error || 'Unknown error');
+      const key = '__lastJsFatalAlert';
+      const last = (global as any)[key];
+      if (isFatal && last !== msg) {
+        (global as any)[key] = msg;
+        Alert.alert('JS Error', msg);
+      }
+    } catch {}
     
     // Для критических ошибок вызываем оригинальный обработчик
     if (isFatal) {

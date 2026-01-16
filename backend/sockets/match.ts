@@ -1,7 +1,7 @@
 import type { Server } from 'socket.io';
 import type { AuthedSocket } from './types';
 import { logger } from '../utils/logger';
-import { createToken } from '../routes/livekit';
+import { createToken, getLiveKitUrl } from '../routes/livekit';
 import * as queueStore from '../utils/queueStore';
 import User from '../models/User';
 
@@ -269,14 +269,16 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
     id: other.id, 
     userId: otherUserId || null,
     livekitToken: livekitTokenA,
-    livekitRoomName
+    livekitRoomName,
+    livekitUrl: getLiveKitUrl() || null,
   });
   io.to(other.id).emit('match_found', { 
     roomId, 
     id: socket.id, 
     userId: myUserId || null,
     livekitToken: livekitTokenB,
-    livekitRoomName
+    livekitRoomName,
+    livekitUrl: getLiveKitUrl() || null,
   });
 
   return true;

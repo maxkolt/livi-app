@@ -2,15 +2,30 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SERVER_URL": "https://api.liviapp.com",
+        "EXPO_PUBLIC_LIVEKIT_URL": "wss://livekit.liviapp.com",
+        "EXPO_PUBLIC_LOG_LEVEL": "debug"
+      }
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SERVER_URL": "https://api.liviapp.com",
+        "EXPO_PUBLIC_LIVEKIT_URL": "wss://livekit.liviapp.com",
+        "EXPO_PUBLIC_LOG_LEVEL": "info"
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
+      "env": {
+        "EXPO_PUBLIC_SERVER_URL": "https://api.liviapp.com",
+        "EXPO_PUBLIC_LIVEKIT_URL": "wss://livekit.liviapp.com",
+        "EXPO_PUBLIC_LOG_LEVEL": "warn"
+      },
       "android": {
         "buildType": "app-bundle"
       }

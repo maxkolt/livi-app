@@ -1,63 +1,39 @@
-// backend/utils/logger.ts
-// Система логирования с уровнями для оптимизации вывода
+type LogMeta = Record<string, unknown> | undefined;
 
-type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+function ts() {
+  return new Date().toISOString();
+}
 
-class Logger {
-  private isProduction = process.env.NODE_ENV === 'production';
-  private debugEnabled = process.env.DEBUG_LOGS === 'true' || !this.isProduction;
-  private infoEnabled = process.env.INFO_LOGS === 'true' || !this.isProduction;
-
-  private log(level: LogLevel, message: string, ...args: any[]) {
-    // В production показываем только ошибки и предупреждения
-    if (this.isProduction && (level === 'info' || level === 'debug')) {
-      return;
-    }
-
-    // В development показываем только warn и error по умолчанию
-    if (!this.isProduction && level === 'info' && !this.infoEnabled) {
-      return;
-    }
-
-    // В development показываем все, кроме debug (если не включен явно)
-    if (!this.isProduction && level === 'debug' && !this.debugEnabled) {
-      return;
-    }
-
-    const timestamp = new Date().toISOString();
-    const prefix = `[${timestamp}] [${level.toUpperCase()}]`;
-    
-    switch (level) {
-      case 'error':
-        console.error(prefix, message, ...args);
-        break;
-      case 'warn':
-        console.warn(prefix, message, ...args);
-        break;
-      case 'info':
-        console.log(prefix, message, ...args);
-        break;
-      case 'debug':
-        console.log(prefix, message, ...args);
-        break;
-    }
-  }
-
-  error(message: string, ...args: any[]) {
-    this.log('error', message, ...args);
-  }
-
-  warn(message: string, ...args: any[]) {
-    this.log('warn', message, ...args);
-  }
-
-  info(message: string, ...args: any[]) {
-    this.log('info', message, ...args);
-  }
-
-  debug(message: string, ...args: any[]) {
-    this.log('debug', message, ...args);
+function fmt(meta?: LogMeta) {
+  if (!meta) return '';
+  try {
+    return ' ' + JSON.stringify(meta);
+  } catch {
+    return ' ' + String(meta);
   }
 }
 
-export const logger = new Logger();
+export const logger = {
+  debug(message: string, meta?: LogMeta) {
+    if (process.env.LOG_LEVEL === 'silent') return;
+    if (process.env.NODE_ENV === 'production' && process.env.LOG_LEVEL !== 'debug') return;
+    // eslint-disable-next-line no-console
+    console.log(`[${ts()}] [debug] ${message}${fmt(meta)}`);
+  },
+  info(message: string, meta?: LogMeta) {
+    if (process.env.LOG_LEVEL === 'silent') return;
+    // eslint-disable-next-line no-console
+    console.log(`[${ts()}] [info] ${message}${fmt(meta)}`);
+  },
+  warn(message: string, meta?: LogMeta) {
+    if (process.env.LOG_LEVEL === 'silent') return;
+    // eslint-disable-next-line no-console
+    console.warn(`[${ts()}] [warn] ${message}${fmt(meta)}`);
+  },
+  error(message: string, meta?: LogMeta) {
+    if (process.env.LOG_LEVEL === 'silent') return;
+    // eslint-disable-next-line no-console
+    console.error(`[${ts()}] [error] ${message}${fmt(meta)}`);
+  },
+};
+

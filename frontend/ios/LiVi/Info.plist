@@ -54,32 +54,19 @@
       <true/>
       <key>NSExceptionDomains</key>
       <dict>
-        <key>92.242.61.46</key>
+        <key>api.liviapp.com</key>
         <dict>
           <key>NSExceptionAllowsInsecureHTTPLoads</key>
-          <true/>
+          <false/>
           <key>NSIncludesSubdomains</key>
           <true/>
-          <key>NSExceptionRequiresForwardSecrecy</key>
-          <false/>
         </dict>
-        <key>192.168.1.12</key>
+        <key>livekit.liviapp.com</key>
         <dict>
           <key>NSExceptionAllowsInsecureHTTPLoads</key>
-          <true/>
+          <false/>
           <key>NSIncludesSubdomains</key>
           <true/>
-          <key>NSExceptionRequiresForwardSecrecy</key>
-          <false/>
-        </dict>
-        <key>192.168.0.158</key>
-        <dict>
-          <key>NSExceptionAllowsInsecureHTTPLoads</key>
-          <true/>
-          <key>NSIncludesSubdomains</key>
-          <true/>
-          <key>NSExceptionRequiresForwardSecrecy</key>
-          <false/>
         </dict>
       </dict>
     </dict>

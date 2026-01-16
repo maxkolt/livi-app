@@ -438,16 +438,6 @@ function AppContent() {
         // НЕ ДОЛЖНО ЗАКРЫВАТЬСЯ пока пользователь в приложении
         activateKeepAwake();
         
-        // КРИТИЧНО: Для iOS ВСЕГДА активируем InCallManager когда приложение не в фоне
-        // Это предотвращает закрытие приложения системой
-        if (Platform.OS === 'ios') {
-          try {
-            InCallManager.start({ media: 'video', ringback: '' });
-          } catch (e) {
-            logger.warn('[App] Failed to start InCallManager (iOS):', e);
-          }
-        }
-        
         // КРИТИЧНО: Для Android ВСЕГДА используем InCallManager для предотвращения засыпания экрана
         if (Platform.OS === 'android') {
           activateAndroidKeepScreenOn();
@@ -461,22 +451,6 @@ function AppContent() {
               }
             }, 3000); // Переактивируем каждые 3 секунды для Android (максимально агрессивная защита)
           }
-        }
-        
-        // КРИТИЧНО: На iOS периодически переактивируем keep-awake и InCallManager
-        // Уменьшаем интервал до 3 секунд для максимально надежной работы
-        if (Platform.OS === 'ios' && !keepAwakeInterval) {
-          keepAwakeInterval = setInterval(() => {
-            if (AppState.currentState === 'active' || AppState.currentState === 'inactive') {
-              activateKeepAwake();
-              // КРИТИЧНО: ВСЕГДА переактивируем InCallManager на iOS когда приложение не в фоне
-              try {
-                InCallManager.start({ media: 'video', ringback: '' });
-              } catch (e) {
-                logger.warn('[App] Failed to re-activate InCallManager (iOS):', e);
-              }
-            }
-          }, 3000); // Переактивируем каждые 3 секунды для iOS (максимально агрессивная защита)
         }
       } else if (nextAppState === 'background') {
         // Приложение ушло в фон - деактивируем для экономии батареи
@@ -514,16 +488,6 @@ function AppContent() {
     if (currentState === 'active' || currentState === 'inactive') {
       activateKeepAwake();
       
-      // КРИТИЧНО: Для iOS ВСЕГДА активируем InCallManager при монтировании
-      // Это предотвращает закрытие приложения системой
-      if (Platform.OS === 'ios') {
-        try {
-          InCallManager.start({ media: 'video', ringback: '' });
-        } catch (e) {
-          logger.warn('[App] Failed to start InCallManager (iOS, initial mount):', e);
-        }
-      }
-      
       // КРИТИЧНО: Для Android ВСЕГДА используем InCallManager для предотвращения засыпания экрана
       if (Platform.OS === 'android') {
         activateAndroidKeepScreenOn();
@@ -535,22 +499,6 @@ function AppContent() {
             activateAndroidKeepScreenOn();
           }
         }, 3000); // Переактивируем каждые 3 секунды для Android (максимально агрессивная защита)
-      }
-      
-      // КРИТИЧНО: На iOS запускаем периодическую переактивацию keep-awake и InCallManager
-      // Уменьшаем интервал до 3 секунд для максимально надежной работы
-      if (Platform.OS === 'ios') {
-        keepAwakeInterval = setInterval(() => {
-          if (AppState.currentState === 'active' || AppState.currentState === 'inactive') {
-            activateKeepAwake();
-            // КРИТИЧНО: ВСЕГДА переактивируем InCallManager на iOS когда приложение не в фоне
-            try {
-              InCallManager.start({ media: 'video', ringback: '' });
-            } catch (e) {
-              logger.warn('[App] Failed to re-activate InCallManager (iOS):', e);
-            }
-          }
-        }, 3000); // Переактивируем каждые 3 секунды для iOS (максимально агрессивная защита)
       }
     }
 

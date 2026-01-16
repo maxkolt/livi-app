@@ -82,7 +82,13 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     
     // Добавляем сокет в комнату
     socket.join(roomId);
-    logger.debug('Socket joined room', { socketId: socket.id, roomId });
+    const userId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : undefined;
+    logger.info(`[room:join] User joined room ${roomId}`, { 
+      socketId: socket.id, 
+      userId, 
+      roomId, 
+      existingPeers: existingPeers.length 
+    });
     
     // Отправляем новому участнику peer ID собеседника (максимум 1)
     if (existingPeers.length === 1) {

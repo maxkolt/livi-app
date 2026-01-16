@@ -1,3 +1,6 @@
+frontend/.env
+backend/.env
+
 # Dependencies
 node_modules/
 frontend/node_modules/
@@ -42,9 +45,12 @@ frontend/android/.idea/
 frontend/android/*.iml
 frontend/android/app/*.jks
 frontend/android/app/*.keystore
+frontend/android/app/*.jks.backup
+frontend/android/app/*.keystore.backup
 frontend/android/app/*.pem
 frontend/android/app/*.zip
 frontend/android/app/pepk.jar
+frontend/android/app/src/main/assets/
 
 # iOS
 frontend/ios/Pods/
@@ -52,6 +58,7 @@ frontend/ios/build/
 frontend/ios/*.xcworkspace/xcuserdata/
 frontend/ios/*.xcodeproj/xcuserdata/
 frontend/ios/*.xcuserstate
+frontend/ios/.xcode.env
 
 # Expo
 .expo/

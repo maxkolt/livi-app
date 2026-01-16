@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiVi Feature Graphic</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            width: 1024px;
+            height: 500px;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+        .banner {
+            width: 1024px;
+            height: 500px;
+            background: linear-gradient(135deg, #0B0B0C 0%, #1a1a1a 100%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            color: white;
+        }
+        .logo {
+            font-size: 72px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            letter-spacing: 2px;
+        }
+        .tagline {
+            font-size: 28px;
+            color: #ffffff;
+            text-align: center;
+            margin-bottom: 30px;
+            opacity: 0.9;
+        }
+        .features {
+            display: flex;
+            gap: 40px;
+            margin-top: 20px;
+        }
+        .feature {
+            text-align: center;
+            font-size: 18px;
+            opacity: 0.8;
+        }
+        .feature-icon {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="banner">
+        <div class="logo">LiVi</div>
+        <div class="tagline">Видеозвонки и общение</div>
+        <div class="features">
+            <div class="feature">
+                <div class="feature-icon">🎥</div>
+                <div>Видеочат</div>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">👥</div>
+                <div>Друзья</div>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">💬</div>
+                <div>Сообщения</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

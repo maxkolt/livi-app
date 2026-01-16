@@ -1,4 +1,4 @@
- // sockets/identity.ts
+// sockets/identity.ts
 import { Server } from 'socket.io';
 import mongoose, { ClientSession, Types } from 'mongoose';
 import User from '../models/User';
@@ -199,13 +199,11 @@ export default function registerIdentitySockets(io: Server) {
           const exists = await User.exists({ _id: userId });
 
           if (!exists) {
-            // Пользователь был удалён - создаём НОВОГО пользователя с НОВЫМ userId
-            // и обновляем связь installId -> новый userId
-            // Это предотвращает "перезапись" старого удаленного пользователя
+            // Пользователь был удалён - создаём ПУСТОГО (игнорируем входящий profile)
             const incomingProfile = payload?.profile || {};
             const hasIncomingData = !!(incomingProfile.nick || incomingProfile.avatar);
 
-            console.log(`[identity] User ${userId} not found, creating NEW user with NEW userId for installId ${installId}...`);
+            console.log(`[identity] User ${userId} not found, creating new user...`);
             
             // КРИТИЧНО: Проверяем готовность MongoDB перед User.create
             if (mongoose.connection.readyState !== 1) {
@@ -215,59 +213,18 @@ export default function registerIdentitySockets(io: Server) {
               return;
             }
             
-            // Создаем нового пользователя с новым userId
-            const newUserId = new Types.ObjectId();
-            let session: ClientSession | null = null;
-            try { session = await mongoose.startSession(); } catch {}
-
-            const work = async (s?: ClientSession) => {
-              const opt = s ? { session: s } : undefined;
-              
-              // Создаем нового пользователя
-              const [newUser] = await User.create(
-                [{
-                  _id: newUserId,
-                  nick: '', // ВСЕГДА пустой для нового пользователя
-                  avatar: '', // ВСЕГДА пустой для нового пользователя
-                  friends: [],
-                }],
-                opt as any
-              );
-              
-              // Обновляем связь installId -> новый userId (удаляем старую связь)
-              await Install.deleteMany({ installId }, opt as any);
-              await Install.create([{ installId, user: newUserId }], opt as any);
-              
-              console.log(`[identity] ✅ New user created (replaced deleted user): ${newUserId}`, {
-                _id: String(newUser._id),
-                nick: newUser.nick,
-                friendsCount: newUser.friends?.length || 0,
-                oldUserId: userId,
-                installId: installId,
-                dbName: mongoose.connection.db?.databaseName
-              });
-            };
-
-            if (session) {
-              await session.withTransaction(async () => { await work(session!); });
-              await session.endSession();
-            } else {
-              try { 
-                await work(); 
-              } catch (e) {
-                // Откатываем изменения при ошибке
-                try { await Install.deleteMany({ installId }); } catch {}
-                try { await User.deleteOne({ _id: newUserId }); } catch {}
-                throw e;
-              }
-            }
-            
-            await bindUser(io, sock, String(newUserId));
-            ack?.({ ok: true, userId: String(newUserId) });
-
-            // Очищаем кэш
-            setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
-            return;
+            const newUser = await User.create({
+              _id: userId,
+              nick: '', // ВСЕГДА пустой для нового пользователя
+              avatar: '', // ВСЕГДА пустой для нового пользователя
+              friends: [],
+            });
+            console.log(`[identity] ✅ User created (recovered): ${userId}`, {
+              _id: String(newUser._id),
+              nick: newUser.nick,
+              friendsCount: newUser.friends?.length || 0,
+              dbName: mongoose.connection.db?.databaseName
+            });
           } else {
             console.log(`[identity] User ${userId} already exists, skipping creation`);
             // Пользователь существует - можно обновлять профиль

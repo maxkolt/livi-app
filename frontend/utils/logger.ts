@@ -1,5 +1,7 @@
 // frontend/utils/logger.ts
-const LOG_LEVEL = process.env.LOG_LEVEL || 'info'; // debug, info, warn, error
+// In Expo, environment variables intended for the JS bundle should be prefixed with EXPO_PUBLIC_.
+// We still support LOG_LEVEL for local tooling / non-Expo environments.
+const LOG_LEVEL = process.env.EXPO_PUBLIC_LOG_LEVEL || process.env.LOG_LEVEL || 'info'; // debug, info, warn, error
 
 const levels = {
   debug: 0,

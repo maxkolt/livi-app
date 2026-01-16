@@ -1,0 +1,14 @@
+{
+  "name": "livi-app-root",
+  "private": true,
+  "scripts": {
+    "dev": "sh -c 'npm --prefix backend run dev & BACK_PID=$!; npm --prefix frontend run start -- --dev-client; kill $BACK_PID'",
+    "dev:lan": "sh -c 'npm --prefix backend run dev & BACK_PID=$!; npm --prefix frontend run start:lan; kill $BACK_PID'",
+    "dev:tunnel": "sh -c 'npm --prefix backend run dev & BACK_PID=$!; npm --prefix frontend run start:tunnel; kill $BACK_PID'",
+    "backend:dev": "npm --prefix backend run dev",
+    "frontend:dev": "npm --prefix frontend run start -- --dev-client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0"
+  }
+}

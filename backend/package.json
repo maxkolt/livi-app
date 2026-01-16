@@ -3,10 +3,9 @@
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
-    "prestart": "../scripts/kill-port.sh",
-    "start": "ts-node index.ts",
-    "predev": "../scripts/kill-port.sh",
-    "dev": "bun --watch index.ts"
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node-dev --respawn --transpile-only index.ts"
   },
   "dependencies": {
     "@types/fluent-ffmpeg": "^2.1.27",

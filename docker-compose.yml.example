@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: livi-backend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"  # Только localhost, наружу через Nginx
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/public/uploads:/app/public/uploads
+    networks:
+      - livi-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livi-livekit
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7880:7880"  # HTTP/WebSocket (только localhost)
+      - "127.0.0.1:7881:7881"  # TCP fallback (только localhost)
+      - "50000-60000:50000-60000/udp"  # WebRTC медиа-порты (публичные)
+    env_file:
+      - ./livekit/.env  # Создайте файл с LIVEKIT_KEYS, LIVEKIT_PORT и т.д.
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit.yaml:ro
+    networks:
+      - livi-network
+    command: --config /etc/livekit.yaml
+    # КРИТИЧНО: Для продакшена нужен use_external_ip: true в livekit.yaml
+
+  redis:
+    image: redis:7-alpine
+    container_name: livi-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"  # Только localhost
+    volumes:
+      - redis-data:/data
+    networks:
+      - livi-network
+    command: redis-server --appendonly yes
+
+networks:
+  livi-network:
+    driver: bridge
+
+volumes:
+  redis-data:

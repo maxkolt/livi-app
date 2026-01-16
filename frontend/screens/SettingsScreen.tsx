@@ -15,8 +15,9 @@ import SplashLoader from '../components/SplashLoader';
 import * as DocumentPicker from 'expo-document-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001';
-const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || 'http://10.0.2.2:3001';
+// КРИТИЧНО: В production используйте домен с HTTPS, не IP адреса!
+const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
+const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
 const API_BASE = (Platform.OS === 'android' ? ANDROID_URL : DEFAULT_URL).replace(/\/+$/, '');
 
 const isHttp = (u?: string) => !!u && /^https?:\/\//i.test(String(u || ''));

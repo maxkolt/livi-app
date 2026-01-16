@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Приглашение в LiVi</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #0D0E10 0%, #1a1a2e 100%);
+            color: #F4F5F7;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 400px;
+            width: 100%;
+            text-align: center;
+        }
+        .logo {
+            font-size: 48px;
+            font-weight: 800;
+            color: #4DD0E1;
+            margin-bottom: 20px;
+            letter-spacing: 2px;
+        }
+        .title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: #F4F5F7;
+        }
+        .subtitle {
+            font-size: 16px;
+            color: #8A8F99;
+            margin-bottom: 30px;
+            line-height: 1.5;
+        }
+        .button {
+            display: inline-block;
+            background: #4DD0E1;
+            color: #0D0E10;
+            padding: 16px 32px;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 16px;
+            margin: 10px;
+            transition: transform 0.2s, opacity 0.2s;
+        }
+        .button:hover {
+            transform: scale(1.05);
+            opacity: 0.9;
+        }
+        .button:active {
+            transform: scale(0.95);
+        }
+        .button-secondary {
+            background: rgba(77, 208, 225, 0.1);
+            color: #4DD0E1;
+            border: 1px solid #4DD0E1;
+        }
+        .info {
+            margin-top: 30px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            border: 1px solid rgba(77, 208, 225, 0.2);
+        }
+        .info-text {
+            font-size: 14px;
+            color: #8A8F99;
+            line-height: 1.6;
+        }
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(77, 208, 225, 0.3);
+            border-top-color: #4DD0E1;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">LiVi</div>
+        <h1 class="title">Приглашение в друзья</h1>
+        <p class="subtitle">Вас пригласили присоединиться к LiVi — видеочату будущего</p>
+        
+        <div id="loading">
+            <div class="spinner"></div>
+            <span>Открываем приложение...</span>
+        </div>
+        
+        <div id="not-installed" class="hidden">
+            <p class="subtitle" style="margin-bottom: 20px;">Приложение LiVi не установлено</p>
+            <a href="#" id="ios-link" class="button">Скачать для iOS</a>
+            <a href="#" id="android-link" class="button button-secondary">Скачать для Android</a>
+            
+            <div class="info" style="margin-top: 20px;">
+                <p class="info-text" style="margin-bottom: 12px;">
+                    Если приложение уже установлено, попробуйте:
+                </p>
+                <a href="#" id="open-app-link" class="button" style="background: rgba(77,208,225,0.15); color: #4DD0E1; border: 1px solid #4DD0E1; margin-top: 8px; display: inline-block; padding: 12px 24px; text-decoration: none; border-radius: 10px; font-weight: 700;">
+                    Открыть приложение вручную
+                </a>
+            </div>
+            
+            <div class="info" style="margin-top: 20px;">
+                <p class="info-text">
+                    После установки приложения откройте эту ссылку снова, чтобы принять приглашение в друзья.
+                </p>
+            </div>
+        </div>
+        
+        <div id="error" class="hidden">
+            <p class="subtitle" style="color: #FF5A67; margin-bottom: 20px;" id="error-message">Ошибка при открытии приложения</p>
+            <a href="#" id="retry-link" class="button">Попробовать снова</a>
+            <div class="info" style="margin-top: 20px;">
+                <p class="info-text" style="font-size: 12px;">
+                    Если приложение установлено, попробуйте открыть ссылку вручную:<br/>
+                    <code style="color: #4DD0E1; font-size: 11px;" id="manual-link">livi://invite/...</code>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Обработка ошибок
+        window.addEventListener('error', (e) => {
+            console.error('[invite] Global error:', e);
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('error').classList.remove('hidden');
+        });
+        
+        try {
+            // Получаем код приглашения из URL
+            // Формат: /invite/{code} или /invite?code={code}
+            const urlParams = new URLSearchParams(window.location.search);
+            let code = urlParams.get('code');
+            
+            // Если код не в query параметре, берем из pathname
+            if (!code) {
+                const pathParts = window.location.pathname.split('/').filter(p => p);
+                const inviteIndex = pathParts.indexOf('invite');
+                if (inviteIndex !== -1 && pathParts[inviteIndex + 1]) {
+                    code = pathParts[inviteIndex + 1];
+                }
+            }
+            
+            console.log('[invite] Extracted code:', code);
+            
+            if (!code || !/^[a-f\d]{24}$/i.test(code)) {
+                console.error('[invite] Invalid code:', code);
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('error').classList.remove('hidden');
+                document.getElementById('error').querySelector('.subtitle').textContent = 'Неверная ссылка приглашения';
+                document.getElementById('retry-link').style.display = 'none';
+            } else {
+            // Пытаемся открыть приложение
+            const appUrl = `livi://invite/${code}`;
+            const fallbackUrl = `https://livi.app/invite/${code}`;
+            
+            // Определяем платформу
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+            const isAndroid = /Android/.test(navigator.userAgent);
+            
+            // Устанавливаем ссылки для скачивания
+            // TODO: Заменить на реальные ссылки App Store и Google Play
+            document.getElementById('ios-link').href = 'https://apps.apple.com/app/livi'; // Заменить на реальную ссылку
+            document.getElementById('android-link').href = 'https://play.google.com/store/apps/details?id=com.kolt12max.livi'; // Заменить на реальную ссылку
+            
+            // Пытаемся открыть приложение
+            let opened = false;
+            let checkTimeout = null;
+            
+            const markAsOpened = () => {
+                opened = true;
+                if (checkTimeout) {
+                    clearTimeout(checkTimeout);
+                }
+            };
+            
+            const showNotInstalled = () => {
+                if (!opened) {
+                    document.getElementById('loading').classList.add('hidden');
+                    document.getElementById('not-installed').classList.remove('hidden');
+                }
+            };
+            
+            // Для iOS используем iframe trick + window.location как fallback
+            if (isIOS) {
+                console.log('[invite] iOS detected, attempting to open app');
+                
+                // Метод 1: iframe trick (более надежно)
+                try {
+                    const iframe = document.createElement('iframe');
+                    iframe.style.display = 'none';
+                    iframe.style.width = '0';
+                    iframe.style.height = '0';
+                    iframe.style.border = 'none';
+                    iframe.src = appUrl;
+                    document.body.appendChild(iframe);
+                    console.log('[invite] iOS iframe created');
+                    
+                    // Удаляем iframe через небольшую задержку
+                    setTimeout(() => {
+                        if (document.body.contains(iframe)) {
+                            document.body.removeChild(iframe);
+                        }
+                    }, 2000);
+                } catch (e) {
+                    console.warn('[invite] iOS iframe failed:', e);
+                }
+                
+                // Метод 2: window.location как дополнительная попытка
+                setTimeout(() => {
+                    if (!opened) {
+                        try {
+                            window.location.href = appUrl;
+                            console.log('[invite] iOS window.location set');
+                        } catch (e) {
+                            console.error('[invite] iOS window.location failed:', e);
+                        }
+                    }
+                }, 100);
+                
+                // Если пользователь вернулся на страницу, значит приложение не установлено
+                window.addEventListener('blur', markAsOpened);
+                window.addEventListener('pagehide', markAsOpened);
+                
+                // Проверяем через таймаут (увеличено до 3 секунд для надежности)
+                checkTimeout = window.setTimeout(() => {
+                    if (!opened) {
+                        console.log('[invite] iOS timeout - app not opened');
+                        showNotInstalled();
+                    }
+                }, 3000);
+                
+                // Если страница стала видимой снова через некоторое время, значит приложение не открылось
+                setTimeout(() => {
+                    if (document.hasFocus() && !opened) {
+                        console.log('[invite] iOS still focused - app not opened');
+                        showNotInstalled();
+                    }
+                }, 2500);
+            } else if (isAndroid) {
+                // Для Android используем intent:// URL для более надежного открытия
+                // Формат: intent://path#Intent;scheme=scheme;package=package;end
+                const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;S.browser_fallback_url=${encodeURIComponent(window.location.href)};end`;
+                
+                console.log('[invite] Attempting to open app on Android:', { intentUrl, appUrl, code });
+                
+                // Сначала пытаемся через intent://
+                try {
+                    window.location.href = intentUrl;
+                    console.log('[invite] Intent URL set');
+                } catch (e) {
+                    console.warn('[invite] Intent URL failed, trying custom scheme:', e);
+                    // Fallback на обычный custom scheme
+                    try {
+                        window.location.href = appUrl;
+                    } catch (e2) {
+                        console.error('[invite] Custom scheme also failed:', e2);
+                    }
+                }
+                
+                // Также создаем скрытую ссылку для клика (дополнительный способ)
+                setTimeout(() => {
+                    if (!opened) {
+                        const link = document.createElement('a');
+                        link.href = intentUrl;
+                        link.style.display = 'none';
+                        document.body.appendChild(link);
+                        try {
+                            link.click();
+                            console.log('[invite] Clicked intent link');
+                        } catch (e) {
+                            console.warn('[invite] Link click failed:', e);
+                        }
+                        setTimeout(() => {
+                            if (document.body.contains(link)) {
+                                document.body.removeChild(link);
+                            }
+                        }, 100);
+                    }
+                }, 100);
+                
+                // Также пытаемся открыть через обычный scheme как fallback
+                setTimeout(() => {
+                    if (!opened) {
+                        try {
+                            window.location.href = appUrl;
+                            console.log('[invite] Trying custom scheme fallback');
+                        } catch (e) {
+                            console.error('[invite] Failed to open app:', e);
+                        }
+                    }
+                }, 500);
+                
+                // Слушаем события для определения открытия приложения
+                window.addEventListener('blur', markAsOpened);
+                window.addEventListener('pagehide', markAsOpened);
+                document.addEventListener('visibilitychange', () => {
+                    if (document.hidden) {
+                        markAsOpened();
+                    }
+                });
+                
+                // Проверяем через таймаут (увеличено до 3 секунд для надежности)
+                checkTimeout = window.setTimeout(() => {
+                    if (!opened) {
+                        console.log('[invite] Android timeout - app not opened');
+                        showNotInstalled();
+                    }
+                }, 3000);
+            } else {
+                // Для других платформ используем обычный scheme
+                try {
+                    window.location.href = appUrl;
+                } catch (e) {
+                    console.error('Failed to open app:', e);
+                }
+                
+                window.addEventListener('blur', markAsOpened);
+                checkTimeout = window.setTimeout(() => {
+                    if (!opened) {
+                        showNotInstalled();
+                    }
+                }, 2000);
+            }
+            
+            // Обработка кнопки "Попробовать снова"
+            document.getElementById('retry-link').addEventListener('click', (e) => {
+                e.preventDefault();
+                opened = false;
+                if (isAndroid) {
+                    const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;end`;
+                    window.location.href = intentUrl;
+                } else {
+                    window.location.href = appUrl;
+                }
+            });
+            
+            // Обработка кнопки "Открыть приложение вручную"
+            const openAppLink = document.getElementById('open-app-link');
+            if (openAppLink) {
+                openAppLink.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    console.log('[invite] Manual open app clicked');
+                    try {
+                        if (isAndroid) {
+                            const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;end`;
+                            window.location.href = intentUrl;
+                        } else {
+                            window.location.href = appUrl;
+                        }
+                    } catch (err) {
+                        console.error('[invite] Manual open failed:', err);
+                        // Показываем инструкцию
+                        alert('Скопируйте ссылку и вставьте её в приложение LiVi:\n' + appUrl);
+                    }
+                });
+            }
+            }
+        } catch (e) {
+            console.error('[invite] Script error:', e);
+            const errorEl = document.getElementById('error');
+            const errorMsgEl = document.getElementById('error-message');
+            const manualLinkEl = document.getElementById('manual-link');
+            
+            if (errorEl) errorEl.classList.remove('hidden');
+            if (errorMsgEl) errorMsgEl.textContent = 'Ошибка: ' + (e.message || 'Неизвестная ошибка');
+            if (manualLinkEl && code) {
+                manualLinkEl.textContent = `livi://invite/${code}`;
+                manualLinkEl.style.cursor = 'pointer';
+                manualLinkEl.onclick = () => {
+                    window.location.href = `livi://invite/${code}`;
+                };
+            }
+            document.getElementById('loading').classList.add('hidden');
+        }
+    </script>
+</body>
+</html>

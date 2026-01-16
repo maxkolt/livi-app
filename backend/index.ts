@@ -17,6 +17,7 @@ import meRouter from './routes/me';
 import appSettingsRouter from './routes/app-settings';
 import uploadRouter from './routes/upload';
 import livekitRouter from './routes/livekit';
+import avatarRouter from './routes/avatar';
 import registerFriendSockets from './sockets/friends';
 import registerIdentitySockets, { bindUser as bindUserIdentity } from './sockets/identity';
 import registerMessageSockets from './sockets/messagesReliable';
@@ -27,7 +28,7 @@ import User from './models/User';
 import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
-import { createToken } from './routes/livekit';
+import { createToken, getLiveKitUrl } from './routes/livekit';
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 
@@ -224,6 +225,7 @@ app.use('/api', appSettingsRouter);
 app.use('/api', meRouter);
 app.use('/api', friendsRouter);
 app.use('/api', uploadRouter);
+app.use('/api', avatarRouter);
 app.use('/api', livekitRouter);
 
 // Stream utility убран - больше не используется
@@ -1346,7 +1348,12 @@ io.on('connection', async (sock: AuthedSocket) => {
   });
 
   // Получение LiveKit токена через сокет
-  sock.on('livekit:token', async ({ roomName }: { roomName?: string }, ack?: (response: { ok: boolean; token?: string; error?: string }) => void) => {
+  sock.on(
+    'livekit:token',
+    async (
+      { roomName }: { roomName?: string },
+      ack?: (response: { ok: boolean; token?: string; url?: string; error?: string }) => void
+    ) => {
     try {
       const me = (sock as any)?.data?.userId;
       if (!me || !roomName) {
@@ -1373,7 +1380,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       });
       
       logger.debug('[livekit:token] Token created successfully', { userId: me, roomName, tokenLength: token?.length || 0 });
-      return ack?.({ ok: true, token });
+      return ack?.({ ok: true, token, url: getLiveKitUrl() || undefined });
     } catch (e: any) {
       console.error('[livekit:token] ❌ Error creating token:', {
         error: e?.message,
@@ -1390,7 +1397,8 @@ io.on('connection', async (sock: AuthedSocket) => {
       });
       return ack?.({ ok: false, error: e?.message || 'server_error' });
     }
-  });
+    }
+  );
 
   sock.on('call:accept', async ({ callId }: { callId?: string }) => {
     const id = String(callId || '');
@@ -1521,7 +1529,8 @@ io.on('connection', async (sock: AuthedSocket) => {
             fromUserId: link.b, 
             roomId,
             livekitToken: livekitTokenA,
-            livekitRoomName
+            livekitRoomName,
+            livekitUrl: getLiveKitUrl() || null,
           });
           console.log('[call:accept] ✅ call:accepted sent to participant A');
         } catch (e) {
@@ -1545,7 +1554,8 @@ io.on('connection', async (sock: AuthedSocket) => {
             fromUserId: link.a, 
             roomId,
             livekitToken: livekitTokenB,
-            livekitRoomName
+            livekitRoomName,
+            livekitUrl: getLiveKitUrl() || null,
           });
           console.log('[call:accept] ✅ call:accepted sent to participant B');
         } catch (e) {
@@ -1563,7 +1573,8 @@ io.on('connection', async (sock: AuthedSocket) => {
             fromUserId: link.b, 
             roomId,
             livekitToken: livekitTokenA,
-            livekitRoomName
+            livekitRoomName,
+            livekitUrl: getLiveKitUrl() || null,
           });
         }
         if (!bSock) {
@@ -1573,7 +1584,8 @@ io.on('connection', async (sock: AuthedSocket) => {
             fromUserId: link.a, 
             roomId,
             livekitToken: livekitTokenB,
-            livekitRoomName
+            livekitRoomName,
+            livekitUrl: getLiveKitUrl() || null,
           });
         }
       } catch {}
