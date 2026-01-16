@@ -1,8 +1,10 @@
 import { MediaStream } from '@livekit/react-native-webrtc';
+import { mediaDevices } from '@livekit/react-native-webrtc';
 import { Buffer } from 'buffer';
 import AudioRecord from 'react-native-audio-record';
 import { Platform } from 'react-native';
 import * as Device from 'expo-device';
+import InCallManager from 'react-native-incall-manager';
 import {
   Room,
   RoomEvent,
@@ -1523,6 +1525,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config.onMicLevelChange?.(0);
     this.config.callbacks.onMicFrequencyLevelsChange?.(emptyLevels);
     this.config.onMicFrequencyLevelsChange?.(emptyLevels);
+
+    // PiP overlay: сбрасываем эквалайзер, если PiP активен
+    try {
+      const pipVisible = (global as any).__pipVisibleRef?.current;
+      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      if (pipVisible && typeof pipUpdate === 'function') {
+        pipUpdate({ micLevel: 0, micFrequencyLevels: emptyLevels });
+      }
+    } catch {}
   }
 
   private cleanupAudioRecorder(): void {
@@ -1668,6 +1679,57 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config.onMicLevelChange?.(audioLevel);
     this.config.callbacks.onMicFrequencyLevelsChange?.(frequencyLevels);
     this.config.onMicFrequencyLevelsChange?.(frequencyLevels);
+
+    // КРИТИЧНО: PiP overlay должен обновляться даже если экран VideoCall размонтирован.
+    // Для этого используем глобальную ссылку на updatePiPState из PiPProvider.
+    try {
+      const pipVisible = (global as any).__pipVisibleRef?.current;
+      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      if (pipVisible && typeof pipUpdate === 'function') {
+        pipUpdate({ micLevel: audioLevel, micFrequencyLevels: frequencyLevels });
+      }
+    } catch {}
+  }
+
+  /* ========= Audio routing (speaker / iOS audio session) ========= */
+  private ensureAudioPlayoutActive(context: string): void {
+    try {
+      // Start call audio session (safe to call multiple times)
+      try { InCallManager.start({ media: 'video', ringback: '' }); } catch {}
+      const kick = () => {
+        try { (InCallManager as any).setForceSpeakerphoneOn?.('on'); } catch {}
+        try { InCallManager.setForceSpeakerphoneOn?.(true as any); } catch {}
+        try { InCallManager.setSpeakerphoneOn(true); } catch {}
+        try { (mediaDevices as any)?.setSpeakerphoneOn?.(true); } catch {}
+        try { (InCallManager as any).setBluetoothScoOn?.(false); } catch {}
+      };
+      kick();
+      setTimeout(kick, 120);
+      setTimeout(kick, 350);
+
+      if (Platform.OS === 'ios') {
+        try {
+          const webrtcMod = require('@livekit/react-native-webrtc');
+          const RTCAudioSession = webrtcMod?.RTCAudioSession;
+          if (RTCAudioSession && typeof RTCAudioSession.sharedInstance === 'function') {
+            const s = RTCAudioSession.sharedInstance();
+            s.setCategory('PlayAndRecord', {
+              defaultToSpeaker: true,
+              allowBluetooth: true,
+              allowBluetoothA2DP: true,
+              mixWithOthers: false,
+            });
+            s.setMode('VideoChat');
+            s.setActive(true);
+            try { s.overrideOutputAudioPort('speaker'); } catch {}
+          }
+        } catch {}
+      }
+
+      logger.debug('[VideoCallSession] ensureAudioPlayoutActive', { context });
+    } catch (e) {
+      logger.debug('[VideoCallSession] ensureAudioPlayoutActive failed', { context, e });
+    }
   }
 
   private generateFrequencyFromLevel(audioLevel: number, barsCount: number): number[] {
@@ -3086,6 +3148,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     if (publication.kind === Track.Kind.Audio) {
       this.remoteAudioTrack = track;
+      // КРИТИЧНО: при появлении удалённого аудио форсим аудио-сессию/спикер,
+      // иначе на iOS иногда звук не начинается до "жеста" пользователя.
+      this.ensureAudioPlayoutActive('remote-audio-subscribed');
       // КРИТИЧНО: гарантируем слышимость аудио (иногда track приходит disabled/muted после reconnect)
       try {
         // sync with local "mute remote" toggle

@@ -417,6 +417,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.remoteStream !== undefined) remoteStreamRef.current = patch.remoteStream;
   }, []);
 
+  // КРИТИЧНО: Делаем updatePiPState доступным глобально, чтобы WebRTC session могла обновлять PiP,
+  // даже когда экран VideoCall размонтирован (PiP работает поверх приложения).
+  useEffect(() => {
+    (global as any).__pipUpdateStateRef = (global as any).__pipUpdateStateRef || { current: null };
+    (global as any).__pipVisibleRef = (global as any).__pipVisibleRef || { current: false };
+    (global as any).__pipUpdateStateRef.current = updatePiPState;
+    (global as any).__pipVisibleRef.current = visible;
+    return () => {
+      try { (global as any).__pipUpdateStateRef.current = null; } catch {}
+      try { (global as any).__pipVisibleRef.current = false; } catch {}
+    };
+  }, [updatePiPState, visible]);
+
   const value = useMemo<PiPState>(() => ({
     // state
     visible,
