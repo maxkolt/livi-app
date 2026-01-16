@@ -30,6 +30,8 @@ export interface WebRTCSessionCallbacks {
 export interface WebRTCSessionConfig {
   myUserId?: string;
   callbacks: WebRTCSessionCallbacks;
+  // True on iOS simulator (used to disable native audio/PCM features that are unstable in Simulator)
+  isSimulator?: boolean;
   
   // State getters (для проверки состояния из компонента)
   getIsInactiveState?: () => boolean;

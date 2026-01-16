@@ -34,4 +34,21 @@ if (Platform.OS === 'android') {
   } catch {}
 }
 
+// Cross-platform console.warn filter for noisy event-target-shim warning that can appear
+// during WebRTC/LiveKit track renegotiations on iOS Simulator / unstable network.
+// It looks like an error (with a fake stack from InternalBytecode), but is usually harmless.
+try {
+  const ORIG_WARN = console.warn.bind(console);
+  const IGNORE_SUBSTR = [
+    "An event listener wasn't added because it has been added already",
+  ];
+  console.warn = (...args: any[]) => {
+    try {
+      const msg = args?.[0] ? String(args[0]) : args.map(a => String(a)).join(' ');
+      if (IGNORE_SUBSTR.some(s => msg.includes(s))) return;
+    } catch {}
+    ORIG_WARN(...args as any);
+  };
+} catch {}
+
 

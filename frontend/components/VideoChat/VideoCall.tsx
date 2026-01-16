@@ -187,6 +187,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const [remoteViewKey, setRemoteViewKey] = useState(0);
   const [localRenderKey, setLocalRenderKey] = useState(0);
   const [micLevel, setMicLevel] = useState(0);
+  const [micFrequencyLevels, setMicFrequencyLevels] = useState<number[]>(() => new Array(21).fill(0));
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [wasFriendCallEnded, setWasFriendCallEnded] = useState(false);
   const [partnerInPiP, setPartnerInPiP] = useState(false);
@@ -789,6 +790,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         },
         onMicLevelChange: (level) => {
           setMicLevel(boostMicLevel(level));
+        },
+        onMicFrequencyLevelsChange: (levels) => {
+          if (Array.isArray(levels) && levels.length) {
+            // IMPORTANT: clone to force state update (session may reuse same array instance)
+            setMicFrequencyLevels(levels.slice());
+          }
         },
         onPcConnectedChange: (connected) => {
           // Обработка изменения состояния подключения
@@ -1898,16 +1905,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           // Это соответствует тому, как аватары используются в других частях приложения
           let avatarUrl: string | undefined = undefined;
           if (partner?.avatarThumbB64 && typeof partner.avatarThumbB64 === 'string' && partner.avatarThumbB64.trim() !== '') {
-            // Используем data URI напрямую
-            avatarUrl = partner.avatarThumbB64;
+            // Преобразуем base64 в data URI если нужно (для Android Glide требуется data: префикс)
+            const thumbB64 = partner.avatarThumbB64.trim();
+            avatarUrl = thumbB64.startsWith('data:') ? thumbB64 : `data:image/jpeg;base64,${thumbB64}`;
           } else if (partner?.avatarB64 && typeof partner.avatarB64 === 'string' && partner.avatarB64.trim() !== '') {
             // Fallback: используем полный аватар если миниатюры нет
-            avatarUrl = partner.avatarB64;
+            // Преобразуем base64 в data URI если нужно (для Android Glide требуется data: префикс)
+            const avatarB64 = partner.avatarB64.trim();
+            avatarUrl = avatarB64.startsWith('data:') ? avatarB64 : `data:image/jpeg;base64,${avatarB64}`;
           } else if (partner?.avatar && typeof partner.avatar === 'string' && partner.avatar.trim() !== '') {
             // Fallback: используем URL аватара если нет base64
-            const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
-            const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
-            const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'http://192.168.1.12:3000';
+            // КРИТИЧНО: В production используйте домен с HTTPS, не IP адреса!
+            const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
+            const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
+            const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
             const serverUrl = (Platform.OS === 'android' ? ANDROID_URL : IOS_URL).replace(/\/+$/, '');
             avatarUrl = partner.avatar.startsWith('http') 
               ? partner.avatar 
@@ -2092,6 +2103,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               const micReallyOn = micOn && !isInactiveState;
               return hasActiveCall && micReallyOn && !isInactiveState ? micLevel : 0;
             })()}
+            frequencyLevels={(() => {
+              const eqActive = (!!partnerId || !!roomId || !!callId) && micOn && !isInactiveState;
+              return eqActive ? micFrequencyLevels : new Array(21).fill(0);
+            })()}
+            mode="waveform"
             width={220}
             height={30}
             bars={21}

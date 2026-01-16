@@ -25,6 +25,7 @@ type CallAcceptedPayload = {
   roomId?: string;
   livekitToken?: string | null;
   livekitRoomName?: string | null;
+  livekitUrl?: string | null;
 };
 
 type CallIncomingPayload = {
@@ -34,6 +35,7 @@ type CallIncomingPayload = {
 };
 
 export class VideoCallSession extends SimpleEventEmitter {
+  private hasLoggedLiveKitApiKeyWarning = false;
   private config: WebRTCSessionConfig;
   private room: Room | null = null;
   private localVideoTrack: LocalVideoTrack | null = null;
@@ -223,29 +225,19 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config.callbacks.onRoomIdChange?.(roomId);
     this.config.onRoomIdChange?.(roomId);
     
-    const LIVEKIT_URL = process.env.EXPO_PUBLIC_LIVEKIT_URL;
-    if (!LIVEKIT_URL) {
-      logger.error('[VideoCallSession] LiveKit URL is not configured', {
-        envVar: 'EXPO_PUBLIC_LIVEKIT_URL',
-        value: process.env.EXPO_PUBLIC_LIVEKIT_URL,
-        roomId,
-      });
-      this.config.callbacks.onLoadingChange?.(false);
-      this.config.onLoadingChange?.(false);
-      return;
-    }
+    const envLivekitUrl = process.env.EXPO_PUBLIC_LIVEKIT_URL;
     
-    logger.debug('[VideoCallSession] Requesting LiveKit token', { roomId, livekitUrl: LIVEKIT_URL });
+    logger.debug('[VideoCallSession] Requesting LiveKit token', { roomId, livekitUrl: envLivekitUrl || LIVEKIT_URL });
     
     try {
       // Запрашиваем токен через сокет (более надёжно чем HTTP)
-      const tokenData = await new Promise<{ ok: boolean; token?: string; error?: string }>((resolve) => {
+      const tokenData = await new Promise<{ ok: boolean; token?: string; url?: string; error?: string }>((resolve) => {
         const timeout = setTimeout(() => {
           logger.warn('[VideoCallSession] Token request timeout', { roomId });
           resolve({ ok: false, error: 'timeout' });
         }, 10000);
         
-        socket.emit('livekit:token', { roomName: roomId }, (response: { ok: boolean; token?: string; error?: string }) => {
+        socket.emit('livekit:token', { roomName: roomId }, (response: { ok: boolean; token?: string; url?: string; error?: string }) => {
           clearTimeout(timeout);
           logger.debug('[VideoCallSession] Token response received', { 
             ok: response.ok, 
@@ -258,13 +250,25 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       
       if (tokenData.ok && tokenData.token) {
+        const resolvedLivekitUrl = ((tokenData.url as string | undefined) || envLivekitUrl || LIVEKIT_URL || '').trim();
+        if (!resolvedLivekitUrl) {
+          logger.error('[VideoCallSession] LiveKit URL is not configured (token received but no URL)', {
+            envVar: 'EXPO_PUBLIC_LIVEKIT_URL',
+            value: envLivekitUrl,
+            tokenHasUrl: !!tokenData.url,
+            roomId,
+          });
+          this.config.callbacks.onLoadingChange?.(false);
+          this.config.onLoadingChange?.(false);
+          return;
+        }
         logger.debug('[VideoCallSession] Connecting to LiveKit', { 
           roomId, 
-          url: LIVEKIT_URL,
+          url: resolvedLivekitUrl,
           tokenLength: tokenData.token.length,
         });
         const connectRequestId = ++this.connectRequestId;
-        const connected = await this.connectToLiveKit(LIVEKIT_URL, tokenData.token, connectRequestId, roomId);
+        const connected = await this.connectToLiveKit(resolvedLivekitUrl, tokenData.token, connectRequestId, roomId);
         if (!connected) {
           logger.debug('[VideoCallSession] connectAsInitiatorAfterAccepted aborted (stale request)');
           return;
@@ -278,7 +282,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         logger.error('[VideoCallSession] Failed to get LiveKit token via socket', {
           tokenData,
           roomId,
-          livekitUrl: LIVEKIT_URL,
+          livekitUrl: envLivekitUrl || LIVEKIT_URL,
         });
         this.config.callbacks.onLoadingChange?.(false);
         this.config.onLoadingChange?.(false);
@@ -287,7 +291,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.error('[VideoCallSession] Error in connectAsInitiatorAfterAccepted', {
         error: e,
         roomId,
-        livekitUrl: LIVEKIT_URL,
+        livekitUrl: envLivekitUrl || LIVEKIT_URL,
       });
       this.config.callbacks.onLoadingChange?.(false);
       this.config.onLoadingChange?.(false);
@@ -363,6 +367,17 @@ export class VideoCallSession extends SimpleEventEmitter {
     } else if (this.localAudioTrack) {
       try {
         this.isMicOn ? this.localAudioTrack.unmute() : this.localAudioTrack.mute();
+      } catch {}
+    }
+    // КРИТИЧНО: Не трогаем mediaStreamTrack.enabled когда есть LiveKit room —
+    // на iOS это может приводить к предупреждениям event-target-shim про повторные listeners.
+    // Вне комнаты синхронизируем enabled как fallback.
+    if (!this.room) {
+      try {
+        const mediaTrack = this.localAudioTrack?.mediaStreamTrack;
+        if (mediaTrack) {
+          mediaTrack.enabled = this.isMicOn;
+        }
       } catch {}
     }
     this.config.callbacks.onMicStateChange?.(this.isMicOn);
@@ -580,7 +595,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
         const data = await response.json();
         if (data.ok && data.token) {
-          await this.connectToLiveKit(LIVEKIT_URL, data.token, ++this.connectRequestId, params.roomId);
+          const resolvedUrl = ((data.url as string | undefined) || LIVEKIT_URL || '').trim();
+          await this.connectToLiveKit(resolvedUrl, data.token, ++this.connectRequestId, params.roomId);
         }
       } catch (e) {
         logger.error('[VideoCallSession] Error restoring call state', e);
@@ -1028,10 +1044,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Компонент должен получать partnerUserId из handleCallAccepted через onPartnerIdChange
     // Но partnerId и partnerUserId - разные вещи, поэтому нужно убедиться, что компонент получает partnerUserId
 
-    if (!LIVEKIT_URL) {
+    const resolvedLivekitUrl = ((data.livekitUrl as string | undefined) || LIVEKIT_URL || '').trim();
+    if (!resolvedLivekitUrl) {
       logger.error('[VideoCallSession] LiveKit URL is not configured', {
         envVar: 'EXPO_PUBLIC_LIVEKIT_URL',
         value: process.env.EXPO_PUBLIC_LIVEKIT_URL,
+        payloadUrl: data.livekitUrl,
         roomId: data.livekitRoomName,
       });
       return;
@@ -1084,7 +1102,7 @@ export class VideoCallSession extends SimpleEventEmitter {
             connectRequestId,
           });
           
-          connected = await this.connectToLiveKit(LIVEKIT_URL, data.livekitToken, connectRequestId, data.livekitRoomName);
+          connected = await this.connectToLiveKit(resolvedLivekitUrl, data.livekitToken, connectRequestId, data.livekitRoomName);
           
           if (connected) {
             logger.info('[VideoCallSession] ✅ Successfully connected to LiveKit after call:accepted', {
@@ -1188,6 +1206,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
         const tokenData = await response.json();
         if (tokenData.ok && tokenData.token) {
+          const resolvedUrl = ((tokenData.url as string | undefined) || LIVEKIT_URL || '').trim();
           // КРИТИЧНО: Используем retry механизм для надежного подключения
           let connected = false;
           const maxRetries = 3;
@@ -1203,7 +1222,7 @@ export class VideoCallSession extends SimpleEventEmitter {
                 connectRequestId,
               });
               
-              connected = await this.connectToLiveKit(LIVEKIT_URL, tokenData.token, connectRequestId, roomId);
+              connected = await this.connectToLiveKit(resolvedUrl, tokenData.token, connectRequestId, roomId);
               
               if (connected) {
                 logger.info('[VideoCallSession] ✅ Successfully connected to LiveKit (fallback)', {
@@ -2185,16 +2204,22 @@ export class VideoCallSession extends SimpleEventEmitter {
       
       // Если ошибка связана с API ключом, логируем дополнительную информацию
       if (isInvalidApiKey) {
-        logger.error('[VideoCallSession] ⚠️ LiveKit API key validation failed!', {
-          url,
-          possibleCauses: [
-            'API key/secret mismatch between backend and LiveKit server',
-            'LiveKit URL points to wrong server',
-            'Token expired or malformed',
-            'Backend environment variables not set correctly'
-          ],
-          suggestion: 'Check LIVEKIT_API_KEY and LIVEKIT_API_SECRET in backend .env file match LiveKit server credentials'
-        });
+        // This warning is often transient during reconnects/room switches; avoid surfacing it as a hard "Console Error" on iOS.
+        if (!this.hasLoggedLiveKitApiKeyWarning) {
+          this.hasLoggedLiveKitApiKeyWarning = true;
+          logger.warn('[VideoCallSession] ⚠️ LiveKit API key validation failed!', {
+            url,
+            possibleCauses: [
+              'API key/secret mismatch between backend and LiveKit server',
+              'LiveKit URL points to wrong server',
+              'Token expired or malformed',
+              'Backend environment variables not set correctly'
+            ],
+            suggestion: 'Check LIVEKIT_API_KEY and LIVEKIT_API_SECRET in backend .env file match LiveKit server credentials'
+          });
+        } else {
+          logger.debug('[VideoCallSession] LiveKit API key validation failed (suppressed повтор)', { url });
+        }
       }
       
       if (this.room === room) {

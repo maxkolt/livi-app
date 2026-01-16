@@ -72,7 +72,7 @@ export function registerProfileSockets(io: Server, socket: Socket) {
       }
 
       const user = await User.findByIdAndUpdate(userId, { $set: update }, { new: true })
-        .select('nick avatar')
+        .select('nick avatar avatarVer avatarThumbB64 friends')
         .lean();
 
       if (!user) {
@@ -80,8 +80,33 @@ export function registerProfileSockets(io: Server, socket: Socket) {
         return ack?.({ ok: false, error: 'User not found' });
       }
 
-      // сообщаем клиенту(ам) про обновление (по желанию можно эмитить в комнату пользователя)
-      socket.emit('profile:updated', user);
+      // 1) сообщаем всем устройствам этого пользователя
+      try {
+        io.to(`u:${String(userId)}`).emit('profile:updated', {
+          userId: String(userId),
+          nick: (user as any).nick || '',
+          avatar: (user as any).avatar || '',
+          avatarVer: (user as any).avatarVer || 0,
+          avatarThumbB64: (user as any).avatarThumbB64 || '',
+        });
+      } catch {}
+
+      // 2) сообщаем друзьям (чтобы у них мгновенно обновился список друзей и header чата)
+      try {
+        const payload = {
+          userId: String(userId),
+          nick: (user as any).nick || '',
+          avatar: (user as any).avatar || '',
+          avatarVer: (user as any).avatarVer || 0,
+          avatarThumbB64: (user as any).avatarThumbB64 || '',
+        };
+        const friends = Array.isArray((user as any).friends) ? (user as any).friends.map(String) : [];
+        for (const fid of friends) {
+          io.to(`u:${String(fid)}`).emit('friend:profile', payload);
+        }
+      } catch (e) {
+        console.warn('[profile:update] friends notify error:', e);
+      }
 
       return ack?.({ ok: true, profile: { nick: user.nick, avatarUrl: user.avatar } });
     } catch (e: any) {
