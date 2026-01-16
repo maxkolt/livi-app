@@ -802,12 +802,22 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           }
         },
         onMicLevelChange: (level) => {
-          setMicLevel(boostMicLevel(level));
+          const boosted = boostMicLevel(level);
+          setMicLevel(boosted);
+          // КРИТИЧНО: Обновляем micLevel в PiP, чтобы эквалайзер в PiP реагировал на голос
+          if (pipRef.current.visible) {
+            pipRef.current.updatePiPState?.({ micLevel: boosted });
+          }
         },
         onMicFrequencyLevelsChange: (levels) => {
           if (Array.isArray(levels) && levels.length) {
             // IMPORTANT: clone to force state update (session may reuse same array instance)
-            setMicFrequencyLevels(levels.slice());
+            const cloned = levels.slice();
+            setMicFrequencyLevels(cloned);
+            // КРИТИЧНО: прокидываем частоты в PiP для "waveform" режима эквалайзера
+            if (pipRef.current.visible) {
+              pipRef.current.updatePiPState?.({ micFrequencyLevels: cloned });
+            }
           }
         },
         onPcConnectedChange: (connected) => {

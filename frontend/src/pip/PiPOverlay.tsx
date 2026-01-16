@@ -47,6 +47,7 @@ export default function PiPOverlay() {
     pipPos,
     updatePiPPosition,
     micLevel,
+    micFrequencyLevels,
   } = usePiP();
 
   const insets = useSafeAreaInsets();
@@ -197,6 +198,8 @@ export default function PiPOverlay() {
         <View style={styles.eqWrapper}>
           <VoiceEqualizer
             level={!isMuted ? micLevel : 0}
+            frequencyLevels={!isMuted ? micFrequencyLevels : new Array(21).fill(0)}
+            mode="waveform"
             width={40}
             height={30}
             bars={7}

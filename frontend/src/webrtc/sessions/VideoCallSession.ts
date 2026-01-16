@@ -3135,8 +3135,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         trackReady: track.mediaStreamTrack?.readyState,
         trackMuted: track.isMuted,
       });
-    } else if (publication.kind === Track.Kind.Audio && !this.remoteVideoTrack) {
-      // Для аудио трека обновляем ключ только если видео трека еще нет
+    } else if (publication.kind === Track.Kind.Audio) {
+      // КРИТИЧНО: Для аудио трека тоже обновляем ключ, даже если видео уже есть.
+      // Иначе remoteStream остается тем же объектом (мы его переиспользуем), React может не перерендерить,
+      // и эффекты (audio routing / включение audio tracks) не сработают → "не слышно звук".
       this.remoteViewKey = Date.now();
     }
     

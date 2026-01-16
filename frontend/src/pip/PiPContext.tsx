@@ -29,6 +29,8 @@ type PiPState = {
 
   // Уровень микрофона для эквалайзера
   micLevel: number;
+  // Частотные полосы для эквалайзера (как в видеочате)
+  micFrequencyLevels?: number[];
 
   // для возврата
   lastNavParams?: any;
@@ -87,6 +89,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const [isMuted, setIsMuted] = useState(false);
   const [isRemoteMuted, setIsRemoteMuted] = useState(false);
   const [micLevel, setMicLevel] = useState(0);
+  const [micFrequencyLevels, setMicFrequencyLevels] = useState<number[]>(() => new Array(21).fill(0));
 
   const localStreamRef = useRef<MediaStreamLike | null>(null);
   const remoteStreamRef = useRef<MediaStreamLike | null>(null);
@@ -407,6 +410,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.isMuted !== undefined) setIsMuted(patch.isMuted);
     if (patch.isRemoteMuted !== undefined) setIsRemoteMuted(patch.isRemoteMuted);
     if (patch.micLevel !== undefined) setMicLevel(patch.micLevel);
+    if (patch.micFrequencyLevels !== undefined) setMicFrequencyLevels(patch.micFrequencyLevels ?? new Array(21).fill(0));
     if (patch.pipPos) setPipPos(patch.pipPos);
     // потоки через ref:
     if (patch.localStream !== undefined) localStreamRef.current = patch.localStream;
@@ -427,6 +431,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     pipPos,
     remoteLevel,
     micLevel,
+    micFrequencyLevels,
     lastNavParams,
 
     // actions
@@ -442,7 +447,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     updatePiPState,
   }), [
     visible, callId, roomId, partnerName, partnerAvatarUrl,
-    isMuted, isRemoteMuted, pipPos, remoteLevel, micLevel,
+    isMuted, isRemoteMuted, pipPos, remoteLevel, micLevel, micFrequencyLevels,
     showPiP, hidePiP, updatePiPPosition, toggleMic, toggleRemoteAudio,
     returnToCall, endCall, startRemoteVAD, stopRemoteVAD, updatePiPState
   ]);
