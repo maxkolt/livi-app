@@ -31,6 +31,11 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   onStreamReady,
 }) => {
   const L = (key: string) => t(key, lang);
+  // На Android 8.1 и старше (API <= 27) SurfaceView overlay/z-order часто ломает отображение (особенно на OPPO/ColorOS).
+  // Для таких устройств отключаем zOrderMediaOverlay, чтобы Surface корректно композировался в окне.
+  const isLegacyAndroidSurface = Platform.OS === 'android' && Number(Platform.Version) <= 27;
+  // На старых Android используем TextureView, чтобы RN-оверлеи (кнопки) гарантированно рисовались поверх видео.
+  const useTextureViewOnAndroid = Platform.OS === 'android' && isLegacyAndroidSurface;
 
   // КРИТИЧНО: Все хуки должны быть вызваны ДО любых условных return
   // Проверяем готовность стрима
@@ -39,7 +44,12 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   const isVideoTrackLive = !!videoTrack && videoTrack.readyState === 'live';
   const isVideoTrackEnabled = !!videoTrack && (videoTrack.enabled ?? true) === true;
   const isVideoTrackMuted = !!videoTrack && (videoTrack.muted ?? false) === true;
-  const canRenderVideo = isVideoTrackLive && isVideoTrackEnabled && !isVideoTrackMuted;
+  // На Android (особенно 8.1/ColorOS) `muted` у локального трека может быть true даже при реальных кадрах,
+  // из-за чего UI ошибочно показывает плейсхолдер "Вы". Поэтому для Android игнорируем `muted` при решении рендера.
+  const canRenderVideo =
+    isVideoTrackLive &&
+    isVideoTrackEnabled &&
+    (Platform.OS === 'android' ? true : !isVideoTrackMuted);
   
   // Логирование для отладки на Android
   useEffect(() => {
@@ -131,25 +141,31 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       ? { 
           stream: localStream, 
           streamURL: localStreamURL, 
-          renderToHardwareTextureAndroid: true, 
-          zOrderMediaOverlay: true 
-        } // Android: пробрасываем оба и форсим рендер на GPU
+          // На legacy Android (8.1/API27) у некоторых устройств (в т.ч. OPPO) Surface/overlay ломается при HW-texture.
+          renderToHardwareTextureAndroid: !isLegacyAndroidSurface,
+          // Важно: не используем overlay-слои для SurfaceView, иначе он может перекрывать RN-кнопки.
+          zOrderMediaOverlay: false,
+          // prop может отсутствовать в типах, но поддерживается нативно в webrtc-view на Android.
+          useTextureView: useTextureViewOnAndroid,
+        } // Android: пробрасываем оба
       : { streamURL: localStreamURL! }; // iOS: используем streamURL (уже проверили выше)
 
     return (
       <RTCView
         key={rtcViewKey}
-        {...rtcViewProps}
+        {...(rtcViewProps as any)}
         style={styles.rtc}
         objectFit="cover"
         mirror
+        // Не поднимаем Surface "наверх": на старых Android это прячет RN-кнопки.
         zOrder={0}
       />
     );
   }
 
-  // Камера явно выключена И нет готового трека — показываем заглушку "Вы"
-  if (!camOn && !canRenderVideo) {
+  // Камера явно выключена И нет даже живого видеотрека — показываем заглушку "Вы"
+  // (на Android camOn может не успеть обновиться, поэтому дополнительно проверяем наличие live трека).
+  if (!camOn && !isVideoTrackLive) {
     return (
       <View style={[styles.rtc, styles.placeholderContainer]}>
         <Text style={styles.placeholder}>{L('you')}</Text>

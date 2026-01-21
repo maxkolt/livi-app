@@ -62,6 +62,18 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
   };
 
   const stopSpeaker = () => {
+    // КРИТИЧНО: Если мы в PiP, НЕ останавливаем аудио-сессию.
+    // При уходе в PiP экран звонка размонтируется, и cleanup этого хука иначе вызовет InCallManager.stop(),
+    // что приводит к "тишине" в PiP.
+    try {
+      const pipVisible = !!(global as any).__pipVisibleRef?.current;
+      if (pipVisible) {
+        logger.info('[useAudioRouting] Skip stopSpeaker because PiP is visible');
+        clearSpeakerTimers();
+        return;
+      }
+    } catch {}
+
     clearSpeakerTimers();
     try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
     try { InCallManager.setSpeakerphoneOn(false); } catch {}

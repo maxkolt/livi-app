@@ -76,6 +76,17 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
   const [lang, setLang] = useState<Lang>(defaultLang);
+  const androidScreenPadding = 12;
+  const androidContentInsets = useMemo(() => {
+    if (Platform.OS !== 'android') return null;
+    // Android: делаем одинаковый базовый отступ со всех сторон + safe-area (челка/навигация)
+    return {
+      paddingTop: insets.top + androidScreenPadding,
+      paddingBottom: insets.bottom + androidScreenPadding,
+      paddingLeft: insets.left + androidScreenPadding,
+      paddingRight: insets.right + androidScreenPadding,
+    } as const;
+  }, [insets.bottom, insets.left, insets.right, insets.top]);
   
   // Состояния
   const [started, setStarted] = useState(false);
@@ -768,9 +779,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     
     // КРИТИЧНО: ЗАЩИТА ОТ ДВОЙНЫХ НАЖАТИЙ - блокируем кнопку если уже идет процесс
     // Это критично для работы с большим количеством пользователей
-    if (isStoppingRef.current || loadingRef.current) {
-      return;
-    }
+    // ВАЖНО: Stop должен работать даже во время поиска (loading=true),
+    // иначе UI может "залипнуть" в поиске и пользователь не сможет остановить рандом-чат.
+    if (isStoppingRef.current) return;
     
     if (startedRef.current) {
       // STOP
@@ -1200,20 +1211,31 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // Обработка AppState - для рандомного чата останавливаем при уходе в фон
   useEffect(() => {
+    let bgTimer: any = null;
     const sub = AppState.addEventListener('change', async (nextAppState) => {
       try {
         if (nextAppState === 'background') {
-          // КРИТИЧНО: При переходе в фон останавливаем чат, чтобы предотвратить проблемы с WebRTC/LiveKit.
-          // Но НЕ останавливаем на 'inactive' — iOS часто уходит в inactive на доли секунды (Control Center, переходы),
-          // из-за чего ранее рвалось соединение и казалось, что "рандом чат не работает".
-          if (startedRef.current || loadingRef.current) {
-            logger.info('[RandomChat] AppState changed to background, stopping chat');
-            forceStopRandomChat();
-          }
+          // На некоторых Android (особенно ColorOS) AppState может кратковременно дергаться.
+          // Делаем debounce: останавливаем только если background держится > ~1.2s.
+          try {
+            if (bgTimer) clearTimeout(bgTimer);
+          } catch {}
+          bgTimer = setTimeout(() => {
+            try {
+              if (AppState.currentState === 'background' && (startedRef.current || loadingRef.current)) {
+                logger.info('[RandomChat] AppState stayed background, stopping chat');
+                forceStopRandomChat();
+              }
+            } catch {}
+          }, 1200);
         } else if (nextAppState === 'inactive') {
           // iOS: просто отмечаем состояние, но не рвем соединение
           setIsInactiveState(true);
         } else if (nextAppState === 'active') {
+          try {
+            if (bgTimer) clearTimeout(bgTimer);
+          } catch {}
+          bgTimer = null;
           setIsInactiveState(false);
           // При возврате в активное состояние включаем динамик если есть удаленный стрим
           if (remoteStream) {
@@ -1230,6 +1252,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     });
     
     return () => {
+      try {
+        if (bgTimer) clearTimeout(bgTimer);
+      } catch {}
       sub.remove();
     };
   }, [remoteStream, forceSpeakerOnHard, forceStopRandomChat]);
@@ -1475,8 +1500,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       )}
       <SafeAreaView 
         style={[styles.container, { backgroundColor: isDark ? '#151F33' : (theme.colors.background as string) }]}
-        edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
+        // Android: safe-area отступы считаем сами через insets, чтобы ничего не перезатиралось стилями
+        edges={Platform.OS === 'android' ? [] : undefined}
       >
+        <View style={[styles.content, androidContentInsets]}>
+        <View style={styles.topSection}>
         {/* Карточка "Собеседник" */}
         <View style={styles.card}>
           {(() => {
@@ -1624,13 +1652,19 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               // КРИТИЧНО: На Android используем prop `stream` для лучшей производительности
               // На iOS используем только streamURL (stream prop не поддерживается)
               if (Platform.OS === 'android') {
+                // На Android 8.1 и старше (API <= 27) SurfaceView overlay/z-order часто ломает отображение (особенно на OPPO/ColorOS).
+                // Для таких устройств отключаем zOrderMediaOverlay, чтобы Surface корректно композировался в окне.
+                const isLegacyAndroidSurface = Number(Platform.Version) <= 27;
                 // Android: всегда используем stream prop
                 // Используем явное приведение типа для обхода проверки TypeScript
                 const rtcViewProps: any = { 
                   stream: remoteStream, 
                   streamURL, 
-                  renderToHardwareTextureAndroid: true, 
-                  zOrderMediaOverlay: true 
+                  renderToHardwareTextureAndroid: !isLegacyAndroidSurface,
+                  // Remote video should be the base layer; no overlay to avoid hiding local preview on some devices (e.g. OPPO A3s).
+                  zOrderMediaOverlay: false,
+                  // На старых Android используем TextureView, чтобы RN-кнопки были видны поверх видео.
+                  useTextureView: isLegacyAndroidSurface,
                 };
                 
                 return (
@@ -1640,7 +1674,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                     style={styles.rtc}
                     objectFit="cover"
                     mirror={false}
-                    zOrder={1}
+                    zOrder={0}
                   />
                 );
               } else {
@@ -1654,7 +1688,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                       style={styles.rtc}
                       objectFit="cover"
                       mirror={false}
-                      zOrder={1}
+                      zOrder={0}
                     />
                   );
                 } else {
@@ -1811,16 +1845,20 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             })()}
             frequencyLevels={(() => {
               const eqActive = (!!partnerId || !!roomId) && micOn && !isInactiveState;
+              // На слабых Android (API<=27) FFT-частоты + анимации могут завалить NativeAnimatedModule.
+              const isLowEndAndroid = Platform.OS === 'android' && Number(Platform.Version) <= 27;
+              if (isLowEndAndroid) return undefined;
               return eqActive ? micFrequencyLevels : new Array(21).fill(0);
             })()}
             mode="waveform"
             width={220}
             height={30}
-            bars={21}
+            bars={Platform.OS === 'android' && Number(Platform.Version) <= 27 ? 13 : 21}
             gap={8}
             minLine={4}
             threshold={0.006}
             sensitivity={2.4}
+            maxFps={Platform.OS === 'android' && Number(Platform.Version) <= 27 ? 8 : 15}
             colors={isDark ? ["#F4FFFF", "#2EE6FF", "#F4FFFF"] : ["#FFE6E6", "rgb(58, 11, 160)", "#FFE6E6"]}
           />
         </View>
@@ -1873,12 +1911,18 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 // КРИТИЧНО: На Android используем prop `stream` для лучшей производительности
                 // На iOS используем streamURL
                 const localRtcViewProps = Platform.OS === 'android' 
-                  ? { 
-                      stream: displayStream, 
-                      streamURL: localStreamURL, 
-                      renderToHardwareTextureAndroid: true, 
-                      zOrderMediaOverlay: true 
-                    } as any
+                  ? (() => {
+                      const isLegacyAndroidSurface = Number(Platform.Version) <= 27;
+                      return { 
+                        stream: displayStream, 
+                        streamURL: localStreamURL, 
+                        renderToHardwareTextureAndroid: !isLegacyAndroidSurface,
+                        // Важно: не используем overlay-слои для SurfaceView, иначе он может перекрывать RN-кнопки.
+                        zOrderMediaOverlay: false,
+                        // На старых Android используем TextureView, чтобы RN-кнопки были видны поверх видео.
+                        useTextureView: isLegacyAndroidSurface,
+                      } as any;
+                    })()
                   : { streamURL: localStreamURL! }; // iOS: используем streamURL
                 
                 if (localStreamURL || Platform.OS === 'android') {
@@ -1889,6 +1933,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                       style={styles.rtc}
                       objectFit="cover"
                       mirror
+                      // Не поднимаем Surface "наверх": на старых Android это прячет RN-кнопки.
                       zOrder={0}
                     />
                   );
@@ -1963,7 +2008,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             </>
           )}
         </View>
-        
+
+        </View>
         {/* Кнопки снизу: Начать/Стоп и Далее */}
         <View style={styles.bottomRow}>
           <TouchableOpacity
@@ -1993,6 +2039,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               {L('next')}
             </Text>
           </TouchableOpacity>
+        </View>
         </View>
       
       {/* Модалка заявки в друзья */}
@@ -2080,20 +2127,30 @@ const RandomChat: React.FC<Props> = ({ route }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    // padding не задаём тут: на Android safe-area + базовый отступ считаем во внутреннем контейнере (styles.content)
+  },
+  content: {
+    flex: 1,
+    width: '100%',
     alignItems: "center",
-    justifyContent: Platform.OS === "ios" ? "flex-start" : "center",
-    ...(Platform.OS === "android" ? { 
-      paddingBottom: 0,
-      paddingLeft: 0,
-      paddingRight: 0,
-      paddingTop: 10,
-    } : { paddingTop: 0 }),
+    // Важно: нижний ряд кнопок должен быть всегда внизу внутри safe-area
+    justifyContent: 'space-between',
+  },
+  topSection: {
+    flex: 1,
+    width: '100%',
+    alignItems: 'center',
   },
   card: {
     ...CARD_BASE,
-    width: Platform.OS === "android" ? '94%' : '94%',
-    ...((Platform.OS === "ios" ? { height: Dimensions.get('window').height * 0.4 } : { height: Dimensions.get('window').height * 0.43 })
-    ),
+    width: Platform.OS === 'android' ? '100%' : '94%',
+    ...(Platform.OS === 'android'
+      ? {
+          flex: 1,
+          flexBasis: 0,
+          minHeight: 170,
+        }
+      : { height: Dimensions.get('window').height * 0.4 }),
   },
   eqWrapper: {
     width: "100%", 
@@ -2119,11 +2176,11 @@ const styles = StyleSheet.create({
     fontSize: 22,
   },
   bottomRow: {
-    width: Platform.OS === "android" ? '94%' : '93%',
+    width: Platform.OS === 'android' ? '100%' : '93%',
     flexDirection: 'row',
     gap: Platform.OS === "android" ? 14 : 16,
     marginTop: Platform.OS === "android" ? 6 : 10,
-    marginBottom: Platform.OS === "android" ? 18 : 32,
+    marginBottom: Platform.OS === "android" ? 0 : 32,
   },
   bigBtn: {
     flex: 1,
@@ -2235,6 +2292,8 @@ const styles = StyleSheet.create({
     padding: 8,
     justifyContent: 'center',
     alignItems: 'center',
+    // Android: чтобы кнопки были выше видеовью (TextureView/обычные View)
+    ...(Platform.OS === 'android' ? { elevation: 40 } : {}),
   },
   iconBtnDisabled: {
     opacity: 0.4,
@@ -2243,6 +2302,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 10,
     left: 10,
+    zIndex: 40,
+    ...(Platform.OS === 'android' ? { elevation: 40 } : {}),
   },
   bottomOverlay: {
     position: 'absolute',
@@ -2251,6 +2312,8 @@ const styles = StyleSheet.create({
     right: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',
+    zIndex: 40,
+    ...(Platform.OS === 'android' ? { elevation: 40 } : {}),
   },
   // Стили для входящего звонка (как в VideoCall/App.tsx)
   incomingOverlayContainer: {

@@ -30,6 +30,12 @@
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="livi" android:host="invite" android:pathPrefix="/"/>
+      </intent-filter>
+      <!-- Expo Dev Client deep link (must NOT be constrained by invite host/path) -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="exp+livi-video-chat"/>
       </intent-filter>
       <intent-filter>

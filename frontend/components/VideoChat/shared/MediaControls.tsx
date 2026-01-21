@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, TouchableOpacity, StyleSheet, Animated } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, Animated, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
 interface MediaControlsProps {
@@ -82,11 +82,15 @@ const styles = StyleSheet.create({
     padding: 8,
     justifyContent: 'center',
     alignItems: 'center',
+    // Android: чтобы кнопки были выше видеовью (TextureView/обычные View)
+    ...(Platform.OS === 'android' ? { elevation: 50 } : {}),
   },
   topLeft: {
     position: 'absolute',
     top: 10,
     left: 10,
+    zIndex: 50,
+    ...(Platform.OS === 'android' ? { elevation: 50 } : {}),
   },
   bottomOverlay: {
     position: 'absolute',
@@ -95,6 +99,8 @@ const styles = StyleSheet.create({
     right: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',
+    zIndex: 50,
+    ...(Platform.OS === 'android' ? { elevation: 50 } : {}),
   },
 });
 

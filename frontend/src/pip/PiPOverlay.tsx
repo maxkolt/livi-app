@@ -184,11 +184,21 @@ export default function PiPOverlay() {
               </View>
             )}
           </View>
-          <Text numberOfLines={1} style={styles.name}>{partnerName || 'Собеседник'}</Text>
           <View style={styles.statusRow}>
             <View style={styles.dot} />
             <Text style={styles.status}>вызов активен</Text>
           </View>
+        </Pressable>
+
+        {/* Nickname below avatar (instead of PiP equalizer) */}
+        <Pressable
+          onPress={returnToCall}
+          android_ripple={{ borderless: true, color: 'rgba(255,255,255,0.08)' }}
+          style={styles.nickWrap}
+        >
+          <Text numberOfLines={2} style={styles.nick}>
+            {partnerName || 'Собеседник'}
+          </Text>
         </Pressable>
 
         {/* actions */}
@@ -271,7 +281,22 @@ const styles = StyleSheet.create({
     width: 46, height: 46, borderRadius: 23,
     backgroundColor: 'rgba(113,91,168,0.22)', borderWidth: 1, borderColor: UI.stroke, alignItems: 'center', justifyContent: 'center',
   },
-  name: { color: UI.fg, fontSize: 14, fontWeight: '600', textAlign: 'center', maxWidth: 120 },
+  nickWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    marginTop: 6,
+    marginBottom: 2,
+  },
+  nick: {
+    color: UI.fg,
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
+    maxWidth: 124,
+    lineHeight: 16,
+  },
   statusRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: UI.success, marginRight: 4 },
   status: { color: UI.subtle, fontSize: 11 },

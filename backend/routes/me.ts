@@ -2,6 +2,8 @@
 import { Router } from 'express';
 import UserModel from '../models/User';
 import type { Server as IOServer } from 'socket.io';
+import { sendPushToUser, upsertExpoPushToken } from '../utils/push';
+import { logger } from '../utils/logger';
 
 const router = Router();
 
@@ -221,6 +223,83 @@ router.patch('/me', async (req, res) => {
   } catch (e: any) {
     console.error('PATCH /api/me ERROR:', e?.message || e);
     return res.status(500).json({ ok: false, error: 'server_error' });
+  }
+});
+
+/**
+ * Регистрация Expo Push Token для устройства.
+ * Ожидаем заголовки:
+ * - x-user-id (или userId в query/по installId — как в глобальном middleware)
+ * - x-install-id (желательно)
+ */
+router.post('/push-token', async (req, res) => {
+  try {
+    const userId =
+      ((req as any)?.auth?.userId as string | undefined) ||
+      ((req as any)?.userId as string | undefined);
+
+    if (!userId) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+
+    const installId = String(req.header('x-install-id') || '');
+    const { token, platform } = (req.body || {}) as { token?: string; platform?: 'ios' | 'android' };
+
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ ok: false, error: 'token_required' });
+    }
+    if (platform !== 'ios' && platform !== 'android') {
+      return res.status(400).json({ ok: false, error: 'platform_required' });
+    }
+
+    await upsertExpoPushToken({ userId, installId, platform, token });
+    logger.info('[push] token registered', {
+      userId: String(userId),
+      platform,
+      installId: String(installId || ''),
+      tokenPrefix: String(token).slice(0, 18),
+    });
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
+
+/**
+ * DEBUG: отправить тестовый push текущему пользователю.
+ * Полезно чтобы проверить, что токен зарегистрирован и пуши доходят в фоне/убитом приложении.
+ */
+router.post('/push-test', async (req, res) => {
+  try {
+    const userId =
+      ((req as any)?.auth?.userId as string | undefined) ||
+      ((req as any)?.userId as string | undefined);
+
+    if (!userId) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+
+    const kind = (String((req.body as any)?.kind || 'message') as 'message' | 'call');
+    const title = String(
+      (req.body as any)?.title || (kind === 'call' ? 'Входящий звонок' : 'Тестовое сообщение')
+    );
+    const body = String((req.body as any)?.body || (kind === 'call' ? 'Кто-то звонит' : 'Это тестовый push'));
+
+    await sendPushToUser(String(userId), {
+      kind,
+      title,
+      body,
+      channelId: kind === 'call' ? 'calls' : 'messages',
+      data:
+        kind === 'call'
+          ? { type: 'call', from: String(userId), fromNick: '', callId: `test_${Date.now()}` }
+          : { type: 'message', from: String(userId), fromNick: '', messageId: `test_${Date.now()}` },
+    });
+
+    return res.json({ ok: true });
+  } catch (e: any) {
+    logger.warn('[push] push-test failed', e as any);
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
   }
 });
 

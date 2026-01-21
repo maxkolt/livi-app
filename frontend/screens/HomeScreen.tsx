@@ -116,6 +116,13 @@ import socket, {
 
 /* ================= constants/helpers ================= */
 
+type HomeRouteParams = {
+  callEnded?: boolean;
+  inviteCode?: string;
+  showInviteModal?: boolean;
+  openFriendsMenu?: boolean;
+};
+
 type Props = { navigation: any };
 
 type Friend = {
@@ -545,7 +552,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
 
 /* ================= component ================= */
 
-export default function HomeScreen({ navigation, route }: Props & { route?: { params?: { callEnded?: boolean } } }) {
+export default function HomeScreen({ navigation, route }: Props & { route?: { params?: HomeRouteParams } }) {
   const insets = useSafeAreaInsets();
   const { preference, setPreference, theme, isDark } = useAppTheme();
 
@@ -555,6 +562,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [refreshing, setRefreshing] = useState(false);
   const friendsRef = useRef<Friend[]>([]);
   useEffect(() => { friendsRef.current = friends; }, [friends]);
+  // Чтобы не ловить TS "использовано до объявления" (loadFriends объявлен ниже),
+  // используем ref-обёртку для вызова loadFriends из ранних колбэков (например инвайты).
+  const loadFriendsFnRef = useRef<() => void>(() => {});
 
   /* tabs & menu */
   const [menuOpen, setMenuOpen] = useState(false);
@@ -569,6 +579,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [nick, setNick] = useState('');
+  // На медленных девайсах (Android 8.1/старые модели) setState может "догонять" ввод,
+  // и при нажатии "Сохранить" в тот же момент на сервер может уйти только первая буква.
+  // Держим актуальный ник в ref и обновляем его синхронно в onChangeText.
+  const nickLiveRef = useRef<string>('');
   const [avatarUri, setAvatarUri] = useState<string>('');      // может быть file:// для локального превью
   const [myFullAvatarUri, setMyFullAvatarUri] = useState<string>(''); // полный аватар (data URI)
   const [avatarRefreshKey, setAvatarRefreshKey] = useState(0); // для принудительного обновления на Android
@@ -581,6 +595,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [savedAvatarUrl, setSavedAvatarUrl] = useState<string>(''); // ТОЛЬКО https или ''
   const [myAvatarVer, setMyAvatarVer] = useState<number>(0);   // версия моего аватара
   const [profileKey, setProfileKey] = useState(0);
+
+  // Всегда синхронизируем ref со state (на случай, если nick меняется НЕ через SettingsTab onChangeText,
+  // например после загрузки профиля с сервера).
+  useEffect(() => {
+    nickLiveRef.current = nick;
+  }, [nick]);
 
   const [installId, setInstallId] = useState<string>('');
   const prevAvatarRef = useRef<string>('');
@@ -599,6 +619,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const resetAllState = useCallback(async () => {
     setFriends([]);
     setNick('');
+    nickLiveRef.current = '';
     setSavedNickDebug('');
     setAvatarUri('');
     setSavedAvatarUrl('');
@@ -626,6 +647,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [lang, setLang] = useState<Lang>(defaultLang);
   const [langPickerVisible, setLangPickerVisible] = useState(false);
   const L = useCallback((key: string) => t(key, lang), [lang]);
+
+  // ===== Notice (toast) =====
+  // ВАЖНО: держим showNotice выше по файлу, потому что он используется в колбэках ниже.
+  const { showNotice: baseShowNotice, NoticeView } = useLiviNotice();
+  const showNotice = useCallback((text: string, kind: NoticeKind = 'info', ms = 1700) => {
+    const normalized = (text ?? '').trim().toLowerCase();
+    if (normalized === t('saved', lang).toLowerCase() || normalized === `${t('saved', lang).toLowerCase()}!`) {
+      setSavedToast(true);
+      return;
+    }
+    baseShowNotice(text, kind, ms);
+  }, [baseShowNotice, setSavedToast, lang]);
   
   // ===== Donate modal =====
   const [donateVisible, setDonateVisible] = useState(false);
@@ -803,11 +836,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         } else if (result.status === 'accepted') {
           showNotice('Пользователь добавлен в друзья', 'success', 2000);
           // Обновляем список друзей
-          loadFriends();
+          loadFriendsFnRef.current();
         } else {
           showNotice('Пользователь добавлен в друзья', 'success', 2000);
           // Обновляем список друзей
-          loadFriends();
+          loadFriendsFnRef.current();
         }
       } else {
         showNotice(result?.error || 'Не удалось добавить в друзья', 'error', 2000);
@@ -829,7 +862,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         processedInviteRef.current = null;
       }
     }
-  }, [inviteRequestData, showNotice, loadFriends, route?.params?.inviteCode]);
+  }, [inviteRequestData, showNotice, route?.params?.inviteCode]);
 
   const handleDeclineInvite = useCallback(() => {
     setInviteRequestVisible(false);
@@ -839,15 +872,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       processedInviteRef.current = null;
     }
   }, [route?.params?.inviteCode]);
-
-  const { showNotice: baseShowNotice, NoticeView } = useLiviNotice();
-  const showNotice = useCallback((text: string, kind: NoticeKind = 'info', ms = 1700) => {
-    const normalized = (text ?? '').trim().toLowerCase();
-    if (normalized === t('saved', lang).toLowerCase() || normalized === `${t('saved', lang).toLowerCase()}!`) {
-      setSavedToast(true); return;
-    }
-    baseShowNotice(text, kind, ms);
-  }, [baseShowNotice, setSavedToast, lang]);
 
   /* ===== Call (outgoing modal) ===== */
   const [calling, setCalling] = useState<{ visible: boolean; friend?: Friend | null; callId?: string | null }>({ visible: false });
@@ -1096,6 +1120,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     loadFriendsRef.current = promise;
     return promise;
   }, []);
+
+  // Делаем стабильный "вызоватор" loadFriends для ранних колбэков (инвайты и т.п.)
+  useEffect(() => {
+    loadFriendsFnRef.current = () => {
+      loadFriends().catch(() => {});
+    };
+  }, [loadFriends]);
 
   /* ===== safe attachIdentity wrapper (queue if socket offline) ===== */
   const attachIdentitySafe = useCallback(
@@ -1396,7 +1427,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const wasNewUser = true;
 
         // Проверяем есть ли данные введённые пользователем СЕЙЧАС (не из черновика)
-        const currentNick = (nick ?? '').trim();
+        const currentNick = String((nickLiveRef.current || nick || '')).trim();
         const currentAvatarUri = (avatarUri ?? '').trim();
 
         // Отправляем только если пользователь что-то ввёл
@@ -1934,7 +1965,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const offAccepted = onFriendAccepted?.(async () => {
       // КРИТИЧНО: Обновляем профиль на сервере и синхронизируем с CometChat
       try {
-        const currentNick = savedNick || nick || '';
+        const currentNick = String(nickLiveRef.current || savedNick || nick || '');
         const currentAvatar = avatarUri || savedAvatarUrl || '';
         if (currentNick || currentAvatar) {
           // Обновляем профиль на сервере
@@ -2468,14 +2499,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
       }
 
-      const finalNick = (nick ?? '').trim();
-      const isLocalFile = /^file:\/\//i.test(avatarUri);
+      const finalNick = String((nickLiveRef.current || nick || '')).trim();
+      // Android часто возвращает content://... (а не file://). Считаем это "локальным"
+      // и прогоняем через normalizeLocalImageUri перед конвертацией в base64.
+      const isLocalFile = /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
       let finalAvatarUrl = avatarUri; // По умолчанию текущий URI
 
       // Если выбран локальный файл - загружаем через socket
       if (isLocalFile) {
         try {
-          const base64 = await imageToBase64(avatarUri);
+          const fileUri = await normalizeLocalImageUri(avatarUri);
+          const base64 = await imageToBase64(fileUri);
 
           const result = await new Promise<{ ok: boolean; avatarVer?: number; error?: string }>((resolve) => {
             socket.emit('user.uploadAvatar', { base64 }, (ack: any) => {
@@ -3534,6 +3568,7 @@ const handleClearNick = useCallback(async () => {
                   <SettingsTab
                       nick={nick}
                       setNick={(v) => { 
+                        nickLiveRef.current = v;
                         setNick(v); 
                         saveDraftProfile({ nick: v }); 
                         // Также сохраняем в основное хранилище
@@ -3545,7 +3580,8 @@ const handleClearNick = useCallback(async () => {
                         saveDraftProfile({ avatar: u }); 
                         setAvatarRefreshKey((k) => k + 1);
                         // Также сохраняем в основное хранилище
-                        saveProfileToStorage({ nick: nick, avatar: u }).catch(() => {});
+                        // ВАЖНО: берём ник из live-ref (state может "догонять" при быстром вводе + выборе аватара)
+                        saveProfileToStorage({ nick: String(nickLiveRef.current || nick || ''), avatar: u }).catch(() => {});
                       }}
                       refreshKey={avatarRefreshKey}
                       openAvatarSheet={openAvatarSheet}

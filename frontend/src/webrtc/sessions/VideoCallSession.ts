@@ -21,6 +21,7 @@ import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, CamSide } from '../types';
 import socket from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
+import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
 
@@ -91,6 +92,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private micMonitorLogCount = 0;
   private lastAudioEnergy = 0;
   private lastAudioDuration = 0;
+  private localVideoHealthTimeout: ReturnType<typeof setTimeout> | null = null;
+  private localVideoHealthAttempts = 0;
 
   constructor(config: WebRTCSessionConfig) {
     super();
@@ -1392,17 +1395,28 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.stopLocalTracksWithoutStateReset();
     }
 
-    const tracks = await createLocalTracks({
-      audio: true,
-      video: {
-        facingMode: this.camSide === 'front' ? 'user' : 'environment',
-        resolution: { width: 1280, height: 720 },
-        frameRate: 30,
-      },
-    }).catch((e) => {
-      logger.error('[VideoCallSession] Failed to create local tracks', e);
-      throw e;
-    });
+    const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+    const preferred = getPreferredVideoCaptureOptions(facingMode);
+    logger.info('[VideoCallSession] Video capture preset', preferred.meta);
+
+    let tracks: LocalTrack[] = [];
+    try {
+      tracks = await createLocalTracks({ audio: true, video: preferred.primary });
+    } catch (e1) {
+      logger.warn('[VideoCallSession] Failed to create local tracks with preferred preset; retrying with fallback', {
+        error: (e1 as any)?.message || String(e1),
+        preferred: preferred.meta,
+      });
+      try {
+        tracks = await createLocalTracks({ audio: true, video: preferred.fallback || preferred.primary });
+      } catch (e2) {
+        logger.error('[VideoCallSession] Failed to create local tracks (preferred + fallback)', {
+          preferred: preferred.meta,
+          error: (e2 as any)?.message || String(e2),
+        });
+        throw e2;
+      }
+    }
 
     tracks.forEach((track) => {
       if (track.kind === Track.Kind.Video) {
@@ -1424,6 +1438,25 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Восстанавливаем сохранённое состояние камеры/микрофона
     this.isCamOn = savedCamState;
     this.isMicOn = savedMicState;
+
+    // КРИТИЧНО: Применяем сохранённые состояния к трекам сразу после создания.
+    // Иначе можно получить ситуацию "UI показывает mic/cam off, но треки реально включены".
+    try {
+      if (this.localVideoTrack?.mediaStreamTrack) {
+        this.localVideoTrack.mediaStreamTrack.enabled = this.isCamOn;
+        if (this.isCamOn) {
+          await this.localVideoTrack.unmute().catch(() => {});
+        } else {
+          await this.localVideoTrack.mute().catch(() => {});
+        }
+      }
+    } catch {}
+    try {
+      if (this.localAudioTrack) {
+        if (this.isMicOn) this.localAudioTrack.unmute();
+        else this.localAudioTrack.mute();
+      }
+    } catch {}
     
     this.config.callbacks.onLocalStreamChange?.(stream);
     this.config.onLocalStreamChange?.(stream);
@@ -1493,16 +1526,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
 
-    // RN native: PCM -> FFT
-    try {
-      if (this.startMicLevelMonitoringNativeFFT(barsCount)) {
-        return;
-      }
-    } catch (e) {
-      logger.warn('[VideoCallSession] Native FFT monitoring failed, using fallback', e);
-    }
-
-    // fallback: берем уровень из статистики LiveKit и генерируем полосы
+    // КРИТИЧНО: НЕ используем react-native-audio-record в видеозвонке.
+    // Он делает отдельный захват микрофона (AudioRecord) и на части устройств приводит к "тишине"
+    // в WebRTC/LiveKit (микрофон занят вторым рекордером).
+    // Безопасный вариант — получать уровень из статистики LiveKit.
     this.startMicLevelMonitoringStatsFallback(barsCount);
   }
 
@@ -2651,6 +2678,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (this.localStream) {
         this.startMicLevelMonitoring(this.localStream);
       }
+      // 🩺 Android 8.1 / OPPO: watchdog — если видео "залипло" (есть трек, но не идут кадры), пересоздаем автоматически.
+      this.scheduleLocalVideoHealthCheck('connectToLiveKit:post-publish');
       return true;
     } catch (e: any) {
       const errorMessage = e?.message || String(e);
@@ -2751,6 +2780,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async disconnectRoom(reason: 'user' | 'server' = 'user'): Promise<void> {
+    this.clearLocalVideoWatchdog();
     // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
     // Если уже идет отключение, возвращаем существующий промис
     if (this.isDisconnecting && this.disconnectPromise) {
@@ -2873,6 +2903,129 @@ export class VideoCallSession extends SimpleEventEmitter {
     });
     
     return this.disconnectPromise;
+  }
+
+  private shouldRunLocalVideoWatchdog(): boolean {
+    if (Platform.OS !== 'android') return false;
+    const api = Number(Platform.Version);
+    const isOldAndroid = Number.isFinite(api) && api <= 27; // Android 8.1 and below
+    const brand = String((Device as any)?.brand || '').toLowerCase();
+    const manufacturer = String((Device as any)?.manufacturer || '').toLowerCase();
+    const isOppoLike = brand.includes('oppo') || manufacturer.includes('oppo');
+    return isOldAndroid || isOppoLike;
+  }
+
+  private clearLocalVideoWatchdog(): void {
+    if (this.localVideoHealthTimeout) {
+      try { clearTimeout(this.localVideoHealthTimeout); } catch {}
+      this.localVideoHealthTimeout = null;
+    }
+  }
+
+  private scheduleLocalVideoHealthCheck(context: string): void {
+    if (!this.shouldRunLocalVideoWatchdog()) return;
+    if (!this.isCamOn) return;
+    if (!this.room || this.room.state !== 'connected') return;
+    if (!this.localVideoTrack || this.localVideoTrack.mediaStreamTrack?.readyState === 'ended') return;
+
+    this.clearLocalVideoWatchdog();
+    if (this.localVideoHealthAttempts > 3) this.localVideoHealthAttempts = 0;
+
+    this.localVideoHealthTimeout = setTimeout(() => {
+      void this.runLocalVideoHealthCheckOnce(context);
+    }, 2800);
+  }
+
+  private pickLocalVideoStat(stats: any[]): any | null {
+    if (!Array.isArray(stats) || stats.length === 0) return null;
+    const sid = this.localVideoTrack?.sid;
+    const isVideo = (s: any) => String(s?.kind || '').toLowerCase() === 'video';
+    const matchesSid = (s: any) =>
+      sid && (String((s as any)?.trackSid || '') === String(sid) || String((s as any)?.mediaTrackId || '') === String(sid));
+
+    const bySid = sid ? stats.find((s) => isVideo(s) && matchesSid(s)) : null;
+    if (bySid) return bySid;
+    return stats.find((s) => isVideo(s)) || null;
+  }
+
+  private extractVideoProgress(stat: any): { frames: number; bytes: number; packets: number } {
+    const frames = Number(
+      (stat as any)?.framesSent ??
+      (stat as any)?.framesEncoded ??
+      (stat as any)?.frames ??
+      0
+    ) || 0;
+    const bytes = Number(
+      (stat as any)?.bytesSent ??
+      (stat as any)?.bytes ??
+      (stat as any)?.bytesSentTotal ??
+      0
+    ) || 0;
+    const packets = Number(
+      (stat as any)?.packetsSent ??
+      (stat as any)?.packets ??
+      0
+    ) || 0;
+    return { frames, bytes, packets };
+  }
+
+  private async runLocalVideoHealthCheckOnce(context: string): Promise<void> {
+    try {
+      if (!this.shouldRunLocalVideoWatchdog()) return;
+      if (!this.isCamOn) return;
+      if (!this.room || this.room.state !== 'connected') return;
+      if (!this.localVideoTrack || this.localVideoTrack.mediaStreamTrack?.readyState === 'ended') return;
+      if (this.localVideoHealthAttempts >= 2) return;
+
+      const getStats = async () => {
+        const stats = await (this.room?.localParticipant as any)?.getTrackStats?.();
+        const st = this.pickLocalVideoStat(stats || []);
+        return this.extractVideoProgress(st);
+      };
+
+      const a = await getStats().catch(() => ({ frames: 0, bytes: 0, packets: 0 }));
+      await new Promise((r) => setTimeout(r, 1200));
+      const b = await getStats().catch(() => ({ frames: 0, bytes: 0, packets: 0 }));
+
+      const framesDelta = b.frames - a.frames;
+      const bytesDelta = b.bytes - a.bytes;
+      const packetsDelta = b.packets - a.packets;
+
+      const stuck = framesDelta <= 0 && bytesDelta <= 5120 && packetsDelta <= 0;
+      if (!stuck) return;
+
+      this.localVideoHealthAttempts += 1;
+      logger.warn('[VideoCallSession] 🔧 Local video seems stuck; restarting camera', {
+        context,
+        attempt: this.localVideoHealthAttempts,
+        framesDelta,
+        bytesDelta,
+        packetsDelta,
+        roomState: this.room.state,
+        camSide: this.camSide,
+      });
+
+      // Best-effort: unpublish old track, recreate, and republish.
+      try {
+        if (this.room?.localParticipant && this.localVideoTrack) {
+          await this.room.localParticipant.unpublishTrack(this.localVideoTrack, false).catch(() => {});
+        }
+      } catch {}
+
+      await this.ensureLocalTracks(true);
+      if (this.room && this.room.state === 'connected' && this.room.localParticipant) {
+        if (this.localVideoTrack && this.isCamOn) {
+          await this.room.localParticipant.publishTrack(this.localVideoTrack).catch(() => {});
+        }
+        if (this.localAudioTrack && this.isMicOn) {
+          await this.room.localParticipant.publishTrack(this.localAudioTrack).catch(() => {});
+        }
+      }
+
+      this.scheduleLocalVideoHealthCheck('post-recovery');
+    } catch (e) {
+      logger.debug('[VideoCallSession] Local video health check failed (ignored)', e);
+    }
   }
 
   private async safeDisconnect(room: Room): Promise<void> {

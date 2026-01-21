@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onCallIncoming, onCallCanceled, acceptCall, declineCall } from '../../../sockets/socket';
 import socket from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
+import { startIncomingCallAlert, stopIncomingCallAlert } from '../../../utils/incomingCallAlert';
 
 interface UseIncomingCallProps {
   myUserId?: string;
@@ -93,6 +94,18 @@ export const useIncomingCall = ({
     };
   }, []);
 
+  // 🔔 Рингтон/вибрация для входящего (когда входящий показывается внутри экрана звонка/пира)
+  useEffect(() => {
+    if (incomingOverlay && incomingCall && !friendCallAccepted) {
+      startIncomingCallAlert();
+    } else {
+      stopIncomingCallAlert();
+    }
+    return () => {
+      stopIncomingCallAlert();
+    };
+  }, [incomingOverlay, incomingCall, friendCallAccepted]);
+
   // Обработка отмены звонка
   useEffect(() => {
     const offCancel = onCallCanceled?.(async (d) => {
@@ -111,6 +124,7 @@ export const useIncomingCall = ({
       setIncomingOverlay(false);
       setIncomingFriendCall(null);
       setIncomingCall(null);
+      stopIncomingCallAlert();
     });
 
     return () => {
@@ -136,6 +150,7 @@ export const useIncomingCall = ({
       setIncomingOverlay(false);
       setIncomingFriendCall(null);
       setIncomingCall(null);
+      stopIncomingCallAlert();
       if (uid) {
         incMissed(uid);
       }
@@ -160,6 +175,7 @@ export const useIncomingCall = ({
       setIncomingOverlay(false);
       setIncomingFriendCall(null);
       setIncomingCall(null);
+      stopIncomingCallAlert();
 
       // Очищаем WebRTC состояние при call:busy
       if (session) {
@@ -194,6 +210,7 @@ export const useIncomingCall = ({
       setIncomingOverlay(false);
       setIncomingFriendCall(null);
       setIncomingCall(null);
+      stopIncomingCallAlert();
     };
 
     socket.on('call:declined', handleDeclined);
@@ -285,6 +302,7 @@ export const useIncomingCall = ({
     setIncomingOverlay(false);
     setIncomingFriendCall(null);
     setIncomingCall(null);
+    stopIncomingCallAlert();
 
     onAccept?.(finalCallId, fromUserId);
   }, [incomingCall, incomingFriendCall, currentCallIdRef, onAccept]);
@@ -299,6 +317,7 @@ export const useIncomingCall = ({
     setIncomingFriendCall(null);
     setIncomingCall(null);
     setIncomingOverlay(false);
+    stopIncomingCallAlert();
 
     onDecline?.(callIdToDecline || '');
   }, [incomingCall, incomingFriendCall, currentCallIdRef, setDeclinedBlock, onDecline]);

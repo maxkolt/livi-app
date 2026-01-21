@@ -700,6 +700,7 @@ export function getMyProfile() {
     } 
   }>(
     "profile:me",
+    undefined,
     8000 // 8 секунд таймаут
   );
 }

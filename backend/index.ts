@@ -29,6 +29,7 @@ import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl } from './routes/livekit';
+import { sendPushToUser } from './utils/push';
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 
@@ -206,11 +207,12 @@ app.get('/invite/:code', (req, res) => {
   
   res.sendFile(htmlPath, (err) => {
     if (err) {
-      logger.error('Failed to send invite.html:', err, { 
-        htmlPath, 
-        __dirname, 
+      logger.error('Failed to send invite.html', {
+        error: (err as any)?.message || String(err),
+        htmlPath,
+        __dirname,
         projectRoot,
-        fileExists: fs.existsSync(htmlPath)
+        fileExists: fs.existsSync(htmlPath),
       });
       res.status(500).send('Error loading invite page');
     }
@@ -280,7 +282,20 @@ app.post('/chat/ensure-dm', async (req, res) => {
 app.get('/api/turn-credentials', async (_req, res) => {
   try {
     if (!TURN_SECRET) {
-      return res.status(503).json({ ok: false, error: 'turn_secret_not_configured' });
+      // Dev-friendly behavior: do NOT return 503 when TURN isn't configured.
+      // Returning 503 causes clients to retry and spam logs, and can contribute to reconnect storms.
+      // Instead, return a valid STUN-only config (200 OK).
+      logger.warn('[TURN] TURN_SECRET not configured, returning fallback STUN only');
+      return res.json({
+        ok: true,
+        username: '',
+        credential: '',
+        ttl: 300,
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' },
+        ],
+      });
     }
 
     // КРИТИЧНО: Проверяем что TURN_HOST задан
@@ -302,7 +317,7 @@ app.get('/api/turn-credentials', async (_req, res) => {
     // Предупреждение если используется IP вместо домена (для продакшена)
     const isIP = /^\d+\.\d+\.\d+\.\d+$/.test(TURN_HOST);
     if (isIP) {
-      logger.warn('[TURN] TURN_HOST uses IP address instead of domain:', TURN_HOST);
+      logger.warn('[TURN] TURN_HOST uses IP address instead of domain', { TURN_HOST });
       logger.warn('[TURN] For production, use domain (e.g., turn.твойдомен.com)');
     }
 
@@ -457,10 +472,10 @@ mongoose
 
       if (userCount === 0 && directCount === 0) {
         logger.warn('[MongoDB] ⚠️  База данных пуста - пользователей нет!');
-        logger.warn('[MongoDB] Убедитесь, что используется правильная БД:', dbName);
+        logger.warn('[MongoDB] Убедитесь, что используется правильная БД', { dbName });
       }
     } catch (e) {
-      logger.warn('[MongoDB] Could not check user count:', e);
+      logger.warn('[MongoDB] Could not check user count', { error: (e as any)?.message || String(e) });
     }
   })
   .catch((err) => {
@@ -674,7 +689,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       const userId = String(payload?.userId || '').trim();
       
       if (!userId || !isOid(userId)) {
-        logger.warn('Reauth failed: invalid userId', userId);
+        logger.warn('Reauth failed: invalid userId', { userId });
         return ack?.({ ok: false, error: 'invalid_userId' });
       }
       
@@ -686,7 +701,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       // Проверяем существует ли пользователь
       const exists = await User.exists({ _id: userId });
       if (!exists) {
-        logger.warn('Reauth failed: user not found', userId);
+        logger.warn('Reauth failed: user not found', { userId });
         return ack?.({ ok: false, error: 'user_not_found' });
       }
       
@@ -694,10 +709,10 @@ io.on('connection', async (sock: AuthedSocket) => {
       bindUserIdentity(io, sock, userId);
       emitPresence(io);
       
-      logger.debug('User reauthorized successfully', userId);
+      logger.debug('User reauthorized successfully', { userId });
       ack?.({ ok: true, userId });
     } catch (e) {
-      logger.error('Reauth error:', e);
+      logger.error('Reauth error', { error: (e as any)?.message || String(e) });
       ack?.({ ok: false, error: 'server_error' });
     }
   });
@@ -922,7 +937,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       });
       
     } catch (e) {
-      logger.error('❌ [call:end] Call end handler error:', e);
+      logger.error('❌ [call:end] Call end handler error', { error: (e as any)?.message || String(e) });
     }
   });
 
@@ -962,7 +977,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         roomId: payload?.roomId
       });
     } catch (e) {
-      logger.error('❌ [presence:update] Error:', e);
+      logger.error('❌ [presence:update] Error', { error: (e as any)?.message || String(e) });
     }
   });
 
@@ -1217,19 +1232,20 @@ io.on('connection', async (sock: AuthedSocket) => {
       // Уже в звонке?
       if (callOfUser.has(me)) return ack?.({ ok: false, error: 'busy' });
       
-      // Найдём любой сокет получателя
-      const peerSocket = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === peerId);
-      if (!peerSocket) return ack?.({ ok: false, error: 'peer_offline' });
+      // Найдём любой сокет получателя (может быть offline — тогда будем будить пушем)
+      const peerSocket = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === peerId) as
+        | AuthedSocket
+        | undefined;
       
-      // Проверяем busy флаг получателя
-      if ((peerSocket as any)?.data?.busy === true) {
+      // Если получатель онлайн — проверяем busy флаг
+      if (peerSocket && (peerSocket as any)?.data?.busy === true) {
         try { sock.emit('call:busy', { from: peerId, userId: peerId }); } catch {}
         return ack?.({ ok: false, error: 'peer_busy' });
       }
       
       // Убрано: проверка randomBusyByUser - рандомный поиск не блокирует звонки другу
       
-      if (callOfUser.has(peerId)) {
+      if (peerSocket && callOfUser.has(peerId)) {
         // Получатель уже в активном звонке
         try { sock.emit('call:busy', { from: peerId, userId: peerId }); } catch {}
         return ack?.({ ok: false, error: 'peer_busy' });
@@ -1252,31 +1268,32 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.debug('Initiator joined room', { socketId: sock.id, roomId, callId });
       } catch {}
       
-      // КРИТИЧНО: Устанавливаем busy флаг и состояние звонка для ОБОИХ участников при инициации
+      // КРИТИЧНО: Устанавливаем busy флаг и состояние звонка для инициатора при инициации
       // Это гарантирует консистентность состояния, даже если инициатор отключится до принятия
       // Инициатор
       (sock as any).data = (sock as any).data || {};
       (sock as any).data.busy = true;
       (sock as any).data.roomId = roomId;
-      (sock as any).data.partnerSid = peerSocket.id;
+      if (peerSocket) (sock as any).data.partnerSid = peerSocket.id;
       
-      // КРИТИЧНО: Получатель также должен иметь roomId и partnerSid
-      // Это позволяет восстановить состояние звонка, если инициатор отключится
-      (peerSocket as any).data = (peerSocket as any).data || {};
-      (peerSocket as any).data.busy = true;
-      (peerSocket as any).data.roomId = roomId;
-      (peerSocket as any).data.partnerSid = sock.id;
+      // Если получатель онлайн — также отмечаем его как busy
+      if (peerSocket) {
+        (peerSocket as any).data = (peerSocket as any).data || {};
+        (peerSocket as any).data.busy = true;
+        (peerSocket as any).data.roomId = roomId;
+        (peerSocket as any).data.partnerSid = sock.id;
+      }
       
       // Рассылаем presence:update (только друзьям)
       await emitPresenceUpdateToFriends(io, me, true);
-      await emitPresenceUpdateToFriends(io, peerId, true);
+      if (peerSocket) await emitPresenceUpdateToFriends(io, peerId, true);
       logger.debug('Call initiated', { from: me, to: peerId, callId, roomId });
       
       // КРИТИЧНО: Отправляем инициатору roomId для немедленного использования
       // Включаем from (socket.id получателя) для сохранения partnerSocketId
       try {
-        sock.emit('call:room:created', { callId, roomId, partnerId: peerId, from: peerSocket.id });
-        logger.debug('Room created event sent to initiator', { socketId: sock.id, roomId, callId, from: peerSocket.id });
+        sock.emit('call:room:created', { callId, roomId, partnerId: peerId, from: peerSocket ? peerSocket.id : null });
+        logger.debug('Room created event sent to initiator', { socketId: sock.id, roomId, callId, from: peerSocket ? peerSocket.id : null });
       } catch {}
 
       // таймаут 20с
@@ -1324,21 +1341,37 @@ io.on('connection', async (sock: AuthedSocket) => {
           }
         } catch {}
         
-        // КРИТИЧНО: Отправляем call:incoming напрямую на все сокеты получателя для гарантированной доставки
-        const recipientSockets = Array.from(io.sockets.sockets.values()).filter((s) => 
-          String((s as any)?.data?.userId || '') === String(peerId)
-        );
-        for (const recipientSocket of recipientSockets) {
-          try {
-            (recipientSocket as any).emit('call:incoming', { callId, from: me, fromNick });
-            // Также отправляем friend:call:incoming для совместимости
-            (recipientSocket as any).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
-          } catch {}
+        // ✅ PUSH для входящего звонка (покажется в фоне/убитом приложении)
+        try {
+          await sendPushToUser(String(peerId), {
+            kind: 'call',
+            title: fromNick || 'Входящий звонок',
+            body: '📞 Входящий видеозвонок',
+            channelId: 'calls',
+            data: {
+              type: 'call',
+              callId,
+              from: String(me),
+              fromNick: fromNick || '',
+            },
+          });
+        } catch {}
+
+        // Если получатель онлайн — дублируем через сокеты для мгновенного UI
+        if (peerSocket) {
+          const recipientSockets = Array.from(io.sockets.sockets.values()).filter((s) =>
+            String((s as any)?.data?.userId || '') === String(peerId)
+          );
+          for (const recipientSocket of recipientSockets) {
+            try {
+              (recipientSocket as any).emit('call:incoming', { callId, from: me, fromNick });
+              // Также отправляем friend:call:incoming для совместимости
+              (recipientSocket as any).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
+            } catch {}
+          }
+          io.to(`u:${peerId}`).emit('call:incoming', { callId, from: me, fromNick });
+          io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
         }
-        
-        // Также отправляем через комнаты на случай, если сокеты не найдены напрямую
-        io.to(`u:${peerId}`).emit('call:incoming', { callId, from: me, fromNick });
-        io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
       } catch {}
 
       return ack?.({ ok: true, callId });
@@ -1508,7 +1541,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.debug('LiveKit tokens created for call:accept', { roomName: livekitRoomName, identityA: livekitIdentityA, identityB: livekitIdentityB });
       } catch (e: any) {
         console.error('[call:accept] ❌ Failed to create LiveKit tokens:', e);
-        logger.error('Failed to create LiveKit tokens for call:accept:', e);
+        logger.error('Failed to create LiveKit tokens for call:accept', { error: (e as any)?.message || String(e) });
       }
       
       // Отправляем call:accepted с LiveKit credentials
@@ -1666,7 +1699,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       }
     } catch (e) {
-      logger.error('Error handling partner:away:', e);
+      logger.error('Error handling partner:away', { error: (e as any)?.message || String(e) });
     }
   });
 
@@ -1687,7 +1720,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       }
     } catch (e) {
-      logger.error('Error handling partner:returned:', e);
+      logger.error('Error handling partner:returned', { error: (e as any)?.message || String(e) });
     }
   });
 
@@ -1776,7 +1809,7 @@ function printLanUrls(port: number) {
     })
   );
   if (urls.length > 0) {
-    logger.info('Server running on:', urls.join(', '));
+    logger.info('Server running on', { urls: urls.join(', ') });
   } else {
     logger.info(`Server running on http://${HOST}:${port}`);
   }

@@ -20,6 +20,7 @@ import type { WebRTCSessionConfig, CamSide } from '../types';
 import socket from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { getIceConfiguration } from '../../../utils/iceConfig';
+import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
 
@@ -68,8 +69,11 @@ export class RandomChatSession extends SimpleEventEmitter {
   private eqPhase = 0;
   private lastFrequencyLevels: number[] = [];
   private lastMicLevel = 0;
+  private localVideoHealthTimeout: NodeJS.Timeout | null = null;
+  private localVideoHealthAttempts = 0;
   private micMonitorLogCount = 0;
   private readonly micBarsCount = 21;
+  private micStatsInFlight = false;
   private camToggleInProgress = false;
   private recoveringVideo = false;
   private detachLocalVideoEnded: (() => void) | null = null;
@@ -799,27 +803,44 @@ export class RandomChatSession extends SimpleEventEmitter {
 
     let tracks: LocalTrack[] = [];
     try {
+      const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+      const preferred = getPreferredVideoCaptureOptions(facingMode);
+      if (shouldTryVideo) {
+        logger.info('[RandomChatSession] Video capture preset', preferred.meta);
+      }
       tracks = await createLocalTracks({
         audio: true,
         video: shouldTryVideo
-          ? {
-              facingMode: this.camSide === 'front' ? 'user' : 'environment',
-              resolution: { width: 1280, height: 720 },
-              frameRate: 30,
-            }
+          ? preferred.primary
           : false,
       });
     } catch (e) {
-      // Fallback: allow audio-only when camera isn't available (esp. Simulator)
-      logger.warn('[RandomChatSession] Failed to create local video track; falling back to audio-only', {
-        error: (e as any)?.message || String(e),
-        platform: Platform.OS,
-        isDevice: Device.isDevice,
-      });
-      this.isCamOn = false;
-      this.config.callbacks.onCamStateChange?.(this.isCamOn);
-      this.config.onCamStateChange?.(this.isCamOn);
-      tracks = await createLocalTracks({ audio: true, video: false });
+      // If video was requested, retry with fallback preset first (better than dropping to audio-only).
+      if (shouldTryVideo) {
+        try {
+          const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+          const preferred = getPreferredVideoCaptureOptions(facingMode);
+          logger.warn('[RandomChatSession] Failed to create local video track with preferred preset; retrying with fallback', {
+            error: (e as any)?.message || String(e),
+            preferred: preferred.meta,
+          });
+          tracks = await createLocalTracks({ audio: true, video: preferred.fallback || preferred.primary });
+        } catch (e2) {
+          // Final fallback: allow audio-only when camera isn't available (esp. older/weak devices)
+          logger.warn('[RandomChatSession] Failed to create local video track (preferred + fallback); falling back to audio-only', {
+            error: (e2 as any)?.message || String(e2),
+            platform: Platform.OS,
+            isDevice: Device.isDevice,
+          });
+          this.isCamOn = false;
+          this.config.callbacks.onCamStateChange?.(this.isCamOn);
+          this.config.onCamStateChange?.(this.isCamOn);
+          tracks = await createLocalTracks({ audio: true, video: false });
+        }
+      } else {
+        // No video requested; just create audio tracks.
+        tracks = await createLocalTracks({ audio: true, video: false });
+      }
     }
 
     tracks.forEach((track) => {
@@ -943,7 +964,10 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.lastAudioEnergy = 0;
     this.lastAudioDuration = 0;
 
-    const barsCount = this.micBarsCount;
+    // Low-end Android (e.g., OPPO A3s / API 27) can struggle with frequent timers + re-renders.
+    // Reduce the amount of work for mic visualization.
+    const isLowEndAndroid = Platform.OS === 'android' && Number(Platform.Version) <= 27;
+    const barsCount = isLowEndAndroid ? 13 : this.micBarsCount;
 
     // iOS Simulator: native PCM/FFT часто ломает аудио устройство симулятора и спамит таймаутами.
     // Для стабильности используем лёгкий fallback (по статистике), без AudioRecord/PCM.
@@ -953,15 +977,13 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
 
-    // React Native: читаем PCM из микрофона и считаем FFT вручную
+    // КРИТИЧНО: НЕ используем react-native-audio-record в рандом-чате.
+    // Он делает отдельный захват микрофона (AudioRecord) и на части устройств приводит к SIGABRT/крашам
+    // (см. Android vitals: com.goodatlas.audiorecord.RNAudioRecordModule + libc abort).
+    // Безопасный вариант — получать уровень из статистики LiveKit.
     if (Platform.OS !== 'web') {
-      try {
-        if (this.startMicLevelMonitoringNativeFFT(barsCount)) {
-          return;
-        }
-      } catch (e) {
-        logger.warn('[RandomChatSession] Native FFT monitoring failed, trying fallbacks', e);
-      }
+      this.startMicLevelMonitoringStatsFallback(barsCount);
+      return;
     }
 
     // Web: используем Web Audio API если доступно
@@ -1201,12 +1223,18 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   private startMicLevelMonitoringStatsFallback(barsCount: number): void {
     this.ensureEqSeeds(barsCount);
+    const isLowEndAndroid = Platform.OS === 'android' && Number(Platform.Version) <= 27;
+    const intervalMs = isLowEndAndroid ? 600 : 300;
     this.micLevelInterval = setInterval(async () => {
       if (!this.isMicOn || !this.room || this.room.state !== 'connected') {
         const emptyLevels = new Array(barsCount).fill(0);
         this.emitMicLevels(0, emptyLevels);
         return;
       }
+
+      // Avoid piling up async stats calls (can freeze JS and trigger LiveKit ping timeouts).
+      if (this.micStatsInFlight) return;
+      this.micStatsInFlight = true;
 
       let audioLevel = 0;
 
@@ -1245,11 +1273,13 @@ export class RandomChatSession extends SimpleEventEmitter {
         }
       } catch (e) {
         logger.debug('[RandomChatSession] Could not get track stats', e);
+      } finally {
+        this.micStatsInFlight = false;
       }
 
       const freqLevels = this.generateFrequencyFromLevel(audioLevel, barsCount);
       this.emitMicLevels(audioLevel, freqLevels);
-    }, 120);
+    }, intervalMs);
   }
 
   private emitMicLevels(audioLevel: number, frequencyLevels: number[]): void {
@@ -1503,7 +1533,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
   }
 
-  private async recoverLocalVideoTrack(reason: 'ended' | 'toggleCam'): Promise<void> {
+  private async recoverLocalVideoTrack(reason: 'ended' | 'toggleCam' | 'stuck'): Promise<void> {
     if (this.recoveringVideo) return;
     this.recoveringVideo = true;
     try {
@@ -1518,7 +1548,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
   }
 
-  private async recreateLocalVideoTrack(reason: 'ended' | 'toggleCam'): Promise<void> {
+  private async recreateLocalVideoTrack(reason: 'ended' | 'toggleCam' | 'stuck'): Promise<void> {
     // iOS Simulator: camera capture for WebRTC is often unavailable
     if (Platform.OS === 'ios' && !Device.isDevice) {
       logger.warn('[RandomChatSession] iOS Simulator: skipping video track recreation (camera unavailable)', { reason });
@@ -1537,17 +1567,30 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
     this.detachLocalVideoEndedListener();
     
-    const tracks = await createLocalTracks({
-      audio: false,
-      video: {
-        facingMode: this.camSide === 'front' ? 'user' : 'environment',
-        resolution: { width: 1280, height: 720 },
-        frameRate: 30,
-      },
-    }).catch((e) => {
-      logger.error('[RandomChatSession] Failed to recreate local video track', e);
-      throw e;
-    });
+    const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+    const preferred = getPreferredVideoCaptureOptions(facingMode);
+    logger.info('[RandomChatSession] Video capture preset (recreate)', { recreateReason: reason, ...preferred.meta });
+
+    let tracks: LocalTrack[] = [];
+    try {
+      tracks = await createLocalTracks({ audio: false, video: preferred.primary });
+    } catch (e1) {
+      logger.warn('[RandomChatSession] Failed to recreate local video track with preferred preset; retrying with fallback', {
+        reason,
+        error: (e1 as any)?.message || String(e1),
+        preferred: preferred.meta,
+      });
+      try {
+        tracks = await createLocalTracks({ audio: false, video: preferred.fallback || preferred.primary });
+      } catch (e2) {
+        logger.error('[RandomChatSession] Failed to recreate local video track (preferred + fallback)', {
+          reason,
+          preferred: preferred.meta,
+          error: (e2 as any)?.message || String(e2),
+        });
+        throw e2;
+      }
+    }
 
     const newVideoTrack = tracks.find((t) => t.kind === Track.Kind.Video) as LocalVideoTrack | undefined;
     if (!newVideoTrack) {
@@ -1608,6 +1651,120 @@ export class RandomChatSession extends SimpleEventEmitter {
       prevTrackId,
       newTrackId: mediaTrack?.id,
     });
+  }
+
+  private shouldRunLocalVideoWatchdog(): boolean {
+    if (Platform.OS !== 'android') return false;
+    const api = Number(Platform.Version);
+    const isOldAndroid = Number.isFinite(api) && api <= 27; // Android 8.1 and below
+    const brand = String((Device as any)?.brand || '').toLowerCase();
+    const manufacturer = String((Device as any)?.manufacturer || '').toLowerCase();
+    const isOppoLike = brand.includes('oppo') || manufacturer.includes('oppo');
+    return isOldAndroid || isOppoLike;
+  }
+
+  private clearLocalVideoWatchdog(): void {
+    if (this.localVideoHealthTimeout) {
+      try { clearTimeout(this.localVideoHealthTimeout); } catch {}
+      this.localVideoHealthTimeout = null;
+    }
+  }
+
+  private scheduleLocalVideoHealthCheck(context: string): void {
+    if (!this.shouldRunLocalVideoWatchdog()) return;
+    if (!this.isCamOn) return;
+    if (!this.room || this.room.state !== 'connected') return;
+    if (!this.localVideoTrack || this.localVideoTrack.mediaStreamTrack?.readyState === 'ended') return;
+
+    this.clearLocalVideoWatchdog();
+
+    // Reset attempts on a fresh schedule
+    if (this.localVideoHealthAttempts > 3) this.localVideoHealthAttempts = 0;
+
+    this.localVideoHealthTimeout = setTimeout(() => {
+      void this.runLocalVideoHealthCheckOnce(context);
+    }, 2800);
+  }
+
+  private pickLocalVideoStat(stats: any[]): any | null {
+    if (!Array.isArray(stats) || stats.length === 0) return null;
+    const sid = this.localVideoTrack?.sid;
+    const isVideo = (s: any) => String(s?.kind || '').toLowerCase() === 'video';
+    const matchesSid = (s: any) =>
+      sid && (String((s as any)?.trackSid || '') === String(sid) || String((s as any)?.mediaTrackId || '') === String(sid));
+
+    const bySid = sid ? stats.find((s) => isVideo(s) && matchesSid(s)) : null;
+    if (bySid) return bySid;
+    // Fallback: first local video-like stat
+    return stats.find((s) => isVideo(s)) || null;
+  }
+
+  private extractVideoProgress(stat: any): { frames: number; bytes: number; packets: number } {
+    const frames = Number(
+      (stat as any)?.framesSent ??
+      (stat as any)?.framesEncoded ??
+      (stat as any)?.frames ??
+      0
+    ) || 0;
+    const bytes = Number(
+      (stat as any)?.bytesSent ??
+      (stat as any)?.bytes ??
+      (stat as any)?.bytesSentTotal ??
+      0
+    ) || 0;
+    const packets = Number(
+      (stat as any)?.packetsSent ??
+      (stat as any)?.packets ??
+      0
+    ) || 0;
+    return { frames, bytes, packets };
+  }
+
+  private async runLocalVideoHealthCheckOnce(context: string): Promise<void> {
+    try {
+      if (!this.shouldRunLocalVideoWatchdog()) return;
+      if (!this.isCamOn) return;
+      if (!this.room || this.room.state !== 'connected') return;
+      if (!this.localVideoTrack || this.localVideoTrack.mediaStreamTrack?.readyState === 'ended') return;
+
+      // Avoid endless loops
+      if (this.localVideoHealthAttempts >= 2) return;
+
+      const getStats = async () => {
+        const stats = await (this.room?.localParticipant as any)?.getTrackStats?.();
+        const st = this.pickLocalVideoStat(stats || []);
+        return this.extractVideoProgress(st);
+      };
+
+      const a = await getStats().catch(() => ({ frames: 0, bytes: 0, packets: 0 }));
+      await new Promise((r) => setTimeout(r, 1200));
+      const b = await getStats().catch(() => ({ frames: 0, bytes: 0, packets: 0 }));
+
+      const framesDelta = b.frames - a.frames;
+      const bytesDelta = b.bytes - a.bytes;
+      const packetsDelta = b.packets - a.packets;
+
+      const stuck = framesDelta <= 0 && bytesDelta <= 5120 && packetsDelta <= 0; // no meaningful progress
+      if (!stuck) {
+        // healthy; schedule next check on future state changes only
+        return;
+      }
+
+      this.localVideoHealthAttempts += 1;
+      logger.warn('[RandomChatSession] 🔧 Local video seems stuck; recreating video track', {
+        context,
+        attempt: this.localVideoHealthAttempts,
+        framesDelta,
+        bytesDelta,
+        packetsDelta,
+        roomState: this.room.state,
+        camSide: this.camSide,
+      });
+
+      await this.recoverLocalVideoTrack('stuck');
+    } catch (e) {
+      logger.debug('[RandomChatSession] Local video health check failed (ignored)', e);
+    }
   }
 
   private async publishVideoTrackIfRoomActive(force = false): Promise<void> {
@@ -2323,184 +2480,15 @@ export class RandomChatSession extends SimpleEventEmitter {
     await this.publishVideoTrackIfRoomActive(true);
     await this.publishAudioTrackIfRoomActive(true);
 
-    // Legacy path (оставлено для истории): прямой publish приводил к дубликатам source.
-    if (false && this.localVideoTrack && this.localVideoTrack.mediaStreamTrack?.readyState !== 'ended') {
-      try {
-        // КРИТИЧНО: Дополнительная проверка состояния перед публикацией
-        // Проверяем не только наличие localParticipant, но и его sid (присутствие в комнате)
-        if (room.state === 'connected' && room.localParticipant && room.localParticipant.sid) {
-          // Если трек еще не опубликован (sid нет), не дергаем mute/unmute LiveKit — только включаем/выключаем mediaTrack
-          if (!this.localVideoTrack.sid && this.localVideoTrack.mediaStreamTrack) {
-            this.localVideoTrack.mediaStreamTrack.enabled = this.isCamOn;
-          } else {
-            // КРИТИЧНО: Убеждаемся что трек включен перед публикацией
-            if (this.isCamOn && this.localVideoTrack.isMuted) {
-              this.localVideoTrack.unmute();
-            } else if (!this.isCamOn && !this.localVideoTrack.isMuted) {
-              this.localVideoTrack.mute();
-            }
-          }
-          // КРИТИЧНО: Публикуем трек сразу без проверки isVideoTrackPublished для ускорения
-          // Проверка isVideoTrackPublished может вызывать задержку из-за Map API
-          // LiveKit сам обработает дубликаты, поэтому проверка не нужна
-          if (this.isCamOn) {
-            // КРИТИЧНО: Проверяем состояние комнаты и участника непосредственно перед публикацией
-            // Это предотвращает ошибку "Tried to add a track for a participant, that's not present"
-            // Участник должен быть полностью добавлен в комнату (иметь sid)
-            if (room.state === 'connected' && 
-                room.localParticipant && 
-                room.localParticipant.sid &&
-                this.room === room) {
-            await room.localParticipant.publishTrack(this.localVideoTrack).catch((e: any) => {
-              // КРИТИЧНО: Улучшенная обработка ошибок публикации для предотвращения крашей
-              const errorMsg = e?.message || String(e || '');
-              const errorName = e?.name || '';
-              
-              // Игнорируем ошибки дубликатов, закрытых соединений, таймаутов, fingerprint mismatch и отсутствующих участников
-              if (errorMsg.includes('already') || 
-                  errorMsg.includes('duplicate') || 
-                  errorMsg.includes('closed') ||
-                  errorMsg.includes('disconnected') ||
-                  errorMsg.includes('timeout') ||
-                  errorMsg.includes('engine not connected') ||
-                  errorMsg.includes('not present') ||
-                  errorMsg.includes('fingerprint') ||
-                  errorMsg.includes('identity') ||
-                  errorMsg.includes('ERROR_CONTENT') ||
-                  (errorMsg.includes('participant') && errorMsg.includes('not present')) ||
-                  errorName === 'PublishTrackError') {
-                logger.debug('[RandomChatSession] Ignoring publish error (duplicate/closed/timeout/fingerprint/not present)', { 
-                  error: errorMsg,
-                  errorName 
-                });
-                return;
-              }
-              
-              // КРИТИЧНО: Для других ошибок логируем, но не бросаем исключение
-              logger.warn('[RandomChatSession] Failed to publish video track (non-critical)', {
-                error: errorMsg,
-                errorName,
-                roomState: room.state
-              });
-            });
-            
-            // КРИТИЧНО: Проверяем что трек действительно опубликован перед логированием
-            // Но не ждем - публикуем асинхронно для ускорения
-            if (this.isVideoTrackPublished(this.localVideoTrack)) {
-              logger.info('[RandomChatSession] Video track published', {
-                trackId: this.localVideoTrack.sid || this.localVideoTrack.mediaStreamTrack?.id,
-                isMuted: this.localVideoTrack.isMuted,
-              });
-            }
-            }
-          } else {
-            // Камера выключена — не публикуем трек, чтобы у новой пары не было ложного видео
-            if (this.localVideoTrack.mediaStreamTrack) {
-              this.localVideoTrack.mediaStreamTrack.enabled = false;
-            }
-            try {
-              this.localVideoTrack.mute();
-            } catch {}
-            // важный момент: не дергаем unpublish здесь, connectToLiveKit уже сделал disconnectRoom перед этим
-          }
-        }
-      } catch (e: any) {
-        // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей
-        const errorMsg = e?.message || String(e || '');
-        const errorName = e?.name || '';
-        logger.warn('[RandomChatSession] Failed to publish video track', {
-          error: errorMsg,
-          errorName,
-          roomState: room?.state
-          // Не логируем полный объект ошибки - это может вызвать проблемы на Android
-        });
-        // Не блокируем успех подключения - трек может быть опубликован позже
-        // Не бросаем исключение - это может вызвать краш на Android
-      }
-    }
-    
-    if (false && this.localAudioTrack && this.localAudioTrack.mediaStreamTrack?.readyState !== 'ended') {
-      try {
-        // КРИТИЧНО: Дополнительная проверка состояния перед публикацией
-        // Проверяем не только наличие localParticipant, но и его sid (присутствие в комнате)
-        // КРИТИЧНО: Проверяем состояние комнаты и участника непосредственно перед публикацией
-        // Это предотвращает ошибку "Tried to add a track for a participant, that's not present"
-        // Участник должен быть полностью добавлен в комнату (иметь sid)
-        if (room.state === 'connected' && 
-            room.localParticipant && 
-            room.localParticipant.sid &&
-            this.room === room) {
-          // КРИТИЧНО: Публикуем трек сразу без проверки isAudioTrackPublished для ускорения
-          // Проверка isAudioTrackPublished может вызывать задержку из-за Map API
-          // LiveKit сам обработает дубликаты, поэтому проверка не нужна
-          // Публикуем трек сразу с улучшенной обработкой ошибок
-          await room.localParticipant.publishTrack(this.localAudioTrack).catch((e: any) => {
-            // КРИТИЧНО: Улучшенная обработка ошибок публикации для предотвращения крашей
-            const errorMsg = e?.message || String(e || '');
-            const errorName = e?.name || '';
-            
-            // Игнорируем ошибки дубликатов, закрытых соединений, таймаутов, fingerprint mismatch и отсутствующих участников
-            if (errorMsg.includes('already') || 
-                errorMsg.includes('duplicate') || 
-                errorMsg.includes('closed') ||
-                errorMsg.includes('disconnected') ||
-                errorMsg.includes('timeout') ||
-                errorMsg.includes('engine not connected') ||
-                errorMsg.includes('not present') ||
-                errorMsg.includes('fingerprint') ||
-                errorMsg.includes('identity') ||
-                errorMsg.includes('ERROR_CONTENT') ||
-                (errorMsg.includes('participant') && errorMsg.includes('not present')) ||
-                errorName === 'PublishTrackError') {
-              logger.debug('[RandomChatSession] Ignoring publish error (duplicate/closed/timeout/fingerprint/not present)', { 
-                error: errorMsg,
-                errorName 
-              });
-              return;
-            }
-            
-            // КРИТИЧНО: Для других ошибок логируем, но не бросаем исключение
-            // Это предотвращает краши приложения на Android
-            logger.warn('[RandomChatSession] Failed to publish audio track (non-critical)', {
-              error: errorMsg,
-              errorName,
-              roomState: room.state
-            });
-          });
-          
-          // КРИТИЧНО: Применяем mute/unmute ПОСЛЕ публикации трека
-          // LiveKit не позволяет изменять статус mute до публикации
-          // КРИТИЧНО: Обернуто в try-catch для предотвращения крашей
-          try {
-            if (!this.isMicOn && !this.localAudioTrack.isMuted) {
-              this.localAudioTrack.mute();
-            } else if (this.isMicOn && this.localAudioTrack.isMuted) {
-              this.localAudioTrack.unmute();
-            }
-          } catch (muteError) {
-          logger.debug('[RandomChatSession] Error toggling audio mute state', muteError);
-        }
-        
-          // КРИТИЧНО: Проверяем что трек действительно опубликован перед логированием
-          if (this.isAudioTrackPublished(this.localAudioTrack)) {
-            logger.info('[RandomChatSession] Audio track published', {
-              trackId: this.localAudioTrack.sid || this.localAudioTrack.mediaStreamTrack?.id,
-              isMuted: this.localAudioTrack.isMuted,
-            });
-          }
-        }
-      } catch (e: any) {
-        // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей
-        const errorMsg = e?.message || String(e || '');
-        logger.warn('[RandomChatSession] Failed to publish audio track (caught)', {
-          error: errorMsg,
-          errorName: e?.name,
-          roomState: room?.state
-        });
-        // Не блокируем успех подключения - трек может быть опубликован позже
-        // Не бросаем исключение - это может вызвать краш на Android
-      }
-    }
+    // 🩺 Android 8.1 / OPPO: watchdog — если видео "залипло" (есть трек, но не идут кадры), пересоздаем автоматически.
+    this.scheduleLocalVideoHealthCheck('connectToLiveKit:post-publish');
+
+    /*
+     * Legacy path (оставлено для истории): прямой publish приводил к дубликатам source
+     * и гонкам состояния. Код был выключен через `if (false && ...)`, но TypeScript
+     * всё равно проверяет его и ловит nullability-ошибки. Оставляем здесь как заметку,
+     * но убираем из компиляции полностью.
+     */
 
     // Обновляем состояние камеры и микрофона
     this.config.callbacks.onMicStateChange?.(this.isMicOn);

@@ -30,9 +30,36 @@ function getCandidates() {
   return out;
 }
 
+function scoreCandidate(c) {
+  const name = String(c.name || '').toLowerCase();
+  const ip = String(c.address || '');
+
+  // Heuristics: strongly avoid Docker/bridge/vpn/tunnel style interfaces.
+  // These often produce unreachable addresses for real devices (e.g. 172.17/172.19 docker bridges).
+  const looksVirtual =
+    name.includes('docker') ||
+    name.includes('bridge') ||
+    name.includes('vmnet') ||
+    name.includes('vbox') ||
+    name.includes('utun') ||
+    name.includes('tun') ||
+    name.includes('tap');
+  if (looksVirtual) return -1000;
+
+  // Prefer common Wi‑Fi/LAN ranges first.
+  if (ip.startsWith('192.168.')) return 300;
+  if (ip.startsWith('10.')) return 200;
+  if (ip.startsWith('172.')) return 100;
+
+  // Default: still valid, but low priority.
+  return 0;
+}
+
 const candidates = getCandidates();
-const preferred = candidates.find((c) => isPrivateIPv4(c.address));
-const chosen = preferred || candidates[0];
+const privateCandidates = candidates.filter((c) => isPrivateIPv4(c.address));
+const chosen =
+  privateCandidates.sort((a, b) => scoreCandidate(b) - scoreCandidate(a))[0] ||
+  candidates.sort((a, b) => scoreCandidate(b) - scoreCandidate(a))[0];
 
 if (!chosen) {
   // fallback

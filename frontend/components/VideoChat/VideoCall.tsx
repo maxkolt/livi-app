@@ -17,7 +17,7 @@ import {
   Easing,
 } from 'react-native';
 import { useNavigation, useFocusEffect, usePreventRemove } from '@react-navigation/native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
 import { VideoCallSession } from '../../src/webrtc/sessions/VideoCallSession';
@@ -39,6 +39,7 @@ import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
 import { useIncomingCall } from './hooks/useIncomingCall';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import InCallManager from 'react-native-incall-manager';
 
 type Props = { 
   route?: { 
@@ -142,9 +143,21 @@ const stopStreamTracks = (stream: MediaStream | null | undefined, context: strin
 
 const VideoCall: React.FC<Props> = ({ route }) => {
   const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
   
   const [lang, setLang] = useState<Lang>(defaultLang);
+  const androidScreenPadding = 12;
+  const androidContentInsets = useMemo(() => {
+    if (Platform.OS !== 'android') return null;
+    // Android: одинаковый базовый отступ со всех сторон + safe-area (челка/навигация)
+    return {
+      paddingTop: insets.top + androidScreenPadding,
+      paddingBottom: insets.bottom + androidScreenPadding,
+      paddingLeft: insets.left + androidScreenPadding,
+      paddingRight: insets.right + androidScreenPadding,
+    } as const;
+  }, [insets.bottom, insets.left, insets.right, insets.top]);
   const [friends, setFriends] = useState<any[]>([]);
   const myUserId = route?.params?.myUserId;
   
@@ -1024,6 +1037,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           } else {
             logger.warn('[VideoCall] session.endCall недоступен в cleanupFunction');
           }
+
+          // КРИТИЧНО: Если звонок завершают из PiP (экран звонка уже размонтирован),
+          // то useAudioRouting больше не будет вызван для остановки аудио-сессии.
+          // Останавливаем InCallManager вручную.
+          try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
+          try { InCallManager.setSpeakerphoneOn(false); } catch {}
+          try { InCallManager.stop(); } catch {}
         } catch (e) {
           logger.error('[VideoCall] Error in cleanupFunction:', e);
         }
@@ -2026,8 +2046,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   return (
     <SafeAreaView 
       style={[styles.container, { backgroundColor: isDark ? '#151F33' : (theme.colors.background as string) }]}
-      edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
+      // Android: safe-area отступы считаем сами через insets, чтобы низ/верх точно не прилипали к системе
+      edges={Platform.OS === 'android' ? [] : undefined}
     >
+      <View style={[styles.content, androidContentInsets]}>
+        <View style={styles.topSection}>
         {/* Карточка "Собеседник" */}
         <View
           style={styles.card}
@@ -2171,6 +2194,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             opacity={buttonsOpacity}
           />
         </View>
+        </View>
         
         {/* Кнопка снизу: Завершить */}
         <View style={styles.bottomRow}>
@@ -2193,7 +2217,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             <MaterialIcons name="call-end" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
-      
+      </View>
     </SafeAreaView>
   );
 };
@@ -2201,15 +2225,29 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    // padding не задаём тут: на Android safe-area + базовый отступ считаем во внутреннем контейнере (styles.content)
+  },
+  content: {
+    flex: 1,
+    width: '100%',
     alignItems: "center",
-    justifyContent: "center",
-    ...(Platform.OS === "android" ? { paddingTop: 0 } : { paddingTop: 20 }),
+    justifyContent: 'space-between',
+  },
+  topSection: {
+    flex: 1,
+    width: '100%',
+    alignItems: 'center',
   },
   card: {
     ...CARD_BASE,
-    width: Platform.OS === "android" ? '94%' : '94%',
-    ...((Platform.OS === "ios" ? { height: Dimensions.get('window').height * 0.4 } : { height: Dimensions.get('window').height * 0.43 })
-    ),
+    width: Platform.OS === 'android' ? '100%' : '94%',
+    ...(Platform.OS === 'android'
+      ? {
+          flex: 1,
+          flexBasis: 0,
+          minHeight: 170,
+        }
+      : { height: Dimensions.get('window').height * 0.4 }),
   },
   eqWrapper: {
     width: "100%",
@@ -2229,11 +2267,11 @@ const styles = StyleSheet.create({
     fontSize: 22,
   },
   bottomRow: {
-    width: Platform.OS === "android" ? '94%' : '93%',
+    width: '100%',
     flexDirection: 'row',
     gap: Platform.OS === "android" ? 14 : 16,
     marginTop: Platform.OS === "android" ? 6 : 5,
-    marginBottom: Platform.OS === "android" ? 18 : 32,
+    marginBottom: Platform.OS === "android" ? 0 : 32,
   },
   bigBtn: {
     flex: 1,

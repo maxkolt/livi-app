@@ -176,27 +176,44 @@ async function uploadViaServerFallback(fileUri: string, userId?: string, install
   const dataUri = `data:image/jpeg;base64,${base64}`;
 
   const url = `${API_BASE}/api/upload/avatar/dataUri`;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (userId) headers['x-user-id'] = userId;
-  if (installId) headers['x-install-id'] = installId;
+  const baseHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (userId) baseHeaders['x-user-id'] = userId;
 
-  const res = await fetchWithTimeout(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ dataUri }),
-  }, 30000);
+  const post = async (extraHeaders: Record<string, string>) => {
+    const res = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { ...baseHeaders, ...extraHeaders },
+        body: JSON.stringify({ dataUri }),
+      },
+      30000
+    );
 
-  const txt = await res.clone().text();
-  let json: any = {};
-  try { json = JSON.parse(txt); } catch {}
+    const txt = await res.clone().text();
+    let json: any = {};
+    try { json = JSON.parse(txt); } catch {}
+    return { res, json };
+  };
 
-  if (!res.ok || !json?.ok) {
-    const reason = json?.error || `server_fallback_failed (${res.status})`;
+  // 1) Основной путь: installId (если есть) + userId
+  let attempt = await post(installId ? { 'x-install-id': installId } : {});
+
+  // 2) Фолбэк: если installId локально есть, но на сервере нет записи installs,
+  // сервер вернет unauthorized. Тогда ретраим БЕЗ x-install-id, используя x-user-id.
+  if (
+    installId &&
+    (attempt.res.status === 401 || attempt.json?.error === 'unauthorized')
+  ) {
+    attempt = await post({});
+  }
+
+  if (!attempt.res.ok || !attempt.json?.ok) {
+    const reason = attempt.json?.error || `server_fallback_failed (${attempt.res.status})`;
     throw new Error(reason);
   }
-  
-  // Возвращаем объект с avatar и avatarVer
-  return json;
+
+  return attempt.json;
 }
 
 /** Основная функция: загрузка аватара на сервер */

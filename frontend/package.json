@@ -5,10 +5,13 @@
   "scripts": {
     "start:lan": "LAN_IP=$(node ./scripts/lan-ip.js) EXPO_PACKAGER_HOSTNAME=$LAN_IP REACT_NATIVE_PACKAGER_HOSTNAME=$LAN_IP expo start --dev-client --host lan --port 8081",
     "start:lan:clean": "LAN_IP=$(node ./scripts/lan-ip.js) EXPO_PACKAGER_HOSTNAME=$LAN_IP REACT_NATIVE_PACKAGER_HOSTNAME=$LAN_IP expo start --dev-client --host lan --port 8081 -c",
+    "start:usb": "node ./scripts/adb-reverse-usb.js 8081 && EXPO_PACKAGER_HOSTNAME=127.0.0.1 REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 expo start --dev-client --host localhost --port 8081",
+    "start:usb:clean": "node ./scripts/adb-reverse-usb.js 8081 && EXPO_PACKAGER_HOSTNAME=127.0.0.1 REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 expo start --dev-client --host localhost --port 8081 -c",
     "start:tunnel": "expo start --dev-client --tunnel --port 8081",
     "start:tunnel:clean": "expo start --dev-client --tunnel --port 8081 -c",
     "start": "expo start",
     "android": "expo run:android",
+    "android:dev": "LIVI_APP_VARIANT=dev expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
     "test": "jest"
@@ -49,6 +52,7 @@
     "expo-linear-gradient": "~14.1.5",
     "expo-media-library": "~17.1.7",
     "expo-navigation-bar": "~4.2.8",
+    "expo-notifications": "~0.31.4",
     "expo-random": "^14.0.1",
     "expo-secure-store": "~14.2.4",
     "expo-sharing": "~13.1.5",

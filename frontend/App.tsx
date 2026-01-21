@@ -10,7 +10,7 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
@@ -19,6 +19,7 @@ import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, onReq
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
+import { startIncomingCallAlert, stopIncomingCallAlert } from './utils/incomingCallAlert';
 import HomeScreen from "./screens/HomeScreen";
 import VideoCallScreen from "./screens/VideoCallScreen";
 import RandomChatScreen from "./screens/RandomChatScreen";
@@ -28,6 +29,8 @@ import PiPOverlay from "./src/pip/PiPOverlay";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native';
+import { addNotificationListeners, ensureInitialNotificationPermissions, registerAndSendPushToken } from './utils/pushNotifications';
+import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
 
 // Импорт expo-keep-awake с безопасной загрузкой
 let activateKeepAwakeAsync: (() => Promise<void>) | null = null;
@@ -60,6 +63,16 @@ try {
 export { activateKeepAwakeAsync, deactivateKeepAwakeAsync };
 
 try { (React as any).useInsertionEffect = (React as any).useEffect; } catch {}
+
+// Dev: hide extremely noisy warning that can spam logs on slower Android devices.
+// This does NOT fix the root cause, but makes Metro logs usable while we iterate.
+if (__DEV__) {
+  try {
+    LogBox.ignoreLogs([
+      'Excessive number of pending callbacks',
+    ]);
+  } catch {}
+}
 
 // Регистрация глобальных LiveKit штук один раз при старте приложения
 try {
@@ -147,7 +160,9 @@ function AppContent() {
           // Fallback на routeName из state, если навигация еще не готова
           currentRoute = routeName;
         }
-        if (!isVideoSessionRoute(currentRoute)) {
+        // КРИТИЧНО: Если PiP видим, нельзя останавливать InCallManager — иначе пропадет звук в PiP.
+        const pipVisible = !!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current;
+        if (!isVideoSessionRoute(currentRoute) && !pipVisible) {
           (InCallManager as any).setKeepScreenOn?.(false);
           InCallManager.stop();
           logger.debug('[App] InCallManager stopped after incoming call modal closed');
@@ -157,6 +172,16 @@ function AppContent() {
       }
     }
   }, [incoming, routeName]);
+
+  // 🔔 Рингтон/вибрация для входящего звонка (когда показываем глобальную модалку)
+  React.useEffect(() => {
+    if (incoming) startIncomingCallAlert();
+    else stopIncomingCallAlert();
+    return () => {
+      // На всякий случай при размонтировании
+      stopIncomingCallAlert();
+    };
+  }, [incoming]);
   // Храним недавно отменённые/истёкшие вызовы, чтобы избежать гонок событий (declined/timeout перед incoming)
   const canceledCallsRef = React.useRef<Map<string, number>>(new Map());
   const timedOutCallsRef = React.useRef<Map<string, number>>(new Map());
@@ -211,7 +236,48 @@ function AppContent() {
         logger.error("CometChat init failed:", e);
       }
 
+      // 🔔 Запрашиваем разрешение на уведомления сразу при старте (Android 13+ / iOS),
+      // чтобы пользователь увидел системный диалог до любых фоновых токен-регистраций.
+      try {
+        await ensureInitialNotificationPermissions();
+      } catch {}
+
+      // 🎥🎙️ Запрашиваем разрешения камеры/микрофона на старте.
+      // На части Android 8.x (в т.ч. ColorOS) это снижает шанс "тихого" фейла WebRTC захвата.
+      try {
+        await ensureInitialMediaPermissions();
+      } catch {}
+
     })();
+  }, []);
+
+  // 🔔 Push notifications: register token once we have userId
+  React.useEffect(() => {
+    let cancelled = false;
+    let cleanupListeners: null | (() => void) = null;
+
+    (async () => {
+      try {
+        cleanupListeners = addNotificationListeners();
+      } catch {}
+
+      // ждём userId (boot() в sockets/socket.ts асинхронный)
+      for (let i = 0; i < 12 && !cancelled; i++) {
+        try {
+          const uid = getCurrentUserId?.();
+          if (uid) {
+            await registerAndSendPushToken(uid);
+            break;
+          }
+        } catch {}
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      try { cleanupListeners?.(); } catch {}
+    };
   }, []);
 
   // ===== Deep Linking обработка для реферальных ссылок =====
@@ -388,15 +454,24 @@ function AppContent() {
     }
   };
 
-  // КРИТИЧНО: Поддержание экрана включенным пока приложение активно (не в фоне)
-  // ВСЕГДА активируем keep-awake и InCallManager когда приложение не в фоне
-  // Это предотвращает закрытие приложения системой и затемнение экрана
+  // КРИТИЧНО: Поддержание экрана включенным ТОЛЬКО когда это нужно (звонок/рандомчат/входящий/PiP).
+  // Глобальный агрессивный InCallManager.start на некоторых Android может приводить к сворачиванию/крашам.
   React.useEffect(() => {
     // Проверяем что модуль доступен
     if (!activateKeepAwakeAsync || !deactivateKeepAwakeAsync) {
       logger.warn('Keep-awake module not available, skipping initialization');
       return;
     }
+
+    // Нужно ли держать экран включённым именно сейчас
+    let currentRoute: string | undefined = undefined;
+    try {
+      currentRoute = navRef.isReady() ? navRef.getCurrentRoute()?.name : routeName;
+    } catch {
+      currentRoute = routeName;
+    }
+    const pipVisible = !!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current;
+    const shouldKeepOn = isVideoSessionRoute(currentRoute) || !!incoming || pipVisible;
 
     let appStateSubscription: any = null;
     let keepAwakeInterval: ReturnType<typeof setInterval> | null = null;
@@ -431,6 +506,7 @@ function AppContent() {
     };
     
     const handleAppStateChange = (nextAppState: string) => {
+      if (!shouldKeepOn) return;
       if (nextAppState === 'active' || nextAppState === 'inactive') {
         // КРИТИЧНО: Приложение активно или неактивно (но видно) - ВСЕГДА активируем keep-awake
         // 'inactive' на iOS означает, что приложение видно, но не полностью активно
@@ -481,24 +557,36 @@ function AppContent() {
       }
     };
 
-    // КРИТИЧНО: Активируем сразу при монтировании если приложение активно или неактивно
-    // ВСЕГДА активируем keep-awake и InCallManager когда приложение не в фоне
+    // Если не на экранах звонка/нет входящего/PiP — ничего не держим включённым.
+    if (!shouldKeepOn) {
+      try {
+        deactivateKeepAwakeAsync?.().catch(() => {});
+      } catch {}
+      if (Platform.OS === 'android') {
+        try {
+          (InCallManager as any).setKeepScreenOn?.(false);
+          InCallManager.stop();
+        } catch {}
+      }
+      return;
+    }
+
+    // Активируем сразу при монтировании если приложение активно или неактивно
     const currentState = AppState.currentState;
     
     if (currentState === 'active' || currentState === 'inactive') {
       activateKeepAwake();
       
-      // КРИТИЧНО: Для Android ВСЕГДА используем InCallManager для предотвращения засыпания экрана
+      // Для Android включаем keep-screen-on только в call-like режиме
       if (Platform.OS === 'android') {
         activateAndroidKeepScreenOn();
         
-        // Запускаем периодическую переактивацию для Android (каждые 3 секунды)
-        // чтобы предотвратить затемнение экрана системой
+        // Запускаем периодическую переактивацию реже, чтобы не спамить нативные вызовы
         androidKeepScreenOnInterval = setInterval(() => {
           if (AppState.currentState === 'active' || AppState.currentState === 'inactive') {
             activateAndroidKeepScreenOn();
           }
-        }, 3000); // Переактивируем каждые 3 секунды для Android (максимально агрессивная защита)
+        }, 8000);
       }
     }
 
@@ -536,7 +624,7 @@ function AppContent() {
         appStateSubscription.remove();
       }
     };
-  }, []); // КРИТИЧНО: Не зависим от PiP - keep-awake должен работать ВСЕГДА когда приложение не в фоне
+  }, [routeName, incoming, (pip as any)?.visible]); // пересчитываем need-to-keep-on по состоянию приложения
 
   // КРИТИЧНО: Убрана глобальная обработка блокировки экрана из App.tsx
   // Логика завершения звонков при блокировке экрана теперь полностью обрабатывается в VideoCall.tsx

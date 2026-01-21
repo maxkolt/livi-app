@@ -44,6 +44,11 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   partnerInPiP = false,
 }) => {
   const L = (key: string) => t(key, lang);
+  // На Android 8.1 и старше (API <= 27) SurfaceView overlay/z-order часто ломает отображение (особенно на OPPO/ColorOS).
+  // Для таких устройств отключаем zOrderMediaOverlay, чтобы Surface корректно композировался в окне.
+  const isLegacyAndroidSurface = Platform.OS === 'android' && Number(Platform.Version) <= 27;
+  // На старых Android используем TextureView, чтобы RN-оверлеи (кнопки) гарантированно рисовались поверх видео.
+  const useTextureViewOnAndroid = Platform.OS === 'android' && isLegacyAndroidSurface;
   const logRenderState = useCallback(
     (reason: string, extra?: Record<string, unknown>) => {
       logger.info('[RemoteVideo] Render state', { reason, ...extra });
@@ -292,8 +297,12 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       ? { 
           stream: streamToUse, 
           streamURL, 
-          renderToHardwareTextureAndroid: true, 
-          zOrderMediaOverlay: true 
+          // На legacy Android (8.1/API27) у некоторых устройств Surface/HW-texture даёт "черный экран".
+          renderToHardwareTextureAndroid: !isLegacyAndroidSurface,
+          // Удаленное видео - фон. Не используем overlay, чтобы не перекрывать локальное превью.
+          zOrderMediaOverlay: false,
+          // prop может отсутствовать в типах, но поддерживается нативно в webrtc-view на Android.
+          useTextureView: useTextureViewOnAndroid,
         }
       : { streamURL: streamURL! }; // iOS: используем streamURL (уже проверили выше)
     
@@ -302,11 +311,12 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       <View style={styles.videoContainer}>
         <RTCView
           key={rtcViewKey}
-          {...rtcViewProps}
+          {...(rtcViewProps as any)}
           style={styles.rtc}
           objectFit="cover"
           mirror={false}
-          zOrder={1}
+          // Удаленное видео - базовый слой
+          zOrder={0}
         />
         {showFriendBadge && (
           <View style={styles.friendBadge}>

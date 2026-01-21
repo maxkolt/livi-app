@@ -26,6 +26,12 @@ type Props = {
   curve?: number;
   attackMs?: number;
   releaseMs?: number;
+  /**
+   * Limit how often we start native animations.
+   * On slower Android devices, starting many Animated.timing() calls per second
+   * can flood NativeAnimatedModule callbacks and freeze the UI.
+   */
+  maxFps?: number;
 
   bars?: number;
   width?: number;
@@ -59,6 +65,7 @@ const VoiceEqualizer: React.FC<Props> = ({
   curve = 0.55,
   attackMs = 85,
   releaseMs = 220,
+  maxFps = 15,
 
   bars = 19,
   width = 200,
@@ -80,8 +87,15 @@ const VoiceEqualizer: React.FC<Props> = ({
   );
 
   const wavePhaseRef = React.useRef(0);
+  const lastAnimAtRef = React.useRef(0);
 
   useEffect(() => {
+    const nowTs = Date.now();
+    const minIntervalMs = Math.max(16, Math.floor(1000 / Math.max(1, maxFps)));
+    // Throttle to avoid flooding NativeAnimatedModule with startAnimatingNode callbacks
+    if (nowTs - lastAnimAtRef.current < minIntervalMs) return;
+    lastAnimAtRef.current = nowTs;
+
     // Если есть реальные FFT-полосы — используем их, иначе fallback на общий level + псевдочастотную волну
     const hasBands = Array.isArray(frequencyLevels) && frequencyLevels.length > 0;
 
@@ -129,8 +143,9 @@ const VoiceEqualizer: React.FC<Props> = ({
       let target: number;
   
       if (mode === 'waveform' && (hasBands || shapedLevel > 0)) {
-        // Voice waveform: стабильная "волна" речи (как на примере), без рандома.
-        // Полосы симметричны относительно центра и имеют разный рисунок (тон/тембр влияет на форму).
+        // Voice waveform: стабильная "волна" речи (без рандома).
+        // Если есть реальные частотные полосы, добавляем частотную модуляцию,
+        // чтобы каждая линия реагировала на "свою" частоту, но сохранялся красивый wave-рисунок.
         const mid = (bars - 1) / 2;
         const x = mid > 0 ? (i - mid) / mid : 0; // -1..1
         const ax = Math.abs(x);
@@ -145,8 +160,19 @@ const VoiceEqualizer: React.FC<Props> = ({
         const rippleCount = 2.2 + 3.2 * centroid + (peakIdx / Math.max(1, bars - 1)) * 1.2;
         const ripple = 0.62 + 0.38 * Math.sin(wavePhaseRef.current + ax * Math.PI * rippleCount);
 
-        // итог: без шума, но соседние полосы разные
-        target = Math.min(1, Math.max(0, env * (0.25 + 0.75 * body) * ripple));
+        // Частотная модуляция: если есть bands[i], делаем вклад частоты в высоту конкретной полосы.
+        // Это дает "чувствительность к разным частотам", но без "лесенки" спектра.
+        let bandMod = 1;
+        if (hasBands && bands) {
+          const raw = Math.max(0, Math.min(1, bands[i] ?? 0));
+          const gamma = Math.max(0.35, Math.min(1.4, bandCurve));
+          const shapedBand = Math.pow(raw, gamma);
+          // 0.35..1.0 — чтобы даже слабые гармоники были заметны, но не ломали форму
+          bandMod = 0.35 + 0.65 * shapedBand;
+        }
+
+        // итог: без шума, но соседние полосы разные + частотная чувствительность при наличии FFT
+        target = Math.min(1, Math.max(0, env * (0.25 + 0.75 * body) * ripple * bandMod));
       } else if (hasBands) {
         // Спектр: каждая полоска = свой диапазон (для режима spectrum)
         const raw = bands?.[i] ?? 0;
@@ -160,7 +186,7 @@ const VoiceEqualizer: React.FC<Props> = ({
         // Используем синусоидальную функцию для создания волнового эффекта ТОЛЬКО когда есть реальный звук
         // КРИТИЧНО: Не создаем движение без реального звука (shaped уже проверен > 0)
         const frequency = (i / bars) * Math.PI * 2; // Разные частоты для каждой полоски
-        const time = Date.now() / 1000; // Текущее время в секундах
+        const time = nowTs / 1000; // Текущее время в секундах
         const wave = Math.sin(frequency * time * 2) * 0.3 + 0.7; // Волна от 0.4 до 1.0
         
         // Комбинируем базовый уровень с волной и небольшим случайным шумом
@@ -173,7 +199,12 @@ const VoiceEqualizer: React.FC<Props> = ({
       const current = (av as any)?._value ?? 0;
       const goingUp = target > current;
       const duration = (goingUp ? attackMs : releaseMs) + (i % 5) * 14;
-  
+
+      // IMPORTANT: stop previous animation to avoid piling up callbacks on native side
+      try {
+        av.stopAnimation();
+      } catch {}
+
       Animated.timing(av, {
         toValue: Math.max(0, target),
         duration,
@@ -183,7 +214,21 @@ const VoiceEqualizer: React.FC<Props> = ({
         useNativeDriver: true,
       }).start();
     });
-  }, [level, frequencyLevels, bandCurve, mode, threshold, curve, sensitivity, anims, factors, attackMs, releaseMs, bars]);
+  }, [
+    level,
+    frequencyLevels,
+    bandCurve,
+    mode,
+    threshold,
+    curve,
+    sensitivity,
+    anims,
+    factors,
+    attackMs,
+    releaseMs,
+    bars,
+    maxFps,
+  ]);
   
 
   // Геометрия

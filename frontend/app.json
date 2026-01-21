@@ -3,11 +3,11 @@
     "name": "LiVi",
     "slug": "livi-video-chat",
     "scheme": "livi",
-    "version": "1.0.10",
+    "version": "1.0.20",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -30,7 +30,7 @@
     },
     "android": {
       "package": "com.kolt12max.livi",
-      "versionCode": 10,
+      "versionCode": 21,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -38,6 +38,7 @@
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.INTERNET",
+        "android.permission.POST_NOTIFICATIONS",
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
@@ -65,6 +66,7 @@
       "expo-image-picker",
       "expo-document-picker",
       "expo-secure-store",
+      "expo-notifications",
       "expo-video",
       "expo-audio",
       "expo-asset",

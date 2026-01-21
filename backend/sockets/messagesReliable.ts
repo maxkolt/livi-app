@@ -5,6 +5,7 @@ import User from '../models/User';
 import FriendshipMessages, { IFriendshipMessages } from '../models/FriendshipMessages';
 import OfflineMessage from '../models/OfflineMessage';
 import { areFriendsCached } from '../utils/friendshipUtils';
+import { sendPushToUser } from '../utils/push';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
@@ -311,6 +312,35 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         timestamp: message.timestamp,
         delivered: recipientOnline
       });
+
+      // 📲 PUSH: новое сообщение (нужно для foreground/background/killed)
+      try {
+        let fromNick: string | undefined;
+        try {
+          const u = await User.findById(me).select('nick').lean();
+          if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+        } catch {}
+
+        const title = fromNick || 'Новое сообщение';
+        const body =
+          payload.type === 'image'
+            ? '📷 Фото'
+            : String(payload.text || '').trim() || 'Сообщение';
+
+        await sendPushToUser(String(payload.to), {
+          kind: 'message',
+          title,
+          body,
+          channelId: 'messages',
+          data: {
+            type: 'message',
+            messageId,
+            from: String(me),
+            to: String(payload.to),
+            fromNick: fromNick || '',
+          },
+        });
+      } catch {}
     } catch (e: any) {
       console.error('[message:send] error:', e?.message || e);
       return ack?.({ ok: false, error: 'server_error' });

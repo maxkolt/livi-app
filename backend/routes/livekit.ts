@@ -17,12 +17,12 @@ if (LIVEKIT_URL) {
   const isIP = /^wss?:\/\/\d+\.\d+\.\d+\.\d+/.test(LIVEKIT_URL);
   
   if (isIP) {
-    logger.warn('[LiveKit] ⚠️ LIVEKIT_URL uses IP address instead of domain:', LIVEKIT_URL);
+    logger.warn('[LiveKit] ⚠️ LIVEKIT_URL uses IP address instead of domain', { LIVEKIT_URL });
     logger.warn('[LiveKit] For production, use domain with WSS (e.g., wss://livekit.твойдомен.com)');
   } else if (!isValidUrl) {
-    logger.warn('[LiveKit] ⚠️ LIVEKIT_URL format may be invalid:', LIVEKIT_URL);
+    logger.warn('[LiveKit] ⚠️ LIVEKIT_URL format may be invalid', { LIVEKIT_URL });
   } else if (!LIVEKIT_URL.startsWith('wss://')) {
-    logger.warn('[LiveKit] ⚠️ LIVEKIT_URL should use WSS (secure) for production:', LIVEKIT_URL);
+    logger.warn('[LiveKit] ⚠️ LIVEKIT_URL should use WSS (secure) for production', { LIVEKIT_URL });
   }
 } else {
   logger.error('[LiveKit] ⚠️ LIVEKIT_URL not configured!');
@@ -50,7 +50,7 @@ export async function createToken({ identity, roomName }: { identity: string; ro
 
   if (!apiKey || !apiSecret) {
     const error = 'LIVEKIT_API_KEY or LIVEKIT_API_SECRET not configured';
-    logger.error('[LiveKit] createToken failed:', error);
+    logger.error('[LiveKit] createToken failed', { error });
     throw new Error(error);
   }
 

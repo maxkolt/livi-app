@@ -136,6 +136,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       muteLocal: p.muteLocal,
       muteRemote: p.muteRemote
     });
+
+    // КРИТИЧНО: Ставим флаг PiP синхронно (до setState), чтобы teardown логика (например, stopSpeaker в хуках)
+    // могла увидеть, что PiP уже включен, даже если React effect еще не успел пробежать.
+    try {
+      (global as any).__pipVisibleRef = (global as any).__pipVisibleRef || { current: false };
+      (global as any).__pipVisibleRef.current = true;
+    } catch {}
     
     setCallId(p.callId);
     setRoomId(p.roomId);
@@ -158,68 +165,85 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   }, []);
 
   const hidePiP = useCallback(() => {
+    // Сбрасываем флаг синхронно (эффект ниже тоже продублирует)
+    try {
+      (global as any).__pipVisibleRef = (global as any).__pipVisibleRef || { current: false };
+      (global as any).__pipVisibleRef.current = false;
+    } catch {}
     setVisible(false);
   }, []);
 
   const updatePiPPosition = useCallback((x: number, y: number) => setPipPos({ x, y }), []);
 
   const toggleMic = useCallback(() => {
-    // КРИТИЧНО: Вызываем функцию toggleMic из VideoCall напрямую
-    // VideoCall.toggleMic переключит трек и обновит состояние PiP
-    // Это нужно чтобы избежать конфликта между локальным переключением и переключением в VideoCall
+    // ✅ Приоритет: дергаем WebRTC session напрямую (работает даже когда экран звонка размонтирован).
+    // Это важно для PiP: пользователь уже ушёл с VideoCall экрана, но звонок и аудио продолжаются.
+    try {
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (session && typeof session.toggleMic === 'function') {
+        session.toggleMic();
+        // UI в PiP обновляем локально (не полагаемся на callbacks из размонтированного экрана)
+        setIsMuted((prev) => !prev);
+        return;
+      }
+    } catch {}
+
+    // Второй приоритет: если экран ещё жив и выставил глобальную функцию
     try {
       const toggleMicFn = (global as any).__toggleMicRef?.current;
       if (toggleMicFn && typeof toggleMicFn === 'function') {
         toggleMicFn();
-        // Состояние isMuted обновится через pip.updatePiPState в VideoCall.toggleMic
-      } else {
-        // Fallback: переключаем локально если функция не зарегистрирована
-        const audioTrack = localStreamRef.current?.getAudioTracks?.()?.[0];
-        if (audioTrack) {
-          const next = !audioTrack.enabled;
-          audioTrack.enabled = next;
-          setIsMuted(!next);
-        } else {
-          setIsMuted(prev => !prev);
-        }
+        setIsMuted((prev) => !prev);
+        return;
       }
-    } catch (e) {
-      console.warn('[PiPContext] Error calling VideoCall toggleMic:', e);
-      // Fallback при ошибке
+    } catch {}
+
+    // Fallback: переключаем локально через mediaStreamTrack
+    try {
       const audioTrack = localStreamRef.current?.getAudioTracks?.()?.[0];
       if (audioTrack) {
         const next = !audioTrack.enabled;
         audioTrack.enabled = next;
         setIsMuted(!next);
       } else {
-        setIsMuted(prev => !prev);
+        setIsMuted((prev) => !prev);
       }
+    } catch {
+      setIsMuted((prev) => !prev);
     }
   }, []);
 
   const toggleRemoteAudio = useCallback(() => {
-    // КРИТИЧНО: Вызываем функцию toggleRemoteAudio из VideoCall напрямую (как в эталонном файле)
-    // VideoCall.toggleRemoteAudio переключит трек и обновит состояние PiP
-    // Это нужно чтобы избежать конфликта между локальным переключением и переключением в VideoCall
+    // ✅ Приоритет: дергаем WebRTC session напрямую (работает когда VideoCall экран размонтирован).
+    try {
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (session && typeof session.toggleRemoteAudio === 'function') {
+        session.toggleRemoteAudio();
+        setIsRemoteMuted((prev) => !prev);
+        return;
+      }
+    } catch {}
+
+    // Второй приоритет: если экран ещё жив и выставил глобальную функцию
     try {
       const toggleRemoteAudioFn = (global as any).__toggleRemoteAudioRef?.current;
       if (toggleRemoteAudioFn && typeof toggleRemoteAudioFn === 'function') {
         toggleRemoteAudioFn();
-        // Состояние isRemoteMuted обновится через pip.updatePiPState в VideoCall.toggleRemoteAudio
-      } else {
-        // Fallback: переключаем локально если функция не зарегистрирована
-        const audioTracks = remoteStreamRef.current?.getAudioTracks?.() ?? [];
-        const nextMuted = !isRemoteMuted;
-        audioTracks.forEach((t: any) => (t.enabled = !nextMuted));
-        setIsRemoteMuted(nextMuted);
+        setIsRemoteMuted((prev) => !prev);
+        return;
       }
-    } catch (e) {
-      console.warn('[PiPContext] Error calling VideoCall toggleRemoteAudio:', e);
-      // Fallback при ошибке
+    } catch {}
+
+    // Fallback: переключаем локально через MediaStream audio tracks
+    try {
       const audioTracks = remoteStreamRef.current?.getAudioTracks?.() ?? [];
-      const nextMuted = !isRemoteMuted;
-      audioTracks.forEach((t: any) => (t.enabled = !nextMuted));
-      setIsRemoteMuted(nextMuted);
+      setIsRemoteMuted((prev) => {
+        const nextMuted = !prev;
+        audioTracks.forEach((t: any) => (t.enabled = !nextMuted));
+        return nextMuted;
+      });
+    } catch {
+      setIsRemoteMuted((prev) => !prev);
     }
   }, [isRemoteMuted]);
 

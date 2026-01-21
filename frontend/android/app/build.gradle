@@ -92,8 +92,8 @@ android {
         applicationId 'com.kolt12max.livi'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 11
-        versionName "1.0.10"
+        versionCode 21
+        versionName "1.0.20"
     }
     signingConfigs {
     debug {
@@ -113,6 +113,9 @@ android {
     buildTypes {
     debug {  
         signingConfig signingConfigs.debug
+        // Install debug/dev-client alongside the Play Store app (different signing key).
+        applicationIdSuffix ".dev"
+        resValue "string", "app_name", "LiVi Dev"
     }
     release {
         signingConfig signingConfigs.release

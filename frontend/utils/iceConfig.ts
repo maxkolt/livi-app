@@ -16,6 +16,7 @@ export function getEnvFallbackConfiguration(options?: { forceRelayOnly?: boolean
   const username = process.env.EXPO_PUBLIC_TURN_USERNAME || '';
   const credential = process.env.EXPO_PUBLIC_TURN_CREDENTIAL || '';
   const icePolicyEnv = (process.env.EXPO_PUBLIC_ICE_POLICY || '').trim().toLowerCase();
+  const hasTurnCredentials = !!(username && credential);
 
   let turnUrls: string[] = rawTurn ? rawTurn.split(/[\,\s]+/).filter(Boolean) : [];
   let turnTcpUrls: string[] = rawTurnTcp ? rawTurnTcp.split(/[\,\s]+/).filter(Boolean) : [];
@@ -34,7 +35,8 @@ export function getEnvFallbackConfiguration(options?: { forceRelayOnly?: boolean
   
   // КРИТИЧНО: Если TURN URL не задан в env или только placeholders, извлекаем из API_BASE
   // Это важно для fallback при VPN блокировке
-  if (turnUrls.length === 0 && API_BASE) {
+  // ВАЖНО: не добавляем TURN без кредов — это приводит к долгому ICE и "залипанию" в поиске.
+  if (hasTurnCredentials && turnUrls.length === 0 && API_BASE) {
     try {
       // Извлекаем хост из API_BASE (например, http://89.111.152.241:3000 -> 89.111.152.241)
       const urlMatch = API_BASE.match(/https?:\/\/([^:\/]+)/);
@@ -63,13 +65,13 @@ export function getEnvFallbackConfiguration(options?: { forceRelayOnly?: boolean
   
   // КРИТИЧНО: TURN обязателен для пробития NAT в мобильных сетях
   // Размещаем TURN серверы ПЕРВЫМИ для приоритета при ICE gathering
-  if (turnUrls.length) {
+  if (hasTurnCredentials && turnUrls.length) {
     // Каждый TURN URL должен быть отдельным объектом
     turnUrls.forEach(url => {
       iceServers.push({ urls: url, username, credential });
     });
   }
-  if (turnTcpUrls.length) {
+  if (hasTurnCredentials && turnTcpUrls.length) {
     turnTcpUrls.forEach(url => {
       iceServers.push({ urls: url, username, credential });
     });
@@ -84,13 +86,17 @@ export function getEnvFallbackConfiguration(options?: { forceRelayOnly?: boolean
   // Логирование для отладки
   const hasTurn = turnUrls.length > 0 || turnTcpUrls.length > 0;
   console.log('[ICE Config] Fallback configuration:', {
-    stunCount: 5,
+    stunCount: 2,
     turnCount: turnUrls.length + turnTcpUrls.length,
     hasTurn,
-    hasCredentials: !!(username && credential),
+    hasCredentials: hasTurnCredentials,
     turnUrls: turnUrls.length > 0 ? turnUrls : undefined,
     turnTcpUrls: turnTcpUrls.length > 0 ? turnTcpUrls : undefined,
-    warning: !hasTurn ? '⚠️ NO TURN SERVER - NAT traversal may fail!' : undefined,
+    warning: !hasTurnCredentials
+      ? '⚠️ TURN credentials are missing — TURN will be disabled in fallback (STUN-only).'
+      : !hasTurn
+        ? '⚠️ NO TURN SERVER - NAT traversal may fail!'
+        : undefined,
   });
 
   const envRelayOnly = icePolicyEnv === 'relay' || icePolicyEnv === 'relay-only' || process.env.EXPO_PUBLIC_ICE_RELAY_ONLY === '1';
@@ -150,8 +156,21 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
       if (r.ok) {
         const j = await r.json();
         if (j?.ok && Array.isArray(j.iceServers)) {
+          // ВАЖНО: выкидываем TURN-серверы без кредов. Иначе ICE может "висеть" и выглядеть как бесконечный поиск.
+          const cleanedIceServers = j.iceServers.filter((s: any) => {
+            const urls = s?.urls;
+            const list: string[] = Array.isArray(urls) ? urls : (typeof urls === 'string' ? [urls] : []);
+            const hasTurnUrl = list.some((u) => typeof u === 'string' && u.startsWith('turn:'));
+            if (!hasTurnUrl) return true; // STUN/прочее оставляем
+            const okCreds = !!(s?.username && s?.credential);
+            if (!okCreds) {
+              console.warn('[ICE Config] Dropping TURN server without credentials:', { urls: list });
+            }
+            return okCreds;
+          });
+
           // Проверяем наличие TURN серверов
-          const hasTurn = j.iceServers.some((server: any) => 
+          const hasTurn = cleanedIceServers.some((server: any) => 
             server.urls && (
               (Array.isArray(server.urls) && server.urls.some((u: string) => u.startsWith('turn:'))) ||
               (typeof server.urls === 'string' && server.urls.startsWith('turn:'))
@@ -159,9 +178,9 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
           );
           
           console.log('[ICE Config] Server configuration loaded:', {
-            serverCount: j.iceServers.length,
+            serverCount: cleanedIceServers.length,
             hasTurn,
-            hasCredentials: j.iceServers.some((s: any) => s.username && s.credential),
+            hasCredentials: cleanedIceServers.some((s: any) => s.username && s.credential),
             ttl: j.ttl,
             attempt,
             platform: Platform.OS,
@@ -179,7 +198,7 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
           }
           
           const cfg: RTCConfiguration = {
-            iceServers: j.iceServers,
+            iceServers: cleanedIceServers,
             iceTransportPolicy: finalIceTransportPolicy,
             bundlePolicy: 'max-bundle',
             rtcpMuxPolicy: 'require',

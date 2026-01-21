@@ -109,7 +109,10 @@ const SettingsAvatar = memo(({
   
   // Стабильный ключ для Android: если локальный file://, используем сам путь
   const isLocal = hasLocalAvatar;
-  const keyBase = isLocal ? avatarUri : 'settings';
+  // ВАЖНО: НЕ добавляем query-параметры к file:// (ломает путь на Android).
+  // Для форс-рефреша используем key.
+  const refreshSuffix = (Platform.OS === 'android' && typeof refreshKey !== 'undefined') ? `:k=${refreshKey}` : '';
+  const keyBase = (isLocal ? avatarUri : 'settings') + refreshSuffix;
   const avatarKey = getAvatarKey(keyBase, avatarSrc || displayUri);
   
   // Если есть кешированный аватар и нет локального файла - используем AvatarImage
@@ -286,7 +289,7 @@ export default function SettingsTab({
                 ]}
               >
                 <SettingsAvatar 
-                  avatarUri={Platform.OS === 'android' && typeof (refreshKey as any) !== 'undefined' ? `${avatarUri}?k=${refreshKey}` : avatarUri}
+                  avatarUri={avatarUri}
                   styles={styles}
                   LIVI={LIVI}
                   refreshKey={refreshKey}
