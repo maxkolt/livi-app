@@ -1,20 +1,16 @@
 import { useEffect, useRef } from 'react';
-import { Platform, AppState } from 'react-native';
+import { Platform } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
 import { mediaDevices } from '@livekit/react-native-webrtc';
 import { logger } from '../../../utils/logger';
 
 /**
  * Хук для управления аудио-рутированием
- * Обрабатывает speaker-on, bluetooth fallback, таймеры которые "пинают" систему
+ * ВАЖНО: без агрессивных таймеров/пинков — они часто ухудшают стабильность (особенно на Android/ColorOS).
+ * Делаем один предсказуемый старт/стоп аудио-сессии, остальное оставляем LiveKit/WebRTC.
  */
 export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
-  const speakerTimersRef = useRef<any[]>([]);
-
-  const clearSpeakerTimers = () => {
-    speakerTimersRef.current.forEach(t => clearTimeout(t));
-    speakerTimersRef.current = [];
-  };
+  const didStartRef = useRef(false);
 
   const configureIOSAudioSession = () => {
     if (Platform.OS !== 'ios') return;
@@ -31,33 +27,19 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
       });
       s.setMode('VideoChat');
       s.setActive(true);
-      const poke = () => { try { s.overrideOutputAudioPort('speaker'); } catch {} };
-      poke();
-      speakerTimersRef.current.push(setTimeout(poke, 80));
-      speakerTimersRef.current.push(setTimeout(poke, 200));
+      try { s.overrideOutputAudioPort('speaker'); } catch {}
     } catch (e) {
       logger.warn('[useAudioRouting] Error configuring iOS audio session:', e);
     }
   };
 
-  const forceSpeakerOnHard = () => {
-    if (!enabled) return;
-
+  const applyRouting = () => {
     try { InCallManager.start({ media: 'video', ringback: '' }); } catch {}
-
-    const kick = () => {
-      try { (InCallManager as any).setForceSpeakerphoneOn?.('on'); } catch {}
-      try { InCallManager.setForceSpeakerphoneOn?.(true as any); } catch {}
-      try { InCallManager.setSpeakerphoneOn(true); } catch {}
-      try { (mediaDevices as any)?.setSpeakerphoneOn?.(true); } catch {}
-      try { (InCallManager as any).setBluetoothScoOn?.(false); } catch {}
-    };
-
-    kick();
-    speakerTimersRef.current.push(setTimeout(kick, 120));
-    speakerTimersRef.current.push(setTimeout(kick, 350));
-    speakerTimersRef.current.push(setTimeout(kick, 800));
-
+    // По умолчанию — на динамик (как было раньше). Кнопки mute/volume работают отдельно.
+    try { InCallManager.setSpeakerphoneOn(true); } catch {}
+    try { (InCallManager as any).setForceSpeakerphoneOn?.('on'); } catch {}
+    try { (mediaDevices as any)?.setSpeakerphoneOn?.(true); } catch {}
+    // Не трогаем BT SCO агрессивно — это ломает роутинг на части устройств.
     configureIOSAudioSession();
   };
 
@@ -69,15 +51,14 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
       const pipVisible = !!(global as any).__pipVisibleRef?.current;
       if (pipVisible) {
         logger.info('[useAudioRouting] Skip stopSpeaker because PiP is visible');
-        clearSpeakerTimers();
         return;
       }
     } catch {}
 
-    clearSpeakerTimers();
     try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
     try { InCallManager.setSpeakerphoneOn(false); } catch {}
     try { InCallManager.stop(); } catch {}
+    didStartRef.current = false;
   };
 
   // КРИТИЧНО: Форсим аудио-сессию/спикер при активном звонке.
@@ -93,41 +74,16 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
       hasRemoteStream: !!remoteStream,
       streamId: remoteStream?.id,
     });
-    forceSpeakerOnHard();
+    if (!didStartRef.current) {
+      didStartRef.current = true;
+      applyRouting();
+    }
 
     return () => stopSpeaker();
   }, [enabled]);
 
-  // Дополнительный "пинок" когда remoteStream появился/обновился (не останавливаем сессию!)
-  useEffect(() => {
-    if (!enabled) return;
-    if (!remoteStream) {
-      logger.info('[useAudioRouting] remoteStream отсутствует, но звонок активен - routing уже поднят');
-      return;
-    }
-    logger.info('[useAudioRouting] ✅ remoteStream updated - re-kick routing', {
-      streamId: remoteStream.id,
-      hasAudioTracks: !!(remoteStream as any)?.getAudioTracks?.()?.[0],
-      audioTrackEnabled: (remoteStream as any)?.getAudioTracks?.()?.[0]?.enabled,
-    });
-    forceSpeakerOnHard();
-  }, [enabled, remoteStream]);
-
-  // Обработка AppState - форсим спикер при активном звонке
-  useEffect(() => {
-    if (!enabled) return;
-
-    const sub = AppState.addEventListener('change', (st) => {
-      if (st === 'active') {
-        forceSpeakerOnHard();
-      }
-    });
-
-    return () => sub.remove();
-  }, [enabled, remoteStream]);
-
   return {
-    forceSpeakerOnHard,
+    forceSpeakerOnHard: applyRouting,
     stopSpeaker,
   };
 };

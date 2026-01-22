@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { RTCView, MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -54,6 +54,62 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       logger.info('[RemoteVideo] Render state', { reason, ...extra });
     },
     []
+  );
+
+  // Anti-infinite-spinner during renegotiation/re-subscribe:
+  // after a short stall, prefer holding the last good frame; after a longer stall, show text.
+  const lastGoodStreamRef = useRef<MediaStream | null>(null);
+  const lastGoodAtRef = useRef<number>(0);
+  const stallSinceRef = useRef<number | null>(null);
+  const REMOTE_VIDEO_STALL_HOLD_MS = 900;
+  const REMOTE_VIDEO_STALL_TEXT_MS = 6000;
+  const REMOTE_VIDEO_LAST_GOOD_MAX_AGE_MS = 30000;
+
+  const renderLastGoodFrame = useCallback(
+    (reason: string, extra?: Record<string, unknown>) => {
+      const s = lastGoodStreamRef.current;
+      if (!s) return null;
+      const now = Date.now();
+      const ageMs = now - lastGoodAtRef.current;
+      if (Platform.OS !== 'android') return null;
+      if (ageMs > REMOTE_VIDEO_LAST_GOOD_MAX_AGE_MS) return null;
+
+      const streamURL = s.toURL?.();
+      const rtcViewKey = `remote-lastgood-${s.id}-${remoteViewKey}`;
+      const rtcViewProps =
+        Platform.OS === 'android'
+          ? {
+              stream: s,
+              streamURL,
+              renderToHardwareTextureAndroid: !isLegacyAndroidSurface,
+              zOrderMediaOverlay: false,
+              useTextureView: useTextureViewOnAndroid,
+            }
+          : { streamURL: streamURL! };
+
+      logRenderState(reason, {
+        streamId: s.id,
+        ageMs,
+        ...extra,
+      });
+
+      return (
+        <RTCView
+          key={rtcViewKey}
+          {...(rtcViewProps as any)}
+          style={styles.rtc}
+          objectFit="cover"
+          mirror={false}
+          zOrder={0}
+        />
+      );
+    },
+    [
+      isLegacyAndroidSurface,
+      logRenderState,
+      remoteViewKey,
+      useTextureViewOnAndroid,
+    ]
   );
 
   // КРИТИЧНО: Логируем значение partnerInPiP при каждом рендере для отладки
@@ -197,7 +253,45 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // КРИТИЧНО: Показываем бейдж друга даже когда нет стрима (для инициатора звонка)
   if (!streamToUse) {
     if (loading || started) {
-      logRenderState('no-stream-loading', { loading, started });
+      const now = Date.now();
+      const stallStart = stallSinceRef.current ?? now;
+      stallSinceRef.current = stallStart;
+      const stallMs = now - stallStart;
+
+      const held = renderLastGoodFrame('no-stream-hold-last-frame', { stallMs });
+      if (stallMs > REMOTE_VIDEO_STALL_HOLD_MS && held) {
+        return (
+          <View style={styles.videoContainer}>
+            {held}
+            {showFriendBadge && (
+              <View style={styles.friendBadge}>
+                <MaterialIcons name="check-circle" size={16} color="#0f0" />
+                <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+              </View>
+            )}
+          </View>
+        );
+      }
+
+      if (stallMs > REMOTE_VIDEO_STALL_TEXT_MS) {
+        logRenderState('no-stream-text', { stallMs, loading, started });
+        // Убрана заглушка "Видео восстанавливается" - показываем лоадер
+        return (
+          <View style={styles.videoContainer}>
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#fff" />
+            </View>
+            {showFriendBadge && (
+              <View style={styles.friendBadge}>
+                <MaterialIcons name="check-circle" size={16} color="#0f0" />
+                <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+              </View>
+            )}
+          </View>
+        );
+      }
+
+      logRenderState('no-stream-loading', { loading, started, stallMs });
       return (
         <View style={styles.videoContainer}>
           <View style={styles.loadingContainer}>
@@ -256,6 +350,11 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // НО: НЕ показываем видео если партнер в PiP (это уже проверено выше, но для безопасности)
   // ИЛИ: Показываем видео если партнер вернулся из PiP (даже если трек временно не готов)
   if ((hasRenderableVideo || isReturningFromPiP) && !partnerInPiP) {
+    // We are able to render (or intentionally render during PiP recovery) -> reset stall + remember last good
+    stallSinceRef.current = null;
+    lastGoodStreamRef.current = streamToUse;
+    lastGoodAtRef.current = Date.now();
+
     // КРИТИЧНО: На Android используем prop `stream` напрямую вместо `streamURL`
     // Это более надежный способ для @livekit/react-native-webrtc на Android, но дублируем streamURL как fallback
     const streamURL = streamToUse.toURL?.();
@@ -329,43 +428,17 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }
 
   // Камера явно выключена И нет готового трека — показываем заглушку "Отошёл"
-  // КРИТИЧНО: Если стрим только что получен (менее 2000ms назад), показываем ActivityIndicator
-  // вместо AwayPlaceholder, чтобы дать треку время стать готовым и избежать мерцания
+  // КРИТИЧНО: Если камера явно выключена (remoteCamOn === false), всегда показываем заглушку "Отошел",
+  // а не лоадер, даже если стрим только что получен. Это означает, что пользователь явно выключил камеру.
   // НО: НЕ показываем заглушку если партнер в PiP (это уже обработано выше)
   if (!remoteCamOn && !hasRenderableVideo && !partnerInPiP) {
-    const isRecentlyReceived = remoteStreamReceivedAt && (Date.now() - remoteStreamReceivedAt) < 2000;
-    
-    if (isRecentlyReceived) {
-      // Стрим только что получен - показываем загрузку вместо заглушки
-      logRenderState('remote-cam-off-recently-received', {
-        streamId: streamToUse.id,
-        hasVideoTrack,
-        videoTrackReady,
-        videoTrackEnabled,
-        videoTrackMuted,
-        timeSinceReceived: Date.now() - (remoteStreamReceivedAt || 0),
-      });
-      return (
-        <View style={styles.videoContainer}>
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#fff" />
-          </View>
-          {showFriendBadge && (
-            <View style={styles.friendBadge}>
-              <MaterialIcons name="check-circle" size={16} color="#0f0" />
-              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
-            </View>
-          )}
-        </View>
-      );
-    }
-    
     logRenderState('remote-cam-off', {
       streamId: streamToUse.id,
       hasVideoTrack,
       videoTrackReady,
       videoTrackEnabled,
       videoTrackMuted,
+      timeSinceReceived: remoteStreamReceivedAt ? Date.now() - remoteStreamReceivedAt : null,
     });
     return (
       <View style={styles.videoContainer}>
@@ -382,12 +455,63 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // Стрим есть, но видеотрек не готов/замьючен — показываем лоадер (камера не "явно выключена")
   if (streamToUse && hasVideoTrack && !partnerInPiP && !isReturningFromPiP) {
-    // Обычный случай: видеотрек не готов/замьючен - показываем лоадер
+    // КРИТИЧНО: Сначала проверяем, disabled или muted ли видеотрек (камера выключена)
+    // Если да, сразу показываем заглушку "Отошел", без проверки stallMs
+    const isVideoTrackDisabled = !videoTrackEnabled || videoTrackMuted;
+    
+    if (isVideoTrackDisabled) {
+      logRenderState('video-track-disabled-show-away', {
+        streamId: streamToUse.id,
+        videoTrackReady,
+        videoTrackEnabled,
+        videoTrackMuted,
+        timeSinceReceived: remoteStreamReceivedAt ? Date.now() - remoteStreamReceivedAt : null,
+      });
+      return (
+        <View style={styles.videoContainer}>
+          <AwayPlaceholder />
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
+
+    const now = Date.now();
+    const stallStart = stallSinceRef.current ?? now;
+    stallSinceRef.current = stallStart;
+    const stallMs = now - stallStart;
+
+    const held = renderLastGoodFrame('video-track-not-renderable-hold-last-frame', {
+      stallMs,
+      videoTrackReady,
+      videoTrackEnabled,
+      videoTrackMuted,
+    });
+    if (stallMs > REMOTE_VIDEO_STALL_HOLD_MS && held) {
+      return (
+        <View style={styles.videoContainer}>
+          {held}
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
+
+    // Обычный случай: видеотрек не готов (но не disabled/muted) - показываем лоадер
     logRenderState('video-track-not-renderable', {
       streamId: streamToUse.id,
       videoTrackReady,
       videoTrackEnabled,
       videoTrackMuted,
+      stallMs,
     });
     return (
       <View style={styles.videoContainer}>
@@ -406,6 +530,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // Нет видеотрека (например, только аудио) — показываем заглушку, если камера "выключена" по состоянию
   if (!remoteCamOn) {
+    stallSinceRef.current = null;
     return (
       <View style={styles.videoContainer}>
         <AwayPlaceholder />
@@ -421,6 +546,45 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // Fallback (стрим есть, но видео не появилось)
   // КРИТИЧНО: Показываем бейдж друга даже когда нет стрима (для инициатора звонка)
+  {
+    const now = Date.now();
+    const stallStart = stallSinceRef.current ?? now;
+    stallSinceRef.current = stallStart;
+    const stallMs = now - stallStart;
+    const held = renderLastGoodFrame('fallback-hold-last-frame', { stallMs });
+    if (stallMs > REMOTE_VIDEO_STALL_HOLD_MS && held) {
+      return (
+        <View style={styles.videoContainer}>
+          {held}
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
+
+    if (stallMs > REMOTE_VIDEO_STALL_TEXT_MS) {
+      logRenderState('fallback-text', { stallMs });
+      // Убрана заглушка "Видео восстанавливается" - показываем лоадер
+      return (
+        <View style={styles.videoContainer}>
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#fff" />
+          </View>
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
+  }
+
   return (
     <View style={styles.videoContainer}>
       <View style={styles.loadingContainer}>

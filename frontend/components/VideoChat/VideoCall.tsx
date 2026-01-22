@@ -26,7 +26,7 @@ import { BlurView } from 'expo-blur';
 import { MediaControls } from './shared/MediaControls';
 import { LocalVideo } from './shared/LocalVideo';
 import { RemoteVideo } from './shared/RemoteVideo';
-import VoiceEqualizer from '../VoiceEqualizer';
+// import VoiceEqualizer from '../VoiceEqualizer'; // эквалайзер отключен
 import { t, loadLang, defaultLang } from '../../utils/i18n';
 import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
@@ -65,7 +65,7 @@ const CARD_BASE = {
   justifyContent: 'center' as const,
   alignItems: 'center' as const,
   overflow: 'hidden' as const,
-  marginVertical: 7,
+  marginVertical: 2,
   position: 'relative' as const,
 };
 
@@ -147,7 +147,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const { theme, isDark } = useAppTheme();
   
   const [lang, setLang] = useState<Lang>(defaultLang);
-  const androidScreenPadding = 12;
+  const androidScreenPadding = 4;
   const androidContentInsets = useMemo(() => {
     if (Platform.OS !== 'android') return null;
     // Android: одинаковый базовый отступ со всех сторон + safe-area (челка/навигация)
@@ -199,8 +199,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
   const [remoteViewKey, setRemoteViewKey] = useState(0);
   const [localRenderKey, setLocalRenderKey] = useState(0);
-  const [micLevel, setMicLevel] = useState(0);
-  const [micFrequencyLevels, setMicFrequencyLevels] = useState<number[]>(() => new Array(21).fill(0));
+  // Эквалайзер отключен
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [wasFriendCallEnded, setWasFriendCallEnded] = useState(false);
   const [partnerInPiP, setPartnerInPiP] = useState(false);
@@ -759,10 +758,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           // КРИТИЧНО: Обновляем состояние PiP при изменении состояния микрофона (как в эталонном файле)
           if (pip.visible) {
             pip.updatePiPState({ isMuted: !enabled });
-            // Если микрофон выключен, обновляем micLevel=0 в PiP
-            if (!enabled) {
-              pip.updatePiPState({ micLevel: 0 });
-            }
           }
         },
         onCamStateChange: (enabled) => {
@@ -814,25 +809,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             logger.info('[VideoCall] ✅ Обновлен remoteViewKey после onRemoteCamStateChange(true)');
           }
         },
-        onMicLevelChange: (level) => {
-          const boosted = boostMicLevel(level);
-          setMicLevel(boosted);
-          // КРИТИЧНО: Обновляем micLevel в PiP, чтобы эквалайзер в PiP реагировал на голос
-          if (pipRef.current.visible) {
-            pipRef.current.updatePiPState?.({ micLevel: boosted });
-          }
-        },
-        onMicFrequencyLevelsChange: (levels) => {
-          if (Array.isArray(levels) && levels.length) {
-            // IMPORTANT: clone to force state update (session may reuse same array instance)
-            const cloned = levels.slice();
-            setMicFrequencyLevels(cloned);
-            // КРИТИЧНО: прокидываем частоты в PiP для "waveform" режима эквалайзера
-            if (pipRef.current.visible) {
-              pipRef.current.updatePiPState?.({ micFrequencyLevels: cloned });
-            }
-          }
-        },
+        // Эквалайзер отключен
+        onMicLevelChange: () => {},
+        onMicFrequencyLevelsChange: () => {},
         onPcConnectedChange: (connected) => {
           // Обработка изменения состояния подключения
         },
@@ -1136,7 +1115,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setStarted(false);
       setCamOn(false);
       setMicOn(false);
-      setMicLevel(0);
       setLocalStream(null);
       remoteStreamRef.current = null;
       remoteStreamReceivedAtRef.current = null;
@@ -1216,7 +1194,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         setLocalStream(null);
         setCamOn(false);
         setMicOn(false);
-        setMicLevel(0);
       }
     };
     
@@ -1405,7 +1382,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setRemoteStream(null);
       setCamOn(false);
       setMicOn(false);
-      setMicLevel(0);
       
       if (typeof session.cleanup === 'function') {
         session.cleanup();
@@ -1551,7 +1527,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const hasActiveCall = !!partnerId || !!roomId || !!callId;
   const shouldShowLocalVideo = camOn && !isInactiveState;
   const shouldShowRemoteVideo = remoteCamOn && !isInactiveState;
-  const micLevelForEqualizer = micOn && !isInactiveState ? micLevel : 0;
+  // const micLevelForEqualizer = micOn && !isInactiveState ? micLevel : 0; // эквалайзер отключен
   const showControls = hasActiveCall && !isInactiveState;
   
   // Проверка, является ли партнер другом
@@ -2140,29 +2116,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           )}
         </View>
         
-        {/* Эквалайзер */}
-        <View style={styles.eqWrapper}>
-          <VoiceEqualizer
-            level={(() => {
-              const hasActiveCall = !!partnerId || !!roomId || !!callId;
-              const micReallyOn = micOn && !isInactiveState;
-              return hasActiveCall && micReallyOn && !isInactiveState ? micLevel : 0;
-            })()}
-            frequencyLevels={(() => {
-              const eqActive = (!!partnerId || !!roomId || !!callId) && micOn && !isInactiveState;
-              return eqActive ? micFrequencyLevels : new Array(21).fill(0);
-            })()}
-            mode="waveform"
-            width={220}
-            height={30}
-            bars={21}
-            gap={8}
-            minLine={4}
-            threshold={0.006}
-            sensitivity={2.4}
-            colors={isDark ? ["#F4FFFF", "#2EE6FF", "#F4FFFF"] : ["#FFE6E6", "rgb(58, 11, 160)", "#FFE6E6"]}
-          />
-        </View>
+        {/* Эквалайзер отключен */}
         
         {/* Карточка "Вы" */}
         <View
@@ -2270,8 +2224,8 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     gap: Platform.OS === "android" ? 14 : 16,
-    marginTop: Platform.OS === "android" ? 6 : 5,
-    marginBottom: Platform.OS === "android" ? 0 : 32,
+    marginTop: Platform.OS === "android" ? 5 : 10,
+    marginBottom: Platform.OS === "android" ? 4 : 32,
   },
   bigBtn: {
     flex: 1,

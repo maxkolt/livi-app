@@ -706,8 +706,23 @@ export function getMyProfile() {
 }
 export function updateProfile(patch: { nick?: string; avatar?: string }) {
   const clean: { nick?: string; avatar?: string } = {};
-  if (typeof patch.nick === "string") clean.nick = patch.nick;
-  if (typeof patch.avatar === "string") clean.avatar = patch.avatar;
+  const hasNick = typeof patch.nick === "string";
+  if (hasNick) clean.nick = patch.nick;
+
+  // ⚠️ КРИТИЧНО:
+  // На сервере `avatar: ''` трактуется как УДАЛЕНИЕ аватара.
+  // Поэтому:
+  // - отправляем avatar='' ТОЛЬКО если это явная операция удаления (нет nick в patch)
+  // - отправляем avatar только если это http(s) URL
+  // - data:/file:/content:/ph: и т.п. НЕ отправляем
+  if (typeof patch.avatar === "string") {
+    const a = patch.avatar.trim();
+    if (a === "") {
+      if (!hasNick) clean.avatar = "";
+    } else if (/^https?:\/\//i.test(a)) {
+      clean.avatar = a;
+    }
+  }
 
   const promise = emitAck<{ ok: boolean; profile?: { nick?: string; avatar?: string }; error?: string }>(
     "profile:update",

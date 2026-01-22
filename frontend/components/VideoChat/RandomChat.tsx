@@ -1,6 +1,6 @@
 /**
  * RandomChat - Компонент для рандомного видеочата
- * Использует компоненты: RTCView (для отображения видео), VoiceEqualizer, AwayPlaceholder
+ * Использует компоненты: RTCView (для отображения видео), AwayPlaceholder
  * Имеет кнопки: Начать/Стоп и Далее
  * Управление медиа реализовано напрямую через TouchableOpacity
  */
@@ -29,13 +29,12 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { MediaStream, mediaDevices, RTCView } from '@livekit/react-native-webrtc';
 import { RandomChatSession } from '../../src/webrtc/sessions/RandomChatSession';
 import type { WebRTCSessionConfig } from '../../src/webrtc/types';
-import VoiceEqualizer from '../VoiceEqualizer';
+// import VoiceEqualizer from '../VoiceEqualizer'; // эквалайзер отключен
 import AwayPlaceholder from '../AwayPlaceholder';
 import { t, loadLang, defaultLang } from '../../utils/i18n';
 import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
-import InCallManager from 'react-native-incall-manager';
 import { logger } from '../../utils/logger';
 import { fetchFriends, requestFriend, respondFriend, onFriendRequest, onFriendAdded, onFriendAccepted, onFriendDeclined, updateProfile, onCallIncoming, onCallCanceled, acceptCall, declineCall } from '../../sockets/socket';
 import socket from '../../sockets/socket';
@@ -45,6 +44,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/keepAwake';
 import * as Device from 'expo-device';
+import { useAudioRouting } from './hooks/useAudioRouting';
 
 type Props = { 
   route?: { 
@@ -61,7 +61,7 @@ const CARD_BASE = {
   justifyContent: 'center' as const,
   alignItems: 'center' as const,
   overflow: 'hidden' as const,
-  marginVertical: 7,
+  marginVertical: 2,
   position: 'relative' as const,
 };
 
@@ -76,7 +76,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
   const [lang, setLang] = useState<Lang>(defaultLang);
-  const androidScreenPadding = 12;
+  const androidScreenPadding = 4;
   const androidContentInsets = useMemo(() => {
     if (Platform.OS !== 'android') return null;
     // Android: делаем одинаковый базовый отступ со всех сторон + safe-area (челка/навигация)
@@ -110,13 +110,24 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const localStreamRef = useRef<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
-  const remoteStreamReceivedAtRef = useRef<number | null>(null);
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
   const [remoteMuted, setRemoteMuted] = useState(false);
   const [remoteCamEnabled, setRemoteCamEnabled] = useState(false);
+  // Once we have rendered remote video at least once, we should never show a spinner again for camera on/off.
+  const hasEverRemoteVideoRef = useRef(false);
+  // Full-screen network overlay (black screen with icon) for network-origin video failures.
+  const [networkOverlayVisible, setNetworkOverlayVisible] = useState(false);
+  const networkOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const NETWORK_OVERLAY_DELAY_MS = 6000;
+  // On Android we must not show "Отошел" because of transient track/stream churn.
+  // Show it ONLY after we got an explicit remote cam state change event.
+  const remoteCamStateKnownRef = useRef(false);
   const [remoteViewKey, setRemoteViewKey] = useState(0);
   const [localRenderKey, setLocalRenderKey] = useState(0);
+  // Keep last good remote stream to keep RTCView mounted (do not break the video pipeline).
+  const lastGoodRemoteStreamRef = useRef<MediaStream | null>(null);
+  const lastGoodRemoteStreamAtRef = useRef<number>(0);
   const localStreamIdRef = useRef<string | null>(null);
   const prevCamOnRef = useRef<boolean | null>(null);
   // КРИТИЧНО для iOS: Timestamp для принудительного обновления RTCView
@@ -127,8 +138,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   // На iOS обновления могут быть чаще из-за особенностей RTCView, но все равно ограничиваем
   const lastLocalRenderKeyUpdateRef = useRef<number>(0);
   const MIN_LOCAL_RENDER_KEY_UPDATE_INTERVAL_MS = Platform.OS === 'ios' ? 150 : 100; // Минимальный интервал между обновлениями key (iOS требует больше времени)
-  const [micLevel, setMicLevel] = useState(0);
-  const [micFrequencyLevels, setMicFrequencyLevels] = useState<number[]>(() => new Array(21).fill(0));
+  // Эквалайзер отключен
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [buttonsOpacity] = useState(new Animated.Value(0));
   const shownSimulatorCameraHintRef = useRef(false);
@@ -162,18 +172,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const incomingCallBounce = useRef(new Animated.Value(0)).current;
   const incomingWaveA = useRef(new Animated.Value(0)).current;
   const incomingWaveB = useRef(new Animated.Value(0)).current;
-  const renderLogCountRef = useRef(0);
-  const logRemoteRenderState = useCallback((reason: string, extra?: Record<string, unknown>) => {
-    const count = renderLogCountRef.current;
-    renderLogCountRef.current = count + 1;
-    // Логируем только первые несколько раз, далее — каждые 40-й в debug, иначе пропускаем
-    if (count < 3) {
-      logger.info('[RandomChat] Remote render state', { reason, ...extra });
-    } else if (count % 40 === 0) {
-      logger.debug('[RandomChat] Remote render state', { reason, ...extra });
-    }
-  }, []);
-  
   // Toast уведомления
   const [toastText, setToastText] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
@@ -187,8 +185,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     if (!partnerId) {
       remoteStreamRef.current = null;
       setRemoteStream(null);
-      remoteStreamReceivedAtRef.current = null;
+      remoteCamStateKnownRef.current = false;
       setRemoteCamEnabled(false);
+      lastGoodRemoteStreamRef.current = null;
+      lastGoodRemoteStreamAtRef.current = 0;
       setRemoteViewKey((k) => k + 1);
     }
   }, [partnerId]);
@@ -258,10 +258,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         const cached = await loadProfileFromStorage();
         const nick = cached?.nick || '';
         const avatarUrl = cached?.avatar || '';
-        if (nick || avatarUrl) {
-          await updateProfile({ nick, avatar: avatarUrl });
-          await syncMyStreamProfile(nick, avatarUrl);
+        const patch: { nick?: string; avatar?: string } = {};
+        if (nick) patch.nick = nick;
+        // ⚠️ КРИТИЧНО: НЕ отправляем avatar='' — на сервере это считается удалением аватара.
+        if (avatarUrl) patch.avatar = avatarUrl;
+        if (Object.keys(patch).length) {
+          await updateProfile(patch);
         }
+        await syncMyStreamProfile(nick, avatarUrl || undefined);
       } catch (e) {
         logger.warn('[RandomChat] Failed to update profile:', e);
       }
@@ -297,10 +301,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           const cached = await loadProfileFromStorage();
           const nick = cached?.nick || '';
           const avatarUrl = cached?.avatar || '';
-          if (nick || avatarUrl) {
-            await updateProfile({ nick, avatar: avatarUrl });
-            await syncMyStreamProfile(nick, avatarUrl);
+          const patch: { nick?: string; avatar?: string } = {};
+          if (nick) patch.nick = nick;
+          // ⚠️ КРИТИЧНО: НЕ отправляем avatar='' — на сервере это считается удалением аватара.
+          if (avatarUrl) patch.avatar = avatarUrl;
+          if (Object.keys(patch).length) {
+            await updateProfile(patch);
           }
+          await syncMyStreamProfile(nick, avatarUrl || undefined);
         } catch (e) {
           logger.warn('[RandomChat] Failed to update profile:', e);
         }
@@ -333,10 +341,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         const cached = await loadProfileFromStorage();
         const nick = cached?.nick || '';
         const avatarUrl = cached?.avatar || '';
-        if (nick || avatarUrl) {
-          await updateProfile({ nick, avatar: avatarUrl });
-          await syncMyStreamProfile(nick, avatarUrl);
+        const patch: { nick?: string; avatar?: string } = {};
+        if (nick) patch.nick = nick;
+        // ⚠️ КРИТИЧНО: НЕ отправляем avatar='' — на сервере это считается удалением аватара.
+        if (avatarUrl) patch.avatar = avatarUrl;
+        if (Object.keys(patch).length) {
+          await updateProfile(patch);
         }
+        await syncMyStreamProfile(nick, avatarUrl || undefined);
       } catch (e) {
         logger.warn('[RandomChat] Failed to update profile:', e);
       }
@@ -444,21 +456,21 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         },
         onRemoteCamStateChange: (enabled) => {
           // КРИТИЧНО: Сохраняем состояние камеры партнера для правильного отображения заглушки
+          remoteCamStateKnownRef.current = true;
           setRemoteCamEnabled(enabled);
+          // КРИТИЧНО: LiveKit часто переиспользует тот же MediaStream при toggle камеры.
+          // На части Android/iOS RTCView может "залипнуть" в черном экране без смены key.
+          setRemoteViewKey((k: number) => k + 1);
           logger.debug('[RandomChat] Remote camera state changed', { enabled });
         },
         onLoadingChange: (loading) => {
           setLoading(loading);
         },
         onMicLevelChange: (level) => {
-          setMicLevel(boostMicLevel(level));
+          // Эквалайзер отключен
         },
         onMicFrequencyLevelsChange: (levels) => {
-          // levels already normalized 0..1 from session FFT; keep length stable for bars=21
-          if (Array.isArray(levels) && levels.length) {
-            // IMPORTANT: clone to force state update (session may reuse same array instance)
-            setMicFrequencyLevels(levels.slice());
-          }
+          // Эквалайзер отключен
         },
       },
       getStarted: () => startedRef.current,
@@ -549,112 +561,26 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     });
     
     session.on('remoteStream', (stream) => {
-      const prevStream = remoteStreamRef.current;
-      const prevVideoTrack = prevStream?.getVideoTracks?.()?.[0];
-      const prevVideoId = prevVideoTrack?.id;
-      const prevVideoReady = !!prevVideoTrack && prevVideoTrack.readyState === 'live';
-      const newVideoTrack = stream?.getVideoTracks?.()?.[0];
-      const newVideoId = newVideoTrack?.id;
-      const newVideoReady = !!newVideoTrack && newVideoTrack.readyState === 'live';
-      const trackIsLiveAndEnabled = !!(
-        newVideoTrack &&
-        newVideoTrack.readyState === 'live' &&
-        newVideoTrack.enabled !== false &&
-        newVideoTrack.muted !== true
-      );
-      const sameStreamInstance =
-        !!stream && !!prevStream && prevStream === stream && prevStream.id === stream.id;
-
-      if (sameStreamInstance) {
-        const trackChanged = prevVideoId !== newVideoId;
-        const trackBecameLive = !prevVideoReady && newVideoReady;
-
-        if (trackChanged || trackBecameLive) {
-          logger.info('[RandomChat] Remote stream tracks updated without new MediaStream instance', {
-            streamId: stream.id,
-            prevVideoId,
-            newVideoId,
-            prevVideoReady,
-            newVideoReady,
-          });
-        }
-
-        // Форсим обновление RTCView даже если трек и id не изменились.
-        setRemoteViewKey((k: number) => k + 1);
-
-        // Не пытаемся "чинить" состояние трека на клиенте — UI реагирует на фактическое состояние трека.
-
-        remoteStreamRef.current = stream;
-        return;
-      }
-
-      const isNewPartner = !prevStream || (prevStream && prevStream.id !== stream?.id);
-      
       remoteStreamRef.current = stream || null;
 
+      // Always bump key to force a re-render even if LiveKit reuses the same MediaStream instance.
+      setRemoteViewKey((k: number) => k + 1);
+
       if (stream) {
-        // КРИТИЧНО: Сохраняем время получения remoteStream ВСЕГДА (не только для нового партнера)
-        // Это предотвращает мерцание заглушки "Отошел" при получении треков
-        remoteStreamReceivedAtRef.current = Date.now();
-        
-        // КРИТИЧНО: При получении нового партнера сбрасываем состояние камеры
-        // Оно обновится через onRemoteCamStateChange когда треки будут получены
-        if (isNewPartner) {
-          setRemoteCamEnabled(false);
-        }
-        
-        logger.info('[RandomChat] Remote stream received', {
-          streamId: stream.id,
-          prevStreamId: prevStream?.id,
-          hasVideoTrack: !!(stream.getVideoTracks?.()?.[0]),
-          hasAudioTrack: !!(stream.getAudioTracks?.()?.[0]),
-          isNewPartner,
-        });
-        const videoTrack = stream.getVideoTracks?.()?.[0];
-        
-        // Логируем для отладки
-        logger.info('[RandomChat] Remote stream track state on receive', {
-          isNewPartner,
-          hasVideoTrack: !!videoTrack,
-          videoTrackReadyState: videoTrack?.readyState,
-          videoTrackMuted: videoTrack?.muted,
-          videoTrackEnabled: videoTrack?.enabled,
-          canRender: !!(
-            videoTrack &&
-            videoTrack.readyState === 'live' &&
-            videoTrack.enabled === true &&
-            videoTrack.muted !== true
-          ),
-        });
-        
-        // Не пытаемся "чинить" состояние трека на клиенте — UI реагирует на фактическое состояние трека.
-        
-        // КРИТИЧНО: Обновляем remoteViewKey для принудительного обновления RTCView
-        // Это гарантирует, что видео отображается сразу при получении stream
         setRemoteStream(stream);
-        setRemoteViewKey((k: number) => k + 1);
         setRemoteMuted(false);
         setIsInactiveState(false);
-        setLoading(false); // КРИТИЧНО: Сбрасываем loading когда соединение установлено
+        setLoading(false);
         loadingRef.current = false;
-        logger.info('[RandomChat] Remote stream установлен', {
-          streamId: stream.id,
-          hasVideoTrack: !!videoTrack,
-          videoTrackEnabled: videoTrack?.enabled,
-          videoTrackMuted: videoTrack?.muted,
-          videoTrackReadyState: videoTrack?.readyState,
-          canRender: !!(
-            videoTrack &&
-            videoTrack.readyState === 'live' &&
-            videoTrack.enabled === true &&
-            videoTrack.muted !== true
-          ),
-        });
+        // Keep last good for overlay/RTCView stability
+        lastGoodRemoteStreamRef.current = stream;
+        lastGoodRemoteStreamAtRef.current = Date.now();
+        hasEverRemoteVideoRef.current = true;
       } else {
         setRemoteStream(null);
         setRemoteMuted(false);
+        remoteCamStateKnownRef.current = false;
         setRemoteCamEnabled(false);
-        remoteStreamReceivedAtRef.current = null;
       }
     });
     
@@ -670,32 +596,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     });
     
     session.on('remoteStreamRemoved', () => {
-      
-      // Проверяем активное соединение перед очисткой
-      const hasRemoteStream = !!remoteStream;
-      const pc = session.getPeerConnection?.();
-      
-      // RandomChatSession использует LiveKit и не имеет PeerConnection
-      // Поэтому пропускаем проверку для RandomChatSession
-      if (hasRemoteStream && pc) {
-        const pcAny = pc as any;
-        if (pcAny.signalingState !== 'closed' && pcAny.connectionState !== 'closed') {
-          const isPcActive = pcAny.iceConnectionState === 'checking' || 
-                            pcAny.iceConnectionState === 'connected' || 
-                            pcAny.iceConnectionState === 'completed' ||
-                            pcAny.connectionState === 'connecting' ||
-                            pcAny.connectionState === 'connected';
-          
-          if (isPcActive) {
-            return;
-          }
-        }
-      }
-      
       remoteStreamRef.current = null;
       setRemoteStream(null);
-      remoteStreamReceivedAtRef.current = null;
       setRemoteMuted(false);
+      remoteCamStateKnownRef.current = false;
       setRemoteCamEnabled(false);
       setRemoteViewKey((k: number) => k + 1);
     });
@@ -703,6 +607,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     session.on('searching', () => {
       setLoading(true);
       setIsInactiveState(false);
+      setNetworkOverlayVisible(false);
+      hasEverRemoteVideoRef.current = false;
       // КРИТИЧНО: во время поиска партнёра UI не должен показывать кнопку "Добавить в друзья"
       // и не должен держать stale partnerUserId от предыдущего собеседника.
       setPartnerUserId(null);
@@ -714,6 +620,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       if (leavingRef.current || !startedRef.current) {
         return;
       }
+      setNetworkOverlayVisible(false);
       
       // UI-очистка
       setPartnerUserId(null);
@@ -751,6 +658,66 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       }
     };
   }, [route?.params?.myUserId]);
+
+  // Network overlay heuristic:
+  // If we had remote video before, remote cam is ON, but video is not renderable for a long time,
+  // treat it as a network-origin failure and show a full-screen overlay.
+  const remoteStreamForUi = remoteStream || remoteStreamRef.current || lastGoodRemoteStreamRef.current;
+  const remoteTrackForUi = (remoteStreamForUi as any)?.getVideoTracks?.()?.[0];
+  const remoteVideoRenderableForUi =
+    !!remoteTrackForUi &&
+    remoteTrackForUi.readyState === 'live' &&
+    remoteTrackForUi.enabled !== false &&
+    remoteTrackForUi.muted !== true;
+
+  useEffect(() => {
+    // mark ever-rendered
+    if (remoteVideoRenderableForUi) {
+      hasEverRemoteVideoRef.current = true;
+    }
+
+    const hasEverNow = hasEverRemoteVideoRef.current || remoteVideoRenderableForUi;
+    const remoteCamKnown = remoteCamStateKnownRef.current;
+
+    const shouldShowNetwork =
+      started &&
+      !loading &&
+      hasEverNow &&
+      remoteCamKnown &&
+      remoteCamEnabled === true &&
+      !remoteVideoRenderableForUi;
+
+    if (!shouldShowNetwork) {
+      if (networkOverlayTimerRef.current) {
+        clearTimeout(networkOverlayTimerRef.current);
+        networkOverlayTimerRef.current = null;
+      }
+      if (networkOverlayVisible) setNetworkOverlayVisible(false);
+      return;
+    }
+
+    if (!networkOverlayTimerRef.current) {
+      networkOverlayTimerRef.current = setTimeout(() => {
+        setNetworkOverlayVisible(true);
+        networkOverlayTimerRef.current = null;
+      }, NETWORK_OVERLAY_DELAY_MS);
+    }
+
+    return () => {
+      if (networkOverlayTimerRef.current) {
+        clearTimeout(networkOverlayTimerRef.current);
+        networkOverlayTimerRef.current = null;
+      }
+    };
+  }, [
+    started,
+    loading,
+    remoteCamEnabled,
+    remoteStream,
+    remoteViewKey,
+    remoteVideoRenderableForUi,
+    networkOverlayVisible,
+  ]);
   
   // Обработка разрешений
   const requestPermissions = useCallback(async () => {
@@ -790,7 +757,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setStarted(false);
       setLoading(false);
       loadingRef.current = false;
-      setMicLevel(0);
+      // Эквалайзер отключен
       setRemoteMuted(false);
       // КРИТИЧНО: Сбрасываем флаг isNexting при остановке
       isNextingRef.current = false;
@@ -883,6 +850,12 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       // Устанавливаем флаги ДО начала операции
       isNextingRef.current = true;
       setIsNexting(true);
+      // Prevent "Отошел" flicker between unsubscribes and the 'searching' event.
+      loadingRef.current = true;
+      setLoading(true);
+      remoteCamStateKnownRef.current = false;
+      setRemoteCamEnabled(false);
+      hasEverRemoteVideoRef.current = false;
       // КРИТИЧНО: Сразу очищаем UI партнёра, чтобы не оставалась кнопка "Добавить в друзья" во время поиска
       setPartnerUserId(null);
       setAddPending(false);
@@ -996,18 +969,31 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   const handleFlipCamera = useCallback(async () => {
     if (!sessionRef.current || !canRunAction()) return;
+    if (!camOn) return; // Кнопка должна быть disabled, но на всякий случай проверяем
     
     try {
       await sessionRef.current.flipCam();
+      // КРИТИЧНО: Force local RTCView refresh after flip (sometimes streamId stays the same)
+      // Переворот камеры - критическое обновление, поэтому обновляем сразу, даже если интервал не прошел
+      const now = Date.now();
+      setLocalRenderKey((k) => k + 1);
+      lastLocalRenderKeyUpdateRef.current = now;
+      if (Platform.OS === 'ios') {
+        localStreamTimestampRef.current = now;
+      }
+      logger.debug('[RandomChat] Camera flipped, localRenderKey updated', {
+        newKey: localRenderKey + 1,
+        timestamp: now,
+      });
     } catch (e) {
       logger.warn('[RandomChat] Error flipping camera', e);
     }
-  }, [canRunAction]);
+  }, [canRunAction, camOn, localRenderKey]);
   
   // Вычисляемые значения
   const hasActiveCall = !!partnerId || !!roomId;
   const shouldShowLocalVideo = camOn && !isInactiveState;
-  const micLevelForEqualizer = micOn && !isInactiveState ? micLevel : 0;
+  // const micLevelForEqualizer = micOn && !isInactiveState ? micLevel : 0; // эквалайзер отключен
   
   // КРИТИЧНО: Обновляем localRenderKey только при реальном изменении localStream (streamId) или camOn
   // Это предотвращает мерцание при next() - когда localStream остается тем же объектом
@@ -1102,44 +1088,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // Swipe жесты для возврата назад
   
-  // Утилиты для спикера
-  const speakerTimersRef = useRef<any[]>([]);
-  const speakerLastKickAtRef = useRef<number>(0);
-  const clearSpeakerTimers = () => {
-    speakerTimersRef.current.forEach((t) => clearTimeout(t));
-    speakerTimersRef.current = [];
-  };
-  
-  const forceSpeakerOnHard = useCallback(() => {
-    // iOS Simulator: не трогаем аудио-сессию (часто ломается и спамит AQMEIO_HAL таймаутами)
-    if (Platform.OS === 'ios' && !(Device as any)?.isDevice) return;
-
-    const now = Date.now();
-    // Не спамим дерганием аудио-роутинга — это может ронять WebRTC/LiveKit
-    if (now - speakerLastKickAtRef.current < 2500) return;
-    speakerLastKickAtRef.current = now;
-
-    try { InCallManager.start({ media: 'video', ringback: '' }); } catch {}
-
-    const kick = () => {
-      try { (InCallManager as any).setForceSpeakerphoneOn?.('on'); } catch {}
-      try { InCallManager.setForceSpeakerphoneOn?.(true as any); } catch {}
-      try { InCallManager.setSpeakerphoneOn(true); } catch {}
-      try { (mediaDevices as any)?.setSpeakerphoneOn?.(true); } catch {}
-      try { (InCallManager as any).setBluetoothScoOn?.(false); } catch {}
-    };
-
-    kick();
-    // Один мягкий ретрай (без 4 таймеров подряд)
-    speakerTimersRef.current.push(setTimeout(kick, 250));
-  }, []);
-  
-  const stopSpeaker = useCallback(() => {
-    clearSpeakerTimers();
-    try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
-    try { InCallManager.setSpeakerphoneOn(false); } catch {}
-    try { InCallManager.stop(); } catch {}
-  }, []);
+  // Аудио-роутинг: минимальный и предсказуемый (без агрессивных "пинков")
+  const hasActiveCallForAudio = started && !isInactiveState;
+  const { stopSpeaker } = useAudioRouting(hasActiveCallForAudio, remoteStream);
   
   // Отправка статуса "busy" при активном общении или поиске в рандомном чате
   useEffect(() => {
@@ -1237,14 +1188,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           } catch {}
           bgTimer = null;
           setIsInactiveState(false);
-          // При возврате в активное состояние включаем динамик если есть удаленный стрим
-          if (remoteStream) {
-            try {
-              forceSpeakerOnHard();
-            } catch (e) {
-              logger.warn('[RandomChat] Error enabling speaker on app active:', e);
-            }
-          }
+          // Аудио-роутинг поднимется через useAudioRouting (без ручных "пинков")
         }
       } catch (e) {
         logger.error('[RandomChat] Error handling AppState change:', e);
@@ -1257,7 +1201,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       } catch {}
       sub.remove();
     };
-  }, [remoteStream, forceSpeakerOnHard, forceStopRandomChat]);
+  }, [forceStopRandomChat]);
   
   // Keep-awake для активного видеозвонка
   useEffect(() => {
@@ -1272,7 +1216,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           logger.warn('[RandomChat] Failed to activate keep-awake:', e);
         });
       }
-      forceSpeakerOnHard();
     }
     
     return () => {
@@ -1284,7 +1227,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         }
       }
     };
-  }, [remoteStream, localStream, started, forceSpeakerOnHard]);
+  }, [remoteStream, localStream, started]);
   
   // Обработка BackHandler - для рандомного чата закрываем при нажатии назад
   useEffect(() => {
@@ -1517,251 +1460,90 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             if (isInactiveState) {
               return <Text style={styles.placeholder}>{L("peer")}</Text>;
             }
-            
-            // Получаем актуальное состояние видео трека
-            const vt = (remoteStream as any)?.getVideoTracks?.()?.[0];
-            // КРИТИЧНО: Проверяем muted состояние трека напрямую из MediaStreamTrack
-            // LiveKit обновляет это состояние при TrackMuted/TrackUnmuted событиях
-            // КРИТИЧНО: Локальное состояние камеры (camOn) НЕ должно влиять на эти значения
-            const videoTrackEnabled = vt?.enabled ?? false;
-            // КРИТИЧНО: muted может быть true когда удаленный пользователь выключил свою камеру
-            // Это состояние определяется ТОЛЬКО состоянием удаленного трека, не локальной камеры
-            const videoTrackMuted = vt?.muted ?? false;
-            const videoTrackReadyState = vt?.readyState ?? 'new';
-            const isFriendCall = false; // Для рандомного чата всегда false
-            const hasVideoTrack = !!vt;
-            const isTrackLive = videoTrackReadyState === 'live';
-            
-            // КРИТИЧНО: Логируем состояние для отладки
-            // КРИТИЧНО: Локальное состояние камеры (camOn) НЕ влияет на отображение удаленного видео
-            logger.debug('[RandomChat] Remote video track state', {
-              hasVideoTrack,
-              videoTrackEnabled,
-              videoTrackMuted,
-              videoTrackReadyState,
-              isTrackLive,
-              localCamOn: camOn, // Только для отладки, НЕ используется в логике
-            });
-            
-            
-            // Если нет соединения (нет потока), показываем лоадер при поиске или текст "Собеседник"
-            if (!remoteStream) {
-              if (started) {
-                return <ActivityIndicator size="large" color="#fff" />;
-              }
-              return <AwayPlaceholder />;
-            }
-            
-            // КРИТИЧНО: Упрощенная и надежная логика отображения (LiveKit)
-            // Показываем видео только если трек live, enabled и не muted.
-            // КРИТИЧНО: Локальное состояние камеры (camOn) НЕ влияет на показ удаленного видео
-            if (!vt) {
-              // Нет видео трека - проверяем состояние камеры партнера
-              // КРИТИЧНО: Если камера партнера выключена (remoteCamEnabled === false), сразу показываем заглушку
-              // Лоадер показываем только если камера включена, но трек еще не получен (установка соединения)
-              const streamReceivedAt = remoteStreamReceivedAtRef.current;
-              const isRecentlyReceived = streamReceivedAt && (Date.now() - streamReceivedAt) < 5000;
-              
-              // КРИТИЧНО: Если камера партнера выключена, сразу показываем заглушку
-              // Не ждем 2 секунды, так как видео трека точно не будет
-              if (remoteCamEnabled === false) {
-                logRemoteRenderState('no-video-track-camera-off', {
-                  remoteStreamId: remoteStream?.id,
-                  hasRemoteStream: !!remoteStream,
-                  remoteCamEnabled: false,
-                  timeSinceReceived: streamReceivedAt ? Date.now() - streamReceivedAt : null,
-                });
-                return <AwayPlaceholder />;
-              }
-              
-              // Камера включена, но видео трека еще нет - это может быть при установке соединения
-              // Показываем лоадер только если стрим получен недавно (< 5000ms)
-              if (isRecentlyReceived && remoteStream) {
-                // Стрим только что получен и камера включена - показываем загрузку
-                // Это предотвращает мерцание "Отошел" при установке соединения
-                logRemoteRenderState('no-video-track-warming-up', {
-                  remoteStreamId: remoteStream?.id,
-                  hasRemoteStream: !!remoteStream,
-                  remoteCamEnabled: true,
-                  timeSinceReceived: Date.now() - (streamReceivedAt || 0),
-                });
-                return <ActivityIndicator size="large" color="#fff" />;
-              }
-              
-              // Нет видео трека и прошло достаточно времени - показываем заглушку "Отошел"
-              // Это означает что трек не был получен в течение 5 секунд
-              logRemoteRenderState('no-video-track-timeout', {
-                remoteStreamId: remoteStream?.id,
-                hasRemoteStream: !!remoteStream,
-                remoteCamEnabled,
-                timeSinceReceived: streamReceivedAt ? Date.now() - streamReceivedAt : null,
-              });
-              return <AwayPlaceholder />;
+
+            // === УПРОЩЕННАЯ ЛОГИКА (требования продукта) ===
+            // 1) Loader: во время поиска/next. ВАЖНО: если соединение уже установлено (есть remoteStream),
+            // не показываем лоадер "поверх" собеседника — даже если видео ещё не пришло/не renderable.
+            // 2) Camera off: показываем "Отошел" ОВЕРЛЕЕМ, не ломая видеопоток/RTCView
+            // 3) Camera on: "Отошел" исчезает только когда видео реально снова renderable (без лоадера)
+            const streamToRender = remoteStream || remoteStreamRef.current || lastGoodRemoteStreamRef.current;
+            const videoTrack = (streamToRender as any)?.getVideoTracks?.()?.[0];
+            const canRenderVideo =
+              !!videoTrack &&
+              videoTrack.readyState === 'live' &&
+              videoTrack.enabled !== false &&
+              videoTrack.muted !== true;
+
+            const hadVideoBefore = hasEverRemoteVideoRef.current || canRenderVideo;
+            // While "Next" is in progress, we must show loader and never flash "Отошел".
+            const nextInProgress = isNextingRef.current || isNexting;
+            const showLoader =
+              loading ||
+              nextInProgress ||
+              // До первого видео показываем лоадер только пока нет remoteStream (т.е. нет установленного соединения).
+              (started && !hadVideoBefore && !remoteStream);
+
+            // Keep last good stream to keep RTCView mounted (avoid pipeline churn).
+            if (canRenderVideo && streamToRender) {
+              hasEverRemoteVideoRef.current = true;
+              lastGoodRemoteStreamRef.current = streamToRender;
+              lastGoodRemoteStreamAtRef.current = Date.now();
             }
 
-            if (!isTrackLive) {
-              // Трек не live - проверяем, не выключена ли камера
-              // КРИТИЧНО: Если трек muted или disabled, камера выключена - показываем заглушку
-              const isCameraOff = videoTrackMuted === true || videoTrackEnabled === false;
-              
-              if (isCameraOff) {
-                // Камера партнера выключена - сразу показываем заглушку
-                logRemoteRenderState('video-track-not-live-camera-off', {
-                  remoteStreamId: remoteStream?.id,
-                  trackId: vt.id,
-                  readyState: vt.readyState,
-                  videoTrackEnabled,
-                  videoTrackMuted,
-                });
-                return <AwayPlaceholder />;
-              }
-              
-              // Трек не live, но камера включена - показываем индикатор загрузки
-              logRemoteRenderState('video-track-not-live', {
-                remoteStreamId: remoteStream?.id,
-                trackId: vt.id,
-                readyState: vt.readyState,
-              });
-              return <ActivityIndicator size="large" color="#fff" />;
-            }
+            // Away overlay:
+            // - Show ONLY when we explicitly know remote camera is OFF.
+            // - When remote camera is turned ON, hide immediately (even if video takes time to resume).
+            const remoteCamKnown = remoteCamStateKnownRef.current;
+            const showAwayOverlay =
+              !showLoader &&
+              hadVideoBefore &&
+              remoteCamKnown &&
+              remoteCamEnabled === false &&
+              !networkOverlayVisible;
 
-            // КРИТИЧНО: Показываем видео только если трек live, enabled и не muted
-            // Когда удаленный пользователь выключает камеру через unpublishTrack(), трек становится unavailable
-            // и мы показываем заглушку "Отошел"
-            // КРИТИЧНО: Локальное состояние камеры (camOn) НЕ влияет на это решение
-            // Выключение локальной камеры НЕ должно влиять на отображение удаленного видео
-            // КРИТИЧНО: Используем более терпимую проверку enabled - если enabled не false, считаем что трек активен
-            // Это важно при установке соединения, когда enabled может быть еще не установлен
-            const canShowVideo = isTrackLive && videoTrackEnabled !== false && videoTrackMuted !== true;
-            
-            if (canShowVideo && remoteStream) {
-              // КРИТИЧНО: На iOS иногда toURL() может вернуть пустое значение для remote MediaStream,
-              // хотя трек уже подписан. В этом случае используем stream.id как fallback, иначе UI застревает на лоадере.
-              const streamURL = remoteStream.toURL?.() || remoteStream.id;
-              const rtcViewKey = `remote-${remoteStream.id}-${remoteViewKey}`;
-              logRemoteRenderState('render-video', {
-                platform: Platform.OS,
-                streamId: remoteStream.id,
-                hasStreamURL: !!streamURL,
-                videoTrackReady: isTrackLive,
-                videoTrackEnabled,
-                videoTrackMuted,
-                rtcViewKey,
-              });
-              
-              // КРИТИЧНО: На Android используем prop `stream` для лучшей производительности
-              // На iOS используем только streamURL (stream prop не поддерживается)
-              if (Platform.OS === 'android') {
-                // На Android 8.1 и старше (API <= 27) SurfaceView overlay/z-order часто ломает отображение (особенно на OPPO/ColorOS).
-                // Для таких устройств отключаем zOrderMediaOverlay, чтобы Surface корректно композировался в окне.
-                const isLegacyAndroidSurface = Number(Platform.Version) <= 27;
-                // Android: всегда используем stream prop
-                // Используем явное приведение типа для обхода проверки TypeScript
-                const rtcViewProps: any = { 
-                  stream: remoteStream, 
-                  streamURL, 
-                  renderToHardwareTextureAndroid: !isLegacyAndroidSurface,
-                  // Remote video should be the base layer; no overlay to avoid hiding local preview on some devices (e.g. OPPO A3s).
-                  zOrderMediaOverlay: false,
-                  // На старых Android используем TextureView, чтобы RN-кнопки были видны поверх видео.
-                  useTextureView: isLegacyAndroidSurface,
-                };
-                
-                return (
+            const streamURL = streamToRender?.toURL?.() || streamToRender?.id;
+            const rtcViewKey = `remote-${streamToRender?.id || 'none'}-${remoteViewKey}`;
+            const rtcViewProps: any = Platform.OS === 'android'
+              ? {
+                  stream: streamToRender,
+                  streamURL,
+                  renderToHardwareTextureAndroid: true,
+                }
+              : { streamURL };
+
+            return (
+              <View style={styles.remoteStage}>
+                {streamToRender ? (
                   <RTCView
                     key={rtcViewKey}
                     {...(rtcViewProps as any)}
                     style={styles.rtc}
                     objectFit="cover"
                     mirror={false}
-                    zOrder={0}
                   />
-                );
-              } else {
-                // iOS: используем только streamURL (обязательно должен быть)
-                // КРИТИЧНО: На iOS важно использовать уникальный key для принудительного обновления
-                if (streamURL) {
-                  return (
-                    <RTCView
-                      key={rtcViewKey}
-                      streamURL={streamURL}
-                      style={styles.rtc}
-                      objectFit="cover"
-                      mirror={false}
-                      zOrder={0}
-                    />
-                  );
-                } else {
-                  // На iOS streamURL обязателен, но если его нет — не показываем вечный лоадер.
-                  // Показываем лоадер только первые несколько секунд после получения remoteStream.
-                  const streamReceivedAt = remoteStreamReceivedAtRef.current;
-                  const isRecentlyReceived = streamReceivedAt && (Date.now() - streamReceivedAt) < 5000;
-                  logger.warn('[RandomChat] iOS: streamURL unavailable, showing loading indicator', {
-                    streamId: remoteStream.id,
-                    isRecentlyReceived,
-                  });
-                  return isRecentlyReceived ? (
+                ) : (
+                  <View style={styles.remoteBlack} />
+                )}
+
+                {showLoader && (
+                  <View style={styles.overlayCenter}>
                     <ActivityIndicator size="large" color="#fff" />
-                  ) : (
+                  </View>
+                )}
+
+                {showAwayOverlay && (
+                  <View style={styles.overlayFill}>
                     <AwayPlaceholder />
-                  );
-                }
-              }
-            } else {
-              // КРИТИЧНО: Показываем заглушку "Отошел" когда удаленное видео недоступно
-              // (трек disabled, muted или не live)
-              // КРИТИЧНО: Это происходит ТОЛЬКО когда удаленный пользователь выключил свою камеру
-              // Локальное состояние камеры (camOn) НЕ влияет на это решение
-              // КРИТИЧНО: Если трек muted или disabled, сразу показываем заглушку (камера выключена)
-              // Лоадер показываем только если трек еще не готов (не live) и стрим только что получен
-              const streamReceivedAt = remoteStreamReceivedAtRef.current;
-              const isRecentlyReceived = streamReceivedAt && (Date.now() - streamReceivedAt) < 5000;
-              
-              // КРИТИЧНО: Если трек muted или disabled, это означает что камера выключена
-              // В этом случае сразу показываем заглушку, не ждем
-              const isCameraOff = videoTrackMuted === true || videoTrackEnabled === false;
-              
-              if (isCameraOff) {
-                // Камера партнера выключена - сразу показываем заглушку
-                logRemoteRenderState('video-camera-off', {
-                  streamId: remoteStream?.id,
-                  hasStream: !!remoteStream,
-                  isTrackLive,
-                  videoTrackEnabled,
-                  videoTrackMuted,
-                });
-                return <AwayPlaceholder />;
-              }
-              
-              // Трек не muted и enabled, но не готов к показу
-              // Если трек только что получен и еще не live, показываем лоадер
-              // КРИТИЧНО: Увеличиваем таймаут до 5 секунд для установки соединения
-              // streamReceivedAt уже объявлен выше
-              if (isRecentlyReceived && !isTrackLive) {
-                // Трек только что получен и еще не готов - показываем загрузку
-                // Это предотвращает мерцание "Отошел" при установке соединения
-                logRemoteRenderState('video-track-warming-up', {
-                  streamId: remoteStream?.id,
-                  hasStream: !!remoteStream,
-                  isTrackLive,
-                  videoTrackEnabled,
-                  videoTrackMuted,
-                  timeSinceReceived: Date.now() - (streamReceivedAt || 0),
-                });
-                return <ActivityIndicator size="large" color="#fff" />;
-              }
-              
-              // Трек не готов и прошло достаточно времени - показываем заглушку
-              logRemoteRenderState('video-not-renderable', {
-                streamId: remoteStream?.id,
-                hasStream: !!remoteStream,
-                isTrackLive,
-                videoTrackEnabled,
-                videoTrackMuted,
-                isRecentlyReceived,
-              });
-              return <AwayPlaceholder />;
-            }
+                  </View>
+                )}
+
+                {networkOverlayVisible && (
+                  <View style={styles.networkOverlay} pointerEvents="auto">
+                    <MaterialIcons name="wifi-off" size={64} color="#fff" />
+                  </View>
+                )}
+              </View>
+            );
           })()}
           
           {/* Кнопка выключения динамика */}
@@ -1835,33 +1617,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           )}
         </View>
         
-        {/* Эквалайзер */}
-        <View style={styles.eqWrapper}>
-          <VoiceEqualizer
-            level={(() => {
-              // Эквалайзер активен только при активном звонке и включенном микрофоне
-              const eqActive = (!!partnerId || !!roomId) && micOn && !isInactiveState;
-              return eqActive ? micLevel : 0;
-            })()}
-            frequencyLevels={(() => {
-              const eqActive = (!!partnerId || !!roomId) && micOn && !isInactiveState;
-              // На слабых Android (API<=27) FFT-частоты + анимации могут завалить NativeAnimatedModule.
-              const isLowEndAndroid = Platform.OS === 'android' && Number(Platform.Version) <= 27;
-              if (isLowEndAndroid) return undefined;
-              return eqActive ? micFrequencyLevels : new Array(21).fill(0);
-            })()}
-            mode="waveform"
-            width={220}
-            height={30}
-            bars={Platform.OS === 'android' && Number(Platform.Version) <= 27 ? 13 : 21}
-            gap={8}
-            minLine={4}
-            threshold={0.006}
-            sensitivity={2.4}
-            maxFps={Platform.OS === 'android' && Number(Platform.Version) <= 27 ? 8 : 15}
-            colors={isDark ? ["#F4FFFF", "#2EE6FF", "#F4FFFF"] : ["#FFE6E6", "rgb(58, 11, 160)", "#FFE6E6"]}
-          />
-        </View>
+        {/* Эквалайзер отключен */}
         
         {/* Карточка "Вы" */}
         <View style={styles.card}>
@@ -1912,15 +1668,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 // На iOS используем streamURL
                 const localRtcViewProps = Platform.OS === 'android' 
                   ? (() => {
-                      const isLegacyAndroidSurface = Number(Platform.Version) <= 27;
                       return { 
                         stream: displayStream, 
                         streamURL: localStreamURL, 
-                        renderToHardwareTextureAndroid: !isLegacyAndroidSurface,
-                        // Важно: не используем overlay-слои для SurfaceView, иначе он может перекрывать RN-кнопки.
-                        zOrderMediaOverlay: false,
-                        // На старых Android используем TextureView, чтобы RN-кнопки были видны поверх видео.
-                        useTextureView: isLegacyAndroidSurface,
+                        renderToHardwareTextureAndroid: true,
                       } as any;
                     })()
                   : { streamURL: localStreamURL! }; // iOS: используем streamURL
@@ -1933,8 +1684,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                       style={styles.rtc}
                       objectFit="cover"
                       mirror
-                      // Не поднимаем Surface "наверх": на старых Android это прячет RN-кнопки.
-                      zOrder={0}
                     />
                   );
                 } else {
@@ -1969,9 +1718,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               <Animated.View style={[styles.topLeft, { opacity: buttonsOpacity }]}>
                 <TouchableOpacity
                   onPress={handleFlipCamera}
+                  disabled={!camOn}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   activeOpacity={0.7}
-                  style={styles.iconBtn}
+                  style={[styles.iconBtn, !camOn && { opacity: 0.5 }]}
                 >
                   <MaterialIcons name="flip-camera-ios" size={26} color="#fff" />
                 </TouchableOpacity>
@@ -2171,6 +1921,37 @@ const styles = StyleSheet.create({
       // На iOS можно добавить дополнительные оптимизации если нужно
     }),
   },
+  remoteStage: {
+    flex: 1,
+    width: '100%',
+  },
+  remoteBlack: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+  },
+  overlayFill: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    // Important: the placeholder must include its own background, otherwise
+    // the underlying video/black layer can change a frame earlier and looks like a "two-step" disappear.
+    backgroundColor: '#000',
+  },
+  overlayCenter: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    // Loader must disappear as a single unit (background + spinner)
+    backgroundColor: '#000',
+  },
+  networkOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 9999,
+    elevation: 9999,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   placeholder: {
     color: 'rgba(237,234,234,0.6)',
     fontSize: 22,
@@ -2179,8 +1960,8 @@ const styles = StyleSheet.create({
     width: Platform.OS === 'android' ? '100%' : '93%',
     flexDirection: 'row',
     gap: Platform.OS === "android" ? 14 : 16,
-    marginTop: Platform.OS === "android" ? 6 : 10,
-    marginBottom: Platform.OS === "android" ? 0 : 32,
+    marginTop: Platform.OS === "android" ? 5 : 10,
+    marginBottom: Platform.OS === "android" ? 4 : 32,
   },
   bigBtn: {
     flex: 1,

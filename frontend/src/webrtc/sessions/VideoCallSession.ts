@@ -1,10 +1,8 @@
 import { MediaStream } from '@livekit/react-native-webrtc';
-import { mediaDevices } from '@livekit/react-native-webrtc';
 import { Buffer } from 'buffer';
 import AudioRecord from 'react-native-audio-record';
 import { Platform } from 'react-native';
 import * as Device from 'expo-device';
-import InCallManager from 'react-native-incall-manager';
 import {
   Room,
   RoomEvent,
@@ -92,6 +90,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private micMonitorLogCount = 0;
   private lastAudioEnergy = 0;
   private lastAudioDuration = 0;
+  private eqBarSeeds: number[] = [];
+  private eqPhase = 0;
   private localVideoHealthTimeout: ReturnType<typeof setTimeout> | null = null;
   private localVideoHealthAttempts = 0;
 
@@ -1379,11 +1379,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.emit('localStream', this.localStream);
       this.config.callbacks.onLocalStreamChange?.(this.localStream);
       this.config.onLocalStreamChange?.(this.localStream);
-      // КРИТИЧНО: Если local tracks уже существуют (например, после reconnection),
-      // гарантируем, что мониторинг микрофона для эквалайзера запущен.
-      if (this.localStream) {
-        this.startMicLevelMonitoring(this.localStream);
-      }
+      // Эквалайзер отключен: мониторинг микрофона не запускаем
       return;
     }
 
@@ -1464,7 +1460,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // НЕ отправляем onCamStateChange здесь - это делается в toggleCam после завершения
 
     // КРИТИЧНО: Эквалайзер должен работать в видеозвонке так же, как в RandomChat.
-    this.startMicLevelMonitoring(stream);
+    // Эквалайзер отключен: мониторинг микрофона не запускаем
   }
 
   private stopLocalTracksWithoutStateReset(): void {
@@ -1664,10 +1660,19 @@ export class VideoCallSession extends SimpleEventEmitter {
       let audioLevel = 0;
 
       try {
-        const stats = await (this.room.localParticipant as any)?.getTrackStats?.();
-        if (stats) {
-          for (const stat of stats) {
-            if (stat.kind === 'audio' && this.localAudioTrack) {
+        const rawStats = await (this.room.localParticipant as any)?.getTrackStats?.();
+        const statsList: any[] = Array.isArray(rawStats)
+          ? rawStats
+          : rawStats && typeof rawStats === 'object'
+            ? Object.values(rawStats as any)
+            : [];
+
+        if (statsList.length) {
+          for (const stat of statsList) {
+            const kind = (stat as any)?.kind ?? (stat as any)?.trackKind ?? (stat as any)?.mediaType;
+            const isAudio = kind === 'audio' || kind === Track.Kind.Audio || (stat as any)?.type === 'audio';
+
+            if (isAudio && this.localAudioTrack) {
               const energy = (stat as any).audioEnergy ?? (stat as any).totalAudioEnergy ?? 0;
               const duration = (stat as any).audioDuration ?? (stat as any).totalSamplesDuration ?? 0;
               if (energy > 0 && duration > 0) {
@@ -1690,6 +1695,13 @@ export class VideoCallSession extends SimpleEventEmitter {
                 break;
               }
             }
+          }
+        }
+        if (audioLevel <= 0) {
+          const lpAny = this.room.localParticipant as any;
+          const pLevel = lpAny?.audioLevel;
+          if (typeof pLevel === 'number' && pLevel > 0) {
+            audioLevel = Math.min(1, pLevel);
           }
         }
       } catch (e) {
@@ -1718,58 +1730,37 @@ export class VideoCallSession extends SimpleEventEmitter {
     } catch {}
   }
 
-  /* ========= Audio routing (speaker / iOS audio session) ========= */
-  private ensureAudioPlayoutActive(context: string): void {
-    try {
-      // Start call audio session (safe to call multiple times)
-      try { InCallManager.start({ media: 'video', ringback: '' }); } catch {}
-      const kick = () => {
-        try { (InCallManager as any).setForceSpeakerphoneOn?.('on'); } catch {}
-        try { InCallManager.setForceSpeakerphoneOn?.(true as any); } catch {}
-        try { InCallManager.setSpeakerphoneOn(true); } catch {}
-        try { (mediaDevices as any)?.setSpeakerphoneOn?.(true); } catch {}
-        try { (InCallManager as any).setBluetoothScoOn?.(false); } catch {}
-      };
-      kick();
-      setTimeout(kick, 120);
-      setTimeout(kick, 350);
-
-      if (Platform.OS === 'ios') {
-        try {
-          const webrtcMod = require('@livekit/react-native-webrtc');
-          const RTCAudioSession = webrtcMod?.RTCAudioSession;
-          if (RTCAudioSession && typeof RTCAudioSession.sharedInstance === 'function') {
-            const s = RTCAudioSession.sharedInstance();
-            s.setCategory('PlayAndRecord', {
-              defaultToSpeaker: true,
-              allowBluetooth: true,
-              allowBluetoothA2DP: true,
-              mixWithOthers: false,
-            });
-            s.setMode('VideoChat');
-            s.setActive(true);
-            try { s.overrideOutputAudioPort('speaker'); } catch {}
-          }
-        } catch {}
-      }
-
-      logger.debug('[VideoCallSession] ensureAudioPlayoutActive', { context });
-    } catch (e) {
-      logger.debug('[VideoCallSession] ensureAudioPlayoutActive failed', { context, e });
-    }
-  }
-
   private generateFrequencyFromLevel(audioLevel: number, barsCount: number): number[] {
-    const base = Math.min(1, audioLevel * 1.2);
+    this.ensureEqSeeds(barsCount);
+    const base = Math.min(1, audioLevel * 1.25);
+    const flux = Math.min(1, Math.abs(base - this.lastMicLevel) * 3.2);
+    // "Яркость" (псевдо-центроид): быстрее меняется речь → выше "частоты"
+    const targetCentroid = Math.max(0.12, Math.min(0.88, 0.28 + 0.42 * flux + 0.10 * Math.sin(this.eqPhase * 0.18)));
+    // используем lastAudioEnergy/Duration как память — без новых полей
+    this.lastAudioEnergy = this.lastAudioEnergy + (targetCentroid - this.lastAudioEnergy) * 0.18;
+    const centroid = this.lastAudioEnergy;
+
     const levels: number[] = [];
     for (let i = 0; i < barsCount; i++) {
-      // стабильный "рисунок" для fallback режима
-      const seed = Math.sin(i * 1.37) * 0.5 + 0.5;
-      const wave = 0.15 * Math.sin((Date.now() / 1000) * 2.2 + i * 0.6);
-      const level = Math.min(1, Math.max(0, base * (0.55 + seed * 0.6) + wave * base));
+      const x = barsCount > 1 ? i / (barsCount - 1) : 0.5;
+      const seed = this.eqBarSeeds[i] ?? 0.8;
+      const dist = (x - centroid) / 0.22;
+      const bell = Math.exp(-0.5 * dist * dist); // 0..1
+      const shimmer = 0.10 * Math.sin(this.eqPhase + i * 0.85 + seed * 3.1);
+      const texture = (0.55 + 0.45 * seed) * (0.35 + 0.65 * bell);
+      const level = Math.min(1, Math.max(0, base * texture + base * flux * 0.25 * bell + shimmer * base));
       levels.push(level);
     }
+    this.eqPhase += 0.22 + 0.26 * flux;
     return this.smoothFrequencyLevels(levels, barsCount);
+  }
+
+  private ensureEqSeeds(barsCount: number): void {
+    if (this.eqBarSeeds.length === barsCount) return;
+    this.eqBarSeeds = Array.from({ length: barsCount }, (_v, i) => {
+      const seed = Math.sin(i * 1.37) * 0.5 + 0.5;
+      return 0.6 + seed * 0.4;
+    });
   }
 
   private smoothFrequencyLevels(levels: number[], barsCount: number): number[] {
@@ -2343,9 +2334,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         expectedPartnerIdentity: this.partnerUserId,
       });
 
-      // КРИТИЧНО: Поднимаем аудио-сессию сразу после подключения к комнате (до прихода remote audio).
-      // Это снижает шанс "тишины" на iOS, когда система не активирует плейбек, пока не будет явного старта.
-      this.ensureAudioPlayoutActive('room-connected');
+      // Аудио-роутинг управляется на уровне UI (useAudioRouting) — без агрессивных "пинков" из сессии.
       
       // КРИТИЧНО: Функция для подписки на все треки участника
       const subscribeToParticipantTracks = (participant: RemoteParticipant, context: string) => {
@@ -2675,9 +2664,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
       // КРИТИЧНО: После подключения к комнате на iOS может "останавливаться" нативный аудио-рекордер.
       // Перезапускаем мониторинг микрофона, чтобы эквалайзер продолжал работать как в RandomChat.
-      if (this.localStream) {
-        this.startMicLevelMonitoring(this.localStream);
-      }
+    // Эквалайзер отключен: мониторинг микрофона не перезапускаем
       // 🩺 Android 8.1 / OPPO: watchdog — если видео "залипло" (есть трек, но не идут кадры), пересоздаем автоматически.
       this.scheduleLocalVideoHealthCheck('connectToLiveKit:post-publish');
       return true;
@@ -3305,9 +3292,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     if (publication.kind === Track.Kind.Audio) {
       this.remoteAudioTrack = track;
-      // КРИТИЧНО: при появлении удалённого аудио форсим аудио-сессию/спикер,
-      // иначе на iOS иногда звук не начинается до "жеста" пользователя.
-      this.ensureAudioPlayoutActive('remote-audio-subscribed');
       // КРИТИЧНО: гарантируем слышимость аудио (иногда track приходит disabled/muted после reconnect)
       try {
         // sync with local "mute remote" toggle

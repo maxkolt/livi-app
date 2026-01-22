@@ -88,6 +88,7 @@ const VoiceEqualizer: React.FC<Props> = ({
 
   const wavePhaseRef = React.useRef(0);
   const lastAnimAtRef = React.useRef(0);
+  const prevShapedLevelRef = React.useRef(0);
 
   useEffect(() => {
     const nowTs = Date.now();
@@ -115,6 +116,14 @@ const VoiceEqualizer: React.FC<Props> = ({
     };
 
     const shapedLevel = shapeLevel(level, threshold, curve, sensitivity);
+    // Транзиенты (attack/пики речи): быстрые изменения уровня должны "подпинывать" визуализацию.
+    // Это делает эквалайзер живым: 0 → пик → обратно к 0 во время разговора.
+    const prevShaped = prevShapedLevelRef.current;
+    const delta = Math.abs(shapedLevel - prevShaped);
+    prevShapedLevelRef.current = shapedLevel;
+    // 0..1 (агрессивнее на малых уровнях)
+    const transient = Math.max(0, Math.min(1, delta * 3.6));
+    const envLevel = Math.max(0, Math.min(1, shapedLevel * (1 + transient * 1.25)));
     const bands = hasBands ? resampleBands(frequencyLevels as number[], bars) : null;
 
     // Для waveform-режима вычисляем "тон/яркость" из спектра, чтобы волна двигалась естественнее
@@ -136,13 +145,13 @@ const VoiceEqualizer: React.FC<Props> = ({
       centroid = sum > 0 ? wsum / sum / Math.max(1, bars - 1) : 0.5;
     }
     // скорость волны зависит от "яркости" (centroid) и силы сигнала
-    const waveSpeed = (0.10 + 0.35 * centroid) * (0.6 + 0.6 * shapedLevel);
+    const waveSpeed = (0.10 + 0.35 * centroid) * (0.55 + 0.65 * envLevel) * (1 + transient * 0.35);
     wavePhaseRef.current += waveSpeed;
   
     anims.forEach((av, i) => {
       let target: number;
   
-      if (mode === 'waveform' && (hasBands || shapedLevel > 0)) {
+      if (mode === 'waveform' && (hasBands || envLevel > 0)) {
         // Voice waveform: стабильная "волна" речи (без рандома).
         // Если есть реальные частотные полосы, добавляем частотную модуляцию,
         // чтобы каждая линия реагировала на "свою" частоту, но сохранялся красивый wave-рисунок.
@@ -151,14 +160,16 @@ const VoiceEqualizer: React.FC<Props> = ({
         const ax = Math.abs(x);
 
         // базовая огибающая: громкость управляет общей высотой
-        const env = shapedLevel;
+        const env = envLevel;
 
         // форма "облака" (в середине чуть выше, края ниже) — как у speech visualizers
         const body = Math.pow(1 - Math.min(1, ax), 0.55);
 
         // рябь по волне: тон/пик спектра влияет на "частоту" ряби
         const rippleCount = 2.2 + 3.2 * centroid + (peakIdx / Math.max(1, bars - 1)) * 1.2;
-        const ripple = 0.62 + 0.38 * Math.sin(wavePhaseRef.current + ax * Math.PI * rippleCount);
+        // transient слегка усиливает пульсацию, но не ломает форму
+        const rippleAmp = 0.38 + 0.18 * transient;
+        const ripple = (1 - rippleAmp) + rippleAmp * Math.sin(wavePhaseRef.current + ax * Math.PI * rippleCount);
 
         // Частотная модуляция: если есть bands[i], делаем вклад частоты в высоту конкретной полосы.
         // Это дает "чувствительность к разным частотам", но без "лесенки" спектра.
@@ -176,8 +187,10 @@ const VoiceEqualizer: React.FC<Props> = ({
       } else if (hasBands) {
         // Спектр: каждая полоска = свой диапазон (для режима spectrum)
         const raw = bands?.[i] ?? 0;
-        target = Math.min(1, Math.max(0, Math.pow(raw, Math.max(0.35, Math.min(1.4, bandCurve)))));
-      } else if (shapedLevel <= 0) {
+        // Лёгкий AGC: когда голос громче, полоса немного выше
+        const agc = 0.7 + 0.6 * envLevel + 0.25 * transient;
+        target = Math.min(1, Math.max(0, Math.pow(raw, Math.max(0.35, Math.min(1.4, bandCurve))) * agc));
+      } else if (envLevel <= 0) {
         // 🔇 Полная тишина → полоски стоят на месте
         target = 0;
       } else {
@@ -193,7 +206,7 @@ const VoiceEqualizer: React.FC<Props> = ({
         // Шум уменьшен, чтобы не создавать хаотичное движение
         const noise = (Math.random() - 0.5) * 0.1; // ±0.05 (уменьшено с 0.15)
         const frequencyFactor = wave * factors[i];
-        target = Math.min(1, shapedLevel * frequencyFactor + noise);
+        target = Math.min(1, envLevel * frequencyFactor + noise);
       }
   
       const current = (av as any)?._value ?? 0;

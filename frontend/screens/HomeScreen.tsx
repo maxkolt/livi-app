@@ -1070,11 +1070,25 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               // Исправляем: используем полный никнейм из нового списка
               const correctedName = f.name.trim();
               logger.info('[loadFriends] Исправляем: используем полный никнейм', { correctedName });
+              
+              // КРИТИЧНО: Сохраняем avatarThumbB64 правильно (как в основном блоке)
+              const newAvatarVer = typeof f.avatarVer === 'number' ? f.avatarVer : (prevOne?.avatarVer || 0);
+              const prevAvatarVer = prevOne?.avatarVer || 0;
+              const avatarVerChanged = newAvatarVer !== prevAvatarVer;
+              
+              let finalAvatarThumbB64: string;
+              if (avatarVerChanged || 'avatarThumbB64' in f) {
+                finalAvatarThumbB64 = typeof f.avatarThumbB64 === 'string' ? f.avatarThumbB64 : '';
+              } else {
+                finalAvatarThumbB64 = prevOne?.avatarThumbB64 || '';
+              }
+              
               return {
                 ...f,
                 name: correctedName,
                 avatar: f.avatar || prevOne?.avatar || '',
-                avatarThumbB64: f.avatarThumbB64 || prevOne?.avatarThumbB64 || '',
+                avatarVer: newAvatarVer,
+                avatarThumbB64: finalAvatarThumbB64,
                 online: !!f.online,
                 isBusy: !!f.isBusy,
                 isRandomBusy: !!prevOne?.isRandomBusy,
@@ -1082,11 +1096,31 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               } as any;
             }
             
+            // КРИТИЧНО: Сохраняем avatarThumbB64 и avatarVer правильно
+            // Если в новом списке есть avatarThumbB64 (даже пустая строка), используем его
+            // Если в новом списке нет avatarThumbB64 (undefined), сохраняем старое значение
+            // Также учитываем avatarVer - если версия изменилась, нужно использовать новые данные
+            const newAvatarVer = typeof f.avatarVer === 'number' ? f.avatarVer : (prevOne?.avatarVer || 0);
+            const prevAvatarVer = prevOne?.avatarVer || 0;
+            const avatarVerChanged = newAvatarVer !== prevAvatarVer;
+            
+            // Если версия изменилась или в новом списке явно указан avatarThumbB64, используем новое значение
+            // Иначе сохраняем старое (если оно было)
+            let finalAvatarThumbB64: string;
+            if (avatarVerChanged || 'avatarThumbB64' in f) {
+              // Версия изменилась или поле явно присутствует в ответе - используем новое значение
+              finalAvatarThumbB64 = typeof f.avatarThumbB64 === 'string' ? f.avatarThumbB64 : '';
+            } else {
+              // Версия не изменилась и поле не пришло - сохраняем старое значение
+              finalAvatarThumbB64 = prevOne?.avatarThumbB64 || '';
+            }
+            
             return {
               ...f,
               name: finalName,
               avatar: f.avatar || prevOne?.avatar || '',
-              avatarThumbB64: f.avatarThumbB64 || prevOne?.avatarThumbB64 || '',
+              avatarVer: newAvatarVer,
+              avatarThumbB64: finalAvatarThumbB64,
               online: !!f.online,
               isBusy: !!f.isBusy, // Используем новое значение из API
               isRandomBusy: !!prevOne?.isRandomBusy,
@@ -1967,12 +2001,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       try {
         const currentNick = String(nickLiveRef.current || savedNick || nick || '');
         const currentAvatar = avatarUri || savedAvatarUrl || '';
-        if (currentNick || currentAvatar) {
-          // Обновляем профиль на сервере
-          await updateProfile({ nick: currentNick, avatar: currentAvatar });
-          // Синхронизируем с CometChat
-          await syncMyStreamProfile(currentNick, currentAvatar);
+        const patch: { nick?: string; avatar?: string } = {};
+        if (currentNick) patch.nick = currentNick;
+        // ⚠️ КРИТИЧНО: не отправляем data: и не отправляем avatar='' (это удаление аватара на сервере).
+        // Сервер принимает только http(s) URL или явное удаление.
+        if (currentAvatar && /^https?:\/\//i.test(currentAvatar)) {
+          patch.avatar = currentAvatar;
         }
+        if (Object.keys(patch).length) {
+          await updateProfile(patch);
+        }
+        // В CometChat тоже лучше отправлять только URL (data: может быть не поддержан).
+        await syncMyStreamProfile(currentNick, /^https?:\/\//i.test(currentAvatar) ? currentAvatar : undefined);
       } catch (e) {
         logger.warn('[HomeScreen] Failed to update profile after friend accepted:', e);
       }
@@ -3317,6 +3357,9 @@ const handleClearNick = useCallback(async () => {
 
     // Используем новую систему кеширования или локальный файл для превью
     const isLocalPreview = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
+    const hasDirectAvatarUri =
+      avatarUri &&
+      (/^data:image\//i.test(avatarUri) || /^https?:\/\//i.test(avatarUri));
     const myUserId = getCurrentUserId();
 
     return (
@@ -3339,6 +3382,13 @@ const handleClearNick = useCallback(async () => {
               fallbackText={letter}
               containerStyle={styles.centerAvatarImg}
               fallbackTextStyle={{ fontSize: 48, fontWeight: '800' }}
+            />)
+          ) : hasDirectAvatarUri ? (
+            // Прямой URI (data:image или https) — показываем сразу, даже если avatarVer отсутствует
+            (<ExpoImage
+              source={{ uri: avatarUri }}
+              style={styles.centerAvatarImg}
+              cachePolicy={/^https?:\/\//i.test(avatarUri) ? 'memory-disk' : 'none'}
             />)
           ) : (
             // Плейсхолдер с буквой
