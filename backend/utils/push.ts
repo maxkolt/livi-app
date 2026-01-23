@@ -1,4 +1,5 @@
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
+import type { ExpoPushTicket } from 'expo-server-sdk';
 import PushTokenModel from '../models/PushToken';
 import { logger } from './logger';
 
@@ -52,14 +53,17 @@ export async function sendPushToUser(userId: string, msg: Omit<ExpoPushMessage, 
     const chunks = expo.chunkPushNotifications(messages);
     for (const chunk of chunks) {
       try {
-        const receipts = await expo.sendPushNotificationsAsync(chunk);
+        const receipts: ExpoPushTicket[] = await expo.sendPushNotificationsAsync(chunk);
         // Мягкий лог — без спама
-        if (receipts?.some((r) => (r as any)?.status === 'error')) {
+        if (receipts.some((r) => r.status === 'error')) {
           logger.warn('[push] Some push receipts contain errors', {
             errors: receipts
-              .filter((r) => (r as any)?.status === 'error')
+              .filter((r) => r.status === 'error')
               .slice(0, 3)
-              .map((r) => ({ message: (r as any)?.message, details: (r as any)?.details })),
+              .map((r) => {
+                const anyR = r as any;
+                return { message: anyR?.message, details: anyR?.details };
+              }),
           });
         }
       } catch (e) {
