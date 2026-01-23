@@ -132,7 +132,7 @@ export const IncomingCallModal: React.FC<IncomingCallModalProps> = ({
                 <MaterialIcons name="call" size={48} color="#4FC3F7" />
               </Animated.View>
             </View>
-            <Text style={styles.incomingTitle}>Входящий вызов</Text>
+            <Text style={styles.incomingTitle}>{L('incomingCallTitle')}</Text>
             <Text style={styles.incomingName}>
               {incomingFriendCall?.nick || `id: ${String(incomingFriendCall?.from || '').slice(0, 5)}`}
             </Text>
@@ -141,13 +141,13 @@ export const IncomingCallModal: React.FC<IncomingCallModalProps> = ({
                 onPress={onAccept}
                 style={[styles.btnGlassBase, styles.btnGlassSuccess]}
               >
-                <Text style={styles.modalBtnText}>Принять</Text>
+                <Text style={styles.modalBtnText}>{L('accept')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={onDecline}
                 style={[styles.btnGlassBase, styles.btnGlassDanger]}
               >
-                <Text style={styles.modalBtnText}>Отклонить</Text>
+                <Text style={styles.modalBtnText}>{L('decline')}</Text>
               </TouchableOpacity>
             </View>
           </View>

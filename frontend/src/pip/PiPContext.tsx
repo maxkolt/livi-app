@@ -80,7 +80,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const [visible, setVisible] = useState(false);
   const [callId, setCallId] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
-  const [partnerName, setPartnerName] = useState<string>('Друг');
+  // хранит реальный ник партнёра (если есть); фоллбек-лейбл вычисляем в UI по текущему языку
+  const [partnerName, setPartnerName] = useState<string>('');
   const [partnerAvatarUrl, setPartnerAvatarUrl] = useState<string | undefined>(undefined);
 
   const [isMuted, setIsMuted] = useState(false);
@@ -142,7 +143,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     
     setCallId(p.callId);
     setRoomId(p.roomId);
-    setPartnerName(p.partnerName || 'Друг');
+    setPartnerName(p.partnerName || '');
     // Убеждаемся, что partnerAvatarUrl сохраняется правильно
     // Используем строгую проверку: сохраняем только если это непустая строка
     if (p.partnerAvatarUrl && typeof p.partnerAvatarUrl === 'string' && p.partnerAvatarUrl.trim() !== '') {

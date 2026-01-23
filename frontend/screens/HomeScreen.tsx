@@ -45,8 +45,9 @@ import {
 
 import LanguagePicker from '../components/LanguagePicker';
 import { useAppTheme, ThemePreference } from '../theme/ThemeProvider';
-import { t, loadLang, saveLang, defaultLang } from '../utils/i18n';
+import { t, defaultLang } from '../utils/i18n';
 import type { Lang } from '../utils/i18n';
+import { useLang } from '../store/lang';
 
 // expo-linear-gradient -> react-native-linear-gradient -> fallback
 const LinearGradient: any = (() => {
@@ -327,7 +328,14 @@ const useLiviNotice = () => {
 
   const ask = useCallback((opts: { title: string; message?: string; confirmText?: string; cancelText?: string }) =>
     new Promise<boolean>((resolve) => {
-      setState({ visible: true, title: opts.title, message: opts.message, confirmText: opts.confirmText || 'ОК', cancelText: opts.cancelText || 'Отмена', resolve });
+      setState({
+        visible: true,
+        title: opts.title,
+        message: opts.message,
+        confirmText: opts.confirmText || t('ok', lang),
+        cancelText: opts.cancelText || t('cancel', lang),
+        resolve,
+      });
     }), []);
   const onCancel = useCallback(() => { state.resolve?.(false); setState((s) => ({ ...s, visible: false })); }, [state]);
   const onOk     = useCallback(() => { state.resolve?.(true);  setState((s) => ({ ...s, visible: false })); }, [state]);
@@ -339,7 +347,8 @@ const useLiviNotice = () => {
       <View
         style={[
           StyleSheet.absoluteFill,
-          { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.58)' : 'rgba(0,0,0,0.35)' },
+          // Android: сильнее затемняем задний фон
+          { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.78)' : 'rgba(0,0,0,0.35)' },
         ]}
       />
       <Surface style={styles.confirmCard}>
@@ -644,7 +653,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
 
   /* language */
-  const [lang, setLang] = useState<Lang>(defaultLang);
+  const lang = useLang((s) => s.lang);
+  const setLang = useLang((s) => s.setLang);
   const [langPickerVisible, setLangPickerVisible] = useState(false);
   const L = useCallback((key: string) => t(key, lang), [lang]);
 
@@ -714,7 +724,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     try {
       const userId = getCurrentUserId();
       if (!userId) {
-        showNotice('Ошибка: пользователь не авторизован', 'error', 2000);
+        showNotice(t('unauthorizedError', lang), 'error', 2000);
         return;
       }
       // Используем веб-ссылку, которая автоматически редиректит на приложение
@@ -743,14 +753,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       await incrCounter('invite_link_generated');
     } catch (e) {
       logger.error('Failed to generate invite link:', e);
-      showNotice('Не удалось создать ссылку', 'error', 2000);
+      showNotice(t('inviteLinkCreateFailed', lang), 'error', 2000);
     }
   }, [showNotice, incrCounter]);
   
-  useEffect(() => { (async () => { setLang(await loadLang()); })(); }, []);
   const openLangPicker  = () => setLangPickerVisible(true);
   const closeLangPicker = () => setLangPickerVisible(false);
-  const handleSelectLang = async (code: Lang) => { setLang(code); await saveLang(code); setLangPickerVisible(false); };
+  const handleSelectLang = async (code: Lang) => { await setLang(code); setLangPickerVisible(false); };
 
   // ===== Обработка реферальной ссылки из route params =====
   const processedInviteRef = useRef<string | null>(null);
@@ -777,19 +786,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const result = await checkInviteLink(inviteCode);
         
         if (!result.ok) {
-          showNotice('Неверная ссылка приглашения', 'error', 2000);
+          showNotice(t('inviteLinkInvalid', lang), 'error', 2000);
           return;
         }
 
         if (result.areFriends) {
           // Пользователи уже друзья
-          showNotice('Вы уже друзья с этим пользователем', 'info', 2000);
+          showNotice(t('inviteAlreadyFriendsWithUser', lang), 'info', 2000);
           return;
         }
 
         if (result.hasPendingRequest) {
           // Заявка уже отправлена
-          showNotice('Заявка в друзья уже отправлена', 'info', 2000);
+          showNotice(t('inviteRequestAlreadySent', lang), 'info', 2000);
           return;
         }
 
@@ -805,7 +814,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
       } catch (e) {
         logger.error('Failed to check invite from route:', e);
-        showNotice('Ошибка при обработке ссылки', 'error', 2000);
+        showNotice(t('inviteLinkProcessFailed', lang), 'error', 2000);
         // Сбрасываем флаг обработки при ошибке, чтобы можно было повторить
         processedInviteRef.current = null;
       }
@@ -832,18 +841,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       
       if (result?.ok) {
         if (result.status === 'already') {
-          showNotice('Вы уже друзья', 'info', 2000);
+          showNotice(t('already_friends', lang), 'info', 2000);
         } else if (result.status === 'accepted') {
-          showNotice('Пользователь добавлен в друзья', 'success', 2000);
+          showNotice(t('inviteUserAdded', lang), 'success', 2000);
           // Обновляем список друзей
           loadFriendsFnRef.current();
         } else {
-          showNotice('Пользователь добавлен в друзья', 'success', 2000);
+          showNotice(t('inviteUserAdded', lang), 'success', 2000);
           // Обновляем список друзей
           loadFriendsFnRef.current();
         }
       } else {
-        showNotice(result?.error || 'Не удалось добавить в друзья', 'error', 2000);
+        showNotice(result?.error || t('friendAddFailed', lang), 'error', 2000);
       }
       
       setInviteRequestVisible(false);
@@ -854,7 +863,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
     } catch (e) {
       logger.error('Failed to accept invite:', e);
-      showNotice('Ошибка при добавлении в друзья', 'error', 2000);
+      showNotice(t('friendAddFailed', lang), 'error', 2000);
       setInviteRequestVisible(false);
       setInviteRequestData(null);
       // Сбрасываем флаг обработки при ошибке
@@ -974,14 +983,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         // Получатель отклонил: инициатор НЕ увеличивает пропущенные
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
-        showNotice('Вызов отклонён', 'error', 1800);
+        showNotice(t('callDeclined', lang), 'error', 1800);
       });
       const offTimeout = onCallTimeout?.(() => {
         if (cleaned) return; cleaned = true;
         // Таймаут: у инициатора счётчик не увеличиваем, просто закрываем UI
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
-        showNotice('Нет ответа', 'error', 1800);
+        showNotice(t('noAnswer', lang), 'error', 1800);
       });
       const offRoomFull = onCallRoomFull?.(() => {
         if (cleaned) return; cleaned = true;
@@ -997,7 +1006,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           cleaned = true;
           setCalling({ visible: false, friend: null, callId: null });
           stopWaves();
-          showNotice('Нет ответа', 'error', 1800);
+          showNotice(t('noAnswer', lang), 'error', 1800);
         }
       }, 20000);
 
@@ -1006,7 +1015,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     } catch (e: any) {
       setCalling({ visible: false, friend: null, callId: null });
       stopWaves();
-      showNotice('Не удалось инициировать вызов', 'error', 2000);
+      showNotice(t('callStartFailed', lang), 'error', 2000);
     }
   }, [navigation, showNotice, startWaves, stopWaves]);
 
@@ -1304,7 +1313,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
         
         if (typeof showNotice === 'function') {
-          showNotice('Пользователь удален, данные очищены', 'error', 3000);
+          showNotice(t('userDeletedDataCleared', lang), 'error', 3000);
         }
         return false; // Пользователь не существует
       }
@@ -2722,9 +2731,9 @@ const handleClearNick = useCallback(async () => {
 
       if (!result.ok) {
         const errorMessage = result.error === 'unauthorized' 
-          ? t('unauthorized', lang) || 'Не авторизован'
+          ? t('unauthorized', lang)
           : result.error === 'timeout'
-          ? 'Превышено время ожидания'
+          ? t('timeoutExceeded', lang)
           : result.error || 'delete_failed';
         throw new Error(errorMessage);
       }
@@ -2766,7 +2775,7 @@ const handleClearNick = useCallback(async () => {
   const openAvatarSheet = () => {
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
-        { options: ['Сделать фото', 'Выбрать из галереи', 'Отмена'], cancelButtonIndex: 2, userInterfaceStyle: 'dark' },
+        { options: [t('takePhoto', lang), t('chooseFromGallery', lang), t('cancel', lang)], cancelButtonIndex: 2, userInterfaceStyle: 'dark' },
         (i) => { if (i === 0) setPendingPicker('camera'); if (i === 1) setPendingPicker('gallery'); },
       );
     } else {
@@ -3224,12 +3233,12 @@ const handleClearNick = useCallback(async () => {
         <Text style={{ color: LIVI.white, fontWeight: '700', marginBottom: 8 }}>{t('uiSettings', lang)}</Text>
 
         {/* Theme selector */}
-        <Text style={{ color: LIVI.text2, fontSize: 14, fontWeight: '500', marginBottom: 8 }}>Тема приложения</Text>
+        <Text style={{ color: LIVI.text2, fontSize: 14, fontWeight: '500', marginBottom: 8 }}>{t('appTheme', lang)}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           {([
-            { key: 'auto', label: 'Авто' },
-            { key: 'light', label: 'Светлая' },
-            { key: 'dark', label: 'Тёмная' },
+            { key: 'auto', label: t('themeAuto', lang) },
+            { key: 'light', label: t('themeLight', lang) },
+            { key: 'dark', label: t('themeDark', lang) },
           ] as { key: ThemePreference; label: string }[]).map((opt) => {
             const active = preference === opt.key;
             return (
@@ -3296,10 +3305,10 @@ const handleClearNick = useCallback(async () => {
         </View>
         <View style={{ flex: 1, justifyContent: 'center' }}>
           <Text style={{ color: '#4DD0E1', fontSize: 16, fontWeight: '700', marginBottom: 3, lineHeight: 20 }}>
-            Пригласить друзей
+            {t('inviteFriendsTitle', lang)}
           </Text>
           <Text style={{ color: LIVI.text2, fontSize: 13, lineHeight: 17 }}>
-            Пригласите друзей в LiVi — видеочат будущего
+            {t('inviteFriendsSubtitle', lang)}
           </Text>
         </View>
       </TouchableOpacity>
@@ -3337,10 +3346,10 @@ const handleClearNick = useCallback(async () => {
         </View>
         <View style={{ flex: 1, justifyContent: 'center' }}>
           <Text style={{ color: '#B8A9E8', fontSize: 16, fontWeight: '700', marginBottom: 3, lineHeight: 20 }}>
-            Поддержать проект
+            {t('supportProjectTitle', lang)}
           </Text>
           <Text style={{ color: LIVI.text2, fontSize: 13, lineHeight: 17 }}>
-            Помоги развивать LiVi — видеочат будущего
+            {t('supportProjectSubtitle', lang)}
           </Text>
         </View>
       </TouchableOpacity>
@@ -3407,7 +3416,7 @@ const handleClearNick = useCallback(async () => {
     const ended = (route as any)?.params?.callEnded;
     const openFriendsMenu = (route as any)?.params?.openFriendsMenu;
     if (ended) {
-      showNotice('Звонок завершён', 'success', 3000);
+      showNotice(t('callEnded', lang), 'success', 3000);
     }
     if (openFriendsMenu) {
       setMenuOpen(true);
@@ -3674,10 +3683,10 @@ const handleClearNick = useCallback(async () => {
               borderColor: 'rgba(255,255,255,0.12)'
             }}
           >
-            <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16, textAlign: 'center' }}>Комната пользователя занята</Text>
+            <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16, textAlign: 'center' }}>{t('roomBusyTitle', lang)}</Text>
             {!!roomFull.name && <Text style={{ color: LIVI.text2, marginTop: 6 }}>{roomFull.name}</Text>}
             <TouchableOpacity onPress={() => setRoomFull({ visible: false })} activeOpacity={0.85} style={[styles.confirmBtn, { marginTop: 14, width: 120, backgroundColor: 'rgba(255,255,255,0.08)' }]}>
-              <Text style={[styles.confirmBtnText, { color: LIVI.white }]}>ОК</Text>
+              <Text style={[styles.confirmBtnText, { color: LIVI.white }]}>{t('ok', lang)}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -3689,7 +3698,8 @@ const handleClearNick = useCallback(async () => {
           <View
             style={[
               StyleSheet.absoluteFill,
-              { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.7)' : 'rgba(0,0,0,0.35)' },
+              // Android: сильнее затемняем задний фон
+              { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.35)' },
             ]}
           />
           <Animated.View
@@ -3710,15 +3720,17 @@ const handleClearNick = useCallback(async () => {
                 <List.Icon icon="video" color={LIVI.white} />
               </View>
             </View>
-            <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700', marginTop: 12 }}>Вы звоните {displayName(calling.friend?.name)}</Text>
-            <Text style={{ color: LIVI.text2, marginTop: 6 }}>Ожидаем ответа…</Text>
+            <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700', marginTop: 12 }}>
+              {t('callingYouCall', lang).replace('{name}', displayName(calling.friend?.name))}
+            </Text>
+            <Text style={{ color: LIVI.text2, marginTop: 6 }}>{t('callingWaiting', lang)}</Text>
             <View style={{ flexDirection: 'row', gap: 12, marginTop: 18 }}>
             <TouchableOpacity
   onPress={handleCancelCall}
   activeOpacity={0.6} // делаем заметнее
   style={[styles.confirmBtn, { backgroundColor: 'rgba(255,90,103,0.18)', width: 96 }]}
 >
-  <Text style={[styles.confirmBtnText, { color: LIVI.white }]}>Отменить</Text>
+  <Text style={[styles.confirmBtnText, { color: LIVI.white }]}>{t('cancelCall', lang)}</Text>
 </TouchableOpacity>
             </View>
           </Animated.View>
@@ -3761,7 +3773,7 @@ const handleClearNick = useCallback(async () => {
               <Ionicons name="arrow-back" size={Platform.OS === 'ios' ? 22 : 20} color={LIVI.titan} />
             </TouchableOpacity>
             <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: LIVI.accent }]}>
-              <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#B8A9E8' }]}>Поддержать проект</Text>
+              <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#B8A9E8' }]}>{t('supportProjectTitle', lang)}</Text>
               <View style={{ marginBottom: 20 }}>
                 <TouchableOpacity
                   onPress={async () => {
@@ -3888,12 +3900,12 @@ const handleClearNick = useCallback(async () => {
             </TouchableOpacity>
             <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: '#4DD0E1' }]}>
               <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#4DD0E1' }]}>
-                Пригласить друга
+                {t('inviteFriendTitle', lang)}
               </Text>
               
               <View style={{ marginBottom: 20 }}>
                 <Text style={{ color: LIVI.text2, fontSize: 14, marginBottom: 8, fontWeight: '600' }}>
-                  Ссылка для приглашения:
+                  {t('inviteLinkLabel', lang)}
                 </Text>
                 <View style={{
                   backgroundColor: 'rgba(255,255,255,0.05)',
@@ -3921,11 +3933,11 @@ const handleClearNick = useCallback(async () => {
                     onPress={async () => {
                       try {
                         await Clipboard.setStringAsync(inviteLink);
-                        showNotice('Ссылка скопирована', 'success', 1500);
+                        showNotice(t('linkCopied', lang), 'success', 1500);
                         await incrCounter('invite_link_copied');
                       } catch (e) {
                         logger.error('Failed to copy link:', e);
-                        showNotice('Не удалось скопировать', 'error', 1500);
+                        showNotice(t('copyFailed', lang), 'error', 1500);
                       }
                     }}
                     activeOpacity={0.7}
@@ -3939,8 +3951,7 @@ const handleClearNick = useCallback(async () => {
                   </TouchableOpacity>
                 </View>
                 <Text style={{ color: LIVI.text2, fontSize: 12, marginTop: 8, textAlign: 'center', lineHeight: 16 }}>
-                  При переходе по ссылке приложение LiVi откроется автоматически.{'\n'}
-                  Если приложение не установлено, получатель увидит инструкцию по установке.
+                  {t('inviteShareHint', lang)}
                 </Text>
               </View>
 
@@ -3948,13 +3959,13 @@ const handleClearNick = useCallback(async () => {
                 <TouchableOpacity
                   onPress={async () => {
                     try {
-                      const shareMessage = `Присоединяйся ко мне в LiVi — видеочат будущего!\n\nСсылка: ${inviteLink}\n\nПримечание: Для открытия ссылки необходимо установить приложение LiVi.`;
+                      const shareMessage = t('inviteShareMessage', lang).replace('{link}', inviteLink);
                       
                       // Используем Share из React Native для текстовых ссылок
                       const result = await Share.share({
                         message: shareMessage,
                         url: inviteLink, // Для iOS это будет использовано как URL
-                        title: 'Приглашение в LiVi',
+                        title: t('inviteShareTitle', lang),
                       });
                       
                       if (result.action === Share.sharedAction) {
@@ -3972,9 +3983,9 @@ const handleClearNick = useCallback(async () => {
                       // Fallback на копирование при ошибке
                       try {
                         await Clipboard.setStringAsync(inviteLink);
-                        showNotice('Ссылка скопирована', 'success', 1500);
+                        showNotice(t('linkCopied', lang), 'success', 1500);
                       } catch (copyError) {
-                        showNotice('Не удалось поделиться', 'error', 1500);
+                        showNotice(t('shareFailed', lang), 'error', 1500);
                       }
                     }
                   }}
@@ -3998,7 +4009,7 @@ const handleClearNick = useCallback(async () => {
                     fontWeight: '700', 
                     fontSize: 16 
                   }}>
-                    Поделиться
+                    {t('share', lang)}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -4039,13 +4050,13 @@ const handleClearNick = useCallback(async () => {
             </TouchableOpacity>
             <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: '#4DD0E1' }]}>
               <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#4DD0E1' }]}>
-                Приглашение в друзья
+                {t('friendInviteTitle', lang)}
               </Text>
               
               {inviteRequestData.areFriends ? (
                 <View style={{ marginBottom: 20 }}>
                   <Text style={{ color: LIVI.text2, fontSize: 14, textAlign: 'center', marginBottom: 12 }}>
-                    Вы уже друзья с пользователем {inviteRequestData.inviter.nick || 'этим пользователем'}
+                    {t('alreadyFriendsWithUser', lang).replace('{user}', inviteRequestData.inviter.nick || t('thisUser', lang))}
                   </Text>
                   <TouchableOpacity
                     onPress={handleDeclineInvite}
@@ -4059,7 +4070,7 @@ const handleClearNick = useCallback(async () => {
                     }}
                   >
                     <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16 }}>
-                      ОК
+                      {t('ok', lang)}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -4091,10 +4102,10 @@ const handleClearNick = useCallback(async () => {
                       </View>
                     )}
                     <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700', marginBottom: 8, textAlign: 'center' }}>
-                      {inviteRequestData.inviter.nick || 'Пользователь'}
+                      {inviteRequestData.inviter.nick || t('user', lang)}
                     </Text>
                     <Text style={{ color: LIVI.text2, fontSize: 14, textAlign: 'center' }}>
-                      хочет добавить вас в друзья
+                      {t('wantsToAddYouAsFriend', lang)}
                     </Text>
                   </View>
 
@@ -4114,7 +4125,7 @@ const handleClearNick = useCallback(async () => {
                       }}
                     >
                       <Text style={{ color: LIVI.white, fontWeight: '700', fontSize: 16 }}>
-                        Отклонить
+                        {t('decline', lang)}
                       </Text>
                     </TouchableOpacity>
                     <TouchableOpacity

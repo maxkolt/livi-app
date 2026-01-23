@@ -1,8 +1,11 @@
 // components/AwayPlaceholder.tsx
 import React, { useEffect, useRef } from 'react';
 import { View, Text, Animated, Easing, StyleSheet, Image } from 'react-native';
+import { useLang } from '../store/lang';
+import { t } from '../utils/i18n';
 
 const AwayPlaceholder = () => {
+  const lang = useLang((s) => s.lang);
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const floatAnim = useRef(new Animated.Value(0)).current;
 
@@ -63,7 +66,7 @@ const AwayPlaceholder = () => {
 
       {/* Надпись + анимированные точки */}
       <View style={styles.textRow}>
-        <Text style={styles.awayText}>Отошёл</Text>
+        <Text style={styles.awayText}>{t('away', lang)}</Text>
         <AnimatedDots />
       </View>
     </View>

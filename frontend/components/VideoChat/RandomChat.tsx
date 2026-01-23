@@ -31,7 +31,8 @@ import { RandomChatSession } from '../../src/webrtc/sessions/RandomChatSession';
 import type { WebRTCSessionConfig } from '../../src/webrtc/types';
 // import VoiceEqualizer from '../VoiceEqualizer'; // эквалайзер отключен
 import AwayPlaceholder from '../AwayPlaceholder';
-import { t, loadLang, defaultLang } from '../../utils/i18n';
+import { t, defaultLang } from '../../utils/i18n';
+import { useLang } from '../../store/lang';
 import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
@@ -75,7 +76,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
-  const [lang, setLang] = useState<Lang>(defaultLang);
+  const lang = useLang((s) => s.lang);
   const androidScreenPadding = 4;
   const androidContentInsets = useMemo(() => {
     if (Platform.OS !== 'android') return null;
@@ -159,8 +160,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     if (Device.isDevice) return;
     shownSimulatorCameraHintRef.current = true;
     Alert.alert(
-      'iOS Simulator camera',
-      'В вашем iOS Simulator камера недоступна для WebRTC/LiveKit (в некоторых версиях Simulator нет пункта I/O → Camera). Для проверки видео используйте физический iPhone. В симуляторе можно тестировать UI/аудио/сигналинг.'
+      t('iosSimulatorCameraTitle', lang),
+      t('iosSimulatorCameraMsg', lang)
     );
   }, []);
   
@@ -194,12 +195,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   }, [partnerId]);
   
   
-  // Загрузка языка и друзей
+  // Здесь грузим только друзей (язык берём выше из глобального стора)
   useEffect(() => {
     (async () => {
-      setLang(await loadLang());
-      
-      // Загружаем список друзей
       try {
         const r = await fetchFriends();
         const friendsList = r?.list || [];
@@ -243,7 +241,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       if (String(userId) === String(partnerUserId)) {
         setAddPending(false);
         setAddBlocked(true);
-        showToast('Добавили в друзья');
+        showToast(L('friend_added'));
       }
     });
     
@@ -251,7 +249,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setAddPending(false);
       fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
       if (String(userId) === String(partnerUserId)) {
-        showToast('Добавили в друзья');
+        showToast(L('friend_added'));
       }
       // Обновляем профиль на сервере и синхронизируем с CometChat
       try {
@@ -275,7 +273,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setAddPending(false);
       setAddBlocked(true);
       if (String(userId) === String(partnerUserId)) {
-        showToast('Вам отказано');
+        showToast(L('friend_declined'));
       }
     });
     
@@ -295,7 +293,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     try {
       const res: any = await requestFriend(partnerUserId);
       if (res?.status === 'pending' || res?.ok) {
-        showToast('Заявка отправлена');
+        showToast(L('friend_request_sent'));
         // Обновляем профиль на сервере и синхронизируем с CometChat
         try {
           const cached = await loadProfileFromStorage();
@@ -316,15 +314,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         setAddPending(false);
         setAddBlocked(true);
         fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
-        showToast('Вы уже друзья');
+        showToast(L('already_friends'));
       } else if (res?.ok === false) {
         setAddPending(false);
-        showToast(res?.error || 'Не удалось отправить заявку');
+        showToast(res?.error || L('friend_request_failed'));
       }
     } catch (e) {
       logger.error('[RandomChat] Error requesting friend:', e);
       setAddPending(false);
-      showToast('Ошибка отправки заявки');
+      showToast(L('friend_request_failed'));
     }
   }, [partnerUserId, addPending, addBlocked, showToast]);
   
@@ -786,7 +784,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       
       const ok = await requestPermissions();
       if (!ok) {
-        Alert.alert('Разрешения', 'Нет доступа к камере/микрофону');
+        Alert.alert(t('permissionsTitle', lang), t('noCameraMicAccess', lang));
         return;
       }
       
@@ -802,7 +800,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         setStarted(false);
         setLoading(false);
         setCamOn(false);
-        Alert.alert('Ошибка', 'Не удалось запустить камеру/микрофон');
+        Alert.alert(t('errorTitle', lang), t('startCameraMicFailed', lang));
       } finally {
         loadingRef.current = false;
       }
@@ -888,7 +886,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       // Критические ошибки (например, краши) не должны показывать Alert
       try {
         if (!errorMsg.includes('crash') && !errorMsg.includes('fatal')) {
-          Alert.alert('Ошибка', 'Не удалось перейти к следующему собеседнику');
+          Alert.alert(t('errorTitle', lang), t('nextFailed', lang));
         }
       } catch (alertError) {
         // Игнорируем ошибки показа Alert - это не критично
@@ -1841,7 +1839,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       {incomingCall && (!started || isInactiveState) && (
         <View style={styles.incomingOverlayFullScreen}>
           <BlurView intensity={60} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.9)' : 'rgba(0,0,0,0.5)' }]} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.5)' }]} />
           <View style={styles.incomingOverlayContent}>
             <View style={{ width: 140, height: 140, alignItems: 'center', justifyContent: 'center' }}>
               <Animated.View style={buildIncomingWaveStyle(incomingWaveA, 'left')} />
@@ -1850,20 +1848,20 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 <MaterialIcons name="call" size={48} color="#4FC3F7" />
               </Animated.View>
             </View>
-            <Text style={styles.incomingOverlayTitle}>Входящий вызов</Text>
-            <Text style={styles.incomingOverlayName}>{incomingCall.fromNick || 'Друг'}</Text>
+            <Text style={styles.incomingOverlayTitle}>{t('incomingCallTitle', lang)}</Text>
+            <Text style={styles.incomingOverlayName}>{incomingCall.fromNick || t('friend', lang)}</Text>
             <View style={styles.incomingOverlayButtons}>
               <TouchableOpacity
                 onPress={handleAcceptIncomingCall}
                 style={[styles.btnGlassBase, styles.btnGlassSuccess]}
               >
-                <Text style={styles.modalBtnText}>Принять</Text>
+                <Text style={styles.modalBtnText}>{t('accept', lang)}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={handleDeclineIncomingCall}
                 style={[styles.btnGlassBase, styles.btnGlassDanger]}
               >
-                <Text style={styles.modalBtnText}>Отклонить</Text>
+                <Text style={styles.modalBtnText}>{t('decline', lang)}</Text>
               </TouchableOpacity>
             </View>
           </View>

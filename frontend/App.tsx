@@ -31,6 +31,8 @@ import type { RootStackParamList } from "./navigation/types";
 import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native';
 import { addNotificationListeners, ensureInitialNotificationPermissions, registerAndSendPushToken } from './utils/pushNotifications';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
+import { useLang } from './store/lang';
+import { t } from './utils/i18n';
 
 // Импорт expo-keep-awake с безопасной загрузкой
 let activateKeepAwakeAsync: (() => Promise<void>) | null = null;
@@ -114,6 +116,12 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 function AppContent() {
   const { theme, isDark } = useAppTheme();
   const pip = usePiP();
+  const lang = useLang((s) => s.lang);
+  const hydrateLang = useLang((s) => s.hydrate);
+  
+  React.useEffect(() => {
+    void hydrateLang();
+  }, [hydrateLang]);
   
   // Убрали постоянные логи для уменьшения шума
   const [routeName, setRouteName] = React.useState<string | undefined>(undefined);
@@ -1044,7 +1052,8 @@ function AppContent() {
               <View
                 style={[
                   StyleSheet.absoluteFill,
-                  { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.35)' },
+                  // Android: сильнее затемняем задний фон
+                  { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.35)' },
                 ]}
               />
               <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -1064,7 +1073,7 @@ function AppContent() {
                       <MaterialIcons name="call" size={48} color="#4FC3F7" />
                     </Animated.View>
                   </View>
-                  <Text style={{ color: '#fff', fontWeight: '700', marginTop: 10 }}>Вам звонит</Text>
+                  <Text style={{ color: '#fff', fontWeight: '700', marginTop: 10 }}>{t('incomingCallTitle', lang)}</Text>
                   <Text style={{ color: '#e5e7eb', marginTop: 4 }}>{incoming.fromNick || `id: ${String(incoming.from || '').slice(0, 5)}`}</Text>
 
                   <View style={{ flexDirection: 'row', gap: 12, marginTop: 300, width: '100%', paddingHorizontal: 15, paddingBottom: 60 }}>
@@ -1099,7 +1108,7 @@ function AppContent() {
       borderColor: 'rgba(36,150,65,0.7)',       // бордер темнее
     }}
   >
-    <Text style={{ color: 'rgb(52,199,89)', fontWeight: '700' }}>Принять</Text>
+    <Text style={{ color: 'rgb(52,199,89)', fontWeight: '700' }}>{t('accept', lang)}</Text>
   </TouchableOpacity>
 
   {/* Отклонить */}
@@ -1122,7 +1131,7 @@ function AppContent() {
       borderColor: 'rgba(200,50,65,0.7)',       // бордер темнее
     }}
   >
-    <Text style={{ color: 'rgb(255,90,103)', fontWeight: '700' }}>Отклонить</Text>
+    <Text style={{ color: 'rgb(255,90,103)', fontWeight: '700' }}>{t('decline', lang)}</Text>
   </TouchableOpacity>
 </View>
 

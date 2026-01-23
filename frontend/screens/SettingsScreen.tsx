@@ -4,6 +4,8 @@ import { Alert, View, Platform, ActionSheetIOS, ActivityIndicator } from 'react-
 import { SafeAreaView } from 'react-native-safe-area-context';
 import SettingsTab from '../components/SettingsTab';
 import { useMe } from '../store/me';
+import { useLang } from '../store/lang';
+import { t } from '../utils/i18n';
 import { getClient } from '../chat/cometchat';
 import { uploadAvatarToCloudinary, normalizeLocalImageUri } from '../utils/uploadAvatar';
 import { getInstallId } from '../utils/installId';
@@ -34,6 +36,7 @@ async function loadDraftProfile(): Promise<{ nick?: string; avatar?: string }> {
 }
 
 export default function SettingsScreen() {
+  const lang = useLang((s) => s.lang);
   const me = useMe((s) => s.me);
   const replaceMe = useMe((s) => s.replaceMe);
   const patchMe = useMe((s) => s.setMe);
@@ -307,7 +310,7 @@ export default function SettingsScreen() {
   const handleSaveProfile = useCallback(async () => {
     try {
       if (!me?.id) {
-        Alert.alert('Ошибка', 'Не получен userId. Откройте экран заново.');
+        Alert.alert(t('errorTitle', lang), t('noUserIdTryReopen', lang));
         return;
       }
       setSaving(true);
@@ -328,7 +331,7 @@ export default function SettingsScreen() {
 
       setSavedToast(true); // ✅ Тост только при сохранении ника
     } catch (e: any) {
-      Alert.alert('Не удалось сохранить', String(e?.message || e));
+      Alert.alert(t('saveFailed', lang), String(e?.message || e));
     } finally {
       setSaving(false);
     }
@@ -369,7 +372,7 @@ export default function SettingsScreen() {
       setLocalAvatarUri('');
       setAvatarUri(prev);
       patchMe({ avatar: prev });
-      Alert.alert('Не удалось удалить', String(e?.message || e));
+      Alert.alert(t('deleteFailed', lang), String(e?.message || e));
     }
   }, [me?.id, me?.nick, avatarUri, replaceMe, patchMe]);
 
@@ -382,9 +385,9 @@ export default function SettingsScreen() {
   const handleForceClearCache = useCallback(async () => {
     try {
       await forceClearAllCaches();
-      Alert.alert('Кэш очищен', 'Перезапустите приложение.');
+      Alert.alert(t('cacheClearedTitle', lang), t('restartApp', lang));
     } catch (e: any) {
-      Alert.alert('Ошибка', `Не удалось очистить кэш: ${e?.message || e}`);
+      Alert.alert(t('errorTitle', lang), `${t('cacheClearFailed', lang)}: ${e?.message || e}`);
     }
   }, []);
 
@@ -393,7 +396,7 @@ export default function SettingsScreen() {
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
         { 
-          options: ['Сделать фото', 'Выбрать из галереи', 'Выбрать файл', 'Отмена'], 
+          options: [t('takePhoto', lang), t('chooseFromGallery', lang), t('chooseFile', lang), t('cancel', lang)], 
           cancelButtonIndex: 3, 
           userInterfaceStyle: 'dark' 
         },

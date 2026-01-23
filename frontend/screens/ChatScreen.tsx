@@ -55,6 +55,8 @@ import {
   getAvatar,
 } from "../sockets/socket";
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useLang } from "../store/lang";
+import { t } from "../utils/i18n";
 
 type RouteParams = {
   peerId: string;
@@ -69,6 +71,7 @@ type Props = { route: { params?: RouteParams }; navigation: any };
 export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
+  const lang = useLang((s) => s.lang);
 
 
   // Загружаем профиль при инициализации
@@ -863,7 +866,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       }}
     >
       <ActivityIndicator />
-      <Text style={{ color: LIVI.text, marginTop: 12 }}>Загружаем чат…</Text>
+      <Text style={{ color: LIVI.text, marginTop: 12 }}>{t('chatLoading', lang)}</Text>
     </View>
   );
 
@@ -890,7 +893,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             borderRadius: 10,
           }}
         >
-          <Text style={{ color: LIVI.white, fontWeight: "700" }}>Ок</Text>
+          <Text style={{ color: LIVI.white, fontWeight: "700" }}>{t('ok', lang)}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -907,12 +910,12 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (!currentUserId || !peerId) return;
     
     Alert.alert(
-      "Удалить переписку только у меня",
-      "Вы уверены, что хотите удалить всю переписку только у себя? У друга переписка останется.",
+      t('chatClearMineTitle', lang),
+      t('chatClearMineMsg', lang),
       [
-        { text: "Отмена", style: "cancel" },
+        { text: t('cancel', lang), style: "cancel" },
         { 
-          text: "Удалить", 
+          text: t('delete', lang), 
           style: "destructive",
           onPress: async () => {
             // Сразу очищаем локальные сообщения у инициатора
@@ -926,9 +929,9 @@ export default function ChatScreen({ route, navigation }: Props) {
             // Отправляем запрос на сервер для очистки только у себя
             const success = await clearChatMessages(peerId, false);
             if (success) {
-              Alert.alert("Успешно", "Переписка удалена только у вас");
+              Alert.alert(t('successTitle', lang), t('chatClearedMineSuccess', lang));
             } else {
-              Alert.alert("Ошибка", "Не удалось удалить переписку на сервере");
+              Alert.alert(t('errorTitle', lang), t('chatClearFailedServer', lang));
             }
           }
         }
@@ -940,12 +943,12 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (!currentUserId || !peerId) return;
     
     Alert.alert(
-      "Удалить переписку у всех",
-      "Вы уверены, что хотите удалить всю переписку для обоих пользователей? Это действие нельзя отменить.",
+      t('chatClearAllTitle', lang),
+      t('chatClearAllMsg', lang),
       [
-        { text: "Отмена", style: "cancel" },
+        { text: t('cancel', lang), style: "cancel" },
         { 
-          text: "Удалить", 
+          text: t('delete', lang), 
           style: "destructive",
           onPress: async () => {
             // Сразу очищаем локальные сообщения у инициатора
@@ -959,9 +962,9 @@ export default function ChatScreen({ route, navigation }: Props) {
             // Отправляем запрос на сервер для очистки у обоих пользователей
             const success = await clearChatMessages(peerId, true);
             if (success) {
-              Alert.alert("Успешно", "Переписка удалена у всех");
+              Alert.alert(t('successTitle', lang), t('chatClearedAllSuccess', lang));
             } else {
-              Alert.alert("Ошибка", "Не удалось удалить переписку на сервере");
+              Alert.alert(t('errorTitle', lang), t('chatClearFailedServer', lang));
             }
           }
         }
@@ -975,7 +978,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (success) {
       setMessages(prev => prev.filter(msg => msg.id !== messageId));
     } else {
-      Alert.alert("Ошибка", "Не удалось удалить сообщение");
+      Alert.alert(t('errorTitle', lang), t('chatDeleteMessageFailed', lang));
     }
   };
 
@@ -1177,9 +1180,9 @@ export default function ChatScreen({ route, navigation }: Props) {
       ActionSheetIOS.showActionSheetWithOptions(
         {
           options: [
-            'Сделать фото',
-            'Выбрать из галереи',
-            'Отмена'
+            t('takePhoto', lang),
+            t('chooseFromGallery', lang),
+            t('cancel', lang)
           ],
           cancelButtonIndex: 2,
           userInterfaceStyle: 'dark'
@@ -1197,12 +1200,12 @@ export default function ChatScreen({ route, navigation }: Props) {
       );
     } else {
       Alert.alert(
-        'Прикрепить файл',
-        'Выберите тип файла',
+        t('attachFileTitle', lang),
+        t('attachFileMsg', lang),
         [
-          { text: 'Сделать фото', onPress: handleCamera },
-          { text: 'Выбрать из галереи', onPress: handleImagePicker },
-          { text: 'Отмена', style: 'cancel' }
+          { text: t('takePhoto', lang), onPress: handleCamera },
+          { text: t('chooseFromGallery', lang), onPress: handleImagePicker },
+          { text: t('cancel', lang), style: 'cancel' }
         ]
       );
     }
@@ -1212,7 +1215,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     try {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert('Ошибка', 'Нужно разрешение на использование камеры');
+        Alert.alert(t('errorTitle', lang), t('needCameraPermission', lang));
         return;
       }
 
@@ -1320,7 +1323,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
     } catch (error) {
       console.error('Camera error:', error);
-      Alert.alert('Ошибка', 'Не удалось сделать фото');
+      Alert.alert(t('errorTitle', lang), t('takePhotoFailed', lang));
     }
   };
 
@@ -1328,7 +1331,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert('Ошибка', 'Нужно разрешение на доступ к галерее');
+        Alert.alert(t('errorTitle', lang), t('needGalleryPermission', lang));
         return;
       }
 
@@ -1435,7 +1438,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
     } catch (error) {
       console.error('Image picker error:', error);
-      Alert.alert('Ошибка', 'Не удалось выбрать изображение');
+      Alert.alert(t('errorTitle', lang), t('pickImageFailed', lang));
     }
   };
 
@@ -2042,7 +2045,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   fontSize: 16,
                   maxHeight: 100,
                 }}
-                placeholder="Введите сообщение..."
+                placeholder={t('chatMessagePlaceholder', lang)}
                 placeholderTextColor={LIVI.titan}
                 value={messageText}
                 onChangeText={setMessageText}
@@ -2190,7 +2193,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
               <TextInput
                 style={{ flex: 1, color: LIVI.white, fontSize: 16, maxHeight: 100 }}
-                placeholder="Введите сообщение..."
+                placeholder={t('chatMessagePlaceholder', lang)}
                 placeholderTextColor={LIVI.titan}
                 value={messageText}
                 onChangeText={setMessageText}

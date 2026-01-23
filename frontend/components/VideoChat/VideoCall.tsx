@@ -1957,7 +1957,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           currentPip.showPiP({
             callId: callId || '',
             roomId: roomId || '',
-            partnerName: partner?.nick || 'Друг',
+            partnerName: partner?.nick || '',
             partnerAvatarUrl: avatarUrl,
             muteLocal: !micOn,
             muteRemote: remoteMuted,
@@ -2054,7 +2054,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           {showIncomingFriendOverlay && (
             <View style={styles.incomingOverlayContainer}>
               <BlurView intensity={60} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
-              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]} />
+              <View
+                style={[
+                  StyleSheet.absoluteFill,
+                  { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.5)' },
+                ]}
+              />
               <View style={styles.incomingOverlayContent}>
                 <View style={{ width: 140, height: 140, alignItems: 'center', justifyContent: 'center' }}>
                   <Animated.View style={buildIncomingWaveStyle(incomingWaveA, 'left')} />
@@ -2063,20 +2068,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                     <MaterialIcons name="call" size={48} color="#4FC3F7" />
                   </Animated.View>
                 </View>
-                <Text style={styles.incomingOverlayTitle}>Входящий вызов</Text>
+                <Text style={styles.incomingOverlayTitle}>{t('incomingCallTitle', lang)}</Text>
                 <Text style={styles.incomingOverlayName}>{incomingCallerLabel}</Text>
                 <View style={styles.incomingOverlayButtons}>
                   <TouchableOpacity
                     onPress={handleIncomingAccept}
                     style={[styles.btnGlassBase, styles.btnGlassSuccess]}
                   >
-                    <Text style={styles.modalBtnText}>Принять</Text>
+                    <Text style={styles.modalBtnText}>{t('accept', lang)}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     onPress={handleIncomingDecline}
                     style={[styles.btnGlassBase, styles.btnGlassDanger]}
                   >
-                    <Text style={styles.modalBtnText}>Отклонить</Text>
+                    <Text style={styles.modalBtnText}>{t('decline', lang)}</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -2167,7 +2172,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             onPress={isInactiveState ? undefined : onAbortCall}
             disabled={isInactiveState}
           >
-            <Text style={styles.bigBtnText}>Завершить</Text>
+            <Text style={styles.bigBtnText}>{t('endCall', lang)}</Text>
             <MaterialIcons name="call-end" size={18} color="#fff" />
           </TouchableOpacity>
         </View>

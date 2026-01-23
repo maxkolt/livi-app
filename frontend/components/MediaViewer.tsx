@@ -19,6 +19,8 @@ import { Ionicons } from '@expo/vector-icons';
 import Modal from 'react-native-modal';
 import { LIVI } from '../utils/i18n';
 import { API_BASE } from '../sockets/socket';
+import { useLang } from '../store/lang';
+import { t } from '../utils/i18n';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -37,6 +39,7 @@ export default function MediaViewer({
   uri, 
   name 
 }: MediaViewerProps) {
+  const lang = useLang((s) => s.lang);
   const [busy, setBusy] = React.useState(false);
 
   const resolvedUri = React.useMemo(() => {
@@ -162,7 +165,7 @@ export default function MediaViewer({
             disabled={busy}
           >
             <Ionicons name="share-outline" size={22} color={LIVI.white} />
-            <Text style={styles.actionText}>Поделиться</Text>
+            <Text style={styles.actionText}>{t('share', lang)}</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>

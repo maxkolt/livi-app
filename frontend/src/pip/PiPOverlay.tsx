@@ -17,6 +17,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePiP } from './PiPContext';
 import { logger } from '../../utils/logger';
+import { useLang } from '../../store/lang';
+import { t } from '../../utils/i18n';
 
 const UI = {
   bg: 'rgba(25,32,46,0.95)',  // LiVi dark
@@ -29,6 +31,7 @@ const UI = {
 };
 
 export default function PiPOverlay() {
+  const lang = useLang((s) => s.lang);
   const {
     visible,
     callId,
@@ -186,7 +189,7 @@ export default function PiPOverlay() {
           </View>
           <View style={styles.statusRow}>
             <View style={styles.dot} />
-            <Text style={styles.status}>вызов активен</Text>
+            <Text style={styles.status}>{t('callActive', lang)}</Text>
           </View>
         </Pressable>
 
@@ -197,7 +200,7 @@ export default function PiPOverlay() {
           style={styles.nickWrap}
         >
           <Text numberOfLines={2} style={styles.nick}>
-            {partnerName || 'Собеседник'}
+            {partnerName || t('peer', lang)}
           </Text>
         </Pressable>
 

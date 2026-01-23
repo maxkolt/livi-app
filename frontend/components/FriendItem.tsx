@@ -3,6 +3,8 @@ import { View, Text, TouchableOpacity } from 'react-native';
 import AvatarImage from './AvatarImage';
 import { useNavigation } from '@react-navigation/native';
 import { putThumb, getThumb } from '../utils/avatarCache';
+import { useLang } from '../store/lang';
+import { t } from '../utils/i18n';
 
 type Friend = {
   _id: string;
@@ -17,6 +19,7 @@ const firstLetter = (s?: string) => (s?.trim()?.[0] || '').toUpperCase();
 
 export default function FriendItem({ friend }: { friend: Friend }) {
   const navigation = useNavigation<any>();
+  const lang = useLang((s) => s.lang);
   const [thumb, setThumb] = useState<string>('');
 
   const nick = (friend.nick || '').trim();
@@ -102,7 +105,7 @@ export default function FriendItem({ friend }: { friend: Friend }) {
         <Text style={{ color: '#E6E8EB', fontSize: 16, fontWeight: '600' }}>{showName}</Text>
         {typeof friend.online === 'boolean' && (
           <Text style={{ color: friend.online ? '#55d187' : '#ff6b6b', fontSize: 12 }}>
-            {friend.online ? 'онлайн' : 'оффлайн'}
+            {friend.online ? t('online', lang) : t('offline', lang)}
           </Text>
         )}
       </View>

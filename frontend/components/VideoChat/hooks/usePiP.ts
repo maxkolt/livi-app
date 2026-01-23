@@ -188,13 +188,13 @@ export const usePiP = ({
         finalCallId,
         finalRoomId,
         actualPartnerId,
-        partnerName: partner?.nick || 'Друг'
+        partnerName: partner?.nick || ''
       });
       
       logger.info('[usePiP] Вызываем pip.showPiP', {
         finalCallId,
         finalRoomId,
-        partnerName: partner?.nick || 'Друг',
+        partnerName: partner?.nick || '',
         hasLocalStream: !!localStream,
         hasRemoteStream: !!remoteStream,
         pipVisibleBefore: pip.visible
@@ -203,7 +203,7 @@ export const usePiP = ({
       pip.showPiP({
         callId: finalCallId,
         roomId: finalRoomId,
-        partnerName: partner?.nick || 'Друг',
+        partnerName: partner?.nick || '',
         partnerAvatarUrl: avatarUrl,
         muteLocal: !micOn,
         muteRemote: remoteMuted,

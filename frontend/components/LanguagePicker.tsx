@@ -8,8 +8,10 @@ import {
   StyleSheet,
   ScrollView,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { t, type Lang, defaultLang } from '../utils/i18n';
 
 type Props = {
@@ -58,8 +60,19 @@ const LanguagePicker: React.FC<Props> = ({
 }) => {
   if (!visible) return null;
 
+  const insets = useSafeAreaInsets();
+  const { height: winH } = useWindowDimensions();
   const headerTitle = t('chooseLanguage', current);
   const cancelLbl   = t('cancel', current);
+
+  // Делаем предсказуемую высоту карточки, чтобы:
+  // - она всегда была по центру
+  // - список скроллился, а кнопка "Закрыть" оставалась видимой
+  const availableH = Math.max(0, winH - insets.top - insets.bottom - 48);
+  const cardH = Math.min(
+    availableH,
+    Math.max(320, Math.min(560, Math.round(availableH * 0.78)))
+  );
 
   return (
     <Modal
@@ -69,15 +82,27 @@ const LanguagePicker: React.FC<Props> = ({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <View style={styles.overlay}>
-        <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+      <View
+        style={[
+          styles.overlay,
+          {
+            paddingTop: 16 + insets.top,
+            paddingBottom: 16 + insets.bottom,
+          },
+        ]}
+      >
+        {Platform.OS === 'ios' ? (
+          <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+        ) : null}
+        <View style={styles.backdrop} />
 
-        <View style={styles.card}>
+        <View style={[styles.card, { height: cardH }]}>
           <View style={styles.header}>
             <Text style={styles.headerTitle}>{headerTitle}</Text>
           </View>
 
           <ScrollView
+            style={styles.list}
             contentContainerStyle={{ paddingVertical: 4 }}
             showsVerticalScrollIndicator={false}
           >
@@ -126,15 +151,16 @@ function normalize(code?: string): string {
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'transparent',
     paddingHorizontal: 18,
-    paddingVertical: 24,
     justifyContent: 'center',
+    alignItems: 'center',
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.62)',
   },
   card: {
-    alignSelf: 'center',
     width: '92%',
-    maxHeight: '78%',
     backgroundColor: LIVI.surface,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
@@ -168,6 +194,9 @@ const styles = StyleSheet.create({
   },
   closeTxt: { color: LIVI.white, fontSize: 16, fontWeight: '800' },
 
+  list: {
+    flex: 1,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
