@@ -134,14 +134,29 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     
     // Пересылаем событие всем в комнатах, где находится этот сокет
     let forwardedViaRoom = false;
-    socket.rooms.forEach((currentRoomId) => {
-      if (currentRoomId.startsWith("room_")) {
-        // КРИТИЧНО: Передаем roomId при пересылке для правильной обработки на клиенте
-        socket.to(currentRoomId).emit("cam-toggle", { enabled, from, roomId: currentRoomId });
-        if (!enabled) logger.debug('Camera toggle forwarded to room', { roomId: currentRoomId });
+    // Prefer explicit roomId if provided (RandomChat can have LiveKit roomName != socket pairing roomId,
+    // so the client relies on the socket pairing roomId from match_found).
+    if (roomId && roomId.startsWith("room_")) {
+      // Only treat as "forwarded via room" if the room actually exists in the adapter.
+      // In RandomChat we may NOT join sockets to that roomId, so room-broadcast would be a no-op.
+      const room = (io.sockets.adapter.rooms as any)?.get?.(roomId) as Set<string> | undefined;
+      if (room && room.size > 0) {
+        socket.to(roomId).emit("cam-toggle", { enabled, from, roomId });
+        if (!enabled) logger.debug('Camera toggle forwarded to room (explicit)', { roomId, roomSize: room.size });
         forwardedViaRoom = true;
+      } else {
+        logger.debug('cam-toggle: roomId provided but room has no members; will fallback to partnerSid', { roomId });
       }
-    });
+    } else {
+      socket.rooms.forEach((currentRoomId) => {
+        if (currentRoomId.startsWith("room_")) {
+          // КРИТИЧНО: Передаем roomId при пересылке для правильной обработки на клиенте
+          socket.to(currentRoomId).emit("cam-toggle", { enabled, from, roomId: currentRoomId });
+          if (!enabled) logger.debug('Camera toggle forwarded to room', { roomId: currentRoomId });
+          forwardedViaRoom = true;
+        }
+      });
+    }
     
     // Для обратной совместимости пересылаем событие напрямую по socket.id
     // ТОЛЬКО если пересылка через комнату не сработала (чтобы избежать дубликатов).
@@ -150,7 +165,8 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     if (!forwardedViaRoom && socketData && socketData.partnerSid) {
       const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
       if (partnerSocket) {
-        partnerSocket.emit("cam-toggle", { enabled, from, to: partnerSocket.id });
+        // Include roomId if provided to let the client filter stale events.
+        partnerSocket.emit("cam-toggle", { enabled, from, to: partnerSocket.id, ...(roomId ? { roomId } : {}) });
         if (!enabled) logger.debug('Camera toggle forwarded to partner', { partnerId: socketData.partnerSid });
       }
     }

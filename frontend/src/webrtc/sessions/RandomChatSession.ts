@@ -59,6 +59,9 @@ export class RandomChatSession extends SimpleEventEmitter {
   private disconnectHandled = false;
   private disconnectPromise: Promise<void> | null = null;
   private currentRoomName: string | null = null; // Имя текущей подключенной комнаты LiveKit
+  // Socket-level match room id (can differ from LiveKit roomName when we use userId-based room names).
+  // Used for cam-toggle filtering to ensure "Отошел" is driven only by explicit UI camera toggles.
+  private matchRoomId: string | null = null;
   private micLevelInterval: NodeJS.Timeout | null = null;
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -110,6 +113,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.config.setStarted?.(false);
     this.config.callbacks.onLoadingChange?.(false);
     this.config.onLoadingChange?.(false);
+    this.matchRoomId = null;
     void this.disconnectRoom('user');
     this.stopLocalTracks();
     this.resetRemoteState();
@@ -163,6 +167,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     // Останавливаем только удаленное соединение и сбрасываем состояние удаленного стрима
     
     try {
+      // Clear match room id early to avoid applying stale cam-toggle events during transition.
+      this.matchRoomId = null;
       socket.emit('next');
     } catch (e) {
       logger.warn('[RandomChatSession] Error emitting next', e);
@@ -225,8 +231,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.emit('remoteStream', null);
       this.config.callbacks.onRemoteStreamChange?.(null);
       this.config.onRemoteStreamChange?.(null);
-      this.config.callbacks.onRemoteCamStateChange?.(false);
-      this.config.onRemoteCamStateChange?.(false);
       this.remoteViewKey = Date.now();
       this.emit('remoteViewKeyChanged', this.remoteViewKey);
       
@@ -388,6 +392,14 @@ export class RandomChatSession extends SimpleEventEmitter {
         if (this.isCamOn) {
           await this.ensureVideoTrackPublished();
         }
+        // RandomChat UX: explicitly signal camera state to the partner.
+        // This is the ONLY thing that should drive the "Отошел" placeholder in random chat.
+        try {
+          const roomId = this.matchRoomId || undefined;
+          if (roomId) {
+            socket.emit('cam-toggle', { enabled: this.isCamOn, from: socket.id, roomId });
+          }
+        } catch {}
       } catch (e) {
         logger.warn('[RandomChatSession] Failed to toggle camera', e);
         // Fallback: try setCameraEnabled only
@@ -609,12 +621,37 @@ export class RandomChatSession extends SimpleEventEmitter {
     const peerStoppedHandler = () => this.handleRandomDisconnected('server');
     const peerLeftHandler = () => this.handlePeerLeft();
     const disconnectedHandler = () => this.handleRandomDisconnected('server');
+    // RandomChat UX: "Отошел" must be driven ONLY by explicit user action (camera toggle button).
+    // We use a dedicated socket relay (cam-toggle) instead of LiveKit TrackMuted/Unmuted to avoid false positives
+    // during re-subscribes, network churn, or when a participant is leaving.
+    const camToggleHandler = (data: { enabled: boolean; from: string; roomId?: string }) => {
+      try {
+        const currentRoomId = this.matchRoomId;
+        const roomIdsMatch =
+          !!data?.roomId &&
+          !!currentRoomId &&
+          (data.roomId === currentRoomId || data.roomId.trim() === currentRoomId.trim());
+
+        if (!roomIdsMatch) {
+          return;
+        }
+
+        this.remoteCamEnabled = !!data.enabled;
+        this.remoteViewKey = Date.now();
+        this.emit('remoteViewKeyChanged', this.remoteViewKey);
+        this.config.callbacks.onRemoteCamStateChange?.(!!data.enabled);
+        this.config.onRemoteCamStateChange?.(!!data.enabled);
+      } catch (e) {
+        logger.debug('[RandomChatSession] cam-toggle handler error', e);
+      }
+    };
 
     socket.on('match_found', matchHandler);
     socket.on('peer:stopped', peerStoppedHandler);
     socket.on('peer:left', peerLeftHandler);
     socket.on('disconnected', disconnectedHandler);
     socket.on('hangup', disconnectedHandler);
+    socket.on('cam-toggle', camToggleHandler);
 
     this.socketOffs = [
       () => socket.off('match_found', matchHandler),
@@ -622,6 +659,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       () => socket.off('peer:left', peerLeftHandler),
       () => socket.off('disconnected', disconnectedHandler),
       () => socket.off('hangup', disconnectedHandler),
+      () => socket.off('cam-toggle', camToggleHandler),
     ];
   }
 
@@ -634,6 +672,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     const partnerId = data.id;
     const roomId = data.roomId ?? null;
     const userId = data.userId ?? null;
+    // Save socket-level match room id (used for cam-toggle relay).
+    this.matchRoomId = roomId;
 
     // КРИТИЧНО: Защита от множественных вызовов handleMatchFound для одной и той же комнаты
     const now = Date.now();
@@ -742,20 +782,20 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
     this.disconnectHandled = true;
+
+    // UX: partner pressed "Next" -> we should go to searching immediately and NEVER flash "Отошел".
+    // The "Отошел" UI is driven by remote cam mute/unmute, and LiveKit can emit TrackMuted while a participant is leaving.
+    // If we wait (even 300ms), the UI can briefly show the away placeholder before the searching state kicks in.
+    try {
+      this.emit('searching');
+      this.config.callbacks.onLoadingChange?.(true);
+      this.config.onLoadingChange?.(true);
+    } catch {}
     
     void (async () => {
       try {
         await this.disconnectRoom('server');
         this.resetRemoteState();
-        
-        // КРИТИЧНО: Добавляем задержку перед обновлением UI, чтобы комната успела отключиться
-        setTimeout(() => {
-          if (this.started && !this.isDisconnecting) {
-            this.emit('searching');
-            this.config.callbacks.onLoadingChange?.(true);
-            this.config.onLoadingChange?.(true);
-          }
-        }, 300);
       } catch (e) {
         logger.error('[RandomChatSession] Error in handlePeerLeft', e);
       } finally {
@@ -1507,8 +1547,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.emit('remoteStream', null);
     this.config.callbacks.onRemoteStreamChange?.(null);
     this.config.onRemoteStreamChange?.(null);
-    this.config.callbacks.onRemoteCamStateChange?.(false);
-    this.config.onRemoteCamStateChange?.(false);
     this.remoteAudioMuted = false;
     this.emit('remoteState', { muted: false });
     this.remoteViewKey = Date.now();
@@ -2550,6 +2588,16 @@ export class RandomChatSession extends SimpleEventEmitter {
         roomName: this.currentRoomName,
         roomState: room.state,
       });
+
+      // RandomChat UX: send initial camera state to partner via socket relay.
+      // This makes "Отошел" depend only on explicit UI camera toggles (and the current state),
+      // not on LiveKit TrackMuted/Unmuted which can be noisy during churn.
+      try {
+        const roomId = this.matchRoomId || undefined;
+        if (roomId) {
+          socket.emit('cam-toggle', { enabled: this.isCamOn, from: socket.id, roomId });
+        }
+      } catch {}
     } catch (e: any) {
       const errorMessage = e?.message || String(e);
       const isInvalidApiKey = errorMessage.includes('invalid API key') || 
@@ -3031,42 +3079,22 @@ export class RandomChatSession extends SimpleEventEmitter {
       })
       .on(RoomEvent.TrackMuted, (pub, participant) => {
         if (!participant.isLocal && pub.kind === Track.Kind.Video) {
-          logger.info('[RandomChatSession] Remote video track muted', {
-            trackId: pub.trackSid,
+          // IMPORTANT (RandomChat UX):
+          // TrackMuted/Unmuted is NOT a reliable source of "user pressed camera button" intent in RandomChat.
+          // It can occur during churn (resubscribe/reconnect/leave) and caused false "Отошел".
+          // We drive "Отошел" ONLY from socket event 'cam-toggle' emitted on explicit toggleCam().
+          logger.debug('[RandomChatSession] Ignoring remote TrackMuted (RandomChat uses cam-toggle)', {
             participantId: participant.identity,
+            trackId: pub.trackSid,
           });
-          this.remoteCamEnabled = false;
-          // КРИТИЧНО: Обновляем remoteViewKey для принудительного обновления UI
-          this.remoteViewKey = Date.now();
-          this.emit('remoteViewKeyChanged', this.remoteViewKey);
-          // КРИТИЧНО: Обновляем remoteStream для отображения заглушки
-          if (this.remoteStream) {
-            this.emit('remoteStream', this.remoteStream);
-            this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
-            this.config.onRemoteStreamChange?.(this.remoteStream);
-          }
-          this.config.callbacks.onRemoteCamStateChange?.(false);
-          this.config.onRemoteCamStateChange?.(false);
         }
       })
       .on(RoomEvent.TrackUnmuted, (pub, participant) => {
         if (!participant.isLocal && pub.kind === Track.Kind.Video) {
-          logger.info('[RandomChatSession] Remote video track unmuted', {
-            trackId: pub.trackSid,
+          logger.debug('[RandomChatSession] Ignoring remote TrackUnmuted (RandomChat uses cam-toggle)', {
             participantId: participant.identity,
+            trackId: pub.trackSid,
           });
-          this.remoteCamEnabled = true;
-          // КРИТИЧНО: Обновляем remoteViewKey для принудительного обновления UI
-          this.remoteViewKey = Date.now();
-          this.emit('remoteViewKeyChanged', this.remoteViewKey);
-          // КРИТИЧНО: Обновляем remoteStream для отображения видео
-          if (this.remoteStream) {
-            this.emit('remoteStream', this.remoteStream);
-            this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
-            this.config.onRemoteStreamChange?.(this.remoteStream);
-          }
-          this.config.callbacks.onRemoteCamStateChange?.(true);
-          this.config.onRemoteCamStateChange?.(true);
         }
       })
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
@@ -3180,7 +3208,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     } else if (publication.kind === Track.Kind.Video) {
       const wasMutedStateChanged = this.remoteVideoTrack && (this.remoteVideoTrack.isMuted !== track.isMuted);
       this.remoteVideoTrack = track;
-      this.remoteCamEnabled = !track.isMuted;
       
       // КРИТИЧНО: Если состояние muted изменилось, обновляем remoteViewKey
       if (wasMutedStateChanged) {
@@ -3190,9 +3217,6 @@ export class RandomChatSession extends SimpleEventEmitter {
         });
         this.remoteViewKey = Date.now();
       }
-      
-      this.config.callbacks.onRemoteCamStateChange?.(!track.isMuted);
-      this.config.onRemoteCamStateChange?.(!track.isMuted);
     }
     
     // КРИТИЧНО: Всегда эмитим remoteStream даже если трек уже был добавлен
