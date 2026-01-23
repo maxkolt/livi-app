@@ -1477,11 +1477,13 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             const hadVideoBefore = hasEverRemoteVideoRef.current || canRenderVideo;
             // While "Next" is in progress, we must show loader and never flash "Отошел".
             const nextInProgress = isNextingRef.current || isNexting;
+            const remoteCamKnown = remoteCamStateKnownRef.current;
+            const remoteCamExplicitlyOff = remoteCamKnown && remoteCamEnabled === false;
             const showLoader =
               loading ||
               nextInProgress ||
               // До первого видео показываем лоадер только пока нет remoteStream (т.е. нет установленного соединения).
-              (started && !hadVideoBefore && !remoteStream);
+              (started && !hadVideoBefore && !remoteStream && !remoteCamExplicitlyOff);
 
             // Keep last good stream to keep RTCView mounted (avoid pipeline churn).
             if (canRenderVideo && streamToRender) {
@@ -1493,10 +1495,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             // Away overlay:
             // - Show ONLY when we explicitly know remote camera is OFF.
             // - When remote camera is turned ON, hide immediately (even if video takes time to resume).
-            const remoteCamKnown = remoteCamStateKnownRef.current;
             const showAwayOverlay =
               !showLoader &&
-              hadVideoBefore &&
               remoteCamKnown &&
               remoteCamEnabled === false &&
               !networkOverlayVisible;
