@@ -786,7 +786,10 @@ export async function attachUserId(userId: string) {
 
 // Кэш для проверки существования пользователей
 const userExistsCache = new Map<string, { result: boolean; timestamp: number }>();
-const USER_EXISTS_CACHE_DURATION = 30000; // 30 секунд
+// ВАЖНО: отрицательный результат нельзя кэшировать надолго — иначе после восстановления/создания пользователя
+// приложение будет зацикливаться на "user_not_found" и делать hard reset по старому кэшу.
+const USER_EXISTS_CACHE_TTL_TRUE = 30000; // 30s
+const USER_EXISTS_CACHE_TTL_FALSE = 1500; // 1.5s (почти "debounce")
 
 // Защита от одновременных вызовов для одного userId
 const pendingChecks = new Map<string, Promise<boolean | null>>();
@@ -795,9 +798,12 @@ const pendingChecks = new Map<string, Promise<boolean | null>>();
 export async function checkUserExists(userId: string): Promise<boolean | null> {
   // Проверяем кэш
   const cached = userExistsCache.get(userId);
-  if (cached && Date.now() - cached.timestamp < USER_EXISTS_CACHE_DURATION) {
+  if (cached) {
+    const ttl = cached.result ? USER_EXISTS_CACHE_TTL_TRUE : USER_EXISTS_CACHE_TTL_FALSE;
+    if (Date.now() - cached.timestamp < ttl) {
     console.log('[checkUserExists] Using cached result:', cached.result);
     return cached.result;
+    }
   }
   
   // Защита от одновременных вызовов - если уже есть запрос для этого userId, ждем его
@@ -816,12 +822,14 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
       if (socketInstance?.connected) {
         try {
           const socketResult = await checkUserExistsSocket(userId);
-          if (socketResult?.ok !== undefined) {
-            const exists = socketResult.exists ?? false;
+          // ВАЖНО: не интерпретируем ok=false как exists=false (например, когда БД временно недоступна).
+          if (socketResult?.ok === true && typeof (socketResult as any).exists === 'boolean') {
+            const exists = (socketResult as any).exists as boolean;
             userExistsCache.set(userId, { result: exists, timestamp: Date.now() });
             console.log('[checkUserExists] User exists (via socket):', exists);
             return exists;
           }
+          // ok=false / нет exists -> fallback to HTTP
         } catch (socketError) {
           // Не логируем как warning - это нормально если socket временно недоступен
           console.log('[checkUserExists] Socket check failed, falling back to HTTP');
@@ -921,6 +929,10 @@ async function createUserInternal(): Promise<string | null> {
   // Очищаем старый userId и все локальные данные из AsyncStorage
   try {
     await AsyncStorage.removeItem("userId");
+    // актуальные ключи
+    await AsyncStorage.removeItem('livi.profile.v1');
+    await AsyncStorage.removeItem('profile_draft_v1');
+    // legacy keys (на случай старых версий)
     await AsyncStorage.removeItem('profile');
     await AsyncStorage.removeItem('livi.home.draft.v1');
     console.log('[createUser] Cleared old userId and all local data from AsyncStorage');
@@ -928,7 +940,7 @@ async function createUserInternal(): Promise<string | null> {
     console.warn('[createUser] Failed to clear AsyncStorage:', e);
   }
   
-  const installId = await getInstallId();
+  let installId = await getInstallId();
 
   // Retry до 5 раз с задержкой
   for (let attempt = 1; attempt <= 5; attempt++) {
@@ -939,12 +951,27 @@ async function createUserInternal(): Promise<string | null> {
       const response = await identityAttach({ installId });
       
       if (response?.ok && response?.userId) {
-        // Устанавливаем userId после успешного создания
-        setCurrentUserId(response.userId);
-        await applyAuthAndConnect();
-        
-        console.log('[createUser] User created successfully:', response.userId);
-        return response.userId;
+        // ВАЖНО: сервер может вернуть userId, который уже удалён из БД (например, по старой связке installId→userId).
+        // Поэтому подтверждаем существование перед тем как считать создание успешным.
+        const candidateId = String(response.userId);
+        const exists = await checkUserExists(candidateId);
+
+        if (exists) {
+          setCurrentUserId(candidateId);
+          await applyAuthAndConnect();
+          console.log('[createUser] User created successfully:', candidateId);
+          return candidateId;
+        }
+
+        console.warn('[createUser] identity:attach returned non-existing userId, resetting installId and retrying...', {
+          candidateId,
+          exists,
+        });
+        const { resetInstallId } = await import('../utils/installId');
+        await resetInstallId();
+        clearCurrentUserId();
+        installId = await getInstallId();
+        continue;
       }
       
       if (response?.error === 'duplicate_request') {
@@ -1035,6 +1062,8 @@ export function getCurrentUserId(): string | undefined {
 export function setCurrentUserId(userId: string) {
   // Логи setCurrentUserId убраны - показывают только рабочее состояние
   currentUserId = userId;
+  // При смене userId — сбрасываем кэш существования, чтобы не залипать на старом false
+  try { userExistsCache.delete(String(userId)); } catch {}
   // Сохраняем в AsyncStorage без переподключения
   AsyncStorage.setItem("userId", userId).catch(e => console.warn('Failed to save userId to storage:', e));
 }
@@ -1042,6 +1071,9 @@ export function setCurrentUserId(userId: string) {
 // КРИТИЧНО: Функция для сброса currentUserId (нужна после удаления профиля)
 export function clearCurrentUserId() {
   currentUserId = undefined;
+  // При сбросе identity — сбрасываем кэши проверок, чтобы новые попытки были "чистыми"
+  try { userExistsCache.clear(); } catch {}
+  try { pendingChecks.clear(); } catch {}
   AsyncStorage.removeItem("userId").catch(e => console.warn('Failed to remove userId from storage:', e));
   console.log('[clearCurrentUserId] Cleared currentUserId');
 }

@@ -199,11 +199,15 @@ export default function registerIdentitySockets(io: Server) {
           const exists = await User.exists({ _id: userId });
 
           if (!exists) {
-            // Пользователь был удалён - создаём ПУСТОГО (игнорируем входящий profile)
-            const incomingProfile = payload?.profile || {};
-            const hasIncomingData = !!(incomingProfile.nick || incomingProfile.avatar);
+            // Пользователь был удалён - создаём НОВОГО пользователя и обновляем привязку installId -> user.
+            // ВАЖНО: нельзя "воскрешать" удалённый userId, иначе клиент будет зацикливаться на user_not_found.
+            const newUserId = new Types.ObjectId();
 
-            console.log(`[identity] User ${userId} not found, creating new user...`);
+            console.log(`[identity] User ${userId} not found, creating new user and rebinding install...`, {
+              oldUserId: userId,
+              newUserId: String(newUserId),
+              installId,
+            });
             
             // КРИТИЧНО: Проверяем готовность MongoDB перед User.create
             if (mongoose.connection.readyState !== 1) {
@@ -214,17 +218,32 @@ export default function registerIdentitySockets(io: Server) {
             }
             
             const newUser = await User.create({
-              _id: userId,
+              _id: newUserId,
               nick: '', // ВСЕГДА пустой для нового пользователя
               avatar: '', // ВСЕГДА пустой для нового пользователя
               friends: [],
             });
-            console.log(`[identity] ✅ User created (recovered): ${userId}`, {
+            // Обновляем привязку installId -> newUserId
+            try {
+              await Install.updateOne({ installId }, { $set: { user: newUserId } }).exec();
+            } catch (e) {
+              console.warn('[identity] Failed to rebind install to new userId', e as any);
+            }
+
+            console.log(`[identity] ✅ User created (recovered): ${String(newUserId)}`, {
               _id: String(newUser._id),
               nick: newUser.nick,
               friendsCount: newUser.friends?.length || 0,
               dbName: mongoose.connection.db?.databaseName
             });
+            // Переопределяем userId для bindUser/ack
+            const reboundUserId = String(newUserId);
+            await bindUser(io, sock, reboundUserId);
+            ack?.({ ok: true, userId: reboundUserId });
+
+            // Очищаем кэш
+            setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+            return;
           } else {
             console.log(`[identity] User ${userId} already exists, skipping creation`);
             // Пользователь существует - можно обновлять профиль
@@ -338,7 +357,8 @@ export default function registerIdentitySockets(io: Server) {
 
         // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
         if (mongoose.connection.readyState !== 1) {
-          return ack?.({ ok: true, exists: false }); // Если БД недоступна, считаем что пользователь не существует
+          // Если БД недоступна — НЕ говорим "exists=false", иначе клиент будет делать hard reset по ложному отрицанию.
+          return ack?.({ ok: false, error: 'database_unavailable' });
         }
 
         const exists = await User.exists({ _id: id });

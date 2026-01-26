@@ -9,6 +9,9 @@ buildscript {
     classpath('com.android.tools.build:gradle')
     classpath('com.facebook.react:react-native-gradle-plugin')
     classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')
+    // Needed for Firebase/FCM initialization (expo-notifications in release builds)
+    // https://developers.google.com/android/guides/google-services-plugin
+    classpath('com.google.gms:google-services:4.4.4')
   }
 }
 
