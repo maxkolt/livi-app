@@ -30,7 +30,9 @@ import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl } from './routes/livekit';
-import { sendPushToUser } from './utils/push';
+// sendPushToUser intentionally not used here:
+// - message pushes are sent in sockets/messagesReliable.ts
+// - calls should work only inside the app (no push)
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 
@@ -1397,21 +1399,8 @@ io.on('connection', async (sock: AuthedSocket) => {
           }
         } catch {}
         
-        // ✅ PUSH для входящего звонка (покажется в фоне/убитом приложении)
-        try {
-          await sendPushToUser(String(peerId), {
-            kind: 'call',
-            title: fromNick || 'Входящий звонок',
-            body: '📞 Входящий видеозвонок',
-            channelId: 'calls',
-            data: {
-              type: 'call',
-              callId,
-              from: String(me),
-              fromNick: fromNick || '',
-            },
-          });
-        } catch {}
+        // ⛔️ ВАЖНО: не отправляем PUSH для входящего звонка.
+        // Звонок должен работать только внутри приложения (через сокеты).
 
         // Если получатель онлайн — дублируем через сокеты для мгновенного UI
         if (peerSocket) {

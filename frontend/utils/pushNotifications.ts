@@ -5,15 +5,28 @@ import { API_BASE } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
 
-// Показывать уведомления даже в foreground
+// Показывать уведомления даже в foreground (для сообщений).
+// Для звонков — не показываем системное уведомление, т.к. звонок должен работать только внутри приложения.
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (n) => {
+    const type = String((n as any)?.request?.content?.data?.type || '');
+    if (type === 'call') {
+      return {
+        shouldShowAlert: false,
+        shouldShowBanner: false,
+        shouldShowList: false,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      };
+    }
+    return {
+      shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    };
+  },
 });
 
 async function waitForNavReady(ms = 9000) {

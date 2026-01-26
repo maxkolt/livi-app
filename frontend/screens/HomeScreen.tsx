@@ -581,6 +581,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   /* profile state */
   const [saving, setSaving] = useState(false);
+  // Синхронный guard от двойного тапа "Сохранить" (state обновляется не мгновенно)
+  const savingRef = useRef(false);
   const [savedToast, setSavedToast] = useState(false);
   const [wiping, setWiping] = useState(false);
 
@@ -2516,7 +2518,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   /* ===== save profile (ник + аватар) ===== */
   const handleSaveProfile = async () => {
-    if (saving) return;
+    if (savingRef.current) return;
+    savingRef.current = true;
 
     const MIN_SPINNER_MS = 500;
     const startedAt = Date.now();
@@ -2685,6 +2688,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     } finally {
       await ensureMinSpinner();
       setSaving(false);
+      savingRef.current = false;
 
       if (shouldToast) {
         setSavedToast(true);
@@ -3630,8 +3634,9 @@ const handleClearNick = useCallback(async () => {
                         nickLiveRef.current = v;
                         setNick(v); 
                         saveDraftProfile({ nick: v }); 
-                        // Также сохраняем в основное хранилище
-                        saveProfileToStorage({ nick: v, avatar: savedAvatarUrl || avatarUri }).catch(() => {});
+                        // ВАЖНО: НЕ сохраняем ник в постоянное хранилище на каждый ввод.
+                        // Иначе при резком "убийстве" приложения может записаться промежуточное значение (например, только первая буква),
+                        // а затем при старте оно перезапишет ник на сервере через ensureIdentity/attachIdentity.
                       }}
                       avatarUri={avatarUri}
                       setAvatarUri={(u) => { 
