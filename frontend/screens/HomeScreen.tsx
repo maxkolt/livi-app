@@ -1417,12 +1417,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
 
       // nick - только для существующих пользователей
-      // Не перезаписываем если пользователь уже что-то ввел
-      if (!nick || nick.trim() === '') {
+      // КРИТИЧНО: используем nickLiveRef (state может отставать на 1 ввод),
+      // иначе первый символ может "съедаться" async-логикой после удаления аккаунта.
+      const liveNickNow = String(nickLiveRef.current || nick || '').trim();
+      if (!liveNickNow) {
         if (userExistsOnServer && existingUserId && localNick) {
           setNick(localNick);
+          nickLiveRef.current = localNick;
         } else {
           setNick('');
+          nickLiveRef.current = '';
         }
       }
 
@@ -1667,7 +1671,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Проверяем есть ли реальные данные после всех попыток загрузки
       // Используем локальные переменные вместо state (state обновляется асинхронно)
       // Приоритет: загруженные с сервера > из кэша > из текущего state
-      const finalNick = loadedNick || cachedNick || nick || '';
+      const finalNick = loadedNick || cachedNick || String(nickLiveRef.current || nick || '') || '';
       const finalAvatar = loadedAvatar || cachedAvatar || avatarUri || '';
       const hasRealData = (finalNick && finalNick.trim()) || (finalAvatar && finalAvatar.trim());
       
@@ -1679,16 +1683,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (!cached || (!cached.nick && !cached.avatar)) {
           console.warn('[HomeScreen] No cached data found, clearing profile');
           // Нет кэша - очищаем все локальные данные
-          if (!hasRealData) {
+          // Не трогаем ник/аватар, если пользователь уже начал вводить (state может отставать)
+          const liveNick = String(nickLiveRef.current || '').trim();
+          if (!hasRealData && !liveNick) {
             setNick('');
+            nickLiveRef.current = '';
             setSavedNickDebug('');
             setSavedAvatarUrl('');
             setAvatarUri('');
-            
-            // Очищаем локальное хранилище
+
+            // Очищаем локальное хранилище (ключи должны совпадать с тем, что реально используем)
             try {
-              await AsyncStorage.removeItem('profile');
-              await AsyncStorage.removeItem('livi.home.draft.v1');
+              await AsyncStorage.removeItem(PROFILE_KEY); // livi.profile.v1
+              await AsyncStorage.removeItem(DRAFT_KEY);   // profile_draft_v1
               console.log('[HomeScreen] Cleared local storage after profile deletion');
             } catch (e) {
               console.warn('[HomeScreen] Failed to clear local storage:', e);
