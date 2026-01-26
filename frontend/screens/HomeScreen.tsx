@@ -1304,6 +1304,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       
       if (userExists === false) {
         console.warn('[syncUserData] User not found on server, performing hard reset...');
+
+        // Если пользователь уже начал вводить ник (пока мы ждём checkUserExists),
+        // сохраняем ввод, чтобы resetAllState не "съедал" первый символ.
+        const preservedNick = String(nickLiveRef.current || '').trim();
         
         // Жёсткий локальный сброс
         if (typeof hardLocalReset === 'function') {
@@ -1312,6 +1316,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         
         if (typeof resetAllState === 'function') {
           resetAllState();
+        }
+
+        // Восстанавливаем ввод, если он уже был
+        if (preservedNick) {
+          nickLiveRef.current = preservedNick;
+          setNick(preservedNick);
+          // держим draft актуальным даже после hard reset
+          saveDraftProfile({ nick: preservedNick }).catch(() => {});
         }
         
         if (typeof showNotice === 'function') {
@@ -1361,10 +1373,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
           if (userExistsOnServer === false) {
             console.warn('[ensureIdentity] User not found on server, performing hard reset...');
+
+            // Пользователь мог уже начать вводить ник, пока мы ждали checkUserExists.
+            const preservedNick = String(nickLiveRef.current || '').trim();
             
             // Жёсткий локальный сброс
             await hardLocalReset();
             resetAllState();
+
+            // Восстанавливаем ввод, если он уже был
+            if (preservedNick) {
+              nickLiveRef.current = preservedNick;
+              setNick(preservedNick);
+              saveDraftProfile({ nick: preservedNick }).catch(() => {});
+            }
             
             // Attach без профиля (создаст нового пользователя)
             await attachIdentitySafe({ installId: localInstallId, profile: {} });
