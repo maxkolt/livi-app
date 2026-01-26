@@ -594,6 +594,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // и при нажатии "Сохранить" в тот же момент на сервер может уйти только первая буква.
   // Держим актуальный ник в ref и обновляем его синхронно в onChangeText.
   const nickLiveRef = useRef<string>('');
+  // Флаг "пользователь начал вводить ник вручную в этом UI".
+  // Нужен, чтобы при hard reset после удаления аккаунта:
+  // - НЕ восстанавливать старый ник из предыдущего состояния
+  // - но сохранить введённые пользователем символы, если reset пришёл во время ввода
+  const nickInputDirtyRef = useRef(false);
   const [avatarUri, setAvatarUri] = useState<string>('');      // может быть file:// для локального превью
   const [myFullAvatarUri, setMyFullAvatarUri] = useState<string>(''); // полный аватар (data URI)
   const [avatarRefreshKey, setAvatarRefreshKey] = useState(0); // для принудительного обновления на Android
@@ -631,6 +636,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     setFriends([]);
     setNick('');
     nickLiveRef.current = '';
+    nickInputDirtyRef.current = false;
     setSavedNickDebug('');
     setAvatarUri('');
     setSavedAvatarUrl('');
@@ -1307,7 +1313,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
         // Если пользователь уже начал вводить ник (пока мы ждём checkUserExists),
         // сохраняем ввод, чтобы resetAllState не "съедал" первый символ.
-        const preservedNick = String(nickLiveRef.current || '').trim();
+        const preservedNick = nickInputDirtyRef.current ? String(nickLiveRef.current || '').trim() : '';
         
         // Жёсткий локальный сброс
         if (typeof hardLocalReset === 'function') {
@@ -1321,6 +1327,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         // Восстанавливаем ввод, если он уже был
         if (preservedNick) {
           nickLiveRef.current = preservedNick;
+          nickInputDirtyRef.current = true;
           setNick(preservedNick);
           // держим draft актуальным даже после hard reset
           saveDraftProfile({ nick: preservedNick }).catch(() => {});
@@ -1375,7 +1382,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             console.warn('[ensureIdentity] User not found on server, performing hard reset...');
 
             // Пользователь мог уже начать вводить ник, пока мы ждали checkUserExists.
-            const preservedNick = String(nickLiveRef.current || '').trim();
+            const preservedNick = nickInputDirtyRef.current ? String(nickLiveRef.current || '').trim() : '';
             
             // Жёсткий локальный сброс
             await hardLocalReset();
@@ -1384,6 +1391,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             // Восстанавливаем ввод, если он уже был
             if (preservedNick) {
               nickLiveRef.current = preservedNick;
+              nickInputDirtyRef.current = true;
               setNick(preservedNick);
               saveDraftProfile({ nick: preservedNick }).catch(() => {});
             }
@@ -3661,6 +3669,7 @@ const handleClearNick = useCallback(async () => {
                       nick={nick}
                       setNick={(v) => { 
                         nickLiveRef.current = v;
+                        nickInputDirtyRef.current = true;
                         setNick(v); 
                         saveDraftProfile({ nick: v }); 
                         // ВАЖНО: НЕ сохраняем ник в постоянное хранилище на каждый ввод.
