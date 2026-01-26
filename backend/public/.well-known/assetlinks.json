@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.kolt12max.livi",
+      "sha256_cert_fingerprints": [
+        "A7:1E:0E:C5:C4:08:EF:B7:F5:77:82:0F:27:FF:7E:67:B1:37:60:06:F7:58:A7:53:95:1E:4A:8C:C5:68:60:30"
+      ]
+    }
+  }
+]

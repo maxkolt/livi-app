@@ -11,6 +11,7 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import os from 'os';
 import path from 'path';
+import fs from 'fs';
 import type { AuthedSocket } from './sockets/types';
 import friendsRouter from './routes/friends';
 import meRouter from './routes/me';
@@ -103,6 +104,36 @@ const isMongoReady = () => mongoose.connection.readyState === 1;
 /* ========= App / HTTP / IO ========= */
 const app = express();
 
+// Resolve backend public directory robustly for:
+// - dev (running from backend/ via ts-node)
+// - prod (running compiled from backend/dist/)
+// IMPORTANT: tsc does NOT copy backend/public into backend/dist by default,
+// and sometimes an empty dist/public folder can exist, so we select by "known files".
+const PUBLIC_DIR = (() => {
+  const candidates = [
+    // when running from dist/: __dirname = backend/dist -> ../public = backend/public
+    path.resolve(__dirname, '..', 'public'),
+    // when running from backend/: __dirname = backend -> public = backend/public
+    path.join(__dirname, 'public'),
+    // extra fallback (covers odd cwd layouts)
+    path.resolve(__dirname, '..', '..', 'public'),
+  ];
+
+  const hasKnownFiles = (dir: string) => {
+    try {
+      return (
+        fs.existsSync(path.join(dir, '.well-known', 'assetlinks.json')) ||
+        fs.existsSync(path.join(dir, 'invite.html')) ||
+        fs.existsSync(path.join(dir, 'uploads'))
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  return candidates.find((d) => fs.existsSync(d) && hasKnownFiles(d)) ?? candidates[0]!;
+})();
+
 app.use(
   cors({
     origin: '*',
@@ -182,7 +213,32 @@ app.get('/', (_req, res) => res.send('🚀 Сервер работает!'));
 app.get('/health', (_req, res) => res.json({ ok: true, mongo: mongoose.connection.readyState }));
 
 /* ========= Static files ========= */
-app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+app.use('/uploads', express.static(path.join(PUBLIC_DIR, 'uploads')));
+
+// Android App Links / Apple AASA (dotfiles must be allowed)
+app.use(
+  '/.well-known',
+  express.static(path.join(PUBLIC_DIR, '.well-known'), {
+    dotfiles: 'allow',
+  })
+);
+
+// Android App Links: assetlinks.json
+// КРИТИЧНО: отдаём файл из корня проекта, чтобы работало и из dist/, и из исходников.
+app.get('/.well-known/assetlinks.json', (_req, res) => {
+  try {
+    const assetLinksPath = path.join(PUBLIC_DIR, '.well-known/assetlinks.json');
+    if (!fs.existsSync(assetLinksPath)) {
+      logger.error('assetlinks.json not found', { assetLinksPath, __dirname, PUBLIC_DIR });
+      return res.status(404).send('Not found');
+    }
+    res.type('application/json');
+    return res.sendFile(assetLinksPath);
+  } catch (e) {
+    logger.error('Failed to send assetlinks.json', { error: (e as any)?.message || String(e) });
+    return res.status(500).send('Error loading assetlinks.json');
+  }
+});
 
 // КРИТИЧНО: Обработка веб-версии реферальных ссылок ДО express.static
 // Иначе Express будет искать статический файл /invite/:code и вернет ошибку
@@ -220,7 +276,7 @@ app.get('/invite/:code', (req, res) => {
 });
 
 // Статические файлы после специфичных маршрутов
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(PUBLIC_DIR));
 
 /* ========= REST API ========= */
 app.use('/api', appSettingsRouter);

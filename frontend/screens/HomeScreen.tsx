@@ -4220,8 +4220,11 @@ const styles = StyleSheet.create({
   },
   buttonLabel: { color: '#151515', fontSize: 16, fontWeight: '700', letterSpacing: 0.4 },
 
-  overlayMenu: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: screenWidth, height: screenHeight, backgroundColor: 'transparent', zIndex: 999 },
-  overlayModal: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: screenWidth, height: screenHeight, backgroundColor: 'transparent', zIndex: 999, alignItems: 'center', justifyContent: 'center' },
+  // IMPORTANT: do NOT use fixed screenWidth/screenHeight here.
+  // On Android edge-to-edge, window height can exclude the navigation bar area,
+  // which leaves an uncovered strip at the bottom.
+  overlayMenu: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent', zIndex: 999 },
+  overlayModal: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent', zIndex: 999, alignItems: 'center', justifyContent: 'center' },
 
   sheetFull: {
     position: "absolute",

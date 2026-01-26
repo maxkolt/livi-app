@@ -1913,318 +1913,320 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   return (
     <SafeAreaView 
-      style={{ flex: 1, backgroundColor: LIVI.surface }}
+      // IMPORTANT: color the top safe-area (status bar area) to match the header.
+      // Otherwise on Android (with translucent StatusBar) you'll see a white strip above the header.
+      style={{ flex: 1, backgroundColor: LIVI.bg }}
       // КРИТИЧНО: На Android убираем 'bottom' из edges, чтобы избежать белого пробела после скрытия клавиатуры
       // adjustResize уже обрабатывает изменение размера экрана, SafeAreaView не должен добавлять лишний отступ
       edges={Platform.OS === 'android' ? ['top', 'left', 'right'] : ['top', 'bottom', 'left', 'right']}
     >
-      <Header />
-      {loading ? (
-        <Loading />
-      ) : err ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <Text style={{ color: LIVI.white, marginBottom: 12, textAlign: "center" }}>
-            {err}
-          </Text>
-          <TouchableOpacity
-            onPress={() => setErr(null)}
-            style={{
-              backgroundColor: LIVI.titan,
-              paddingVertical: 10,
-              paddingHorizontal: 18,
-              borderRadius: 10,
-              borderWidth: 1,
-              borderColor: BORDER_COLOR,
-            }}
-          >
-            <Text style={{ color: LIVI.white, fontWeight: "700" }}>Попробовать снова</Text>
-          </TouchableOpacity>
-        </View>
-      ) : Platform.OS === 'ios' ? (
-        // iOS версия с KeyboardAvoidingView
-        (<KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior="padding"
-          keyboardVerticalOffset={0}
-        >
-          <FlatList
-            ref={flatListRef}
-            data={[...messages]}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <MessageItem
-                item={item}
-                currentUserId={currentUserId}
-                readStatus={readStatuses[item.id]}
-                uploadStatus={uploadStatus[item.id]}
-                onPressImage={openMediaViewer}
-                onLongPressMessage={(m: any) => { setSelectedMessage(m); showDeleteModal(); }}
-              />
-            )}
-            style={{ flex: 1 }}
-            contentContainerStyle={{ 
-              flexGrow: 1,
-              justifyContent: isEmpty ? 'center' : 'flex-end',
-              paddingVertical: 16,
-              paddingBottom: 12,
-            }}
-            showsVerticalScrollIndicator={false}
-            inverted={false}
-            onContentSizeChange={() => setTimeout(() => scrollToBottom(), 0)}
-            ListEmptyComponent={() => (
-              <View
-                style={{
-                  flex: 1,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  backgroundColor: LIVI.surface,
-                  ...(Platform.OS === 'ios' ? {} : { transform: [{ scaleY: -1 }] }),
-                }}
-              >
-                <Ionicons
-                  name="chatbubble-outline"
-                  size={64}
-                  color={isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)'}
-                />
-                <Text
-                  style={{
-                    color: isDark ? 'rgba(255,255,255,0.65)' : 'rgba(0,0,0,0.55)',
-                    fontSize: 18,
-                    marginTop: 16,
-                    textAlign: 'center',
-                    fontWeight: '500',
-                  }}
-                >
-                  Начните общение с {peerNameParam}
-                </Text>
-              </View>
-            )}
-          />
-          {/* Поле ввода для iOS */}
-          <View
-            style={{
-              borderTopWidth: BORDER_WIDTH,
-              borderTopColor: BORDER_COLOR,
-              backgroundColor: LIVI.bg,
-              paddingHorizontal: 16,
-              paddingTop: 18,
-              // КРИТИЧНО: Используем одинаковый paddingBottom для iOS и Android для единообразного стиля
-              // SafeAreaView уже обрабатывает safe area, поэтому не добавляем insets.bottom
-              paddingBottom: 26,
-            }}
-            onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
-          >
-            <View
+      <View style={{ flex: 1, backgroundColor: LIVI.surface }}>
+        <Header />
+        {loading ? (
+          <Loading />
+        ) : err ? (
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+            <Text style={{ color: LIVI.white, marginBottom: 12, textAlign: "center" }}>
+              {err}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setErr(null)}
               style={{
-
-                flexDirection: "row",
-                alignItems: "center",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderRadius: 28,
-                paddingHorizontal: 14,
-                paddingVertical: Platform.OS === 'ios' ? 8 : 4,
+                backgroundColor: LIVI.titan,
+                paddingVertical: 10,
+                paddingHorizontal: 18,
+                borderRadius: 10,
                 borderWidth: 1,
                 borderColor: BORDER_COLOR,
               }}
             >
-              {/* Кнопка очистки убрана по требованию */}
-              <TouchableOpacity
-                onPress={handleAttachments}
-                style={{
-                  padding: 2,
-                  marginRight: 12,
-                }}
-              >
-                <Ionicons name="image" size={28} color={LIVI.titan} />
-              </TouchableOpacity>
-
-              <TextInput
-                style={{
-                  flex: 1,
-                  color: LIVI.white,
-                  fontSize: 16,
-                  maxHeight: 100,
-                }}
-                placeholder={t('chatMessagePlaceholder', lang)}
-                placeholderTextColor={LIVI.titan}
-                value={messageText}
-                onChangeText={setMessageText}
-                multiline
-                onSubmitEditing={sendMessage}
-                returnKeyType="send"
-              />
-
-
-              <TouchableOpacity
-                onPress={sendMessage}
-                style={{
-                  backgroundColor: messageText.trim()
-                    ? LIVI.titan
-                    : "rgba(255,255,255,0.2)",
-                  borderRadius: 14,
-                  padding: 6,
-                  marginLeft: 6,
-                  borderWidth: 1,
-                  borderColor: BORDER_COLOR,
-                }}
-                disabled={!messageText.trim()}
-              >
-                <Ionicons
-                  name="send"
-                  size={20}
-                  color={messageText.trim() ? LIVI.white : LIVI.titan}
-                />
-              </TouchableOpacity>
-            </View>
+              <Text style={{ color: LIVI.white, fontWeight: "700" }}>Попробовать снова</Text>
+            </TouchableOpacity>
           </View>
-        </KeyboardAvoidingView>)
-      ) : (
-        // Android: Не используем KeyboardAvoidingView, так как adjustResize в манифесте уже обрабатывает клавиатуру
-        // KeyboardAvoidingView оставляет отступы после скрытия клавиатуры, поэтому используем только adjustResize
-        (<View style={{ flex: 1 }}>
-          <FlatList
-            ref={flatListRef}
-            data={isEmpty ? [] : [...messages].reverse()}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <MessageItem
-                item={item}
-                currentUserId={currentUserId}
-                readStatus={readStatuses[item.id]}
-                uploadStatus={uploadStatus[item.id]}
-                onPressImage={openMediaViewer}
-                onLongPressMessage={(m: any) => { setSelectedMessage(m); showDeleteModal(); }}
-              />
-            )}
+        ) : Platform.OS === 'ios' ? (
+          // iOS версия с KeyboardAvoidingView
+          (<KeyboardAvoidingView
             style={{ flex: 1 }}
-            contentContainerStyle={{ 
-              flexGrow: 1,
-              justifyContent: isEmpty ? 'center' : 'flex-start',
-              paddingTop: 12,
-            }}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            inverted={!isEmpty}
-            maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-            ListHeaderComponent={!isEmpty ? () => (
-              // КРИТИЧНО: Отступ под блок ввода - постоянный независимо от состояния клавиатуры
-              // Это обеспечивает одинаковый отступ между сообщениями и блоком ввода в любом состоянии
-              <View style={{ 
-                height: inputHeight > 0 
-                  ? inputHeight + insets.bottom - 130  // Постоянный отступ для обоих состояний
-                  : 100 
-              }} />
-            ) : null}
-            ListEmptyComponent={() => (
-              <View
-                style={{
-                  flex: 1,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  backgroundColor: LIVI.surface,
-                }}
-              >
-                <Ionicons
-                  name="chatbubble-outline"
-                  size={64}
-                  color={isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)'}
+            behavior="padding"
+            keyboardVerticalOffset={0}
+          >
+            <FlatList
+              ref={flatListRef}
+              data={[...messages]}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <MessageItem
+                  item={item}
+                  currentUserId={currentUserId}
+                  readStatus={readStatuses[item.id]}
+                  uploadStatus={uploadStatus[item.id]}
+                  onPressImage={openMediaViewer}
+                  onLongPressMessage={(m: any) => { setSelectedMessage(m); showDeleteModal(); }}
                 />
-                <Text
+              )}
+              style={{ flex: 1 }}
+              contentContainerStyle={{ 
+                flexGrow: 1,
+                justifyContent: isEmpty ? 'center' : 'flex-end',
+                paddingVertical: 16,
+                paddingBottom: 12,
+              }}
+              showsVerticalScrollIndicator={false}
+              inverted={false}
+              onContentSizeChange={() => setTimeout(() => scrollToBottom(), 0)}
+              ListEmptyComponent={() => (
+                <View
                   style={{
-                    color: isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)',
-                    fontSize: 18,
-                    marginTop: 16,
-                    textAlign: 'center',
-                    fontWeight: '500',
+                    flex: 1,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    backgroundColor: LIVI.surface,
+                    ...(Platform.OS === 'ios' ? {} : { transform: [{ scaleY: -1 }] }),
                   }}
                 >
-                  Начните общение с {peerNameParam}
-                </Text>
-              </View>
-            )}
-          />
-          {/* Поле ввода для Android - оборачиваем в KeyboardAvoidingView только блок ввода */}
-          <KeyboardAvoidingView
-            behavior="padding"
-            // КРИТИЧНО: Используем динамический offset на основе реальной высоты клавиатуры для универсальности
-            // Это обеспечит правильную работу на всех Android устройствах с разными размерами клавиатур
-            // Увеличиваем коэффициент и добавляем фиксированное значение для поднятия блока выше
-            keyboardVerticalOffset={keyboardVisible && keyboardHeight > 0 
-              ? Math.max(0, keyboardHeight * 0.12) // 15% от высоты клавиатуры + 20px, минимум 0
-              : 0}
-          >
+                  <Ionicons
+                    name="chatbubble-outline"
+                    size={64}
+                    color={isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)'}
+                  />
+                  <Text
+                    style={{
+                      color: isDark ? 'rgba(255,255,255,0.65)' : 'rgba(0,0,0,0.55)',
+                      fontSize: 18,
+                      marginTop: 16,
+                      textAlign: 'center',
+                      fontWeight: '500',
+                    }}
+                  >
+                    Начните общение с {peerNameParam}
+                  </Text>
+                </View>
+              )}
+            />
+            {/* Поле ввода для iOS */}
             <View
               style={{
                 borderTopWidth: BORDER_WIDTH,
                 borderTopColor: BORDER_COLOR,
                 backgroundColor: LIVI.bg,
-              paddingHorizontal: 16,
-              paddingTop: 18,
-              paddingBottom: 22, // Возвращаем исходные размеры
-              // КРИТИЧНО: Уменьшаем marginBottom чтобы поднять блок ввода чуть выше
-              // KeyboardAvoidingView поднимает блок над клавиатурой, marginBottom для отступа от навигации
-              marginBottom: Math.max(0, insets.bottom + 0),
+                paddingHorizontal: 16,
+                paddingTop: 18,
+                // КРИТИЧНО: Используем одинаковый paddingBottom для iOS и Android для единообразного стиля
+                // SafeAreaView уже обрабатывает safe area, поэтому не добавляем insets.bottom
+                paddingBottom: 26,
               }}
               onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
             >
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderRadius: 28,
-                paddingHorizontal: 12,
-               
-                borderWidth: 1,
-                borderColor: BORDER_COLOR,
-              }}
-            >
-              {/* Кнопка очистки убрана по требованию */}
-
-              <TouchableOpacity
-                onPress={handleAttachments}
+              <View
                 style={{
-                  padding: 2,
-                  marginRight: 12,
-                }}
-              >
-                <Ionicons name="image" size={28} color={LIVI.titan} />
-              </TouchableOpacity>
-
-              <TextInput
-                style={{ flex: 1, color: LIVI.white, fontSize: 16, maxHeight: 100 }}
-                placeholder={t('chatMessagePlaceholder', lang)}
-                placeholderTextColor={LIVI.titan}
-                value={messageText}
-                onChangeText={setMessageText}
-                multiline
-                onSubmitEditing={sendMessage}
-                returnKeyType="send"
-              />
-
-              <TouchableOpacity
-                onPress={sendMessage}
-                style={{
-                  backgroundColor: messageText.trim() ? LIVI.titan : "rgba(255,255,255,0.2)",
-                  borderRadius: 14,
-                  padding: 6,
-                  marginLeft: 6,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  backgroundColor: "rgba(255,255,255,0.06)",
+                  borderRadius: 28,
+                  paddingHorizontal: 14,
+                  paddingVertical: Platform.OS === 'ios' ? 8 : 4,
                   borderWidth: 1,
                   borderColor: BORDER_COLOR,
                 }}
-                disabled={!messageText.trim()}
               >
-                <Ionicons
-                  name="send"
-                  size={20}
-                  color={messageText.trim() ? LIVI.white : LIVI.titan}
+                {/* Кнопка очистки убрана по требованию */}
+                <TouchableOpacity
+                  onPress={handleAttachments}
+                  style={{
+                    padding: 2,
+                    marginRight: 12,
+                  }}
+                >
+                  <Ionicons name="image" size={28} color={LIVI.titan} />
+                </TouchableOpacity>
+
+                <TextInput
+                  style={{
+                    flex: 1,
+                    color: LIVI.white,
+                    fontSize: 16,
+                    maxHeight: 100,
+                  }}
+                  placeholder={t('chatMessagePlaceholder', lang)}
+                  placeholderTextColor={LIVI.titan}
+                  value={messageText}
+                  onChangeText={setMessageText}
+                  multiline
+                  onSubmitEditing={sendMessage}
+                  returnKeyType="send"
                 />
-              </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={sendMessage}
+                  style={{
+                    backgroundColor: messageText.trim()
+                      ? LIVI.titan
+                      : "rgba(255,255,255,0.2)",
+                    borderRadius: 14,
+                    padding: 6,
+                    marginLeft: 6,
+                    borderWidth: 1,
+                    borderColor: BORDER_COLOR,
+                  }}
+                  disabled={!messageText.trim()}
+                >
+                  <Ionicons
+                    name="send"
+                    size={20}
+                    color={messageText.trim() ? LIVI.white : LIVI.titan}
+                  />
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
-          </KeyboardAvoidingView>
-        </View>)
-      )}
+          </KeyboardAvoidingView>)
+        ) : (
+          // Android: Не используем KeyboardAvoidingView, так как adjustResize в манифесте уже обрабатывает клавиатуру
+          // KeyboardAvoidingView оставляет отступы после скрытия клавиатуры, поэтому используем только adjustResize
+          (<View style={{ flex: 1 }}>
+            <FlatList
+              ref={flatListRef}
+              data={isEmpty ? [] : [...messages].reverse()}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <MessageItem
+                  item={item}
+                  currentUserId={currentUserId}
+                  readStatus={readStatuses[item.id]}
+                  uploadStatus={uploadStatus[item.id]}
+                  onPressImage={openMediaViewer}
+                  onLongPressMessage={(m: any) => { setSelectedMessage(m); showDeleteModal(); }}
+                />
+              )}
+              style={{ flex: 1 }}
+              contentContainerStyle={{ 
+                flexGrow: 1,
+                justifyContent: isEmpty ? 'center' : 'flex-start',
+                paddingTop: 12,
+              }}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              inverted={!isEmpty}
+              maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+              ListHeaderComponent={!isEmpty ? () => (
+                // КРИТИЧНО: Отступ под блок ввода - постоянный независимо от состояния клавиатуры
+                // Это обеспечивает одинаковый отступ между сообщениями и блоком ввода в любом состоянии
+                <View style={{ 
+                  height: inputHeight > 0 
+                    ? inputHeight + insets.bottom - 130  // Постоянный отступ для обоих состояний
+                    : 100 
+                }} />
+              ) : null}
+              ListEmptyComponent={() => (
+                <View
+                  style={{
+                    flex: 1,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    backgroundColor: LIVI.surface,
+                  }}
+                >
+                  <Ionicons
+                    name="chatbubble-outline"
+                    size={64}
+                    color={isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)'}
+                  />
+                  <Text
+                    style={{
+                      color: isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)',
+                      fontSize: 18,
+                      marginTop: 16,
+                      textAlign: 'center',
+                      fontWeight: '500',
+                    }}
+                  >
+                    Начните общение с {peerNameParam}
+                  </Text>
+                </View>
+              )}
+            />
+            {/* Поле ввода для Android - оборачиваем в KeyboardAvoidingView только блок ввода */}
+            <KeyboardAvoidingView
+              behavior="padding"
+              // КРИТИЧНО: Используем динамический offset на основе реальной высоты клавиатуры для универсальности
+              // Это обеспечит правильную работу на всех Android устройствах с разными размерами клавиатур
+              // Увеличиваем коэффициент и добавляем фиксированное значение для поднятия блока выше
+              keyboardVerticalOffset={keyboardVisible && keyboardHeight > 0 
+                ? Math.max(0, keyboardHeight * 0.12) // 15% от высоты клавиатуры + 20px, минимум 0
+                : 0}
+            >
+              <View
+                style={{
+                  borderTopWidth: BORDER_WIDTH,
+                  borderTopColor: BORDER_COLOR,
+                  backgroundColor: LIVI.bg,
+                paddingHorizontal: 16,
+                paddingTop: 18,
+                paddingBottom: 22, // Возвращаем исходные размеры
+                // КРИТИЧНО: Уменьшаем marginBottom чтобы поднять блок ввода чуть выше
+                // KeyboardAvoidingView поднимает блок над клавиатурой, marginBottom для отступа от навигации
+                marginBottom: Math.max(0, insets.bottom + 0),
+                }}
+                onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
+              >
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  backgroundColor: "rgba(255,255,255,0.06)",
+                  borderRadius: 28,
+                  paddingHorizontal: 12,
+                 
+                  borderWidth: 1,
+                  borderColor: BORDER_COLOR,
+                }}
+              >
+                {/* Кнопка очистки убрана по требованию */}
+
+                <TouchableOpacity
+                  onPress={handleAttachments}
+                  style={{
+                    padding: 2,
+                    marginRight: 12,
+                  }}
+                >
+                  <Ionicons name="image" size={28} color={LIVI.titan} />
+                </TouchableOpacity>
+
+                <TextInput
+                  style={{ flex: 1, color: LIVI.white, fontSize: 16, maxHeight: 100 }}
+                  placeholder={t('chatMessagePlaceholder', lang)}
+                  placeholderTextColor={LIVI.titan}
+                  value={messageText}
+                  onChangeText={setMessageText}
+                  multiline
+                  onSubmitEditing={sendMessage}
+                  returnKeyType="send"
+                />
+
+                <TouchableOpacity
+                  onPress={sendMessage}
+                  style={{
+                    backgroundColor: messageText.trim() ? LIVI.titan : "rgba(255,255,255,0.2)",
+                    borderRadius: 14,
+                    padding: 6,
+                    marginLeft: 6,
+                    borderWidth: 1,
+                    borderColor: BORDER_COLOR,
+                  }}
+                  disabled={!messageText.trim()}
+                >
+                  <Ionicons
+                    name="send"
+                    size={20}
+                    color={messageText.trim() ? LIVI.white : LIVI.titan}
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+            </KeyboardAvoidingView>
+          </View>)
+        )}
+      </View>
       {/* Полноэкранный просмотр медиа */}
       <MediaViewer
         visible={mediaViewerVisible}
