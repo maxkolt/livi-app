@@ -7,7 +7,7 @@ const router = Router();
 
 router.get('/friends', async (req, res) => {
   try {
-    const userId = (req as any)?.auth?.userId as string | undefined;
+    const userId = (req as any)?.userId as string | undefined;
     if (!userId) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const page = parseInt(req.query.page as string) || 1;
@@ -42,7 +42,7 @@ router.get('/friends', async (req, res) => {
 
 router.get('/friends/check/:userId', async (req, res) => {
   try {
-    const me = (req as any)?.auth?.userId as string | undefined;
+    const me = (req as any)?.userId as string | undefined;
     const targetUserId = req.params.userId;
     
     if (!me) return res.status(401).json({ ok: false, error: 'unauthorized' });

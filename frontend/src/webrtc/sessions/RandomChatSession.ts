@@ -10,6 +10,7 @@ import {
   LocalAudioTrack,
   LocalVideoTrack,
   createLocalTracks,
+  VideoPresets,
 } from 'livekit-client';
 import { Buffer } from 'buffer';
 import AudioRecord from 'react-native-audio-record';
@@ -2541,13 +2542,10 @@ export class RandomChatSession extends SimpleEventEmitter {
     const capture = getPreferredVideoCaptureOptions(facingMode);
     const isHighCapture = capture?.meta?.preset === 'high';
 
-    // Minimal simulcast (2 layers) to reduce CPU on mobile but still allow auto down/up.
-    const videoSimulcastLayers = isHighCapture
-      ? ([
-          { width: 320, height: 180, bitrate: 160_000, fps: 15 },
-          { width: 1280, height: 720, bitrate: 1_500_000, fps: 30 },
-        ] as any[])
-      : ([] as any[]);
+    // IMPORTANT: livekit-client expects VideoPreset objects here (not width/height literals).
+    // Keep it minimal (1 additional layer) to avoid overloading mobile devices.
+    const simulcast = !!isHighCapture;
+    const videoSimulcastLayers = simulcast ? [VideoPresets.h180] : undefined;
 
     const room = new Room({
       // Отключаем dynacast/adaptiveStream, чтобы LiveKit не мьютил треки и не слал quality updates для "unknown track"
@@ -2556,7 +2554,8 @@ export class RandomChatSession extends SimpleEventEmitter {
       ...(rtcConfig ? { rtcConfig } : {}),
       publishDefaults: {
         videoEncoding: { maxBitrate: isHighCapture ? 2_500_000 : 1_200_000, maxFramerate: 30 },
-        videoSimulcastLayers,
+        simulcast,
+        ...(videoSimulcastLayers ? { videoSimulcastLayers } : {}),
       },
     });
     this.room = room;

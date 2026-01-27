@@ -9,28 +9,17 @@ const router = Router();
 const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(String(s || '').trim());
 
 async function resolveAuthedUserId(req: any): Promise<{ userId?: string; error?: string }> {
-  const headerUserId = String(req.header('x-user-id') || '').trim();
   const installId = String(req.header('x-install-id') || '').trim();
 
-  // Prefer installId when present (prevents spoofing x-user-id).
-  if (installId) {
-    if (mongoose.connection.readyState !== 1) {
-      return { error: 'database_unavailable' };
-    }
-    const inst = await Install.findOne({ installId }).select('user').lean();
-    const fromInstall = inst?.user ? String((inst as any).user) : '';
-    if (!isOid(fromInstall)) return { error: 'unauthorized' };
-    if (headerUserId && isOid(headerUserId) && headerUserId !== fromInstall) {
-      return { error: 'unauthorized' };
-    }
-    return { userId: fromInstall };
+  // SECURITY: require installId-based auth (do not accept x-user-id alone).
+  if (!installId) return { error: 'no_installId' };
+  if (mongoose.connection.readyState !== 1) {
+    return { error: 'database_unavailable' };
   }
-
-  if (isOid(headerUserId)) return { userId: headerUserId };
-
-  const fallback = String(req.userId || '').trim();
-  if (isOid(fallback)) return { userId: fallback };
-  return { error: 'unauthorized' };
+  const inst = await Install.findOne({ installId }).select('user').lean();
+  const fromInstall = inst?.user ? String((inst as any).user) : '';
+  if (!isOid(fromInstall)) return { error: 'unauthorized' };
+  return { userId: fromInstall };
 }
 
 function parseDataUriToBuffer(dataUriOrB64: string): { buf: Buffer; mime: string } | null {

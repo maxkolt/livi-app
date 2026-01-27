@@ -1,9 +1,12 @@
 // backend/routes/me.ts
 import { Router } from 'express';
 import UserModel from '../models/User';
+import Install from '../models/Install';
+import mongoose from 'mongoose';
 import type { Server as IOServer } from 'socket.io';
 import { sendPushToUser, upsertExpoPushToken } from '../utils/push';
 import { logger } from '../utils/logger';
+import { checkRateLimit } from '../utils/rateLimit';
 
 const router = Router();
 
@@ -234,15 +237,33 @@ router.patch('/me', async (req, res) => {
  */
 router.post('/push-token', async (req, res) => {
   try {
-    const userId =
-      ((req as any)?.auth?.userId as string | undefined) ||
-      ((req as any)?.userId as string | undefined);
+    const installId = String(req.header('x-install-id') || '');
+    if (!installId) {
+      return res.status(401).json({ ok: false, error: 'no_installId' });
+    }
 
+    // Basic abuse protection: token updates are rare
+    const rl = checkRateLimit(`push_token:${installId}`, 10, 60 * 60_000);
+    if (!rl.ok) {
+      res.setHeader('Retry-After', String(rl.retryAfterSec || 3600));
+      return res.status(429).json({ ok: false, error: 'rate_limited' });
+    }
+
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ ok: false, error: 'database_unavailable' });
+    }
+    const inst = await Install.findOne({ installId }).select('user').lean();
+    const userId = inst?.user ? String((inst as any).user) : '';
     if (!userId) {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
+    const claimed = String(req.header('x-user-id') || '').trim();
+    if (claimed && claimed !== userId) {
+      logger.warn('[push] x-user-id mismatch for installId', { installId, claimedUserId: claimed, userId });
+      // do not allow registering a token for a different user
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
 
-    const installId = String(req.header('x-install-id') || '');
     const { token, platform } = (req.body || {}) as { token?: string; platform?: 'ios' | 'android' };
 
     if (!token || typeof token !== 'string') {

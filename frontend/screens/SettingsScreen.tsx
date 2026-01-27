@@ -349,7 +349,7 @@ export default function SettingsScreen() {
     patchMe({ avatar: '' });
 
     try {
-      const headers: Record<string, string> = { 'x-user-id': me.id };
+      const headers: Record<string, string> = { 'x-user-id': me.id, 'x-install-id': await getInstallId() };
       const r = await fetch(`${API_BASE}/api/avatar/${encodeURIComponent(me.id)}`, { method: 'DELETE', headers });
 
       const txt = await r.clone().text();

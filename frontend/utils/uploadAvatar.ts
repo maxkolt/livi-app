@@ -177,7 +177,6 @@ async function uploadViaServerFallback(fileUri: string, userId?: string, install
 
   const url = `${API_BASE}/api/upload/avatar/dataUri`;
   const baseHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (userId) baseHeaders['x-user-id'] = userId;
 
   const post = async (extraHeaders: Record<string, string>) => {
     const res = await fetchWithTimeout(
@@ -196,17 +195,8 @@ async function uploadViaServerFallback(fileUri: string, userId?: string, install
     return { res, json };
   };
 
-  // 1) Основной путь: installId (если есть) + userId
+  // SECURITY: only installId-based auth is supported
   let attempt = await post(installId ? { 'x-install-id': installId } : {});
-
-  // 2) Фолбэк: если installId локально есть, но на сервере нет записи installs,
-  // сервер вернет unauthorized. Тогда ретраим БЕЗ x-install-id, используя x-user-id.
-  if (
-    installId &&
-    (attempt.res.status === 401 || attempt.json?.error === 'unauthorized')
-  ) {
-    attempt = await post({});
-  }
 
   if (!attempt.res.ok || !attempt.json?.ok) {
     const reason = attempt.json?.error || `server_fallback_failed (${attempt.res.status})`;

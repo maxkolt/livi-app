@@ -545,6 +545,11 @@ export async function checkInviteLink(code: string): Promise<{
 
     const userId = getCurrentUserId();
     const headers: Record<string, string> = {};
+    // Prefer installId so backend can resolve user securely.
+    try {
+      const installId = await getInstallId();
+      if (installId) headers['x-install-id'] = String(installId);
+    } catch {}
     
     if (userId) {
       headers['x-user-id'] = userId;

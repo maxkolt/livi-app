@@ -325,6 +325,7 @@ const useLiviNotice = () => {
 /* ==== confirm modal ==== */
   const useLiviConfirm = () => {
   const [state, setState] = useState<{ visible: boolean; title: string; message?: string; confirmText?: string; cancelText?: string; resolve?: (v: boolean) => void; }>({ visible: false, title: '' });
+  const lang = useLang((s) => s.lang);
 
   const ask = useCallback((opts: { title: string; message?: string; confirmText?: string; cancelText?: string }) =>
     new Promise<boolean>((resolve) => {
@@ -336,7 +337,7 @@ const useLiviNotice = () => {
         cancelText: opts.cancelText || t('cancel', lang),
         resolve,
       });
-    }), []);
+    }), [lang]);
   const onCancel = useCallback(() => { state.resolve?.(false); setState((s) => ({ ...s, visible: false })); }, [state]);
   const onOk     = useCallback(() => { state.resolve?.(true);  setState((s) => ({ ...s, visible: false })); }, [state]);
 

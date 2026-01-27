@@ -138,7 +138,20 @@ const PUBLIC_DIR = (() => {
 
 app.use(
   cors({
-    origin: '*',
+    origin: (() => {
+      const raw = String(process.env.CORS_ORIGINS || '').trim();
+      if (!raw) return '*';
+      const list = raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      // If provided, enforce allowlist; otherwise fallback to '*'.
+      return (origin: any, cb: any) => {
+        if (!origin) return cb(null, true);
+        const ok = list.includes(origin);
+        return cb(null, ok);
+      };
+    })(),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'x-install-id'],
   })
@@ -149,33 +162,37 @@ app.use(express.json({ limit: '500mb' })); // Увеличиваем лимит 
 app.use('/chat', createChatRouter());
 app.use(express.urlencoded({ extended: true, limit: '500mb' }));
 
-/** Резолвим userId из заголовков/квери/инсталла */
+/** Резолвим userId ТОЛЬКО по installId (не доверяем x-user-id). */
 app.use(async (req, _res, next) => {
   try {
-    const hUser = req.header('x-user-id') || undefined;
-    const qUser = typeof req.query.userId === 'string' ? (req.query.userId as string) : undefined;
+    const installId = String(req.header('x-install-id') || '').trim();
+    (req as any).installId = installId;
 
-    let uid: string | undefined = [hUser, qUser].find((x): x is string => !!x && isOid(x));
+    if (installId && mongoose.connection.readyState === 1) {
+      try {
+        const rec = (await Install.findOne({ installId }).select('user').lean()) as
+          | { user?: any }
+          | null;
+        if (rec?.user && isOid(String(rec.user))) {
+          const uid = String(rec.user);
+          (req as any).userId = uid;
 
-    if (!uid) {
-      const inst = req.header('x-install-id') || '';
-      // КРИТИЧНО: Проверяем готовность MongoDB перед использованием моделей
-      // Это предотвращает ошибки буферизации при отсутствии подключения
-      if (inst && mongoose.connection.readyState === 1) {
-        try {
-          const rec = (await Install.findOne({ installId: inst }).select('user').lean()) as
-            | { user?: any }
-            | null;
-          if (rec?.user && isOid(String(rec.user))) {
-            uid = String(rec.user);
+          // If client still sends x-user-id, ensure it matches (audit only).
+          const headerUserId = String(req.header('x-user-id') || '').trim();
+          if (headerUserId && isOid(headerUserId) && headerUserId !== uid) {
+            logger.warn('[auth] x-user-id mismatch for installId', {
+              installId,
+              headerUserId,
+              resolvedUserId: uid,
+              path: req.path,
+              method: req.method,
+            });
           }
-        } catch (e) {
-          // Игнорируем ошибки MongoDB, продолжаем без userId из installId
         }
+      } catch {
+        // Ignore Mongo errors here (routes may handle DB unavailable separately).
       }
     }
-
-    if (uid) (req as any).userId = uid;
   } catch {}
   next();
 });
@@ -744,43 +761,61 @@ io.on('connection', async (sock: AuthedSocket) => {
   // Обработчик события reauth для мягкой переавторизации
   sock.on('reauth', async (payload: any, ack?: Function) => {
     try {
-      const userId = String(payload?.userId || '').trim();
-      
-      if (!userId || !isOid(userId)) {
-        logger.warn('Reauth failed: invalid userId', { userId });
-        return ack?.({ ok: false, error: 'invalid_userId' });
+      // SECURITY: do NOT trust client-provided userId. Re-authenticate by installId -> user mapping.
+      const hs: any = sock.handshake || {};
+      const rawInstallId =
+        (typeof hs.auth?.installId === 'string' && hs.auth.installId) ||
+        (typeof hs.query?.installId === 'string' && hs.query.installId) ||
+        '';
+
+      const installId = String(rawInstallId || '').trim();
+      if (!installId) {
+        logger.warn('[auth] Reauth failed: no installId', { socketId: sock.id });
+        return ack?.({ ok: false, error: 'no_installId' });
       }
-      
-      // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+
       if (!isMongoReady()) {
         logger.warn('Reauth failed: database unavailable');
         return ack?.({ ok: false, error: 'database_unavailable' });
       }
-      // Проверяем существует ли пользователь
-      const exists = await User.exists({ _id: userId });
+
+      const inst = await Install.findOne({ installId }).select('user').lean();
+      const mappedUserId = inst?.user ? String((inst as any).user) : '';
+      if (!isOid(mappedUserId)) {
+        logger.warn('[auth] Reauth failed: install not found', { installId, socketId: sock.id });
+        return ack?.({ ok: false, error: 'not_found' });
+      }
+
+      const exists = await User.exists({ _id: mappedUserId });
       if (!exists) {
-        logger.warn('Reauth failed: user not found', { userId });
+        logger.warn('Reauth failed: user not found for install', { installId, userId: mappedUserId });
         return ack?.({ ok: false, error: 'user_not_found' });
       }
-      
-      // Привязываем пользователя к сокету
-      bindUserIdentity(io, sock, userId);
+
+      bindUserIdentity(io, sock, mappedUserId);
       emitPresence(io);
-      
-      logger.debug('User reauthorized successfully', { userId });
-      ack?.({ ok: true, userId });
+
+      // If client sent userId in payload and it differs, log it.
+      const claimed = String(payload?.userId || '').trim();
+      if (claimed && isOid(claimed) && claimed !== mappedUserId) {
+        logger.warn('[auth] Reauth claimed userId mismatch', {
+          installId,
+          claimedUserId: claimed,
+          mappedUserId,
+          socketId: sock.id,
+        });
+      }
+
+      logger.debug('User reauthorized successfully', { userId: mappedUserId });
+      ack?.({ ok: true, userId: mappedUserId });
     } catch (e) {
       logger.error('Reauth error', { error: (e as any)?.message || String(e) });
       ack?.({ ok: false, error: 'server_error' });
     }
   });
 
-  // ВОССТАНАВЛИВАЕМ: привязка по handshake: userId/installId
+  // SECURITY: restore auth ONLY by installId mapping (do NOT trust handshake userId)
   const hs: any = sock.handshake || {};
-  const rawUserId =
-    (typeof hs.auth?.userId === 'string' && hs.auth.userId) ||
-    (typeof hs.query?.userId === 'string' && hs.query.userId) ||
-    '';
   const rawInstallId =
     (typeof hs.auth?.installId === 'string' && hs.auth.installId) ||
     (typeof hs.query?.installId === 'string' && hs.query.installId) ||
@@ -789,14 +824,12 @@ io.on('connection', async (sock: AuthedSocket) => {
   let bindUid: string | null = null;
   // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
   if (isMongoReady()) {
-    if (isOid(rawUserId) && (await User.exists({ _id: rawUserId }))) {
-      bindUid = String(rawUserId);
-    } else if (rawInstallId.trim()) {
+    if (rawInstallId.trim()) {
       try {
         const inst = (await Install.findOne({ installId: rawInstallId.trim() })
           .select('user')
           .lean()) as { user?: any } | null;
-        if (inst?.user) {
+        if (inst?.user && isOid(String(inst.user)) && (await User.exists({ _id: String(inst.user) }))) {
           bindUid = String(inst.user);
         }
       } catch (e) {
@@ -1039,21 +1072,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
   });
 
-  /* ---- профиль ---- */
-  sock.on('attach_user', async (payload: any, ack?: Function) => {
-    const uid = String(payload?.userId || '').trim();
-
-    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
-    if (!isMongoReady()) {
-      return ack?.({ ok: false, error: 'database_unavailable' });
-    }
-    if (uid && isOid(uid) && (await User.exists({ _id: uid }))) {
-      bindUserIdentity(io, sock, uid);
-      emitPresence(io);
-      return ack?.({ ok: true, userId: uid });
-    }
-    return ack?.({ ok: false, error: 'not_found' });
-  });
+  // SECURITY: legacy attach_user is disabled (use identity:attach instead).
 
   // ВОТ ЗДЕСЬ: читаем профиль (ник + нормализованный https-аватар)
   sock.on('profile:me', async (_: any, ack?: Function) => {
@@ -1844,18 +1863,24 @@ app.get('/api/presence', (_req, res) => res.json({ ok: true, list: getOnlineList
 
 /* ========= Start ========= */
 function printLanUrls(port: number) {
-  const nets = os.networkInterfaces();
-  const urls: string[] = [];
-  Object.values(nets).forEach((ifaces) =>
-    ifaces?.forEach((it) => {
-      if (it && it.family === 'IPv4' && !it.internal) {
-        urls.push(`http://${it.address}:${port}`);
-      }
-    })
-  );
-  if (urls.length > 0) {
-    logger.info('Server running on', { urls: urls.join(', ') });
-  } else {
+  try {
+    const nets = os.networkInterfaces();
+    const urls: string[] = [];
+    Object.values(nets).forEach((ifaces) =>
+      ifaces?.forEach((it) => {
+        if (it && it.family === 'IPv4' && !it.internal) {
+          urls.push(`http://${it.address}:${port}`);
+        }
+      })
+    );
+    if (urls.length > 0) {
+      logger.info('Server running on', { urls: urls.join(', ') });
+    } else {
+      logger.info(`Server running on http://${HOST}:${port}`);
+    }
+  } catch (e: any) {
+    // Some sandboxed environments can fail os.networkInterfaces().
+    logger.warn('Failed to list LAN interfaces, falling back to HOST', { error: e?.message || String(e) });
     logger.info(`Server running on http://${HOST}:${port}`);
   }
 }

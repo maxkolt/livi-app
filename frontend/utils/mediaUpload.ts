@@ -2,6 +2,7 @@
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import { logger } from './logger';
+import { getInstallId } from './installId';
 
 // Получаем BASE_URL из переменных окружения
 // Приоритет: платформо-специфичная переменная > общая переменная > fallback
@@ -76,6 +77,8 @@ export const uploadMediaToServer = async (
   try {
     logger.debug('Starting upload to:', API_BASE_URL);
     logger.debug('Local file:', localUri);
+
+    const installId = await getInstallId().catch(() => '');
     
     // Конвертируем файл в dataUri
     const dataUri = await fileToDataUri(localUri);
@@ -125,6 +128,7 @@ export const uploadMediaToServer = async (
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(installId ? { 'x-install-id': String(installId) } : {}),
         },
         body: JSON.stringify({
           dataUri,
