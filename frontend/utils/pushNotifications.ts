@@ -1,9 +1,21 @@
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { API_BASE } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
+
+async function clearNotificationIndicators() {
+  // Android launchers usually show the badge based on *active* notifications in the tray.
+  // If we don't dismiss them, the badge can stay even after the user read messages inside the app.
+  try {
+    await Notifications.dismissAllNotificationsAsync();
+  } catch {}
+  // iOS badge (and some Android launchers) can also be controlled explicitly.
+  try {
+    await Notifications.setBadgeCountAsync(0);
+  } catch {}
+}
 
 // Показывать уведомления даже в foreground (для сообщений).
 // Для звонков — не показываем системное уведомление, т.к. звонок должен работать только внутри приложения.
@@ -48,6 +60,9 @@ async function navigateFromPushData(data: any) {
     if (!nav) return;
 
     if (type === 'message') {
+      // Clear system notification badge/tray since user is going to the chat.
+      // This prevents stuck launcher badges on Android.
+      await clearNotificationIndicators();
       const peerId = String(data?.from || '');
       const peerName = String(data?.fromNick || '').trim() || '—';
       if (!peerId) return;
@@ -134,6 +149,28 @@ export async function registerAndSendPushToken(userId?: string) {
       return;
     }
 
+    // --- DEV helper: get *device* push token (FCM on Android) for Firebase "Test on device" ---
+    // Firebase Console expects an FCM registration token. Expo's push token (ExponentPushToken[...])
+    // is a different thing.
+    try {
+      const deviceTokenResp = await Notifications.getDevicePushTokenAsync();
+      const deviceToken = (deviceTokenResp as any)?.data;
+      const deviceType = String((deviceTokenResp as any)?.type || '');
+      if (deviceToken) {
+        logger.info('[push] device push token acquired', {
+          type: deviceType,
+          tokenPrefix: String(deviceToken).slice(0, 18),
+        });
+        if (__DEV__) {
+          // Intentionally log full token in dev for copy/paste into Firebase Console test dialog.
+          // Do NOT rely on this in production logs.
+          console.log('[push][DEV] DEVICE_PUSH_TOKEN (copy into Firebase Test on device):', String(deviceToken));
+        }
+      }
+    } catch (e) {
+      logger.warn('[push] failed to get device push token', e as any);
+    }
+
     // Получаем Expo push token
     const projectId =
       (Constants.expoConfig as any)?.extra?.eas?.projectId ||
@@ -204,6 +241,18 @@ export async function registerAndSendPushToken(userId?: string) {
 }
 
 export function addNotificationListeners() {
+  // When app becomes active, clear notification indicators.
+  // This matches user expectation: after opening/reading in-app, the launcher badge should go away.
+  let appStateRef = AppState.currentState;
+  const appStateSub = AppState.addEventListener('change', (next) => {
+    try {
+      if (appStateRef.match(/inactive|background/) && next === 'active') {
+        void clearNotificationIndicators();
+      }
+      appStateRef = next;
+    } catch {}
+  });
+
   // 1) Если приложение было "убито" и открылось по тапу по пушу
   (async () => {
     try {
@@ -224,6 +273,9 @@ export function addNotificationListeners() {
   return () => {
     sub1.remove();
     sub2.remove();
+    try {
+      appStateSub.remove();
+    } catch {}
   };
 }
 

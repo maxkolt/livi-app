@@ -455,6 +455,21 @@ export class VideoCallSession extends SimpleEventEmitter {
               });
               logger.info('[VideoCallSession] Video track published after camera enable');
             }
+
+            // КРИТИЧНО: ensureLocalTracks(true) пересоздаёт И аудио-трек тоже.
+            // Если микрофон был включён, но новый аудио-трек не опубликован — собеседник перестаёт слышать звук
+            // после OFF->ON камеры. Поэтому (best-effort) убеждаемся, что аудио трек тоже опубликован.
+            if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
+              await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
+                const errorMsg = e?.message || String(e || '');
+                if (!errorMsg.includes('already') && !errorMsg.includes('duplicate')) {
+                  logger.warn('[VideoCallSession] Failed to publish audio track after camera recovery', e);
+                }
+              });
+              logger.info('[VideoCallSession] Audio track published after camera recovery', {
+                trackId: this.localAudioTrack?.sid || this.localAudioTrack?.mediaStreamTrack?.id,
+              });
+            }
           }
           
           logger.info('[VideoCallSession] Camera enabled successfully');
@@ -2250,13 +2265,32 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     // КРИТИЧНО: Создаем промис подключения для защиты от множественных вызовов
     const connectionPromise = (async (): Promise<boolean> => {
+      // Publish defaults:
+      // - Start reasonably high on capable devices (720p capture is handled separately),
+      // - Allow network-based adaptation via simulcast layers.
+      // We keep adaptiveStream/dynacast disabled because this project previously had
+      // stability issues with "unknown track" quality updates.
+      const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+      const capture = getPreferredVideoCaptureOptions(facingMode);
+      const isHighCapture = capture?.meta?.preset === 'high';
+
+      // Minimal simulcast (2 layers) to reduce CPU on mobile but still allow auto down/up.
+      // If capture is already low, keep single layer to avoid extra load.
+      const videoSimulcastLayers = isHighCapture
+        ? ([
+            { width: 320, height: 180, bitrate: 160_000, fps: 15 },
+            { width: 1280, height: 720, bitrate: 1_500_000, fps: 30 },
+          ] as any[])
+        : ([] as any[]);
+
       const room = new Room({
         // Отключаем dynacast/adaptiveStream, чтобы LiveKit не мьютил треки и не слал quality updates для "unknown track"
         adaptiveStream: false,
         dynacast: false,
         publishDefaults: {
-          videoEncoding: { maxBitrate: 1200_000, maxFramerate: 30 },
-          videoSimulcastLayers: [],
+          // Allow higher ceiling on high-capture devices; WebRTC congestion control will still scale down.
+          videoEncoding: { maxBitrate: isHighCapture ? 2_500_000 : 1_200_000, maxFramerate: 30 },
+          videoSimulcastLayers,
         },
       });
       this.room = room;

@@ -4,10 +4,17 @@ apply plugin: "com.facebook.react"
 
 // Firebase/FCM: required for expo-notifications push token registration in release builds.
 // Make it safe for local builds by applying only when google-services.json exists.
+def _isReleaseTaskRequested = gradle.startParameter.taskNames.any { it.toString().toLowerCase().contains('release') }
 if (file("google-services.json").exists()) {
     apply plugin: "com.google.gms.google-services"
 } else {
     println("[livi] google-services.json not found in android/app - skipping google-services plugin")
+    // For release builds we fail fast, otherwise you might ship a build without FCM wired up.
+    if (_isReleaseTaskRequested) {
+        throw new RuntimeException(
+            "[livi] google-services.json is required for release builds. Place it at frontend/android/app/google-services.json"
+        )
+    }
 }
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
@@ -100,8 +107,8 @@ android {
         applicationId 'com.kolt12max.livi'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 29
-        versionName "1.0.28"
+        versionCode 31
+        versionName "1.0.30"
     }
     signingConfigs {
     debug {
@@ -111,11 +118,55 @@ android {
         keyPassword 'android'
     }
     release {
-        // Используем явные значения, так как чтение из gradle.properties не работает корректно
-        storeFile file("livi-release.jks")
-        storePassword "kolt1208"
-        keyAlias "livi"
-        keyPassword "kolt1208"
+        // Release signing secrets must NOT live in the repo.
+        // Provide them via environment variables or ~/.gradle/gradle.properties.
+        //
+        // Supported keys:
+        // - LIVI_RELEASE_STORE_FILE (path to .jks, default: livi-release.jks in this folder)
+        // - LIVI_RELEASE_STORE_PASSWORD
+        // - LIVI_RELEASE_KEY_ALIAS
+        // - LIVI_RELEASE_KEY_PASSWORD
+        def isReleaseTaskRequested = gradle.startParameter.taskNames.any { it.toString().toLowerCase().contains('release') }
+        // Optional local file (ignored): android/app/keystore.properties
+        // This is convenient for other machines/CI without touching ~/.gradle.
+        def localKeystoreProps = new Properties()
+        def localKeystoreFile = file('keystore.properties')
+        if (localKeystoreFile.exists()) {
+            localKeystoreFile.withInputStream { localKeystoreProps.load(it) }
+        }
+
+        def envOrProp = { String k ->
+            def fileV = localKeystoreProps.getProperty(k)
+            if (fileV != null && fileV.toString().trim()) return fileV.toString().trim()
+            def v = System.getenv(k)
+            if (v != null && v.toString().trim()) return v.toString().trim()
+            def p = project.findProperty(k)
+            return (p != null && p.toString().trim()) ? p.toString().trim() : null
+        }
+
+        def storeFilePath = envOrProp('LIVI_RELEASE_STORE_FILE') ?: 'livi-release.jks'
+        def storeFileResolved = file(storeFilePath)
+        storeFile storeFileResolved
+
+        def storePass = envOrProp('LIVI_RELEASE_STORE_PASSWORD')
+        def keyAliasVal = envOrProp('LIVI_RELEASE_KEY_ALIAS')
+        def keyPass = envOrProp('LIVI_RELEASE_KEY_PASSWORD')
+
+        if (storePass != null) storePassword storePass
+        if (keyAliasVal != null) keyAlias keyAliasVal
+        if (keyPass != null) keyPassword keyPass
+
+        if (isReleaseTaskRequested && !storeFileResolved.exists()) {
+            throw new RuntimeException(
+                "[livi] Missing release keystore file: ${storeFileResolved}. Set LIVI_RELEASE_STORE_FILE or place livi-release.jks in android/app."
+            )
+        }
+        if (isReleaseTaskRequested && (storePass == null || keyAliasVal == null || keyPass == null)) {
+            throw new RuntimeException(
+                "[livi] Missing release signing config. Set LIVI_RELEASE_STORE_PASSWORD, LIVI_RELEASE_KEY_ALIAS, LIVI_RELEASE_KEY_PASSWORD " +
+                "via android/app/keystore.properties, env, or ~/.gradle/gradle.properties (optional: LIVI_RELEASE_STORE_FILE)."
+            )
+        }
     }
 }
     buildTypes {

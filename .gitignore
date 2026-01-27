@@ -51,6 +51,8 @@ frontend/android/app/*.pem
 frontend/android/app/*.zip
 frontend/android/app/pepk.jar
 frontend/android/app/google-services.json
+frontend/android/app/src/**/google-services.json
+frontend/android/app/keystore.properties
 frontend/android/app/src/main/assets/
 
 # iOS
