@@ -13,9 +13,13 @@ const router = Router();
 // If we write into dist/public, the files become unreachable => 404 on /uploads/media/...
 function resolvePublicDir(): string {
   const candidates = [
+    // When compiled: __dirname = backend/dist/routes -> ../../public = backend/public (correct)
+    // When dev:      __dirname = backend/routes      -> ../../public = backend/public (correct)
+    path.resolve(__dirname, '..', '..', 'public'),
+    // Fallbacks
     path.resolve(__dirname, '..', 'public'),
     path.join(__dirname, 'public'),
-    path.resolve(__dirname, '..', '..', 'public'),
+    path.resolve(__dirname, '..', '..', '..', 'public'),
   ];
   const hasKnownFiles = (dir: string) => {
     try {
@@ -28,7 +32,11 @@ function resolvePublicDir(): string {
       return false;
     }
   };
-  return candidates.find((d) => fs.existsSync(d) && hasKnownFiles(d)) ?? candidates[0]!;
+  return (
+    candidates.find((d) => fs.existsSync(d) && hasKnownFiles(d)) ??
+    candidates.find((d) => fs.existsSync(d)) ??
+    candidates[0]!
+  );
 }
 
 // Создаем директорию для uploads если её нет
