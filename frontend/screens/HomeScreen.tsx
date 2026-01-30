@@ -1643,7 +1643,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             
             // Обновляем аватар из backend
             if (profile.avatarB64 && typeof profile.avatarB64 === 'string') {
-              const avatarDataUri = `data:image/jpeg;base64,${profile.avatarB64}`;
+              const raw = String(profile.avatarB64 || '').trim();
+              // backend хранит и отдаёт data URI (data:image/...), но на всякий случай поддержим и "чистый" base64
+              const avatarDataUri = raw.startsWith('data:') ? raw : `data:image/jpeg;base64,${raw}`;
               loadedAvatar = avatarDataUri;
               setMyFullAvatarUri(avatarDataUri);
               setAvatarUri(avatarDataUri);
@@ -1652,7 +1654,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               logger.debug('Set avatar from backend avatarB64');
               hasActualData = true;
             } else if (profile.avatarThumbB64 && typeof profile.avatarThumbB64 === 'string') {
-              const avatarDataUri = `data:image/jpeg;base64,${profile.avatarThumbB64}`;
+              const raw = String(profile.avatarThumbB64 || '').trim();
+              const avatarDataUri = raw.startsWith('data:') ? raw : `data:image/jpeg;base64,${raw}`;
               loadedAvatar = avatarDataUri;
               setMyFullAvatarUri(avatarDataUri);
               setAvatarUri(avatarDataUri);
@@ -3398,7 +3401,9 @@ const handleClearNick = useCallback(async () => {
     </View>
   );
 
-  const CenterTopProfile = React.memo(() => {
+  // КРИТИЧНО: нельзя объявлять компонент внутри HomeScreen и рендерить как <CenterTopProfile />,
+  // иначе при любом setState будет создаваться новый тип компонента -> ремоунт -> мерцание аватара.
+  const renderCenterTopProfile = () => {
     const letter = displayAvatarLetter(savedNick);
     const wrapperStyle: StyleProp<ViewStyle> = {
       alignItems: "center",
@@ -3451,7 +3456,7 @@ const handleClearNick = useCallback(async () => {
         <Text style={[styles.subtitleNik, { marginTop: 12, fontSize: Platform.OS === "ios" ? 25 : 20, color: isDark ? LIVI.text2 : LIVI.textThemeWhite }]}>{displayName(savedNick)}</Text>
       </View>
     );
-  });
+  };
 
   // Показ уведомления «Звонок завершён» и, при необходимости, авто-открытие меню друзей
   useEffect(() => {
@@ -3584,7 +3589,7 @@ const handleClearNick = useCallback(async () => {
         </View>
       </View>
 
-      <CenterTopProfile />
+      {renderCenterTopProfile()}
 
       <View style={styles.center}>
         <Text style={[styles.title, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>{L('welcomeTitle')}</Text>
@@ -3664,7 +3669,7 @@ const handleClearNick = useCallback(async () => {
               <Divider style={{ backgroundColor: LIVI.border, marginTop: 12 }} />
 
               <View style={{ flex: 1 }}>
-                {tab === 'friends' && <FriendsTab />}
+                {tab === 'friends' && FriendsTab()}
                 {tab === 'settings' && (
                   <SettingsTab
                       nick={nick}
@@ -3705,7 +3710,7 @@ const handleClearNick = useCallback(async () => {
                       lang={lang}
                     />
                 )}
-                {tab === 'more' && <MoreTab />}
+                {tab === 'more' && MoreTab()}
               </View>
             </KeyboardAvoidingView>
           </SafeAreaView>

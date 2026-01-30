@@ -95,7 +95,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     })();
   }, []);
 
-  const LIVI = {
+  // КРИТИЧНО: мемоизируем объект, иначе он новый на каждый рендер (и может ломать мемоизацию ниже)
+  const LIVI = React.useMemo(() => ({
     rgb: theme.colors.background === '#151F33' ? 'rgba(21, 31, 51, 0.3)' : 'rgba(0,0,0,0.06)',
     bg: theme.colors.background,
     surface: theme.colors.surface,
@@ -104,7 +105,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     white: theme.colors.onSurface as string,
     green: '#2ECC71',
     red: '#FF5A67',
-  } as const;
+  } as const), [theme, isDark]);
 
   const BORDER_COLOR = theme.colors.outline as string;
   // Цвета облаков: в светлой теме немного затемняем входящие, исходящие чуть светлее
@@ -677,15 +678,15 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const headerH = 56;
 
-  const hasHttp = (s?: string) => !!s && /^https?:\/\//i.test(String(s).trim());
-  const isUploads = (s?: string) => !!s && String(s).startsWith('/uploads/');
-  const resolveAvatar = (s?: string) => {
+  const resolveAvatar = React.useCallback((s?: string) => {
     if (!s) return '';
-    if (hasHttp(s)) return toAvatarThumb(s, 72, 72);
-    if (isUploads(s)) return `${API_BASE}${s}`;
+    const raw = String(s).trim();
+    if (/^https?:\/\//i.test(raw)) return toAvatarThumb(raw, 72, 72);
+    if (raw.startsWith('/uploads/')) return `${API_BASE}${raw}`;
     return '';
-  };
-  const resolveMediaUri = (s?: string) => {
+  }, []);
+
+  const resolveMediaUri = React.useCallback((s?: string) => {
     if (!s) {
       logger.warn('[ChatScreen] resolveMediaUri: empty URI');
       return '';
@@ -704,7 +705,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     // Или это может быть base64 или другой формат
     logger.debug('[ChatScreen] resolveMediaUri: returning as-is', { uri: s });
     return s;
-  };
+  }, []);
   // КРИТИЧНО: firstLetter используется ТОЛЬКО для аватара (headerInitial), НЕ для текста
   // Для текста используем peerNameState (полный никнейм)
   const firstLetter = (s?: string) => (s?.trim()?.[0] || '').toUpperCase();
@@ -712,7 +713,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   const headerInitial = peerNameState ? firstLetter(peerNameState) : '--'; // Только для аватара!
   const headerPlaceholder = '--'; // Всегда показываем -- если нет аватара
 
-  const Header = () => (
+  // КРИТИЧНО: Header нельзя объявлять как "новую функцию" на каждый рендер,
+  // иначе шапка (и аватар) будут размонтироваться на каждый ввод в TextInput.
+  const Header = React.useCallback(() => (
     <View
       style={{
         // КРИТИЧНО: Не добавляем paddingTop, так как SafeAreaView уже обрабатывает safe area
@@ -768,7 +771,25 @@ export default function ChatScreen({ route, navigation }: Props) {
         containerStyle={{ backgroundColor: 'rgba(255,255,255,0.12)' }}
       />
     </View>
-  );
+  ), [
+    headerH,
+    LIVI.bg,
+    LIVI.white,
+    LIVI.titan,
+    LIVI.green,
+    LIVI.red,
+    BORDER_WIDTH,
+    BORDER_COLOR,
+    navigation,
+    isDark,
+    (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
+    peerNameState,
+    peerOnline,
+    peerId,
+    peerAvatarVerState,
+    fullAvatarUri,
+    headerInitial,
+  ]);
 
   // live updates for peer profile while chat is open
   useEffect(() => {
@@ -869,37 +890,8 @@ export default function ChatScreen({ route, navigation }: Props) {
       <Text style={{ color: LIVI.text, marginTop: 12 }}>{t('chatLoading', lang)}</Text>
     </View>
   );
-
-  if (err) {
-    return (
-      <View
-        style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
-      >
-        <Text
-          style={{
-            color: LIVI.text,
-            marginBottom: 12,
-            textAlign: "center",
-          }}
-        >
-          Не удалось открыть чат: {err}
-        </Text>
-        <TouchableOpacity
-          onPress={() => setErr(null)}
-          style={{
-            backgroundColor: "rgba(255,255,255,0.08)",
-            paddingVertical: 10,
-            paddingHorizontal: 18,
-            borderRadius: 10,
-          }}
-        >
-          <Text style={{ color: LIVI.white, fontWeight: "700" }}>{t('ok', lang)}</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  if (loading) return <Loading />;
+  // КРИТИЧНО: НЕ делаем ранние return по loading/err, иначе ниже хуки (useMemo/useCallback) будут
+  // вызываться не на каждом рендере -> "Rendered more hooks than during the previous render".
   const isEmpty = messages.length === 0;
 
   const openClearMenu = () => {
@@ -1033,16 +1025,16 @@ export default function ChatScreen({ route, navigation }: Props) {
     });
   };
 
-  // Функция для получения анимации сообщения
-  const getMessageAnimation = (messageId: string) => {
+  // Функция для получения анимации сообщения (стабильная ссылка, чтобы не ломать мемоизацию)
+  const getMessageAnimation = React.useCallback((messageId: string) => {
     if (!messagePressAnimations[messageId]) {
       messagePressAnimations[messageId] = new Animated.Value(1);
     }
     return messagePressAnimations[messageId];
-  };
+  }, [messagePressAnimations]);
 
   // Функция для анимации нажатия на сообщение
-  const animateMessagePress = (messageId: string, callback?: () => void) => {
+  const animateMessagePress = React.useCallback((messageId: string, callback?: () => void) => {
     const animation = getMessageAnimation(messageId);
     
     // Тактильная обратная связь
@@ -1073,7 +1065,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     ]).start(() => {
       if (callback) callback();
     });
-  };
+  }, [getMessageAnimation]);
 
   const sendMessage = async () => {
     if (!messageText.trim() || !currentUserId) return;
@@ -1443,7 +1435,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   };
 
 
-  const MessageItem = React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onLongPressMessage }: any) => {
+  // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
+  // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
+  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onLongPressMessage }: any) => {
     const [imageLoadError, setImageLoadError] = React.useState(false);
     const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
     const [isDownloading, setIsDownloading] = React.useState(false);
@@ -1616,7 +1610,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                 }}
                 contentFit="cover"
                 cachePolicy="memory-disk"
-                transition={200}
+                // КРИТИЧНО: на Android transition часто даёт мерцание в списках
+                transition={Platform.OS === 'android' ? 0 : 200}
                 recyclingKey={`message_image_${item.id}_${localImageUri ? 'local' : 'remote'}`}
                 allowDownscaling={false}
                 placeholder={null}
@@ -1909,7 +1904,36 @@ export default function ChatScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       </Animated.View>
     );
-  });
+  }), [
+    resolveMediaUri,
+    animateMessagePress,
+    getMessageAnimation,
+    BUBBLE_BG_OUT,
+    BUBBLE_BG_IN,
+    BORDER_COLOR,
+    LIVI.white,
+    LIVI.titan,
+    LIVI.red,
+  ]);
+
+  // КРИТИЧНО: на каждый ввод нельзя пересоздавать массив data для FlatList,
+  // иначе он будет перерисовывать (а иногда и переразмещать) все элементы -> мерцание изображений.
+  const androidMessagesData = React.useMemo(() => {
+    if (isEmpty) return [];
+    // reverse создаёт новый массив, поэтому мемоизируем
+    return [...messages].reverse();
+  }, [isEmpty, messages]);
+
+  const renderMessageRow = React.useCallback(({ item }: any) => (
+    <MessageItem
+      item={item}
+      currentUserId={currentUserId}
+      readStatus={readStatuses[item.id]}
+      uploadStatus={uploadStatus[item.id]}
+      onPressImage={openMediaViewer}
+      onLongPressMessage={(m: any) => { setSelectedMessage(m); showDeleteModal(); }}
+    />
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer]);
 
   return (
     <SafeAreaView 
@@ -1952,18 +1976,9 @@ export default function ChatScreen({ route, navigation }: Props) {
           >
             <FlatList
               ref={flatListRef}
-              data={[...messages]}
+              data={messages}
               keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <MessageItem
-                  item={item}
-                  currentUserId={currentUserId}
-                  readStatus={readStatuses[item.id]}
-                  uploadStatus={uploadStatus[item.id]}
-                  onPressImage={openMediaViewer}
-                  onLongPressMessage={(m: any) => { setSelectedMessage(m); showDeleteModal(); }}
-                />
-              )}
+              renderItem={renderMessageRow}
               style={{ flex: 1 }}
               contentContainerStyle={{ 
                 flexGrow: 1,
@@ -2085,18 +2100,9 @@ export default function ChatScreen({ route, navigation }: Props) {
           (<View style={{ flex: 1 }}>
             <FlatList
               ref={flatListRef}
-              data={isEmpty ? [] : [...messages].reverse()}
+              data={androidMessagesData}
               keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <MessageItem
-                  item={item}
-                  currentUserId={currentUserId}
-                  readStatus={readStatuses[item.id]}
-                  uploadStatus={uploadStatus[item.id]}
-                  onPressImage={openMediaViewer}
-                  onLongPressMessage={(m: any) => { setSelectedMessage(m); showDeleteModal(); }}
-                />
-              )}
+              renderItem={renderMessageRow}
               style={{ flex: 1 }}
               contentContainerStyle={{ 
                 flexGrow: 1,

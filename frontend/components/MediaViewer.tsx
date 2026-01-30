@@ -151,7 +151,8 @@ export default function MediaViewer({
                 style={styles.image}
                 contentFit="contain"
                 cachePolicy="memory-disk"
-                transition={200}
+                // На Android transition может выглядеть как мерцание при показе/перерисовке
+                transition={Platform.OS === 'android' ? 0 : 200}
               />
             </Animated.View>
           </PinchGestureHandler>
