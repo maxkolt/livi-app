@@ -21,6 +21,9 @@ type PiPState = {
   localStream: MediaStreamLike | null;
   remoteStream: MediaStreamLike | null;
 
+  // Состояние камеры на момент входа в PiP (нужно для точного восстановления при возврате)
+  localCamOn?: boolean;
+
   // позиция PiP
   pipPos: { x: number; y: number };
 
@@ -40,9 +43,15 @@ type PiPState = {
     partnerAvatarUrl?: string;
     localStream?: MediaStreamLike | null;
     remoteStream?: MediaStreamLike | null;
+    localCamOn?: boolean;
     muteLocal?: boolean;
     muteRemote?: boolean;
     navParams?: any; // ← кто нас вызвал (для корректного возврата)
+    /**
+     * When true, delays making overlay visible by a couple frames.
+     * Used on Android BackHandler to avoid PiP flashing before navigation.
+     */
+    deferVisible?: boolean;
   }) => void;
 
   hidePiP: () => void;
@@ -90,6 +99,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   const localStreamRef = useRef<MediaStreamLike | null>(null);
   const remoteStreamRef = useRef<MediaStreamLike | null>(null);
+  const [localCamOn, setLocalCamOn] = useState<boolean | undefined>(undefined);
 
   const [pipPos, setPipPos] = useState({ x: 12, y: 120 });
 
@@ -120,9 +130,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     partnerAvatarUrl?: string;
     localStream?: MediaStreamLike | null;
     remoteStream?: MediaStreamLike | null;
+    localCamOn?: boolean;
     muteLocal?: boolean;
     muteRemote?: boolean;
     navParams?: any; // ← кто нас вызвал (для корректного возврата)
+    deferVisible?: boolean;
   }) => {
     console.log('[PiPContext] 🔥 showPiP вызван', {
       callId: p.callId,
@@ -153,12 +165,35 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     }
     if (p.localStream !== undefined) localStreamRef.current = p.localStream ?? null;
     if (p.remoteStream !== undefined) remoteStreamRef.current = p.remoteStream ?? null;
+    // localCamOn — источник истины для восстановления после PiP.
+    // Если явно не передали, пытаемся вычислить из localStream (best-effort).
+    if (typeof p.localCamOn === 'boolean') {
+      setLocalCamOn(p.localCamOn);
+    } else {
+      try {
+        const t = (p.localStream as any)?.getVideoTracks?.()?.[0];
+        const enabled = t?.enabled;
+        if (typeof enabled === 'boolean') {
+          setLocalCamOn(enabled);
+        }
+      } catch {}
+    }
     if (typeof p.muteLocal === 'boolean') setIsMuted(!!p.muteLocal);
     if (typeof p.muteRemote === 'boolean') setIsRemoteMuted(!!p.muteRemote);
     setLastNavParams(p.navParams); // сохраняем navParams для возврата
-    setVisible(true);
-    
-    console.log('[PiPContext] ✅ PiP состояние установлено, visible=true');
+
+    // By default show immediately. On Android BackHandler, defer visibility so navigation can happen first.
+    if (p.deferVisible) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setVisible(true);
+          console.log('[PiPContext] ✅ PiP состояние установлено (deferred), visible=true');
+        });
+      });
+    } else {
+      setVisible(true);
+      console.log('[PiPContext] ✅ PiP состояние установлено, visible=true');
+    }
   }, []);
 
   const hidePiP = useCallback(() => {
@@ -368,6 +403,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     setIsRemoteMuted(false);
     setPartnerAvatarUrl(undefined);
     setLastNavParams(undefined);
+    setLocalCamOn(undefined);
   }, [callId, roomId, onEndCall, stopRemoteVAD]);
 
   // Обработчик завершения звонка для пользователя в PiP
@@ -402,6 +438,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         setIsRemoteMuted(false);
         setPartnerAvatarUrl(undefined);
         setLastNavParams(undefined);
+        setLocalCamOn(undefined);
       } else if (visible && (callId || roomId)) {
         // Логируем, но не обрабатываем, если это не наш звонок
         console.log('[PiPContext] Call ended event received but not for our call, ignoring:', {
@@ -431,6 +468,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.isMuted !== undefined) setIsMuted(patch.isMuted);
     if (patch.isRemoteMuted !== undefined) setIsRemoteMuted(patch.isRemoteMuted);
     if (patch.pipPos) setPipPos(patch.pipPos);
+    if (patch.localCamOn !== undefined) setLocalCamOn(patch.localCamOn);
     // потоки через ref:
     if (patch.localStream !== undefined) localStreamRef.current = patch.localStream;
     if (patch.remoteStream !== undefined) remoteStreamRef.current = patch.remoteStream;
@@ -460,6 +498,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     isRemoteMuted,
     localStream: localStreamRef.current,
     remoteStream: remoteStreamRef.current,
+    localCamOn,
     pipPos,
     remoteLevel,
     // Эквалайзер отключен
@@ -478,7 +517,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     updatePiPState,
   }), [
     visible, callId, roomId, partnerName, partnerAvatarUrl,
-    isMuted, isRemoteMuted, pipPos, remoteLevel,
+    isMuted, isRemoteMuted, localCamOn, pipPos, remoteLevel,
     showPiP, hidePiP, updatePiPPosition, toggleMic, toggleRemoteAudio,
     returnToCall, endCall, startRemoteVAD, stopRemoteVAD, updatePiPState
   ]);

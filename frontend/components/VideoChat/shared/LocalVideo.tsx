@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Platform } from 'react-native';
 import { RTCView, MediaStream } from '@livekit/react-native-webrtc';
 import { isValidStream } from '../../../utils/streamUtils';
@@ -89,6 +89,23 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     }
   }, [localStream?.id, localRenderKey]);
 
+  // КРИТИЧНО: На Android RTCView может "залипать" на черном экране при переключении enabled у videoTrack
+  // (камера OFF -> ON). Поэтому при изменении enabled/ camOn форсим remount.
+  const lastEnabledRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!localStream || !isValidStream(localStream)) return;
+    const currentEnabled = !!(videoTrack?.enabled ?? false);
+    if (lastEnabledRef.current === null) {
+      lastEnabledRef.current = currentEnabled;
+      return;
+    }
+    if (lastEnabledRef.current !== currentEnabled) {
+      lastEnabledRef.current = currentEnabled;
+      setForceUpdateKey((prev) => prev + 1);
+    }
+  }, [camOn, localStream?.id, isVideoTrackEnabled]);
+
   // Уведомляем о готовности стрима
   useEffect(() => {
     if (localStream && isValidStream(localStream) && onStreamReady) {
@@ -105,6 +122,16 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     );
   }
 
+  // Если UI считает, что камера выключена — всегда показываем заглушку "Вы".
+  // Это должно иметь приоритет над попытками рендера RTCView, иначе получаем "черный прямоугольник".
+  if (!camOn) {
+    return (
+      <View style={[styles.rtc, styles.placeholderContainer]}>
+        <Text style={styles.placeholder}>{L('you')}</Text>
+      </View>
+    );
+  }
+
   // КРИТИЧНО: Показываем видео если есть готовый трек, даже если camOn еще не обновлен
   // camOn может обновиться позже через onCamStateChange
   if (hasLocalStream && canRenderVideo) {
@@ -112,7 +139,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     // Это более надежный способ для @livekit/react-native-webrtc на Android, но добавляем streamURL как fallback
     const localStreamURL = localStream.toURL?.();
     const rtcViewKey = Platform.OS === 'android'
-      ? `local-video-${localStream.id}-${localRenderKey}-${forceUpdateKey}`
+      ? `local-video-${localStream.id}-${localRenderKey}-${forceUpdateKey}-${isVideoTrackEnabled ? 1 : 0}`
       : `local-video-${localStream.id}-${localRenderKey}`;
     
     logger.info('[LocalVideo] ✅ Рендерим RTCView', {
@@ -163,15 +190,8 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     );
   }
 
-  // Камера явно выключена И нет даже живого видеотрека — показываем заглушку "Вы"
-  // (на Android camOn может не успеть обновиться, поэтому дополнительно проверяем наличие live трека).
-  if (!camOn && !isVideoTrackLive) {
-    return (
-      <View style={[styles.rtc, styles.placeholderContainer]}>
-        <Text style={styles.placeholder}>{L('you')}</Text>
-      </View>
-    );
-  }
+  // Если camOn=true, но трек ещё не готов/не рендерится — показываем черный экран (как "идет восстановление"),
+  // а не заглушку "Вы". Заглушка должна означать именно camOff по UI.
 
   // Если стрим есть, но трек еще не ready/замьючен - показываем черный экран
   return <View style={[styles.rtc, { backgroundColor: 'black' }]} />;

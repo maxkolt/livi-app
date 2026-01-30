@@ -20,6 +20,7 @@ interface UsePiPProps {
   partnerUserId: string | null;
   isInactiveState: boolean;
   wasFriendCallEnded: boolean;
+  camOn: boolean;
   micOn: boolean;
   remoteMuted: boolean;
   localStream: any;
@@ -42,6 +43,7 @@ export const usePiP = ({
   partnerUserId,
   isInactiveState,
   wasFriendCallEnded,
+  camOn,
   micOn,
   remoteMuted,
   localStream,
@@ -78,7 +80,7 @@ export const usePiP = ({
   }, [wasFriendCallEnded]);
 
   // Функция для входа в PiP
-  const enterPiPMode = useCallback(() => {
+  const enterPiPMode = useCallback((opts?: { deferVisible?: boolean }) => {
     // КРИТИЧНО: Сначала проверяем, завершен ли звонок - если да, НЕ показываем PiP
     // Это предотвращает появление PiP при свайпе назад после завершения звонка
     if (isInactiveState || wasFriendCallEnded) {
@@ -211,6 +213,8 @@ export const usePiP = ({
         muteRemote: remoteMuted,
         localStream: localStream || null,
         remoteStream: remoteStream || null,
+        localCamOn: camOn,
+        deferVisible: !!opts?.deferVisible,
         navParams: {
           ...routeParams,
           peerUserId: partnerUserId,
@@ -262,7 +266,7 @@ export const usePiP = ({
         pipVisible: pip.visible
       });
     }
-  }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, micOn, remoteMuted, localStream, remoteStream, routeParams, session]);
+  }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, camOn, micOn, remoteMuted, localStream, remoteStream, routeParams, session]);
 
   // Обработка BackHandler для входа в PiP (только для Android)
   // На iOS навигация назад обрабатывается через PanResponder (свайп слева направо)
@@ -304,7 +308,8 @@ export const usePiP = ({
         });
         // КРИТИЧНО: Не используем setTimeout — при загруженном JS-треде он может "уплывать" на секунды.
         // Показываем PiP и сразу уходим назад (через rAF, чтобы не блокировать обработчик BackHandler).
-        enterPiPMode();
+        // Defer making overlay visible to avoid PiP flashing before navigation on Android.
+        enterPiPMode({ deferVisible: true });
         // Оптимистично фиксируем, что PiP уже запрошен/видим, чтобы не повторять обработку
         pipVisibleRef.current = true;
         requestAnimationFrame(() => {

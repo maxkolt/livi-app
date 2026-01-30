@@ -783,15 +783,19 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
         logger.info('[VideoCallSession] ✅ Отправлено pip:state=false партнеру', { roomId: currentRoomId });
         
-        // КРИТИЧНО: При возврате из PiP отправляем cam-toggle(true) чтобы включить видеотрек партнера обратно
-        // Это гарантирует, что видеопоток восстановится после возврата из PiP
+        // КРИТИЧНО: При возврате из PiP сообщаем партнеру ТЕКУЩЕЕ состояние нашей камеры,
+        // а не форсим enabled=true. Иначе, если пользователь выключил камеру до/во время PiP,
+        // у партнера UI начинает думать что камера включена и показывает "черный экран".
         try {
           socket.emit('cam-toggle', {
-            enabled: true,
+            enabled: !!this.isCamOn,
             from: socket.id,
             roomId: currentRoomId,
           });
-          logger.info('[VideoCallSession] ✅ Отправлено cam-toggle(true) партнеру при возврате из PiP', { roomId: currentRoomId });
+          logger.info('[VideoCallSession] ✅ Отправлено cam-toggle(enabled) партнеру при возврате из PiP', {
+            roomId: currentRoomId,
+            enabled: !!this.isCamOn,
+          });
         } catch (e) {
           logger.warn('[VideoCallSession] Ошибка отправки cam-toggle при возврате из PiP:', e);
         }
