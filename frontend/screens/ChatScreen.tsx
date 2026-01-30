@@ -81,7 +81,8 @@ export default function ChatScreen({ route, navigation }: Props) {
         const profileResponse = await getMyProfile();
         if (profileResponse?.ok && profileResponse.profile) {
           const profile = profileResponse.profile;
-          logger.debug('Loaded profile on init', { nick: profile.nick, hasAvatar: !!profile.avatarB64 });
+          const hasAvatar = ("avatarB64" in profile ? !!profile.avatarB64 : !!profile.avatarUrl);
+          logger.debug('Loaded profile on init', { nick: profile.nick, hasAvatar });
           
           // Обновляем никнейм из backend
           if (profile.nick && typeof profile.nick === 'string') {
@@ -599,7 +600,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         
             if (serverMessages?.ok && serverMessages.messages) {
           // Конвертируем сообщения сервера в формат фронтенда
-          const formattedMessages = serverMessages.messages.map(msg => {
+          const formattedMessages = serverMessages.messages.map((msg: any) => {
             // КРИТИЧНО: Логируем сообщения с изображениями при загрузке истории
             if (msg.type === 'image') {
               logger.info('[ChatScreen] Loading image message from history', {

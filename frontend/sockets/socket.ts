@@ -73,9 +73,18 @@ export const getSocket = (): Socket => {
   if (!socketInstance) {
     socketInstance = io(API_BASE, {
       path: "/socket.io",
-      transports: ["websocket"],
+      // IMPORTANT:
+      // Many VPNs / captive portals / corporate networks block WebSocket.
+      // Server supports polling fallback, so allow it on the client too.
+      transports: ["websocket", "polling"],
+      upgrade: true,
       forceNew: false, // не создаём новый, держим singleton
-      autoConnect: true,
+      // CRITICAL:
+      // Do NOT auto-connect on module load. We must attach installId into handshake first,
+      // otherwise server will treat us as guest and reauth can fail with "no_installId",
+      // causing reconnect loops and even identity resets.
+      // Connection is triggered via applyAuthAndConnect()/emitAck() when ready.
+      autoConnect: false,
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,
@@ -494,41 +503,186 @@ export type FriendListItem = {
 
 export function addFriend(toUserId: string) {
   if (!isOid(toUserId)) return Promise.reject(new Error("invalid ObjectId"));
-  return emitAck<{ ok: boolean; status?: string; error?: string }>(
-    "friends:add",
-    { to: toUserId },
-  );
+  const viaSocket = () =>
+    emitAck<{ ok: boolean; status?: string; error?: string }>('friends:add', { to: toUserId });
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    const url = `${API_BASE}/api/friends/add`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ to: toUserId }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  return (async () => {
+    try {
+      return await viaSocket();
+    } catch {
+      return await viaHttp();
+    }
+  })();
 }
 export const inviteFriend = addFriend;
 export const requestFriend = addFriend; // Для обратной совместимости
 
 export function respondFriend(fromUserId: string, accept: boolean, requestId?: string) {
   if (!isOid(fromUserId)) return Promise.reject(new Error("invalid ObjectId"));
-  return emitAck<{ ok: boolean; status?: string; error?: string }>(
-    "friends:respond",
-    { from: fromUserId, accept, requestId },
-  );
+  const viaSocket = () =>
+    emitAck<{ ok: boolean; status?: string; error?: string }>('friends:respond', { from: fromUserId, accept, requestId });
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    const url = `${API_BASE}/api/friends/respond`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ from: fromUserId, accept }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  return (async () => {
+    try {
+      return await viaSocket();
+    } catch {
+      return await viaHttp();
+    }
+  })();
 }
 
 export function acceptInvite(inviterId: string) {
   if (!isOid(inviterId)) return Promise.reject(new Error("invalid ObjectId"));
-  return emitAck<{ ok: boolean; status?: string; error?: string }>(
-    "friends:acceptInvite",
-    { inviterId },
-  );
+  const viaSocket = () =>
+    emitAck<{ ok: boolean; status?: string; error?: string }>('friends:acceptInvite', { inviterId });
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    const url = `${API_BASE}/api/friends/acceptInvite`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ inviterId }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  return (async () => {
+    try {
+      return await viaSocket();
+    } catch {
+      return await viaHttp();
+    }
+  })();
 }
 
 export function fetchFriends(page: number = 1, limit: number = 50) {
-  return emitAck<{ 
-    ok: boolean; 
-    list: FriendListItem[];
-    pagination?: {
-      page: number;
-      limit: number;
-      total: number;
-      hasMore: boolean;
+  const viaSocket = () =>
+    emitAck<{
+      ok: boolean;
+      list: FriendListItem[];
+      pagination?: {
+        page: number;
+        limit: number;
+        total: number;
+        hasMore: boolean;
+      };
+      error?: string;
+    }>('friends:fetch', { page, limit });
+
+  // Fallback for networks/VPNs that break socket connectivity:
+  // use REST endpoint that returns the same list shape.
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    // Legacy/audit-only header (server does NOT trust it, but may log mismatch).
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    // "Fast but safe" strategy:
+    // - first attempt: short timeout (good networks feel instant)
+    // - second attempt: longer timeout (slow VPN still succeeds)
+    const timeouts = [7000, 20000];
+    let lastErr: any = null;
+    const url = `${API_BASE}/api/friends?page=${encodeURIComponent(String(page))}&limit=${encodeURIComponent(String(limit))}`;
+
+    for (const ms of timeouts) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), ms);
+      try {
+        const res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '');
+          return { ok: false, list: [], error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+        }
+        return await res.json();
+      } catch (e: any) {
+        lastErr = e;
+        // If it's a timeout, just retry with the longer budget.
+        // For other errors (DNS/VPN drop), retry once too — it can be transient.
+        await new Promise((r) => setTimeout(r, 200));
+      } finally {
+        clearTimeout(timeoutId);
+      }
     }
-  }>("friends:fetch", { page, limit });
+
+    return { ok: false, list: [], error: lastErr?.message || String(lastErr || 'network_error') };
+  };
+
+  return (async () => {
+    try {
+      return await viaSocket();
+    } catch (e) {
+      return await viaHttp();
+    }
+  })();
 }
 
 export function onFriendAdded(
@@ -587,7 +741,41 @@ export function onFriendRemoved(cb: (p: { userId: string }) => void): () => void
 
 export function removeFriend(peerId: string) {
   if (!isOid(peerId)) return Promise.reject(new Error("invalid ObjectId"));
-  return emitAck<{ ok: boolean; error?: string }>("friends:remove", { peerId });
+  const viaSocket = () => emitAck<{ ok: boolean; error?: string }>('friends:remove', { peerId });
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    const url = `${API_BASE}/api/friends/remove`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ peerId }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  return (async () => {
+    try {
+      return await viaSocket();
+    } catch {
+      return await viaHttp();
+    }
+  })();
 }
 
 // Проверка реферальной ссылки
@@ -669,7 +857,47 @@ export async function checkInviteLink(code: string): Promise<{
 
 export function checkFriendship(userId: string) {
   if (!isOid(userId)) return Promise.reject(new Error("invalid ObjectId"));
-  return emitAck<{ ok: boolean; areFriends: boolean; error?: string }>("friends:check", { userId });
+  const viaSocket = () =>
+    emitAck<{ ok: boolean; areFriends: boolean; error?: string }>('friends:check', { userId });
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    const timeouts = [5000, 12000];
+    let lastErr: any = null;
+    const url = `${API_BASE}/api/friends/check/${encodeURIComponent(String(userId))}`;
+
+    for (const ms of timeouts) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), ms);
+      try {
+        const res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '');
+          return { ok: false, areFriends: false, error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+        }
+        return await res.json();
+      } catch (e: any) {
+        lastErr = e;
+        await new Promise((r) => setTimeout(r, 150));
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    return { ok: false, areFriends: false, error: lastErr?.message || String(lastErr || 'network_error') };
+  };
+
+  return (async () => {
+    try {
+      return await viaSocket();
+    } catch (e) {
+      return await viaHttp();
+    }
+  })();
 }
 
 /* ========= Presence ========= */
@@ -761,20 +989,67 @@ export function onRtcCandidate(
 /* ========= Profile ========= */
 export function getMyProfile() {
   // КРИТИЧНО: Добавляем таймаут 8 секунд для защиты от зависания MongoDB
-  return emitAck<{ 
-    ok: boolean; 
-    profile?: { 
-      nick?: string; 
-      avatarUrl?: string;
-      avatarB64?: string;
-      avatarThumbB64?: string;
-      avatarVer?: number;
-    } 
-  }>(
-    "profile:me",
-    undefined,
-    8000 // 8 секунд таймаут
-  );
+  const viaSocket = () =>
+    emitAck<{
+      ok: boolean;
+      profile?: {
+        nick?: string;
+        avatarUrl?: string;
+        avatarB64?: string;
+        avatarThumbB64?: string;
+        avatarVer?: number;
+      };
+      error?: string;
+    }>('profile:me', undefined, 8000);
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    const timeouts = [5000, 12000];
+    let lastErr: any = null;
+    const url = `${API_BASE}/me`;
+
+    for (const ms of timeouts) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), ms);
+      try {
+        const res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '');
+          return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+        }
+        const data = await res.json();
+        if (data?.ok && data?.user) {
+          return {
+            ok: true,
+            profile: {
+              nick: data.user.nick || '',
+              avatarUrl: data.user.avatar || '',
+              avatarVer: data.user.avatarVer || 0,
+            },
+          };
+        }
+        return { ok: false, error: 'invalid_response' };
+      } catch (e: any) {
+        lastErr = e;
+        await new Promise((r) => setTimeout(r, 150));
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+    return { ok: false, error: lastErr?.message || String(lastErr || 'network_error') };
+  };
+
+  return (async () => {
+    try {
+      return await viaSocket();
+    } catch {
+      return await viaHttp();
+    }
+  })();
 }
 export function updateProfile(patch: { nick?: string; avatar?: string }) {
   const clean: { nick?: string; avatar?: string } = {};
@@ -796,11 +1071,58 @@ export function updateProfile(patch: { nick?: string; avatar?: string }) {
     }
   }
 
-  const promise = emitAck<{ ok: boolean; profile?: { nick?: string; avatar?: string }; error?: string }>(
-    "profile:update",
-    clean,
-    5000
-  );
+  const viaSocket = () =>
+    emitAck<{ ok: boolean; profile?: { nick?: string; avatar?: string }; error?: string }>(
+      'profile:update',
+      clean,
+      5000
+    );
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    const timeouts = [5000, 12000];
+    let lastErr: any = null;
+    const url = `${API_BASE}/api/me`;
+    for (const ms of timeouts) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), ms);
+      try {
+        const res = await fetch(url, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify(clean),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '');
+          return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+        }
+        const data = await res.json();
+        if (data?.ok && data?.user) {
+          return { ok: true, profile: { nick: data.user.nick || '', avatar: data.user.avatar || '' } };
+        }
+        return data;
+      } catch (e: any) {
+        lastErr = e;
+        await new Promise((r) => setTimeout(r, 150));
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+    return { ok: false, error: lastErr?.message || String(lastErr || 'network_error') };
+  };
+
+  const promise = (async () => {
+    try {
+      return await viaSocket();
+    } catch {
+      return await viaHttp();
+    }
+  })();
 
   promise.then((result) => {
     if (result?.ok) {} else {
@@ -1216,22 +1538,83 @@ export function sendMessage(payload: {
   // Ограничиваем типы сообщений для новой системы
   const messageType = payload.type === 'video' || payload.type === 'document' ? 'text' : payload.type;
 
-  return emitAck<{ ok: boolean; messageId?: string; timestamp?: Date; delivered?: boolean; error?: string }>(
-    "message:send",
-    {
-      to: payload.to,
-      text: payload.text,
-      type: messageType,
-      uri: payload.uri
+  const viaSocket = () =>
+    emitAck<{ ok: boolean; messageId?: string; timestamp?: Date; delivered?: boolean; error?: string }>(
+      'message:send',
+      { to: payload.to, text: payload.text, type: messageType, uri: payload.uri }
+    );
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    const url = `${API_BASE}/api/messages/send`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ to: payload.to, text: payload.text, type: messageType, uri: payload.uri }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timeoutId);
     }
-  );
+  };
+
+  return (async () => {
+    try {
+      return await viaSocket();
+    } catch {
+      return await viaHttp();
+    }
+  })();
 }
 
 export function markMessagesAsRead(from: string) {
-  return emitAck<{ ok: boolean; error?: string }>(
-    "messages:mark_read",
-    { from }
-  );
+  const viaSocket = () => emitAck<{ ok: boolean; error?: string }>('messages:mark_read', { from });
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    const url = `${API_BASE}/api/messages/mark_read`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ from }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  return (async () => {
+    try {
+      return await viaSocket();
+    } catch {
+      return await viaHttp();
+    }
+  })();
 }
 
 export function sendReadReceipt(messageId: string, from: string) {
@@ -1244,21 +1627,54 @@ export function fetchMessages(payload: {
   limit?: number;
   before?: string;
 }) {
-  return emitAck<{ 
-    ok: boolean; 
-    messages?: Array<{
-      id: string;
-      from: string;
-      to: string;
-      type: 'text' | 'image';
-      text?: string;
-      uri?: string;
-      timestamp: string;
-      read: boolean;
-    }>;
-    hasMore?: boolean;
-    error?: string;
-  }>("messages:fetch", payload);
+  const viaSocket = () =>
+    emitAck<{
+      ok: boolean;
+      messages?: Array<{
+        id: string;
+        from: string;
+        to: string;
+        type: 'text' | 'image';
+        text?: string;
+        uri?: string;
+        timestamp: string;
+        read: boolean;
+      }>;
+      hasMore?: boolean;
+      error?: string;
+    }>('messages:fetch', payload);
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    const url =
+      `${API_BASE}/api/messages?with=${encodeURIComponent(String(payload.with))}` +
+      `&limit=${encodeURIComponent(String(payload.limit ?? 50))}` +
+      (payload.before ? `&before=${encodeURIComponent(String(payload.before))}` : '');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    try {
+      const res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  return (async () => {
+    try {
+      return await viaSocket();
+    } catch {
+      return await viaHttp();
+    }
+  })();
 }
 
 // Новая функция для получения количества непрочитанных сообщений
@@ -1422,8 +1838,43 @@ export function clearAllMessageCache() {
 // Очистить переписку с пользователем
 export async function clearChatMessages(peerId: string, forAll: boolean = true): Promise<boolean> {
   try {
-    const result = await emitAck('message:clear_chat', { with: peerId, forAll });
-    if (result.ok) {
+    const viaSocket = async () => {
+      const result = await emitAck('message:clear_chat', { with: peerId, forAll });
+      return !!result?.ok;
+    };
+
+    const viaHttp = async () => {
+      const installId = await getInstallId().catch(() => '');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (installId) headers['x-install-id'] = String(installId);
+      if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+      const url = `${API_BASE}/api/messages/clear_chat`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ with: peerId, forAll }),
+          signal: controller.signal,
+        });
+        if (!res.ok) return false;
+        const data = await res.json().catch(() => null);
+        return !!data?.ok;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    let ok = false;
+    try {
+      ok = await viaSocket();
+    } catch {
+      ok = await viaHttp();
+    }
+
+    if (ok) {
       // Очищаем локальный кэш
       clearMessageCache(peerId);
       
@@ -1446,8 +1897,40 @@ export async function clearChatMessages(peerId: string, forAll: boolean = true):
 // Удалить одно сообщение
 export async function deleteMessage(messageId: string): Promise<boolean> {
   try {
-    const result = await emitAck('message:delete', { messageId });
-    return result.ok;
+    const viaSocket = async () => {
+      const result = await emitAck('message:delete', { messageId });
+      return !!result?.ok;
+    };
+
+    const viaHttp = async () => {
+      const installId = await getInstallId().catch(() => '');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (installId) headers['x-install-id'] = String(installId);
+      if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+      const url = `${API_BASE}/api/messages/delete`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ messageId }),
+          signal: controller.signal,
+        });
+        if (!res.ok) return false;
+        const data = await res.json().catch(() => null);
+        return !!data?.ok;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    try {
+      return await viaSocket();
+    } catch {
+      return await viaHttp();
+    }
   } catch (error) {
     console.error('Failed to delete message:', error);
     return false;

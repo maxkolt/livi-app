@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { Keyboard } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onCallIncoming, onCallCanceled, acceptCall, declineCall } from '../../../sockets/socket';
 import socket from '../../../sockets/socket';
@@ -97,6 +98,9 @@ export const useIncomingCall = ({
   // 🔔 Рингтон/вибрация для входящего (когда входящий показывается внутри экрана звонка/пира)
   useEffect(() => {
     if (incomingOverlay && incomingCall && !friendCallAccepted) {
+      // Если где-то открыт инпут (например чат) — убираем клавиатуру,
+      // иначе она может перекрыть UI входящего.
+      try { Keyboard.dismiss(); } catch {}
       startIncomingCallAlert();
     } else {
       stopIncomingCallAlert();

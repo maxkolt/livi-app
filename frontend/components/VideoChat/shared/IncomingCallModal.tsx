@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Animated,
   Easing,
+  Keyboard,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -102,6 +103,8 @@ export const IncomingCallModal: React.FC<IncomingCallModalProps> = ({
   // Запускаем/останавливаем анимацию при изменении visible
   useEffect(() => {
     if (visible) {
+      // Закрываем клавиатуру, чтобы она не перекрывала кнопки accept/decline
+      try { Keyboard.dismiss(); } catch {}
       startIncomingAnim();
     } else {
       stopIncomingAnim();

@@ -1,0 +1,36 @@
+#
+# coturn (turnserver) пример для shared secret (ephemeral credentials)
+# ВАЖНО: это пример. Проверьте порты/realm/external-ip под ваш прод.
+#
+
+# Слушаем на всех интерфейсах
+listening-ip=0.0.0.0
+
+# Основной порт
+listening-port=3478
+
+# Диапазон UDP портов для relay (обязательно открыть на фаерволе)
+min-port=49152
+max-port=65535
+
+# Рекомендуется указать внешний IP сервера (или используйте external-ip=PUBLIC_IP/PRIVATE_IP)
+# external-ip=<PUBLIC_IP>
+
+# Shared secret режим
+use-auth-secret
+static-auth-secret=<SET_SAME_VALUE_AS_BACKEND_TURN_SECRET>
+
+# Realm должен соответствовать вашему домену
+realm=<YOUR_DOMAIN_OR_TURN_DOMAIN>
+
+# Логи
+verbose
+fingerprint
+
+# Полезные ограничения
+no-multicast-peers
+no-loopback-peers
+
+# (Опционально) TLS/DTLS можно настроить отдельно, если нужен turns://
+# Для TCP/443 без TLS backend уже добавляет turn:<host>:443?transport=tcp
+#

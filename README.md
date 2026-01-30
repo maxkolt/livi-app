@@ -29,3 +29,10 @@ npx expo start --dev-client
 ```
 
 Теперь приложение поддерживает WebRTC и другие нативные модули, включая `react-native-webrtc`. Все функции видеочата будут работать как задумано.
+
+## TURN (важно для VPN/моб.сети/CGNAT)
+
+Если в логах видишь `⚠️ NO TURN SERVER - NAT traversal may fail!`, это означает, что сервер не отдаёт TURN-кандидаты и часть пользователей может **не соединяться** в видеозвонке.
+
+В проекте TURN-креды берутся с backend endpoint `GET /api/turn-credentials`.  
+Инструкция и примеры конфигурации coturn лежат в `backend/turn/README.md`.

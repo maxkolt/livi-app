@@ -1,6 +1,7 @@
 // utils/mediaUpload.ts
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { logger } from './logger';
 import { getInstallId } from './installId';
 
@@ -80,17 +81,73 @@ export const uploadMediaToServer = async (
 
     const installId = await getInstallId().catch(() => '');
     
-    // Конвертируем файл в dataUri
-    const dataUri = await fileToDataUri(localUri);
+    // IMPORTANT:
+    // Uploading raw images as base64-in-JSON is very heavy (size +33%),
+    // and becomes extremely slow on VPN / high-latency networks.
+    // We proactively resize+compress ONLY for typical photos to keep UX acceptable,
+    // but we avoid re-encoding formats like GIF/WebP to not break expectations.
+    let workingUri = localUri;
+    try {
+      const ext = (localUri.split('?')[0]?.split('#')[0]?.split('.').pop() || '').toLowerCase();
+      const isGif = ext === 'gif';
+      const isWebp = ext === 'webp';
+
+      // Skip manipulation for formats where re-encoding can be a breaking change.
+      if (!isGif && !isWebp) {
+        const format =
+          ext === 'png' ? ImageManipulator.SaveFormat.PNG : ImageManipulator.SaveFormat.JPEG;
+        const compress = format === ImageManipulator.SaveFormat.PNG ? 1 : 0.85;
+
+        const manip = await ImageManipulator.manipulateAsync(
+          localUri,
+          [{ resize: { width: 1280 } }],
+          { compress, format }
+        );
+        if (manip?.uri) workingUri = manip.uri;
+      }
+    } catch {
+      // Non-fatal: fallback to original file.
+    }
+
+    // Prefer multipart upload (faster & more stable on bad networks / VPN).
+    // Keep legacy base64 JSON upload as fallback for release-safety.
+    const normalizedUri = workingUri.startsWith('file://') ? workingUri : `file://${workingUri}`;
+    try {
+      if (onProgress) onProgress(15);
+      const mpUrl = `${API_BASE_URL}/api/upload/media/multipart`;
+      const mpRes = await FileSystem.uploadAsync(mpUrl, normalizedUri, {
+        httpMethod: 'POST',
+        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        fieldName: 'file',
+        headers: {
+          ...(installId ? { 'x-install-id': String(installId) } : {}),
+        },
+      });
+
+      if (mpRes.status >= 200 && mpRes.status < 300) {
+        let json: any = null;
+        try { json = JSON.parse(mpRes.body || '{}'); } catch {}
+        if (json?.ok && (json.url || json.secure_url)) {
+          if (onProgress) onProgress(100);
+          const url = json.url || json.secure_url;
+          return { success: true, url };
+        }
+      }
+      // Fall through to legacy upload
+      logger.warn('Multipart upload failed, falling back to base64', { status: mpRes.status });
+    } catch (e) {
+      logger.warn('Multipart upload error, falling back to base64', e as any);
+    }
+
+    // Legacy base64-in-JSON upload (fallback)
+    const dataUri = await fileToDataUri(normalizedUri);
     if (!dataUri) {
       logger.error('Failed to convert file to dataUri');
       return { success: false, error: 'Failed to convert file to dataUri' };
     }
     
     const fileSizeMB = Math.round(dataUri.length / 1024 / 1024);
-    
-    // Проверяем размер файла (только для изображений)
-    const maxSizeMB = 100; // 100MB для изображений
+    const maxSizeMB = 100;
     if (fileSizeMB > maxSizeMB) {
       logger.error(`File too large: ${fileSizeMB}MB (max: ${maxSizeMB}MB)`);
       return { success: false, error: `File too large: ${fileSizeMB}MB (maximum allowed: ${maxSizeMB}MB)` };

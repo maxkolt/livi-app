@@ -3,6 +3,7 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
+import multer from 'multer';
 import Install from '../models/Install';
 import { checkRateLimit } from '../utils/rateLimit';
 
@@ -143,6 +144,80 @@ router.post('/upload/media', async (req, res) => {
     return res.json({ ok: true, url });
   } catch (error: any) {
     console.error('📤 Upload error:', error);
+    return res.status(500).json({ ok: false, error: error?.message || 'Upload failed' });
+  }
+});
+
+// POST /api/upload/media/multipart
+// Field: file
+const MAX_BYTES = 100 * 1024 * 1024;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_BYTES },
+});
+
+router.post('/upload/media/multipart', upload.single('file'), async (req, res) => {
+  try {
+    // SECURITY: require installId-based auth (do not accept x-user-id alone).
+    const installId = String(req.header('x-install-id') || '').trim();
+    if (!installId) {
+      return res.status(401).json({ ok: false, error: 'no_installId' });
+    }
+
+    // Basic abuse protection
+    const rl = checkRateLimit(`upload_media_mp:${installId}`, 60, 60_000);
+    if (!rl.ok) {
+      res.setHeader('Retry-After', String(rl.retryAfterSec || 60));
+      return res.status(429).json({ ok: false, error: 'rate_limited' });
+    }
+
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ ok: false, error: 'database_unavailable' });
+    }
+    const inst = await Install.findOne({ installId }).select('user').lean();
+    const authedUserId = inst?.user ? String((inst as any).user) : '';
+    if (!authedUserId) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+
+    const file = (req as any).file as { buffer: Buffer; mimetype: string; originalname: string } | undefined;
+    if (!file?.buffer?.length) {
+      return res.status(400).json({ ok: false, error: 'missing_file' });
+    }
+
+    const allowed = new Set([
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'image/gif',
+      'video/mp4',
+      'video/quicktime',
+      'video/webm',
+    ]);
+    if (!allowed.has(String(file.mimetype || ''))) {
+      return res.status(400).json({ ok: false, error: 'unsupported_mime' });
+    }
+
+    let extension = 'bin';
+    if (file.mimetype.startsWith('image/')) {
+      const ext = file.mimetype.split('/')[1];
+      extension = ext === 'jpeg' ? 'jpg' : ext;
+    } else if (file.mimetype.startsWith('video/')) {
+      const ext = file.mimetype.split('/')[1];
+      extension = ext === 'quicktime' ? 'mov' : ext;
+    }
+
+    const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${extension}`;
+    const filePath = path.join(uploadsDir, fileName);
+
+    if (file.buffer.length > MAX_BYTES) {
+      return res.status(413).json({ ok: false, error: 'file_too_large' });
+    }
+
+    fs.writeFileSync(filePath, file.buffer);
+    const url = `/uploads/media/${fileName}`;
+    return res.json({ ok: true, url });
+  } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message || 'Upload failed' });
   }
 });

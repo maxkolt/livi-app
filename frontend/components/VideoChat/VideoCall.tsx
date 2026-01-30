@@ -203,6 +203,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [wasFriendCallEnded, setWasFriendCallEnded] = useState(false);
   const [partnerInPiP, setPartnerInPiP] = useState(false);
+  const partnerInPiPRef = useRef(false);
+  useEffect(() => { partnerInPiPRef.current = partnerInPiP; }, [partnerInPiP]);
   
   // КРИТИЧНО: Логируем изменения partnerInPiP для отладки
   useEffect(() => {
@@ -1229,7 +1231,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       
       // КРИТИЧНО: Всегда обновляем состояние partnerInPiP при получении события
       // Это гарантирует, что заглушка "Отошел" показывается/скрывается правильно
-      const previousState = partnerInPiP;
+      const previousState = partnerInPiPRef.current;
+      partnerInPiPRef.current = inPiP;
       setPartnerInPiP(inPiP);
       logger.info('[VideoCall] ✅ Состояние partnerInPiP обновлено', { 
         newState: inPiP,
@@ -1290,7 +1293,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         logger.info('[VideoCall] Event handlers removed');
       }
     };
-  }, [sessionRef.current, partnerInPiP, remoteStream, remoteCamOn, roomId, callId, partnerId, partnerUserId, clearSessionRefs]);
+    // IMPORTANT: handlers should be attached once per session, not on every UI state change.
+  }, [sessionRef.current, clearSessionRefs]);
   
   // Keep-awake для активного видеозвонка
   useEffect(() => {

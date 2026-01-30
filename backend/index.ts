@@ -19,6 +19,7 @@ import appSettingsRouter from './routes/app-settings';
 import uploadRouter from './routes/upload';
 import livekitRouter from './routes/livekit';
 import avatarRouter from './routes/avatar';
+import messagesRouter from './routes/messages';
 import registerFriendSockets from './sockets/friends';
 import registerIdentitySockets, { bindUser as bindUserIdentity } from './sockets/identity';
 import registerMessageSockets from './sockets/messagesReliable';
@@ -91,7 +92,24 @@ if (!TURN_HOST) {
   logger.warn('[TURN] Set TURN_HOST environment variable (use domain, not IP for production)');
 }
 const TURN_ENABLE_TCP = String(process.env.TURN_ENABLE_TCP || '1') === '1';
+// TCP/443 часто занят HTTPS (api/livekit). Поэтому включаем его ТОЛЬКО по явному флагу.
+const TURN_ENABLE_TCP_443 = String(process.env.TURN_ENABLE_TCP_443 || process.env.TURN_TCP_443 || '0') === '1';
 const TURN_TTL_SECONDS = Number(process.env.TURN_TTL || 600); // 10 min default
+
+// Стартовая диагностика TURN (без утечки секретов)
+if (!TURN_SECRET) {
+  logger.warn('[TURN] ⚠️ TURN_SECRET not configured! /api/turn-credentials will return STUN-only config.');
+} else {
+  logger.info('[TURN] ✅ TURN shared secret configured', {
+    hasTurnHost: !!TURN_HOST,
+    turnHost: TURN_HOST ? (TURN_HOST.includes('.') ? TURN_HOST.split('.').slice(-2).join('.') : 'configured') : undefined,
+    turnPort: TURN_PORT,
+    stunHostConfigured: !!STUN_HOST,
+    turnEnableTcp: TURN_ENABLE_TCP,
+    turnEnableTcp443: TURN_ENABLE_TCP_443,
+    turnTtlSeconds: TURN_TTL_SECONDS,
+  });
+}
 
 /* ========= Helpers ========= */
 const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(String(s));
@@ -303,6 +321,7 @@ app.use('/api', meRouter);
 app.use('/api', friendsRouter);
 app.use('/api', uploadRouter);
 app.use('/api', avatarRouter);
+app.use('/api', messagesRouter);
 app.use('/api', livekitRouter);
 
 // Stream utility убран - больше не используется
@@ -407,7 +426,7 @@ app.get('/api/turn-credentials', async (_req, res) => {
     const stunUrl = `stun:${STUN_HOST}:${TURN_PORT}`;
     const turnUdp = `turn:${TURN_HOST}:${TURN_PORT}`;
     const turnTcp = `turn:${TURN_HOST}:${TURN_PORT}?transport=tcp`;
-    // ОПТИМИЗИРОВАНО: Добавляем TURN TCP/443 для обхода строгих firewall
+    // TURN TCP/443 — только если явно включено (часто конфликтует с HTTPS)
     const turnTcp443 = `turn:${TURN_HOST}:443?transport=tcp`;
 
     // ОПТИМИЗИРОВАНО: Приоритет TURN серверам для более быстрого подключения
@@ -422,7 +441,9 @@ app.get('/api/turn-credentials', async (_req, res) => {
       // TURN TCP на стандартном порту (приоритет #2)
       iceServers.push({ urls: turnTcp, username, credential: hmac });
       // TURN TCP/443 для обхода firewall (приоритет #3)
-      iceServers.push({ urls: turnTcp443, username, credential: hmac });
+      if (TURN_ENABLE_TCP_443) {
+        iceServers.push({ urls: turnTcp443, username, credential: hmac });
+      }
     }
     
     // STUN серверы идут ПОСЛЕ TURN для резервирования

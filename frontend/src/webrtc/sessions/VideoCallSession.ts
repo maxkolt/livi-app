@@ -79,6 +79,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private partnerInPiP = false; // Состояние партнера в PiP
   private currentRoomName: string | null = null; // Имя текущей подключенной комнаты LiveKit
   private lastProcessedCallAccepted: { callId: string | null; roomName: string | null; timestamp: number } | null = null; // Защита от повторной обработки
+  private endCallInProgress = false;
+  private ended = false;
 
   /* ========= Mic level monitoring (VoiceEqualizer) ========= */
   private micBarsCount = 21;
@@ -321,6 +323,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   endCall(): void {
+    // Idempotency: endCall can be invoked from multiple places (UI + cleanup + socket events).
+    // Make it safe to call multiple times without triggering warnings or duplicate actions.
+    if (this.ended || this.endCallInProgress) {
+      return;
+    }
+    this.endCallInProgress = true;
+
     logger.info('[VideoCallSession] 🛑 endCall вызван', {
       callId: this.callId,
       roomId: this.roomId,
@@ -354,11 +363,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       } catch (e) {
         logger.warn('[VideoCallSession] Ошибка отправки call:end', e);
       }
-    } else {
-      logger.warn('[VideoCallSession] ⚠️ Не удалось отправить call:end - нет callId и roomId', {
-        callId: this.callId,
-        roomId: this.roomId,
-      });
     }
     
     // Очищаем состояние после отправки на сервер
@@ -378,6 +382,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config.setWasFriendCallEnded?.(true);
     this.emit('callEnded');
     logger.info('[VideoCallSession] ✅ Состояние сессии сброшено и callEnded событие отправлено');
+    this.ended = true;
+    this.endCallInProgress = false;
   }
 
   toggleMic(): void {
@@ -448,6 +454,9 @@ export class VideoCallSession extends SimpleEventEmitter {
           if (this.room && this.room.state === 'connected' && this.room.localParticipant) {
             // Проверяем, не опубликован ли трек уже
             if (!this.isVideoTrackPublished(this.localVideoTrack)) {
+              // Safety: if we recreated the track, LiveKit may still have an older camera publication.
+              // Unpublish other camera tracks first to avoid "publishing a second track with the same source: camera".
+              await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
               await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
                 const errorMsg = e?.message || String(e || '');
                 if (!errorMsg.includes('already') && !errorMsg.includes('duplicate')) {
@@ -461,6 +470,8 @@ export class VideoCallSession extends SimpleEventEmitter {
             // Если микрофон был включён, но новый аудио-трек не опубликован — собеседник перестаёт слышать звук
             // после OFF->ON камеры. Поэтому (best-effort) убеждаемся, что аудио трек тоже опубликован.
             if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
+              // Same for microphone when ensureLocalTracks(true) recreated audio.
+              await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
               await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
                 const errorMsg = e?.message || String(e || '');
                 if (!errorMsg.includes('already') && !errorMsg.includes('duplicate')) {
@@ -521,6 +532,33 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     this.config.callbacks.onCamStateChange?.(this.isCamOn);
     this.config.onCamStateChange?.(this.isCamOn);
+  }
+
+  /**
+   * Unpublish other local tracks of same kind before publishing a new one.
+   * Prevents LiveKit warnings about publishing a second track with the same source.
+   */
+  private async unpublishOtherLocalTracks(kind: 'video' | 'audio', keep: LocalTrack): Promise<void> {
+    try {
+      if (!this.room || this.room.state !== 'connected' || !this.room.localParticipant) return;
+      const lp = this.room.localParticipant as any;
+      const pubs =
+        kind === 'video' ? lp.videoTrackPublications : lp.audioTrackPublications;
+      if (!pubs || typeof pubs.values !== 'function') return;
+
+      for (const pub of pubs.values()) {
+        const track = pub?.track as LocalTrack | undefined;
+        if (!track) continue;
+        if (track === keep) continue;
+        // Unpublish only same source (camera/microphone) when source info exists; otherwise be conservative.
+        const source = pub?.source;
+        if (kind === 'video' && source && source !== Track.Source.Camera) continue;
+        if (kind === 'audio' && source && source !== Track.Source.Microphone) continue;
+        try {
+          await (this.room!.localParticipant as any).unpublishTrack(track, true);
+        } catch {}
+      }
+    } catch {}
   }
 
   toggleRemoteAudio(): void {
@@ -1337,6 +1375,19 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private handleCallEnded(): void {
+    // Idempotency: server may deliver call:ended multiple times (e.g., room + direct).
+    // Also, call:ended can arrive after local cleanup already cleared ids.
+    // In those cases, ignore to avoid duplicate cleanup and "null callId" log noise.
+    if (this.ended || this.endCallInProgress || (!this.callId && !this.roomId)) {
+      logger.debug('[VideoCallSession] Ignoring duplicate call:ended', {
+        ended: this.ended,
+        endCallInProgress: this.endCallInProgress,
+        callId: this.callId,
+        roomId: this.roomId,
+      });
+      return;
+    }
+
     // КРИТИЧНО: Сохраняем состояние ПЕРЕД очисткой для логирования
     const savedCallId = this.callId;
     const savedRoomId = this.roomId;
@@ -1383,6 +1434,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       previousPartnerId: savedPartnerId,
       previousPartnerUserId: savedPartnerUserId,
     });
+
+    // Mark session ended so repeated call:ended won't re-run cleanup.
+    this.ended = true;
   }
 
   private handleDisconnected(): void {

@@ -65,10 +65,14 @@ const LanguagePicker: React.FC<Props> = ({
   const headerTitle = t('chooseLanguage', current);
   const cancelLbl   = t('cancel', current);
 
+  const V_PAD = Platform.OS === 'android' ? 12 : 16;
+  // RTL labels: keep proper glyph shaping/direction but align consistently in LTR UI.
+  const isRtlLang = (code: Lang) => code === 'ar';
+
   // Делаем предсказуемую высоту карточки, чтобы:
   // - она всегда была по центру
   // - список скроллился, а кнопка "Закрыть" оставалась видимой
-  const availableH = Math.max(0, winH - insets.top - insets.bottom - 48);
+  const availableH = Math.max(0, winH - (V_PAD + insets.top) - (V_PAD + insets.bottom));
   const cardH = Math.min(
     availableH,
     Math.max(320, Math.min(560, Math.round(availableH * 0.78)))
@@ -86,15 +90,23 @@ const LanguagePicker: React.FC<Props> = ({
         style={[
           styles.overlay,
           {
-            paddingTop: 16 + insets.top,
-            paddingBottom: 16 + insets.bottom,
+            paddingTop: V_PAD + insets.top,
+            paddingBottom: V_PAD + insets.bottom,
           },
         ]}
       >
         {Platform.OS === 'ios' ? (
           <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
         ) : null}
-        <View style={styles.backdrop} />
+        <View
+          style={[
+            styles.backdrop,
+            {
+              // Android needs stronger dimming (no BlurView) for readability
+              backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.62)',
+            },
+          ]}
+        />
 
         <View style={[styles.card, { height: cardH }]}>
           <View style={styles.header}>
@@ -108,6 +120,7 @@ const LanguagePicker: React.FC<Props> = ({
           >
             {LANGUAGES.map((lng) => {
               const selected = normalize(current) === normalize(lng.code);
+              const rtl = isRtlLang(lng.code);
               return (
                 <TouchableOpacity
                   key={lng.code}
@@ -122,7 +135,18 @@ const LanguagePicker: React.FC<Props> = ({
                   ]}
                 >
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.rowNative}>{lng.native}</Text>
+                    <Text
+                      style={[
+                        styles.rowNative,
+                        rtl && {
+                          writingDirection: 'rtl',
+                          // keep the label in the same visual column as other languages
+                          textAlign: 'left',
+                        },
+                      ]}
+                    >
+                      {lng.native}
+                    </Text>
                     <Text style={styles.rowName}>{lng.name}</Text>
                   </View>
                   {selected ? <View style={styles.radioOn} /> : <View style={styles.radioOff} />}
@@ -205,9 +229,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     marginVertical: 6,
     borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: LIVI.border,
+    // More pronounced rows for readability
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: Platform.OS === 'android' ? 1 : StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.18)',
   },
   rowNative: {
     color: LIVI.white,
@@ -238,13 +263,14 @@ const styles = StyleSheet.create({
 
   footerBtn: {
     marginTop: 8,
-    backgroundColor: LIVI.glass,
+    // Make the close button background more noticeable
+    backgroundColor: 'rgba(255,255,255,0.10)',
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: LIVI.border,
+    borderWidth: Platform.OS === 'android' ? 1 : StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.22)',
   },
   footerBtnText: {
     color: LIVI.white,

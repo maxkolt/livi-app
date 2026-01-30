@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    command: >
+      -n
+      --log-file=stdout
+      --config=/etc/coturn/turnserver.conf
+    volumes:
+      - ./turnserver.conf.example:/etc/coturn/turnserver.conf:ro
+    ports:
+      # TURN/STUN
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      # TURN TCP/443 (полезно при VPN/жестких сетях)
+      - "443:443/tcp"
+      # Relay UDP range (должен совпадать с min-port/max-port в конфиге)
+      - "49152-65535:49152-65535/udp"
+

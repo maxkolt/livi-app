@@ -4,13 +4,13 @@ import React from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Provider as PaperProvider } from "react-native-paper";
 import { Platform } from "react-native";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as NavigationBar from "expo-navigation-bar";
 import { NavigationContainer, createNavigationContainerRef, CommonActions, DefaultTheme } from "@react-navigation/native";
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
@@ -118,6 +118,7 @@ function AppContent() {
   const pip = usePiP();
   const lang = useLang((s) => s.lang);
   const hydrateLang = useLang((s) => s.hydrate);
+  const insets = useSafeAreaInsets();
   
   React.useEffect(() => {
     void hydrateLang();
@@ -689,6 +690,9 @@ function AppContent() {
 
     if (shouldShowGlobal) {
       logger.debug('Showing incoming call modal', { callId: d.callId, from: d.from, fromNick: d.fromNick, currentRoute });
+      // КРИТИЧНО: если пользователь печатает в чате — закрываем клавиатуру,
+      // иначе она может перекрыть кнопки принять/отклонить на входящем экране.
+      try { Keyboard.dismiss(); } catch {}
       setIncoming(d);
       startAnim();
       // Запомним последнего звонящего для любых экранов
@@ -980,49 +984,49 @@ function AppContent() {
   }, [incoming]);
 
   return (
-    <SafeAreaProvider>
-        <StatusBar 
-          barStyle={isDark ? 'light-content' : 'dark-content'} 
-          translucent={Platform.OS === 'android'}
-          backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
-        />
-        <PaperProvider theme={theme}>
-          <NavigationContainer
-            ref={navRef}
-            theme={{
-              ...DefaultTheme,
-              colors: {
-                ...DefaultTheme.colors,
-                background: (theme.colors.background as string) || '#151F33',
-              },
-            }}
-            onReady={() => {
-              try {
-                if (navRef.isReady()) {
-                  const currentRoute = navRef.getCurrentRoute()?.name;
-                  console.log('[App] Navigation ready, current route:', currentRoute);
-                  setRouteName(currentRoute);
-                }
-              } catch (e) {
-                console.warn('[App] Error in onReady callback:', e);
+    <>
+      <StatusBar 
+        barStyle={isDark ? 'light-content' : 'dark-content'} 
+        translucent={Platform.OS === 'android'}
+        backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
+      />
+      <PaperProvider theme={theme}>
+        <NavigationContainer
+          ref={navRef}
+          theme={{
+            ...DefaultTheme,
+            colors: {
+              ...DefaultTheme.colors,
+              background: (theme.colors.background as string) || '#151F33',
+            },
+          }}
+          onReady={() => {
+            try {
+              if (navRef.isReady()) {
+                const currentRoute = navRef.getCurrentRoute()?.name;
+                console.log('[App] Navigation ready, current route:', currentRoute);
+                setRouteName(currentRoute);
               }
-            }}
-            onStateChange={() => {
-              try {
-                if (navRef.isReady()) {
-                  const currentRoute = navRef.getCurrentRoute()?.name;
-                  console.log('[App] Navigation state changed, current route:', currentRoute);
-                  setRouteName(currentRoute);
-                }
-              } catch (e) {
-                console.warn('[App] Error in onStateChange callback:', e);
+            } catch (e) {
+              console.warn('[App] Error in onReady callback:', e);
+            }
+          }}
+          onStateChange={() => {
+            try {
+              if (navRef.isReady()) {
+                const currentRoute = navRef.getCurrentRoute()?.name;
+                console.log('[App] Navigation state changed, current route:', currentRoute);
+                setRouteName(currentRoute);
               }
-            }}
-          >
-            <Stack.Navigator screenOptions={{ 
-              headerShown: false,
-              contentStyle: { backgroundColor: 'transparent' },
-            }}>
+            } catch (e) {
+              console.warn('[App] Error in onStateChange callback:', e);
+            }
+          }}
+        >
+          <Stack.Navigator screenOptions={{ 
+            headerShown: false,
+            contentStyle: { backgroundColor: 'transparent' },
+          }}>
               <Stack.Screen name="Home" component={HomeScreen} />
               <Stack.Screen
                 name="RandomChat"
@@ -1083,7 +1087,16 @@ function AppContent() {
                   <Text style={{ color: '#fff', fontWeight: '700', marginTop: 10 }}>{t('incomingCallTitle', lang)}</Text>
                   <Text style={{ color: '#e5e7eb', marginTop: 4 }}>{incoming.fromNick || `id: ${String(incoming.from || '').slice(0, 5)}`}</Text>
 
-                  <View style={{ flexDirection: 'row', gap: 12, marginTop: 300, width: '100%', paddingHorizontal: 15, paddingBottom: 60 }}>
+                  <View
+                    style={{
+                      position: 'absolute',
+                      left: 18,
+                      right: 18,
+                      bottom: Math.max(insets.bottom, 14) + 18,
+                      flexDirection: 'row',
+                      gap: 12,
+                    }}
+                  >
   {/* Принять */}
   <TouchableOpacity
     onPress={async () => {
@@ -1159,8 +1172,8 @@ function AppContent() {
           {/* Глобальный PiP оверлей - виден на всех страницах когда pip.visible === true */}
           <PiPOverlay />
 
-        </PaperProvider>
-      </SafeAreaProvider>
+      </PaperProvider>
+    </>
   );
 }
 
@@ -1213,11 +1226,13 @@ export default function App() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider>
-        <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
-          <AppContent />
-        </PiPProvider>
-      </ThemeProvider>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
+            <AppContent />
+          </PiPProvider>
+        </ThemeProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
