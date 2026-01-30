@@ -42,6 +42,7 @@ export const globalMessageStorage = {
   }
 };
 import { Platform } from "react-native";
+import { AppState, type AppStateStatus } from "react-native";
 import { getInstallId } from "../utils/installId";
 
 /* ========= Server URL ========= */
@@ -65,6 +66,8 @@ let createUserPromise: Promise<string | null> | null = null; // Трекер п�
 /* ========= socket (singleton) ========= */
 let socketInstance: Socket | null = null;
 let reconnecting = false;
+// Флаг: гарантировали ли мы, что handshake содержит installId (иначе сервер вернёт guest профиль {})
+let __handshakeHasInstallId = false;
 export const isReconnecting = () => reconnecting;
 export const getSocket = (): Socket => {
   if (!socketInstance) {
@@ -90,6 +93,41 @@ async function applyAuthAndConnect() {
     const installId = await getInstallId();
     // @ts-ignore
     socket.auth = { installId, ...(currentUserId ? { userId: currentUserId } : {}) };
+
+    // Если уже подключены, но handshake был без installId (типичный кейс из-за autoConnect),
+    // сервер будет считать нас гостем и profile:me вернёт {}. В этом случае делаем 1 reconnect.
+    if (socket.connected) {
+      if (!__handshakeHasInstallId && installId) {
+        try {
+          const resp = await emitAck<{ ok: boolean; userId?: string; error?: string }>(
+            'reauth',
+            { userId: currentUserId },
+            6000,
+            0
+          );
+          if (resp?.ok) {
+            __handshakeHasInstallId = true;
+            return;
+          }
+          if (resp?.error === 'no_installId') {
+            logger.warn('[applyAuthAndConnect] Connected without installId in handshake, forcing reconnect');
+            try { socket.disconnect(); } catch {}
+            __handshakeHasInstallId = false;
+            socket.connect();
+          } else {
+            // Если иная ошибка — не делаем агрессивный reconnect, чтобы не ломать релиз-стабильность.
+            return;
+          }
+        } catch (e) {
+          // Если ack завис/упал — мягко пробуем переподключиться один раз.
+          try { socket.disconnect(); } catch {}
+          __handshakeHasInstallId = false;
+          socket.connect();
+        }
+      } else {
+        return;
+      }
+    }
 
     if (!socket.connected) {
       logger.debug("Connecting socket...");
@@ -128,6 +166,7 @@ async function applyAuthAndConnect() {
           socket.once('connect_error', onError);
         }
       });
+      if (installId) __handshakeHasInstallId = true;
     } else {
       logger.debug("Socket already connected, skip reconnect");
     }
@@ -156,10 +195,8 @@ async function boot() {
       // Сначала устанавливаем userId и подключаемся
       currentUserId = saved;
       
-      // Подключаемся к socket
-      if (!socket.connected) {
-        await applyAuthAndConnect();
-      }
+      // Подключаемся к socket (и гарантируем installId в handshake)
+      await applyAuthAndConnect();
 
       // ВАЖНО: гарантируем, что сервер "видит" userId (иначе profile:me вернёт гостевой профиль {})
       // Не пересоздаём пользователя на временных проблемах сети/авторизации — сначала пробуем reauth.
@@ -259,6 +296,34 @@ setTimeout(() => {
   })();
 }, 100); // Небольшая задержка для инициализации модулей
 
+/* ========= AppState -> presence ========= */
+// Требование: статус online только когда пользователь в приложении.
+// Самый надёжный способ без изменения сервера — отключать сокет при уходе в фон.
+let __lastAppState: AppStateStatus = AppState.currentState;
+try {
+  AppState.addEventListener('change', (nextState) => {
+    try {
+      const wasActive = __lastAppState === 'active';
+      const isActive = nextState === 'active';
+      __lastAppState = nextState;
+
+      if (wasActive && !isActive) {
+        // App -> background/inactive => offline
+        try {
+          if (socket?.connected) socket.disconnect();
+        } catch {}
+        return;
+      }
+
+      if (!wasActive && isActive) {
+        // App -> active => online (reconnect)
+        // applyAuthAndConnect already sets installId/userId and connects with timeouts.
+        applyAuthAndConnect().catch(() => {});
+      }
+    } catch {}
+  });
+} catch {}
+
 /* ========= logging ========= */
 socket.on("connect", async () => {
   reconnecting = false;
@@ -290,6 +355,8 @@ socket.on("reconnect", () => { reconnecting = false; });
 socket.on("disconnect", (r) => {
   const transient = ["transport close", "ping timeout"];
   reconnecting = transient.includes(r) || r === undefined;
+  // На следующем коннекте снова гарантируем наличие installId в handshake
+  __handshakeHasInstallId = false;
   console.warn(`[socket] disconnected (${r}) reconnecting=${reconnecting}`);
 });
 socket.on("connect_error", (e) => {
