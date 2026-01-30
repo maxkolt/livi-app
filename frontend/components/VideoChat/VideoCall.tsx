@@ -418,6 +418,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     routeParams: route?.params,
     session: sessionRef.current,
     acceptCallTimeRef,
+    // Android: хотим сначала уйти назад, а PiP показать уже на предыдущем экране
+    // (BackHandler внутри usePiP иначе показывает PiP "на этом экране" перед pop).
+    enableAndroidBackHandler: false,
   });
   
   // Сохраняем ссылку на enterPiPMode для использования в beforeRemove
@@ -1573,36 +1576,49 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   // КРИТИЧНО: На iOS отключаем usePreventRemove - он мешает нормальному свайпу
   // PanResponder полностью обрабатывает свайп: показывает PiP и делает навигацию
   // На Android используем usePreventRemove как fallback для BackHandler
-  const shouldPreventRemove = React.useMemo(() => {
+  const shouldPreventRemove = (() => {
     // На iOS не блокируем навигацию - PanResponder обработает жест
-    if (Platform.OS === 'ios') {
-      return false;
-    }
-    
-    // На Android блокируем навигацию только если есть активный звонок и PiP еще не показан
+    if (Platform.OS === 'ios') return false;
+
+    // На Android блокируем навигацию только если есть активный звонок и PiP еще не показан.
+    // ВАЖНО: используем pipRef.current.visible (в логах pip.visible может оставаться false
+    // сразу после showPiP, из-за чего поп может "залипать" на секунды).
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
     const actualRoomId = roomId || session?.getRoomId?.() || null;
     const actualCallId = callId || session?.getCallId?.() || null;
     const actualPartnerId = partnerId || session?.getPartnerId?.() || null;
     const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveState && !wasFriendCallEnded;
-    const pipVisible = pip.visible;
-    
-    return hasActiveCall && !pipVisible;
-  }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible]);
+    const pipVisibleNow = !!pipRef.current?.visible;
+
+    return hasActiveCall && !pipVisibleNow;
+  })();
   
   usePreventRemove(
     shouldPreventRemove,
-    () => {
-      // Fallback только для Android: если BackHandler не сработал, показываем PiP и возвращаемся назад
+    (e) => {
+      // Android: перехватываем уход со страницы (и hardware back, и swipe-back).
+      // Требование: сначала делаем "назад", и уже на предыдущем экране показываем PiP.
       if (Platform.OS === 'android' && enterPiPModeRef.current) {
-        enterPiPModeRef.current();
-        setTimeout(() => {
-          if (navigation.canGoBack && navigation.canGoBack()) {
-            navigation.goBack();
-          } else {
-            navigation.navigate('Home' as never);
+        requestAnimationFrame(() => {
+          const action = (e as any)?.data?.action;
+          if (action) {
+            (navigation as any).dispatch(action);
           }
-        }, 100);
+          // Если action нет, всё равно пытаемся уйти назад
+          if (!action) {
+            if (navigation.canGoBack && navigation.canGoBack()) {
+              navigation.goBack();
+            } else {
+              navigation.navigate('Home' as never);
+            }
+          }
+
+          // После запуска навигации показываем PiP (не до!), чтобы визуально он появился уже "на предыдущей".
+          // Используем rAF (вместо setTimeout), чтобы не ловить задержки на загруженном JS.
+          requestAnimationFrame(() => {
+            enterPiPModeRef.current?.();
+          });
+        });
       }
     }
   );

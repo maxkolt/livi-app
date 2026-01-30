@@ -675,12 +675,19 @@ function AppContent() {
     } catch {}
 
     // КРИТИЧНО: Показываем глобальную модалку если:
-    // 1. НЕ на экране видеозвонка/рандомчата, ИЛИ
-    // 2. Навигация не готова (безопаснее показать)
-    // НЕ показываем если на VideoCall/RandomChat - там модалка в блоке собеседник
+    // 1) НЕ на экране видеозвонка/рандомчата, ИЛИ
+    // 2) Навигация не готова (безопаснее показать), ИЛИ
+    // 3) Мы на VideoCall/RandomChat, но видеосессия УЖЕ завершена (неактивное состояние) —
+    //    тогда модалка должна быть как у "неактивного видеочата": во весь экран.
     const isOnVideoScreen = isVideoSessionRoute(currentRoute);
-    
-    if (!isOnVideoScreen || !currentRoute) {
+    const isInactiveVideoState = !!(global as any)?.__isInactiveStateRef?.current;
+
+    const shouldShowGlobal =
+      !isOnVideoScreen ||
+      !currentRoute ||
+      (isOnVideoScreen && isInactiveVideoState);
+
+    if (shouldShowGlobal) {
       logger.debug('Showing incoming call modal', { callId: d.callId, from: d.from, fromNick: d.fromNick, currentRoute });
       setIncoming(d);
       startAnim();

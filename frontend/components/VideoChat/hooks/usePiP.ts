@@ -28,6 +28,7 @@ interface UsePiPProps {
   routeParams?: any;
   session?: any; // VideoCallSession
   acceptCallTimeRef: React.MutableRefObject<number>;
+  enableAndroidBackHandler?: boolean;
 }
 
 /**
@@ -49,6 +50,7 @@ export const usePiP = ({
   routeParams,
   session,
   acceptCallTimeRef,
+  enableAndroidBackHandler = true,
 }: UsePiPProps) => {
   const navigation = useNavigation();
   const pip = usePiPContext();
@@ -268,6 +270,9 @@ export const usePiP = ({
     if (Platform.OS !== 'android') {
       return;
     }
+    if (!enableAndroidBackHandler) {
+      return;
+    }
     
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       // КРИТИЧНО: Проверяем актуальное состояние звонка через ref
@@ -287,21 +292,28 @@ export const usePiP = ({
       const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
       const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current;
 
-      if (hasActiveCall && !pip.visible) {
+      // ВАЖНО: pip.visible может быть "позади" сразу после showPiP (это видно в логах),
+      // поэтому используем ref-ы как источник истины, чтобы не ловить повторные срабатывания/дубль.
+      const pipVisibleNow = !!(pip.visible || pipRef.current?.visible || pipVisibleRef.current);
+
+      if (hasActiveCall && !pipVisibleNow) {
         logger.info('[usePiP] BackHandler (Android): вход в PiP и возврат назад', {
           actualRoomId,
           actualCallId,
           actualPartnerId
         });
-        // Показываем PiP и возвращаемся на предыдущую страницу
+        // КРИТИЧНО: Не используем setTimeout — при загруженном JS-треде он может "уплывать" на секунды.
+        // Показываем PiP и сразу уходим назад (через rAF, чтобы не блокировать обработчик BackHandler).
         enterPiPMode();
-        setTimeout(() => {
+        // Оптимистично фиксируем, что PiP уже запрошен/видим, чтобы не повторять обработку
+        pipVisibleRef.current = true;
+        requestAnimationFrame(() => {
           if (navigation.canGoBack && navigation.canGoBack()) {
             navigation.goBack();
           } else {
             navigation.navigate('Home' as never);
           }
-        }, 100);
+        });
         return true; // Предотвращаем стандартное поведение кнопки назад
       }
 
@@ -309,7 +321,7 @@ export const usePiP = ({
     });
 
     return () => backHandler.remove();
-  }, [enterPiPMode, roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, session, navigation]);
+  }, [enableAndroidBackHandler, enterPiPMode, roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, session, navigation]);
 
   // Обработка Swipe Left to Right для входа в PiP и возврата на предыдущую страницу
   // Порог: 25% ширины экрана для iOS (уменьшено для более чувствительного свайпа)
@@ -554,14 +566,6 @@ export const usePiP = ({
                 }
                 // Сбрасываем флаг после навигации
                 pipShownDuringSwipeRef.current = false;
-              });
-              // На Android делаем навигацию сразу
-              requestAnimationFrame(() => {
-                if (navigation.canGoBack && navigation.canGoBack()) {
-                  navigation.goBack();
-                } else {
-                  navigation.navigate('Home' as never);
-                }
               });
             }
           } else {

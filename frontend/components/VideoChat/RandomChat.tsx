@@ -146,11 +146,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // Синхронизируем состояние неактивности с глобальным ref для App.tsx
   useEffect(() => {
-    (global as any).__isInactiveStateRef = { current: isInactiveState };
+    // КРИТИЧНО: Для стратегии A считаем RandomChat "неактивным", когда:
+    // - поиск/сессия не запущены (started=false), ИЛИ
+    // - сессия завершена и экран в неактивном состоянии (isInactiveState=true)
+    // Тогда входящий должен идти через ГЛОБАЛЬНУЮ full-screen модалку (App.tsx) с рингтоном/вибрацией.
+    (global as any).__isInactiveStateRef = { current: (!started || isInactiveState) };
     return () => {
       (global as any).__isInactiveStateRef = { current: false };
     };
-  }, [isInactiveState]);
+  }, [isInactiveState, started]);
 
   // iOS Simulator: camera capture for WebRTC may be unavailable unless Simulator camera input is configured.
   // Show a one-time hint to avoid confusion when local video is black/missing.
@@ -1243,12 +1247,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // Обработка входящих звонков (когда пользователь в неактивном состоянии)
   useEffect(() => {
-    // Слушаем входящие звонки только когда в неактивном состоянии
+    // Стратегия A:
+    // На неактивном RandomChat НЕ показываем локальную модалку,
+    // а отдаём обработку глобальной модалке в App.tsx (full-screen + рингтон/вибрация).
     const offIncoming = onCallIncoming?.((d) => {
-      if (!started || isInactiveState) {
-        logger.info('[RandomChat] Incoming call received', { callId: d.callId, from: d.from });
-        setIncomingCall(d);
-      }
+      if (!started || isInactiveState) return;
     });
     
     return () => {
