@@ -271,11 +271,29 @@ async function hardLocalReset() {
 }
 
 /* wait socket connect */
-const waitSocketConnected = () =>
+const waitSocketConnected = (timeoutMs: number = 1200) =>
   new Promise<void>((resolve) => {
-    if ((socket as any)?.connected) return resolve();
-    const on = () => { socket.off('connect', on); resolve(); };
-    socket.on('connect', on);
+    try {
+      if ((socket as any)?.connected) return resolve();
+      let done = false;
+      const on = () => {
+        if (done) return;
+        done = true;
+        try { socket.off('connect', on); } catch {}
+        resolve();
+      };
+      try { socket.on('connect', on); } catch {}
+      if (timeoutMs > 0) {
+        setTimeout(() => {
+          if (done) return;
+          done = true;
+          try { socket.off('connect', on); } catch {}
+          resolve();
+        }, timeoutMs);
+      }
+    } catch {
+      resolve();
+    }
   });
 
 /* ==== notice banner ==== */
@@ -572,6 +590,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [refreshing, setRefreshing] = useState(false);
   const friendsRef = useRef<Friend[]>([]);
   useEffect(() => { friendsRef.current = friends; }, [friends]);
+  
+  // ===== friends cache (cold start UX) =====
+  // При холодном старте сокет/идентификация могут занять 1-3+ сек, из-за чего вкладка "Друзья" выглядит пустой.
+  // Решение: показываем последний кэшированный список друзей сразу, а потом обновляем через loadFriends().
+  const FRIENDS_CACHE_KEY = 'friends_cache_v1';
+  const friendsCacheLoadedRef = useRef(false);
   // Чтобы не ловить TS "использовано до объявления" (loadFriends объявлен ниже),
   // используем ref-обёртку для вызова loadFriends из ранних колбэков (например инвайты).
   const loadFriendsFnRef = useRef<() => void>(() => {});
@@ -1053,8 +1077,40 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     
     const promise = (async () => {
       try {
-        try { await waitSocketConnected(); } catch {}
-        const res = await fetchFriends?.();
+        // Хотим максимально быстро получить "свежий" список.
+        // Если сокет уже подключён — берём socket-ack. Если нет — используем REST /api/friends (по installId),
+        // чтобы не ждать handshake/reauth и не держать вкладку пустой.
+        let res: any = null;
+
+        const s: any = socket as any;
+        if (s?.connected) {
+          try {
+            res = await fetchFriends?.();
+          } catch {}
+        }
+
+        if (!res?.ok) {
+          // REST fallback (не зависит от сокета)
+          const base = String(API_BASE || 'https://api.liviapp.com').replace(/\/+$/, '');
+          const id = await getInstallId().catch(() => '');
+          if (id) {
+            try {
+              const url = `${base}/api/friends?page=1&limit=50`;
+              const httpRes = await Promise.race([
+                fetch(url, {
+                  method: 'GET',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'x-install-id': String(id),
+                  },
+                }),
+                new Promise<Response>((_, reject) => setTimeout(() => reject(new Error('friends http timeout')), 3500)),
+              ]);
+              const json = await (httpRes as Response).json().catch(() => null);
+              if (json?.ok) res = json;
+            } catch {}
+          }
+        }
         
         // КРИТИЧНО: Убираем avatarThumbB64 из логов (очень большой base64)
         const logRes = res ? {
@@ -1159,6 +1215,24 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             logger.warn('Error caching thumbs:', e);
           }
 
+          // Кэшируем список друзей для мгновенного отображения при холодном старте
+          // (без ожидания сокета/ensureIdentity).
+          try {
+            const cacheList = merged.map((f: any) => ({
+              id: String(f.id),
+              name: String(f.name || ''),
+              avatar: String(f.avatar || ''),
+              avatarVer: typeof f.avatarVer === 'number' ? f.avatarVer : 0,
+              // AvatarImage умеет грузить миниатюру из avatarCache по (userId, avatarVer),
+              // но сохраняем avatarThumbB64 если он есть, чтобы сразу показывать без доп. async.
+              avatarThumbB64: String(f.avatarThumbB64 || ''),
+            }));
+            AsyncStorage.setItem(
+              FRIENDS_CACHE_KEY,
+              JSON.stringify({ v: 1, ts: Date.now(), list: cacheList })
+            ).catch(() => {});
+          } catch {}
+
           return merged;
         });
       } catch (e) {
@@ -1171,6 +1245,45 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     
     loadFriendsRef.current = promise;
     return promise;
+  }, []);
+
+  // Поднимаем кэш друзей сразу (до socket/ensureIdentity), чтобы вкладка "Друзья" не была пустой при холодном старте.
+  useEffect(() => {
+    if (friendsCacheLoadedRef.current) return;
+    friendsCacheLoadedRef.current = true;
+
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(FRIENDS_CACHE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        const list = Array.isArray(parsed?.list) ? parsed.list : (Array.isArray(parsed) ? parsed : []);
+        if (!Array.isArray(list) || list.length === 0) return;
+
+        const cached: Friend[] = list
+          .map((it: any) => {
+            const id = it?.id != null ? String(it.id) : '';
+            if (!id) return null;
+            return {
+              id,
+              name: String(it?.name || ''),
+              avatar: String(it?.avatar || ''),
+              avatarVer: typeof it?.avatarVer === 'number' ? it.avatarVer : 0,
+              avatarThumbB64: String(it?.avatarThumbB64 || ''),
+              // онлайн/занятость не считаем "истиной" при холодном старте — это будет обновлено presence/socket-ивентами
+              online: false,
+              isBusy: false,
+            } as any;
+          })
+          .filter(Boolean) as Friend[];
+
+        if (cached.length > 0) {
+          // Не затираем уже загруженный список, если он успел прийти
+          setFriends((prev) => (prev && prev.length > 0 ? prev : cached));
+          setInitialized(true);
+        }
+      } catch {}
+    })();
   }, []);
 
   // Делаем стабильный "вызоватор" loadFriends для ранних колбэков (инвайты и т.п.)
@@ -1786,10 +1899,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       
       // Если пользователь существует, загружаем его данные
       if (userExists !== false) {
-        await ensureIdentity();
+        // Не блокируем загрузку списка друзей — пусть идет параллельно, чтобы "Друзья" обновились быстрее.
+        ensureIdentity().catch(() => {});
       }
       
-      //
+      // Друзей грузим как можно раньше (socket или REST fallback)
       await loadFriends();
       // Инициализация пропущенных видеозвонков из хранилища
       // КРИТИЧНО: Нормализуем ключи (преобразуем в строки) для корректной работы
