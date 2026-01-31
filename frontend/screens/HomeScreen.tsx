@@ -3326,7 +3326,7 @@ const handleClearNick = useCallback(async () => {
       overScrollMode="never"
       data={friends}
       keyExtractor={(item) => item.id}
-      ItemSeparatorComponent={Divider}
+      ItemSeparatorComponent={() => <View style={styles.friendSeparator} />}
       refreshing={refreshing}
       onRefresh={onRefreshFriends}
       renderItem={({ item }) => (
@@ -3378,7 +3378,7 @@ const handleClearNick = useCallback(async () => {
           />
         </Swipeable>
       )}
-      contentContainerStyle={{ paddingBottom: 24, paddingHorizontal: 16, paddingRight: 6 }}
+      contentContainerStyle={{ paddingBottom: 24, paddingHorizontal: 16 }}
       ListEmptyComponent={initialized ? (<View style={{ padding: 16 }}><Text style={{ color: LIVI.text2 }}>👤 {L('friendsEmpty')}</Text></View>) : null}
     />
   );
@@ -4419,6 +4419,12 @@ const styles = StyleSheet.create({
   segTopShadow: { position: 'absolute', top: 0, left: 0, right: 0, height: 0 },
 
   rowRightActions: { height: 48, flexDirection: 'row', alignItems: 'center', paddingRight: 1 },
+  friendSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    marginLeft: 16,
+    marginRight: 16,
+  },
 
   actionBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
   actionBtnGap: { marginLeft: 8 },
