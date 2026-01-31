@@ -1121,10 +1121,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           }))
         } : res;
         
-        const incoming = Array.isArray(res?.list) ? res.list : [];
-        const fresh = incoming.map(mapToFriend);
+        const incoming: any[] = Array.isArray(res?.list) ? res.list : [];
+        const fresh: Friend[] = incoming.map(mapToFriend);
         setFriends((prev) => {
-          const merged: Friend[] = fresh.map((f) => {
+          const merged: Friend[] = fresh.map((f: Friend) => {
             const prevOne = prev.find((p) => p.id === f.id) as any;
             // КРИТИЧНО: Используем полный никнейм из нового списка, не обрезаем
             // Если в новом списке есть имя - используем его, иначе старое, иначе пустое
@@ -1727,22 +1727,30 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         try {
           console.log(`[HomeScreen] Loading profile attempt ${attempt}/5...`);
           const profileResponse = await getMyProfile();
+          const profileAny: any = profileResponse?.profile ?? null;
+          const avatarB64 = typeof profileAny?.avatarB64 === 'string' ? String(profileAny.avatarB64) : '';
+          const avatarThumbB64 = typeof profileAny?.avatarThumbB64 === 'string' ? String(profileAny.avatarThumbB64) : '';
+          const toDataUri = (raw: string) => {
+            const s = String(raw || '').trim();
+            if (!s) return '';
+            return s.startsWith('data:') ? s : `data:image/jpeg;base64,${s}`;
+          };
           // КРИТИЧНО: Убираем avatarB64 и avatarThumbB64 из логов (очень большие base64)
           const logProfile = profileResponse ? {
             ...profileResponse,
             profile: profileResponse.profile ? {
               ...profileResponse.profile,
-              avatarB64: profileResponse.profile.avatarB64 ? `[base64: ${profileResponse.profile.avatarB64.length} chars]` : undefined,
-              avatarThumbB64: profileResponse.profile.avatarThumbB64 ? `[base64: ${profileResponse.profile.avatarThumbB64.length} chars]` : undefined
+              avatarB64: avatarB64 ? `[base64: ${avatarB64.length} chars]` : undefined,
+              avatarThumbB64: avatarThumbB64 ? `[base64: ${avatarThumbB64.length} chars]` : undefined
             } : profileResponse.profile
           } : profileResponse;
           console.log('[HomeScreen] Profile response from backend:', JSON.stringify(logProfile));
           
           // Проверяем что профиль не пустой (должен быть хотя бы nick или avatar)
           if (profileResponse?.ok && profileResponse.profile) {
-            const profile = profileResponse.profile;
-            console.log('[HomeScreen] Profile data:', { nick: profile.nick, hasAvatar: !!profile.avatarB64, hasAvatarThumb: !!profile.avatarThumbB64, avatarVer: profile.avatarVer });
-            logger.debug('Loaded profile from backend', { nick: profile.nick, hasAvatar: !!profile.avatarB64 });
+            const profile = profileResponse.profile as any;
+            console.log('[HomeScreen] Profile data:', { nick: profile.nick, hasAvatar: !!avatarB64, hasAvatarThumb: !!avatarThumbB64, avatarVer: profile.avatarVer });
+            logger.debug('Loaded profile from backend', { nick: profile.nick, hasAvatar: !!avatarB64 });
             
             // Обновляем никнейм из backend
             if (profile.nick && typeof profile.nick === 'string' && profile.nick.trim()) {
@@ -1755,10 +1763,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             }
             
             // Обновляем аватар из backend
-            if (profile.avatarB64 && typeof profile.avatarB64 === 'string') {
-              const raw = String(profile.avatarB64 || '').trim();
-              // backend хранит и отдаёт data URI (data:image/...), но на всякий случай поддержим и "чистый" base64
-              const avatarDataUri = raw.startsWith('data:') ? raw : `data:image/jpeg;base64,${raw}`;
+            if (avatarB64) {
+              const avatarDataUri = toDataUri(avatarB64);
               loadedAvatar = avatarDataUri;
               setMyFullAvatarUri(avatarDataUri);
               setAvatarUri(avatarDataUri);
@@ -1766,9 +1772,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               console.log('[HomeScreen] Set avatar from backend avatarB64');
               logger.debug('Set avatar from backend avatarB64');
               hasActualData = true;
-            } else if (profile.avatarThumbB64 && typeof profile.avatarThumbB64 === 'string') {
-              const raw = String(profile.avatarThumbB64 || '').trim();
-              const avatarDataUri = raw.startsWith('data:') ? raw : `data:image/jpeg;base64,${raw}`;
+            } else if (avatarThumbB64) {
+              const avatarDataUri = toDataUri(avatarThumbB64);
               loadedAvatar = avatarDataUri;
               setMyFullAvatarUri(avatarDataUri);
               setAvatarUri(avatarDataUri);
@@ -1787,11 +1792,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             // Важно: сохраняем ответ от backend, даже если все поля пустые
             await saveProfileToStorage({
               nick: profile.nick || '',
-              avatar: profile.avatarB64 ? `data:image/jpeg;base64,${profile.avatarB64}` : (profile.avatarThumbB64 ? `data:image/jpeg;base64,${profile.avatarThumbB64}` : '')
+              avatar: avatarB64 ? toDataUri(avatarB64) : (avatarThumbB64 ? toDataUri(avatarThumbB64) : '')
             });
             
             // Если есть реальные данные (nick или avatar), отмечаем как успешную загрузку
-            if (hasActualData || (profile.nick && profile.nick.trim()) || profile.avatarB64 || profile.avatarThumbB64) {
+            if (hasActualData || (profile.nick && profile.nick.trim()) || avatarB64 || avatarThumbB64) {
               profileLoadedSuccess = true;
               console.log('[HomeScreen] Profile loaded successfully with data');
             } else {
@@ -4422,8 +4427,8 @@ const styles = StyleSheet.create({
   friendSeparator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.10)',
-    marginLeft: 16,
-    marginRight: 16,
+    marginLeft: 8,
+    marginRight: 8,
   },
 
   actionBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },

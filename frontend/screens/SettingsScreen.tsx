@@ -107,8 +107,16 @@ export default function SettingsScreen() {
           console.log(`[SettingsScreen] Loading profile attempt ${attempt}/5...`);
           const profileResponse = await getMyProfile();
           if (profileResponse?.ok && profileResponse.profile) {
-            const profile = profileResponse.profile;
-            logger.debug('Loaded profile from backend', { nick: profile.nick, hasAvatar: !!profile.avatarB64 });
+            const profile: any = profileResponse.profile as any;
+            const avatarB64 = typeof (profile as any)?.avatarB64 === 'string' ? String((profile as any).avatarB64) : '';
+            const avatarThumbB64 = typeof (profile as any)?.avatarThumbB64 === 'string' ? String((profile as any).avatarThumbB64) : '';
+            const toDataUri = (raw: string) => {
+              const s = String(raw || '').trim();
+              if (!s) return '';
+              return s.startsWith('data:') ? s : `data:image/jpeg;base64,${s}`;
+            };
+
+            logger.debug('Loaded profile from backend', { nick: profile.nick, hasAvatar: !!avatarB64 });
             
             // Обновляем никнейм из backend
             if (profile.nick && typeof profile.nick === 'string') {
@@ -118,13 +126,13 @@ export default function SettingsScreen() {
             }
             
             // Обновляем аватар из backend
-            if (profile.avatarB64 && typeof profile.avatarB64 === 'string') {
-              const avatarDataUri = `data:image/jpeg;base64,${profile.avatarB64}`;
+            if (avatarB64) {
+              const avatarDataUri = toDataUri(avatarB64);
               setAvatarUri(avatarDataUri);
               patchMe({ avatar: avatarDataUri });
               logger.debug('Set avatar from backend avatarB64');
-            } else if (profile.avatarThumbB64 && typeof profile.avatarThumbB64 === 'string') {
-              const avatarDataUri = `data:image/jpeg;base64,${profile.avatarThumbB64}`;
+            } else if (avatarThumbB64) {
+              const avatarDataUri = toDataUri(avatarThumbB64);
               setAvatarUri(avatarDataUri);
               patchMe({ avatar: avatarDataUri });
               logger.debug('Set avatar from backend avatarThumbB64');
@@ -133,7 +141,7 @@ export default function SettingsScreen() {
             // Сохраняем в локальный кэш для быстрого доступа
             await saveProfileToStorage({
               nick: profile.nick || '',
-              avatar: profile.avatarB64 ? `data:image/jpeg;base64,${profile.avatarB64}` : ''
+              avatar: avatarB64 ? toDataUri(avatarB64) : (avatarThumbB64 ? toDataUri(avatarThumbB64) : '')
             });
             
             profileLoadedSuccess = true;
