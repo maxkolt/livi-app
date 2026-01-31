@@ -457,6 +457,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const fromPiPProcessedRef = useRef(false);
   const isInactiveStateRef = useRef(false);
   const isEndingCallRef = useRef(false); // КРИТИЧНО: Флаг для предотвращения повторных вызовов handleCallEnded
+  // КРИТИЧНО: изменения sessionRef.current сами по себе НЕ триггерят ререндер.
+  // В dev это может маскироваться (StrictMode), но в release приводит к тому, что эффекты
+  // установки хендлеров/бриджа стримов не срабатывают. Поэтому используем tick.
+  const [sessionTick, setSessionTick] = useState(0);
   // КРИТИЧНО: Сессия может переживать размонтирование экрана (PiP).
   // Когда возвращаемся из PiP и используем существующую сессию из global ref,
   // её callbacks привязаны к старому инстансу компонента. Поэтому нам нужно
@@ -633,6 +637,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           sessionType: globalSession.constructor.name,
         });
         sessionRef.current = globalSession;
+        setSessionTick((t) => t + 1);
         // Восстанавливаем remoteStream из сессии
         const sessionRemoteStream = globalSession.getRemoteStream?.();
         if (sessionRemoteStream) {
@@ -863,6 +868,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     
     const session = new VideoCallSession(config);
     sessionRef.current = session;
+    setSessionTick((t) => t + 1);
     // Помечаем, что эта сессия создана этим инстансом VideoCall (callbacks актуальны).
     // Для "чужих" (восстановленных из global ref) будем подписываться на события stream.
     try { createdSessionsRef.current.add(session as any); } catch {}
@@ -1356,7 +1362,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
     };
     // IMPORTANT: handlers should be attached once per session, not on every UI state change.
-  }, [sessionRef.current, clearSessionRefs]);
+  }, [sessionTick, clearSessionRefs]);
   
   // Keep-awake для активного видеозвонка
   useEffect(() => {
