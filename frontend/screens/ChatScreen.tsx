@@ -15,6 +15,7 @@ import {
   Animated,
   Vibration,
   NativeModules,
+  Dimensions,
 } from "react-native";
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
@@ -129,7 +130,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [keyboardInset, setKeyboardInset] = useState(0);
   const [inputHeight, setInputHeight] = useState(0);
   const [messageText, setMessageText] = useState("");
   const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
@@ -205,6 +206,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     }, delay);
   };
 
+  // Реальная высота контейнера (по onLayout), чтобы корректно понять, ресайзит ли система окно при клавиатуре
+  const [rootLayoutH, setRootLayoutH] = useState<number>(0);
+  const baseRootLayoutHRef = useRef<number>(0);
+
   // Всегда прижимаем к низу при показе/скрытии клавиатуры
   useEffect(() => {
     // Закрыть возможный глобальный оверлей входящего, если звонящий отменил/таймаут
@@ -232,26 +237,29 @@ export default function ChatScreen({ route, navigation }: Props) {
     try { socket.on('call:timeout', clearIncomingTimer); } catch {}
     const onShow = (event: any) => { 
       setKeyboardVisible(true); 
-      if (Platform.OS === 'android' && event?.endCoordinates?.height) {
-        setKeyboardHeight(event.endCoordinates.height);
+      if (Platform.OS === 'android') {
+        const screenY = Number(event?.endCoordinates?.screenY || 0);
+        const screenH = Dimensions.get('screen').height;
+        const fallbackH = Number(event?.endCoordinates?.height || 0);
+        const inset = screenY > 0 ? Math.max(0, screenH - screenY) : Math.max(0, fallbackH);
+        setKeyboardInset(inset);
       }
       scheduleScrollToBottom(0); 
     };
     const onHide = () => { 
       setKeyboardVisible(false); 
-      setKeyboardHeight(0);
+      setKeyboardInset(0);
       scheduleScrollToBottom(0); 
     };
     const onWillShow = (event: any) => { 
       setKeyboardVisible(true); 
       if (Platform.OS === 'ios' && event?.endCoordinates?.height) {
-        setKeyboardHeight(event.endCoordinates.height);
+        // On iOS KeyboardAvoidingView will handle offsets; we keep this for potential diagnostics only.
       }
       scheduleScrollToBottom(0); 
     };
     const onWillHide = () => { 
       setKeyboardVisible(false); 
-      setKeyboardHeight(0);
       scheduleScrollToBottom(0); 
     };
 
@@ -268,6 +276,11 @@ export default function ChatScreen({ route, navigation }: Props) {
   useEffect(() => {
     scheduleScrollToBottom(0);
   }, [messages.length, keyboardVisible]);
+
+  // Фактический подъём панели над клавиатурой:
+  // lift = keyboardInset - (на сколько система уже ужала контейнер)
+  const systemResizeDelta = keyboardVisible ? Math.max(0, baseRootLayoutHRef.current - rootLayoutH) : 0;
+  const keyboardLift = keyboardVisible ? Math.max(0, keyboardInset - systemResizeDelta) : 0;
 
   // Кэшируем миниатюру при инициализации (если передана)
   useEffect(() => {
@@ -1941,11 +1954,20 @@ export default function ChatScreen({ route, navigation }: Props) {
       // IMPORTANT: color the top safe-area (status bar area) to match the header.
       // Otherwise on Android (with translucent StatusBar) you'll see a white strip above the header.
       style={{ flex: 1, backgroundColor: LIVI.bg }}
-      // КРИТИЧНО: На Android убираем 'bottom' из edges, чтобы избежать белого пробела после скрытия клавиатуры
-      // adjustResize уже обрабатывает изменение размера экрана, SafeAreaView не должен добавлять лишний отступ
+      // Android: bottom inset добавляем вручную только когда клавиатура скрыта,
+      // иначе получаем лишний зазор между инпутом и клавиатурой на разных прошивках.
       edges={Platform.OS === 'android' ? ['top', 'left', 'right'] : ['top', 'bottom', 'left', 'right']}
     >
-      <View style={{ flex: 1, backgroundColor: LIVI.surface }}>
+      <View
+        style={{ flex: 1, backgroundColor: LIVI.surface }}
+        onLayout={(e) => {
+          const h = e.nativeEvent.layout.height;
+          setRootLayoutH(h);
+          if (!keyboardVisible) {
+            baseRootLayoutHRef.current = h;
+          }
+        }}
+      >
         <Header />
         {loading ? (
           <Loading />
@@ -2096,16 +2118,16 @@ export default function ChatScreen({ route, navigation }: Props) {
             </View>
           </KeyboardAvoidingView>)
         ) : (
-          // Android: Не используем KeyboardAvoidingView, так как adjustResize в манифесте уже обрабатывает клавиатуру
-          // KeyboardAvoidingView оставляет отступы после скрытия клавиатуры, поэтому используем только adjustResize
+          // Android: полагаемся на adjustResize (MainActivity windowSoftInputMode=adjustResize)
           (<View style={{ flex: 1 }}>
+            {/** Если система уже "ужала" окно, поднимаем только остаток (без двойного подъёма). */}
             <FlatList
               ref={flatListRef}
               data={androidMessagesData}
               keyExtractor={(item) => item.id}
               renderItem={renderMessageRow}
               style={{ flex: 1 }}
-              contentContainerStyle={{ 
+              contentContainerStyle={{
                 flexGrow: 1,
                 justifyContent: isEmpty ? 'center' : 'flex-start',
                 paddingTop: 12,
@@ -2115,13 +2137,17 @@ export default function ChatScreen({ route, navigation }: Props) {
               inverted={!isEmpty}
               maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
               ListHeaderComponent={!isEmpty ? () => (
-                // КРИТИЧНО: Отступ под блок ввода - постоянный независимо от состояния клавиатуры
-                // Это обеспечивает одинаковый отступ между сообщениями и блоком ввода в любом состоянии
-                <View style={{ 
-                  height: inputHeight > 0 
-                    ? inputHeight + insets.bottom - 130  // Постоянный отступ для обоих состояний
-                    : 100 
-                }} />
+                <View
+                  style={{
+                    // Spacer so the last message doesn't hide under the input bar (and the keyboard on devices without resize).
+                    height:
+                      inputHeight > 0
+                        ? inputHeight +
+                          12 +
+                          keyboardLift
+                        : 96,
+                  }}
+                />
               ) : null}
               ListEmptyComponent={() => (
                 <View
@@ -2151,44 +2177,36 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </View>
               )}
             />
-            {/* Поле ввода для Android - оборачиваем в KeyboardAvoidingView только блок ввода */}
-            <KeyboardAvoidingView
-              behavior="padding"
-              // КРИТИЧНО: Используем динамический offset на основе реальной высоты клавиатуры для универсальности
-              // Это обеспечит правильную работу на всех Android устройствах с разными размерами клавиатур
-              // Увеличиваем коэффициент и добавляем фиксированное значение для поднятия блока выше
-              keyboardVerticalOffset={keyboardVisible && keyboardHeight > 0 
-                ? Math.max(0, keyboardHeight * 0.12) // 15% от высоты клавиатуры + 20px, минимум 0
-                : 0}
+
+            {/* Поле ввода для Android: поднимаем над клавиатурой, если система не ресайзит окно */}
+            <View
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: keyboardLift,
+                borderTopWidth: BORDER_WIDTH,
+                borderTopColor: BORDER_COLOR,
+                backgroundColor: LIVI.bg,
+                paddingHorizontal: 16,
+                paddingTop: 18,
+                // Когда клавиатура открыта — панель должна "стыковаться" с клавиатурой без зазора.
+                // Когда клавиатура скрыта — добавляем safe-area снизу, чтобы не упираться в навигацию.
+                paddingBottom: 22 + (keyboardVisible ? 0 : Math.max(0, insets.bottom)),
+              }}
+              onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
             >
               <View
                 style={{
-                  borderTopWidth: BORDER_WIDTH,
-                  borderTopColor: BORDER_COLOR,
-                  backgroundColor: LIVI.bg,
-                paddingHorizontal: 16,
-                paddingTop: 18,
-                paddingBottom: 22, // Возвращаем исходные размеры
-                // КРИТИЧНО: Уменьшаем marginBottom чтобы поднять блок ввода чуть выше
-                // KeyboardAvoidingView поднимает блок над клавиатурой, marginBottom для отступа от навигации
-                marginBottom: Math.max(0, insets.bottom + 0),
-                }}
-                onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
-              >
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  backgroundColor: "rgba(255,255,255,0.06)",
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  backgroundColor: 'rgba(255,255,255,0.06)',
                   borderRadius: 28,
                   paddingHorizontal: 12,
-                 
                   borderWidth: 1,
                   borderColor: BORDER_COLOR,
                 }}
               >
-                {/* Кнопка очистки убрана по требованию */}
-
                 <TouchableOpacity
                   onPress={handleAttachments}
                   style={{
@@ -2213,7 +2231,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 <TouchableOpacity
                   onPress={sendMessage}
                   style={{
-                    backgroundColor: messageText.trim() ? LIVI.titan : "rgba(255,255,255,0.2)",
+                    backgroundColor: messageText.trim() ? LIVI.titan : 'rgba(255,255,255,0.2)',
                     borderRadius: 14,
                     padding: 6,
                     marginLeft: 6,
@@ -2230,7 +2248,6 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </TouchableOpacity>
               </View>
             </View>
-            </KeyboardAvoidingView>
           </View>)
         )}
       </View>
