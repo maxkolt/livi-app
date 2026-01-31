@@ -16,6 +16,7 @@ import {
   Vibration,
   NativeModules,
   Dimensions,
+  Image,
 } from "react-native";
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
@@ -151,6 +152,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     uri: string;
     name?: string;
   } | null>(null);
+
+  // Состояние для предпросмотра выбранного фото перед отправкой (без лишних Alert/ActionSheet)
+  const [composeViewerVisible, setComposeViewerVisible] = useState(false);
+  const [composeAsset, setComposeAsset] = useState<any>(null);
 
 
 
@@ -347,16 +352,20 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [peerId, peerAvatarVerState]);
 
   // Функция для открытия медиа в полноэкранном режиме
-  const openMediaViewer = (type: 'image', uri: string, name?: string) => {
+  const openMediaViewer = React.useCallback((type: 'image', uri: string, name?: string) => {
     setSelectedMedia({ type, uri, name });
     setMediaViewerVisible(true);
-  };
+  }, []);
 
   // Функция для закрытия медиа просмотра
-  const closeMediaViewer = () => {
+  const closeMediaViewer = React.useCallback(() => {
     setMediaViewerVisible(false);
-    setSelectedMedia(null);
-  };
+    // NB: keep selectedMedia to avoid extra prop churn while animating close;
+    // we'll clear it in a microtask after visibility changes.
+    setTimeout(() => {
+      try { setSelectedMedia(null); } catch {}
+    }, 0);
+  }, []);
 
   // Функции для работы с сохраненными сообщениями и статусами
   const getMessagesKey = (userId: string, peerId: string) => {
@@ -988,7 +997,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   };
 
-  const showDeleteModal = () => {
+  const showDeleteModal = React.useCallback(() => {
     setShowDeleteIndicator(true);
     
     // Мягкая вибрация для появления модального окна
@@ -1019,9 +1028,9 @@ export default function ChatScreen({ route, navigation }: Props) {
         useNativeDriver: true,
       }),
     ]).start();
-  };
+  }, [deleteModalOpacity, deleteModalScale]);
 
-  const hideDeleteModal = () => {
+  const hideDeleteModal = React.useCallback(() => {
     Animated.parallel([
       Animated.timing(deleteModalOpacity, {
         toValue: 0,
@@ -1037,7 +1046,16 @@ export default function ChatScreen({ route, navigation }: Props) {
       setShowDeleteIndicator(false);
       setSelectedMessage(null);
     });
-  };
+  }, [deleteModalOpacity, deleteModalScale]);
+
+  // Stable handler to avoid re-rendering all MessageItem rows on parent re-renders
+  const handleLongPressMessage = React.useCallback(
+    (m: any) => {
+      setSelectedMessage(m);
+      showDeleteModal();
+    },
+    [showDeleteModal]
+  );
 
   // Функция для получения анимации сообщения (стабильная ссылка, чтобы не ломать мемоизацию)
   const getMessageAnimation = React.useCallback((messageId: string) => {
@@ -1217,6 +1235,95 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   };
 
+  const sendPickedImage = React.useCallback(async (asset: any) => {
+    if (!currentUserId || !peerId) return;
+
+    const messageId = Date.now().toString();
+    const messageType = 'image';
+
+    const localUri = asset?.uri;
+    const fileName = asset?.fileName || `file_${Date.now()}`;
+    const fileSize = asset?.fileSize || 0;
+
+    const newMessage = {
+      id: messageId,
+      type: messageType,
+      uri: localUri,
+      name: fileName,
+      size: fileSize,
+      sender: 'me',
+      from: currentUserId,
+      to: peerId,
+      timestamp: new Date(),
+    };
+
+    setMessages((prev) => {
+      const existingMessage = prev.find((msg) => msg.id === messageId);
+      if (existingMessage) return prev;
+      return [...prev, newMessage];
+    });
+
+    updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
+
+    try {
+      setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
+
+      const uploadResult = await uploadMediaToServer(localUri, messageType, undefined, currentUserId, peerId);
+      if (!uploadResult.success || !uploadResult.url) {
+        console.error('❌ Media upload failed:', uploadResult.error);
+        updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+        setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+        return;
+      }
+
+      const socketResult = await sendSocketMessage({
+        to: peerId,
+        type: messageType,
+        uri: uploadResult.url,
+        name: fileName || undefined,
+        size: fileSize || undefined,
+      });
+
+      if (socketResult.ok && socketResult.messageId) {
+        setMessages((prev) => {
+          const updated = prev.map((msg) =>
+            msg.id === messageId ? { ...msg, id: socketResult.messageId!, uri: resolveMediaUri(uploadResult.url), from: currentUserId, to: peerId } : msg
+          );
+          saveMessages(updated);
+          return updated;
+        });
+
+        setUploadStatus((prev) => {
+          const newStatus = { ...prev };
+          newStatus[socketResult.messageId!] = 'sent';
+          delete newStatus[messageId];
+          return newStatus;
+        });
+
+        updateReadStatuses((prev) => {
+          const newStatuses = { ...prev };
+          const delivery = socketResult.delivered ? 'delivered' : 'sent';
+          newStatuses[socketResult.messageId!] = delivery;
+          delete newStatuses[messageId];
+          return newStatuses;
+        });
+      } else {
+        console.warn('❌ Socket send failed:', socketResult);
+        updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+        setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+      }
+    } catch (e) {
+      console.error('Failed to upload and send media:', e);
+      updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+      setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+    }
+  }, [currentUserId, peerId, updateReadStatuses, saveMessages, resolveMediaUri]);
+
+  const openComposeViewer = React.useCallback((asset: any) => {
+    setComposeAsset(asset);
+    setComposeViewerVisible(true);
+  }, []);
+
   const handleCamera = async () => {
     try {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
@@ -1226,106 +1333,15 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.All,
-        allowsEditing: true,
-        aspect: [4, 3],
+        mediaTypes: ['images'],
+        // Не обрезаем принудительно: даём предпросмотр и возможность обрезать/не обрезать
+        allowsEditing: false,
         quality: 0.8,
       });
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        const messageId = Date.now().toString();
-        
-        // Только изображения
-        const messageType = 'image';
-        
-        const newMessage = {
-          id: messageId,
-          type: messageType,
-          uri: asset.uri,
-          name: asset.fileName || `file_${Date.now()}`,
-          size: asset.fileSize || 0,
-          sender: 'me',
-          from: currentUserId,
-          to: peerId,
-          timestamp: new Date(),
-        };
-        setMessages(prev => {
-          // Проверяем, есть ли уже сообщение с таким ID
-          const existingMessage = prev.find(msg => msg.id === messageId);
-          if (existingMessage) {
-            return prev;
-          }
-
-
-          return [...prev, newMessage];
-        });
-        
-        // Статус для медиа файлов
-        updateReadStatuses(prev => ({ ...prev, [messageId]: 'sending' }));
-        
-        // Загружаем медиа файл на сервер и отправляем через сокеты
-        if (currentUserId) {
-          try {
-            // Устанавливаем статус "отправляется"
-            setUploadStatus(prev => ({ ...prev, [messageId]: 'sending' }));
-
-            // Загружаем файл на сервер
-            const uploadResult = await uploadMediaToServer(asset.uri, messageType, undefined, currentUserId, peerId);
-
-            if (uploadResult.success && uploadResult.url) {
-              // Устанавливаем статус "отправляется"
-              setUploadStatus(prev => ({ ...prev, [messageId]: 'sending' }));
-
-              const socketResult = await sendSocketMessage({
-                to: peerId,
-                type: messageType,
-                uri: uploadResult.url, // Используем публичный URL вместо локального
-                name: asset.fileName || undefined,
-                size: asset.fileSize || undefined
-              });
-
-              if (socketResult.ok && socketResult.messageId) {
-                setMessages(prev => {
-                  const updated = prev.map(msg => 
-                    msg.id === messageId 
-                      ? { ...msg, id: socketResult.messageId!, uri: resolveMediaUri(uploadResult.url), from: currentUserId, to: peerId }
-                      : msg
-                  );
-                  saveMessages(updated); // Сохраняем обновленные сообщения
-                  return updated;
-                });
-
-                // Устанавливаем статус отправки/доставки по факту
-                setUploadStatus(prev => {
-                  const newStatus = { ...prev };
-                  newStatus[socketResult.messageId!] = 'sent';
-                  delete newStatus[messageId]; // Удаляем старый статус
-                  return newStatus;
-                });
-
-                updateReadStatuses(prev => {
-                  const newStatuses = { ...prev };
-                  const delivery = socketResult.delivered ? 'delivered' : 'sent';
-                  newStatuses[socketResult.messageId!] = delivery;
-                  delete newStatuses[messageId];
-                  return newStatuses;
-                });
-              } else {
-                console.warn('❌ Socket send failed:', socketResult);
-                updateReadStatuses(prev => ({ ...prev, [messageId]: 'failed' }));
-                setUploadStatus(prev => ({ ...prev, [messageId]: 'failed' }));
-              }
-            } else {
-              console.error('❌ Media upload failed:', uploadResult.error);
-              updateReadStatuses(prev => ({ ...prev, [messageId]: 'failed' }));
-              setUploadStatus(prev => ({ ...prev, [messageId]: 'failed' }));
-            }
-          } catch (e) {
-            console.error('Failed to upload and send media:', e);
-            updateReadStatuses(prev => ({ ...prev, [messageId]: 'failed' }));
-          }
-        }
+        openComposeViewer(asset);
       }
     } catch (error) {
       console.error('Camera error:', error);
@@ -1342,105 +1358,15 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.All,
-        allowsEditing: true,
-        aspect: [4, 3],
+        mediaTypes: ['images'],
+        // Не обрезаем принудительно: даём предпросмотр и возможность обрезать/не обрезать
+        allowsEditing: false,
         quality: 0.8,
       });
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        const messageId = Date.now().toString();
-        
-        // Только изображения
-        const messageType = 'image';
-        
-        const newMessage = {
-          id: messageId,
-          type: messageType,
-          uri: asset.uri,
-          name: asset.fileName || `file_${Date.now()}`,
-          size: asset.fileSize || 0,
-          sender: 'me',
-          from: currentUserId,
-          to: peerId,
-          timestamp: new Date(),
-        };
-        setMessages(prev => {
-          // Проверяем, есть ли уже сообщение с таким ID
-          const existingMessage = prev.find(msg => msg.id === messageId);
-          if (existingMessage) {
-            return prev;
-          }
-
-
-          return [...prev, newMessage];
-        });
-        
-        // Статус для медиа файлов
-        updateReadStatuses(prev => ({ ...prev, [messageId]: 'sending' }));
-        
-        // Загружаем медиа файл на сервер и отправляем через сокеты
-        if (currentUserId) {
-          try {
-            // Устанавливаем статус "отправляется"
-            setUploadStatus(prev => ({ ...prev, [messageId]: 'sending' }));
-
-            // Загружаем файл на сервер
-            const uploadResult = await uploadMediaToServer(asset.uri, messageType, undefined, currentUserId, peerId);
-
-            if (uploadResult.success && uploadResult.url) {
-              // Устанавливаем статус "отправляется"
-              setUploadStatus(prev => ({ ...prev, [messageId]: 'sending' }));
-
-              const socketResult = await sendSocketMessage({
-                to: peerId,
-                type: messageType,
-                uri: uploadResult.url, // Используем публичный URL вместо локального
-                name: asset.fileName || undefined,
-                size: asset.fileSize || undefined
-              });
-
-              if (socketResult.ok && socketResult.messageId) {
-                setMessages(prev => {
-                  const updated = prev.map(msg => 
-                    msg.id === messageId 
-                      ? { ...msg, id: socketResult.messageId!, uri: uploadResult.url, from: currentUserId, to: peerId }
-                      : msg
-                  );
-                  saveMessages(updated); // Сохраняем обновленные сообщения
-                  return updated;
-                });
-
-                // Устанавливаем статус "отправлено"
-
-                setUploadStatus(prev => {
-                  const newStatus = { ...prev };
-                  newStatus[socketResult.messageId!] = 'sent';
-                  delete newStatus[messageId]; // Удаляем старый статус
-                  return newStatus;
-                });
-
-                updateReadStatuses(prev => {
-                  const newStatuses = { ...prev };
-                  newStatuses[socketResult.messageId!] = 'delivered';
-                  delete newStatuses[messageId];
-                  return newStatuses;
-                });
-              } else {
-                console.warn('❌ Socket send failed:', socketResult);
-                updateReadStatuses(prev => ({ ...prev, [messageId]: 'failed' }));
-              }
-            } else {
-              console.error('❌ Media upload failed:', uploadResult.error);
-              updateReadStatuses(prev => ({ ...prev, [messageId]: 'failed' }));
-              setUploadStatus(prev => ({ ...prev, [messageId]: 'failed' }));
-            }
-          } catch (e) {
-            console.error('Failed to upload and send media:', e);
-            updateReadStatuses(prev => ({ ...prev, [messageId]: 'failed' }));
-          }
-        }
+        openComposeViewer(asset);
       }
     } catch (error) {
       console.error('Image picker error:', error);
@@ -1945,9 +1871,9 @@ export default function ChatScreen({ route, navigation }: Props) {
       readStatus={readStatuses[item.id]}
       uploadStatus={uploadStatus[item.id]}
       onPressImage={openMediaViewer}
-      onLongPressMessage={(m: any) => { setSelectedMessage(m); showDeleteModal(); }}
+      onLongPressMessage={handleLongPressMessage}
     />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer]);
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, handleLongPressMessage]);
 
   return (
     <SafeAreaView 
@@ -1960,6 +1886,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     >
       <View
         style={{ flex: 1, backgroundColor: LIVI.surface }}
+        // Prevent touch-through during modal close animations (can trigger header back -> Home -> Chat flicker)
+        pointerEvents={mediaViewerVisible || composeViewerVisible ? 'none' : 'auto'}
         onLayout={(e) => {
           const h = e.nativeEvent.layout.height;
           setRootLayoutH(h);
@@ -2258,6 +2186,27 @@ export default function ChatScreen({ route, navigation }: Props) {
         mediaType={selectedMedia?.type || 'image'}
         uri={selectedMedia?.uri || ''}
         name={selectedMedia?.name}
+      />
+
+      {/* Предпросмотр выбранного фото перед отправкой (можно обрезать или отправить как есть) */}
+      <MediaViewer
+        visible={composeViewerVisible}
+        onClose={() => {
+          setComposeViewerVisible(false);
+          setComposeAsset(null);
+        }}
+        mediaType="image"
+        uri={composeAsset?.uri || ''}
+        name={composeAsset?.fileName}
+        onSend={(finalUri) => {
+          try {
+            if (!composeAsset) return;
+            void sendPickedImage({ ...composeAsset, uri: finalUri });
+          } finally {
+            setComposeViewerVisible(false);
+            setComposeAsset(null);
+          }
+        }}
       />
       {/* Модальное окно для меню очистки чата */}
       {showClearMenu && (

@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@babel/runtime": "^7.28.3",
+    "@baronha/react-native-photo-editor": "^1.1.6",
     "@cometchat/chat-sdk-react-native": "^4.0.14",
     "@cometchat/chat-uikit-react-native": "^5.0.1",
     "@expo/vector-icons": "^14.1.0",

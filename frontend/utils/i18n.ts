@@ -1,5 +1,6 @@
 // utils/i18n.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as RNLocalize from 'react-native-localize';
 
 // 1) Коды языков (один источник правды)
 export const LANGS = [
@@ -2586,17 +2587,87 @@ export function t(key: string, lang: Lang = defaultLang): string {
 }
 
 const LANG_KEY = 'app_lang';
+const LANG_MODE_KEY = 'app_lang_mode';
+type LangMode = 'system' | 'manual';
+
+export function getSystemLang(): Lang {
+  try {
+    const locales = (RNLocalize.getLocales?.() ?? []) as Array<{
+      languageTag?: string;
+      languageCode?: string;
+      scriptCode?: string;
+    }>;
+
+    const first = locales[0] || {};
+    const tag = String(first.languageTag || '').trim(); // e.g. "ru-RU", "zh-Hant-TW"
+    const code = String(first.languageCode || '').trim(); // e.g. "ru", "zh"
+    const script = String(first.scriptCode || '').trim(); // e.g. "Hans", "Hant"
+
+    // Special-case Chinese scripts
+    const lowerTag = tag.toLowerCase();
+    const lowerCode = code.toLowerCase();
+    const lowerScript = script.toLowerCase();
+
+    const isZh = lowerCode === 'zh' || lowerTag.startsWith('zh');
+    if (isZh) {
+      const isTraditional = lowerTag.includes('hant') || lowerTag.includes('tw') || lowerTag.includes('hk') || lowerScript === 'hant';
+      return (isTraditional ? 'zh-TW' : 'zh') as Lang;
+    }
+
+    // Try exact tag match first (e.g. "zh-TW")
+    if (tag && (LANGS as readonly string[]).includes(tag)) return tag as Lang;
+
+    // Fall back to base language code (e.g. "ru" from "ru-RU")
+    if (code && (LANGS as readonly string[]).includes(code)) return code as Lang;
+
+    // Parse base from tag if code missing
+    if (tag) {
+      const base = tag.split(/[-_]/)[0];
+      if (base && (LANGS as readonly string[]).includes(base)) return base as Lang;
+    }
+  } catch {}
+
+  return defaultLang;
+}
+
+async function loadLangMode(): Promise<LangMode> {
+  try {
+    const v = await AsyncStorage.getItem(LANG_MODE_KEY);
+    if (v === 'manual' || v === 'system') return v;
+  } catch {}
+  // Default: follow system language
+  return 'system';
+}
+
+export async function setLangModeSystem(): Promise<void> {
+  try {
+    await AsyncStorage.setItem(LANG_MODE_KEY, 'system');
+  } catch {}
+}
 
 export async function saveLang(lang: Lang): Promise<void> {
-  await AsyncStorage.setItem(LANG_KEY, lang);
+  // Manual selection should persist and override system
+  await AsyncStorage.multiSet([
+    [LANG_KEY, lang],
+    [LANG_MODE_KEY, 'manual'],
+  ]);
 }
 
 export async function loadLang(): Promise<Lang> {
   try {
-    const v = await AsyncStorage.getItem(LANG_KEY);
-    if (v && (LANGS as readonly string[]).includes(v)) {
-      return v as Lang;
+    const mode = await loadLangMode();
+    const systemLang = getSystemLang();
+
+    if (mode === 'manual') {
+      const v = await AsyncStorage.getItem(LANG_KEY);
+      if (v && (LANGS as readonly string[]).includes(v)) {
+        return v as Lang;
+      }
+      return systemLang;
     }
+
+    // system mode
+    return systemLang;
   } catch { }
-  return defaultLang;
+  return getSystemLang();
 }

@@ -14,6 +14,10 @@ const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EX
 
 const API_BASE_URL = (Platform.OS === 'android' ? ANDROID_URL : IOS_URL).replace(/\/+$/, '');
 
+// Some production deployments may not have multipart endpoint enabled yet.
+// Cache support after the first request to avoid spamming logs and wasting time on repeated 404s.
+let multipartSupported: boolean | null = null;
+
 /**
  * Конвертирует локальный файл в dataUri
  */
@@ -113,30 +117,45 @@ export const uploadMediaToServer = async (
     // Keep legacy base64 JSON upload as fallback for release-safety.
     const normalizedUri = workingUri.startsWith('file://') ? workingUri : `file://${workingUri}`;
     try {
-      if (onProgress) onProgress(15);
-      const mpUrl = `${API_BASE_URL}/api/upload/media/multipart`;
-      const mpRes = await FileSystem.uploadAsync(mpUrl, normalizedUri, {
-        httpMethod: 'POST',
-        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-        fieldName: 'file',
-        headers: {
-          ...(installId ? { 'x-install-id': String(installId) } : {}),
-        },
-      });
+      if (multipartSupported !== false) {
+        if (onProgress) onProgress(15);
+        const mpUrl = `${API_BASE_URL}/api/upload/media/multipart`;
+        const mpRes = await FileSystem.uploadAsync(mpUrl, normalizedUri, {
+          httpMethod: 'POST',
+          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+          fieldName: 'file',
+          headers: {
+            ...(installId ? { 'x-install-id': String(installId) } : {}),
+          },
+        });
 
-      if (mpRes.status >= 200 && mpRes.status < 300) {
-        let json: any = null;
-        try { json = JSON.parse(mpRes.body || '{}'); } catch {}
-        if (json?.ok && (json.url || json.secure_url)) {
-          if (onProgress) onProgress(100);
-          const url = json.url || json.secure_url;
-          return { success: true, url };
+        if (mpRes.status === 404) {
+          // Endpoint not available on this server — disable multipart for the session.
+          multipartSupported = false;
+        } else {
+          multipartSupported = true;
+        }
+
+        if (mpRes.status >= 200 && mpRes.status < 300) {
+          let json: any = null;
+          try { json = JSON.parse(mpRes.body || '{}'); } catch {}
+          if (json?.ok && (json.url || json.secure_url)) {
+            if (onProgress) onProgress(100);
+            const url = json.url || json.secure_url;
+            return { success: true, url };
+          }
+        }
+
+        // Fall through to legacy upload (avoid warning spam on known-missing endpoint)
+        if (mpRes.status !== 404) {
+          logger.warn('Multipart upload failed, falling back to base64', { status: mpRes.status });
         }
       }
-      // Fall through to legacy upload
-      logger.warn('Multipart upload failed, falling back to base64', { status: mpRes.status });
     } catch (e) {
-      logger.warn('Multipart upload error, falling back to base64', e as any);
+      // If multipart is flaky, fallback to base64. Keep warning only if we believe endpoint exists.
+      if (multipartSupported !== false) {
+        logger.warn('Multipart upload error, falling back to base64', e as any);
+      }
     }
 
     // Legacy base64-in-JSON upload (fallback)

@@ -1,13 +1,14 @@
 // store/lang.ts
 import { create, StateCreator } from 'zustand';
 import type { Lang } from '../utils/i18n';
-import { defaultLang, loadLang, saveLang } from '../utils/i18n';
+import { defaultLang, getSystemLang, loadLang, saveLang, setLangModeSystem } from '../utils/i18n';
 
 export interface LangState {
   lang: Lang;
   hydrated: boolean;
   hydrate: () => Promise<void>;
   setLang: (lang: Lang) => Promise<void>;
+  setSystemLang: () => Promise<void>;
 }
 
 const creator: StateCreator<LangState> = (set, get) => ({
@@ -28,6 +29,14 @@ const creator: StateCreator<LangState> = (set, get) => ({
     set({ lang });
     try {
       await saveLang(lang);
+    } catch {}
+  },
+
+  setSystemLang: async () => {
+    const sys = getSystemLang();
+    set({ lang: sys });
+    try {
+      await setLangModeSystem();
     } catch {}
   },
 });

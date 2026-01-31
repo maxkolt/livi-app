@@ -126,6 +126,7 @@ function AppContent() {
   
   // Убрали постоянные логи для уменьшения шума
   const [routeName, setRouteName] = React.useState<string | undefined>(undefined);
+  const lastLoggedRouteRef = React.useRef<string | undefined>(undefined);
 
 
   // ==== incoming call (global, когда не на экране видеозвонка) ====
@@ -137,8 +138,13 @@ function AppContent() {
   // Настройка навигационной панели на Android для edge-to-edge
   React.useEffect(() => {
     if (Platform.OS === 'android') {
-      NavigationBar.setBackgroundColorAsync('transparent');
-      NavigationBar.setButtonStyleAsync(isDark ? 'light' : 'dark');
+      // Имитируем системный "затемнённый прозрачный" navbar как в dev:
+      // bar поверх контента + полупрозрачный тёмный фон + светлые иконки.
+      const bg = 'rgba(0,0,0,0.22)';
+      NavigationBar.setPositionAsync('absolute').catch(() => {});
+      NavigationBar.setBackgroundColorAsync(bg);
+      NavigationBar.setButtonStyleAsync('light');
+      NavigationBar.setBorderColorAsync(bg).catch(() => {});
     }
   }, [isDark]);
   
@@ -1004,7 +1010,11 @@ function AppContent() {
             try {
               if (navRef.isReady()) {
                 const currentRoute = navRef.getCurrentRoute()?.name;
-                console.log('[App] Navigation ready, current route:', currentRoute);
+                // Avoid log spam: only log when the route actually changes.
+                if (currentRoute && currentRoute !== lastLoggedRouteRef.current) {
+                  console.log('[App] Navigation ready, current route:', currentRoute);
+                  lastLoggedRouteRef.current = currentRoute;
+                }
                 setRouteName(currentRoute);
               }
             } catch (e) {
@@ -1015,7 +1025,11 @@ function AppContent() {
             try {
               if (navRef.isReady()) {
                 const currentRoute = navRef.getCurrentRoute()?.name;
-                console.log('[App] Navigation state changed, current route:', currentRoute);
+                // Avoid log spam: NavigationContainer can emit many state changes even on the same route.
+                if (currentRoute && currentRoute !== lastLoggedRouteRef.current) {
+                  console.log('[App] Navigation state changed, current route:', currentRoute);
+                  lastLoggedRouteRef.current = currentRoute;
+                }
                 setRouteName(currentRoute);
               }
             } catch (e) {

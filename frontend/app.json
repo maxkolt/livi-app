@@ -71,9 +71,18 @@
       "expo-audio",
       "expo-asset",
       [
+        "expo-media-library",
+        {
+          "granularPermissions": [
+            "photo"
+          ]
+        }
+      ],
+      [
         "expo-navigation-bar",
         {
-          "barStyle": "light-content"
+          "barStyle": "light-content",
+          "backgroundColor": "rgba(0,0,0,0.22)"
         }
       ]
     ],

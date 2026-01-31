@@ -42,6 +42,11 @@ target 'LiVi' do
     :privacy_file_aggregation_enabled => podfile_properties['apple.privacyManifestAggregationEnabled'] != 'false',
   )
 
+  # Needed by @baronha/react-native-photo-editor when building as static libraries
+  # (prevents "non-modular header" import errors in Swift).
+  pod 'SDWebImage', :modular_headers => true
+  pod 'SDWebImageWebPCoder', :modular_headers => true
+
   post_install do |installer|
     react_native_post_install(
       installer,
