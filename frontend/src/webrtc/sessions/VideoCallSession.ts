@@ -26,7 +26,8 @@ const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined)
 
 // During camera flip / track replacement LiveKit can briefly unpublish/unsubscribe video.
 // We should not treat that as "partner turned camera off" (otherwise UI flashes "Отошел").
-const REMOTE_CAM_OFF_GRACE_MS = 700;
+// Slightly longer to cover renegotiation bursts during camera flip/restart on Android.
+const REMOTE_CAM_OFF_GRACE_MS = 1400;
 
 type CallAcceptedPayload = {
   callId?: string;
