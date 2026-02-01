@@ -12,11 +12,14 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Keyboard,
+  Modal,
+  Pressable,
   Animated,
   Vibration,
   NativeModules,
   Dimensions,
   Image,
+  StyleSheet,
 } from "react-native";
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
@@ -27,6 +30,7 @@ import { useAppTheme } from "../theme/ThemeProvider";
 import { Image as ExpoImage } from "expo-image";
 import AvatarImage from "../components/AvatarImage";
 import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
 import { getFull, putFull, putThumb } from '../utils/avatarCache';
  
 import { API_BASE, getMyProfile } from '../sockets/socket';
@@ -56,6 +60,7 @@ import {
   onMessageDeleted,
   globalMessageStorage,
   fetchMessages,
+  fetchFriends,
   getAvatar,
 } from "../sockets/socket";
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -76,6 +81,13 @@ export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
   const lang = useLang((s) => s.lang);
+  // Android: одинаковый нижний отступ для bottom sheet на всех девайсах.
+  // На кнопочной навигации insets.bottom часто = 0, поэтому фиксируем минимальный паддинг.
+  // Важно: на жестовой навигации insets.bottom может быть большим, и лист визуально "висит" слишком высоко.
+  // Поэтому делаем clamp: не меньше 24px и не больше 32px.
+  const ANDROID_SHEET_BOTTOM_PAD = Platform.OS === 'android'
+    ? Math.max(18, Math.min(26, 10 + Math.max(0, insets.bottom)))
+    : 12 + Math.max(0, insets.bottom);
 
 
   // Загружаем профиль при инициализации
@@ -132,6 +144,24 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
+  // Чтобы не показывать "пустую заглушку" до загрузки истории (иначе она мелькает на входе в чат)
+  const [historyReady, setHistoryReady] = useState(false);
+  // Кастомное подтверждение удаления сообщения (вместо системного Alert)
+  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
+  const pendingDeleteRef = useRef<any>(null);
+  // Кастомный алерт/ошибка (вместо системного Alert)
+  const [noticeVisible, setNoticeVisible] = useState(false);
+  const [noticeTitle, setNoticeTitle] = useState('');
+  const [noticeMessage, setNoticeMessage] = useState('');
+  const [noticeKind, setNoticeKind] = useState<'error' | 'info'>('info');
+  // Универсальный confirm (2 кнопки) для замены Alert.alert с действиями
+  const [confirmVisible, setConfirmVisible] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmCancelText, setConfirmCancelText] = useState('Отмена');
+  const [confirmOkText, setConfirmOkText] = useState('Ок');
+  const [confirmDestructive, setConfirmDestructive] = useState(false);
+  const onConfirmRef = useRef<(() => void) | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [inputHeight, setInputHeight] = useState(0);
@@ -142,9 +172,25 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [uploadStatus, setUploadStatus] = useState<Record<string, 'sending' | 'sent' | 'failed'>>({});
   const [showClearMenu, setShowClearMenu] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<any>(null);
-  const [showDeleteIndicator, setShowDeleteIndicator] = useState(false);
-  const deleteModalOpacity = useRef(new Animated.Value(0)).current;
-  const deleteModalScale = useRef(new Animated.Value(0.8)).current;
+  const [showMessageActions, setShowMessageActions] = useState(false);
+  const [showForwardPicker, setShowForwardPicker] = useState(false);
+  const [forwardFriends, setForwardFriends] = useState<any[]>([]);
+  const [forwardLoading, setForwardLoading] = useState(false);
+  // Multi-select (режим "Выбрать")
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const [forwardToast, setForwardToast] = useState<{ visible: boolean; ok: boolean; text: string }>({
+    visible: false,
+    ok: true,
+    text: '',
+  });
+  const messageActionsOpacity = useRef(new Animated.Value(0)).current;
+  const messageActionsTranslateY = useRef(new Animated.Value(30)).current;
+  const forwardToastOpacity = useRef(new Animated.Value(0)).current;
+  // Чтобы не спамить логами при перезагрузках/повторных fetch — логируем каждую картинку из истории один раз
+  const loggedHistoryImageIdsRef = useRef<Set<string>>(new Set());
+  // И дополнительно ограничиваем общий объём этих логов (в dev), чтобы консоль не шумела
+  const loggedHistoryImagesCountRef = useRef(0);
 
   // Анимации для сообщений
   const messagePressAnimations = useRef<Record<string, Animated.Value>>({}).current;
@@ -160,6 +206,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Состояние для предпросмотра выбранного фото перед отправкой (без лишних Alert/ActionSheet)
   const [composeViewerVisible, setComposeViewerVisible] = useState(false);
   const [composeAsset, setComposeAsset] = useState<any>(null);
+
+  // Android: кастомный sheet для выбора вложений (камера/галерея)
+  const [showAttachSheet, setShowAttachSheet] = useState(false);
 
 
 
@@ -390,25 +439,35 @@ export default function ChatScreen({ route, navigation }: Props) {
     return () => clearInterval(id);
   }, [peerTyping]);
 
-  const TypingIndicator = React.useMemo(() => {
-    if (!peerTyping) return null;
-    const color = isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.40)';
+  const GapCenterIndicator = React.useMemo(() => {
+    // Приоритет: "Печатает..." > "Отправлено"
+    if (!peerTyping && !forwardToast.visible) return null;
+
+    const baseStyle = {
+      fontSize: 13,
+      fontStyle: 'italic' as const,
+      fontWeight: '500' as const,
+      letterSpacing: 0.2,
+    };
+
+    const text = peerTyping ? `Печатает${'.'.repeat(peerTypingDots)}` : String(forwardToast.text || 'Отправлено');
+    const color = peerTyping
+      ? (isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.40)')
+      : '#55d187';
+
     return (
-      <View pointerEvents="none" style={{ justifyContent: 'center', alignItems: 'center' }}>
-        <Text
-          style={{
-            color,
-            fontSize: 13,
-            fontStyle: 'italic',
-            fontWeight: '500',
-            letterSpacing: 0.2,
-          }}
-        >
-          {`Печатает${'.'.repeat(peerTypingDots)}`}
-        </Text>
-      </View>
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          justifyContent: 'center',
+          alignItems: 'center',
+          opacity: peerTyping ? 1 : forwardToastOpacity,
+        }}
+      >
+        <Text style={{ ...baseStyle, color }}>{text}</Text>
+      </Animated.View>
     );
-  }, [peerTyping, peerTypingDots, isDark]);
+  }, [peerTyping, peerTypingDots, isDark, forwardToast.visible, forwardToast.text, forwardToastOpacity]);
 
   // Кэшируем миниатюру при инициализации (если передана)
   useEffect(() => {
@@ -734,6 +793,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     
     const loadHistory = async () => {
       try {
+        // На входе в чат не показываем "пусто", пока не загрузили историю
+        setHistoryReady(false);
         // Очищаем кэш для принудительной перезагрузки с правильными полями
         clearMessageCache(peerId, currentUserId);
         
@@ -748,6 +809,11 @@ export default function ChatScreen({ route, navigation }: Props) {
           const formattedMessages = serverMessages.messages.map((msg: any) => {
             // КРИТИЧНО: Логируем сообщения с изображениями при загрузке истории
             if (msg.type === 'image') {
+            const mid = String(msg.id || '').trim();
+            // В проде это не нужно. В dev ограничиваем максимум 1 логом.
+            if (__DEV__ && mid && !loggedHistoryImageIdsRef.current.has(mid) && loggedHistoryImagesCountRef.current < 1) {
+              loggedHistoryImageIdsRef.current.add(mid);
+              loggedHistoryImagesCountRef.current += 1;
               logger.info('[ChatScreen] Loading image message from history', {
                 messageId: msg.id,
                 from: msg.from,
@@ -756,6 +822,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 resolvedUri: resolveMediaUri(msg.uri),
                 hasUri: !!msg.uri,
               });
+            }
             }
             
             return {
@@ -814,6 +881,9 @@ export default function ChatScreen({ route, navigation }: Props) {
           console.error('Fallback loading also failed:', fallbackError);
           setMessages([]); // Пустая история при ошибке
         }
+      } finally {
+        // История (успешно или с фолбэком) отработала — можно показывать заглушку при реально пустом чате
+        setHistoryReady(true);
       }
     };
 
@@ -859,83 +929,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const headerInitial = peerNameState ? firstLetter(peerNameState) : '--'; // Только для аватара!
   const headerPlaceholder = '--'; // Всегда показываем -- если нет аватара
 
-  // КРИТИЧНО: Header нельзя объявлять как "новую функцию" на каждый рендер,
-  // иначе шапка (и аватар) будут размонтироваться на каждый ввод в TextInput.
-  const Header = React.useCallback(() => (
-    <View
-      style={{
-        // КРИТИЧНО: Не добавляем paddingTop, так как SafeAreaView уже обрабатывает safe area
-        // Используем одинаковую высоту для iOS и Android для единообразного стиля
-        height: headerH,
-        backgroundColor: LIVI.bg,
-        borderBottomWidth: BORDER_WIDTH,
-        borderBottomColor: BORDER_COLOR,
-        flexDirection: "row",
-        alignItems: "center",
-        paddingHorizontal: 12,
-      }}
-    >
-      <TouchableOpacity
-        onPress={() => navigation.goBack()}
-        activeOpacity={0.85}
-        style={{
-          width: 36,
-          height: 36,
-          borderRadius: 14,
-          backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
-          borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
-          borderWidth: 1,
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Ionicons name="arrow-back" size={20} color={LIVI.titan} />
-      </TouchableOpacity>
-
-      <View style={{ flex: 1, alignItems: "center" }}>
-        <Text style={{ color: LIVI.white, fontSize: 18, fontWeight: "700" }}>
-          {peerNameState}
-        </Text>
-        <Text
-          style={{
-            marginTop: 2,
-            fontSize: 12,
-            color: peerOnline ? LIVI.green : LIVI.red,
-            fontWeight: "600",
-          }}
-        >
-          {peerOnline ? "Online" : "Offline"}
-        </Text>
-      </View>
-
-      <AvatarImage
-        userId={peerId}
-        avatarVer={peerAvatarVerState}
-        uri={fullAvatarUri || undefined}
-        size={36}
-        fallbackText={headerInitial}
-        containerStyle={{ backgroundColor: 'rgba(255,255,255,0.12)' }}
-      />
-    </View>
-  ), [
-    headerH,
-    LIVI.bg,
-    LIVI.white,
-    LIVI.titan,
-    LIVI.green,
-    LIVI.red,
-    BORDER_WIDTH,
-    BORDER_COLOR,
-    navigation,
-    isDark,
-    (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
-    peerNameState,
-    peerOnline,
-    peerId,
-    peerAvatarVerState,
-    fullAvatarUri,
-    headerInitial,
-  ]);
+  // Header будет объявлен ниже (после всех helper-функций), чтобы не было "используется до объявления".
 
   // live updates for peer profile while chat is open
   useEffect(() => {
@@ -1039,6 +1033,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   // КРИТИЧНО: НЕ делаем ранние return по loading/err, иначе ниже хуки (useMemo/useCallback) будут
   // вызываться не на каждом рендере -> "Rendered more hooks than during the previous render".
   const isEmpty = messages.length === 0;
+  const showEmpty = isEmpty && historyReady;
 
   const openClearMenu = () => {
     setShowClearMenu(true);
@@ -1046,68 +1041,68 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const clearChatForMe = async () => {
     if (!currentUserId || !peerId) return;
-    
-    Alert.alert(
-      t('chatClearMineTitle', lang),
-      t('chatClearMineMsg', lang),
-      [
-        { text: t('cancel', lang), style: "cancel" },
-        { 
-          text: t('delete', lang), 
-          style: "destructive",
-          onPress: async () => {
-            // Сразу очищаем локальные сообщения у инициатора
-            setMessages([]);
-            clearMessageCache(peerId, currentUserId);
 
-            // Очищаем AsyncStorage у инициатора
-            const chatKey = globalMessageStorage.getChatKey(currentUserId, peerId);
-            await AsyncStorage.removeItem(chatKey);
+    openConfirm({
+      title: t('chatClearMineTitle', lang),
+      message: t('chatClearMineMsg', lang),
+      okText: t('delete', lang),
+      cancelText: t('cancel', lang),
+      destructive: true,
+      onConfirm: () => {
+        (async () => {
+          // Сразу очищаем локальные сообщения у инициатора
+          setMessages([]);
+          clearMessageCache(peerId, currentUserId);
 
-            // Отправляем запрос на сервер для очистки только у себя
-            const success = await clearChatMessages(peerId, false);
-            if (success) {
-              Alert.alert(t('successTitle', lang), t('chatClearedMineSuccess', lang));
-            } else {
-              Alert.alert(t('errorTitle', lang), t('chatClearFailedServer', lang));
-            }
+          // Очищаем AsyncStorage у инициатора
+          const chatKey = globalMessageStorage.getChatKey(currentUserId, peerId);
+          await AsyncStorage.removeItem(chatKey);
+
+          // Отправляем запрос на сервер для очистки только у себя
+          const success = await clearChatMessages(peerId, false);
+          if (success) {
+            showNotice('info', t('successTitle', lang), t('chatClearedMineSuccess', lang));
+          } else {
+            showNotice('error', t('errorTitle', lang), t('chatClearFailedServer', lang));
           }
-        }
-      ]
-    );
+        })().catch(() => {
+          showNotice('error', t('errorTitle', lang), t('chatClearFailedServer', lang));
+        });
+      },
+    });
   };
 
   const clearChatForAll = async () => {
     if (!currentUserId || !peerId) return;
-    
-    Alert.alert(
-      t('chatClearAllTitle', lang),
-      t('chatClearAllMsg', lang),
-      [
-        { text: t('cancel', lang), style: "cancel" },
-        { 
-          text: t('delete', lang), 
-          style: "destructive",
-          onPress: async () => {
-            // Сразу очищаем локальные сообщения у инициатора
-            setMessages([]);
-            clearMessageCache(peerId, currentUserId);
 
-            // Очищаем AsyncStorage у инициатора
-            const chatKey = globalMessageStorage.getChatKey(currentUserId, peerId);
-            await AsyncStorage.removeItem(chatKey);
+    openConfirm({
+      title: t('chatClearAllTitle', lang),
+      message: t('chatClearAllMsg', lang),
+      okText: t('delete', lang),
+      cancelText: t('cancel', lang),
+      destructive: true,
+      onConfirm: () => {
+        (async () => {
+          // Сразу очищаем локальные сообщения у инициатора
+          setMessages([]);
+          clearMessageCache(peerId, currentUserId);
 
-            // Отправляем запрос на сервер для очистки у обоих пользователей
-            const success = await clearChatMessages(peerId, true);
-            if (success) {
-              Alert.alert(t('successTitle', lang), t('chatClearedAllSuccess', lang));
-            } else {
-              Alert.alert(t('errorTitle', lang), t('chatClearFailedServer', lang));
-            }
+          // Очищаем AsyncStorage у инициатора
+          const chatKey = globalMessageStorage.getChatKey(currentUserId, peerId);
+          await AsyncStorage.removeItem(chatKey);
+
+          // Отправляем запрос на сервер для очистки у обоих пользователей
+          const success = await clearChatMessages(peerId, true);
+          if (success) {
+            showNotice('info', t('successTitle', lang), t('chatClearedAllSuccess', lang));
+          } else {
+            showNotice('error', t('errorTitle', lang), t('chatClearFailedServer', lang));
           }
-        }
-      ]
-    );
+        })().catch(() => {
+          showNotice('error', t('errorTitle', lang), t('chatClearFailedServer', lang));
+        });
+      },
+    });
   };
 
 
@@ -1116,68 +1111,494 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (success) {
       setMessages(prev => prev.filter(msg => msg.id !== messageId));
     } else {
-      Alert.alert(t('errorTitle', lang), t('chatDeleteMessageFailed', lang));
+      showNotice('error', t('errorTitle', lang), t('chatDeleteMessageFailed', lang));
     }
   };
 
-  const showDeleteModal = React.useCallback(() => {
-    setShowDeleteIndicator(true);
-    
-    // Мягкая вибрация для появления модального окна
-    if (Platform.OS === 'ios') {
-      try {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      } catch (error) {
-        Vibration.vibrate(5);
-      }
-    } else {
-      Vibration.vibrate(40);
-    }
-    
-    // Сброс значений анимации
-    deleteModalOpacity.setValue(0);
-    deleteModalScale.setValue(0.7);
-    
+  const hideMessageActions = React.useCallback(() => {
     Animated.parallel([
-      Animated.timing(deleteModalOpacity, {
-        toValue: 1,
-        duration: 250,
-        useNativeDriver: true,
-      }),
-      Animated.spring(deleteModalScale, {
-        toValue: 1,
-        tension: 120,
-        friction: 7,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [deleteModalOpacity, deleteModalScale]);
-
-  const hideDeleteModal = React.useCallback(() => {
-    Animated.parallel([
-      Animated.timing(deleteModalOpacity, {
+      Animated.timing(messageActionsOpacity, {
         toValue: 0,
-        duration: 200,
+        duration: 160,
         useNativeDriver: true,
       }),
-      Animated.timing(deleteModalScale, {
-        toValue: 0.7,
-        duration: 200,
+      Animated.timing(messageActionsTranslateY, {
+        toValue: 30,
+        duration: 160,
         useNativeDriver: true,
       }),
     ]).start(() => {
-      setShowDeleteIndicator(false);
-      setSelectedMessage(null);
+      setShowMessageActions(false);
     });
-  }, [deleteModalOpacity, deleteModalScale]);
+  }, [messageActionsOpacity, messageActionsTranslateY]);
+
+  const showMessageActionsSheet = React.useCallback(() => {
+    setShowMessageActions(true);
+
+    // Haptics on open
+    if (Platform.OS === 'ios') {
+      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(5); }
+    } else {
+      Vibration.vibrate(30);
+    }
+
+    messageActionsOpacity.setValue(0);
+    messageActionsTranslateY.setValue(30);
+    Animated.parallel([
+      Animated.timing(messageActionsOpacity, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+      Animated.timing(messageActionsTranslateY, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [messageActionsOpacity, messageActionsTranslateY]);
+
+  const confirmDeleteSelectedMessage = React.useCallback((m: any) => {
+    if (!m?.id) return;
+    // Закрываем нижний sheet (если открыт), чтобы не было наложений
+    try { hideMessageActions(); } catch {}
+    pendingDeleteRef.current = m;
+    setDeleteConfirmVisible(true);
+  }, [deleteSingleMessage]);
+
+  const copySelectedMessage = React.useCallback(async (m: any) => {
+    const text = String(m?.text ?? '').trim();
+    if (!text) return;
+    try {
+      await Clipboard.setStringAsync(text);
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
+    } catch {}
+  }, []);
+
+  const showForwardToastBadge = React.useCallback((ok: boolean, text: string) => {
+    setForwardToast({ visible: true, ok, text });
+    forwardToastOpacity.setValue(0);
+    Animated.timing(forwardToastOpacity, {
+      toValue: 1,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+    setTimeout(() => {
+      Animated.timing(forwardToastOpacity, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+      }).start(() => {
+        setForwardToast((p) => ({ ...p, visible: false }));
+      });
+    }, 1400);
+  }, [forwardToastOpacity]);
+
+  const openForwardPicker = React.useCallback(async () => {
+    setShowForwardPicker(true);
+    setForwardLoading(true);
+    try {
+      // Грузим ВСЕХ друзей (страницами), чтобы список был полный
+      const all: any[] = [];
+      const seen = new Set<string>();
+      let page = 1;
+      const limit = 50;
+      // Safety cap: не зацикливаться, если сервер вернул некорректную пагинацию
+      for (let i = 0; i < 20; i++) {
+        const res: any = await fetchFriends(page, limit);
+        const list = Array.isArray(res?.list) ? res.list : [];
+        for (const f of list) {
+          const id = String(f?._id || '').trim();
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          all.push(f);
+        }
+        const hasMore = !!res?.pagination?.hasMore;
+        if (!hasMore || list.length === 0) break;
+        page += 1;
+      }
+      setForwardFriends(all);
+    } catch {
+      setForwardFriends([]);
+    } finally {
+      setForwardLoading(false);
+    }
+  }, []);
+
+  const forwardSelectedMessageTo = React.useCallback(async (friend: any) => {
+    try {
+      const to = String(friend?._id || '').trim();
+      if (!to) return;
+
+      setShowForwardPicker(false);
+      hideMessageActions();
+
+      // Если включён режим выбора — пересылаем все выбранные ТЕКСТОВЫЕ сообщения
+      if (selectionMode) {
+        const selectedTexts = messages
+          .filter((m) => selectedMessageIds.has(String(m?.id || '')))
+          .filter((m) => String(m?.type || '') === 'text' && String(m?.text || '').trim())
+          .map((m) => String(m.text).trim());
+
+        if (selectedTexts.length === 0) {
+          setNoticeKind('info');
+          setNoticeTitle('Пересылка');
+          setNoticeMessage('Нет текстовых сообщений для пересылки.');
+          setNoticeVisible(true);
+          return;
+        }
+
+        let okCount = 0;
+        for (const txt of selectedTexts) {
+          const r: any = await sendSocketMessage({ to, text: txt, type: 'text' });
+          if (r?.ok) okCount += 1;
+        }
+
+        setSelectionMode(false);
+        setSelectedMessageIds(new Set());
+        showForwardToastBadge(okCount > 0, okCount > 0 ? 'Отправлено' : 'Не удалось отправить');
+        return;
+      }
+
+      // Обычный режим — пересылаем одно выбранное сообщение
+      const txt = String(selectedMessage?.text ?? '').trim();
+      if (!txt) return;
+      const r: any = await sendSocketMessage({ to, text: txt, type: 'text' });
+      showForwardToastBadge(!!r?.ok, r?.ok ? 'Отправлено' : 'Не удалось отправить');
+    } catch {}
+  }, [selectedMessage, hideMessageActions, showForwardToastBadge, selectionMode, messages, selectedMessageIds]);
+
+  const exitSelectionMode = React.useCallback(() => {
+    setSelectionMode(false);
+    setSelectedMessageIds(new Set());
+  }, []);
+
+  const toggleSelectMessage = React.useCallback((id: string) => {
+    const mid = String(id || '').trim();
+    if (!mid) return;
+    setSelectedMessageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(mid)) next.delete(mid);
+      else next.add(mid);
+      return next;
+    });
+  }, []);
+
+  const enterSelectionModeFromMessage = React.useCallback((m: any) => {
+    const mid = String(m?.id || '').trim();
+    setSelectionMode(true);
+    setSelectedMessageIds(() => {
+      const next = new Set<string>();
+      if (mid) next.add(mid);
+      return next;
+    });
+    // Закрываем sheet, если он был открыт
+    try { hideMessageActions(); } catch {}
+  }, [hideMessageActions]);
+
+  const closeDeleteConfirm = React.useCallback(() => {
+    setDeleteConfirmVisible(false);
+    pendingDeleteRef.current = null;
+  }, []);
+
+  const confirmDeleteNow = React.useCallback(() => {
+    const m = pendingDeleteRef.current;
+    const id = String(m?.id || '').trim();
+    setDeleteConfirmVisible(false);
+    pendingDeleteRef.current = null;
+    if (!id) return;
+    void deleteSingleMessage(id);
+  }, [deleteSingleMessage]);
+
+  const closeNotice = React.useCallback(() => {
+    setNoticeVisible(false);
+  }, []);
+
+  const showNotice = React.useCallback(
+    (kind: 'error' | 'info', title: string, message: string) => {
+      setNoticeKind(kind);
+      setNoticeTitle(title);
+      setNoticeMessage(message);
+      setNoticeVisible(true);
+    },
+    [],
+  );
+
+  const openConfirm = React.useCallback(
+    (opts: {
+      title: string;
+      message: string;
+      okText: string;
+      cancelText: string;
+      destructive?: boolean;
+      onConfirm: () => void;
+    }) => {
+      setConfirmTitle(opts.title);
+      setConfirmMessage(opts.message);
+      setConfirmOkText(opts.okText);
+      setConfirmCancelText(opts.cancelText);
+      setConfirmDestructive(!!opts.destructive);
+      onConfirmRef.current = opts.onConfirm;
+      setConfirmVisible(true);
+    },
+    [],
+  );
+
+  const closeConfirm = React.useCallback(() => {
+    setConfirmVisible(false);
+    onConfirmRef.current = null;
+  }, []);
+
+  const runConfirm = React.useCallback(() => {
+    const fn = onConfirmRef.current;
+    setConfirmVisible(false);
+    onConfirmRef.current = null;
+    try { fn?.(); } catch {}
+  }, []);
+
+  const selectedCount = selectedMessageIds.size;
+  const selectedHasAnyText = React.useMemo(() => {
+    if (!selectionMode || selectedMessageIds.size === 0) return false;
+    // Пересылаем только текстовые сообщения
+    for (const m of messages) {
+      const id = String(m?.id || '').trim();
+      if (!id) continue;
+      if (!selectedMessageIds.has(id)) continue;
+      if (String(m?.type || '') === 'text' && String(m?.text || '').trim()) return true;
+    }
+    return false;
+  }, [selectionMode, selectedMessageIds, messages]);
+
+  const selectAllLoaded = React.useCallback(() => {
+    setSelectedMessageIds(new Set(messages.map((m) => String(m?.id || '')).filter(Boolean)));
+  }, [messages]);
+
+  const batchDeleteSelected = React.useCallback(async () => {
+    const ids = Array.from(selectedMessageIds);
+    if (ids.length === 0) return;
+
+    const failed: string[] = [];
+    for (const id of ids) {
+      try {
+        const ok = await deleteMessage(String(id));
+        if (ok) {
+          setMessages((prev) => prev.filter((mm) => String(mm?.id) !== String(id)));
+        } else {
+          failed.push(String(id));
+        }
+      } catch {
+        failed.push(String(id));
+      }
+    }
+
+    if (failed.length === 0) {
+      exitSelectionMode();
+      showForwardToastBadge(true, 'Удалено');
+      return;
+    }
+
+    // Оставляем выделенными только те, что не удалились (можно повторить)
+    setSelectedMessageIds(new Set(failed));
+    showNotice('error', t('errorTitle', lang), `Не удалось удалить: ${failed.length}`);
+  }, [selectedMessageIds, exitSelectionMode, showForwardToastBadge, showNotice, lang]);
+
+  const confirmDeleteSelected = React.useCallback(() => {
+    if (selectedCount === 0) return;
+    openConfirm({
+      title: 'Удалить сообщения?',
+      message: selectedCount === 1 ? 'Удалить выбранное сообщение?' : `Удалить выбранные сообщения: ${selectedCount}?`,
+      okText: 'Удалить',
+      cancelText: 'Отмена',
+      destructive: true,
+      onConfirm: () => {
+        void batchDeleteSelected();
+      },
+    });
+  }, [selectedCount, openConfirm, batchDeleteSelected]);
+
+  const startForwardSelected = React.useCallback(() => {
+    if (selectedCount === 0) return;
+    if (!selectedHasAnyText) {
+      showNotice('info', 'Пересылка', 'Можно переслать только текстовые сообщения.');
+      return;
+    }
+    void openForwardPicker();
+  }, [selectedCount, selectedHasAnyText, showNotice, openForwardPicker]);
+
+  // КРИТИЧНО: Header нельзя объявлять как "новую функцию" на каждый рендер,
+  // иначе шапка (и аватар) будут размонтироваться на каждый ввод в TextInput.
+  const Header = React.useCallback(() => (
+    <View
+      style={{
+        height: headerH,
+        backgroundColor: LIVI.bg,
+        borderBottomWidth: BORDER_WIDTH,
+        borderBottomColor: BORDER_COLOR,
+        flexDirection: "row",
+        alignItems: "center",
+        paddingHorizontal: 12,
+      }}
+    >
+      <TouchableOpacity
+        onPress={() => {
+          if (selectionMode) exitSelectionMode();
+          else navigation.goBack();
+        }}
+        activeOpacity={0.85}
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 14,
+          backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
+          borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
+          borderWidth: 1,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Ionicons name={selectionMode ? "close" : "arrow-back"} size={20} color={LIVI.titan} />
+      </TouchableOpacity>
+
+      <View style={{ flex: 1, alignItems: "center" }}>
+        <Text style={{ color: LIVI.white, fontSize: 18, fontWeight: "700" }}>
+          {selectionMode ? `Выбрано: ${selectedCount}` : peerNameState}
+        </Text>
+        {!selectionMode && (
+          <Text style={{ marginTop: 2, fontSize: 12, color: peerOnline ? LIVI.green : LIVI.red, fontWeight: "600" }}>
+            {peerOnline ? "Online" : "Offline"}
+          </Text>
+        )}
+      </View>
+
+      {selectionMode ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity
+            onPress={selectAllLoaded}
+            activeOpacity={0.85}
+            style={{
+              height: 36,
+              paddingHorizontal: 10,
+              borderRadius: 14,
+              backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
+              borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
+              borderWidth: 1,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text style={{ color: LIVI.titan, fontSize: 13, fontWeight: '600' }}>Все</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={startForwardSelected}
+            activeOpacity={0.85}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 14,
+              backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
+              borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
+              borderWidth: 1,
+              alignItems: "center",
+              justifyContent: "center",
+              opacity: selectedCount === 0 ? 0.45 : 1,
+            }}
+          >
+            <Ionicons name="paper-plane-outline" size={18} color={LIVI.titan} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={confirmDeleteSelected}
+            activeOpacity={0.85}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 14,
+              backgroundColor: isDark ? "rgba(255,90,103,0.14)" : "rgba(255,90,103,0.12)",
+              borderColor: 'rgba(255,90,103,0.35)',
+              borderWidth: 1,
+              alignItems: "center",
+              justifyContent: "center",
+              opacity: selectedCount === 0 ? 0.45 : 1,
+            }}
+          >
+            <Ionicons name="trash-outline" size={18} color="#FF5A67" />
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <AvatarImage
+          userId={peerId}
+          avatarVer={peerAvatarVerState}
+          uri={fullAvatarUri || undefined}
+          size={36}
+          fallbackText={headerInitial}
+          containerStyle={{ backgroundColor: 'rgba(255,255,255,0.12)' }}
+        />
+      )}
+    </View>
+  ), [
+    headerH,
+    LIVI.bg,
+    LIVI.white,
+    LIVI.titan,
+    LIVI.green,
+    LIVI.red,
+    BORDER_WIDTH,
+    BORDER_COLOR,
+    navigation,
+    isDark,
+    (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
+    peerNameState,
+    peerOnline,
+    peerId,
+    peerAvatarVerState,
+    fullAvatarUri,
+    headerInitial,
+    selectionMode,
+    selectedCount,
+    exitSelectionMode,
+    selectAllLoaded,
+    startForwardSelected,
+    confirmDeleteSelected,
+  ]);
 
   // Stable handler to avoid re-rendering all MessageItem rows on parent re-renders
   const handleLongPressMessage = React.useCallback(
     (m: any) => {
       setSelectedMessage(m);
-      showDeleteModal();
+
+      const isImage = String(m?.type || '') === 'image';
+      const options = isImage
+        ? ['Выбрать', 'Удалить', 'Отмена']
+        : ['Копировать', 'Переслать', 'Выбрать', 'Удалить', 'Отмена'];
+
+      const cancelButtonIndex = options.length - 1;
+      const destructiveButtonIndex = options.indexOf('Удалить');
+
+      if (Platform.OS === 'ios') {
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            options,
+            cancelButtonIndex,
+            destructiveButtonIndex,
+            userInterfaceStyle: 'dark',
+          },
+          (buttonIndex) => {
+            const picked = options[buttonIndex];
+            if (picked === 'Отмена') return;
+            if (picked === 'Удалить') return confirmDeleteSelectedMessage(m);
+            if (picked === 'Копировать') return void copySelectedMessage(m);
+            if (picked === 'Переслать') return void openForwardPicker();
+            if (picked === 'Выбрать') return void enterSelectionModeFromMessage(m);
+          }
+        );
+        return;
+      }
+
+      // Android: custom bottom sheet (чтобы не перекрывать экран большой модалкой)
+      showMessageActionsSheet();
     },
-    [showDeleteModal]
+    [confirmDeleteSelectedMessage, copySelectedMessage, openForwardPicker, showMessageActionsSheet]
   );
 
   // Функция для получения анимации сообщения (стабильная ссылка, чтобы не ломать мемоизацию)
@@ -1348,15 +1769,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         }
       );
     } else {
-      Alert.alert(
-        t('attachFileTitle', lang),
-        t('attachFileMsg', lang),
-        [
-          { text: t('takePhoto', lang), onPress: handleCamera },
-          { text: t('chooseFromGallery', lang), onPress: handleImagePicker },
-          { text: t('cancel', lang), style: 'cancel' }
-        ]
-      );
+      setShowAttachSheet(true);
     }
   };
 
@@ -1453,7 +1866,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     try {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert(t('errorTitle', lang), t('needCameraPermission', lang));
+        showNotice('error', t('errorTitle', lang), t('needCameraPermission', lang));
         return;
       }
 
@@ -1470,7 +1883,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
     } catch (error) {
       console.error('Camera error:', error);
-      Alert.alert(t('errorTitle', lang), t('takePhotoFailed', lang));
+      showNotice('error', t('errorTitle', lang), t('takePhotoFailed', lang));
     }
   };
 
@@ -1478,7 +1891,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert(t('errorTitle', lang), t('needGalleryPermission', lang));
+        showNotice('error', t('errorTitle', lang), t('needGalleryPermission', lang));
         return;
       }
 
@@ -1495,14 +1908,14 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
     } catch (error) {
       console.error('Image picker error:', error);
-      Alert.alert(t('errorTitle', lang), t('pickImageFailed', lang));
+      showNotice('error', t('errorTitle', lang), t('pickImageFailed', lang));
     }
   };
 
 
   // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
   // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
-  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onLongPressMessage }: any) => {
+  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onLongPressMessage, selectionMode, isSelected, onToggleSelect }: any) => {
     const [imageLoadError, setImageLoadError] = React.useState(false);
     const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
     const [isDownloading, setIsDownloading] = React.useState(false);
@@ -1614,6 +2027,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                     onPressImage('image', imageUri, item.name);
                   });
                 }}
+                onLongPress={() => {
+                  animateMessagePress(item.id, () => {
+                    onLongPressMessage(item);
+                  });
+                }}
                 activeOpacity={0.9}
               >
                 <Ionicons name="image-outline" size={40} color="rgba(255,255,255,0.5)" />
@@ -1648,6 +2066,11 @@ export default function ChatScreen({ route, navigation }: Props) {
               onPress={() => {
                 animateMessagePress(item.id, () => {
                   onPressImage('image', imageUri, item.name);
+                });
+              }}
+              onLongPress={() => {
+                animateMessagePress(item.id, () => {
+                  onLongPressMessage(item);
                 });
               }}
               activeOpacity={0.9}
@@ -1901,6 +2324,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     };
 
     const messageAnimation = getMessageAnimation(item.id);
+    const canToggle = !!selectionMode;
 
     return (
       <Animated.View
@@ -1909,19 +2333,48 @@ export default function ChatScreen({ route, navigation }: Props) {
           marginHorizontal: 16,
           marginVertical: 4,
           alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
-          maxWidth: '80%',
+          // row, чтобы чекбокс был рядом с облаком и по центру по высоте
+          flexDirection: 'row',
+          alignItems: 'center',
+          // чуть шире, т.к. добавляется чекбокс
+          maxWidth: '92%',
         }}
       >
+        {/* Чекбокс выбора (режим "Выбрать") — рядом с облаком и по центру */}
+        {selectionMode && !isMyMessage && (
+          <Pressable
+            onPress={() => onToggleSelect?.(String(item.id))}
+            style={({ pressed }) => ({
+              width: 26,
+              height: 26,
+              borderRadius: 13,
+              borderWidth: 1.5,
+              borderColor: isSelected ? '#55d187' : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
+              backgroundColor: pressed
+                ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
+                : (isSelected ? 'rgba(85,209,135,0.18)' : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginRight: 10,
+              overflow: 'hidden',
+            })}
+          >
+            {isSelected ? <Ionicons name="checkmark" size={18} color="#55d187" /> : null}
+          </Pressable>
+        )}
+
         <TouchableOpacity
           onPress={() => {
+            if (canToggle) {
+              onToggleSelect?.(String(item.id));
+              return;
+            }
             animateMessagePress(item.id);
           }}
           onLongPress={() => {
-            if (isMyMessage) {
-              animateMessagePress(item.id, () => {
-                onLongPressMessage(item);
-              });
-            }
+            animateMessagePress(item.id, () => {
+              onLongPressMessage(item);
+            });
           }}
           activeOpacity={0.7}
           style={{
@@ -1930,6 +2383,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             borderRadius: 16,
             borderWidth: 1,
             borderColor: BORDER_COLOR,
+            maxWidth: '80%',
           }}
         >
         {/* Основной контент */}
@@ -1940,7 +2394,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           <Text style={{ 
             color: LIVI.white, 
             fontSize: 16, 
-            marginBottom: 8,
+            // меньше воздуха между текстом и временем
+            marginBottom: 3,
             lineHeight: 22,
             fontWeight: '400',
           }}>
@@ -1953,7 +2408,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           flexDirection: 'row', 
           alignItems: 'center', 
           justifyContent: 'flex-end',
-          marginTop: item.type !== 'text' ? 4 : 2,
+          marginTop: item.type !== 'text' ? 4 : 1,
         }}>
           <Text style={{ 
             color: LIVI.text, 
@@ -1967,6 +2422,28 @@ export default function ChatScreen({ route, navigation }: Props) {
           {renderStatusIcons()}
         </View>
         </TouchableOpacity>
+
+        {selectionMode && isMyMessage && (
+          <Pressable
+            onPress={() => onToggleSelect?.(String(item.id))}
+            style={({ pressed }) => ({
+              width: 26,
+              height: 26,
+              borderRadius: 13,
+              borderWidth: 1.5,
+              borderColor: isSelected ? '#55d187' : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
+              backgroundColor: pressed
+                ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
+                : (isSelected ? 'rgba(85,209,135,0.18)' : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginLeft: 10,
+              overflow: 'hidden',
+            })}
+          >
+            {isSelected ? <Ionicons name="checkmark" size={18} color="#55d187" /> : null}
+          </Pressable>
+        )}
       </Animated.View>
     );
   }), [
@@ -1979,6 +2456,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     LIVI.white,
     LIVI.titan,
     LIVI.red,
+    isDark,
   ]);
 
   // КРИТИЧНО: на каждый ввод нельзя пересоздавать массив data для FlatList,
@@ -1997,8 +2475,11 @@ export default function ChatScreen({ route, navigation }: Props) {
       uploadStatus={uploadStatus[item.id]}
       onPressImage={openMediaViewer}
       onLongPressMessage={handleLongPressMessage}
+      selectionMode={selectionMode}
+      isSelected={selectedMessageIds.has(String(item.id))}
+      onToggleSelect={toggleSelectMessage}
     />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, handleLongPressMessage]);
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, handleLongPressMessage, selectionMode, selectedMessageIds, toggleSelectMessage]);
 
   return (
     <SafeAreaView 
@@ -2058,46 +2539,63 @@ export default function ChatScreen({ route, navigation }: Props) {
               style={{ flex: 1 }}
               contentContainerStyle={{ 
                 flexGrow: 1,
-                justifyContent: isEmpty ? 'center' : 'flex-end',
+                justifyContent: showEmpty ? 'center' : 'flex-end',
                 paddingVertical: 16,
                 paddingBottom: 12,
               }}
-              ListFooterComponent={TypingIndicator ? (
+              ListFooterComponent={GapCenterIndicator ? (
                 <View style={{ height: 24, justifyContent: 'center', alignItems: 'center' }}>
-                  {TypingIndicator}
+                  {GapCenterIndicator}
                 </View>
               ) : null}
               showsVerticalScrollIndicator={false}
               inverted={false}
               onContentSizeChange={() => setTimeout(() => scrollToBottom(), 0)}
-              ListEmptyComponent={() => (
-                <View
-                  style={{
-                    flex: 1,
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    backgroundColor: LIVI.surface,
-                    ...(Platform.OS === 'ios' ? {} : { transform: [{ scaleY: -1 }] }),
-                  }}
-                >
-                  <Ionicons
-                    name="chatbubble-outline"
-                    size={64}
-                    color={isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)'}
-                  />
-                  <Text
+              ListEmptyComponent={() => {
+                if (!historyReady) {
+                  return (
+                    <View
+                      style={{
+                        flex: 1,
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        backgroundColor: LIVI.surface,
+                      }}
+                    >
+                      <ActivityIndicator color={LIVI.titan} />
+                    </View>
+                  );
+                }
+                if (!showEmpty) return null;
+                return (
+                  <View
                     style={{
-                      color: isDark ? 'rgba(255,255,255,0.65)' : 'rgba(0,0,0,0.55)',
-                      fontSize: 18,
-                      marginTop: 16,
-                      textAlign: 'center',
-                      fontWeight: '500',
+                      flex: 1,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      backgroundColor: LIVI.surface,
+                      ...(Platform.OS === 'ios' ? {} : { transform: [{ scaleY: -1 }] }),
                     }}
                   >
-                    Начните общение с {peerNameParam}
-                  </Text>
-                </View>
-              )}
+                    <Ionicons
+                      name="chatbubble-outline"
+                      size={64}
+                      color={isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)'}
+                    />
+                    <Text
+                      style={{
+                        color: isDark ? 'rgba(255,255,255,0.65)' : 'rgba(0,0,0,0.55)',
+                        fontSize: 18,
+                        marginTop: 16,
+                        textAlign: 'center',
+                        fontWeight: '500',
+                      }}
+                    >
+                      Начните общение с {peerNameParam}
+                    </Text>
+                  </View>
+                );
+              }}
             />
             {/* Поле ввода для iOS */}
             <View
@@ -2195,7 +2693,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              inverted={!isEmpty}
+              inverted={!showEmpty}
               maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
               ListHeaderComponent={!isEmpty ? () => (
                 <View
@@ -2211,7 +2709,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 >
                   {/* ВАЖНО: сам spacer живёт "под" инпутом (его цель — добавить padding),
                       поэтому текст нужно рисовать в верхней (видимой) части spacer-а. */}
-                  {TypingIndicator ? (
+                  {GapCenterIndicator ? (
                     <View
                       pointerEvents="none"
                       style={{
@@ -2224,38 +2722,55 @@ export default function ChatScreen({ route, navigation }: Props) {
                         alignItems: 'center',
                       }}
                     >
-                      {TypingIndicator}
+                      {GapCenterIndicator}
                     </View>
                   ) : null}
                 </View>
               ) : null}
-              ListEmptyComponent={() => (
-                <View
-                  style={{
-                    flex: 1,
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    backgroundColor: LIVI.surface,
-                  }}
-                >
-                  <Ionicons
-                    name="chatbubble-outline"
-                    size={64}
-                    color={isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)'}
-                  />
-                  <Text
+              ListEmptyComponent={() => {
+                if (!historyReady) {
+                  return (
+                    <View
+                      style={{
+                        flex: 1,
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        backgroundColor: LIVI.surface,
+                      }}
+                    >
+                      <ActivityIndicator color={LIVI.titan} />
+                    </View>
+                  );
+                }
+                if (!showEmpty) return null;
+                return (
+                  <View
                     style={{
-                      color: isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)',
-                      fontSize: 18,
-                      marginTop: 16,
-                      textAlign: 'center',
-                      fontWeight: '500',
+                      flex: 1,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      backgroundColor: LIVI.surface,
                     }}
                   >
-                    Начните общение с {peerNameParam}
-                  </Text>
-                </View>
-              )}
+                    <Ionicons
+                      name="chatbubble-outline"
+                      size={64}
+                      color={isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)'}
+                    />
+                    <Text
+                      style={{
+                        color: isDark ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)',
+                        fontSize: 18,
+                        marginTop: 16,
+                        textAlign: 'center',
+                        fontWeight: '500',
+                      }}
+                    >
+                      Начните общение с {peerNameParam}
+                    </Text>
+                  </View>
+                );
+              }}
             />
 
             {/* Поле ввода для Android: поднимаем над клавиатурой, если система не ресайзит окно */}
@@ -2505,100 +3020,603 @@ export default function ChatScreen({ route, navigation }: Props) {
           </View>
         </View>
       )}
-      {/* Модальное окно для удаления сообщения */}
-      {showDeleteIndicator && selectedMessage && (
-        <Animated.View style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.6)',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 1001,
-          opacity: deleteModalOpacity,
-        }}>
-          <Animated.View style={{
-            backgroundColor: LIVI.surface,
-            borderRadius: 16,
-            padding: 20,
-            margin: 18,
-            minWidth: 200,
-            borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.15)',
-            transform: [{ scale: deleteModalScale }],
-            alignItems: 'center',
-            shadowColor: '#000',
-            shadowOffset: {
-              width: 0,
-              height: 6,
-            },
-            shadowOpacity: 0.25,
-            shadowRadius: 8,
-            elevation: 6,
-          }}>
-            <Text style={{
-              color: LIVI.white,
-              fontSize: 16,
-              fontWeight: '700',
-              textAlign: 'center',
-              marginBottom: 18,
-            }}>
-              Удалить сообщение?
-            </Text>
-            
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 22 }}>
-             {/* Cancel (X) */}
-              <TouchableOpacity
-                onPress={hideDeleteModal}
-                activeOpacity={0.85}
+
+      {/* Android: bottom sheet с действиями над сообщением */}
+      {Platform.OS === 'android' && showMessageActions && selectedMessage && (
+        <Modal
+          transparent
+          visible={showMessageActions}
+          animationType="none"
+          onRequestClose={hideMessageActions}
+        >
+          <Pressable
+            onPress={hideMessageActions}
+            style={{
+              flex: 1,
+              backgroundColor: isDark ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.40)',
+              justifyContent: 'flex-end',
+            }}
+          >
+            <Animated.View
+              style={{
+                opacity: messageActionsOpacity,
+                transform: [{ translateY: messageActionsTranslateY }],
+              }}
+            >
+              <Pressable
+                onPress={() => {}}
                 style={{
-                  width: 52,
-                  height: 52,
-                  borderRadius: 26,
-                  backgroundColor: isDark
-                    ? 'rgba(255,255,255,0.08)'     // тёмная тема — как было
-                    : 'rgba(0,0,0,0.09)',          // светлая — чуть темнее фон
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderWidth: 1,
-                  borderColor: isDark
-                    ? 'rgba(255,255,255,0.2)'
-                    : 'rgba(0,0,0,0.1)',
+                  backgroundColor: isDark ? '#0F1626' : LIVI.surface,
+                  borderTopLeftRadius: 20,
+                  borderTopRightRadius: 20,
+                  paddingTop: 8,
+                  paddingBottom: ANDROID_SHEET_BOTTOM_PAD,
+                  paddingHorizontal: 14,
+                  // убираем тонкую линию сверху — она отличается по девайсам и выглядит как артефакт
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: -6 },
+                  shadowOpacity: 0.20,
+                  shadowRadius: 12,
+                  elevation: 12,
                 }}
               >
-                <Ionicons
-                  name="close"
-                  size={22}
-                  color={isDark ? LIVI.white : 'rgba(0,0,0,0.8)'}
-                />
-              </TouchableOpacity>
-              
-              {/* Confirm (check) */}
-              <TouchableOpacity
-                onPress={() => {
-                  hideDeleteModal();
-                  deleteSingleMessage(selectedMessage.id);
-                }}
-                activeOpacity={0.85}
-                style={{
-                  width: 52,
-                  height: 52,
-                  borderRadius: 26,
-                  backgroundColor: 'rgba(71, 207, 115, 0.18)',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderWidth: 2,
-                  borderColor: 'rgba(71, 207, 115, 0.35)'
-                }}
-              >
-                <Ionicons name="checkmark" size={22} color="#47CF73" />
-              </TouchableOpacity>
-            </View>
-          </Animated.View>
-        </Animated.View>
+                {/* handle */}
+                <View style={{ alignItems: 'center', paddingTop: 4, paddingBottom: 8 }}>
+                  <View
+                    style={{
+                      width: 42,
+                      height: 4,
+                      borderRadius: 2,
+                      backgroundColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.18)',
+                    }}
+                  />
+                </View>
+
+                {String(selectedMessage?.type || '') !== 'image' && String(selectedMessage?.text || '').trim() && (
+                  <>
+                    <Pressable
+                      onPress={() => {
+                        hideMessageActions();
+                        void copySelectedMessage(selectedMessage);
+                      }}
+                      style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingVertical: 14,
+                        paddingHorizontal: 12,
+                        borderRadius: 14,
+                        overflow: 'hidden',
+                        backgroundColor: pressed
+                          ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
+                          : 'transparent',
+                      })}
+                    >
+                      <Ionicons name="copy-outline" size={20} color={LIVI.titan} />
+                      <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
+                        Копировать
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      onPress={() => {
+                        hideMessageActions();
+                        void openForwardPicker();
+                      }}
+                      style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingVertical: 14,
+                        paddingHorizontal: 12,
+                        borderRadius: 14,
+                        overflow: 'hidden',
+                        marginTop: 2,
+                        backgroundColor: pressed
+                          ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
+                          : 'transparent',
+                      })}
+                    >
+                      <Ionicons name="paper-plane-outline" size={20} color={LIVI.titan} />
+                      <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
+                        Переслать
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      onPress={() => {
+                        enterSelectionModeFromMessage(selectedMessage);
+                      }}
+                      style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingVertical: 14,
+                        paddingHorizontal: 12,
+                        borderRadius: 14,
+                        overflow: 'hidden',
+                        marginTop: 2,
+                        backgroundColor: pressed
+                          ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
+                          : 'transparent',
+                      })}
+                    >
+                      <Ionicons name="checkbox-outline" size={20} color={LIVI.titan} />
+                      <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
+                        Выбрать
+                      </Text>
+                    </Pressable>
+
+                    <View style={{ height: 10 }} />
+                  </>
+                )}
+
+                {String(selectedMessage?.type || '') === 'image' && (
+                  <>
+                    <Pressable
+                      onPress={() => {
+                        enterSelectionModeFromMessage(selectedMessage);
+                      }}
+                      style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingVertical: 14,
+                        paddingHorizontal: 12,
+                        borderRadius: 14,
+                        overflow: 'hidden',
+                        marginBottom: 10,
+                        backgroundColor: pressed
+                          ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
+                          : 'transparent',
+                      })}
+                    >
+                      <Ionicons name="checkbox-outline" size={20} color={LIVI.titan} />
+                      <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
+                        Выбрать
+                      </Text>
+                    </Pressable>
+                  </>
+                )}
+
+                <Pressable
+                  onPress={() => {
+                    hideMessageActions();
+                    confirmDeleteSelectedMessage(selectedMessage);
+                  }}
+                  style={({ pressed }) => ({
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: 14,
+                    paddingHorizontal: 12,
+                    borderRadius: 14,
+                    overflow: 'hidden',
+                    backgroundColor: pressed
+                      ? 'rgba(255,90,103,0.10)'
+                      : (isDark ? 'rgba(255,90,103,0.06)' : 'rgba(255,90,103,0.07)'),
+                    borderWidth: 1,
+                    borderColor: 'rgba(255,90,103,0.22)',
+                  })}
+                >
+                  <Ionicons name="trash-outline" size={20} color="#FF5A67" />
+                  <Text style={{ color: '#FF5A67', fontSize: 16, fontWeight: '700', marginLeft: 12 }}>
+                    Удалить
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={hideMessageActions}
+                  style={({ pressed }) => ({
+                    marginTop: 10,
+                    paddingVertical: 14,
+                    paddingHorizontal: 12,
+                    borderRadius: 14,
+                    overflow: 'hidden',
+                    backgroundColor: pressed
+                      ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)')
+                      : (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'),
+                    borderWidth: 1,
+                    borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
+                    alignItems: 'center',
+                  })}
+                >
+                  <Text style={{ color: LIVI.titan, fontSize: 16, fontWeight: '600', textAlign: 'center' }}>
+                    Отмена
+                  </Text>
+                </Pressable>
+              </Pressable>
+            </Animated.View>
+          </Pressable>
+        </Modal>
       )}
+
+      {/* Android: bottom sheet для выбора вложений (камера/галерея) */}
+      {Platform.OS === 'android' && showAttachSheet && (
+        <Modal
+          transparent
+          visible={showAttachSheet}
+          animationType="none"
+          onRequestClose={() => setShowAttachSheet(false)}
+        >
+          <Pressable
+            onPress={() => setShowAttachSheet(false)}
+            style={{
+              flex: 1,
+              backgroundColor: isDark ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.40)',
+              justifyContent: 'flex-end',
+            }}
+          >
+            <Animated.View style={{ opacity: 1, transform: [{ translateY: 0 }] }}>
+              <Pressable
+                onPress={() => {}}
+                style={{
+                  backgroundColor: isDark ? '#0F1626' : LIVI.surface,
+                  borderTopLeftRadius: 20,
+                  borderTopRightRadius: 20,
+                  paddingTop: 8,
+                  paddingBottom: ANDROID_SHEET_BOTTOM_PAD,
+                  paddingHorizontal: 14,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: -6 },
+                  shadowOpacity: 0.20,
+                  shadowRadius: 12,
+                  elevation: 12,
+                }}
+              >
+                <View style={{ alignItems: 'center', paddingTop: 4, paddingBottom: 8 }}>
+                  <View
+                    style={{
+                      width: 42,
+                      height: 4,
+                      borderRadius: 2,
+                      backgroundColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.18)',
+                    }}
+                  />
+                </View>
+
+                <Pressable
+                  onPress={() => {
+                    setShowAttachSheet(false);
+                    void handleCamera();
+                  }}
+                  style={({ pressed }) => ({
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: 14,
+                    paddingHorizontal: 12,
+                    borderRadius: 14,
+                    overflow: 'hidden',
+                    backgroundColor: pressed
+                      ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
+                      : 'transparent',
+                  })}
+                >
+                  <Ionicons name="camera-outline" size={20} color={LIVI.titan} />
+                  <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
+                    {t('takePhoto', lang)}
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => {
+                    setShowAttachSheet(false);
+                    void handleImagePicker();
+                  }}
+                  style={({ pressed }) => ({
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: 14,
+                    paddingHorizontal: 12,
+                    borderRadius: 14,
+                    overflow: 'hidden',
+                    marginTop: 2,
+                    backgroundColor: pressed
+                      ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
+                      : 'transparent',
+                  })}
+                >
+                  <Ionicons name="images-outline" size={20} color={LIVI.titan} />
+                  <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
+                    {t('chooseFromGallery', lang)}
+                  </Text>
+                </Pressable>
+
+                <View style={{ height: 10 }} />
+
+                <Pressable
+                  onPress={() => setShowAttachSheet(false)}
+                  style={({ pressed }) => ({
+                    paddingVertical: 14,
+                    borderRadius: 14,
+                    overflow: 'hidden',
+                    backgroundColor: pressed
+                      ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)')
+                      : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
+                  })}
+                >
+                  <Text style={{ color: LIVI.titan, fontSize: 16, fontWeight: '600', textAlign: 'center' }}>
+                    {t('cancel', lang)}
+                  </Text>
+                </Pressable>
+              </Pressable>
+            </Animated.View>
+          </Pressable>
+        </Modal>
+      )}
+
+      {/* Переслать: выбор друга */}
+      {showForwardPicker && (selectedMessage || selectionMode) && (
+        <Modal
+          transparent
+          visible={showForwardPicker}
+          animationType="fade"
+          onRequestClose={() => setShowForwardPicker(false)}
+        >
+          <Pressable
+            onPress={() => setShowForwardPicker(false)}
+            style={{ flex: 1, backgroundColor: isDark ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.40)', justifyContent: 'flex-end' }}
+          >
+            <Pressable
+              onPress={() => {}}
+              style={{
+                backgroundColor: isDark ? '#0F1626' : LIVI.surface,
+                borderTopLeftRadius: 20,
+                borderTopRightRadius: 20,
+                paddingTop: 8,
+                paddingHorizontal: 14,
+                paddingBottom: ANDROID_SHEET_BOTTOM_PAD,
+                // убираем тонкую линию сверху — выглядит как артефакт на некоторых девайсах
+                maxHeight: '70%',
+              }}
+            >
+              <View style={{ alignItems: 'center', paddingTop: 4, paddingBottom: 8 }}>
+                <View
+                  style={{
+                    width: 42,
+                    height: 4,
+                    borderRadius: 2,
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.18)',
+                  }}
+                />
+              </View>
+              <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700', textAlign: 'center', marginBottom: 10 }}>
+                Переслать…
+              </Text>
+
+              {forwardLoading ? (
+                <View style={{ paddingVertical: 18, alignItems: 'center' }}>
+                  <ActivityIndicator />
+                </View>
+              ) : (
+                <FlatList
+                  data={forwardFriends}
+                  keyExtractor={(it: any) => String(it?._id || Math.random())}
+                  showsVerticalScrollIndicator={false}
+                  renderItem={({ item }) => (
+                    <Pressable
+                      onPress={() => void forwardSelectedMessageTo(item)}
+                      style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingVertical: 10,
+                        paddingHorizontal: 8,
+                        borderRadius: 14,
+                        overflow: 'hidden', // чтобы ripple/подсветка были только со скруглением
+                        // На некоторых Android ripple рисуется квадратом поверх скругления,
+                        // поэтому используем только нашу подсветку через backgroundColor.
+                        backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.10)' : 'rgba(123,97,255,0.08)') : 'transparent',
+                      })}
+                    >
+                      <AvatarImage
+                        userId={String(item._id)}
+                        avatarVer={Number(item.avatarVer || 0)}
+                        uri={item.avatarThumbB64 || undefined}
+                        size={44}
+                        fallbackText={String((item.nick || '--').trim()?.[0] || '--').toUpperCase()}
+                        containerStyle={{
+                          borderWidth: 1,
+                          borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
+                          overflow: 'hidden',
+                        }}
+                        fallbackTextStyle={{ color: LIVI.white, fontSize: 16 }}
+                      />
+                      <View style={{ marginLeft: 12, flex: 1 }}>
+                        <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600' }}>
+                          {(item.nick && String(item.nick).trim()) || '—'}
+                        </Text>
+                        {typeof item.online === 'boolean' && (
+                          <Text style={{ color: item.online ? '#55d187' : 'rgba(255,255,255,0.45)', fontSize: 12 }}>
+                            {item.online ? 'Online' : 'Offline'}
+                          </Text>
+                        )}
+                      </View>
+                      <Ionicons name="chevron-forward" size={18} color={LIVI.titan} />
+                    </Pressable>
+                  )}
+                  ItemSeparatorComponent={() => (
+                    <View style={{ height: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }} />
+                  )}
+                  ListEmptyComponent={() => (
+                    <View style={{ paddingVertical: 18, alignItems: 'center' }}>
+                      <Text style={{ color: LIVI.titan, textAlign: 'center' }}>Нет друзей для пересылки</Text>
+                    </View>
+                  )}
+                />
+              )}
+
+              <View style={{ height: 10 }} />
+              <TouchableOpacity
+                onPress={() => setShowForwardPicker(false)}
+                style={{
+                  paddingVertical: 14,
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+                  borderRadius: 12,
+                }}
+                activeOpacity={0.85}
+              >
+                <Text style={{ color: LIVI.titan, fontSize: 16, fontWeight: '600', textAlign: 'center' }}>
+                  Отмена
+                </Text>
+              </TouchableOpacity>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      )}
+
+      {/* "Отправлено" теперь показывается в том же gap, что и "Печатает..." */}
+
+      {/* Кастомное подтверждение удаления сообщения (вместо Alert) */}
+      <Modal
+        visible={deleteConfirmVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeDeleteConfirm}
+      >
+        <Pressable
+          onPress={closeDeleteConfirm}
+          style={{
+            flex: 1,
+            backgroundColor: isDark ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.38)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+          }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              width: '100%',
+              maxWidth: 380,
+              borderRadius: 18,
+              // Светлая тема: оставляем как есть. Тёмная: фирменный LiVi background (без серого оттенка).
+              backgroundColor: isDark ? LIVI.bg : 'rgba(255,255,255,0.98)',
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
+              overflow: 'hidden',
+            }}
+          >
+            <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
+              <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
+                Удалить сообщение?
+              </Text>
+              <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
+                Это действие нельзя отменить.
+              </Text>
+            </View>
+
+            <View
+              style={{
+                height: StyleSheet.hairlineWidth,
+                backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
+              }}
+            />
+
+            <View style={{ flexDirection: 'row', padding: 12, gap: 10 }}>
+              <Pressable
+                onPress={closeDeleteConfirm}
+                style={({ pressed }) => ({
+                  flex: 1,
+                  paddingVertical: 12,
+                  borderRadius: 14,
+                  alignItems: 'center',
+                  backgroundColor: pressed
+                    ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
+                    : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
+                })}
+              >
+                <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '600' }}>Отмена</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={confirmDeleteNow}
+                style={({ pressed }) => ({
+                  flex: 1,
+                  paddingVertical: 12,
+                  borderRadius: 14,
+                  alignItems: 'center',
+                  backgroundColor: pressed ? 'rgba(255,90,103,0.26)' : 'rgba(255,90,103,0.18)',
+                  borderWidth: StyleSheet.hairlineWidth,
+                  borderColor: 'rgba(255,90,103,0.45)',
+                })}
+              >
+                <Text style={{ color: '#FF5A67', fontSize: 15, fontWeight: '700' }}>Удалить</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Кастомный алерт/ошибка (в тех же цветах LiVi) */}
+      <Modal
+        visible={noticeVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeNotice}
+      >
+        <Pressable
+          onPress={closeNotice}
+          style={{
+            flex: 1,
+            backgroundColor: isDark ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.38)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+          }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              width: '100%',
+              maxWidth: 380,
+              borderRadius: 18,
+              backgroundColor: isDark ? LIVI.bg : 'rgba(255,255,255,0.98)',
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
+              overflow: 'hidden',
+            }}
+          >
+            <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons
+                  name={noticeKind === 'error' ? 'alert-circle-outline' : 'information-circle-outline'}
+                  size={18}
+                  color={noticeKind === 'error' ? '#FF5A67' : LIVI.titan}
+                  style={{ marginRight: 10 }}
+                />
+                <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700', flex: 1 }}>
+                  {noticeTitle || (noticeKind === 'error' ? t('errorTitle', lang) : '')}
+                </Text>
+              </View>
+              {!!noticeMessage && (
+                <Text style={{ marginTop: 10, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
+                  {noticeMessage}
+                </Text>
+              )}
+            </View>
+
+            <View
+              style={{
+                height: StyleSheet.hairlineWidth,
+                backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
+              }}
+            />
+
+            <View style={{ padding: 12 }}>
+              <Pressable
+                onPress={closeNotice}
+                style={({ pressed }) => ({
+                  paddingVertical: 12,
+                  borderRadius: 14,
+                  alignItems: 'center',
+                  backgroundColor: pressed
+                    ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
+                    : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
+                })}
+              >
+                <Text style={{ color: noticeKind === 'error' ? '#FF5A67' : LIVI.titan, fontSize: 15, fontWeight: '700' }}>
+                  Ок
+                </Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }

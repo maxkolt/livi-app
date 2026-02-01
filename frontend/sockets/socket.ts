@@ -41,6 +41,8 @@ export const globalMessageStorage = {
     }
   }
 };
+// Dev-only: avoid log spam for typing events
+const __devTypingLogState = new Map<string, boolean>();
 import { Platform } from "react-native";
 import { AppState, type AppStateStatus } from "react-native";
 import { getInstallId } from "../utils/installId";
@@ -1625,8 +1627,22 @@ export function sendChatTyping(payload: { to: string; typing: boolean }) {
   try {
     if (__DEV__) {
       try {
-        // Use console.log for visibility in Metro logs (logger.debug may be filtered).
-        console.log('[chat:typing] send', { to: payload.to, typing: !!payload.typing });
+        // По умолчанию выключаем спам логов typing.
+        // Если нужно включить — поставь true и получишь короткие логи только при смене состояния.
+        const DEV_LOG_CHAT_TYPING = false;
+        if (!DEV_LOG_CHAT_TYPING) {
+          // всё равно продолжаем отправлять событие
+          throw new Error('__skip_dev_typing_log__');
+        }
+        const to = String(payload.to || '');
+        const typing = !!payload.typing;
+        const key = `send:${to}`;
+        const prev = __devTypingLogState.get(key);
+        if (prev !== typing) {
+          __devTypingLogState.set(key, typing);
+          // Короткий формат: меньше шума в Metro
+          console.log(`[chat:typing] send ${typing ? '1' : '0'} -> ${to}`);
+        }
       } catch {}
     }
     socket.emit('chat:typing', { to: payload.to, typing: !!payload.typing });
@@ -1639,11 +1655,19 @@ export function onChatTyping(
   const h = (data: any) => {
     if (__DEV__) {
       try {
-        console.log('[chat:typing] recv', {
-          from: String(data?.from || ''),
-          to: String(data?.to || ''),
-          typing: !!data?.typing,
-        });
+        const DEV_LOG_CHAT_TYPING = false;
+        if (!DEV_LOG_CHAT_TYPING) {
+          throw new Error('__skip_dev_typing_log__');
+        }
+        const from = String(data?.from || '');
+        const to = String(data?.to || '');
+        const typing = !!data?.typing;
+        const key = `recv:${from}->${to}`;
+        const prev = __devTypingLogState.get(key);
+        if (prev !== typing) {
+          __devTypingLogState.set(key, typing);
+          console.log(`[chat:typing] recv ${typing ? '1' : '0'} ${from} -> ${to}`);
+        }
       } catch {}
     }
     cb(data);

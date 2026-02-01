@@ -4346,8 +4346,11 @@ const styles = StyleSheet.create({
   topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
   brand: { color: LIVI.text, fontSize: Platform.OS === "ios" ? 39 : 30, fontWeight: Platform.OS === "ios" ? '600' : '800', letterSpacing: 0.3, paddingHorizontal: Platform.OS === "android" ? 10 : 0 },
   menuBtn: { backgroundColor: LIVI.glass, borderRadius: 14 },
-  listRow: { backgroundColor: 'transparent', paddingVertical: 10, paddingRight: 8 },
-  listRowAligned: { alignItems: 'center', paddingLeft: 0, paddingRight: 8, minHeight: 72 },
+  // Симметричные отступы: левый край -> аватар = правый край -> иконка чата.
+  // Горизонтальные отступы задаются contentContainerStyle у FlatList (paddingHorizontal: 16),
+  // поэтому не добавляем дополнительный paddingRight на уровне строки.
+  listRow: { backgroundColor: 'transparent', paddingVertical: 10, paddingRight: 0 },
+  listRowAligned: { alignItems: 'center', paddingLeft: 0, paddingRight: 0, minHeight: 72 },
   nameCol: { marginLeft: 0, justifyContent: 'center' },
   friendName: {
     color: LIVI.white,
@@ -4423,7 +4426,7 @@ const styles = StyleSheet.create({
   segActiveBg: { backgroundColor: 'rgba(157, 161, 169, 0.11)' },
   segTopShadow: { position: 'absolute', top: 0, left: 0, right: 0, height: 0 },
 
-  rowRightActions: { height: 48, flexDirection: 'row', alignItems: 'center', paddingRight: 1 },
+  rowRightActions: { height: 48, flexDirection: 'row', alignItems: 'center', paddingRight: 0 },
   friendSeparator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.10)',
