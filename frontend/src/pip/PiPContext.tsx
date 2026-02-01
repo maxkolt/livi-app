@@ -3,7 +3,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import type { PropsWithChildren } from 'react';
 import { AppState } from 'react-native';
 import { CommonActions } from '@react-navigation/native';
-import socket from '../../sockets/socket';
+import socket, { onConnected } from '../../sockets/socket';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
 
@@ -108,6 +108,33 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   // guard от двойной навигации
   const navigatingRef = useRef(false);
+
+  /**
+   * КРИТИЧНО (фикс): когда VideoCall экран размонтирован (мы ушли в меню/друзья, а звонок продолжает жить в PiP),
+   * при реконнекте сокета `socket.data.busy` на сервере сбрасывается в дефолт (false), и друзья видят пользователя
+   * как НЕ занятого. Поэтому, пока PiP видим и у нас есть call/room id, поддерживаем presence busy из PiPContext
+   * и переотправляем его при connect.
+   *
+   * Важно: здесь НЕ отправляем status:'online' при hidePiP(), чтобы не "мигать" статусом при возврате на экран звонка.
+   * Снятие busy происходит на сервере при завершении звонка (call:end/call:ended) и/или экраном звонка.
+   */
+  const sendPresenceBusyFromPiP = useCallback(() => {
+    if (!visible) return;
+    const rid = String(roomId || callId || '').trim();
+    if (!rid) return;
+    try {
+      socket.emit('presence:update', { status: 'busy', roomId: rid });
+    } catch {}
+  }, [visible, roomId, callId]);
+
+  useEffect(() => {
+    if (!visible) return;
+    // первичная отправка при показе PiP + при изменении callId/roomId
+    sendPresenceBusyFromPiP();
+    // переотправка при реконнекте сокета (часто в PiP/фон в релизе)
+    const off = onConnected(() => sendPresenceBusyFromPiP());
+    return () => { try { off?.(); } catch {} };
+  }, [visible, callId, roomId, sendPresenceBusyFromPiP]);
 
   // ====== VAD отключен ======
   // VAD полностью отключен для уменьшения нагрузки

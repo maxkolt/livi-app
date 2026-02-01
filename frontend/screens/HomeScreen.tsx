@@ -4427,8 +4427,8 @@ const styles = StyleSheet.create({
   friendSeparator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.10)',
-    marginLeft: 8,
-    marginRight: 8,
+    marginLeft: 4,
+    marginRight: 4,
   },
 
   actionBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
