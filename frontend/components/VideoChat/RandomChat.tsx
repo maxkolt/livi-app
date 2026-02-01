@@ -460,9 +460,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           // КРИТИЧНО: Сохраняем состояние камеры партнера для правильного отображения заглушки
           remoteCamStateKnownRef.current = true;
           setRemoteCamEnabled(enabled);
-          // КРИТИЧНО: LiveKit часто переиспользует тот же MediaStream при toggle камеры.
-          // На части Android/iOS RTCView может "залипнуть" в черном экране без смены key.
-          setRemoteViewKey((k: number) => k + 1);
+          // ВАЖНО: Не дергаем remoteViewKey из UI.
+          // Сессия сама эмитит remoteViewKeyChanged при необходимости — иначе на Android легко получить мерцания из-за remount RTCView.
           logger.debug('[RandomChat] Remote camera state changed', { enabled });
         },
         onLoadingChange: (loading) => {
@@ -565,9 +564,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     session.on('remoteStream', (stream) => {
       remoteStreamRef.current = stream || null;
 
-      // Always bump key to force a re-render even if LiveKit reuses the same MediaStream instance.
-      setRemoteViewKey((k: number) => k + 1);
-
       if (stream) {
         setRemoteStream(stream);
         setRemoteMuted(false);
@@ -603,7 +599,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setRemoteMuted(false);
       remoteCamStateKnownRef.current = false;
       setRemoteCamEnabled(false);
-      setRemoteViewKey((k: number) => k + 1);
     });
     
     session.on('searching', () => {

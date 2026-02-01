@@ -730,7 +730,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                 prevVideoReady,
                 newVideoReady
               });
-              setRemoteViewKey((k: number) => k + 1);
             }
             remoteStreamRef.current = stream;
             return;
@@ -753,7 +752,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             setWasFriendCallEnded(false);
             setStarted(true);
             setLoading(false);
-            setRemoteViewKey((k: number) => k + 1);
           } else {
             setRemoteMuted(false);
             remoteStreamReceivedAtRef.current = null;
@@ -827,11 +825,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           });
           remoteCamStateKnownRef.current = true;
           setRemoteCamOn(enabled);
-          // КРИТИЧНО: При возврате из PiP обновляем remoteViewKey для принудительной перерисовки
-          if (enabled && !partnerInPiP) {
-            setRemoteViewKey(Date.now());
-            logger.info('[VideoCall] ✅ Обновлен remoteViewKey после onRemoteCamStateChange(true)');
-          }
+          // ВАЖНО: Не дергаем remoteViewKey из UI.
+          // Этим управляет сессия через событие remoteViewKeyChanged, иначе на Android легко получить мерцания из-за частых remount RTCView.
         },
         // Эквалайзер отключен
         onMicLevelChange: () => {},
@@ -1286,8 +1281,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
         
         setRemoteCamOn(true);
-        setRemoteViewKey(Date.now());
-        logger.info('[VideoCall] ✅ Обновлен remoteViewKey после возврата партнера из PiP');
+        // remoteViewKey управляется сессией (remoteViewKeyChanged). Здесь избегаем лишних принудительных remount.
       }
     };
 
@@ -1320,7 +1314,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         setWasFriendCallEnded(false);
         setStarted(true);
         setLoading(false);
-        setRemoteViewKey((k: number) => k + 1);
       } else {
         remoteStreamReceivedAtRef.current = null;
       }
@@ -1866,8 +1859,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               });
             }
             
-            // Для удалённого видео делаем только форс-перерисовку (без изменения enabled/remoteCamOn).
-            setRemoteViewKey(Date.now());
+            // Для удалённого видео НЕ делаем принудительную перерисовку через remoteViewKey —
+            // это источник мерцаний (RTCView remount). Сессия сама эмитит remoteViewKeyChanged при необходимости.
           } catch (e) {
             logger.warn('[VideoCall] Error enabling video tracks:', e);
           }
@@ -1882,8 +1875,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               if (remoteViewKeyFromSession !== undefined) {
                 setRemoteViewKey(remoteViewKeyFromSession);
               } else {
-                // Fallback: обновляем remoteViewKey если его нет в session
-                setRemoteViewKey(Date.now());
+                // Fallback: если сессия не отдает ключ, не форсим его здесь — лучше избежать RTCView remount bursts.
               }
               setTimeout(() => { pipReturnUpdateRef.current = false; }, 100);
             }

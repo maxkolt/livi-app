@@ -156,7 +156,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       });
     }
     return stream;
-  }, [remoteStream, remoteViewKey]);
+  }, [remoteStream]);
 
 
   // Сообщаем о готовности стрима
@@ -168,25 +168,50 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // КРИТИЧНО: На Android нужен force-update для RTCView при изменении стрима
   const [forceUpdateKey, setForceUpdateKey] = useState(0);
+  const lastForceUpdateAtRef = useRef<number>(0);
+  const lastForceUpdateIdsRef = useRef<{ streamId: string | null; trackId: string | null }>({
+    streamId: null,
+    trackId: null,
+  });
+  const streamToUseVideoTrackId = streamToUse
+    ? ((streamToUse as any)?.getVideoTracks?.()?.[0]?.id ?? null)
+    : null;
   
   useEffect(() => {
-    if (Platform.OS === 'android' && streamToUse) {
-      const videoTrack = (streamToUse as any)?.getVideoTracks?.()?.[0];
-      // На Android используем stream prop, поэтому проверяем только наличие трека
-      if (videoTrack && videoTrack.readyState === 'live') {
-        setForceUpdateKey((prev) => {
-          const next = prev + 1;
-          logger.info('[RemoteVideo] Android: force-update RTCView', {
-            streamId: streamToUse.id,
-            trackId: videoTrack.id,
-            trackEnabled: videoTrack.enabled,
-            key: next,
-          });
-          return next;
-        });
-      }
+    if (Platform.OS !== 'android') return;
+    if (!streamToUse) return;
+
+    const videoTrack = (streamToUse as any)?.getVideoTracks?.()?.[0] || null;
+    if (!videoTrack) return;
+    if (videoTrack.readyState !== 'live') return;
+
+    const streamId = streamToUse.id;
+    const trackId = videoTrack.id || null;
+    const prev = lastForceUpdateIdsRef.current;
+    const idsChanged = prev.streamId !== streamId || prev.trackId !== trackId;
+    if (!idsChanged) return;
+
+    // Prevent rapid RTCView remount bursts (main source of black flicker on Android).
+    const now = Date.now();
+    if (now - lastForceUpdateAtRef.current < 250) {
+      // Still update refs so the next allowed bump applies to the latest ids.
+      lastForceUpdateIdsRef.current = { streamId, trackId };
+      return;
     }
-  }, [streamToUse?.id, remoteViewKey]);
+    lastForceUpdateAtRef.current = now;
+    lastForceUpdateIdsRef.current = { streamId, trackId };
+
+    setForceUpdateKey((prevKey) => {
+      const next = prevKey + 1;
+      logger.info('[RemoteVideo] Android: force-update RTCView', {
+        streamId,
+        trackId,
+        trackEnabled: videoTrack.enabled,
+        key: next,
+      });
+      return next;
+    });
+  }, [streamToUse?.id, streamToUseVideoTrackId]);
 
   // Управление аудио треками под mute/unmute
   useEffect(() => {

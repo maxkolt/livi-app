@@ -1836,10 +1836,11 @@ export class RandomChatSession extends SimpleEventEmitter {
           newTrackId: newVideoTrack?.sid || newVideoTrack?.mediaStreamTrack?.id,
         });
       } else if (!this.isVideoTrackPublished(newVideoTrack)) {
-        await this.room.localParticipant.publishTrack(newVideoTrack);
-        logger.info('[RandomChatSession] Published new video track', {
-          trackId: newVideoTrack?.sid || newVideoTrack?.mediaStreamTrack?.id,
-        });
+        // В некоторых сборках RN livekit-client `replaceTrack` недоступен.
+        // Тогда publishTrack может оставить старую camera публикацию и привести к
+        // "publishing a second track with the same source: camera".
+        // Используем единый безопасный путь с агрессивным cleanup.
+        await this.publishVideoTrackIfRoomActive(true);
       }
     } catch (e) {
       logger.warn('[RandomChatSession] Failed to replace/publish video track', e);
@@ -1908,8 +1909,9 @@ export class RandomChatSession extends SimpleEventEmitter {
     // Reset attempts on a fresh schedule
     if (this.localVideoHealthAttempts > 3) this.localVideoHealthAttempts = 0;
 
-    // При форсировании (обычно toggleCam ON) проверяем максимально быстро, чтобы быстрее восстановить видео.
-    const delayMs = this.isLocalVideoWatchdogForced() ? 350 : 2800;
+    // При форсировании (обычно toggleCam ON) проверяем быстрее, но НЕ сразу после publish,
+    // иначе на ряде девайсов getTrackStats может еще показывать 0 и мы поймаем false-positive ("гирлянда").
+    const delayMs = this.isLocalVideoWatchdogForced() ? 1800 : 2800;
 
     this.localVideoHealthTimeout = setTimeout(() => {
       void this.runLocalVideoHealthCheckOnce(context);
@@ -1958,7 +1960,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       if (!this.localVideoTrack || this.localVideoTrack.mediaStreamTrack?.readyState === 'ended') return;
 
       // Avoid endless loops
-      if (this.localVideoHealthAttempts >= 2) return;
+      if (this.localVideoHealthAttempts >= 3) return;
 
       const getStats = async () => {
         const stats = await (this.room?.localParticipant as any)?.getTrackStats?.();
@@ -1967,8 +1969,9 @@ export class RandomChatSession extends SimpleEventEmitter {
       };
 
       const a = await getStats().catch(() => ({ frames: 0, bytes: 0, packets: 0 }));
-      // Быстрый 2-sample чек после включения камеры: не ждем 1.2с, чтобы UI не "висел" в черном.
-      const sampleDelay = this.isLocalVideoWatchdogForced() ? 450 : 1200;
+      // 2-sample чек. В forced-режиме даём больше времени, чтобы снизить false-positive
+      // на старте publish/renegotiation (особенно на Samsung/Android 13+).
+      const sampleDelay = this.isLocalVideoWatchdogForced() ? 1400 : 1200;
       await new Promise((r) => setTimeout(r, sampleDelay));
       const b = await getStats().catch(() => ({ frames: 0, bytes: 0, packets: 0 }));
 
@@ -1979,6 +1982,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       const stuck = framesDelta <= 0 && bytesDelta <= 5120 && packetsDelta <= 0; // no meaningful progress
       if (!stuck) {
         // healthy; schedule next check on future state changes only
+        this.localVideoHealthAttempts = 0;
         return;
       }
 
@@ -1992,6 +1996,13 @@ export class RandomChatSession extends SimpleEventEmitter {
         roomState: this.room.state,
         camSide: this.camSide,
       });
+
+      // First stuck signal can be a stats false-positive right after publish.
+      // Do a retry before we do a disruptive recovery (which causes renegotiation and remote black flicker).
+      if (this.localVideoHealthAttempts < 2) {
+        this.scheduleLocalVideoHealthCheck(`${context}:retry`);
+        return;
+      }
 
       await this.recoverLocalVideoTrack('stuck');
     } catch (e) {
@@ -2746,7 +2757,11 @@ export class RandomChatSession extends SimpleEventEmitter {
     await this.publishAudioTrackIfRoomActive(true);
 
     // 🩺 Android 8.1 / OPPO: watchdog — если видео "залипло" (есть трек, но не идут кадры), пересоздаем автоматически.
-    this.scheduleLocalVideoHealthCheck('connectToLiveKit:post-publish');
+    // ВАЖНО: не форсим watchdog на всех девайсах (на новых Samsung это дает false-positive и вызывает "гирлянду").
+    if (this.shouldRunLocalVideoWatchdog()) {
+      this.forceLocalVideoWatchdog(6500);
+      this.scheduleLocalVideoHealthCheck('connectToLiveKit:post-publish');
+    }
 
     /*
      * Legacy path (оставлено для истории): прямой publish приводил к дубликатам source
