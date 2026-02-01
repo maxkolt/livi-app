@@ -138,13 +138,11 @@ function AppContent() {
   // Настройка навигационной панели на Android для edge-to-edge
   React.useEffect(() => {
     if (Platform.OS === 'android') {
-      // Имитируем системный "затемнённый прозрачный" navbar как в dev:
-      // bar поверх контента + полупрозрачный тёмный фон + светлые иконки.
-      const bg = 'rgba(0,0,0,0.22)';
-      NavigationBar.setPositionAsync('absolute').catch(() => {});
-      NavigationBar.setBackgroundColorAsync(bg);
-      NavigationBar.setButtonStyleAsync('light');
-      NavigationBar.setBorderColorAsync(bg).catch(() => {});
+      // ВНИМАНИЕ:
+      // При включённом edge-to-edge expo-navigation-bar выводит WARN для setPositionAsync/setBackgroundColorAsync/setBorderColorAsync.
+      // Мы переносим цвета в app.json (через плагин expo-navigation-bar), а в рантайме меняем только стиль кнопок.
+      // Это убирает WARN и не ломает UI.
+      NavigationBar.setButtonStyleAsync(isDark ? 'light' : 'dark').catch(() => {});
     }
   }, [isDark]);
   

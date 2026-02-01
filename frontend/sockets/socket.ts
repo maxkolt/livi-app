@@ -1621,6 +1621,39 @@ export function sendReadReceipt(messageId: string, from: string) {
   socket.emit('message:read', { messageId, from });
 }
 
+export function sendChatTyping(payload: { to: string; typing: boolean }) {
+  try {
+    if (__DEV__) {
+      try {
+        // Use console.log for visibility in Metro logs (logger.debug may be filtered).
+        console.log('[chat:typing] send', { to: payload.to, typing: !!payload.typing });
+      } catch {}
+    }
+    socket.emit('chat:typing', { to: payload.to, typing: !!payload.typing });
+  } catch {}
+}
+
+export function onChatTyping(
+  cb: (data: { from: string; to: string; typing: boolean; ts?: string }) => void
+): () => void {
+  const h = (data: any) => {
+    if (__DEV__) {
+      try {
+        console.log('[chat:typing] recv', {
+          from: String(data?.from || ''),
+          to: String(data?.to || ''),
+          typing: !!data?.typing,
+        });
+      } catch {}
+    }
+    cb(data);
+  };
+  socket.on('chat:typing', h);
+  return () => {
+    socket.off('chat:typing', h);
+  };
+}
+
 // Новая функция для получения сообщений
 export function fetchMessages(payload: {
   with: string;

@@ -41,6 +41,8 @@ import { CometChat } from "@cometchat/chat-sdk-react-native";
 import { 
   getMyUserId,
   sendMessage as sendSocketMessage,
+  sendChatTyping,
+  onChatTyping,
   onMessageReceived,
   onMessageReadReceipt,
   markMessagesAsRead,
@@ -134,6 +136,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [inputHeight, setInputHeight] = useState(0);
   const [messageText, setMessageText] = useState("");
+  const [peerTyping, setPeerTyping] = useState(false);
+  const [peerTypingDots, setPeerTypingDots] = useState(1);
   const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
   const [uploadStatus, setUploadStatus] = useState<Record<string, 'sending' | 'sent' | 'failed'>>({});
   const [showClearMenu, setShowClearMenu] = useState(false);
@@ -285,7 +289,126 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Фактический подъём панели над клавиатурой:
   // lift = keyboardInset - (на сколько система уже ужала контейнер)
   const systemResizeDelta = keyboardVisible ? Math.max(0, baseRootLayoutHRef.current - rootLayoutH) : 0;
-  const keyboardLift = keyboardVisible ? Math.max(0, keyboardInset - systemResizeDelta) : 0;
+  // Android: если система реально ресайзит окно (adjustResize), панель должна "лежать" на клавиатуре
+  // без какого-либо bottom-offset (иначе появится воздух). Если система НЕ ресайзит — поднимаем сами.
+  const isAndroidResizeMode =
+    Platform.OS === 'android' && keyboardVisible && systemResizeDelta > 80; // 80px threshold to avoid jitter
+  const keyboardLift =
+    Platform.OS === 'android'
+      ? (keyboardVisible ? (isAndroidResizeMode ? 0 : Math.max(0, keyboardInset)) : 0)
+      : (keyboardVisible ? Math.max(0, keyboardInset - systemResizeDelta) : 0);
+
+  // ===== Typing indicator (peer + local) =====
+  // Высота видимого зазора между последним сообщением и верхом инпута (сюда ставим "Печатает...")
+  const TYPING_GAP_H = 17;
+  const peerTypingHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const localTypingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const localTypingActiveRef = useRef(false);
+  const lastTypingSentAtRef = useRef(0);
+
+  const stopLocalTyping = React.useCallback(() => {
+    if (localTypingStopTimerRef.current) {
+      clearTimeout(localTypingStopTimerRef.current);
+      localTypingStopTimerRef.current = null;
+    }
+    if (localTypingActiveRef.current) {
+      localTypingActiveRef.current = false;
+      try {
+        if (peerId) sendChatTyping({ to: peerId, typing: false });
+      } catch {}
+    }
+  }, [peerId]);
+
+  const signalLocalTyping = React.useCallback(() => {
+    if (!peerId) return;
+    const now = Date.now();
+    // Throttle "typing:true" to avoid spamming the socket
+    if (!localTypingActiveRef.current || now - lastTypingSentAtRef.current > 900) {
+      lastTypingSentAtRef.current = now;
+      localTypingActiveRef.current = true;
+      try {
+        sendChatTyping({ to: peerId, typing: true });
+      } catch {}
+    }
+    if (localTypingStopTimerRef.current) clearTimeout(localTypingStopTimerRef.current);
+    localTypingStopTimerRef.current = setTimeout(() => {
+      stopLocalTyping();
+    }, 2000);
+  }, [peerId, stopLocalTyping]);
+
+  useEffect(() => {
+    // Cleanup on unmount
+    return () => {
+      stopLocalTyping();
+      if (peerTypingHideTimerRef.current) {
+        clearTimeout(peerTypingHideTimerRef.current);
+        peerTypingHideTimerRef.current = null;
+      }
+    };
+  }, [stopLocalTyping]);
+
+  useEffect(() => {
+    // Incoming typing events from peer
+    const off = onChatTyping((data) => {
+      try {
+        const from = String((data as any)?.from || '');
+        const to = String((data as any)?.to || '');
+        const typing = !!(data as any)?.typing;
+
+        if (!from || from !== peerId) return;
+        if (currentUserId && to && to !== String(currentUserId)) return;
+
+        if (peerTypingHideTimerRef.current) {
+          clearTimeout(peerTypingHideTimerRef.current);
+          peerTypingHideTimerRef.current = null;
+        }
+
+        if (typing) {
+          setPeerTyping(true);
+          // If peer stops typing but "typing:false" is lost, hide after 2s
+          peerTypingHideTimerRef.current = setTimeout(() => {
+            setPeerTyping(false);
+          }, 2100);
+        } else {
+          setPeerTyping(false);
+        }
+      } catch {}
+    });
+    return () => {
+      off?.();
+    };
+  }, [peerId, currentUserId]);
+
+  useEffect(() => {
+    if (!peerTyping) {
+      setPeerTypingDots(1);
+      return;
+    }
+    const id = setInterval(() => {
+      setPeerTypingDots((prev) => (prev % 3) + 1);
+    }, 420);
+    return () => clearInterval(id);
+  }, [peerTyping]);
+
+  const TypingIndicator = React.useMemo(() => {
+    if (!peerTyping) return null;
+    const color = isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.40)';
+    return (
+      <View pointerEvents="none" style={{ justifyContent: 'center', alignItems: 'center' }}>
+        <Text
+          style={{
+            color,
+            fontSize: 13,
+            fontStyle: 'italic',
+            fontWeight: '500',
+            letterSpacing: 0.2,
+          }}
+        >
+          {`Печатает${'.'.repeat(peerTypingDots)}`}
+        </Text>
+      </View>
+    );
+  }, [peerTyping, peerTypingDots, isDark]);
 
   // Кэшируем миниатюру при инициализации (если передана)
   useEffect(() => {
@@ -1105,6 +1228,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     
     const messageToSend = messageText.trim();
     setMessageText(""); // Очищаем поле сразу
+    // Если отправили сообщение — прекращаем "typing"
+    stopLocalTyping();
     
     // Добавляем сообщение локально
     const messageId = Date.now().toString();
@@ -1937,6 +2062,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                 paddingVertical: 16,
                 paddingBottom: 12,
               }}
+              ListFooterComponent={TypingIndicator ? (
+                <View style={{ height: 24, justifyContent: 'center', alignItems: 'center' }}>
+                  {TypingIndicator}
+                </View>
+              ) : null}
               showsVerticalScrollIndicator={false}
               inverted={false}
               onContentSizeChange={() => setTimeout(() => scrollToBottom(), 0)}
@@ -2016,7 +2146,10 @@ export default function ChatScreen({ route, navigation }: Props) {
                   placeholder={t('chatMessagePlaceholder', lang)}
                   placeholderTextColor={LIVI.titan}
                   value={messageText}
-                  onChangeText={setMessageText}
+                  onChangeText={(txt) => {
+                    setMessageText(txt);
+                    signalLocalTyping();
+                  }}
                   multiline
                   onSubmitEditing={sendMessage}
                   returnKeyType="send"
@@ -2071,11 +2204,30 @@ export default function ChatScreen({ route, navigation }: Props) {
                     height:
                       inputHeight > 0
                         ? inputHeight +
-                          12 +
+                          TYPING_GAP_H +
                           keyboardLift
                         : 96,
                   }}
-                />
+                >
+                  {/* ВАЖНО: сам spacer живёт "под" инпутом (его цель — добавить padding),
+                      поэтому текст нужно рисовать в верхней (видимой) части spacer-а. */}
+                  {TypingIndicator ? (
+                    <View
+                      pointerEvents="none"
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        height: TYPING_GAP_H,
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                      }}
+                    >
+                      {TypingIndicator}
+                    </View>
+                  ) : null}
+                </View>
               ) : null}
               ListEmptyComponent={() => (
                 <View
@@ -2150,7 +2302,10 @@ export default function ChatScreen({ route, navigation }: Props) {
                   placeholder={t('chatMessagePlaceholder', lang)}
                   placeholderTextColor={LIVI.titan}
                   value={messageText}
-                  onChangeText={setMessageText}
+                  onChangeText={(txt) => {
+                    setMessageText(txt);
+                    signalLocalTyping();
+                  }}
                   multiline
                   onSubmitEditing={sendMessage}
                   returnKeyType="send"

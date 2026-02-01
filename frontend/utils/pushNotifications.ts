@@ -168,7 +168,21 @@ export async function registerAndSendPushToken(userId?: string) {
         }
       }
     } catch (e) {
-      logger.warn('[push] failed to get device push token', e as any);
+      // В dev окружении FCM часто не настроен (или dev-client/сборка без google-services),
+      // поэтому getDevicePushTokenAsync может падать с FirebaseApp.initializeApp.
+      // Это НЕ мешает Expo push token (ExponentPushToken[...]) и не должно спамить WARN.
+      const msg = String((e as any)?.message || e || '');
+      const looksLikeFcmSetupError =
+        msg.includes('fcm-credentials') ||
+        msg.includes('Default FirebaseApp is not initialized') ||
+        msg.includes('FirebaseApp.initializeApp');
+      if (__DEV__ && looksLikeFcmSetupError) {
+        logger.debug('[push] skipping device push token warning (FCM not configured)', {
+          message: msg.slice(0, 220),
+        });
+      } else {
+        logger.warn('[push] failed to get device push token', e as any);
+      }
     }
 
     // Получаем Expo push token

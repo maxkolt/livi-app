@@ -222,6 +222,41 @@ function registerMessageHandlers(io: Server, sock: Socket) {
   // per-socket handlers
   // console.log(`[sockets] handlers for ${sock.id} user=${meId()}`);
 
+  /** ===== Typing indicator (chat) ===== */
+  sock.on('chat:typing', async (payload: { to: string; typing: boolean }, ack?: Function) => {
+    try {
+      const me = meId();
+
+      if (!isOid(me)) {
+        return ack?.({ ok: false, error: 'unauthorized' });
+      }
+      if (!isOid(payload?.to)) {
+        return ack?.({ ok: false, error: 'invalid_to' });
+      }
+
+      // Проверяем дружбу (защита от спама)
+      const isFriend = await areFriendsCached(me, payload.to);
+      if (!isFriend) {
+        return ack?.({ ok: false, error: 'not_friends' });
+      }
+
+      // Best-effort realtime event (только если получатель онлайн)
+      try {
+        io.to(`u:${payload.to}`).emit('chat:typing', {
+          from: me,
+          to: payload.to,
+          typing: !!payload.typing,
+          ts: new Date().toISOString(),
+        });
+      } catch {}
+
+      return ack?.({ ok: true });
+    } catch (e: any) {
+      console.error('[chat:typing] error:', e?.message || e);
+      return ack?.({ ok: false, error: 'server_error' });
+    }
+  });
+
   /** ===== Отправка сообщения другу ===== */
   sock.on('message:send', async (payload: {
     to: string;
