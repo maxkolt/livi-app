@@ -31,6 +31,7 @@ import { Image as ExpoImage } from "expo-image";
 import AvatarImage from "../components/AvatarImage";
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
+import { Audio } from 'expo-av';
 import { getFull, putFull, putThumb } from '../utils/avatarCache';
  
 import { API_BASE, getMyProfile } from '../sockets/socket';
@@ -202,6 +203,25 @@ export default function ChatScreen({ route, navigation }: Props) {
     uri: string;
     name?: string;
   } | null>(null);
+
+  /* ===== Voice messages (hold-to-record) ===== */
+  const voiceRecordingRef = useRef<Audio.Recording | null>(null);
+  const voiceRecordTimerRef = useRef<any>(null);
+  const voiceStopInProgressRef = useRef(false);
+  const [voiceIsRecording, setVoiceIsRecording] = useState(false);
+  const [voiceRecordMs, setVoiceRecordMs] = useState(0);
+  const [voiceDraft, setVoiceDraft] = useState<{
+    localUri: string;
+    durationMs: number;
+    name: string;
+    size?: number;
+  } | null>(null);
+  const [voiceConfirmVisible, setVoiceConfirmVisible] = useState(false);
+  const voiceSoundRef = useRef<Audio.Sound | null>(null);
+  const [voicePreviewPlaying, setVoicePreviewPlaying] = useState(false);
+
+  const audioSoundRef = useRef<Audio.Sound | null>(null);
+  const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
 
   // Состояние для предпросмотра выбранного фото перед отправкой (без лишних Alert/ActionSheet)
   const [composeViewerVisible, setComposeViewerVisible] = useState(false);
@@ -672,6 +692,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           uri: message.uri,
           name: (message as any).name,
           size: (message as any).size,
+          duration: (message as any).duration,
           sender: isFromMe ? "me" : "peer",
           from: message.from,
           to: message.to,
@@ -922,6 +943,75 @@ export default function ChatScreen({ route, navigation }: Props) {
     logger.debug('[ChatScreen] resolveMediaUri: returning as-is', { uri: s });
     return s;
   }, []);
+
+  const formatDuration = React.useCallback((ms: number) => {
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }, []);
+
+  const stopAudioPlayback = React.useCallback(async () => {
+    try {
+      if (audioSoundRef.current) {
+        await audioSoundRef.current.stopAsync().catch(() => {});
+        await audioSoundRef.current.unloadAsync().catch(() => {});
+      }
+    } finally {
+      audioSoundRef.current = null;
+      setPlayingAudioId(null);
+    }
+  }, []);
+
+  const togglePlayAudioMessage = React.useCallback(async (m: any) => {
+    try {
+      const mid = String(m?.id || '').trim();
+      const rawUri = String(m?.uri || '').trim();
+      const uri = rawUri ? resolveMediaUri(rawUri) : '';
+      if (!mid || !uri) return;
+
+      if (playingAudioId === mid) {
+        await stopAudioPlayback();
+        return;
+      }
+
+      await stopAudioPlayback();
+
+      const { sound } = await Audio.Sound.createAsync(
+        { uri },
+        { shouldPlay: true },
+        (status) => {
+          const s: any = status as any;
+          if (s?.didJustFinish) {
+            void stopAudioPlayback();
+          }
+        }
+      );
+      audioSoundRef.current = sound;
+      setPlayingAudioId(mid);
+    } catch {
+      // ignore
+    }
+  }, [resolveMediaUri, playingAudioId, stopAudioPlayback]);
+
+  useEffect(() => {
+    return () => {
+      // cleanup sounds/recording on unmount
+      try { void stopAudioPlayback(); } catch {}
+      try {
+        if (voiceSoundRef.current) {
+          voiceSoundRef.current.stopAsync().catch(() => {});
+          voiceSoundRef.current.unloadAsync().catch(() => {});
+        }
+      } catch {}
+      try {
+        if (voiceRecordingRef.current) {
+          voiceRecordingRef.current.stopAndUnloadAsync().catch(() => {});
+        }
+      } catch {}
+      try { if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current); } catch {}
+    };
+  }, [stopAudioPlayback]);
   // КРИТИЧНО: firstLetter используется ТОЛЬКО для аватара (headerInitial), НЕ для текста
   // Для текста используем peerNameState (полный никнейм)
   const firstLetter = (s?: string) => (s?.trim()?.[0] || '').toUpperCase();
@@ -1173,7 +1263,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     const value =
       text ||
-      (type === 'image' && rawUri ? resolveMediaUri(rawUri) : '');
+      ((type === 'image' || type === 'audio') && rawUri ? resolveMediaUri(rawUri) : '');
 
     if (!value) return;
     try {
@@ -1240,14 +1330,14 @@ export default function ChatScreen({ route, navigation }: Props) {
       setShowForwardPicker(false);
       hideMessageActions();
 
-      const normalizeForwardImageUri = (u: string) => {
+      const normalizeForwardMediaUri = (u: string) => {
         const resolved = resolveMediaUri(u);
         // локальные file:// нельзя пересылать
         if (/^file:\/\//i.test(resolved)) return '';
         return resolved;
       };
 
-      // Если включён режим выбора — пересылаем все выбранные сообщения (текст + картинки)
+      // Если включён режим выбора — пересылаем все выбранные сообщения (текст + медиа)
       if (selectionMode) {
         const selected = messages.filter((m) => selectedMessageIds.has(String(m?.id || '')));
 
@@ -1259,8 +1349,12 @@ export default function ChatScreen({ route, navigation }: Props) {
             if (txt) forwardables.push({ type: 'text', text: txt });
           } else if (type === 'image') {
             const rawUri = String(m?.uri || '').trim();
-            const uri = rawUri ? normalizeForwardImageUri(rawUri) : '';
+            const uri = rawUri ? normalizeForwardMediaUri(rawUri) : '';
             if (uri) forwardables.push({ type: 'image', uri, name: m?.name, size: m?.size });
+          } else if (type === 'audio') {
+            const rawUri = String(m?.uri || '').trim();
+            const uri = rawUri ? normalizeForwardMediaUri(rawUri) : '';
+            if (uri) forwardables.push({ type: 'audio', uri, name: m?.name, size: m?.size, duration: m?.duration });
           }
         }
 
@@ -1295,7 +1389,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
       if (type === 'image') {
         const rawUri = String(selectedMessage?.uri ?? '').trim();
-        const uri = rawUri ? normalizeForwardImageUri(rawUri) : '';
+        const uri = rawUri ? normalizeForwardMediaUri(rawUri) : '';
         if (!uri) {
           setNoticeKind('info');
           setNoticeTitle('Пересылка');
@@ -1309,6 +1403,27 @@ export default function ChatScreen({ route, navigation }: Props) {
           uri,
           name: selectedMessage?.name,
           size: selectedMessage?.size,
+        });
+        showForwardToastBadge(!!r?.ok, r?.ok ? 'Отправлено' : 'Не удалось отправить');
+        return;
+      }
+      if (type === 'audio') {
+        const rawUri = String(selectedMessage?.uri ?? '').trim();
+        const uri = rawUri ? normalizeForwardMediaUri(rawUri) : '';
+        if (!uri) {
+          setNoticeKind('info');
+          setNoticeTitle('Пересылка');
+          setNoticeMessage('Это голосовое ещё не готово для пересылки.');
+          setNoticeVisible(true);
+          return;
+        }
+        const r: any = await sendSocketMessage({
+          to,
+          type: 'audio',
+          uri,
+          name: selectedMessage?.name,
+          size: selectedMessage?.size,
+          duration: selectedMessage?.duration,
         });
         showForwardToastBadge(!!r?.ok, r?.ok ? 'Отправлено' : 'Не удалось отправить');
         return;
@@ -1407,7 +1522,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const selectedCount = selectedMessageIds.size;
   const selectedHasAnyForwardable = React.useMemo(() => {
     if (!selectionMode || selectedMessageIds.size === 0) return false;
-    // Пересылаем текст и картинки
+    // Пересылаем текст и медиа
     for (const m of messages) {
       const id = String(m?.id || '').trim();
       if (!id) continue;
@@ -1415,6 +1530,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       const type = String(m?.type || '').trim();
       if (type === 'text' && String(m?.text || '').trim()) return true;
       if (type === 'image' && String(m?.uri || '').trim()) return true;
+      if (type === 'audio' && String(m?.uri || '').trim()) return true;
     }
     return false;
   }, [selectionMode, selectedMessageIds, messages]);
@@ -1469,7 +1585,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const startForwardSelected = React.useCallback(() => {
     if (selectedCount === 0) return;
     if (!selectedHasAnyForwardable) {
-      showNotice('info', 'Пересылка', 'Можно переслать только текстовые сообщения или изображения.');
+      showNotice('info', 'Пересылка', 'Можно переслать только текстовые сообщения, изображения или голосовые.');
       return;
     }
     void openForwardPicker();
@@ -1582,7 +1698,16 @@ export default function ChatScreen({ route, navigation }: Props) {
           uri={fullAvatarUri || undefined}
           size={36}
           fallbackText={headerInitial}
-          containerStyle={{ backgroundColor: 'rgba(255,255,255,0.12)' }}
+          // If no avatar: match back button background + 1px outline
+          containerStyle={
+            fullAvatarUri
+              ? undefined
+              : {
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.06)',
+                  borderWidth: 1,
+                  borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
+                }
+          }
         />
       )}
     </View>
@@ -1820,6 +1945,262 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   };
 
+  const VOICE_MAX_MS = 60_000;
+
+  const stopVoicePreview = React.useCallback(async () => {
+    try {
+      if (voiceSoundRef.current) {
+        await voiceSoundRef.current.stopAsync().catch(() => {});
+        await voiceSoundRef.current.unloadAsync().catch(() => {});
+      }
+    } finally {
+      voiceSoundRef.current = null;
+      setVoicePreviewPlaying(false);
+    }
+  }, []);
+
+  const discardVoiceDraft = React.useCallback(async () => {
+    const draft = voiceDraft;
+    setVoiceConfirmVisible(false);
+    setVoiceDraft(null);
+    setVoiceRecordMs(0);
+    await stopVoicePreview();
+    if (draft?.localUri) {
+      try { await FileSystem.deleteAsync(draft.localUri, { idempotent: true }); } catch {}
+    }
+  }, [voiceDraft, stopVoicePreview]);
+
+  const startVoiceRecording = React.useCallback(async () => {
+    try {
+      if (voiceIsRecording) return;
+      if (!currentUserId || !peerId) return;
+      if (selectionMode) return; // avoid accidental recording in select mode
+      // Close any existing preview/draft
+      await discardVoiceDraft();
+
+      const perm = await Audio.requestPermissionsAsync();
+      if (!perm.granted) {
+        showNotice('error', t('errorTitle', lang), 'Нужно разрешение на микрофон.');
+        return;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+        staysActiveInBackground: false,
+      });
+
+      const recording = new Audio.Recording();
+      voiceRecordingRef.current = recording;
+      voiceStopInProgressRef.current = false;
+      setVoiceRecordMs(0);
+      setVoiceIsRecording(true);
+
+      await recording.prepareToRecordAsync({
+        android: {
+          extension: '.m4a',
+          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder: Audio.AndroidAudioEncoder.AAC,
+          sampleRate: 44100,
+          numberOfChannels: 1,
+          bitRate: 96000,
+        },
+        ios: {
+          extension: '.m4a',
+          audioQuality: Audio.IOSAudioQuality.HIGH,
+          sampleRate: 44100,
+          numberOfChannels: 1,
+          bitRate: 96000,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat: false,
+        },
+        web: undefined as any,
+        isMeteringEnabled: false,
+      } as any);
+
+      await recording.startAsync();
+      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
+
+      if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current);
+      voiceRecordTimerRef.current = setInterval(async () => {
+        try {
+          const rec = voiceRecordingRef.current;
+          if (!rec) return;
+          const st: any = await rec.getStatusAsync();
+          const ms = Number(st?.durationMillis || 0);
+          setVoiceRecordMs(ms);
+          if (ms >= VOICE_MAX_MS) {
+            void stopVoiceRecording(true);
+          }
+        } catch {}
+      }, 160);
+    } catch {
+      setVoiceIsRecording(false);
+      voiceRecordingRef.current = null;
+    }
+  }, [voiceIsRecording, currentUserId, peerId, selectionMode, discardVoiceDraft, showNotice, lang]);
+
+  const stopVoiceRecording = React.useCallback(async (autoStopped?: boolean) => {
+    if (voiceStopInProgressRef.current) return;
+    const rec = voiceRecordingRef.current;
+    if (!rec) return;
+
+    voiceStopInProgressRef.current = true;
+    voiceRecordingRef.current = null;
+    setVoiceIsRecording(false);
+
+    try { if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current); } catch {}
+    voiceRecordTimerRef.current = null;
+
+    try {
+      await rec.stopAndUnloadAsync();
+      const uri = rec.getURI() || '';
+      const st: any = await rec.getStatusAsync().catch(() => null);
+      const durationMs = Number(st?.durationMillis || voiceRecordMs || 0);
+
+      // Very short taps shouldn't create a voice message
+      if (!uri || durationMs < 600) {
+        if (uri) {
+          try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+        }
+        setVoiceRecordMs(0);
+        return;
+      }
+
+      const info = await FileSystem.getInfoAsync(uri).catch(() => null as any);
+      const size = typeof info?.size === 'number' ? Number(info.size) : undefined;
+      const name = `voice_${Date.now()}.m4a`;
+
+      setVoiceDraft({ localUri: uri, durationMs, name, size });
+      setVoiceConfirmVisible(true);
+      if (autoStopped) {
+        try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch {}
+      }
+    } catch {
+      // ignore
+    } finally {
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+          staysActiveInBackground: false,
+        });
+      } catch {}
+      voiceStopInProgressRef.current = false;
+    }
+  }, [voiceRecordMs]);
+
+  const toggleVoicePreview = React.useCallback(async () => {
+    try {
+      if (!voiceDraft?.localUri) return;
+      if (voicePreviewPlaying) {
+        await stopVoicePreview();
+        return;
+      }
+      await stopVoicePreview();
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: voiceDraft.localUri },
+        { shouldPlay: true },
+        (status) => {
+          const s: any = status as any;
+          if (s?.didJustFinish) {
+            setVoicePreviewPlaying(false);
+          }
+        }
+      );
+      voiceSoundRef.current = sound;
+      setVoicePreviewPlaying(true);
+    } catch {}
+  }, [voiceDraft, voicePreviewPlaying, stopVoicePreview]);
+
+  const sendVoiceDraft = React.useCallback(async () => {
+    const draft = voiceDraft;
+    if (!draft || !currentUserId || !peerId) return;
+
+    setVoiceConfirmVisible(false);
+    await stopVoicePreview();
+    setVoiceDraft(null);
+
+    const messageId = Date.now().toString();
+    const durationSec = Math.max(1, Math.round(draft.durationMs / 1000));
+    const newMessage = {
+      id: messageId,
+      type: 'audio',
+      uri: draft.localUri,
+      name: draft.name,
+      size: draft.size || 0,
+      duration: durationSec,
+      sender: 'me',
+      from: currentUserId,
+      to: peerId,
+      timestamp: new Date(),
+    };
+
+    setMessages((prev) => [...prev, newMessage]);
+    updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
+
+    try {
+      setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
+      const uploadResult = await uploadMediaToServer(draft.localUri, 'audio', undefined, currentUserId, peerId);
+      if (!uploadResult.success || !uploadResult.url) {
+        updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+        setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+        return;
+      }
+
+      const socketResult: any = await sendSocketMessage({
+        to: peerId,
+        type: 'audio',
+        uri: uploadResult.url,
+        name: draft.name,
+        size: draft.size,
+        duration: durationSec,
+      });
+
+      if (socketResult?.ok && socketResult?.messageId) {
+        setMessages((prev) => {
+          const updated = prev.map((msg: any) =>
+            msg.id === messageId
+              ? { ...msg, id: socketResult.messageId!, uri: resolveMediaUri(uploadResult.url), from: currentUserId, to: peerId }
+              : msg
+          );
+          saveMessages(updated);
+          return updated;
+        });
+
+        setUploadStatus((prev) => {
+          const next = { ...prev };
+          next[socketResult.messageId!] = 'sent';
+          delete next[messageId];
+          return next;
+        });
+
+        updateReadStatuses((prev) => {
+          const next = { ...prev };
+          const delivery = socketResult.delivered ? 'delivered' : 'sent';
+          next[socketResult.messageId!] = delivery;
+          delete next[messageId];
+          return next;
+        });
+      } else {
+        updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+        setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+      }
+    } catch {
+      updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+      setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+    } finally {
+      // best-effort cleanup local file after sending
+      try { await FileSystem.deleteAsync(draft.localUri, { idempotent: true }); } catch {}
+      setVoiceRecordMs(0);
+    }
+  }, [voiceDraft, currentUserId, peerId, stopVoicePreview, resolveMediaUri, updateReadStatuses, saveMessages]);
+
   const sendPickedImage = React.useCallback(async (asset: any) => {
     if (!currentUserId || !peerId) return;
 
@@ -1962,7 +2343,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
   // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
-  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onLongPressMessage, selectionMode, isSelected, onToggleSelect }: any) => {
+  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, onLongPressMessage, selectionMode, isSelected, onToggleSelect }: any) => {
     const [imageLoadError, setImageLoadError] = React.useState(false);
     const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
     const [isDownloading, setIsDownloading] = React.useState(false);
@@ -2278,6 +2659,52 @@ export default function ChatScreen({ route, navigation }: Props) {
               )}
             </TouchableOpacity>
           );
+        case 'audio': {
+          const isPlaying = String(playingAudioId || '') === String(item.id || '');
+          const durSec = Number(item?.duration || 0);
+          const durLabel = durSec > 0 ? formatDuration(durSec * 1000) : '';
+
+          return (
+            <View
+              style={{
+                minWidth: 200,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 10,
+              }}
+            >
+              <View
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)',
+                  borderWidth: 1,
+                  borderColor: BORDER_COLOR,
+                }}
+              >
+                <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color={LIVI.white} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '600' }}>Голосовое</Text>
+                <Text style={{ marginTop: 2, color: LIVI.titan, fontSize: 12, fontWeight: '500' }}>
+                  {durLabel || '—'}
+                </Text>
+              </View>
+
+              {messageUploadStatus === 'sending' && (
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <ActivityIndicator size="small" color={LIVI.titan} />
+                </View>
+              )}
+              {messageUploadStatus === 'failed' && (
+                <Ionicons name="alert-circle" size={18} color="#FF5A67" />
+              )}
+            </View>
+          );
+        }
         default:
           return null; // Текст будет отображаться в основном блоке
       }
@@ -2416,6 +2843,12 @@ export default function ChatScreen({ route, navigation }: Props) {
               onToggleSelect?.(String(item.id));
               return;
             }
+            if (String(item?.type || '') === 'audio') {
+              animateMessagePress(item.id, () => {
+                try { onPressAudio?.(item); } catch {}
+              });
+              return;
+            }
             animateMessagePress(item.id);
           }}
           onLongPress={() => {
@@ -2495,6 +2928,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     );
   }), [
     resolveMediaUri,
+    formatDuration,
     animateMessagePress,
     getMessageAnimation,
     BUBBLE_BG_OUT,
@@ -2521,12 +2955,14 @@ export default function ChatScreen({ route, navigation }: Props) {
       readStatus={readStatuses[item.id]}
       uploadStatus={uploadStatus[item.id]}
       onPressImage={openMediaViewer}
+      onPressAudio={togglePlayAudioMessage}
+      playingAudioId={playingAudioId}
       onLongPressMessage={handleLongPressMessage}
       selectionMode={selectionMode}
       isSelected={selectedMessageIds.has(String(item.id))}
       onToggleSelect={toggleSelectMessage}
     />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, handleLongPressMessage, selectionMode, selectedMessageIds, toggleSelectMessage]);
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, handleLongPressMessage, selectionMode, selectedMessageIds, toggleSelectMessage]);
 
   return (
     <SafeAreaView 
@@ -2658,6 +3094,30 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
               onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
             >
+              {voiceIsRecording && (
+                <View style={{ alignItems: 'center', marginBottom: 10 }}>
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                      borderRadius: 14,
+                      backgroundColor: isDark ? 'rgba(255,90,103,0.14)' : 'rgba(255,90,103,0.12)',
+                      borderWidth: 1,
+                      borderColor: 'rgba(255,90,103,0.28)',
+                    }}
+                  >
+                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#FF5A67', marginRight: 8 }} />
+                    <Text style={{ color: LIVI.white, fontSize: 12, fontWeight: '700' }}>
+                      Запись {formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS))}
+                    </Text>
+                    <Text style={{ color: LIVI.titan, fontSize: 12, fontWeight: '600', marginLeft: 6 }}>
+                      / 1:00
+                    </Text>
+                  </View>
+                </View>
+              )}
               <View
                 style={{
                   flexDirection: "row",
@@ -2699,6 +3159,29 @@ export default function ChatScreen({ route, navigation }: Props) {
                   onSubmitEditing={sendMessage}
                   returnKeyType="send"
                 />
+
+                <Pressable
+                  onPressIn={() => void startVoiceRecording()}
+                  onPressOut={() => void stopVoiceRecording(false)}
+                  disabled={voiceConfirmVisible}
+                  style={({ pressed }) => ({
+                    backgroundColor: voiceIsRecording
+                      ? (pressed ? 'rgba(255,90,103,0.26)' : 'rgba(255,90,103,0.18)')
+                      : (pressed ? 'rgba(255,255,255,0.26)' : 'rgba(255,255,255,0.18)'),
+                    borderRadius: 14,
+                    padding: 6,
+                    marginLeft: 6,
+                    borderWidth: 1,
+                    borderColor: voiceIsRecording ? 'rgba(255,90,103,0.35)' : BORDER_COLOR,
+                    opacity: pressed ? 0.95 : 1,
+                  })}
+                >
+                  <Ionicons
+                    name={voiceIsRecording ? 'mic' : 'mic-outline'}
+                    size={20}
+                    color={voiceIsRecording ? '#FF5A67' : LIVI.titan}
+                  />
+                </Pressable>
 
                 <TouchableOpacity
                   onPress={sendMessage}
@@ -2838,6 +3321,30 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
               onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
             >
+              {voiceIsRecording && (
+                <View style={{ alignItems: 'center', marginBottom: 10 }}>
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                      borderRadius: 14,
+                      backgroundColor: isDark ? 'rgba(255,90,103,0.14)' : 'rgba(255,90,103,0.12)',
+                      borderWidth: 1,
+                      borderColor: 'rgba(255,90,103,0.28)',
+                    }}
+                  >
+                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#FF5A67', marginRight: 8 }} />
+                    <Text style={{ color: LIVI.white, fontSize: 12, fontWeight: '700' }}>
+                      Запись {formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS))}
+                    </Text>
+                    <Text style={{ color: LIVI.titan, fontSize: 12, fontWeight: '600', marginLeft: 6 }}>
+                      / 1:00
+                    </Text>
+                  </View>
+                </View>
+              )}
               <View
                 style={{
                   flexDirection: 'row',
@@ -2872,6 +3379,29 @@ export default function ChatScreen({ route, navigation }: Props) {
                   onSubmitEditing={sendMessage}
                   returnKeyType="send"
                 />
+
+                <Pressable
+                  onPressIn={() => void startVoiceRecording()}
+                  onPressOut={() => void stopVoiceRecording(false)}
+                  disabled={voiceConfirmVisible}
+                  style={({ pressed }) => ({
+                    backgroundColor: voiceIsRecording
+                      ? (pressed ? 'rgba(255,90,103,0.26)' : 'rgba(255,90,103,0.18)')
+                      : (pressed ? 'rgba(255,255,255,0.26)' : 'rgba(255,255,255,0.18)'),
+                    borderRadius: 14,
+                    padding: 6,
+                    marginLeft: 6,
+                    borderWidth: 1,
+                    borderColor: voiceIsRecording ? 'rgba(255,90,103,0.35)' : BORDER_COLOR,
+                    opacity: pressed ? 0.95 : 1,
+                  })}
+                >
+                  <Ionicons
+                    name={voiceIsRecording ? 'mic' : 'mic-outline'}
+                    size={20}
+                    color={voiceIsRecording ? '#FF5A67' : LIVI.titan}
+                  />
+                </Pressable>
 
                 <TouchableOpacity
                   onPress={sendMessage}
@@ -2925,6 +3455,116 @@ export default function ChatScreen({ route, navigation }: Props) {
           }
         }}
       />
+
+      {/* Голосовое: предпросмотр перед отправкой */}
+      {voiceConfirmVisible && voiceDraft && (
+        <Modal
+          visible={voiceConfirmVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => void discardVoiceDraft()}
+        >
+          <Pressable
+            onPress={() => void discardVoiceDraft()}
+            style={{
+              flex: 1,
+              backgroundColor: isDark ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.38)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 24,
+            }}
+          >
+            <Pressable
+              onPress={() => {}}
+              style={{
+                width: '100%',
+                maxWidth: 380,
+                borderRadius: 18,
+                backgroundColor: isDark ? LIVI.bg : 'rgba(255,255,255,0.98)',
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
+                overflow: 'hidden',
+              }}
+            >
+              <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
+                <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
+                  Голосовое сообщение
+                </Text>
+                <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
+                  Длительность: {formatDuration(voiceDraft.durationMs)}
+                </Text>
+
+                <View style={{ marginTop: 14, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Pressable
+                    onPress={() => void toggleVoicePreview()}
+                    style={({ pressed }) => ({
+                      width: 46,
+                      height: 46,
+                      borderRadius: 23,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: pressed
+                        ? (isDark ? 'rgba(123,97,255,0.22)' : 'rgba(123,97,255,0.18)')
+                        : (isDark ? 'rgba(123,97,255,0.16)' : 'rgba(123,97,255,0.12)'),
+                      borderWidth: StyleSheet.hairlineWidth,
+                      borderColor: 'rgba(123,97,255,0.45)',
+                    })}
+                  >
+                    <Ionicons name={voicePreviewPlaying ? 'pause' : 'play'} size={22} color={LIVI.white} />
+                  </Pressable>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '600' }}>
+                      Нажмите для прослушивания
+                    </Text>
+                    <Text style={{ marginTop: 4, color: LIVI.titan, fontSize: 12, fontWeight: '500' }}>
+                      После записи можно отправить или сбросить
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              <View
+                style={{
+                  height: StyleSheet.hairlineWidth,
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
+                }}
+              />
+
+              <View style={{ flexDirection: 'row', padding: 12, gap: 10 }}>
+                <Pressable
+                  onPress={() => void discardVoiceDraft()}
+                  style={({ pressed }) => ({
+                    flex: 1,
+                    paddingVertical: 12,
+                    borderRadius: 14,
+                    alignItems: 'center',
+                    backgroundColor: pressed
+                      ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
+                      : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
+                  })}
+                >
+                  <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '600' }}>Сбросить</Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => void sendVoiceDraft()}
+                  style={({ pressed }) => ({
+                    flex: 1,
+                    paddingVertical: 12,
+                    borderRadius: 14,
+                    alignItems: 'center',
+                    backgroundColor: pressed ? 'rgba(85,209,135,0.22)' : 'rgba(85,209,135,0.16)',
+                    borderWidth: StyleSheet.hairlineWidth,
+                    borderColor: 'rgba(85,209,135,0.45)',
+                  })}
+                >
+                  <Text style={{ color: '#55d187', fontSize: 15, fontWeight: '700' }}>Отправить</Text>
+                </Pressable>
+              </View>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      )}
       {/* Модальное окно для меню очистки чата */}
       {showClearMenu && (
         <View style={{

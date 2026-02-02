@@ -27,6 +27,7 @@ export const globalMessageStorage = {
           uri: message.uri,
           name: message.name,
           size: message.size,
+          duration: message.duration,
           sender: 'peer',
           from: message.from,
           to: message.to,
@@ -1532,10 +1533,11 @@ export function onFriendProfile(
 export function sendMessage(payload: {
   to: string;
   text?: string;
-  type: 'text' | 'image' | 'video' | 'document';
+  type: 'text' | 'image' | 'audio' | 'video' | 'document';
   uri?: string;
   name?: string;
   size?: number;
+  duration?: number;
 }) {
   // Ограничиваем типы сообщений для новой системы
   const messageType = payload.type === 'video' || payload.type === 'document' ? 'text' : payload.type;
@@ -1543,7 +1545,7 @@ export function sendMessage(payload: {
   const viaSocket = () =>
     emitAck<{ ok: boolean; messageId?: string; timestamp?: Date; delivered?: boolean; error?: string }>(
       'message:send',
-      { to: payload.to, text: payload.text, type: messageType, uri: payload.uri }
+      { to: payload.to, text: payload.text, type: messageType, uri: payload.uri, name: payload.name, size: payload.size, duration: payload.duration }
     );
 
   const viaHttp = async () => {
@@ -1559,7 +1561,7 @@ export function sendMessage(payload: {
       const res = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ to: payload.to, text: payload.text, type: messageType, uri: payload.uri }),
+        body: JSON.stringify({ to: payload.to, text: payload.text, type: messageType, uri: payload.uri, name: payload.name, size: payload.size, duration: payload.duration }),
         signal: controller.signal,
       });
       if (!res.ok) {

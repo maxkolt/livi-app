@@ -44,6 +44,7 @@ async function getOrCreateFriendship(user1Id: string, user2Id: string): Promise<
         user2: new mongoose.Types.ObjectId(user2),
         textMessages: [],
         imageMessages: [],
+        audioMessages: [],
         lastActivity: new Date()
       });
       await friendship.save();
@@ -70,6 +71,9 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       type: message.type,
       text: message.text,
       uri: message.uri,
+      name: message.name,
+      size: message.size,
+      duration: message.duration,
       timestamp: message.timestamp,
       read: message.read
     };
@@ -261,8 +265,11 @@ function registerMessageHandlers(io: Server, sock: Socket) {
   sock.on('message:send', async (payload: {
     to: string;
     text?: string;
-    type: 'text' | 'image';
+    type: 'text' | 'image' | 'audio';
     uri?: string;
+    name?: string;
+    size?: number;
+    duration?: number;
   }, ack?: Function) => {
     try {
       const me = meId();
@@ -297,6 +304,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         type: payload.type,
         text: payload.text,
         uri: payload.uri,
+        name: payload.name,
+        size: payload.size,
+        duration: payload.duration,
         timestamp: new Date(),
         read: false
       };
@@ -321,6 +331,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           type: payload.type,
           text: payload.text,
           uri: payload.uri,
+          name: payload.name,
+          size: payload.size,
+          duration: payload.duration,
           timestamp: message.timestamp.toISOString(),
           read: false
         });
@@ -335,6 +348,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           type: payload.type,
           text: payload.text,
           uri: payload.uri,
+          name: payload.name,
+          size: payload.size,
+          duration: payload.duration,
           timestamp: message.timestamp.toISOString(),
           read: false
         });
@@ -360,6 +376,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         const body =
           payload.type === 'image'
             ? '📷 Фото'
+            : payload.type === 'audio'
+              ? '🎤 Голосовое'
             : String(payload.text || '').trim() || 'Сообщение';
 
         await sendPushToUser(String(payload.to), {
@@ -433,6 +451,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         type: msg.type,
         text: msg.text,
         uri: msg.uri,
+        name: msg.name,
+        size: msg.size,
+        duration: msg.duration,
         timestamp: msg.timestamp.toISOString(),
         read: msg.read
       }));

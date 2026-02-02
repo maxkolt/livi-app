@@ -24,6 +24,7 @@ async function getOrCreateFriendship(user1Id: string, user2Id: string): Promise<
         user2: new mongoose.Types.ObjectId(user2),
         textMessages: [],
         imageMessages: [],
+        audioMessages: [],
         lastActivity: new Date(),
       });
       await friendship.save();
@@ -37,7 +38,7 @@ async function getOrCreateFriendship(user1Id: string, user2Id: string): Promise<
 
 /**
  * POST /api/messages/send
- * Body: { to, type: 'text'|'image', text?, uri? }
+ * Body: { to, type: 'text'|'image'|'audio', text?, uri?, name?, size?, duration? }
  */
 router.post('/messages/send', async (req, res) => {
   try {
@@ -45,12 +46,15 @@ router.post('/messages/send', async (req, res) => {
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const to = String(req.body?.to || '').trim();
-    const type = String(req.body?.type || '').trim() as 'text' | 'image';
+    const type = String(req.body?.type || '').trim() as 'text' | 'image' | 'audio';
     const text = typeof req.body?.text === 'string' ? String(req.body.text) : undefined;
     const uri = typeof req.body?.uri === 'string' ? String(req.body.uri) : undefined;
+    const name = typeof req.body?.name === 'string' ? String(req.body.name) : undefined;
+    const size = typeof req.body?.size === 'number' ? Number(req.body.size) : undefined;
+    const duration = typeof req.body?.duration === 'number' ? Number(req.body.duration) : undefined;
 
     if (!isOid(to)) return res.status(400).json({ ok: false, error: 'invalid_to' });
-    if (type !== 'text' && type !== 'image') return res.status(400).json({ ok: false, error: 'invalid_type' });
+    if (type !== 'text' && type !== 'image' && type !== 'audio') return res.status(400).json({ ok: false, error: 'invalid_type' });
 
     const isFriend = await areFriendsCached(me, to);
     if (!isFriend) return res.status(403).json({ ok: false, error: 'not_friends' });
@@ -68,6 +72,9 @@ router.post('/messages/send', async (req, res) => {
       type,
       text,
       uri,
+      name,
+      size,
+      duration,
       timestamp,
       read: false,
     };
@@ -88,6 +95,9 @@ router.post('/messages/send', async (req, res) => {
           type,
           text,
           uri,
+          name,
+          size,
+          duration,
           timestamp: timestamp.toISOString(),
           read: false,
         };
@@ -111,6 +121,9 @@ router.post('/messages/send', async (req, res) => {
           type,
           text,
           uri,
+          name,
+          size,
+          duration,
           timestamp: timestamp.toISOString(),
           read: false,
         },
@@ -160,6 +173,9 @@ router.get('/messages', async (req, res) => {
       type: msg.type,
       text: msg.text,
       uri: msg.uri,
+      name: msg.name,
+      size: msg.size,
+      duration: msg.duration,
       timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
       read: !!msg.read,
     }));

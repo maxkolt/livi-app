@@ -5,9 +5,12 @@ export interface IMessageItem {
   id: string; // Уникальный ID сообщения
   from: mongoose.Types.ObjectId;
   to: mongoose.Types.ObjectId;
-  type: 'text' | 'image';
+  type: 'text' | 'image' | 'audio';
   text?: string; // Текст сообщения
   uri?: string; // URL изображения
+  name?: string; // original filename (optional)
+  size?: number; // bytes (optional)
+  duration?: number; // seconds (optional, for audio)
   timestamp: Date;
   read: boolean;
 }
@@ -19,6 +22,7 @@ export interface IFriendshipMessages extends Document {
   user2: mongoose.Types.ObjectId; // Второй пользователь
   textMessages: IMessageItem[]; // Массив текстовых сообщений
   imageMessages: IMessageItem[]; // Массив сообщений с изображениями
+  audioMessages: IMessageItem[]; // Массив голосовых сообщений
   lastMessage?: IMessageItem; // Последнее сообщение для быстрого доступа
   lastActivity: Date; // Время последней активности
   createdAt: Date;
@@ -43,7 +47,7 @@ const MessageItemSchema = new Schema<IMessageItem>({
   },
   type: {
     type: String,
-    enum: ['text', 'image'],
+    enum: ['text', 'image', 'audio'],
     required: true
   },
   text: {
@@ -51,6 +55,15 @@ const MessageItemSchema = new Schema<IMessageItem>({
   },
   uri: {
     type: String
+  },
+  name: {
+    type: String
+  },
+  size: {
+    type: Number
+  },
+  duration: {
+    type: Number
   },
   timestamp: {
     type: Date,
@@ -76,6 +89,7 @@ const FriendshipMessagesSchema = new Schema<IFriendshipMessages>({
   },
   textMessages: [MessageItemSchema],
   imageMessages: [MessageItemSchema],
+  audioMessages: [MessageItemSchema],
   lastMessage: MessageItemSchema,
   lastActivity: {
     type: Date,
@@ -93,8 +107,9 @@ FriendshipMessagesSchema.index({ user2: 1, lastActivity: -1 });
 // Метод для получения всех сообщений в хронологическом порядке
 FriendshipMessagesSchema.methods.getAllMessages = function() {
   const allMessages = [
-    ...this.textMessages,
-    ...this.imageMessages
+    ...(this.textMessages || []),
+    ...(this.imageMessages || []),
+    ...(this.audioMessages || [])
   ];
   
   return allMessages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
@@ -117,6 +132,7 @@ FriendshipMessagesSchema.methods.getMessagesArray = function(type: string) {
   switch (type) {
     case 'text': return this.textMessages;
     case 'image': return this.imageMessages;
+    case 'audio': return this.audioMessages || (this.audioMessages = []);
     default: return this.textMessages;
   }
 };

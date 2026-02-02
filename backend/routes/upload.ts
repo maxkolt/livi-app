@@ -104,6 +104,15 @@ router.post('/upload/media', async (req, res) => {
       'video/mp4',
       'video/quicktime',
       'video/webm',
+      // audio (voice messages)
+      'audio/mp4',    // m4a (common)
+      'audio/m4a',    // some clients report this
+      'audio/aac',
+      'audio/mpeg',   // mp3
+      'audio/ogg',
+      'audio/webm',
+      'audio/wav',
+      'audio/x-wav',
     ]);
     if (!allowed.has(mimeType)) {
       return res.status(400).json({ ok: false, error: 'unsupported_mime' });
@@ -117,6 +126,13 @@ router.post('/upload/media', async (req, res) => {
     } else if (mimeType.startsWith('video/')) {
       const ext = mimeType.split('/')[1];
       extension = ext === 'quicktime' ? 'mov' : ext;
+    } else if (mimeType.startsWith('audio/')) {
+      const ext = mimeType.split('/')[1];
+      // Normalize common audio extensions
+      if (ext === 'mp4' || ext === 'm4a') extension = 'm4a';
+      else if (ext === 'mpeg') extension = 'mp3';
+      else if (ext === 'x-wav') extension = 'wav';
+      else extension = ext;
     }
 
     // Генерируем уникальное имя файла
@@ -193,6 +209,15 @@ router.post('/upload/media/multipart', upload.single('file'), async (req, res) =
       'video/mp4',
       'video/quicktime',
       'video/webm',
+      // audio (voice messages)
+      'audio/mp4',
+      'audio/m4a',
+      'audio/aac',
+      'audio/mpeg',
+      'audio/ogg',
+      'audio/webm',
+      'audio/wav',
+      'audio/x-wav',
     ]);
     if (!allowed.has(String(file.mimetype || ''))) {
       return res.status(400).json({ ok: false, error: 'unsupported_mime' });
@@ -205,6 +230,12 @@ router.post('/upload/media/multipart', upload.single('file'), async (req, res) =
     } else if (file.mimetype.startsWith('video/')) {
       const ext = file.mimetype.split('/')[1];
       extension = ext === 'quicktime' ? 'mov' : ext;
+    } else if (file.mimetype.startsWith('audio/')) {
+      const ext = file.mimetype.split('/')[1];
+      if (ext === 'mp4' || ext === 'm4a') extension = 'm4a';
+      else if (ext === 'mpeg') extension = 'mp3';
+      else if (ext === 'x-wav') extension = 'wav';
+      else extension = ext;
     }
 
     const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${extension}`;

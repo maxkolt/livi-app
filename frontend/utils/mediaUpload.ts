@@ -59,6 +59,22 @@ export const fileToDataUri = async (uri: string): Promise<string | null> => {
         case 'webm':
           mimeType = 'video/webm';
           break;
+        // audio (voice messages)
+        case 'm4a':
+          mimeType = 'audio/mp4';
+          break;
+        case 'aac':
+          mimeType = 'audio/aac';
+          break;
+        case 'mp3':
+          mimeType = 'audio/mpeg';
+          break;
+        case 'ogg':
+          mimeType = 'audio/ogg';
+          break;
+        case 'wav':
+          mimeType = 'audio/wav';
+          break;
       }
     }
     
@@ -74,7 +90,7 @@ export const fileToDataUri = async (uri: string): Promise<string | null> => {
  */
 export const uploadMediaToServer = async (
   localUri: string, 
-  type: 'image',
+  type: 'image' | 'audio',
   onProgress?: (progress: number) => void,
   from?: string,
   to?: string
@@ -88,16 +104,15 @@ export const uploadMediaToServer = async (
     // IMPORTANT:
     // Uploading raw images as base64-in-JSON is very heavy (size +33%),
     // and becomes extremely slow on VPN / high-latency networks.
-    // We proactively resize+compress ONLY for typical photos to keep UX acceptable,
-    // but we avoid re-encoding formats like GIF/WebP to not break expectations.
+    // We proactively resize+compress ONLY for photos to keep UX acceptable.
     let workingUri = localUri;
     try {
       const ext = (localUri.split('?')[0]?.split('#')[0]?.split('.').pop() || '').toLowerCase();
       const isGif = ext === 'gif';
       const isWebp = ext === 'webp';
 
-      // Skip manipulation for formats where re-encoding can be a breaking change.
-      if (!isGif && !isWebp) {
+      // Only images are resized/compressed.
+      if (type === 'image' && !isGif && !isWebp) {
         const format =
           ext === 'png' ? ImageManipulator.SaveFormat.PNG : ImageManipulator.SaveFormat.JPEG;
         const compress = format === ImageManipulator.SaveFormat.PNG ? 1 : 0.85;
@@ -192,7 +207,7 @@ export const uploadMediaToServer = async (
     
     // Создаем AbortController для таймаута
     const controller = new AbortController();
-    const timeoutMs = 300000; // 5 минут для изображений
+    const timeoutMs = type === 'audio' ? 120000 : 300000; // audio: 2 мин, images: 5 мин
     const timeoutId = setTimeout(() => {
       controller.abort();
     }, timeoutMs);

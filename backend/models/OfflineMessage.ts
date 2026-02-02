@@ -10,9 +10,12 @@ export interface IOfflineMessage extends Document {
     id: string;
     from: string;
     to: string;
-    type: 'text' | 'image';
+    type: 'text' | 'image' | 'audio';
     text?: string;
     uri?: string;
+    name?: string;
+    size?: number;
+    duration?: number;
     timestamp: Date;
     read: boolean;
   };
@@ -43,9 +46,12 @@ const OfflineMessageSchema = new Schema<IOfflineMessage>({
     id: { type: String, required: true },
     from: { type: String, required: true },
     to: { type: String, required: true },
-    type: { type: String, enum: ['text', 'image'], required: true },
+    type: { type: String, enum: ['text', 'image', 'audio'], required: true },
     text: { type: String },
     uri: { type: String },
+    name: { type: String },
+    size: { type: Number },
+    duration: { type: Number },
     timestamp: { type: Date, required: true },
     read: { type: Boolean, default: false }
   },

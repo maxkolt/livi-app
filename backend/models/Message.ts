@@ -5,11 +5,12 @@ export interface IMessage extends Document {
   clientId?: string; // Кастомный ID с фронтенда (msg_...)
   from: mongoose.Types.ObjectId;
   to: mongoose.Types.ObjectId;
-  type: 'text' | 'image' | 'video' | 'document';
+  type: 'text' | 'image' | 'audio' | 'video' | 'document';
   text?: string;
   uri?: string;
   name?: string;
   size?: number;
+  duration?: number;
   timestamp: Date;
   read: boolean;
   createdAt: Date;
@@ -32,7 +33,7 @@ const MessageSchema = new Schema<IMessage>({
   },
   type: {
     type: String,
-    enum: ['text', 'image', 'video', 'document'],
+    enum: ['text', 'image', 'audio', 'video', 'document'],
     default: 'text'
   },
   text: {
@@ -48,6 +49,10 @@ const MessageSchema = new Schema<IMessage>({
     default: ''
   },
   size: {
+    type: Number,
+    default: 0
+  },
+  duration: {
     type: Number,
     default: 0
   },
