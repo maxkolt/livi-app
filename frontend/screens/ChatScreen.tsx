@@ -15,6 +15,7 @@ import {
   Modal,
   Pressable,
   Animated,
+  PanResponder,
   Vibration,
   NativeModules,
   Dimensions,
@@ -208,17 +209,22 @@ export default function ChatScreen({ route, navigation }: Props) {
   const voiceRecordingRef = useRef<Audio.Recording | null>(null);
   const voiceRecordTimerRef = useRef<any>(null);
   const voiceStopInProgressRef = useRef(false);
+  const voiceCancelTriggeredRef = useRef(false);
   const [voiceIsRecording, setVoiceIsRecording] = useState(false);
   const [voiceRecordMs, setVoiceRecordMs] = useState(0);
-  const [voiceDraft, setVoiceDraft] = useState<{
-    localUri: string;
-    durationMs: number;
-    name: string;
-    size?: number;
-  } | null>(null);
-  const [voiceConfirmVisible, setVoiceConfirmVisible] = useState(false);
-  const voiceSoundRef = useRef<Audio.Sound | null>(null);
-  const [voicePreviewPlaying, setVoicePreviewPlaying] = useState(false);
+
+  // Gesture/animations for swipe-to-cancel
+  const voiceDragX = useRef(new Animated.Value(0)).current; // 0..negative
+  const micScale = useRef(new Animated.Value(1)).current;
+  const trashLid = useRef(new Animated.Value(0)).current; // 0 closed -> 1 open
+  const trashFlash = useRef(new Animated.Value(0)).current; // subtle feedback on cancel
+  const cancelArmedRef = useRef(false);
+  const recordViz = useRef(new Animated.Value(0)).current;
+  const recordVizLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+  const trashZoneRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const trashMeasureRef = useRef<View | null>(null);
+  const voiceStartXRef = useRef(0);
+  const voiceStartYRef = useRef(0);
 
   const audioSoundRef = useRef<Audio.Sound | null>(null);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
@@ -473,7 +479,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     const text = peerTyping ? `Печатает${'.'.repeat(peerTypingDots)}` : String(forwardToast.text || 'Отправлено');
     const color = peerTyping
       ? (isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.40)')
-      : '#55d187';
+      : (forwardToast.ok ? '#55d187' : '#FF5A67');
 
     return (
       <Animated.View
@@ -487,7 +493,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         <Text style={{ ...baseStyle, color }}>{text}</Text>
       </Animated.View>
     );
-  }, [peerTyping, peerTypingDots, isDark, forwardToast.visible, forwardToast.text, forwardToastOpacity]);
+  }, [peerTyping, peerTypingDots, isDark, forwardToast.visible, forwardToast.text, forwardToast.ok, forwardToastOpacity]);
 
   // Кэшируем миниатюру при инициализации (если передана)
   useEffect(() => {
@@ -999,12 +1005,6 @@ export default function ChatScreen({ route, navigation }: Props) {
       // cleanup sounds/recording on unmount
       try { void stopAudioPlayback(); } catch {}
       try {
-        if (voiceSoundRef.current) {
-          voiceSoundRef.current.stopAsync().catch(() => {});
-          voiceSoundRef.current.unloadAsync().catch(() => {});
-        }
-      } catch {}
-      try {
         if (voiceRecordingRef.current) {
           voiceRecordingRef.current.stopAndUnloadAsync().catch(() => {});
         }
@@ -1012,6 +1012,28 @@ export default function ChatScreen({ route, navigation }: Props) {
       try { if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current); } catch {}
     };
   }, [stopAudioPlayback]);
+
+  // Recording visualization loop (placeholder replacement)
+  useEffect(() => {
+    try {
+      recordVizLoopRef.current?.stop?.();
+    } catch {}
+    recordViz.setValue(0);
+
+    if (!voiceIsRecording) return;
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(recordViz, { toValue: 1, duration: 520, useNativeDriver: true }),
+        Animated.timing(recordViz, { toValue: 0, duration: 520, useNativeDriver: true }),
+      ])
+    );
+    recordVizLoopRef.current = loop;
+    loop.start();
+    return () => {
+      try { loop.stop(); } catch {}
+    };
+  }, [voiceIsRecording, recordViz]);
   // КРИТИЧНО: firstLetter используется ТОЛЬКО для аватара (headerInitial), НЕ для текста
   // Для текста используем peerNameState (полный никнейм)
   const firstLetter = (s?: string) => (s?.trim()?.[0] || '').toUpperCase();
@@ -1946,37 +1968,146 @@ export default function ChatScreen({ route, navigation }: Props) {
   };
 
   const VOICE_MAX_MS = 60_000;
+  // Swipe-left cancel with hysteresis (more stable on Android)
+  const VOICE_CANCEL_ARM_DX = -22;     // more sensitive
+  const VOICE_CANCEL_DISARM_DX = -10;  // keeps it armed unless user clearly returns
+  const VOICE_TRASH_PAD = 18;          // hit zone padding around trash icon (px)
 
-  const stopVoicePreview = React.useCallback(async () => {
+  const updateTrashZone = React.useCallback(() => {
     try {
-      if (voiceSoundRef.current) {
-        await voiceSoundRef.current.stopAsync().catch(() => {});
-        await voiceSoundRef.current.unloadAsync().catch(() => {});
-      }
-    } finally {
-      voiceSoundRef.current = null;
-      setVoicePreviewPlaying(false);
-    }
+      const node: any = trashMeasureRef.current;
+      if (!node?.measureInWindow) return;
+      node.measureInWindow((x: number, y: number, w: number, h: number) => {
+        trashZoneRef.current = { x, y, w, h };
+      });
+    } catch {}
   }, []);
 
-  const discardVoiceDraft = React.useCallback(async () => {
-    const draft = voiceDraft;
-    setVoiceConfirmVisible(false);
-    setVoiceDraft(null);
-    setVoiceRecordMs(0);
-    await stopVoicePreview();
-    if (draft?.localUri) {
-      try { await FileSystem.deleteAsync(draft.localUri, { idempotent: true }); } catch {}
+  const isInTrashZone = React.useCallback((moveX: number, moveY: number) => {
+    const z = trashZoneRef.current;
+    if (!z) return false;
+    return (
+      moveX >= (z.x - VOICE_TRASH_PAD) &&
+      moveX <= (z.x + z.w + VOICE_TRASH_PAD) &&
+      moveY >= (z.y - VOICE_TRASH_PAD) &&
+      moveY <= (z.y + z.h + VOICE_TRASH_PAD)
+    );
+  }, []);
+
+  const resetVoiceGesture = React.useCallback(() => {
+    cancelArmedRef.current = false;
+    voiceCancelTriggeredRef.current = false;
+    try { voiceDragX.setValue(0); } catch {}
+    try { trashLid.setValue(0); } catch {}
+    try { trashFlash.setValue(0); } catch {}
+    Animated.timing(micScale, { toValue: 1, duration: 90, useNativeDriver: true }).start();
+  }, [voiceDragX, trashLid, trashFlash, micScale]);
+
+  const armCancelUI = React.useCallback(() => {
+    if (cancelArmedRef.current) return;
+    cancelArmedRef.current = true;
+    Animated.parallel([
+      Animated.timing(trashLid, { toValue: 1, duration: 140, useNativeDriver: true }),
+      Animated.sequence([
+        Animated.timing(trashFlash, { toValue: 1, duration: 90, useNativeDriver: true }),
+        Animated.timing(trashFlash, { toValue: 0, duration: 180, useNativeDriver: true }),
+      ]),
+    ]).start();
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+  }, [trashLid, trashFlash]);
+
+  const disarmCancelUI = React.useCallback(() => {
+    if (!cancelArmedRef.current) return;
+    cancelArmedRef.current = false;
+    Animated.timing(trashLid, { toValue: 0, duration: 120, useNativeDriver: true }).start();
+  }, [trashLid]);
+
+  const sendVoiceMessageFromLocal = React.useCallback(async (localUri: string, durationMs: number, size?: number) => {
+    if (!currentUserId || !peerId) return;
+
+    const messageId = Date.now().toString();
+    const durationSec = Math.max(1, Math.round(durationMs / 1000));
+    const name = `voice_${Date.now()}.m4a`;
+
+    const newMessage = {
+      id: messageId,
+      type: 'audio',
+      uri: localUri,
+      name,
+      size: size || 0,
+      duration: durationSec,
+      sender: 'me',
+      from: currentUserId,
+      to: peerId,
+      timestamp: new Date(),
+    };
+
+    setMessages((prev) => [...prev, newMessage]);
+    updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
+
+    try {
+      setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
+      const uploadResult = await uploadMediaToServer(localUri, 'audio', undefined, currentUserId, peerId);
+      if (!uploadResult.success || !uploadResult.url) {
+        updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+        setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+        return;
+      }
+
+      const socketResult: any = await sendSocketMessage({
+        to: peerId,
+        type: 'audio',
+        uri: uploadResult.url,
+        name,
+        size,
+        duration: durationSec,
+      });
+
+      if (socketResult?.ok && socketResult?.messageId) {
+        setMessages((prev) => {
+          const updated = prev.map((msg: any) =>
+            msg.id === messageId
+              ? { ...msg, id: socketResult.messageId!, uri: resolveMediaUri(uploadResult.url), from: currentUserId, to: peerId }
+              : msg
+          );
+          saveMessages(updated);
+          return updated;
+        });
+
+        setUploadStatus((prev) => {
+          const next = { ...prev };
+          next[socketResult.messageId!] = 'sent';
+          delete next[messageId];
+          return next;
+        });
+
+        updateReadStatuses((prev) => {
+          const next = { ...prev };
+          const delivery = socketResult.delivered ? 'delivered' : 'sent';
+          next[socketResult.messageId!] = delivery;
+          delete next[messageId];
+          return next;
+        });
+      } else {
+        updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+        setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+      }
+    } catch {
+      updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+      setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+    } finally {
+      // cleanup recorded file after sending attempt
+      try { await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch {}
+      setVoiceRecordMs(0);
     }
-  }, [voiceDraft, stopVoicePreview]);
+  }, [currentUserId, peerId, resolveMediaUri, updateReadStatuses, saveMessages]);
 
   const startVoiceRecording = React.useCallback(async () => {
     try {
       if (voiceIsRecording) return;
       if (!currentUserId || !peerId) return;
       if (selectionMode) return; // avoid accidental recording in select mode
-      // Close any existing preview/draft
-      await discardVoiceDraft();
+      resetVoiceGesture();
 
       const perm = await Audio.requestPermissionsAsync();
       if (!perm.granted) {
@@ -2033,7 +2164,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           const ms = Number(st?.durationMillis || 0);
           setVoiceRecordMs(ms);
           if (ms >= VOICE_MAX_MS) {
-            void stopVoiceRecording(true);
+            void stopVoiceRecording(false, true);
           }
         } catch {}
       }, 160);
@@ -2041,9 +2172,9 @@ export default function ChatScreen({ route, navigation }: Props) {
       setVoiceIsRecording(false);
       voiceRecordingRef.current = null;
     }
-  }, [voiceIsRecording, currentUserId, peerId, selectionMode, discardVoiceDraft, showNotice, lang]);
+  }, [voiceIsRecording, currentUserId, peerId, selectionMode, resetVoiceGesture, showNotice, lang]);
 
-  const stopVoiceRecording = React.useCallback(async (autoStopped?: boolean) => {
+  const stopVoiceRecording = React.useCallback(async (cancelled?: boolean, autoStopped?: boolean) => {
     if (voiceStopInProgressRef.current) return;
     const rec = voiceRecordingRef.current;
     if (!rec) return;
@@ -2072,13 +2203,21 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       const info = await FileSystem.getInfoAsync(uri).catch(() => null as any);
       const size = typeof info?.size === 'number' ? Number(info.size) : undefined;
-      const name = `voice_${Date.now()}.m4a`;
+      if (cancelled || voiceCancelTriggeredRef.current) {
+        // cancel: throw away the recording
+        try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+        setVoiceRecordMs(0);
+        return;
+      }
 
-      setVoiceDraft({ localUri: uri, durationMs, name, size });
-      setVoiceConfirmVisible(true);
       if (autoStopped) {
         try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch {}
+      } else {
+        try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
       }
+
+      // release -> send immediately
+      await sendVoiceMessageFromLocal(uri, durationMs, size);
     } catch {
       // ignore
     } finally {
@@ -2092,114 +2231,88 @@ export default function ChatScreen({ route, navigation }: Props) {
         });
       } catch {}
       voiceStopInProgressRef.current = false;
+      resetVoiceGesture();
     }
-  }, [voiceRecordMs]);
+  }, [voiceRecordMs, sendVoiceMessageFromLocal, resetVoiceGesture]);
 
-  const toggleVoicePreview = React.useCallback(async () => {
-    try {
-      if (!voiceDraft?.localUri) return;
-      if (voicePreviewPlaying) {
-        await stopVoicePreview();
-        return;
-      }
-      await stopVoicePreview();
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: voiceDraft.localUri },
-        { shouldPlay: true },
-        (status) => {
-          const s: any = status as any;
-          if (s?.didJustFinish) {
-            setVoicePreviewPlaying(false);
-          }
+  const cancelVoiceRecordingWithAnimation = React.useCallback(async () => {
+    if (voiceCancelTriggeredRef.current) return;
+    voiceCancelTriggeredRef.current = true;
+
+    // Open lid and "throw" to left
+    Animated.parallel([
+      Animated.timing(trashLid, { toValue: 1, duration: 120, useNativeDriver: true }),
+      Animated.timing(voiceDragX, { toValue: -120, duration: 140, useNativeDriver: true }),
+      Animated.sequence([
+        Animated.timing(trashFlash, { toValue: 1, duration: 90, useNativeDriver: true }),
+        Animated.timing(trashFlash, { toValue: 0, duration: 220, useNativeDriver: true }),
+      ]),
+    ]).start(() => {
+      Animated.timing(trashLid, { toValue: 0, duration: 180, useNativeDriver: true }).start();
+    });
+
+    try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch {}
+    await stopVoiceRecording(true, false);
+    showForwardToastBadge(false, 'Удалено');
+  }, [trashLid, trashFlash, voiceDragX, stopVoiceRecording, showForwardToastBadge]);
+
+  const micPanResponder = React.useMemo(() => {
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: (_evt, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
+      onMoveShouldSetPanResponderCapture: (_evt, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        Animated.timing(micScale, { toValue: 0.92, duration: 90, useNativeDriver: true }).start();
+        // snapshot start point (helps debug / stability)
+        try {
+          voiceStartXRef.current = 0;
+          voiceStartYRef.current = 0;
+        } catch {}
+        // measure trash zone after it renders
+        setTimeout(() => updateTrashZone(), 0);
+        void startVoiceRecording();
+      },
+      onPanResponderMove: (_evt, gestureState) => {
+        if (!voiceIsRecording) return;
+        const dx = Math.min(0, Math.max(-120, gestureState.dx));
+        voiceDragX.setValue(dx);
+        const inZone = isInTrashZone(Number(gestureState.moveX || 0), Number(gestureState.moveY || 0));
+        if (inZone) {
+          armCancelUI();
+          return;
         }
-      );
-      voiceSoundRef.current = sound;
-      setVoicePreviewPlaying(true);
-    } catch {}
-  }, [voiceDraft, voicePreviewPlaying, stopVoicePreview]);
-
-  const sendVoiceDraft = React.useCallback(async () => {
-    const draft = voiceDraft;
-    if (!draft || !currentUserId || !peerId) return;
-
-    setVoiceConfirmVisible(false);
-    await stopVoicePreview();
-    setVoiceDraft(null);
-
-    const messageId = Date.now().toString();
-    const durationSec = Math.max(1, Math.round(draft.durationMs / 1000));
-    const newMessage = {
-      id: messageId,
-      type: 'audio',
-      uri: draft.localUri,
-      name: draft.name,
-      size: draft.size || 0,
-      duration: durationSec,
-      sender: 'me',
-      from: currentUserId,
-      to: peerId,
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => [...prev, newMessage]);
-    updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
-
-    try {
-      setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
-      const uploadResult = await uploadMediaToServer(draft.localUri, 'audio', undefined, currentUserId, peerId);
-      if (!uploadResult.success || !uploadResult.url) {
-        updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
-        setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
-        return;
-      }
-
-      const socketResult: any = await sendSocketMessage({
-        to: peerId,
-        type: 'audio',
-        uri: uploadResult.url,
-        name: draft.name,
-        size: draft.size,
-        duration: durationSec,
-      });
-
-      if (socketResult?.ok && socketResult?.messageId) {
-        setMessages((prev) => {
-          const updated = prev.map((msg: any) =>
-            msg.id === messageId
-              ? { ...msg, id: socketResult.messageId!, uri: resolveMediaUri(uploadResult.url), from: currentUserId, to: peerId }
-              : msg
-          );
-          saveMessages(updated);
-          return updated;
-        });
-
-        setUploadStatus((prev) => {
-          const next = { ...prev };
-          next[socketResult.messageId!] = 'sent';
-          delete next[messageId];
-          return next;
-        });
-
-        updateReadStatuses((prev) => {
-          const next = { ...prev };
-          const delivery = socketResult.delivered ? 'delivered' : 'sent';
-          next[socketResult.messageId!] = delivery;
-          delete next[messageId];
-          return next;
-        });
-      } else {
-        updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
-        setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
-      }
-    } catch {
-      updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
-      setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
-    } finally {
-      // best-effort cleanup local file after sending
-      try { await FileSystem.deleteAsync(draft.localUri, { idempotent: true }); } catch {}
-      setVoiceRecordMs(0);
-    }
-  }, [voiceDraft, currentUserId, peerId, stopVoicePreview, resolveMediaUri, updateReadStatuses, saveMessages]);
+        // fallback dx hysteresis
+        if (!cancelArmedRef.current) {
+          if (dx <= VOICE_CANCEL_ARM_DX) armCancelUI();
+        } else {
+          if (dx >= VOICE_CANCEL_DISARM_DX) disarmCancelUI();
+        }
+      },
+      onPanResponderRelease: async (_evt, gestureState) => {
+        Animated.timing(micScale, { toValue: 1, duration: 90, useNativeDriver: true }).start();
+        if (!voiceIsRecording) {
+          resetVoiceGesture();
+          return;
+        }
+        const dx = Math.min(0, Math.max(-120, gestureState.dx));
+        const inZone = isInTrashZone(Number(gestureState.moveX || 0), Number(gestureState.moveY || 0));
+        if (inZone || dx <= VOICE_CANCEL_ARM_DX || cancelArmedRef.current) {
+          await cancelVoiceRecordingWithAnimation();
+          return;
+        }
+        await stopVoiceRecording(false, false);
+      },
+      onPanResponderTerminate: async () => {
+        Animated.timing(micScale, { toValue: 1, duration: 90, useNativeDriver: true }).start();
+        if (voiceIsRecording) {
+          await stopVoiceRecording(true, false);
+        }
+        resetVoiceGesture();
+      },
+    });
+  }, [PanResponder, micScale, startVoiceRecording, voiceIsRecording, voiceDragX, armCancelUI, disarmCancelUI, resetVoiceGesture, stopVoiceRecording, cancelVoiceRecordingWithAnimation, isInTrashZone, updateTrashZone]);
 
   const sendPickedImage = React.useCallback(async (asset: any) => {
     if (!currentUserId || !peerId) return;
@@ -3108,7 +3221,16 @@ export default function ChatScreen({ route, navigation }: Props) {
                       borderColor: 'rgba(255,90,103,0.28)',
                     }}
                   >
-                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#FF5A67', marginRight: 8 }} />
+                    <Animated.View
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: 4,
+                        backgroundColor: '#FF5A67',
+                        marginRight: 8,
+                        opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] }),
+                      }}
+                    />
                     <Text style={{ color: LIVI.white, fontSize: 12, fontWeight: '700' }}>
                       Запись {formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS))}
                     </Text>
@@ -3131,57 +3253,86 @@ export default function ChatScreen({ route, navigation }: Props) {
                 }}
               >
                 {/* Кнопка очистки убрана по требованию */}
-                <TouchableOpacity
-                  onPress={handleAttachments}
-                  style={{
-                    padding: 2,
-                    marginRight: 12,
-                  }}
-                >
-                  <Ionicons name="image" size={28} color={LIVI.titan} />
-                </TouchableOpacity>
+                {voiceIsRecording ? (
+                  <Animated.View
+                    ref={(r) => { trashMeasureRef.current = r as any; }}
+                    onLayout={() => updateTrashZone()}
+                    style={{
+                      padding: 2,
+                      marginRight: 12,
+                      transform: [
+                        { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
+                        { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
+                      ],
+                      opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
+                    }}
+                  >
+                    <Ionicons name="trash-outline" size={28} color="#FF5A67" />
+                  </Animated.View>
+                ) : (
+                  <TouchableOpacity
+                    onPress={handleAttachments}
+                    style={{
+                      padding: 2,
+                      marginRight: 12,
+                    }}
+                  >
+                    <Ionicons name="image" size={28} color={LIVI.titan} />
+                  </TouchableOpacity>
+                )}
 
-                <TextInput
-                  style={{
-                    flex: 1,
-                    color: LIVI.white,
-                    fontSize: 16,
-                    maxHeight: 100,
-                  }}
-                  placeholder={t('chatMessagePlaceholder', lang)}
-                  placeholderTextColor={LIVI.titan}
-                  value={messageText}
-                  onChangeText={(txt) => {
-                    setMessageText(txt);
-                    signalLocalTyping();
-                  }}
-                  multiline
-                  onSubmitEditing={sendMessage}
-                  returnKeyType="send"
-                />
-
-                <Pressable
-                  onPressIn={() => void startVoiceRecording()}
-                  onPressOut={() => void stopVoiceRecording(false)}
-                  disabled={voiceConfirmVisible}
-                  style={({ pressed }) => ({
-                    backgroundColor: voiceIsRecording
-                      ? (pressed ? 'rgba(255,90,103,0.26)' : 'rgba(255,90,103,0.18)')
-                      : (pressed ? 'rgba(255,255,255,0.26)' : 'rgba(255,255,255,0.18)'),
-                    borderRadius: 14,
-                    padding: 6,
-                    marginLeft: 6,
-                    borderWidth: 1,
-                    borderColor: voiceIsRecording ? 'rgba(255,90,103,0.35)' : BORDER_COLOR,
-                    opacity: pressed ? 0.95 : 1,
-                  })}
-                >
-                  <Ionicons
-                    name={voiceIsRecording ? 'mic' : 'mic-outline'}
-                    size={20}
-                    color={voiceIsRecording ? '#FF5A67' : LIVI.titan}
+                {voiceIsRecording ? (
+                  <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', height: 36 }}>
+                    <Animated.View
+                      style={{
+                        opacity: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.45] }),
+                        transform: [
+                          {
+                            translateX: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) as any,
+                          },
+                        ],
+                      }}
+                    >
+                      <Ionicons name="chevron-back" size={18} color={LIVI.titan} />
+                    </Animated.View>
+                  </View>
+                ) : (
+                  <TextInput
+                    style={{
+                      flex: 1,
+                      color: LIVI.white,
+                      fontSize: 16,
+                      maxHeight: 100,
+                    }}
+                    placeholder={t('chatMessagePlaceholder', lang)}
+                    placeholderTextColor={LIVI.titan}
+                    value={messageText}
+                    onChangeText={(txt) => {
+                      setMessageText(txt);
+                      signalLocalTyping();
+                    }}
+                    multiline
+                    onSubmitEditing={sendMessage}
+                    returnKeyType="send"
+                    editable={!voiceIsRecording}
                   />
-                </Pressable>
+                )}
+
+                <Animated.View
+                  {...micPanResponder.panHandlers}
+                  style={{
+                    marginLeft: 6,
+                    transform: [{ scale: micScale }],
+                  }}
+                >
+                  <View pointerEvents="none" style={{ padding: 8 }}>
+                    <Ionicons
+                      name={voiceIsRecording ? 'mic' : 'mic-outline'}
+                      size={22}
+                      color={voiceIsRecording ? '#FF5A67' : LIVI.titan}
+                    />
+                  </View>
+                </Animated.View>
 
                 <TouchableOpacity
                   onPress={sendMessage}
@@ -3335,7 +3486,16 @@ export default function ChatScreen({ route, navigation }: Props) {
                       borderColor: 'rgba(255,90,103,0.28)',
                     }}
                   >
-                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#FF5A67', marginRight: 8 }} />
+                    <Animated.View
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: 4,
+                        backgroundColor: '#FF5A67',
+                        marginRight: 8,
+                        opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] }),
+                      }}
+                    />
                     <Text style={{ color: LIVI.white, fontSize: 12, fontWeight: '700' }}>
                       Запись {formatDuration(Math.min(voiceRecordMs, VOICE_MAX_MS))}
                     </Text>
@@ -3356,52 +3516,81 @@ export default function ChatScreen({ route, navigation }: Props) {
                   borderColor: BORDER_COLOR,
                 }}
               >
-                <TouchableOpacity
-                  onPress={handleAttachments}
-                  style={{
-                    padding: 2,
-                    marginRight: 12,
-                  }}
-                >
-                  <Ionicons name="image" size={28} color={LIVI.titan} />
-                </TouchableOpacity>
+                {voiceIsRecording ? (
+                  <Animated.View
+                    ref={(r) => { trashMeasureRef.current = r as any; }}
+                    onLayout={() => updateTrashZone()}
+                    style={{
+                      padding: 2,
+                      marginRight: 12,
+                      transform: [
+                        { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
+                        { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
+                      ],
+                      opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
+                    }}
+                  >
+                    <Ionicons name="trash-outline" size={28} color="#FF5A67" />
+                  </Animated.View>
+                ) : (
+                  <TouchableOpacity
+                    onPress={handleAttachments}
+                    style={{
+                      padding: 2,
+                      marginRight: 12,
+                    }}
+                  >
+                    <Ionicons name="image" size={28} color={LIVI.titan} />
+                  </TouchableOpacity>
+                )}
 
-                <TextInput
-                  style={{ flex: 1, color: LIVI.white, fontSize: 16, maxHeight: 100 }}
-                  placeholder={t('chatMessagePlaceholder', lang)}
-                  placeholderTextColor={LIVI.titan}
-                  value={messageText}
-                  onChangeText={(txt) => {
-                    setMessageText(txt);
-                    signalLocalTyping();
-                  }}
-                  multiline
-                  onSubmitEditing={sendMessage}
-                  returnKeyType="send"
-                />
-
-                <Pressable
-                  onPressIn={() => void startVoiceRecording()}
-                  onPressOut={() => void stopVoiceRecording(false)}
-                  disabled={voiceConfirmVisible}
-                  style={({ pressed }) => ({
-                    backgroundColor: voiceIsRecording
-                      ? (pressed ? 'rgba(255,90,103,0.26)' : 'rgba(255,90,103,0.18)')
-                      : (pressed ? 'rgba(255,255,255,0.26)' : 'rgba(255,255,255,0.18)'),
-                    borderRadius: 14,
-                    padding: 6,
-                    marginLeft: 6,
-                    borderWidth: 1,
-                    borderColor: voiceIsRecording ? 'rgba(255,90,103,0.35)' : BORDER_COLOR,
-                    opacity: pressed ? 0.95 : 1,
-                  })}
-                >
-                  <Ionicons
-                    name={voiceIsRecording ? 'mic' : 'mic-outline'}
-                    size={20}
-                    color={voiceIsRecording ? '#FF5A67' : LIVI.titan}
+                {voiceIsRecording ? (
+                  <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', height: 36 }}>
+                    <Animated.View
+                      style={{
+                        opacity: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.45] }),
+                        transform: [
+                          {
+                            translateX: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) as any,
+                          },
+                        ],
+                      }}
+                    >
+                      <Ionicons name="chevron-back" size={18} color={LIVI.titan} />
+                    </Animated.View>
+                  </View>
+                ) : (
+                  <TextInput
+                    style={{ flex: 1, color: LIVI.white, fontSize: 16, maxHeight: 100 }}
+                    placeholder={t('chatMessagePlaceholder', lang)}
+                    placeholderTextColor={LIVI.titan}
+                    value={messageText}
+                    onChangeText={(txt) => {
+                      setMessageText(txt);
+                      signalLocalTyping();
+                    }}
+                    multiline
+                    onSubmitEditing={sendMessage}
+                    returnKeyType="send"
+                    editable={!voiceIsRecording}
                   />
-                </Pressable>
+                )}
+
+                <Animated.View
+                  {...micPanResponder.panHandlers}
+                  style={{
+                    marginLeft: 6,
+                    transform: [{ scale: micScale }],
+                  }}
+                >
+                  <View pointerEvents="none" style={{ padding: 8 }}>
+                    <Ionicons
+                      name={voiceIsRecording ? 'mic' : 'mic-outline'}
+                      size={22}
+                      color={voiceIsRecording ? '#FF5A67' : LIVI.titan}
+                    />
+                  </View>
+                </Animated.View>
 
                 <TouchableOpacity
                   onPress={sendMessage}
@@ -3456,115 +3645,6 @@ export default function ChatScreen({ route, navigation }: Props) {
         }}
       />
 
-      {/* Голосовое: предпросмотр перед отправкой */}
-      {voiceConfirmVisible && voiceDraft && (
-        <Modal
-          visible={voiceConfirmVisible}
-          transparent
-          animationType="fade"
-          onRequestClose={() => void discardVoiceDraft()}
-        >
-          <Pressable
-            onPress={() => void discardVoiceDraft()}
-            style={{
-              flex: 1,
-              backgroundColor: isDark ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.38)',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 24,
-            }}
-          >
-            <Pressable
-              onPress={() => {}}
-              style={{
-                width: '100%',
-                maxWidth: 380,
-                borderRadius: 18,
-                backgroundColor: isDark ? LIVI.bg : 'rgba(255,255,255,0.98)',
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
-                overflow: 'hidden',
-              }}
-            >
-              <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
-                <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
-                  Голосовое сообщение
-                </Text>
-                <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
-                  Длительность: {formatDuration(voiceDraft.durationMs)}
-                </Text>
-
-                <View style={{ marginTop: 14, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <Pressable
-                    onPress={() => void toggleVoicePreview()}
-                    style={({ pressed }) => ({
-                      width: 46,
-                      height: 46,
-                      borderRadius: 23,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: pressed
-                        ? (isDark ? 'rgba(123,97,255,0.22)' : 'rgba(123,97,255,0.18)')
-                        : (isDark ? 'rgba(123,97,255,0.16)' : 'rgba(123,97,255,0.12)'),
-                      borderWidth: StyleSheet.hairlineWidth,
-                      borderColor: 'rgba(123,97,255,0.45)',
-                    })}
-                  >
-                    <Ionicons name={voicePreviewPlaying ? 'pause' : 'play'} size={22} color={LIVI.white} />
-                  </Pressable>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '600' }}>
-                      Нажмите для прослушивания
-                    </Text>
-                    <Text style={{ marginTop: 4, color: LIVI.titan, fontSize: 12, fontWeight: '500' }}>
-                      После записи можно отправить или сбросить
-                    </Text>
-                  </View>
-                </View>
-              </View>
-
-              <View
-                style={{
-                  height: StyleSheet.hairlineWidth,
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
-                }}
-              />
-
-              <View style={{ flexDirection: 'row', padding: 12, gap: 10 }}>
-                <Pressable
-                  onPress={() => void discardVoiceDraft()}
-                  style={({ pressed }) => ({
-                    flex: 1,
-                    paddingVertical: 12,
-                    borderRadius: 14,
-                    alignItems: 'center',
-                    backgroundColor: pressed
-                      ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
-                      : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
-                  })}
-                >
-                  <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '600' }}>Сбросить</Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => void sendVoiceDraft()}
-                  style={({ pressed }) => ({
-                    flex: 1,
-                    paddingVertical: 12,
-                    borderRadius: 14,
-                    alignItems: 'center',
-                    backgroundColor: pressed ? 'rgba(85,209,135,0.22)' : 'rgba(85,209,135,0.16)',
-                    borderWidth: StyleSheet.hairlineWidth,
-                    borderColor: 'rgba(85,209,135,0.45)',
-                  })}
-                >
-                  <Text style={{ color: '#55d187', fontSize: 15, fontWeight: '700' }}>Отправить</Text>
-                </Pressable>
-              </View>
-            </Pressable>
-          </Pressable>
-        </Modal>
-      )}
       {/* Модальное окно для меню очистки чата */}
       {showClearMenu && (
         <View style={{
