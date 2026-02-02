@@ -1167,13 +1167,20 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [deleteSingleMessage]);
 
   const copySelectedMessage = React.useCallback(async (m: any) => {
+    const type = String(m?.type || '').trim();
     const text = String(m?.text ?? '').trim();
-    if (!text) return;
+    const rawUri = String(m?.uri ?? '').trim();
+
+    const value =
+      text ||
+      (type === 'image' && rawUri ? resolveMediaUri(rawUri) : '');
+
+    if (!value) return;
     try {
-      await Clipboard.setStringAsync(text);
+      await Clipboard.setStringAsync(value);
       try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
     } catch {}
-  }, []);
+  }, [resolveMediaUri]);
 
   const showForwardToastBadge = React.useCallback((ok: boolean, text: string) => {
     setForwardToast({ visible: true, ok, text });
@@ -1233,24 +1240,41 @@ export default function ChatScreen({ route, navigation }: Props) {
       setShowForwardPicker(false);
       hideMessageActions();
 
-      // Если включён режим выбора — пересылаем все выбранные ТЕКСТОВЫЕ сообщения
-      if (selectionMode) {
-        const selectedTexts = messages
-          .filter((m) => selectedMessageIds.has(String(m?.id || '')))
-          .filter((m) => String(m?.type || '') === 'text' && String(m?.text || '').trim())
-          .map((m) => String(m.text).trim());
+      const normalizeForwardImageUri = (u: string) => {
+        const resolved = resolveMediaUri(u);
+        // локальные file:// нельзя пересылать
+        if (/^file:\/\//i.test(resolved)) return '';
+        return resolved;
+      };
 
-        if (selectedTexts.length === 0) {
+      // Если включён режим выбора — пересылаем все выбранные сообщения (текст + картинки)
+      if (selectionMode) {
+        const selected = messages.filter((m) => selectedMessageIds.has(String(m?.id || '')));
+
+        const forwardables: any[] = [];
+        for (const m of selected) {
+          const type = String(m?.type || '').trim();
+          if (type === 'text') {
+            const txt = String(m?.text || '').trim();
+            if (txt) forwardables.push({ type: 'text', text: txt });
+          } else if (type === 'image') {
+            const rawUri = String(m?.uri || '').trim();
+            const uri = rawUri ? normalizeForwardImageUri(rawUri) : '';
+            if (uri) forwardables.push({ type: 'image', uri, name: m?.name, size: m?.size });
+          }
+        }
+
+        if (forwardables.length === 0) {
           setNoticeKind('info');
           setNoticeTitle('Пересылка');
-          setNoticeMessage('Нет текстовых сообщений для пересылки.');
+          setNoticeMessage('Нет подходящих сообщений для пересылки.');
           setNoticeVisible(true);
           return;
         }
 
         let okCount = 0;
-        for (const txt of selectedTexts) {
-          const r: any = await sendSocketMessage({ to, text: txt, type: 'text' });
+        for (const payload of forwardables) {
+          const r: any = await sendSocketMessage({ to, ...payload });
           if (r?.ok) okCount += 1;
         }
 
@@ -1261,12 +1285,36 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
 
       // Обычный режим — пересылаем одно выбранное сообщение
-      const txt = String(selectedMessage?.text ?? '').trim();
-      if (!txt) return;
-      const r: any = await sendSocketMessage({ to, text: txt, type: 'text' });
-      showForwardToastBadge(!!r?.ok, r?.ok ? 'Отправлено' : 'Не удалось отправить');
+      const type = String(selectedMessage?.type || '').trim();
+      if (type === 'text') {
+        const txt = String(selectedMessage?.text ?? '').trim();
+        if (!txt) return;
+        const r: any = await sendSocketMessage({ to, text: txt, type: 'text' });
+        showForwardToastBadge(!!r?.ok, r?.ok ? 'Отправлено' : 'Не удалось отправить');
+        return;
+      }
+      if (type === 'image') {
+        const rawUri = String(selectedMessage?.uri ?? '').trim();
+        const uri = rawUri ? normalizeForwardImageUri(rawUri) : '';
+        if (!uri) {
+          setNoticeKind('info');
+          setNoticeTitle('Пересылка');
+          setNoticeMessage('Это изображение ещё не готово для пересылки.');
+          setNoticeVisible(true);
+          return;
+        }
+        const r: any = await sendSocketMessage({
+          to,
+          type: 'image',
+          uri,
+          name: selectedMessage?.name,
+          size: selectedMessage?.size,
+        });
+        showForwardToastBadge(!!r?.ok, r?.ok ? 'Отправлено' : 'Не удалось отправить');
+        return;
+      }
     } catch {}
-  }, [selectedMessage, hideMessageActions, showForwardToastBadge, selectionMode, messages, selectedMessageIds]);
+  }, [selectedMessage, hideMessageActions, showForwardToastBadge, selectionMode, messages, selectedMessageIds, resolveMediaUri]);
 
   const exitSelectionMode = React.useCallback(() => {
     setSelectionMode(false);
@@ -1357,14 +1405,16 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, []);
 
   const selectedCount = selectedMessageIds.size;
-  const selectedHasAnyText = React.useMemo(() => {
+  const selectedHasAnyForwardable = React.useMemo(() => {
     if (!selectionMode || selectedMessageIds.size === 0) return false;
-    // Пересылаем только текстовые сообщения
+    // Пересылаем текст и картинки
     for (const m of messages) {
       const id = String(m?.id || '').trim();
       if (!id) continue;
       if (!selectedMessageIds.has(id)) continue;
-      if (String(m?.type || '') === 'text' && String(m?.text || '').trim()) return true;
+      const type = String(m?.type || '').trim();
+      if (type === 'text' && String(m?.text || '').trim()) return true;
+      if (type === 'image' && String(m?.uri || '').trim()) return true;
     }
     return false;
   }, [selectionMode, selectedMessageIds, messages]);
@@ -1418,12 +1468,12 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const startForwardSelected = React.useCallback(() => {
     if (selectedCount === 0) return;
-    if (!selectedHasAnyText) {
-      showNotice('info', 'Пересылка', 'Можно переслать только текстовые сообщения.');
+    if (!selectedHasAnyForwardable) {
+      showNotice('info', 'Пересылка', 'Можно переслать только текстовые сообщения или изображения.');
       return;
     }
     void openForwardPicker();
-  }, [selectedCount, selectedHasAnyText, showNotice, openForwardPicker]);
+  }, [selectedCount, selectedHasAnyForwardable, showNotice, openForwardPicker]);
 
   // КРИТИЧНО: Header нельзя объявлять как "новую функцию" на каждый рендер,
   // иначе шапка (и аватар) будут размонтироваться на каждый ввод в TextInput.
@@ -1464,8 +1514,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           {selectionMode ? `Выбрано: ${selectedCount}` : peerNameState}
         </Text>
         {!selectionMode && (
-          <Text style={{ marginTop: 2, fontSize: 12, color: peerOnline ? LIVI.green : LIVI.red, fontWeight: "600" }}>
-            {peerOnline ? "Online" : "Offline"}
+          <Text style={{ marginTop: 2, fontSize: 12, color: peerOnline ? LIVI.green : LIVI.red, fontWeight: "500" }}>
+            {peerOnline ? t('online', lang) : t('offline', lang)}
           </Text>
         )}
       </View>
@@ -1567,10 +1617,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     (m: any) => {
       setSelectedMessage(m);
 
-      const isImage = String(m?.type || '') === 'image';
-      const options = isImage
-        ? ['Выбрать', 'Удалить', 'Отмена']
-        : ['Копировать', 'Переслать', 'Выбрать', 'Удалить', 'Отмена'];
+      const options = ['Копировать', 'Переслать', 'Выбрать', 'Удалить', 'Отмена'];
 
       const cancelButtonIndex = options.length - 1;
       const destructiveButtonIndex = options.indexOf('Удалить');
@@ -2605,9 +2652,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                 backgroundColor: LIVI.bg,
                 paddingHorizontal: 16,
                 paddingTop: 18,
-                // КРИТИЧНО: Используем одинаковый paddingBottom для iOS и Android для единообразного стиля
+                // Важно: симметричные отступы сверху/снизу вокруг инпута
                 // SafeAreaView уже обрабатывает safe area, поэтому не добавляем insets.bottom
-                paddingBottom: 26,
+                paddingBottom: 18,
               }}
               onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
             >
@@ -2787,7 +2834,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 paddingTop: 18,
                 // Когда клавиатура открыта — панель должна "стыковаться" с клавиатурой без зазора.
                 // Когда клавиатура скрыта — добавляем safe-area снизу, чтобы не упираться в навигацию.
-                paddingBottom: 22 + (keyboardVisible ? 0 : Math.max(0, insets.bottom)),
+                paddingBottom: 18 + (keyboardVisible ? 0 : Math.max(0, insets.bottom)),
               }}
               onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
             >
@@ -3072,7 +3119,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   />
                 </View>
 
-                {String(selectedMessage?.type || '') !== 'image' && String(selectedMessage?.text || '').trim() && (
+                {(String(selectedMessage?.text || '').trim() || String(selectedMessage?.uri || '').trim()) && (
                   <>
                     <Pressable
                       onPress={() => {
@@ -3145,33 +3192,6 @@ export default function ChatScreen({ route, navigation }: Props) {
                     </Pressable>
 
                     <View style={{ height: 10 }} />
-                  </>
-                )}
-
-                {String(selectedMessage?.type || '') === 'image' && (
-                  <>
-                    <Pressable
-                      onPress={() => {
-                        enterSelectionModeFromMessage(selectedMessage);
-                      }}
-                      style={({ pressed }) => ({
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        paddingVertical: 14,
-                        paddingHorizontal: 12,
-                        borderRadius: 14,
-                        overflow: 'hidden',
-                        marginBottom: 10,
-                        backgroundColor: pressed
-                          ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
-                          : 'transparent',
-                      })}
-                    >
-                      <Ionicons name="checkbox-outline" size={20} color={LIVI.titan} />
-                      <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
-                        Выбрать
-                      </Text>
-                    </Pressable>
                   </>
                 )}
 
@@ -3460,6 +3480,99 @@ export default function ChatScreen({ route, navigation }: Props) {
       )}
 
       {/* "Отправлено" теперь показывается в том же gap, что и "Печатает..." */}
+
+      {/* Универсальное подтверждение (используется для массового удаления/очистки и т.п.) */}
+      <Modal
+        visible={confirmVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeConfirm}
+      >
+        <Pressable
+          onPress={closeConfirm}
+          style={{
+            flex: 1,
+            backgroundColor: isDark ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.38)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+          }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              width: '100%',
+              maxWidth: 380,
+              borderRadius: 18,
+              // Светлая тема: оставляем как есть. Тёмная: фирменный LiVi background (без серого оттенка).
+              backgroundColor: isDark ? LIVI.bg : 'rgba(255,255,255,0.98)',
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
+              overflow: 'hidden',
+            }}
+          >
+            <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
+              <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
+                {confirmTitle || 'Подтвердите действие'}
+              </Text>
+              <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
+                {confirmMessage || ''}
+              </Text>
+            </View>
+
+            <View
+              style={{
+                height: StyleSheet.hairlineWidth,
+                backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
+              }}
+            />
+
+            <View style={{ flexDirection: 'row', padding: 12, gap: 10 }}>
+              <Pressable
+                onPress={closeConfirm}
+                style={({ pressed }) => ({
+                  flex: 1,
+                  paddingVertical: 12,
+                  borderRadius: 14,
+                  alignItems: 'center',
+                  backgroundColor: pressed
+                    ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
+                    : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
+                })}
+              >
+                <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '600' }}>
+                  {confirmCancelText || 'Отмена'}
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={runConfirm}
+                style={({ pressed }) => ({
+                  flex: 1,
+                  paddingVertical: 12,
+                  borderRadius: 14,
+                  alignItems: 'center',
+                  backgroundColor: confirmDestructive
+                    ? (pressed ? 'rgba(255,90,103,0.26)' : 'rgba(255,90,103,0.18)')
+                    : (pressed ? 'rgba(123,97,255,0.22)' : 'rgba(123,97,255,0.16)'),
+                  borderWidth: StyleSheet.hairlineWidth,
+                  borderColor: confirmDestructive ? 'rgba(255,90,103,0.45)' : 'rgba(123,97,255,0.45)',
+                })}
+              >
+                <Text
+                  style={{
+                    color: confirmDestructive ? '#FF5A67' : LIVI.titan,
+                    fontSize: 15,
+                    fontWeight: '700',
+                  }}
+                >
+                  {confirmOkText || 'Ок'}
+                </Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Кастомное подтверждение удаления сообщения (вместо Alert) */}
       <Modal

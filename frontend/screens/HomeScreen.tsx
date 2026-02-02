@@ -3313,7 +3313,7 @@ const handleClearNick = useCallback(async () => {
           )}
         </View>
         {missedCount > 0 && (
-          <View style={[styles.badgeBubble, { right: -2 }]}> 
+          <View style={styles.badgeBubble}>
             <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>
               {missedCount > 99 ? '99+' : missedCount}
             </Text>
@@ -4361,6 +4361,7 @@ const styles = StyleSheet.create({
   friendStatus: {
     marginTop: 2,
     fontSize: Platform.OS === "android" ? 12 : 14,
+    fontWeight: '500',
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4 },
   centerAvatarWrap: {
@@ -4442,7 +4443,9 @@ const styles = StyleSheet.create({
   menuDot: { position: 'absolute', top: 4, right: 4, width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(255,90,103,0.95)' },
 
   badgeBubble: {
-    position: 'absolute', top: -2, right: -2, minWidth: 16, height: 16, paddingHorizontal: 3,
+    // IMPORTANT: не используем отрицательные right/top, иначе на Android (List.Item часто с overflow: 'hidden')
+    // бейдж может обрезаться у правого края на разных девайсах/скейлах.
+    position: 'absolute', top: 2, right: 2, minWidth: 16, height: 16, paddingHorizontal: 3,
     borderRadius: 8, backgroundColor: 'rgba(255,90,103,0.9)', alignItems: 'center', justifyContent: 'center',
   },
 

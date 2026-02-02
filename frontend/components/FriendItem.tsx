@@ -104,7 +104,7 @@ export default function FriendItem({ friend }: { friend: Friend }) {
       <View style={{ flex: 1 }}>
         <Text style={{ color: '#E6E8EB', fontSize: 16, fontWeight: '600' }}>{showName}</Text>
         {typeof friend.online === 'boolean' && (
-          <Text style={{ color: friend.online ? '#55d187' : '#ff6b6b', fontSize: 12 }}>
+          <Text style={{ color: friend.online ? '#55d187' : '#ff6b6b', fontSize: 12, fontWeight: '500' }}>
             {friend.online ? t('online', lang) : t('offline', lang)}
           </Text>
         )}
