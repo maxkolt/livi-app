@@ -1764,34 +1764,15 @@ export default function ChatScreen({ route, navigation }: Props) {
     let beforeMessages: any[] = [];
     setMessages((prev) => {
       beforeMessages = prev;
-      // NOTE: backend only allows deleting own messages "for all".
-      // Keep non-own selected messages visible so selection can be adjusted.
-      return prev.filter((mm) => {
-        const mid = String(mm?.id || '');
-        if (!idSet.has(mid)) return true;
-        const isMine =
-          String(mm?.from || '') === String(currentUserId || '') ||
-          String(mm?.sender || '') === 'me';
-        return !isMine;
-      });
+      return prev.filter((mm) => !idSet.has(String(mm?.id || '')));
     });
 
     // IMPORTANT: delete requests sequentially (emitAck/socket acks are not guaranteed to be concurrency-safe).
     // UI is already updated optimistically above, so user still sees "all deleted at once".
     const failed: string[] = [];
-    const skippedNotMine: string[] = [];
     for (const id of ids) {
       try {
         const mid = String(id);
-        const m = beforeMessages.find((x: any) => String(x?.id || '') === mid);
-        const isMine =
-          String(m?.from || '') === String(currentUserId || '') ||
-          String(m?.sender || '') === 'me';
-        if (!isMine) {
-          skippedNotMine.push(mid);
-          continue;
-        }
-
         const ok = await deleteMessage(mid);
         if (!ok) failed.push(mid);
       } catch {
@@ -1800,14 +1781,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
 
     if (failed.length === 0) {
-      if (skippedNotMine.length === 0) {
-        exitSelectionMode();
-        showForwardToastBadge(true, 'Удалено');
-      } else {
-        // Keep selection for non-own messages and explain
-        setSelectedMessageIds(new Set(skippedNotMine));
-        showNotice('info', 'Удаление', `Можно удалить у всех только свои сообщения. Не удалено: ${skippedNotMine.length}`);
-      }
+      exitSelectionMode();
+      showForwardToastBadge(true, 'Удалено');
       return;
     }
 
@@ -1816,9 +1791,9 @@ export default function ChatScreen({ route, navigation }: Props) {
     setMessages(() => beforeMessages.filter((mm) => !succeededSet.has(String(mm?.id))));
 
     // Оставляем выделенными только те, что не удалились (можно повторить)
-    setSelectedMessageIds(new Set([...failed, ...skippedNotMine]));
+    setSelectedMessageIds(new Set(failed));
     showNotice('error', t('errorTitle', lang), `Не удалось удалить: ${failed.length}`);
-  }, [selectedMessageIds, exitSelectionMode, showForwardToastBadge, showNotice, lang, currentUserId]);
+  }, [selectedMessageIds, exitSelectionMode, showForwardToastBadge, showNotice, lang]);
 
   const confirmDeleteSelected = React.useCallback(() => {
     if (selectedCount === 0) return;

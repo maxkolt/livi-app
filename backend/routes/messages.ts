@@ -246,9 +246,8 @@ router.post('/messages/delete', async (req, res) => {
     const msg = (friendship as any).findMessageById?.(messageId);
     if (!msg) return res.json({ ok: false, error: 'not_found' });
 
-    // Safety: allow deleting only own messages (UI already enforces this).
-    const fromId = String(msg?.from?.toString?.() || msg?.from || '');
-    if (fromId !== me) return res.status(403).json({ ok: false, error: 'forbidden' });
+    // Allow either participant to delete any message in this friendship (delete for both).
+    // This matches the product requirement: deletion removes message for BOTH users.
 
     const removed = await (friendship as any).removeMessage(messageId);
     if (!removed) return res.json({ ok: false, error: 'remove_failed' });
