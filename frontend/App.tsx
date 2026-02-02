@@ -234,7 +234,8 @@ function AppContent() {
         await Audio.setAudioModeAsync({
           playsInSilentModeIOS: true,
           allowsRecordingIOS: true,
-          staysActiveInBackground: true,   // Включаем для работы аудио в PiP
+          // IMPORTANT: do not keep audio session alive in background to avoid battery drain.
+          staysActiveInBackground: false,
           shouldDuckAndroid: true,
           // IMPORTANT: allow OS routing to headset/Bluetooth; do not force speaker
           playThroughEarpieceAndroid: true,

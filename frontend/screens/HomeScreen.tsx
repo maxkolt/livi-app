@@ -583,6 +583,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
 export default function HomeScreen({ navigation, route }: Props & { route?: { params?: HomeRouteParams } }) {
   const insets = useSafeAreaInsets();
   const { preference, setPreference, theme, isDark } = useAppTheme();
+  const [appIsActive, setAppIsActive] = useState(AppState.currentState === 'active');
 
   /* friends state */
   const [friends, setFriends] = useState<Friend[]>([]);
@@ -2042,13 +2043,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   /* ===== refresh friends === */
   useEffect(() => {
-    if (menuOpen && tab === 'friends') {
+    if (menuOpen && tab === 'friends' && appIsActive) {
       setInitialized(true);
       void loadFriends();
       const tmr = setInterval(() => void loadFriends(), 10_000);
       return () => clearInterval(tmr);
     }
-  }, [menuOpen, tab, loadFriends]);
+  }, [menuOpen, tab, appIsActive, loadFriends]);
 
   /* ===== warm avatar cache когда открыта вкладка друзей === */
   useEffect(() => {
@@ -2082,6 +2083,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const sub = AppState.addEventListener('change', async (state) => {
       const wasBg = /inactive|background/.test(appStateRef.current);
       appStateRef.current = state;
+      try { setAppIsActive(state === 'active'); } catch {}
       if (wasBg && state === 'active') {
         try {
           await waitSocketConnected();

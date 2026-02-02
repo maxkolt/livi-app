@@ -237,7 +237,7 @@ router.post('/messages/delete', async (req, res) => {
     const friendship = await FriendshipMessages.findOne({
       $and: [
         { $or: [{ user1: me }, { user2: me }] },
-        { $or: [{ 'textMessages.id': messageId }, { 'imageMessages.id': messageId }] },
+        { $or: [{ 'textMessages.id': messageId }, { 'imageMessages.id': messageId }, { 'audioMessages.id': messageId }] },
       ],
     });
 
@@ -298,6 +298,7 @@ router.post('/messages/clear_chat', async (req, res) => {
 
       (friendship as any).textMessages = [];
       (friendship as any).imageMessages = [];
+      (friendship as any).audioMessages = [];
       (friendship as any).lastMessage = undefined;
       (friendship as any).lastActivity = new Date();
       await friendship.save();

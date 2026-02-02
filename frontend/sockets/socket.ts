@@ -312,23 +312,33 @@ setTimeout(() => {
 // Требование: статус online только когда пользователь в приложении.
 // Самый надёжный способ без изменения сервера — отключать сокет при уходе в фон.
 let __lastAppState: AppStateStatus = AppState.currentState;
+let __realtimePaused = __lastAppState !== 'active';
 try {
   AppState.addEventListener('change', (nextState) => {
     try {
-      const wasActive = __lastAppState === 'active';
-      const isActive = nextState === 'active';
+      // Treat 'inactive' as foreground to avoid disconnect/reconnect flicker while user is still in-app
+      // (e.g. transient OS transitions). We only pause realtime when app actually goes to background.
+      const wasForeground = __lastAppState === 'active' || __lastAppState === 'inactive';
+      const isForeground = nextState === 'active' || nextState === 'inactive';
       __lastAppState = nextState;
 
-      if (wasActive && !isActive) {
-        // App -> background/inactive => offline
+      if (wasForeground && !isForeground) {
+        // App -> background => offline
+        __realtimePaused = true;
         try {
+          // IMPORTANT: prevent any auto-reconnect loops while app is in background.
+          // socket.disconnect() is "manual" and should stop reconnects, but some edge cases
+          // (race with reconnect attempt) are safer with reconnection=false.
+          try { (socket as any).io.opts.reconnection = false; } catch {}
           if (socket?.connected) socket.disconnect();
         } catch {}
         return;
       }
 
-      if (!wasActive && isActive) {
-        // App -> active => online (reconnect)
+      if (!wasForeground && isForeground) {
+        // App -> foreground => online (reconnect)
+        __realtimePaused = false;
+        try { (socket as any).io.opts.reconnection = true; } catch {}
         // applyAuthAndConnect already sets installId/userId and connects with timeouts.
         applyAuthAndConnect().catch(() => {});
       }
@@ -369,7 +379,16 @@ socket.on("disconnect", (r) => {
   reconnecting = transient.includes(r) || r === undefined;
   // На следующем коннекте снова гарантируем наличие installId в handshake
   __handshakeHasInstallId = false;
-  console.warn(`[socket] disconnected (${r}) reconnecting=${reconnecting}`);
+  const reason = String(r || '');
+  const isExpectedUserBackgroundDisconnect = reason === 'io client disconnect';
+  if (isExpectedUserBackgroundDisconnect) {
+    const note = __realtimePaused ? 'app in background / screen locked' : 'user-initiated disconnect';
+    logger.info(`[socket] temporary disconnect (${note}) reason=${reason || 'unknown'}`);
+  } else if (transient.includes(reason)) {
+    logger.warn(`[socket] disconnected (${reason}) reconnecting=${reconnecting}`);
+  } else {
+    logger.warn(`[socket] disconnected (${reason || 'unknown'}) reconnecting=${reconnecting}`);
+  }
 });
 socket.on("connect_error", (e) => {
   reconnecting = true;
@@ -1187,6 +1206,8 @@ const userExistsCache = new Map<string, { result: boolean; timestamp: number }>(
 // приложение будет зацикливаться на "user_not_found" и делать hard reset по старому кэшу.
 const USER_EXISTS_CACHE_TTL_TRUE = 30000; // 30s
 const USER_EXISTS_CACHE_TTL_FALSE = 1500; // 1.5s (почти "debounce")
+// Чтобы не спамить логами при частых проверках (например, при resume/focus)
+let __lastUserExistsCacheLogAt = 0;
 
 // Защита от одновременных вызовов для одного userId
 const pendingChecks = new Map<string, Promise<boolean | null>>();
@@ -1198,7 +1219,12 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
   if (cached) {
     const ttl = cached.result ? USER_EXISTS_CACHE_TTL_TRUE : USER_EXISTS_CACHE_TTL_FALSE;
     if (Date.now() - cached.timestamp < ttl) {
-    console.log('[checkUserExists] Using cached result:', cached.result);
+    // Log at most once per ~10s to avoid noisy dev console spam
+    const now = Date.now();
+    if (__DEV__ && now - __lastUserExistsCacheLogAt > 10_000) {
+      __lastUserExistsCacheLogAt = now;
+      console.log('[checkUserExists] Using cached result:', cached.result);
+    }
     return cached.result;
     }
   }
@@ -1576,7 +1602,12 @@ export function sendMessage(payload: {
 
   return (async () => {
     try {
-      return await viaSocket();
+      const r = await viaSocket();
+      // IMPORTANT: if socket responds with ok=false (no throw), fall back to HTTP.
+      // This improves reliability (e.g. during transient auth/reauth timing or server hiccups),
+      // and still supports offline recipients via backend persistence.
+      if ((r as any)?.ok === true) return r;
+      return await viaHttp();
     } catch {
       return await viaHttp();
     }
@@ -1957,8 +1988,7 @@ export async function clearChatMessages(peerId: string, forAll: boolean = true):
 export async function deleteMessage(messageId: string): Promise<boolean> {
   try {
     const viaSocket = async () => {
-      const result = await emitAck('message:delete', { messageId });
-      return !!result?.ok;
+      return await emitAck('message:delete', { messageId });
     };
 
     const viaHttp = async () => {
@@ -1986,7 +2016,10 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
     };
 
     try {
-      return await viaSocket();
+      const r: any = await viaSocket();
+      // IMPORTANT: if socket responds with ok=false (no throw), fall back to HTTP for reliability.
+      if (r?.ok === true) return true;
+      return await viaHttp();
     } catch {
       return await viaHttp();
     }

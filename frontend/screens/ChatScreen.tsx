@@ -982,6 +982,156 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   }, []);
 
+  const [retryUiForId, setRetryUiForId] = useState<string | null>(null);
+
+  const retryFailedOutgoingMessage = React.useCallback(async (m: any) => {
+    try {
+      if (!m?.id || !currentUserId || !peerId) return;
+      const mid = String(m.id);
+      const type = String(m?.type || '').trim();
+      if (!type) return;
+
+      setRetryUiForId(null);
+      setUploadStatus((prev) => ({ ...prev, [mid]: 'sending' }));
+      updateReadStatuses((prev) => ({ ...prev, [mid]: 'sending' }));
+
+      if (type === 'audio') {
+        const localUri = String(m?.uri || '').trim();
+        const name = String(m?.name || `voice_${Date.now()}.m4a`);
+        const size = Number(m?.size || 0) || 0;
+        const durationSec = Number(m?.duration || 0) || 0;
+
+        let remoteUrl = localUri;
+        const looksRemote = /^https?:\/\//i.test(remoteUrl);
+        if (!looksRemote) {
+          const upload = await uploadMediaToServer(localUri, 'audio', undefined, currentUserId, peerId);
+          if (!upload.success || !upload.url) {
+            updateReadStatuses((prev) => ({ ...prev, [mid]: 'failed' }));
+            setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
+            return;
+          }
+          remoteUrl = upload.url;
+        }
+
+        const socketResult: any = await sendSocketMessage({
+          to: peerId,
+          type: 'audio',
+          uri: remoteUrl,
+          name,
+          size,
+          duration: durationSec,
+        });
+
+        if (socketResult?.ok && socketResult?.messageId) {
+          const newId = String(socketResult.messageId);
+          setMessages((prev) => {
+            const updated = prev.map((msg: any) =>
+              String(msg?.id) === mid
+                ? { ...msg, id: newId, uri: resolveMediaUri(remoteUrl), from: currentUserId, to: peerId }
+                : msg
+            );
+            saveMessages(updated);
+            return updated;
+          });
+
+          setUploadStatus((prev) => {
+            const next = { ...prev };
+            next[newId] = 'sent';
+            delete next[mid];
+            return next;
+          });
+
+          updateReadStatuses((prev) => {
+            const next = { ...prev };
+            const delivery = socketResult.delivered ? 'delivered' : 'sent';
+            next[newId] = delivery;
+            delete next[mid];
+            return next;
+          });
+
+          // cleanup local file if it exists and we have sent successfully
+          try { if (!looksRemote) await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch {}
+          return;
+        }
+
+        updateReadStatuses((prev) => ({ ...prev, [mid]: 'failed' }));
+        setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
+        return;
+      }
+
+      if (type === 'image') {
+        const localUri = String(m?.uri || '').trim();
+        const fileName = String(m?.name || `file_${Date.now()}`);
+        const fileSize = Number(m?.size || 0) || 0;
+
+        let remoteUrl = localUri;
+        const looksRemote = /^https?:\/\//i.test(remoteUrl);
+        if (!looksRemote) {
+          const upload = await uploadMediaToServer(localUri, 'image', undefined, currentUserId, peerId);
+          if (!upload.success || !upload.url) {
+            updateReadStatuses((prev) => ({ ...prev, [mid]: 'failed' }));
+            setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
+            return;
+          }
+          remoteUrl = upload.url;
+        }
+
+        const socketResult: any = await sendSocketMessage({
+          to: peerId,
+          type: 'image',
+          uri: remoteUrl,
+          name: fileName || undefined,
+          size: fileSize || undefined,
+        });
+
+        if (socketResult?.ok && socketResult?.messageId) {
+          const newId = String(socketResult.messageId);
+          setMessages((prev) => {
+            const updated = prev.map((msg: any) =>
+              String(msg?.id) === mid
+                ? { ...msg, id: newId, uri: resolveMediaUri(remoteUrl), from: currentUserId, to: peerId }
+                : msg
+            );
+            saveMessages(updated);
+            return updated;
+          });
+
+          setUploadStatus((prev) => {
+            const next = { ...prev };
+            next[newId] = 'sent';
+            delete next[mid];
+            return next;
+          });
+
+          updateReadStatuses((prev) => {
+            const next = { ...prev };
+            const delivery = socketResult.delivered ? 'delivered' : 'sent';
+            next[newId] = delivery;
+            delete next[mid];
+            return next;
+          });
+          return;
+        }
+
+        updateReadStatuses((prev) => ({ ...prev, [mid]: 'failed' }));
+        setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
+        return;
+      }
+
+      // Fallback: no retry implemented for this type
+      updateReadStatuses((prev) => ({ ...prev, [mid]: 'failed' }));
+      setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
+    } catch {
+      try {
+        const mid = String(m?.id || '');
+        if (mid) {
+          updateReadStatuses((prev) => ({ ...prev, [mid]: 'failed' }));
+          setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
+        }
+      } catch {}
+    }
+  }, [currentUserId, peerId, resolveMediaUri, updateReadStatuses, saveMessages]);
+
   const [playingAudioState, setPlayingAudioState] = useState<{
     id: string;
     durationMs: number;
@@ -1608,30 +1758,67 @@ export default function ChatScreen({ route, navigation }: Props) {
     const ids = Array.from(selectedMessageIds);
     if (ids.length === 0) return;
 
+    const idSet = new Set(ids.map((x) => String(x)));
+
+    // Optimistic UI: remove all selected messages at once (no sequential "one-by-one" deletion).
+    let beforeMessages: any[] = [];
+    setMessages((prev) => {
+      beforeMessages = prev;
+      // NOTE: backend only allows deleting own messages "for all".
+      // Keep non-own selected messages visible so selection can be adjusted.
+      return prev.filter((mm) => {
+        const mid = String(mm?.id || '');
+        if (!idSet.has(mid)) return true;
+        const isMine =
+          String(mm?.from || '') === String(currentUserId || '') ||
+          String(mm?.sender || '') === 'me';
+        return !isMine;
+      });
+    });
+
+    // IMPORTANT: delete requests sequentially (emitAck/socket acks are not guaranteed to be concurrency-safe).
+    // UI is already updated optimistically above, so user still sees "all deleted at once".
     const failed: string[] = [];
+    const skippedNotMine: string[] = [];
     for (const id of ids) {
       try {
-        const ok = await deleteMessage(String(id));
-        if (ok) {
-          setMessages((prev) => prev.filter((mm) => String(mm?.id) !== String(id)));
-        } else {
-          failed.push(String(id));
+        const mid = String(id);
+        const m = beforeMessages.find((x: any) => String(x?.id || '') === mid);
+        const isMine =
+          String(m?.from || '') === String(currentUserId || '') ||
+          String(m?.sender || '') === 'me';
+        if (!isMine) {
+          skippedNotMine.push(mid);
+          continue;
         }
+
+        const ok = await deleteMessage(mid);
+        if (!ok) failed.push(mid);
       } catch {
         failed.push(String(id));
       }
     }
 
     if (failed.length === 0) {
-      exitSelectionMode();
-      showForwardToastBadge(true, 'Удалено');
+      if (skippedNotMine.length === 0) {
+        exitSelectionMode();
+        showForwardToastBadge(true, 'Удалено');
+      } else {
+        // Keep selection for non-own messages and explain
+        setSelectedMessageIds(new Set(skippedNotMine));
+        showNotice('info', 'Удаление', `Можно удалить у всех только свои сообщения. Не удалено: ${skippedNotMine.length}`);
+      }
       return;
     }
 
+    // Restore failed items (keep successful deletions applied)
+    const succeededSet = new Set(ids.map(String).filter((id) => !failed.includes(id)));
+    setMessages(() => beforeMessages.filter((mm) => !succeededSet.has(String(mm?.id))));
+
     // Оставляем выделенными только те, что не удалились (можно повторить)
-    setSelectedMessageIds(new Set(failed));
+    setSelectedMessageIds(new Set([...failed, ...skippedNotMine]));
     showNotice('error', t('errorTitle', lang), `Не удалось удалить: ${failed.length}`);
-  }, [selectedMessageIds, exitSelectionMode, showForwardToastBadge, showNotice, lang]);
+  }, [selectedMessageIds, exitSelectionMode, showForwardToastBadge, showNotice, lang, currentUserId]);
 
   const confirmDeleteSelected = React.useCallback(() => {
     if (selectedCount === 0) return;
@@ -2071,6 +2258,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     const messageId = Date.now().toString();
     const durationSec = Math.max(1, Math.round(durationMs / 1000));
     const name = `voice_${Date.now()}.m4a`;
+    const localFileForCleanup = String(localUri || '');
 
     const newMessage = {
       id: messageId,
@@ -2131,6 +2319,9 @@ export default function ChatScreen({ route, navigation }: Props) {
           delete next[messageId];
           return next;
         });
+
+        // cleanup recorded file only after successful send
+        try { await FileSystem.deleteAsync(localFileForCleanup, { idempotent: true }); } catch {}
       } else {
         updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
         setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
@@ -2139,8 +2330,6 @@ export default function ChatScreen({ route, navigation }: Props) {
       updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
       setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
     } finally {
-      // cleanup recorded file after sending attempt
-      try { await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch {}
       setVoiceRecordMs(0);
     }
   }, [currentUserId, peerId, resolveMediaUri, updateReadStatuses, saveMessages]);
@@ -2501,7 +2690,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
   // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
-  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, selectionMode, isSelected, onToggleSelect }: any) => {
+  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed }: any) => {
     const [imageLoadError, setImageLoadError] = React.useState(false);
     const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
     const [isDownloading, setIsDownloading] = React.useState(false);
@@ -2862,9 +3051,6 @@ export default function ChatScreen({ route, navigation }: Props) {
                   <ActivityIndicator size="small" color={LIVI.titan} />
                 </View>
               )}
-              {messageUploadStatus === 'failed' && (
-                <Ionicons name="alert-circle" size={18} color="#FF5A67" />
-              )}
             </View>
           );
         }
@@ -2890,27 +3076,57 @@ export default function ChatScreen({ route, navigation }: Props) {
             </View>
           );
           
-        case 'failed':
-          // Не доставлено - красный кружок с восклицательным знаком
+        case 'failed': {
+          const showRetry = String(retryUiForId || '') === String(item?.id || '');
           return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 2 }}>
-              <View style={{
-                width: 14,
-                height: 14,
-                borderRadius: 7,
-                backgroundColor: LIVI.red,
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}>
-                <Text style={{ 
-                  color: 'white', 
-                  fontSize: 9, 
-                  fontWeight: 'bold',
-                  lineHeight: 9 
-                }}>!</Text>
-              </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 6, gap: 8 }}>
+              {showRetry && (
+                <Pressable
+                  onPress={() => {
+                    try { onRetryFailed?.(item); } catch {}
+                  }}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingHorizontal: 10,
+                    height: 28,
+                    borderRadius: 14,
+                    backgroundColor: isDark ? 'rgba(255,90,103,0.16)' : 'rgba(255,90,103,0.12)',
+                    borderWidth: 1,
+                    borderColor: 'rgba(255,90,103,0.45)',
+                  }}
+                >
+                  <Ionicons name="refresh-circle" size={18} color="#FF5A67" style={{ marginRight: 6 }} />
+                  <Text style={{ color: '#FF5A67', fontSize: 12, fontWeight: '700' }}>Повторить</Text>
+                </Pressable>
+              )}
+
+              <Pressable
+                onPress={() => {
+                  try { onToggleRetryUi?.(String(item?.id || '')); } catch {}
+                }}
+                hitSlop={8}
+                style={{ flexDirection: 'row', alignItems: 'center' }}
+              >
+                <View style={{
+                  width: 14,
+                  height: 14,
+                  borderRadius: 7,
+                  backgroundColor: LIVI.red,
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <Text style={{ 
+                    color: 'white', 
+                    fontSize: 9, 
+                    fontWeight: 'bold',
+                    lineHeight: 9 
+                  }}>!</Text>
+                </View>
+              </Pressable>
             </View>
           );
+        }
         case 'sent':
           // Отправлено на сервер (еще не доставлено) — одна серая птичка
           return (
@@ -3122,12 +3338,15 @@ export default function ChatScreen({ route, navigation }: Props) {
       onPressAudio={togglePlayAudioMessage}
       playingAudioId={playingAudioId}
       playingAudioState={playingAudioState}
+      retryUiForId={retryUiForId}
+      onToggleRetryUi={(id: string) => setRetryUiForId((prev) => (prev === id ? null : id))}
+      onRetryFailed={retryFailedOutgoingMessage}
       onLongPressMessage={handleLongPressMessage}
       selectionMode={selectionMode}
       isSelected={selectedMessageIds.has(String(item.id))}
       onToggleSelect={toggleSelectMessage}
     />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, handleLongPressMessage, selectionMode, selectedMessageIds, toggleSelectMessage]);
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, selectionMode, selectedMessageIds, toggleSelectMessage]);
 
   return (
     <SafeAreaView 
