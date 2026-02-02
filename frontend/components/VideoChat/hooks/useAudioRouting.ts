@@ -27,7 +27,7 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
       });
       s.setMode('VideoChat');
       s.setActive(true);
-      try { s.overrideOutputAudioPort('speaker'); } catch {}
+      // IMPORTANT: do NOT force speaker output. Let iOS route to wired/Bluetooth devices.
     } catch (e) {
       logger.warn('[useAudioRouting] Error configuring iOS audio session:', e);
     }
@@ -35,10 +35,10 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
 
   const applyRouting = () => {
     try { InCallManager.start({ media: 'video', ringback: '' }); } catch {}
-    // По умолчанию — на динамик (как было раньше). Кнопки mute/volume работают отдельно.
-    try { InCallManager.setSpeakerphoneOn(true); } catch {}
-    try { (InCallManager as any).setForceSpeakerphoneOn?.('on'); } catch {}
-    try { (mediaDevices as any)?.setSpeakerphoneOn?.(true); } catch {}
+    // IMPORTANT: do NOT force speakerphone. Use auto routing so headset/BT works correctly.
+    try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
+    // Do not call setSpeakerphoneOn(true) here; InCallManager.start({media:'video'}) will default appropriately.
+    // Also do not force WebRTC mediaDevices speaker; let OS route.
     // Не трогаем BT SCO агрессивно — это ломает роутинг на части устройств.
     configureIOSAudioSession();
   };

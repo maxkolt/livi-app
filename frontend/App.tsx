@@ -236,7 +236,8 @@ function AppContent() {
           allowsRecordingIOS: true,
           staysActiveInBackground: true,   // Включаем для работы аудио в PiP
           shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
+          // IMPORTANT: allow OS routing to headset/Bluetooth; do not force speaker
+          playThroughEarpieceAndroid: true,
         });
       } catch (e) {
         logger.warn("Audio setAudioModeAsync failed:", e);

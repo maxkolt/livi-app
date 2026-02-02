@@ -68,6 +68,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t } from "../utils/i18n";
+import { clearNotificationIndicators } from "../utils/pushNotifications";
 
 type RouteParams = {
   peerId: string;
@@ -738,6 +739,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         if (isFromPeer) {
           setTimeout(() => {
             markMessagesAsRead(senderId);
+            try { void clearNotificationIndicators(); } catch {}
           }, 1000);
         }
       }
@@ -871,6 +873,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           
           // Отмечаем сообщения как прочитанные
           await markMessagesAsRead(peerId);
+          // Clear notification tray/badge after reading
+          try { await clearNotificationIndicators(); } catch {}
           
               // Синхронизируем статусы доставки/прочтения из сервера для моих сообщений
               try {
@@ -957,6 +961,14 @@ export default function ChatScreen({ route, navigation }: Props) {
     return `${m}:${String(s).padStart(2, '0')}`;
   }, []);
 
+  // UI format requested: 0.07, 1.02, etc.
+  const formatDurationDot = React.useCallback((ms: number) => {
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m}.${String(s).padStart(2, '0')}`;
+  }, []);
+
   const stopAudioPlayback = React.useCallback(async () => {
     try {
       if (audioSoundRef.current) {
@@ -966,8 +978,15 @@ export default function ChatScreen({ route, navigation }: Props) {
     } finally {
       audioSoundRef.current = null;
       setPlayingAudioId(null);
+      setPlayingAudioState(null);
     }
   }, []);
+
+  const [playingAudioState, setPlayingAudioState] = useState<{
+    id: string;
+    durationMs: number;
+    positionMs: number;
+  } | null>(null);
 
   const togglePlayAudioMessage = React.useCallback(async (m: any) => {
     try {
@@ -983,11 +1002,24 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       await stopAudioPlayback();
 
+      const fallbackDurationMs = Math.max(0, Number(m?.duration || 0) * 1000);
+      setPlayingAudioState({ id: mid, durationMs: fallbackDurationMs, positionMs: 0 });
+
       const { sound } = await Audio.Sound.createAsync(
         { uri },
         { shouldPlay: true },
         (status) => {
           const s: any = status as any;
+          if (s && typeof s.positionMillis === 'number') {
+            setPlayingAudioState((prev) => {
+              if (!prev || prev.id !== mid) return prev;
+              return {
+                id: prev.id,
+                durationMs: typeof s.durationMillis === 'number' ? Number(s.durationMillis) : prev.durationMs,
+                positionMs: Number(s.positionMillis || 0),
+              };
+            });
+          }
           if (s?.didJustFinish) {
             void stopAudioPlayback();
           }
@@ -1126,6 +1158,17 @@ export default function ChatScreen({ route, navigation }: Props) {
       socket.off('user.avatarUpdated', handleAvatarUpdated);
     };
   }, [peerId]);
+
+  // When chat is focused, clear system notification tray/badge.
+  // This fixes the case: user opens app from notifications, reads messages, but badge stays.
+  useEffect(() => {
+    const unsub = navigation?.addListener?.('focus', () => {
+      try { void clearNotificationIndicators(); } catch {}
+    });
+    return () => {
+      try { unsub?.(); } catch {}
+    };
+  }, [navigation]);
 
   // Предзагрузка удалена - теперь используется система кеширования в AvatarImage
 
@@ -2119,7 +2162,8 @@ export default function ChatScreen({ route, navigation }: Props) {
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
         shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
+        // IMPORTANT: allow OS routing to headset/Bluetooth; do not force speaker
+        playThroughEarpieceAndroid: true,
         staysActiveInBackground: false,
       });
 
@@ -2226,7 +2270,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           allowsRecordingIOS: false,
           playsInSilentModeIOS: true,
           shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
+          // IMPORTANT: allow OS routing to headset/Bluetooth; do not force speaker
+          playThroughEarpieceAndroid: true,
           staysActiveInBackground: false,
         });
       } catch {}
@@ -2456,7 +2501,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
   // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
-  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, onLongPressMessage, selectionMode, isSelected, onToggleSelect }: any) => {
+  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, selectionMode, isSelected, onToggleSelect }: any) => {
     const [imageLoadError, setImageLoadError] = React.useState(false);
     const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
     const [isDownloading, setIsDownloading] = React.useState(false);
@@ -2775,7 +2820,12 @@ export default function ChatScreen({ route, navigation }: Props) {
         case 'audio': {
           const isPlaying = String(playingAudioId || '') === String(item.id || '');
           const durSec = Number(item?.duration || 0);
-          const durLabel = durSec > 0 ? formatDuration(durSec * 1000) : '';
+          const fullMs = durSec > 0 ? durSec * 1000 : 0;
+          const remainingMs =
+            isPlaying && playingAudioState?.id === String(item.id || '')
+              ? Math.max(0, Number(playingAudioState.durationMs || 0) - Number(playingAudioState.positionMs || 0))
+              : fullMs;
+          const durLabel = (isPlaying ? remainingMs : fullMs) > 0 ? formatDurationDot(isPlaying ? remainingMs : fullMs) : '';
 
           return (
             <View
@@ -3042,6 +3092,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   }), [
     resolveMediaUri,
     formatDuration,
+    formatDurationDot,
     animateMessagePress,
     getMessageAnimation,
     BUBBLE_BG_OUT,
@@ -3070,12 +3121,13 @@ export default function ChatScreen({ route, navigation }: Props) {
       onPressImage={openMediaViewer}
       onPressAudio={togglePlayAudioMessage}
       playingAudioId={playingAudioId}
+      playingAudioState={playingAudioState}
       onLongPressMessage={handleLongPressMessage}
       selectionMode={selectionMode}
       isSelected={selectedMessageIds.has(String(item.id))}
       onToggleSelect={toggleSelectMessage}
     />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, handleLongPressMessage, selectionMode, selectedMessageIds, toggleSelectMessage]);
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, handleLongPressMessage, selectionMode, selectedMessageIds, toggleSelectMessage]);
 
   return (
     <SafeAreaView 

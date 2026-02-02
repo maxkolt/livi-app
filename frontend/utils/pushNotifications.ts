@@ -5,7 +5,7 @@ import { API_BASE } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
 
-async function clearNotificationIndicators() {
+export async function clearNotificationIndicators() {
   // Android launchers usually show the badge based on *active* notifications in the tray.
   // If we don't dismiss them, the badge can stay even after the user read messages inside the app.
   try {
