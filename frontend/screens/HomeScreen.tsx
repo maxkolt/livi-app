@@ -605,6 +605,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [menuOpen, setMenuOpen] = useState(false);
   const [tab, setTab] = useState<'friends' | 'settings' | 'more'>('friends');
 
+  // Единый фон для "титановой" кнопки меню и кружка аватара (в светлой теме),
+  // чтобы элементы выглядели консистентно.
+  const MENU_CHROME_BG = isDark
+    ? 'rgba(138, 143, 153, 0.15)' // титановый для тёмной темы
+    : Platform.OS === 'android'
+      ? 'rgba(59, 68, 83, 0.10)' // чуть легче на Android
+      : 'rgba(59, 68, 83, 0.15)'; // iOS
+
   /* profile state */
   const [saving, setSaving] = useState(false);
   // Синхронный guard от двойного тапа "Сохранить" (state обновляется не мгновенно)
@@ -3538,10 +3546,13 @@ const handleClearNick = useCallback(async () => {
       avatarUri &&
       (/^data:image\//i.test(avatarUri) || /^https?:\/\//i.test(avatarUri));
     const myUserId = getCurrentUserId();
+    const hasCachedAvatar = !!(myUserId && myAvatarVer > 0);
+    const noAvatar = !isLocalPreview && !hasCachedAvatar && !hasDirectAvatarUri;
+    const noNick = !(savedNick && String(savedNick).trim());
 
     return (
       <View style={wrapperStyle}>
-        <View style={styles.centerAvatarWrap}>
+        <View style={[styles.centerAvatarWrap, { backgroundColor: MENU_CHROME_BG }]}>
           {isLocalPreview ? (
             // Локальное превью (до загрузки)
             (<ExpoImage
@@ -3574,7 +3585,19 @@ const handleClearNick = useCallback(async () => {
             </View>)
           )}
         </View>
-        <Text style={[styles.subtitleNik, { marginTop: 12, fontSize: Platform.OS === "ios" ? 25 : 20, color: isDark ? LIVI.text2 : LIVI.textThemeWhite }]}>{displayName(savedNick)}</Text>
+        <Text
+          style={[
+            styles.subtitleNik,
+            {
+              marginTop: 12,
+              fontSize: Platform.OS === "ios" ? 25 : 20,
+              // Когда показываем "—" (ник пустой) или нет аватара — цвет должен совпадать с плейсхолдером в аватаре.
+              color: (noNick || noAvatar) ? LIVI.titan : (isDark ? LIVI.text2 : LIVI.textThemeWhite),
+            },
+          ]}
+        >
+          {displayName(savedNick)}
+        </Text>
       </View>
     );
   };
@@ -3674,11 +3697,7 @@ const handleClearNick = useCallback(async () => {
             style={[
               styles.menuBtn,
               { 
-                backgroundColor: isDark 
-                  ? 'rgba(138, 143, 153, 0.15)' // Титановый цвет для темной темы
-                  : Platform.OS === 'android' 
-                    ? 'rgba(59, 68, 83, 0.10)' // Чуть светлее для светлой темы на Android
-                    : 'rgba(59, 68, 83, 0.15)', // Обычный для светлой темы на iOS
+                backgroundColor: MENU_CHROME_BG,
                 borderColor: isDark ? theme.colors.outline : LIVI.textThemeWhite,
                 borderWidth: StyleSheet.hairlineWidth,
               }

@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   TextInput,
+  AppState,
   Platform,
   Alert,
   ActionSheetIOS,
@@ -126,6 +127,19 @@ export default function ChatScreen({ route, navigation }: Props) {
     green: '#2ECC71',
     red: '#FF5A67',
   } as const), [theme, isDark]);
+
+  // В светлой теме background задан как rgba(..., 0.93) (слегка прозрачный),
+  // из‑за чего под панелью ввода "просвечивает" контент (например, заглушка пустого чата).
+  // Для самой панели ввода делаем фон полностью непрозрачным, сохраняя тот же цвет.
+  const INPUT_BAR_BG = React.useMemo(() => {
+    if (isDark) return LIVI.bg;
+    const bg = String(LIVI.bg || '');
+    const m = bg.match(/^rgba\(([^)]+)\)$/i);
+    if (!m) return bg;
+    const parts = m[1].split(',').map((s) => s.trim());
+    if (parts.length !== 4) return bg;
+    return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, 1)`;
+  }, [LIVI.bg, isDark]);
 
   const BORDER_COLOR = theme.colors.outline as string;
   // Цвета облаков: в светлой теме немного затемняем входящие, исходящие чуть светлее
@@ -793,6 +807,88 @@ export default function ChatScreen({ route, navigation }: Props) {
     };
   }, [currentUserId, peerId]);
 
+  // When app returns from background with chat open, we might have missed realtime events
+  // (e.g. message deleted by peer while device was sleeping). Do a quiet sync.
+  const lastQuietSyncAtRef = useRef(0);
+  const quietSyncInFlightRef = useRef(false);
+  const quietSyncChat = React.useCallback(async () => {
+    try {
+      if (!currentUserId || !peerId) return;
+      if (quietSyncInFlightRef.current) return;
+      const now = Date.now();
+      if (now - lastQuietSyncAtRef.current < 1200) return; // debounce
+      lastQuietSyncAtRef.current = now;
+      quietSyncInFlightRef.current = true;
+
+      const serverMessages = await fetchMessages({ with: peerId, limit: 60 });
+      if (!(serverMessages?.ok && Array.isArray(serverMessages.messages))) return;
+
+      const formatted = serverMessages.messages.map((msg: any) => ({
+        id: msg.id,
+        text: msg.text,
+        type: msg.type,
+        uri: msg.uri,
+        name: (msg as any).name,
+        size: (msg as any).size,
+        duration: (msg as any).duration,
+        sender: msg.from === currentUserId ? 'me' : 'peer',
+        from: msg.from,
+        to: msg.to,
+        timestamp: new Date(msg.timestamp),
+        read: !!msg.read,
+      }));
+
+      const serverIdSet = new Set(formatted.map((m: any) => String(m?.id || '')));
+
+      setMessages((prev) => {
+        // Preserve local pending/failed outgoing messages (file://) that server doesn't know about yet.
+        const localKeep = prev.filter((m: any) => {
+          const id = String(m?.id || '');
+          if (!id) return false;
+          if (serverIdSet.has(id)) return false;
+          const st = (uploadStatus as any)?.[id];
+          if (st === 'sending' || st === 'failed') return true;
+          const uri = String(m?.uri || '');
+          if (String(m?.sender || '') === 'me' && /^(file|content|ph|assets-library):\/\//i.test(uri)) return true;
+          return false;
+        });
+
+        const merged = [...formatted, ...localKeep];
+        merged.sort((a: any, b: any) => {
+          const ta = +new Date(a?.timestamp || 0);
+          const tb = +new Date(b?.timestamp || 0);
+          return ta - tb;
+        });
+        return merged;
+      });
+    } catch {}
+    finally {
+      quietSyncInFlightRef.current = false;
+    }
+  }, [currentUserId, peerId, uploadStatus]);
+
+  useEffect(() => {
+    const appStateRef = { current: AppState.currentState };
+    const sub = AppState.addEventListener('change', (state) => {
+      const wasBg = /inactive|background/.test(String(appStateRef.current || ''));
+      appStateRef.current = state;
+      if (wasBg && state === 'active') {
+        void quietSyncChat();
+      }
+    });
+    return () => {
+      try { sub.remove(); } catch {}
+    };
+  }, [quietSyncChat]);
+
+  useEffect(() => {
+    const unsub = navigation?.addListener?.('focus', () => {
+      // If user returns to an already-open chat via app switcher, refresh once.
+      void quietSyncChat();
+    });
+    return () => { try { unsub?.(); } catch {} };
+  }, [navigation, quietSyncChat]);
+
   // Отправляем read receipt для всех сообщений peer при открытии чата
   useEffect(() => {
     if (messages.length && peerId && currentUserId) {
@@ -861,6 +957,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               uri: msg.uri,
               name: (msg as any).name,
               size: (msg as any).size,
+              duration: (msg as any).duration,
               sender: msg.from === currentUserId ? 'me' : 'peer',
               from: msg.from,
               to: msg.to,
@@ -3444,7 +3541,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               style={{
                 borderTopWidth: BORDER_WIDTH,
                 borderTopColor: BORDER_COLOR,
-                backgroundColor: LIVI.bg,
+                backgroundColor: INPUT_BAR_BG,
                 paddingHorizontal: 16,
                 paddingTop: 18,
                 // Важно: симметричные отступы сверху/снизу вокруг инпута
@@ -3709,7 +3806,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 bottom: keyboardLift,
                 borderTopWidth: BORDER_WIDTH,
                 borderTopColor: BORDER_COLOR,
-                backgroundColor: LIVI.bg,
+                backgroundColor: INPUT_BAR_BG,
                 paddingHorizontal: 16,
                 paddingTop: 18,
                 // Когда клавиатура открыта — панель должна "стыковаться" с клавиатурой без зазора.
