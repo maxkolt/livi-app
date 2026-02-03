@@ -1656,7 +1656,7 @@ export function sendReadReceipt(messageId: string, from: string) {
   socket.emit('message:read', { messageId, from });
 }
 
-export function sendChatTyping(payload: { to: string; typing: boolean }) {
+export function sendChatTyping(payload: { to: string; typing?: boolean; recording?: boolean }) {
   try {
     if (__DEV__) {
       try {
@@ -1678,12 +1678,16 @@ export function sendChatTyping(payload: { to: string; typing: boolean }) {
         }
       } catch {}
     }
-    socket.emit('chat:typing', { to: payload.to, typing: !!payload.typing });
+    socket.emit('chat:typing', {
+      to: payload.to,
+      typing: !!payload.typing,
+      recording: payload.recording === undefined ? undefined : !!payload.recording,
+    });
   } catch {}
 }
 
 export function onChatTyping(
-  cb: (data: { from: string; to: string; typing: boolean; ts?: string }) => void
+  cb: (data: { from: string; to: string; typing: boolean; recording?: boolean; ts?: string }) => void
 ): () => void {
   const h = (data: any) => {
     if (__DEV__) {
@@ -1760,7 +1764,11 @@ export function fetchMessages(payload: {
 
   return (async () => {
     try {
-      return await viaSocket();
+      const r: any = await viaSocket();
+      // IMPORTANT: if socket returns ok=false (no throw), fall back to HTTP.
+      // This is common right after device wake / reconnect when auth/reauth is still settling.
+      if (r?.ok === true) return r;
+      return await viaHttp();
     } catch {
       return await viaHttp();
     }

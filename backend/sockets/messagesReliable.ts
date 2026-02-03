@@ -226,8 +226,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
   // per-socket handlers
   // console.log(`[sockets] handlers for ${sock.id} user=${meId()}`);
 
-  /** ===== Typing indicator (chat) ===== */
-  sock.on('chat:typing', async (payload: { to: string; typing: boolean }, ack?: Function) => {
+  /** ===== Typing/Recording indicator (chat) ===== */
+  sock.on('chat:typing', async (payload: { to: string; typing?: boolean; recording?: boolean }, ack?: Function) => {
     try {
       const me = meId();
 
@@ -246,10 +246,13 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
       // Best-effort realtime event (только если получатель онлайн)
       try {
+        const typing = !!(payload as any)?.typing;
+        const recording = !!(payload as any)?.recording;
         io.to(`u:${payload.to}`).emit('chat:typing', {
           from: me,
           to: payload.to,
-          typing: !!payload.typing,
+          typing,
+          recording,
           ts: new Date().toISOString(),
         });
       } catch {}

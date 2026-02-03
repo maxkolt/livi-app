@@ -183,7 +183,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [inputHeight, setInputHeight] = useState(0);
   const [messageText, setMessageText] = useState("");
-  const [peerTyping, setPeerTyping] = useState(false);
+  const [peerActivity, setPeerActivity] = useState<'typing' | 'recording' | null>(null);
   const [peerTypingDots, setPeerTypingDots] = useState(1);
   const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
   const [uploadStatus, setUploadStatus] = useState<Record<string, 'sending' | 'sent' | 'failed'>>({});
@@ -395,6 +395,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   const localTypingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localTypingActiveRef = useRef(false);
   const lastTypingSentAtRef = useRef(0);
+  const localRecordingPingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const localRecordingActiveRef = useRef(false);
+  const peerRecordingMicOpacity = useRef(new Animated.Value(0)).current;
+  const peerRecordingMicLoopRef = useRef<Animated.CompositeAnimation | null>(null);
 
   const stopLocalTyping = React.useCallback(() => {
     if (localTypingStopTimerRef.current) {
@@ -409,6 +413,36 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   }, [peerId]);
 
+  const stopLocalRecordingSignal = React.useCallback(() => {
+    try {
+      if (localRecordingPingTimerRef.current) {
+        clearInterval(localRecordingPingTimerRef.current);
+        localRecordingPingTimerRef.current = null;
+      }
+    } catch {}
+    if (localRecordingActiveRef.current) {
+      localRecordingActiveRef.current = false;
+      try {
+        if (peerId) sendChatTyping({ to: peerId, typing: false, recording: false });
+      } catch {}
+    }
+  }, [peerId]);
+
+  const startLocalRecordingSignal = React.useCallback(() => {
+    if (!peerId) return;
+    localRecordingActiveRef.current = true;
+    try {
+      // Send once immediately and then keep-alive while user holds the record button.
+      sendChatTyping({ to: peerId, typing: false, recording: true });
+    } catch {}
+    try {
+      if (localRecordingPingTimerRef.current) clearInterval(localRecordingPingTimerRef.current);
+      localRecordingPingTimerRef.current = setInterval(() => {
+        try { sendChatTyping({ to: peerId, typing: false, recording: true }); } catch {}
+      }, 900);
+    } catch {}
+  }, [peerId]);
+
   const signalLocalTyping = React.useCallback(() => {
     if (!peerId) return;
     const now = Date.now();
@@ -417,7 +451,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       lastTypingSentAtRef.current = now;
       localTypingActiveRef.current = true;
       try {
-        sendChatTyping({ to: peerId, typing: true });
+        sendChatTyping({ to: peerId, typing: true, recording: false });
       } catch {}
     }
     if (localTypingStopTimerRef.current) clearTimeout(localTypingStopTimerRef.current);
@@ -430,12 +464,13 @@ export default function ChatScreen({ route, navigation }: Props) {
     // Cleanup on unmount
     return () => {
       stopLocalTyping();
+      stopLocalRecordingSignal();
       if (peerTypingHideTimerRef.current) {
         clearTimeout(peerTypingHideTimerRef.current);
         peerTypingHideTimerRef.current = null;
       }
     };
-  }, [stopLocalTyping]);
+  }, [stopLocalTyping, stopLocalRecordingSignal]);
 
   useEffect(() => {
     // Incoming typing events from peer
@@ -444,6 +479,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         const from = String((data as any)?.from || '');
         const to = String((data as any)?.to || '');
         const typing = !!(data as any)?.typing;
+        const recording = !!(data as any)?.recording;
 
         if (!from || from !== peerId) return;
         if (currentUserId && to && to !== String(currentUserId)) return;
@@ -453,14 +489,18 @@ export default function ChatScreen({ route, navigation }: Props) {
           peerTypingHideTimerRef.current = null;
         }
 
-        if (typing) {
-          setPeerTyping(true);
-          // If peer stops typing but "typing:false" is lost, hide after 2s
+        const next: 'typing' | 'recording' | null =
+          recording ? 'recording' : (typing ? 'typing' : null);
+
+        setPeerActivity(next);
+
+        if (next) {
+          // If "stop" event is lost, hide after a short grace period.
+          // Recording needs a keep-alive ping while the peer is holding the button.
+          const ttl = next === 'recording' ? 1600 : 2100;
           peerTypingHideTimerRef.current = setTimeout(() => {
-            setPeerTyping(false);
-          }, 2100);
-        } else {
-          setPeerTyping(false);
+            setPeerActivity(null);
+          }, ttl);
         }
       } catch {}
     });
@@ -470,6 +510,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [peerId, currentUserId]);
 
   useEffect(() => {
+    const peerTyping = peerActivity === 'typing';
     if (!peerTyping) {
       setPeerTypingDots(1);
       return;
@@ -478,11 +519,36 @@ export default function ChatScreen({ route, navigation }: Props) {
       setPeerTypingDots((prev) => (prev % 3) + 1);
     }, 420);
     return () => clearInterval(id);
-  }, [peerTyping]);
+  }, [peerActivity]);
+
+  useEffect(() => {
+    const peerRecording = peerActivity === 'recording';
+    // Blink mic icon while peer is recording
+    try { peerRecordingMicLoopRef.current?.stop?.(); } catch {}
+    peerRecordingMicLoopRef.current = null;
+    try { peerRecordingMicOpacity.setValue(0); } catch {}
+
+    if (!peerRecording) return;
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(peerRecordingMicOpacity, { toValue: 1, duration: 260, useNativeDriver: true }),
+        Animated.timing(peerRecordingMicOpacity, { toValue: 0.1, duration: 260, useNativeDriver: true }),
+      ])
+    );
+    peerRecordingMicLoopRef.current = loop;
+    loop.start();
+    return () => {
+      try { loop.stop(); } catch {}
+      try { peerRecordingMicOpacity.setValue(0); } catch {}
+    };
+  }, [peerActivity, peerRecordingMicOpacity]);
 
   const GapCenterIndicator = React.useMemo(() => {
-    // Приоритет: "Печатает..." > "Отправлено"
-    if (!peerTyping && !forwardToast.visible) return null;
+    const peerTyping = peerActivity === 'typing';
+    const peerRecording = peerActivity === 'recording';
+    // Приоритет: "Записывает" > "Печатает..." > "Отправлено"
+    if (!peerTyping && !peerRecording && !forwardToast.visible) return null;
 
     const baseStyle = {
       fontSize: 13,
@@ -491,8 +557,11 @@ export default function ChatScreen({ route, navigation }: Props) {
       letterSpacing: 0.2,
     };
 
-    const text = peerTyping ? `Печатает${'.'.repeat(peerTypingDots)}` : String(forwardToast.text || 'Отправлено');
-    const color = peerTyping
+    const text = peerRecording
+      ? 'Записывает'
+      : (peerTyping ? `Печатает${'.'.repeat(peerTypingDots)}` : String(forwardToast.text || 'Отправлено'));
+
+    const color = (peerTyping || peerRecording)
       ? (isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.40)')
       : (forwardToast.ok ? '#55d187' : '#FF5A67');
 
@@ -502,13 +571,20 @@ export default function ChatScreen({ route, navigation }: Props) {
         style={{
           justifyContent: 'center',
           alignItems: 'center',
-          opacity: peerTyping ? 1 : forwardToastOpacity,
+          opacity: (peerTyping || peerRecording) ? 1 : forwardToastOpacity,
         }}
       >
-        <Text style={{ ...baseStyle, color }}>{text}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={{ ...baseStyle, color }}>{text}</Text>
+          {peerRecording ? (
+            <Animated.View style={{ opacity: peerRecordingMicOpacity, marginLeft: 6, marginTop: 1 }}>
+              <Ionicons name="mic" size={12} color={color} />
+            </Animated.View>
+          ) : null}
+        </View>
       </Animated.View>
     );
-  }, [peerTyping, peerTypingDots, isDark, forwardToast.visible, forwardToast.text, forwardToast.ok, forwardToastOpacity]);
+  }, [peerActivity, peerTypingDots, isDark, forwardToast.visible, forwardToast.text, forwardToast.ok, forwardToastOpacity, peerRecordingMicOpacity]);
 
   // Кэшируем миниатюру при инициализации (если передана)
   useEffect(() => {
@@ -794,7 +870,36 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     // Слушатель удаления сообщений
     const unsubscribeMessageDeleted = onMessageDeleted((data) => {
-      setMessages(prev => prev.filter(msg => msg.id !== data.messageId));
+      const mid = String((data as any)?.messageId || '').trim();
+      if (!mid) return;
+      setMessages((prev) => {
+        const updated = prev.filter((msg) => String(msg?.id || '') !== mid);
+        void saveMessages(updated);
+        return updated;
+      });
+      // cleanup local maps (prevents stale statuses for deleted ids)
+      try {
+        updateReadStatuses((prev) => {
+          const next: any = { ...prev };
+          delete next[mid];
+          return next;
+        });
+      } catch {}
+      try {
+        setUploadStatus((prev) => {
+          const next: any = { ...prev };
+          delete next[mid];
+          return next;
+        });
+      } catch {}
+      // If user had it selected, unselect it
+      try {
+        setSelectedMessageIds((prev) => {
+          const next = new Set(prev);
+          next.delete(mid);
+          return next;
+        });
+      } catch {}
     });
 
 
@@ -811,6 +916,12 @@ export default function ChatScreen({ route, navigation }: Props) {
   // (e.g. message deleted by peer while device was sleeping). Do a quiet sync.
   const lastQuietSyncAtRef = useRef(0);
   const quietSyncInFlightRef = useRef(false);
+  const messagesLenRef = useRef(0);
+  const messagesRef = useRef<any[]>([]);
+  useEffect(() => {
+    messagesLenRef.current = messages.length;
+    messagesRef.current = messages;
+  }, [messages.length]);
   const quietSyncChat = React.useCallback(async () => {
     try {
       if (!currentUserId || !peerId) return;
@@ -820,10 +931,26 @@ export default function ChatScreen({ route, navigation }: Props) {
       lastQuietSyncAtRef.current = now;
       quietSyncInFlightRef.current = true;
 
-      const serverMessages = await fetchMessages({ with: peerId, limit: 60 });
-      if (!(serverMessages?.ok && Array.isArray(serverMessages.messages))) return;
+      // Fetch at least the amount currently shown to avoid "shrinking" message count after wake.
+      // Cap requests to avoid heavy sync on wake.
+      const targetCount = Math.min(400, Math.max(60, Math.max(0, messagesLenRef.current)));
+      const pages: any[] = [];
+      let before: string | undefined = undefined;
+      for (let i = 0; i < 3 && pages.length < targetCount; i++) {
+        const limit = Math.min(200, Math.max(1, targetCount - pages.length));
+        const resp: any = await fetchMessages({ with: peerId, limit, ...(before ? { before } : {}) });
+        if (!(resp?.ok && Array.isArray(resp.messages))) break;
+        const batch = resp.messages as any[];
+        if (batch.length === 0) break;
+        // Prepend older pages in front
+        pages.unshift(...batch);
+        before = String(batch[0]?.id || '').trim() || before;
+        if (!resp?.hasMore) break;
+      }
 
-      const formatted = serverMessages.messages.map((msg: any) => ({
+      if (pages.length === 0) return;
+
+      const formatted = pages.map((msg: any) => ({
         id: msg.id,
         text: msg.text,
         type: msg.type,
@@ -859,13 +986,14 @@ export default function ChatScreen({ route, navigation }: Props) {
           const tb = +new Date(b?.timestamp || 0);
           return ta - tb;
         });
+        void saveMessages(merged);
         return merged;
       });
     } catch {}
     finally {
       quietSyncInFlightRef.current = false;
     }
-  }, [currentUserId, peerId, uploadStatus]);
+  }, [currentUserId, peerId, uploadStatus, saveMessages]);
 
   useEffect(() => {
     const appStateRef = { current: AppState.currentState };
@@ -1509,9 +1637,52 @@ export default function ChatScreen({ route, navigation }: Props) {
 
 
   const deleteSingleMessage = async (messageId: string) => {
-    const success = await deleteMessage(messageId);
+    const mid = String(messageId || '').trim();
+    if (!mid) return;
+
+    // Server message ids look like "msg_...". Local pending/outgoing messages can have numeric ids (Date.now()).
+    // In release builds users are more likely to delete messages while they are still pending.
+    // For such messages we should delete locally without hitting the server.
+    const isServerId = /^msg_\d+_[a-z0-9]+$/i.test(mid) || mid.startsWith('msg_');
+    if (!isServerId) {
+      setMessages((prev) => {
+        const updated = prev.filter((msg) => String(msg?.id || '') !== mid);
+        void saveMessages(updated);
+        return updated;
+      });
+      // cleanup local status maps
+      updateReadStatuses((prev) => {
+        const next = { ...prev };
+        delete (next as any)[mid];
+        return next as any;
+      });
+      setUploadStatus((prev) => {
+        const next = { ...prev };
+        delete (next as any)[mid];
+        return next as any;
+      });
+      showForwardToastBadge(true, 'Удалено');
+      return;
+    }
+
+    const success = await deleteMessage(mid);
     if (success) {
-      setMessages(prev => prev.filter(msg => msg.id !== messageId));
+      setMessages((prev) => {
+        const updated = prev.filter((msg) => String(msg?.id || '') !== mid);
+        void saveMessages(updated);
+        return updated;
+      });
+      // cleanup status maps (server will also emit message:deleted, but keep local maps tidy)
+      updateReadStatuses((prev) => {
+        const next = { ...prev };
+        delete (next as any)[mid];
+        return next as any;
+      });
+      setUploadStatus((prev) => {
+        const next = { ...prev };
+        delete (next as any)[mid];
+        return next as any;
+      });
     } else {
       showNotice('error', t('errorTitle', lang), t('chatDeleteMessageFailed', lang));
     }
@@ -1857,40 +2028,104 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     const idSet = new Set(ids.map((x) => String(x)));
 
+    const isServerId = (id: string) => /^msg_\d+_[a-z0-9]+$/i.test(id) || id.startsWith('msg_');
+    const serverIds = ids.map(String).filter((id) => isServerId(String(id)));
+    const localOnlyIds = ids.map(String).filter((id) => !isServerId(String(id)));
+
     // Optimistic UI: remove all selected messages at once (no sequential "one-by-one" deletion).
-    let beforeMessages: any[] = [];
+    // Keep a snapshot of removed messages so we can restore only the ones that actually failed.
+    const removedById = new Map<string, any>();
+    try {
+      const snap = Array.isArray(messagesRef.current) ? messagesRef.current : [];
+      for (const mm of snap) {
+        const mid = String(mm?.id || '').trim();
+        if (mid && idSet.has(mid)) removedById.set(mid, mm);
+      }
+    } catch {}
     setMessages((prev) => {
-      beforeMessages = prev;
-      return prev.filter((mm) => !idSet.has(String(mm?.id || '')));
+      const next: any[] = [];
+      for (const mm of prev) {
+        const mid = String(mm?.id || '').trim();
+        if (mid && idSet.has(mid)) {
+          if (!removedById.has(mid)) removedById.set(mid, mm);
+        } else {
+          next.push(mm);
+        }
+      }
+      void saveMessages(next);
+      return next;
     });
 
     // IMPORTANT: delete requests sequentially (emitAck/socket acks are not guaranteed to be concurrency-safe).
     // UI is already updated optimistically above, so user still sees "all deleted at once".
-    const failed: string[] = [];
-    for (const id of ids) {
+    const failedServer: string[] = [];
+    for (const id of serverIds) {
       try {
         const mid = String(id);
         const ok = await deleteMessage(mid);
-        if (!ok) failed.push(mid);
+        if (!ok) failedServer.push(mid);
       } catch {
-        failed.push(String(id));
+        failedServer.push(String(id));
       }
     }
 
-    if (failed.length === 0) {
+    // local-only deletions are always considered successful (client-side only)
+    const successServerIds = serverIds.filter((id) => !failedServer.includes(String(id)));
+
+    // cleanup status maps for successful deletions (both server + local-only)
+    const deletedOk = new Set<string>([...localOnlyIds, ...successServerIds].map(String));
+    if (deletedOk.size > 0) {
+      updateReadStatuses((prev) => {
+        const next: any = { ...prev };
+        for (const id of deletedOk) delete next[id];
+        return next;
+      });
+      setUploadStatus((prev) => {
+        const next: any = { ...prev };
+        for (const id of deletedOk) delete next[id];
+        return next;
+      });
+    }
+
+    if (failedServer.length === 0) {
       exitSelectionMode();
       showForwardToastBadge(true, 'Удалено');
       return;
     }
 
-    // Restore failed items (keep successful deletions applied)
-    const succeededSet = new Set(ids.map(String).filter((id) => !failed.includes(id)));
-    setMessages(() => beforeMessages.filter((mm) => !succeededSet.has(String(mm?.id))));
+    // Restore ONLY failed server items (keep successful deletions applied).
+    // Also preserve any new messages that might have arrived while we were deleting.
+    const failedSet = new Set(failedServer.map(String));
+    setMessages((prev) => {
+      const toRestore: any[] = [];
+      for (const id of failedSet) {
+        const mm = removedById.get(String(id));
+        if (mm) toRestore.push(mm);
+      }
+      const merged = [...prev, ...toRestore];
+      merged.sort((a: any, b: any) => {
+        const ta = +new Date(a?.timestamp || 0);
+        const tb = +new Date(b?.timestamp || 0);
+        return ta - tb;
+      });
+      void saveMessages(merged);
+      return merged;
+    });
 
     // Оставляем выделенными только те, что не удалились (можно повторить)
-    setSelectedMessageIds(new Set(failed));
-    showNotice('error', t('errorTitle', lang), `Не удалось удалить: ${failed.length}`);
-  }, [selectedMessageIds, exitSelectionMode, showForwardToastBadge, showNotice, lang]);
+    setSelectedMessageIds(new Set(failedServer));
+    showNotice('error', t('errorTitle', lang), `Не удалось удалить: ${failedServer.length}`);
+  }, [
+    selectedMessageIds,
+    exitSelectionMode,
+    showForwardToastBadge,
+    showNotice,
+    lang,
+    deleteMessage,
+    saveMessages,
+    updateReadStatuses,
+    setUploadStatus,
+  ]);
 
   const confirmDeleteSelected = React.useCallback(() => {
     if (selectedCount === 0) return;
@@ -2459,6 +2694,8 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       await recording.startAsync();
       try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
+      // Signal peer that we are recording (keep-alive is handled by startLocalRecordingSignal)
+      try { startLocalRecordingSignal(); } catch {}
 
       if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current);
       voiceRecordTimerRef.current = setInterval(async () => {
@@ -2476,8 +2713,9 @@ export default function ChatScreen({ route, navigation }: Props) {
     } catch {
       setVoiceIsRecording(false);
       voiceRecordingRef.current = null;
+      try { stopLocalRecordingSignal(); } catch {}
     }
-  }, [voiceIsRecording, currentUserId, peerId, selectionMode, resetVoiceGesture, showNotice, lang]);
+  }, [voiceIsRecording, currentUserId, peerId, selectionMode, resetVoiceGesture, showNotice, lang, startLocalRecordingSignal, stopLocalRecordingSignal]);
 
   const stopVoiceRecording = React.useCallback(async (cancelled?: boolean, autoStopped?: boolean) => {
     if (voiceStopInProgressRef.current) return;
@@ -2487,6 +2725,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     voiceStopInProgressRef.current = true;
     voiceRecordingRef.current = null;
     setVoiceIsRecording(false);
+    // Stop recording indicator for peer immediately on release/cancel
+    try { stopLocalRecordingSignal(); } catch {}
 
     try { if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current); } catch {}
     voiceRecordTimerRef.current = null;
