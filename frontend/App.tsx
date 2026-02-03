@@ -233,12 +233,13 @@ function AppContent() {
         // 🔊 Конфиг аудио
         await Audio.setAudioModeAsync({
           playsInSilentModeIOS: true,
-          allowsRecordingIOS: true,
+          // Default app-wide mode: playback (not recording). Recording-enabled modes can route audio to the receiver on iOS.
+          allowsRecordingIOS: false,
           // IMPORTANT: do not keep audio session alive in background to avoid battery drain.
           staysActiveInBackground: false,
-          shouldDuckAndroid: true,
-          // IMPORTANT: allow OS routing to headset/Bluetooth; do not force speaker
-          playThroughEarpieceAndroid: true,
+          shouldDuckAndroid: false,
+          // IMPORTANT: do not force earpiece output. Let OS route (speaker / wired / BT) for consistent loud playback.
+          playThroughEarpieceAndroid: false,
         });
       } catch (e) {
         logger.warn("Audio setAudioModeAsync failed:", e);

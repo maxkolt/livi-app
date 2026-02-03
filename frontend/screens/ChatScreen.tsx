@@ -1352,6 +1352,18 @@ export default function ChatScreen({ route, navigation }: Props) {
       const fallbackDurationMs = Math.max(0, Number(m?.duration || 0) * 1000);
       setPlayingAudioState({ id: mid, durationMs: fallbackDurationMs, positionMs: 0 });
 
+      // 🔊 Ensure stable, loud voice playback (avoid receiver/earpiece routing and recording categories).
+      // This prevents volume/route "jumping" when notifications or other OS sounds steal audio focus.
+      try {
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: false,
+          playThroughEarpieceAndroid: false,
+        });
+      } catch {}
+
       const { sound } = await Audio.Sound.createAsync(
         { uri },
         { shouldPlay: true },
@@ -2755,12 +2767,12 @@ export default function ChatScreen({ route, navigation }: Props) {
     } finally {
       try {
         await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
           playsInSilentModeIOS: true,
-          shouldDuckAndroid: true,
-          // IMPORTANT: allow OS routing to headset/Bluetooth; do not force speaker
-          playThroughEarpieceAndroid: true,
+          // Back to normal playback mode after recording (prevents voice playback going through earpiece).
+          allowsRecordingIOS: false,
           staysActiveInBackground: false,
+          shouldDuckAndroid: false,
+          playThroughEarpieceAndroid: false,
         });
       } catch {}
       voiceStopInProgressRef.current = false;
