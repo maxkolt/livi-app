@@ -397,8 +397,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   const lastTypingSentAtRef = useRef(0);
   const localRecordingPingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const localRecordingActiveRef = useRef(false);
-  const peerRecordingMicOpacity = useRef(new Animated.Value(0)).current;
-  const peerRecordingMicLoopRef = useRef<Animated.CompositeAnimation | null>(null);
 
   const stopLocalTyping = React.useCallback(() => {
     if (localTypingStopTimerRef.current) {
@@ -510,8 +508,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [peerId, currentUserId]);
 
   useEffect(() => {
-    const peerTyping = peerActivity === 'typing';
-    if (!peerTyping) {
+    const active = peerActivity === 'typing' || peerActivity === 'recording';
+    if (!active) {
       setPeerTypingDots(1);
       return;
     }
@@ -520,29 +518,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     }, 420);
     return () => clearInterval(id);
   }, [peerActivity]);
-
-  useEffect(() => {
-    const peerRecording = peerActivity === 'recording';
-    // Blink mic icon while peer is recording
-    try { peerRecordingMicLoopRef.current?.stop?.(); } catch {}
-    peerRecordingMicLoopRef.current = null;
-    try { peerRecordingMicOpacity.setValue(0); } catch {}
-
-    if (!peerRecording) return;
-
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(peerRecordingMicOpacity, { toValue: 1, duration: 320, useNativeDriver: true }),
-        Animated.timing(peerRecordingMicOpacity, { toValue: 0, duration: 320, useNativeDriver: true }),
-      ])
-    );
-    peerRecordingMicLoopRef.current = loop;
-    loop.start();
-    return () => {
-      try { loop.stop(); } catch {}
-      try { peerRecordingMicOpacity.setValue(0); } catch {}
-    };
-  }, [peerActivity, peerRecordingMicOpacity]);
 
   const GapCenterIndicator = React.useMemo(() => {
     const peerTyping = peerActivity === 'typing';
@@ -558,15 +533,12 @@ export default function ChatScreen({ route, navigation }: Props) {
     };
 
     const text = peerRecording
-      ? 'Записывает'
+      ? `Записывает${'.'.repeat(peerTypingDots)}`
       : (peerTyping ? `Печатает${'.'.repeat(peerTypingDots)}` : String(forwardToast.text || 'Отправлено'));
 
     const color = (peerTyping || peerRecording)
       ? (isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.40)')
       : (forwardToast.ok ? '#55d187' : '#FF5A67');
-    const pulseColor = (peerTyping || peerRecording)
-      ? (isDark ? 'rgba(255,255,255,0.62)' : 'rgba(0,0,0,0.62)')
-      : color;
 
     return (
       <Animated.View
@@ -578,38 +550,11 @@ export default function ChatScreen({ route, navigation }: Props) {
         }}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <View style={{ position: 'relative' }}>
-            <Text style={{ ...baseStyle, color }}>{text}</Text>
-            {peerRecording ? (
-              <Animated.Text
-                style={{
-                  ...baseStyle,
-                  color: pulseColor,
-                  position: 'absolute',
-                  left: 0,
-                  top: 0,
-                  opacity: peerRecordingMicOpacity,
-                }}
-              >
-                {text}
-              </Animated.Text>
-            ) : null}
-          </View>
-
-          {peerRecording ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 6, marginTop: 1 }}>
-              {/* Base mic (always visible) */}
-              <Ionicons name="mic-outline" size={12} color={color} />
-              {/* Pulse overlay mic (slightly brighter) */}
-              <Animated.View style={{ position: 'absolute', opacity: peerRecordingMicOpacity }}>
-                <Ionicons name="mic-outline" size={12} color={pulseColor} />
-              </Animated.View>
-            </View>
-          ) : null}
+          <Text style={{ ...baseStyle, color }}>{text}</Text>
         </View>
       </Animated.View>
     );
-  }, [peerActivity, peerTypingDots, isDark, forwardToast.visible, forwardToast.text, forwardToast.ok, forwardToastOpacity, peerRecordingMicOpacity]);
+  }, [peerActivity, peerTypingDots, isDark, forwardToast.visible, forwardToast.text, forwardToast.ok, forwardToastOpacity]);
 
   // Кэшируем миниатюру при инициализации (если передана)
   useEffect(() => {
