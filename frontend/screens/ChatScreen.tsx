@@ -2128,9 +2128,11 @@ export default function ChatScreen({ route, navigation }: Props) {
     void openForwardPicker();
   }, [selectedCount, selectedHasAnyForwardable, showNotice, openForwardPicker, lang]);
 
-  // КРИТИЧНО: Header нельзя объявлять как "новую функцию" на каждый рендер,
-  // иначе шапка (и аватар) будут размонтироваться на каждый ввод в TextInput.
-  const Header = React.useCallback(() => (
+  // КРИТИЧНО: Header нельзя объявлять как "компонент-функцию" (const Header = () => ...)
+  // и потом рендерить как <Header />, иначе при изменении зависимостей React будет считать,
+  // что "тип компонента" поменялся → размонтирует/смонтирует заново (и аватар начнёт мерцать).
+  // Поэтому делаем мемоизированный JSX-элемент.
+  const headerEl = React.useMemo(() => (
     <View
       style={{
         height: headerH,
@@ -3675,7 +3677,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           }
         }}
       >
-        <Header />
+        {headerEl}
         {loading ? (
           <Loading />
         ) : err ? (
