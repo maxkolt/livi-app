@@ -532,8 +532,8 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(peerRecordingMicOpacity, { toValue: 1, duration: 260, useNativeDriver: true }),
-        Animated.timing(peerRecordingMicOpacity, { toValue: 0.1, duration: 260, useNativeDriver: true }),
+        Animated.timing(peerRecordingMicOpacity, { toValue: 1, duration: 320, useNativeDriver: true }),
+        Animated.timing(peerRecordingMicOpacity, { toValue: 0, duration: 320, useNativeDriver: true }),
       ])
     );
     peerRecordingMicLoopRef.current = loop;
@@ -564,6 +564,9 @@ export default function ChatScreen({ route, navigation }: Props) {
     const color = (peerTyping || peerRecording)
       ? (isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.40)')
       : (forwardToast.ok ? '#55d187' : '#FF5A67');
+    const pulseColor = (peerTyping || peerRecording)
+      ? (isDark ? 'rgba(255,255,255,0.62)' : 'rgba(0,0,0,0.62)')
+      : color;
 
     return (
       <Animated.View
@@ -575,11 +578,33 @@ export default function ChatScreen({ route, navigation }: Props) {
         }}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <Text style={{ ...baseStyle, color }}>{text}</Text>
+          <View style={{ position: 'relative' }}>
+            <Text style={{ ...baseStyle, color }}>{text}</Text>
+            {peerRecording ? (
+              <Animated.Text
+                style={{
+                  ...baseStyle,
+                  color: pulseColor,
+                  position: 'absolute',
+                  left: 0,
+                  top: 0,
+                  opacity: peerRecordingMicOpacity,
+                }}
+              >
+                {text}
+              </Animated.Text>
+            ) : null}
+          </View>
+
           {peerRecording ? (
-            <Animated.View style={{ opacity: peerRecordingMicOpacity, marginLeft: 6, marginTop: 1 }}>
-              <Ionicons name="mic" size={12} color={color} />
-            </Animated.View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 6, marginTop: 1 }}>
+              {/* Base mic (always visible) */}
+              <Ionicons name="mic-outline" size={12} color={color} />
+              {/* Pulse overlay mic (slightly brighter) */}
+              <Animated.View style={{ position: 'absolute', opacity: peerRecordingMicOpacity }}>
+                <Ionicons name="mic-outline" size={12} color={pulseColor} />
+              </Animated.View>
+            </View>
           ) : null}
         </View>
       </Animated.View>
