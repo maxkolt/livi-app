@@ -517,10 +517,36 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'friendship_not_found' });
       }
 
-      const msg = (friendship as any).findMessageById(payload.messageId);
-      if (msg && !msg.read) {
-        msg.read = true;
-        await friendship.save();
+      // IMPORTANT:
+      // Do NOT call friendship.save() here.
+      // The friendship document is cached in-memory and can be saved concurrently by other handlers
+      // (or multiple read receipts at once). Mongoose throws:
+      // "Can't save() the same doc multiple times in parallel".
+      //
+      // Use atomic updateOne instead to make this idempotent and concurrency-safe.
+      const messageId = String(payload.messageId || '').trim();
+      if (messageId) {
+        const fid: any = (friendship as any)?._id;
+        try {
+          const tryUpdate = async (path: 'textMessages' | 'imageMessages' | 'audioMessages') => {
+            const filter: any = { _id: fid };
+            filter[`${path}.id`] = messageId;
+            filter[`${path}.read`] = { $ne: true };
+            const update: any = { $set: { [`${path}.$.read`]: true } };
+            return FriendshipMessages.updateOne(filter, update).exec();
+          };
+
+          // Try each message bucket; only one should match.
+          await tryUpdate('textMessages');
+          await tryUpdate('imageMessages');
+          await tryUpdate('audioMessages');
+        } catch {}
+
+        // Keep in-memory cached doc consistent (best-effort, no save)
+        try {
+          const msg = (friendship as any).findMessageById?.(messageId);
+          if (msg && !msg.read) msg.read = true;
+        } catch {}
       }
 
       // Чистим из in-memory очереди одно сообщение
