@@ -175,8 +175,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [confirmTitle, setConfirmTitle] = useState('');
   const [confirmMessage, setConfirmMessage] = useState('');
-  const [confirmCancelText, setConfirmCancelText] = useState('Отмена');
-  const [confirmOkText, setConfirmOkText] = useState('Ок');
+  const [confirmCancelText, setConfirmCancelText] = useState('');
+  const [confirmOkText, setConfirmOkText] = useState('');
   const [confirmDestructive, setConfirmDestructive] = useState(false);
   const onConfirmRef = useRef<(() => void) | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -533,8 +533,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     };
 
     const text = peerRecording
-      ? `Записывает${'.'.repeat(peerTypingDots)}`
-      : (peerTyping ? `Печатает${'.'.repeat(peerTypingDots)}` : String(forwardToast.text || 'Отправлено'));
+      ? `${t('chatRecording', lang)}${'.'.repeat(peerTypingDots)}`
+      : (peerTyping
+        ? `${t('chatTyping', lang)}${'.'.repeat(peerTypingDots)}`
+        : String(forwardToast.text || t('chatSent', lang)));
 
     const color = (peerTyping || peerRecording)
       ? (isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.40)')
@@ -554,7 +556,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         </View>
       </Animated.View>
     );
-  }, [peerActivity, peerTypingDots, isDark, forwardToast.visible, forwardToast.text, forwardToast.ok, forwardToastOpacity]);
+  }, [peerActivity, peerTypingDots, isDark, forwardToast.visible, forwardToast.text, forwardToast.ok, forwardToastOpacity, lang]);
 
   // Кэшируем миниатюру при инициализации (если передана)
   useEffect(() => {
@@ -1631,7 +1633,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         delete (next as any)[mid];
         return next as any;
       });
-      showForwardToastBadge(true, 'Удалено');
+      showForwardToastBadge(true, t('chatDeleted', lang));
       return;
     }
 
@@ -1813,8 +1815,8 @@ export default function ChatScreen({ route, navigation }: Props) {
 
         if (forwardables.length === 0) {
           setNoticeKind('info');
-          setNoticeTitle('Пересылка');
-          setNoticeMessage('Нет подходящих сообщений для пересылки.');
+          setNoticeTitle(t('chatForwardTitle', lang));
+          setNoticeMessage(t('chatForwardNoSuitable', lang));
           setNoticeVisible(true);
           return;
         }
@@ -1827,7 +1829,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
         setSelectionMode(false);
         setSelectedMessageIds(new Set());
-        showForwardToastBadge(okCount > 0, okCount > 0 ? 'Отправлено' : 'Не удалось отправить');
+        showForwardToastBadge(okCount > 0, okCount > 0 ? t('chatSent', lang) : t('chatSendFailed', lang));
         return;
       }
 
@@ -1837,7 +1839,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         const txt = String(selectedMessage?.text ?? '').trim();
         if (!txt) return;
         const r: any = await sendSocketMessage({ to, text: txt, type: 'text' });
-        showForwardToastBadge(!!r?.ok, r?.ok ? 'Отправлено' : 'Не удалось отправить');
+        showForwardToastBadge(!!r?.ok, r?.ok ? t('chatSent', lang) : t('chatSendFailed', lang));
         return;
       }
       if (type === 'image') {
@@ -1845,8 +1847,8 @@ export default function ChatScreen({ route, navigation }: Props) {
         const uri = rawUri ? normalizeForwardMediaUri(rawUri) : '';
         if (!uri) {
           setNoticeKind('info');
-          setNoticeTitle('Пересылка');
-          setNoticeMessage('Это изображение ещё не готово для пересылки.');
+          setNoticeTitle(t('chatForwardTitle', lang));
+          setNoticeMessage(t('chatForwardImageNotReady', lang));
           setNoticeVisible(true);
           return;
         }
@@ -1857,7 +1859,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           name: selectedMessage?.name,
           size: selectedMessage?.size,
         });
-        showForwardToastBadge(!!r?.ok, r?.ok ? 'Отправлено' : 'Не удалось отправить');
+        showForwardToastBadge(!!r?.ok, r?.ok ? t('chatSent', lang) : t('chatSendFailed', lang));
         return;
       }
       if (type === 'audio') {
@@ -1865,8 +1867,8 @@ export default function ChatScreen({ route, navigation }: Props) {
         const uri = rawUri ? normalizeForwardMediaUri(rawUri) : '';
         if (!uri) {
           setNoticeKind('info');
-          setNoticeTitle('Пересылка');
-          setNoticeMessage('Это голосовое ещё не готово для пересылки.');
+          setNoticeTitle(t('chatForwardTitle', lang));
+          setNoticeMessage(t('chatForwardVoiceNotReady', lang));
           setNoticeVisible(true);
           return;
         }
@@ -1878,11 +1880,11 @@ export default function ChatScreen({ route, navigation }: Props) {
           size: selectedMessage?.size,
           duration: selectedMessage?.duration,
         });
-        showForwardToastBadge(!!r?.ok, r?.ok ? 'Отправлено' : 'Не удалось отправить');
+        showForwardToastBadge(!!r?.ok, r?.ok ? t('chatSent', lang) : t('chatSendFailed', lang));
         return;
       }
     } catch {}
-  }, [selectedMessage, hideMessageActions, showForwardToastBadge, selectionMode, messages, selectedMessageIds, resolveMediaUri]);
+  }, [selectedMessage, hideMessageActions, showForwardToastBadge, selectionMode, messages, selectedMessageIds, resolveMediaUri, lang]);
 
   const exitSelectionMode = React.useCallback(() => {
     setSelectionMode(false);
@@ -2059,7 +2061,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     if (failedServer.length === 0) {
       exitSelectionMode();
-      showForwardToastBadge(true, 'Удалено');
+      showForwardToastBadge(true, t('chatDeleted', lang));
       return;
     }
 
@@ -2084,7 +2086,11 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     // Оставляем выделенными только те, что не удалились (можно повторить)
     setSelectedMessageIds(new Set(failedServer));
-    showNotice('error', t('errorTitle', lang), `Не удалось удалить: ${failedServer.length}`);
+    showNotice(
+      'error',
+      t('errorTitle', lang),
+      t('chatDeleteFailedCount', lang).replace('{count}', String(failedServer.length))
+    );
   }, [
     selectedMessageIds,
     exitSelectionMode,
@@ -2100,25 +2106,27 @@ export default function ChatScreen({ route, navigation }: Props) {
   const confirmDeleteSelected = React.useCallback(() => {
     if (selectedCount === 0) return;
     openConfirm({
-      title: 'Удалить сообщения?',
-      message: selectedCount === 1 ? 'Удалить выбранное сообщение?' : `Удалить выбранные сообщения: ${selectedCount}?`,
-      okText: 'Удалить',
-      cancelText: 'Отмена',
+      title: t('chatDeleteMessagesTitle', lang),
+      message: selectedCount === 1
+        ? t('chatDeleteSelectedOne', lang)
+        : t('chatDeleteSelectedMany', lang).replace('{count}', String(selectedCount)),
+      okText: t('delete', lang),
+      cancelText: t('cancelAction', lang),
       destructive: true,
       onConfirm: () => {
         void batchDeleteSelected();
       },
     });
-  }, [selectedCount, openConfirm, batchDeleteSelected]);
+  }, [selectedCount, openConfirm, batchDeleteSelected, lang]);
 
   const startForwardSelected = React.useCallback(() => {
     if (selectedCount === 0) return;
     if (!selectedHasAnyForwardable) {
-      showNotice('info', 'Пересылка', 'Можно переслать только текстовые сообщения, изображения или голосовые.');
+      showNotice('info', t('chatForwardTitle', lang), t('chatForwardOnlySupported', lang));
       return;
     }
     void openForwardPicker();
-  }, [selectedCount, selectedHasAnyForwardable, showNotice, openForwardPicker]);
+  }, [selectedCount, selectedHasAnyForwardable, showNotice, openForwardPicker, lang]);
 
   // КРИТИЧНО: Header нельзя объявлять как "новую функцию" на каждый рендер,
   // иначе шапка (и аватар) будут размонтироваться на каждый ввод в TextInput.
@@ -2156,7 +2164,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       <View style={{ flex: 1, alignItems: "center" }}>
         <Text style={{ color: LIVI.white, fontSize: 18, fontWeight: "700" }}>
-          {selectionMode ? `Выбрано: ${selectedCount}` : peerNameState}
+          {selectionMode ? t('chatSelectedCount', lang).replace('{count}', String(selectedCount)) : peerNameState}
         </Text>
         {!selectionMode && (
           <Text style={{ marginTop: 2, fontSize: 12, color: peerOnline ? LIVI.green : LIVI.red, fontWeight: "500" }}>
@@ -2181,7 +2189,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               justifyContent: "center",
             }}
           >
-            <Text style={{ color: LIVI.titan, fontSize: 13, fontWeight: '600' }}>Все</Text>
+            <Text style={{ color: LIVI.titan, fontSize: 13, fontWeight: '600' }}>{t('chatSelectAll', lang)}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -2271,10 +2279,17 @@ export default function ChatScreen({ route, navigation }: Props) {
     (m: any) => {
       setSelectedMessage(m);
 
-      const options = ['Копировать', 'Переслать', 'Выбрать', 'Удалить', 'Отмена'];
+      const actionIds = ['copy', 'forward', 'select', 'delete', 'cancel'] as const;
+      const options = [
+        t('chatActionCopy', lang),
+        t('chatActionForward', lang),
+        t('chatActionSelect', lang),
+        t('delete', lang),
+        t('cancelAction', lang),
+      ];
 
-      const cancelButtonIndex = options.length - 1;
-      const destructiveButtonIndex = options.indexOf('Удалить');
+      const cancelButtonIndex = actionIds.length - 1;
+      const destructiveButtonIndex = actionIds.indexOf('delete');
 
       if (Platform.OS === 'ios') {
         ActionSheetIOS.showActionSheetWithOptions(
@@ -2285,12 +2300,12 @@ export default function ChatScreen({ route, navigation }: Props) {
             userInterfaceStyle: 'dark',
           },
           (buttonIndex) => {
-            const picked = options[buttonIndex];
-            if (picked === 'Отмена') return;
-            if (picked === 'Удалить') return confirmDeleteSelectedMessage(m);
-            if (picked === 'Копировать') return void copySelectedMessage(m);
-            if (picked === 'Переслать') return void openForwardPicker();
-            if (picked === 'Выбрать') return void enterSelectionModeFromMessage(m);
+            const action = actionIds[buttonIndex] || 'cancel';
+            if (action === 'cancel') return;
+            if (action === 'delete') return confirmDeleteSelectedMessage(m);
+            if (action === 'copy') return void copySelectedMessage(m);
+            if (action === 'forward') return void openForwardPicker();
+            if (action === 'select') return void enterSelectionModeFromMessage(m);
           }
         );
         return;
@@ -2299,7 +2314,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       // Android: custom bottom sheet (чтобы не перекрывать экран большой модалкой)
       showMessageActionsSheet();
     },
-    [confirmDeleteSelectedMessage, copySelectedMessage, openForwardPicker, showMessageActionsSheet]
+    [confirmDeleteSelectedMessage, copySelectedMessage, openForwardPicker, showMessageActionsSheet, lang]
   );
 
   // Функция для получения анимации сообщения (стабильная ссылка, чтобы не ломать мемоизацию)
@@ -2622,7 +2637,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (!perm.granted) {
         // If we already signaled recording on press-in, stop it on permission denial.
         try { stopLocalRecordingSignal(); } catch {}
-        showNotice('error', t('errorTitle', lang), 'Нужно разрешение на микрофон.');
+        showNotice('error', t('errorTitle', lang), t('needMicPermission', lang));
         return;
       }
 
@@ -2769,8 +2784,8 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch {}
     await stopVoiceRecording(true, false);
-    showForwardToastBadge(false, 'Удалено');
-  }, [trashLid, trashFlash, voiceDragX, stopVoiceRecording, showForwardToastBadge]);
+    showForwardToastBadge(false, t('chatDeleted', lang));
+  }, [trashLid, trashFlash, voiceDragX, stopVoiceRecording, showForwardToastBadge, lang]);
 
   const micPanResponder = React.useMemo(() => {
     return PanResponder.create({
@@ -3058,7 +3073,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                 borderColor: 'rgba(255,255,255,0.2)',
               }}>
                 <Ionicons name="image-outline" size={32} color="rgba(255,255,255,0.5)" />
-                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, marginTop: 4 }}>Изображение недоступно</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, marginTop: 4 }}>
+                  {t('chatImageUnavailable', lang)}
+                </Text>
               </View>
             );
           }
@@ -3329,7 +3346,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color={LIVI.white} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '600' }}>Голосовое</Text>
+                <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '600' }}>{t('chatVoiceMessage', lang)}</Text>
                 <Text style={{ marginTop: 2, color: LIVI.titan, fontSize: 12, fontWeight: '500' }}>
                   {durLabel || '—'}
                 </Text>
@@ -3386,7 +3403,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   }}
                 >
                   <Ionicons name="refresh-circle" size={18} color="#FF5A67" style={{ marginRight: 6 }} />
-                  <Text style={{ color: '#FF5A67', fontSize: 12, fontWeight: '700' }}>Повторить</Text>
+                  <Text style={{ color: '#FF5A67', fontSize: 12, fontWeight: '700' }}>{t('retry', lang)}</Text>
                 </Pressable>
               )}
 
@@ -3677,7 +3694,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 borderColor: BORDER_COLOR,
               }}
             >
-              <Text style={{ color: LIVI.white, fontWeight: "700" }}>Попробовать снова</Text>
+              <Text style={{ color: LIVI.white, fontWeight: "700" }}>{t('tryAgain', lang)}</Text>
             </TouchableOpacity>
           </View>
         ) : Platform.OS === 'ios' ? (
@@ -4420,7 +4437,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     >
                       <Ionicons name="copy-outline" size={20} color={LIVI.titan} />
                       <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
-                        Копировать
+                        {t('chatActionCopy', lang)}
                       </Text>
                     </Pressable>
 
@@ -4444,7 +4461,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     >
                       <Ionicons name="paper-plane-outline" size={20} color={LIVI.titan} />
                       <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
-                        Переслать
+                        {t('chatActionForward', lang)}
                       </Text>
                     </Pressable>
 
@@ -4467,7 +4484,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     >
                       <Ionicons name="checkbox-outline" size={20} color={LIVI.titan} />
                       <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
-                        Выбрать
+                        {t('chatActionSelect', lang)}
                       </Text>
                     </Pressable>
 
@@ -4496,7 +4513,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 >
                   <Ionicons name="trash-outline" size={20} color="#FF5A67" />
                   <Text style={{ color: '#FF5A67', fontSize: 16, fontWeight: '700', marginLeft: 12 }}>
-                    Удалить
+                    {t('delete', lang)}
                   </Text>
                 </Pressable>
 
@@ -4517,7 +4534,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   })}
                 >
                   <Text style={{ color: LIVI.titan, fontSize: 16, fontWeight: '600', textAlign: 'center' }}>
-                    Отмена
+                    {t('cancelAction', lang)}
                   </Text>
                 </Pressable>
               </Pressable>
@@ -4676,7 +4693,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 />
               </View>
               <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700', textAlign: 'center', marginBottom: 10 }}>
-                Переслать…
+                {`${t('chatActionForward', lang)}…`}
               </Text>
 
               {forwardLoading ? (
@@ -4722,7 +4739,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         </Text>
                         {typeof item.online === 'boolean' && (
                           <Text style={{ color: item.online ? '#55d187' : 'rgba(255,255,255,0.45)', fontSize: 12 }}>
-                            {item.online ? 'Online' : 'Offline'}
+                            {item.online ? t('online', lang) : t('offline', lang)}
                           </Text>
                         )}
                       </View>
@@ -4734,7 +4751,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   )}
                   ListEmptyComponent={() => (
                     <View style={{ paddingVertical: 18, alignItems: 'center' }}>
-                      <Text style={{ color: LIVI.titan, textAlign: 'center' }}>Нет друзей для пересылки</Text>
+                      <Text style={{ color: LIVI.titan, textAlign: 'center' }}>{t('chatForwardNoFriends', lang)}</Text>
                     </View>
                   )}
                 />
@@ -4751,7 +4768,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 activeOpacity={0.85}
               >
                 <Text style={{ color: LIVI.titan, fontSize: 16, fontWeight: '600', textAlign: 'center' }}>
-                  Отмена
+                  {t('cancelAction', lang)}
                 </Text>
               </TouchableOpacity>
             </Pressable>
@@ -4793,7 +4810,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           >
             <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
               <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
-                {confirmTitle || 'Подтвердите действие'}
+                {confirmTitle || t('confirmActionTitle', lang)}
               </Text>
               <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
                 {confirmMessage || ''}
@@ -4821,7 +4838,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 })}
               >
                 <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '600' }}>
-                  {confirmCancelText || 'Отмена'}
+                  {confirmCancelText || t('cancelAction', lang)}
                 </Text>
               </Pressable>
 
@@ -4846,7 +4863,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     fontWeight: '700',
                   }}
                 >
-                  {confirmOkText || 'Ок'}
+                  {confirmOkText || t('ok', lang)}
                 </Text>
               </Pressable>
             </View>
@@ -4913,7 +4930,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
                 })}
               >
-                <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '600' }}>Отмена</Text>
+                <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '600' }}>{t('cancelAction', lang)}</Text>
               </Pressable>
 
               <Pressable
@@ -4928,7 +4945,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   borderColor: 'rgba(255,90,103,0.45)',
                 })}
               >
-                <Text style={{ color: '#FF5A67', fontSize: 15, fontWeight: '700' }}>Удалить</Text>
+                <Text style={{ color: '#FF5A67', fontSize: 15, fontWeight: '700' }}>{t('delete', lang)}</Text>
               </Pressable>
             </View>
           </Pressable>

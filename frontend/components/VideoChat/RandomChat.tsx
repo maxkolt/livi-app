@@ -1804,9 +1804,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{L('friend_request')}</Text>
             <Text style={styles.modalText}>
-              {incomingFriendNick 
-                ? `Пользователь ${incomingFriendNick} хочет добавить вас в друзья.`
-                : `Пользователь (${incomingFriendFrom || ''}) хочет добавить вас в друзья.`}
+              {t('friend_request_text', lang).replace(
+                '{user}',
+                incomingFriendNick || incomingFriendFrom || t('thisUser', lang)
+              )}
             </Text>
             <View style={{ flexDirection: "row", gap: 12, marginTop: 16 }}>
               <TouchableOpacity

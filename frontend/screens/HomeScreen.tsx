@@ -3289,7 +3289,7 @@ const handleClearNick = useCallback(async () => {
       <View style={styles.rightWrap}>
         {busy && (
           <Animated.View style={[styles.busyBadge, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.65, 1] }) }]}>
-            <Text style={styles.busyText}>Занято</Text>
+            <Text style={styles.busyText}>{t('busy', lang)}</Text>
           </Animated.View>
         )}
         <View style={{ position: 'relative' }}>
