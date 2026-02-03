@@ -2620,6 +2620,8 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       const perm = await Audio.requestPermissionsAsync();
       if (!perm.granted) {
+        // If we already signaled recording on press-in, stop it on permission denial.
+        try { stopLocalRecordingSignal(); } catch {}
         showNotice('error', t('errorTitle', lang), 'Нужно разрешение на микрофон.');
         return;
       }
@@ -2664,8 +2666,6 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       await recording.startAsync();
       try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
-      // Signal peer that we are recording (keep-alive is handled by startLocalRecordingSignal)
-      try { startLocalRecordingSignal(); } catch {}
 
       if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current);
       voiceRecordTimerRef.current = setInterval(async () => {
@@ -2685,7 +2685,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       voiceRecordingRef.current = null;
       try { stopLocalRecordingSignal(); } catch {}
     }
-  }, [voiceIsRecording, currentUserId, peerId, selectionMode, resetVoiceGesture, showNotice, lang, startLocalRecordingSignal, stopLocalRecordingSignal]);
+  }, [voiceIsRecording, currentUserId, peerId, selectionMode, resetVoiceGesture, showNotice, lang, stopLocalRecordingSignal]);
 
   const stopVoiceRecording = React.useCallback(async (cancelled?: boolean, autoStopped?: boolean) => {
     if (voiceStopInProgressRef.current) return;
@@ -2788,6 +2788,13 @@ export default function ChatScreen({ route, navigation }: Props) {
         } catch {}
         // measure trash zone after it renders
         setTimeout(() => updateTrashZone(), 0);
+        // IMPORTANT: show "Записывает..." to peer immediately on press-in.
+        // This avoids a 3-5s delay on Android while permissions/audio mode/recorder are initializing.
+        try {
+          if (!voiceIsRecording && currentUserId && peerId && !selectionMode) {
+            startLocalRecordingSignal();
+          }
+        } catch {}
         void startVoiceRecording();
       },
       onPanResponderMove: (_evt, gestureState) => {
