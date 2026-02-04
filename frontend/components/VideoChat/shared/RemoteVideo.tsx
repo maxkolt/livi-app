@@ -51,7 +51,8 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   const useTextureViewOnAndroid = Platform.OS === 'android' && isLegacyAndroidSurface;
   const logRenderState = useCallback(
     (reason: string, extra?: Record<string, unknown>) => {
-      logger.info('[RemoteVideo] Render state', { reason, ...extra });
+      // Noisy render-state logs should be DEBUG-level (hidden by default LOG_LEVEL=info).
+      logger.debug('[RemoteVideo] Render state', { reason, ...extra });
     },
     []
   );
@@ -120,7 +121,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // КРИТИЧНО: Логируем значение partnerInPiP при каждом рендере для отладки
   useEffect(() => {
-    logger.info('[RemoteVideo] partnerInPiP prop changed', { 
+    logger.debug('[RemoteVideo] partnerInPiP prop changed', { 
       partnerInPiP,
       hasStream: !!remoteStream,
       remoteCamOn,
@@ -133,7 +134,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // КРИТИЧНО: Логируем каждый рендер для отладки отображения заглушки
   useEffect(() => {
     if (partnerInPiP) {
-      logger.info('[RemoteVideo] 🔴 partnerInPiP=true - заглушка "Отошел" ДОЛЖНА быть видна', {
+      logger.debug('[RemoteVideo] partnerInPiP=true - away placeholder should be visible', {
         partnerInPiP,
         hasStream: !!remoteStream,
         streamId: remoteStream?.id,
@@ -209,7 +210,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
     setForceUpdateKey((prevKey) => {
       const next = prevKey + 1;
-      logger.info('[RemoteVideo] Android: force-update RTCView', {
+      logger.debug('[RemoteVideo] Android: force-update RTCView', {
         streamId,
         trackId,
         trackEnabled: videoTrack.enabled,
@@ -227,10 +228,10 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       if (!track) return;
       if (!remoteMuted && !track.enabled) {
         track.enabled = true;
-        logger.info('[RemoteVideo] Включаем аудио трек', { trackId: track.id, index, streamId: streamToUse.id });
+        logger.debug('[RemoteVideo] Enable remote audio track', { trackId: track.id, index, streamId: streamToUse.id });
       } else if (remoteMuted && track.enabled) {
         track.enabled = false;
-        logger.info('[RemoteVideo] Отключаем аудио трек (muted)', { trackId: track.id, index, streamId: streamToUse.id });
+        logger.debug('[RemoteVideo] Disable remote audio track (muted)', { trackId: track.id, index, streamId: streamToUse.id });
       }
     });
   }, [streamToUse, remoteMuted]);
@@ -250,7 +251,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // Это гарантирует, что заглушка покажется в любом случае, даже если нет стрима или он еще загружается
   // Заглушка должна показываться автоматически при уходе партнера в PiP и исчезать при возврате
   if (partnerInPiP) {
-    logger.info('[RemoteVideo] 🔴 ПОКАЗЫВАЕМ ЗАГЛУШКУ "Отошел" - partnerInPiP=true', {
+    logger.debug('[RemoteVideo] Show away placeholder (partnerInPiP=true)', {
       partnerInPiP,
       streamId: streamToUse?.id,
       hasStream: !!streamToUse,
@@ -364,7 +365,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   
   // Логируем состояние для отладки восстановления видео
   if (isReturningFromPiP) {
-    logger.info('[RemoteVideo] 🔄 Партнер вернулся из PiP - показываем видео для восстановления', {
+    logger.debug('[RemoteVideo] Partner returned from PiP - recovery render', {
       remoteCamOn,
       partnerInPiP,
       hasVideoTrack,

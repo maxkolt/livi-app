@@ -1416,12 +1416,28 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Idempotency: server may deliver call:ended multiple times (e.g., room + direct).
     // Also, call:ended can arrive after local cleanup already cleared ids.
     // In those cases, ignore to avoid duplicate cleanup and "null callId" log noise.
-    if (this.ended || this.endCallInProgress || (!this.callId && !this.roomId)) {
+    if (this.ended || this.endCallInProgress) {
       logger.debug('[VideoCallSession] Ignoring duplicate call:ended', {
         ended: this.ended,
         endCallInProgress: this.endCallInProgress,
         callId: this.callId,
         roomId: this.roomId,
+      });
+      return;
+    }
+
+    // Safety: sometimes the UI/session may clear identifiers early (race with cleanup / reconnect),
+    // but LiveKit room/tracks may still be active. In that case we MUST still teardown on call:ended.
+    // Only ignore if we are clearly not in a call anymore.
+    const hasAnyIdentifiers = !!this.callId || !!this.roomId;
+    const hasLiveKitRoom = !!this.room && this.room.state !== 'disconnected';
+    const hasAnyTracks = !!this.localStream || !!this.remoteStream || !!this.localAudioTrack || !!this.localVideoTrack;
+    if (!hasAnyIdentifiers && !hasLiveKitRoom && !hasAnyTracks) {
+      logger.debug('[VideoCallSession] Ignoring call:ended (no active call state)', {
+        callId: this.callId,
+        roomId: this.roomId,
+        hasLiveKitRoom,
+        hasAnyTracks,
       });
       return;
     }
@@ -2940,6 +2956,9 @@ export class VideoCallSession extends SimpleEventEmitter {
           this.currentRoomName = null;
           logger.debug('[VideoCallSession] Room reference cleared synchronously in Disconnected handler');
         }
+        // Best-effort: полностью добиваем внутренний engine/ws, чтобы LiveKit не успевал
+        // выстрелить WARN "ping timeout triggered" уже ПОСЛЕ завершения звонка.
+        this.forceDisposeRoom(roomToDisconnect, 'disconnected');
         this.disconnectReason = 'unknown';
         this.isDisconnecting = false;
         this.disconnectPromise = null;
@@ -2957,6 +2976,14 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (disconnectedHandler) {
           roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
         }
+        // Best-effort: если LiveKit "завис" и Disconnected не пришёл, пытаемся принудительно добить соединение,
+        // чтобы не получать WARN "ping timeout triggered" уже ПОСЛЕ завершения звонка.
+        // Важно: НЕ делаем removeAllListeners() ДО попытки disconnect(), чтобы не сломать внутренние обработчики LiveKit.
+        try { roomToDisconnect.disconnect(); } catch {}
+        // После повторной попытки отключения можно безопасно снять внешние listeners, чтобы прекратить лог-спам.
+        try { roomToDisconnect.removeAllListeners(); } catch {}
+        // Дополнительно принудительно закрываем внутренний engine/ws.
+        this.forceDisposeRoom(roomToDisconnect, 'timeout');
         // КРИТИЧНО: Очищаем ссылку на комнату СИНХРОННО при таймауте
         // Это гарантирует, что this.room = null установится даже если событие Disconnected не придет
         if (this.room === roomToDisconnect) {
@@ -3015,6 +3042,36 @@ export class VideoCallSession extends SimpleEventEmitter {
     });
     
     return this.disconnectPromise;
+  }
+
+  // livekit-client иногда оставляет активный ws/engine на мобилках даже после room.disconnect().
+  // Это приводит к WARN "ping timeout triggered" уже после завершения звонка.
+  // Делаем best-effort cleanup через внутренние поля (не публичный API) — строго в try/catch.
+  private forceDisposeRoom(room: Room, context: 'disconnected' | 'timeout' | string): void {
+    try {
+      // Внешние listeners можно снять безопасно после начала/завершения disconnect.
+      try { (room as any)?.removeAllListeners?.(); } catch {}
+
+      const engine: any = (room as any)?.engine;
+      // Пытаемся закрыть engine/SignalClient максимально мягко/совместимо.
+      try { engine?.close?.(); } catch {}
+      try { engine?.client?.close?.(); } catch {}
+      try { engine?.signalClient?.close?.(); } catch {}
+      try { engine?.signalClient?.ws?.close?.(); } catch {}
+      try { engine?.signalClient?.socket?.close?.(); } catch {}
+      try { engine?.signalClient?.transport?.close?.(); } catch {}
+
+      logger.debug('[VideoCallSession] forceDisposeRoom complete', {
+        context,
+        roomState: (room as any)?.state,
+      });
+    } catch (e) {
+      // Никогда не даем этой логике ломать завершение звонка.
+      logger.debug('[VideoCallSession] forceDisposeRoom failed (ignored)', {
+        context,
+        error: (e as any)?.message || String(e || ''),
+      });
+    }
   }
 
   private shouldRunLocalVideoWatchdog(): boolean {

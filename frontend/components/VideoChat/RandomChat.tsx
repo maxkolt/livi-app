@@ -192,9 +192,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setRemoteStream(null);
       remoteCamStateKnownRef.current = false;
       setRemoteCamEnabled(false);
-      lastGoodRemoteStreamRef.current = null;
-      lastGoodRemoteStreamAtRef.current = 0;
-      setRemoteViewKey((k) => k + 1);
+      // During "Next"/search transitions keep the lastGoodRemoteStream mounted (covered by loader overlay)
+      // to avoid Android RTCView black flickers caused by unmount/remount.
+      const isTransition = loadingRef.current || isNextingRef.current;
+      if (!isTransition) {
+        lastGoodRemoteStreamRef.current = null;
+        lastGoodRemoteStreamAtRef.current = 0;
+        setRemoteViewKey((k) => k + 1);
+      }
     }
   }, [partnerId]);
   
@@ -491,7 +496,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       // КРИТИЧНО: Сохраняем предыдущий стрим в ref для предотвращения мерцания
       // Если новый стрим null/невалидный, но предыдущий валидный - используем предыдущий
       const prevStream = localStreamRef.current || localStream;
-      const prevStreamValid = prevStream && isValidStream(prevStream);
+      const isTransition = isNextingRef.current || loadingRef.current;
+      const prevStreamExists = !!prevStream;
+      const prevStreamValid = prevStreamExists && isValidStream(prevStream);
       const prevStreamId = prevStream?.id;
       const newStreamId = stream?.id;
       const isNewStreamInstance = prevStreamId !== newStreamId;
@@ -530,13 +537,16 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       } else if (stream === null) {
         // КРИТИЧНО: При явном null проверяем, не идет ли процесс next()
         // Если идет next(), сохраняем предыдущий стрим чтобы не было черного экрана
-        if (isNextingRef.current && prevStreamValid) {
-          // Идет next() и есть валидный предыдущий стрим - сохраняем его
-          localStreamRef.current = prevStream;
+        if (isTransition && prevStreamExists) {
+          // Идет next()/поиск и есть предыдущий стрим — держим его, даже если он уже "ended".
+          // Так RTCView не размонтируется и визуальное мерцание "Вы" сильно уменьшается.
+          localStreamRef.current = prevStream!;
           // НЕ обновляем state на null, чтобы не было черного экрана
           logger.debug('[RandomChat] Keeping previous localStream during next() to prevent flicker', {
-            prevStreamId: prevStream.id,
+            prevStreamId,
+            prevStreamValid,
             isNexting: isNextingRef.current,
+            loading: loadingRef.current,
           });
         } else {
           // Не идет next() или нет предыдущего стрима - обновляем на null
@@ -545,13 +555,24 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         }
       } else if (!stream || !isValidStream(stream)) {
         // Новый стрим невалидный - сохраняем предыдущий в ref если он валидный
-        if (prevStreamValid) {
-          localStreamRef.current = prevStream;
+        if (isTransition && prevStreamExists) {
+          localStreamRef.current = prevStream!;
           // НЕ обновляем state, чтобы не было черного экрана
           logger.debug('[RandomChat] Keeping previous localStream to prevent flicker', {
-            prevStreamId: prevStream.id,
+            prevStreamId,
             newStreamValid: false,
             hasPrevStream: !!prevStream,
+            isNexting: isNextingRef.current,
+            loading: loadingRef.current,
+          });
+        } else if (prevStreamValid) {
+          localStreamRef.current = prevStream!;
+          logger.debug('[RandomChat] Keeping previous localStream (valid) to prevent flicker', {
+            prevStreamId,
+            newStreamValid: false,
+            hasPrevStream: !!prevStream,
+            isNexting: isNextingRef.current,
+            loading: loadingRef.current,
           });
         } else {
           // Предыдущий стрим тоже невалидный - обновляем state
@@ -575,6 +596,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         lastGoodRemoteStreamAtRef.current = Date.now();
         hasEverRemoteVideoRef.current = true;
       } else {
+        // During "Next"/search transitions we intentionally keep the lastGoodRemoteStream mounted
+        // (covered by the loader overlay) to avoid RTCView remount black flickers on Android.
         setRemoteStream(null);
         setRemoteMuted(false);
         remoteCamStateKnownRef.current = false;
@@ -999,6 +1022,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   useEffect(() => {
     if (started && !isInactiveState && localStream) {
+      // Android: во время Next/поиска не ремоунтим RTCView через localRenderKey —
+      // иначе получаем визуальные "вспышки" в блоке "Вы".
+      if (Platform.OS === 'android' && (isNextingRef.current || loadingRef.current)) {
+        // Но refs всё равно обновляем, чтобы после перехода логика была корректной.
+        localStreamIdRef.current = localStream.id;
+        prevCamOnRef.current = camOn;
+        prevStreamURLRef.current = localStream.toURL?.() || null;
+        return;
+      }
       const currentStreamId = localStream.id;
       const prevStreamId = localStreamIdRef.current;
       const prevCamOn = prevCamOnRef.current;
@@ -1160,6 +1192,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   // Обработка AppState - для рандомного чата останавливаем при уходе в фон
   useEffect(() => {
     let bgTimer: any = null;
+    let bgDisconnectTimer: any = null;
     const sub = AppState.addEventListener('change', async (nextAppState) => {
       try {
         if (nextAppState === 'background') {
@@ -1167,7 +1200,18 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           // Делаем debounce: останавливаем только если background держится > ~1.2s.
           try {
             if (bgTimer) clearTimeout(bgTimer);
+            if (bgDisconnectTimer) clearTimeout(bgDisconnectTimer);
           } catch {}
+          // Быстрый "мягкий" разрыв LiveKit комнаты (без полного cleanup),
+          // чтобы не получить WARN "ping timeout triggered" после лок/фон.
+          // Делаем небольшой debounce, чтобы не реагировать на transient AppState дергания.
+          bgDisconnectTimer = setTimeout(() => {
+            try {
+              if (AppState.currentState === 'background' && (startedRef.current || loadingRef.current)) {
+                sessionRef.current?.leaveRoom?.();
+              }
+            } catch {}
+          }, 250);
           bgTimer = setTimeout(() => {
             try {
               if (AppState.currentState === 'background' && (startedRef.current || loadingRef.current)) {
@@ -1182,8 +1226,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         } else if (nextAppState === 'active') {
           try {
             if (bgTimer) clearTimeout(bgTimer);
+            if (bgDisconnectTimer) clearTimeout(bgDisconnectTimer);
           } catch {}
           bgTimer = null;
+          bgDisconnectTimer = null;
           setIsInactiveState(false);
           // Аудио-роутинг поднимется через useAudioRouting (без ручных "пинков")
         }
@@ -1195,6 +1241,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     return () => {
       try {
         if (bgTimer) clearTimeout(bgTimer);
+        if (bgDisconnectTimer) clearTimeout(bgDisconnectTimer);
       } catch {}
       sub.remove();
     };
@@ -1632,13 +1679,17 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             // При выключении камеры используем unpublishTrack(), который полностью останавливает камеру
             // Это убирает индикатор камеры на iPhone
             if (shouldShowLocalVideo) {
+              const isTransition = loadingRef.current || isNextingRef.current;
               // КРИТИЧНО: Используем localStream из state, но если он невалидный, пробуем ref
               // Это предотвращает черный экран во время пересоздания треков при next()
-              const displayStream = (localStream && isValidStream(localStream)) 
-                ? localStream 
-                : (localStreamRef.current && isValidStream(localStreamRef.current))
-                  ? localStreamRef.current
-                  : null;
+              const displayStream =
+                (localStream && isValidStream(localStream))
+                  ? localStream
+                  : (localStreamRef.current && isValidStream(localStreamRef.current))
+                    ? localStreamRef.current
+                    : (Platform.OS === 'android' && isTransition && localStreamRef.current)
+                      ? localStreamRef.current
+                      : null;
               
               if (displayStream) {
                 // Безопасно получаем streamURL с проверкой на null/undefined
@@ -1646,9 +1697,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 // КРИТИЧНО: Используем комбинацию streamId, camOn и localRenderKey для принудительного обновления
                 // Это гарантирует, что видео обновится при включении камеры
                 // КРИТИЧНО для iOS: Добавляем timestamp в key для гарантированного обновления RTCView
-                const localRtcViewKey = Platform.OS === 'ios' 
-                  ? `local-${displayStream.id}-${camOn}-${localRenderKey}-${localStreamTimestampRef.current}`
-                  : `local-${displayStream.id}-${camOn}-${localRenderKey}`;
+                const localRtcViewKey =
+                  Platform.OS === 'ios'
+                    ? `local-${displayStream.id}-${camOn}-${localRenderKey}-${localStreamTimestampRef.current}`
+                    : `local-${camOn}-${localRenderKey}`;
                 
                 logger.debug('[RandomChat] Rendering local video', {
                   camOn,
@@ -1692,6 +1744,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   hasLocalStreamRef: !!localStreamRef.current,
                   isValid: localStream ? isValidStream(localStream) : false,
                   isValidRef: localStreamRef.current ? isValidStream(localStreamRef.current) : false,
+                  isTransition,
                 });
                 return <Text style={styles.placeholder}>{L("you")}</Text>;
               }

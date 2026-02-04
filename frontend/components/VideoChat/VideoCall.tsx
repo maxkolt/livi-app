@@ -100,7 +100,8 @@ const stopStreamTracks = (stream: MediaStream | null | undefined, context: strin
 
     const uniqueTracks = Array.from(new Set(allTracks));
 
-    logger.info('[VideoCall] 🛑 Останавливаем локальный стрим', {
+    // Менее шумно: детали остановки стримов/треков — только в debug.
+    logger.debug('[VideoCall] Stopping local stream tracks', {
       context,
       totalTracks: uniqueTracks.length,
       videoTracks: uniqueTracks.filter((t: any) => (t.kind || (t as any).type) === 'video').length,
@@ -114,7 +115,7 @@ const stopStreamTracks = (stream: MediaStream | null | undefined, context: strin
           track.enabled = false;
           track.stop();
 
-          logger.info('[VideoCall] ✅ Трек остановлен', {
+          logger.debug('[VideoCall] Track stopped', {
             context,
             trackKind,
             trackId: track.id,
@@ -208,7 +209,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   // КРИТИЧНО: Логируем изменения partnerInPiP для отладки
   useEffect(() => {
-    logger.info('[VideoCall] partnerInPiP state changed', { 
+    // Noisy UI-state logs should be DEBUG-level (hidden by default LOG_LEVEL=info).
+    logger.debug('[VideoCall] partnerInPiP state changed', { 
       partnerInPiP,
       roomId,
       callId,
@@ -450,7 +452,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   // Это решает проблему, когда remoteStream в состоянии еще null, но в ref уже есть
   // Вычисляем напрямую каждый раз при рендере, так как это дешевая операция
   const currentRemoteStream: MediaStream | null = remoteStreamRef.current || remoteStream || (sessionRef.current?.getRemoteStream?.() ?? null);
-  const { forceSpeakerOnHard } = useAudioRouting(hasActiveCallForAudio && !isInactiveState, currentRemoteStream);
+  const { syncRouteNow } = useAudioRouting(hasActiveCallForAudio && !isInactiveState, currentRemoteStream);
   
   // Refs
   const focusEffectGuardRef = useRef(false);
@@ -1403,7 +1405,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }
     
     try {
-      logger.info('[VideoCall] 🛑 Завершение звонка - останавливаем камеру и микрофон', {
+      // Менее шумно: оставляем одну сводную INFO строку (детали — в debug).
+      logger.info('[VideoCall] Ending call (stop camera/mic)', {
         roomId,
         callId,
         partnerId,
@@ -1418,16 +1421,18 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       
       // КРИТИЧНО: Сначала принудительно останавливаем локальный стрим через session
       // Это гарантирует, что камера остановится даже если localStream в состоянии устарел
+      let stoppedStream: MediaStream | null = null;
       try {
         const sessionLocalStream = session.getLocalStream?.();
         stopStreamTracks(sessionLocalStream, 'onAbortCall/sessionLocalStream');
+        stoppedStream = sessionLocalStream || null;
       } catch (e) {
         logger.warn('[VideoCall] Error stopping session local stream:', e);
       }
       
       // КРИТИЧНО: Также останавливаем локальный стрим из состояния компонента
       // (на случай если он отличается от session)
-      if (localStream) {
+      if (localStream && localStream !== stoppedStream) {
         stopStreamTracks(localStream, 'onAbortCall/localStreamState');
       }
       
@@ -1459,7 +1464,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       // КРИТИЧНО: Сбрасываем флаг через небольшую задержку, чтобы дать состоянию обновиться
       setTimeout(() => {
         isEndingCallRef.current = false;
-        logger.info('[VideoCall] isEndingCallRef сброшен в onAbortCall');
+        logger.debug('[VideoCall] isEndingCallRef reset in onAbortCall');
       }, 1000);
       
       // КРИТИЧНО: Дополнительная проверка через небольшую задержку
@@ -1882,13 +1887,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           });
         }
         
-        // Форсим спикер при возврате из PiP
-        try {
-          forceSpeakerOnHard();
-          logger.info('[VideoCall] Force enabled speaker');
-        } catch (e) {
-          logger.warn('[VideoCall] Error enabling speaker:', e);
-        }
+        // Восстанавливаем корректный аудио-роут при возврате из PiP (наушники/BT должны "побеждать").
+        try { syncRouteNow?.(); } catch {}
         
         // Сбрасываем guard через небольшую задержку
         setTimeout(() => {

@@ -66,6 +66,26 @@ let currentUserId: string | undefined;
 let bootInProgress = false; // Защита от повторного вызова boot()
 let createUserPromise: Promise<string | null> | null = null; // Трекер параллельных createUser
 
+// Notify UI when currentUserId changes (screens depend on it for profile/avatar).
+type CurrentUserIdListener = (userId: string | undefined) => void;
+const __currentUserIdListeners = new Set<CurrentUserIdListener>();
+function __notifyCurrentUserId() {
+  try {
+    for (const cb of __currentUserIdListeners) {
+      try { cb(currentUserId); } catch {}
+    }
+  } catch {}
+}
+
+// Subscribe to currentUserId changes (invoked immediately once).
+export function onCurrentUserId(cb: CurrentUserIdListener): () => void {
+  try { cb(currentUserId); } catch {}
+  __currentUserIdListeners.add(cb);
+  return () => {
+    __currentUserIdListeners.delete(cb);
+  };
+}
+
 /* ========= socket (singleton) ========= */
 let socketInstance: Socket | null = null;
 let reconnecting = false;
@@ -206,6 +226,7 @@ async function boot() {
       
       // Сначала устанавливаем userId и подключаемся
       currentUserId = saved;
+      __notifyCurrentUserId();
       
       // Подключаемся к socket (и гарантируем installId в handshake)
       await applyAuthAndConnect();
@@ -350,6 +371,12 @@ try {
 socket.on("connect", async () => {
   reconnecting = false;
   console.log(`[socket] connected ${socket.id}`);
+  // If we connected with installId in auth, handshake is considered valid.
+  try {
+    // @ts-ignore
+    const auth = (socket as any)?.auth;
+    if (auth?.installId) __handshakeHasInstallId = true;
+  } catch {}
   
   // КРИТИЧНО: Если у нас есть userId, но socket подключился без него - отправляем reauth
   if (currentUserId && !(socket as any).data?.userId) {
@@ -436,6 +463,17 @@ export function socketFlushBufferedIceCandidates(from: string): any[] {
 /* ========= small utils ========= */
 async function waitForConnect(ms = 8000): Promise<void> {
   if (socket.connected) return;
+  // CRITICAL: ensure installId is attached before any implicit connect().
+  // Some codepaths call waitForConnect() (emitAck) which triggers socket.connect().
+  // Without installId in handshake server can treat client as guest and return empty profile/avatar.
+  try {
+    const installId = await getInstallId();
+    // @ts-ignore
+    const prevAuth =
+      (socket as any)?.auth && typeof (socket as any).auth === 'object' ? (socket as any).auth : {};
+    // @ts-ignore
+    socket.auth = { ...prevAuth, installId, ...(currentUserId ? { userId: currentUserId } : {}) };
+  } catch {}
   return new Promise((resolve, reject) => {
     const onOk = () => { cleanup(); resolve(); };
     const t = setTimeout(() => { cleanup(); reject(new Error("wait connect timeout")); }, ms);
@@ -1188,6 +1226,7 @@ export async function attachUserId(userId: string) {
   if (!isOid(userId)) return;
   console.log('[attachUserId] Attaching userId:', userId);
   currentUserId = userId;
+  __notifyCurrentUserId();
   try {
     await AsyncStorage.setItem("userId", currentUserId);
   } catch {}
@@ -1211,6 +1250,8 @@ let __lastUserExistsCacheLogAt = 0;
 
 // Защита от одновременных вызовов для одного userId
 const pendingChecks = new Map<string, Promise<boolean | null>>();
+// Чтобы не спамить "Waiting for pending check" при множественных параллельных вызовах
+const pendingWaitLogged = new Set<string>();
 
 // Функция для проверки существования пользователя с retry и кэшированием
 export async function checkUserExists(userId: string): Promise<boolean | null> {
@@ -1223,7 +1264,7 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
     const now = Date.now();
     if (__DEV__ && now - __lastUserExistsCacheLogAt > 10_000) {
       __lastUserExistsCacheLogAt = now;
-      console.log('[checkUserExists] Using cached result:', cached.result);
+      logger.debug('[checkUserExists] Using cached result', { result: cached.result });
     }
     return cached.result;
     }
@@ -1232,14 +1273,17 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
   // Защита от одновременных вызовов - если уже есть запрос для этого userId, ждем его
   const pending = pendingChecks.get(userId);
   if (pending) {
-    console.log('[checkUserExists] Waiting for pending check for:', userId);
+    if (!pendingWaitLogged.has(userId)) {
+      pendingWaitLogged.add(userId);
+      logger.debug('[checkUserExists] Waiting for pending check', { userId });
+    }
     return pending;
   }
   
   // Создаем новый запрос
   const checkPromise = (async () => {
     try {
-  console.log('[checkUserExists] Checking user:', userId);
+  logger.debug('[checkUserExists] Checking user', { userId });
   
       // ПРИОРИТЕТ: Используем socket.io если подключен, иначе HTTP
       if (socketInstance?.connected) {
@@ -1249,13 +1293,13 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
           if (socketResult?.ok === true && typeof (socketResult as any).exists === 'boolean') {
             const exists = (socketResult as any).exists as boolean;
             userExistsCache.set(userId, { result: exists, timestamp: Date.now() });
-            console.log('[checkUserExists] User exists (via socket):', exists);
+            logger.debug('[checkUserExists] User exists (via socket)', { userId, exists });
             return exists;
           }
           // ok=false / нет exists -> fallback to HTTP
         } catch (socketError) {
           // Не логируем как warning - это нормально если socket временно недоступен
-          console.log('[checkUserExists] Socket check failed, falling back to HTTP');
+          logger.debug('[checkUserExists] Socket check failed, falling back to HTTP');
         }
       }
       
@@ -1264,7 +1308,7 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
     try {
           // Логируем только первую попытку, чтобы не засорять логи
           if (attempt === 1) {
-            console.log(`[checkUserExists] Attempt ${attempt}/2 (HTTP)...`);
+            logger.debug('[checkUserExists] Attempt (HTTP)', { attempt, maxAttempts: 2 });
           }
           
           // Создаем AbortController для timeout (fallback для старых версий)
@@ -1292,7 +1336,7 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
       
       const data = await response.json();
       if (data.ok) {
-            console.log('[checkUserExists] User exists (via HTTP):', data.exists);
+            logger.debug('[checkUserExists] User exists (via HTTP)', { userId, exists: data.exists });
         userExistsCache.set(userId, { result: data.exists, timestamp: Date.now() });
         return data.exists;
       }
@@ -1302,7 +1346,7 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
             const errorMsg = e?.message || String(e);
             // Не логируем как warning если это просто network error - это нормально для мобильных
             if (errorMsg.includes('Network request failed') || errorMsg.includes('timeout')) {
-              console.log(`[checkUserExists] Network unavailable (attempt ${attempt}/2), will retry later`);
+              logger.debug('[checkUserExists] Network unavailable, will retry later', { attempt, maxAttempts: 2 });
             } else {
               console.warn(`[checkUserExists] HTTP error (attempt ${attempt}/2):`, errorMsg);
             }
@@ -1315,11 +1359,12 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
   }
   
       // Не логируем как warning - это нормальная ситуация когда сервер временно недоступен
-      console.log('[checkUserExists] All attempts failed, server temporarily unavailable');
+      logger.debug('[checkUserExists] All attempts failed, server temporarily unavailable');
   return null; // null = неизвестно (сервер не готов)
     } finally {
       // Удаляем из pending после завершения
       pendingChecks.delete(userId);
+      pendingWaitLogged.delete(userId);
     }
   })();
   
@@ -1485,6 +1530,7 @@ export function getCurrentUserId(): string | undefined {
 export function setCurrentUserId(userId: string) {
   // Логи setCurrentUserId убраны - показывают только рабочее состояние
   currentUserId = userId;
+  __notifyCurrentUserId();
   // При смене userId — сбрасываем кэш существования, чтобы не залипать на старом false
   try { userExistsCache.delete(String(userId)); } catch {}
   // Сохраняем в AsyncStorage без переподключения
@@ -1494,6 +1540,7 @@ export function setCurrentUserId(userId: string) {
 // КРИТИЧНО: Функция для сброса currentUserId (нужна после удаления профиля)
 export function clearCurrentUserId() {
   currentUserId = undefined;
+  __notifyCurrentUserId();
   // При сбросе identity — сбрасываем кэши проверок, чтобы новые попытки были "чистыми"
   try { userExistsCache.clear(); } catch {}
   try { pendingChecks.clear(); } catch {}

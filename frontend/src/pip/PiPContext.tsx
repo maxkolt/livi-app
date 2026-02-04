@@ -438,10 +438,18 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const onCallEnded = (data?: any) => {
       // КРИТИЧНО: Проверяем что это НАШ звонок (строгое совпадение callId или roomId)
       // НЕ закрываем PiP при любом call:ended - только если это наш звонок
-      const callMatches = visible && (
-        (data?.callId && callId && callId === data.callId) ||
-        (data?.roomId && roomId && roomId === data.roomId)
-      );
+      const receivedIds = new Set<string>();
+      if (typeof data?.callId === 'string' && data.callId) receivedIds.add(data.callId);
+      if (typeof data?.roomId === 'string' && data.roomId) receivedIds.add(data.roomId);
+      if (typeof data?.resolvedRoomId === 'string' && data.resolvedRoomId) receivedIds.add(data.resolvedRoomId);
+
+      // Backward/forward compatibility:
+      // - older backend versions could send callId=roomId (room id only)
+      // - newer backend sends callId as the real callId (timestamp) and roomId as room_...
+      const callMatches =
+        visible &&
+        ((callId && receivedIds.has(callId)) ||
+          (roomId && receivedIds.has(roomId)));
 
       if (callMatches) {
         console.log('[PiPContext] Call ended event received, closing PiP:', { 

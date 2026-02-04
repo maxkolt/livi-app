@@ -41,6 +41,13 @@ try {
   const ORIG_WARN = console.warn.bind(console);
   const IGNORE_SUBSTR = [
     "An event listener wasn't added because it has been added already",
+    // LiveKit: can appear after Room disconnect on mobile due to internal WS timing.
+    // We handle cleanup separately; this log is just noise in Metro.
+    "ping timeout triggered. last pong received at:",
+    // LiveKit: noisy warning during track churn on RN.
+    "could not find local track subscription for subscribed event",
+      // LiveKit: can show up when disconnect/reconnect overlaps on RN.
+      "could not createOffer with closed peer connection",
   ];
   console.warn = (...args: any[]) => {
     try {

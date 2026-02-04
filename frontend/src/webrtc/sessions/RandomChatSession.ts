@@ -637,11 +637,18 @@ export class RandomChatSession extends SimpleEventEmitter {
           return;
         }
 
-        this.remoteCamEnabled = !!data.enabled;
+        const nextEnabled = !!data.enabled;
+        // Dedup: if camera state didn't actually change, do NOT bump remoteViewKey.
+        // Bumping remoteViewKey remounts RTCView and can cause black flickers on Android.
+        if (this.remoteCamEnabled === nextEnabled) {
+          return;
+        }
+
+        this.remoteCamEnabled = nextEnabled;
         this.remoteViewKey = Date.now();
         this.emit('remoteViewKeyChanged', this.remoteViewKey);
-        this.config.callbacks.onRemoteCamStateChange?.(!!data.enabled);
-        this.config.onRemoteCamStateChange?.(!!data.enabled);
+        this.config.callbacks.onRemoteCamStateChange?.(nextEnabled);
+        this.config.onRemoteCamStateChange?.(nextEnabled);
       } catch (e) {
         logger.debug('[RandomChatSession] cam-toggle handler error', e);
       }
@@ -710,7 +717,8 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
 
-    // КРИТИЧНО: Если идет отключение, не обрабатываем новый match_found
+    // КРИТИЧНО: Если идет отключение, не обрабатываем новый match_found.
+    // Это защищает от overlap двух комнат/negotiation гонок.
     if (this.isDisconnecting) {
       logger.debug('[RandomChatSession] Disconnecting in progress, ignoring match_found', { 
         partnerId, 
@@ -2384,7 +2392,8 @@ export class RandomChatSession extends SimpleEventEmitter {
       return true;
     }
     
-    // КРИТИЧНО: Если идет отключение, не создаем новое подключение
+    // КРИТИЧНО: Если идет отключение, не создаем новое подключение.
+    // Это защищает от overlap двух комнат/negotiation гонок.
     if (this.isDisconnecting) {
       logger.debug('[RandomChatSession] Disconnecting in progress, aborting connect', {
         connectRequestId,
@@ -2508,11 +2517,17 @@ export class RandomChatSession extends SimpleEventEmitter {
           const stuckRoomState: string = stuckRoom.state as string;
           if (stuckRoomState !== 'disconnected') {
             // КРИТИЧНО: Отключаем зависшую комнату без ожидания
-            await stuckRoom.disconnect().catch((e: any) => {
+            try {
+              if (this.started) {
+                await this.disconnectRoomKeepTracks(stuckRoom, 'force_clear_stuck_room');
+              } else {
+                await stuckRoom.disconnect();
+              }
+            } catch (e: any) {
               logger.debug('[RandomChatSession] Error disconnecting stuck room', {
                 error: e?.message || String(e),
               });
-            });
+            }
           }
         }
         // КРИТИЧНО: Очищаем все ссылки на старую комнату
@@ -2562,6 +2577,11 @@ export class RandomChatSession extends SimpleEventEmitter {
       // Отключаем dynacast/adaptiveStream, чтобы LiveKit не мьютил треки и не слал quality updates для "unknown track"
       adaptiveStream: false,
       dynacast: false,
+      // КРИТИЧНО для UX RandomChat:
+      // при next()/disconnect LiveKit по умолчанию может останавливать локальные camera/mic треки,
+      // из-за чего они становятся readyState='ended' -> пересоздание localStream -> мерцания в блоке "Вы".
+      // Отключаем авт-стоп на unpublish/disconnect и освобождаем ресурсы вручную в stopRandomChat().
+      stopLocalTrackOnUnpublish: false,
       ...(rtcConfig ? { rtcConfig } : {}),
       publishDefaults: {
         videoEncoding: { maxBitrate: isHighCapture ? 2_500_000 : 1_200_000, maxFramerate: 30 },
@@ -2830,7 +2850,11 @@ export class RandomChatSession extends SimpleEventEmitter {
       if (room.state === 'connecting') {
         logger.warn('[RandomChatSession] Room stuck in connecting state, forcing disconnect');
         try {
-          await room.disconnect();
+          if (this.started) {
+            await this.disconnectRoomKeepTracks(room, 'connecting_force_disconnect');
+          } else {
+            await room.disconnect();
+          }
         } catch (e) {
           logger.debug('[RandomChatSession] Error disconnecting connecting room', e);
         }
@@ -2848,14 +2872,31 @@ export class RandomChatSession extends SimpleEventEmitter {
       const roomToDisconnect = room;
       let disconnectedHandler: (() => void) | null = null;
       let timeoutId: NodeJS.Timeout | null = null;
+      let aggressiveStopTimerId: NodeJS.Timeout | null = null;
+      let resolved = false;
+      // NOTE: Keep it simple here. Aggressive "early forced cleanup" can cause signaling state races
+      // during fast reconnect/Next. We only use it when RandomChat is fully stopping (started=false).
       
       // Устанавливаем обработчик события Disconnected
       disconnectedHandler = () => {
+        if (resolved) return;
+        resolved = true;
         logger.debug('[RandomChatSession] Room fully disconnected, cleanup complete', { 
           reason: this.disconnectReason 
         });
         if (timeoutId) {
           clearTimeout(timeoutId);
+        }
+        try {
+          if (aggressiveStopTimerId) clearTimeout(aggressiveStopTimerId);
+        } catch {}
+        // ВАЖНО: При Next/переподключениях (started=true) НЕ делаем forceDisposeRoom,
+        // иначе можно получить "Local tracks ended" и SDP state ошибки.
+        // Для полного stop (started=false) — добиваем engine/ws, чтобы не было WARN "ping timeout triggered".
+        if (!this.started) {
+          this.forceDisposeRoom(roomToDisconnect, 'disconnected');
+        } else {
+          this.forceCloseSignalTransport(roomToDisconnect, 'disconnected:started');
         }
         this.disconnectReason = 'unknown';
         this.isDisconnecting = false;
@@ -2871,66 +2912,36 @@ export class RandomChatSession extends SimpleEventEmitter {
         logger.warn('[RandomChatSession] Disconnect timeout, forcing cleanup', { 
           roomState: roomToDisconnect.state 
         });
+        if (resolved) return;
+        resolved = true;
         if (disconnectedHandler) {
           roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
         }
+        try {
+          if (aggressiveStopTimerId) clearTimeout(aggressiveStopTimerId);
+        } catch {}
+        // Timeout — worst-case. Здесь допускаем более агрессивный cleanup.
+        // Если чат всё ещё started, стараемся сначала закрыть только signal transport,
+        // чтобы не гасить локальные треки без необходимости.
+        if (this.started) {
+          this.forceCloseSignalTransport(roomToDisconnect, 'timeout:started');
+          // В режиме started=true НЕ делаем forceDisposeRoom — это может "ended" локальные треки
+          // и снова вызвать чёрные мерцания/renegotiation гонки.
+          this.disconnectReason = 'unknown';
+          this.isDisconnecting = false;
+          this.disconnectPromise = null;
+          resolve();
+          return;
+        }
+        this.forceDisposeRoom(roomToDisconnect, 'timeout');
         this.disconnectReason = 'unknown';
         this.isDisconnecting = false;
         this.disconnectPromise = null;
         resolve();
       }, 5000); // 5 секунд максимум на отключение
       
-      // КРИТИЧНО: Отписываем треки ПЕРЕД disconnect, чтобы LiveKit не останавливал их
-      // Это предотвращает остановку треков (ended) при disconnect, что вызывает черный экран
-      // Отписываем БЕЗ остановки треков (stop: false), чтобы они остались активными
-      void (async () => {
-        try {
-          const localParticipant = roomToDisconnect.localParticipant;
-          if (localParticipant) {
-            // Отписываем все опубликованные треки через публикации
-            const videoPubs = localParticipant.videoTrackPublications;
-            const audioPubs = localParticipant.audioTrackPublications;
-            
-            // Отписываем видео треки
-            if (videoPubs) {
-              const pubs = typeof videoPubs.values === 'function' 
-                ? Array.from(videoPubs.values())
-                : Array.isArray(videoPubs) ? videoPubs : [];
-              
-              for (const pub of pubs) {
-                if (pub.track && (pub.track === this.localVideoTrack || pub.trackSid === this.localVideoTrack?.sid)) {
-                  try {
-                    await localParticipant.unpublishTrack(pub.track, false);
-                    logger.debug('[RandomChatSession] Video track unpublished before disconnect');
-                  } catch (e) {
-                    logger.debug('[RandomChatSession] Error unpublishing video track', e);
-                  }
-                }
-              }
-            }
-            
-            // Отписываем аудио треки
-            if (audioPubs) {
-              const pubs = typeof audioPubs.values === 'function'
-                ? Array.from(audioPubs.values())
-                : Array.isArray(audioPubs) ? audioPubs : [];
-              
-              for (const pub of pubs) {
-                if (pub.track && (pub.track === this.localAudioTrack || pub.trackSid === this.localAudioTrack?.sid)) {
-                  try {
-                    await localParticipant.unpublishTrack(pub.track, false);
-                    logger.debug('[RandomChatSession] Audio track unpublished before disconnect');
-                  } catch (e) {
-                    logger.debug('[RandomChatSession] Error unpublishing audio track', e);
-                  }
-                }
-              }
-            }
-          }
-        } catch (e) {
-          logger.debug('[RandomChatSession] Error unpublishing tracks before disconnect', e);
-        }
-      })();
+      // NOTE: We intentionally avoid complex pre-unpublish here.
+      // It's easy to introduce renegotiation races and make RandomChat connect/disconnect feel worse.
       
       // Увеличиваем connectRequestId, чтобы остановить отложенные подключения
       this.connectRequestId++;
@@ -2946,9 +2957,47 @@ export class RandomChatSession extends SimpleEventEmitter {
       (async () => {
         try {
           // КРИТИЧНО: Проверяем состояние еще раз перед disconnect, чтобы избежать ошибки
-          if (roomToDisconnect.state !== 'disconnected' && roomToDisconnect.state !== 'connecting') {
-            await roomToDisconnect.disconnect();
+          if (roomToDisconnect.state !== 'disconnected') {
+            // КРИТИЧНО для RandomChat UX:
+            // при Next (started=true) на части Android LiveKit может останавливать локальные camera/mic треки,
+            // из-за чего они становятся readyState='ended' -> пересоздание localStream -> мерцание "Вы".
+            // В livekit-client у disconnect() в некоторых версиях есть флаг stopTracks/stopLocalTracks.
+            // JS безопасно принимает лишний аргумент, поэтому делаем best-effort: disconnect(false) во время Next.
+            if (this.started) {
+              await this.disconnectRoomKeepTracks(roomToDisconnect, 'disconnectRoom:started');
+            } else {
+              await roomToDisconnect.disconnect();
+            }
+            // КРИТИЧНО: Закрываем signal transport сразу после disconnect() при Next/переходах.
+            // Иначе ws может остаться "живым" и через 5–10 сек появляется WARN "ping timeout triggered".
+            if (this.started) {
+              this.forceCloseSignalTransport(roomToDisconnect, 'post_disconnect_immediate');
+            }
             logger.debug('[RandomChatSession] Room disconnect() called, waiting for Disconnected event');
+            // Если RandomChat полностью остановлен (не Next/не reconnect), можем агрессивно добить engine/ws
+            // раньше 5–10 секунд, чтобы не увидеть WARN "ping timeout triggered" после выхода.
+            // ВАЖНО: НЕ делаем это при Next/быстрых переподключениях — там это может сломать состояние сигналинга.
+            if (!this.started && this.disconnectReason === 'user') {
+              try {
+                if (aggressiveStopTimerId) clearTimeout(aggressiveStopTimerId);
+              } catch {}
+              aggressiveStopTimerId = setTimeout(() => {
+                try {
+                  if (resolved) return;
+                  if (roomToDisconnect.state !== 'disconnected' && disconnectedHandler) {
+                    logger.debug('[RandomChatSession] Disconnected delayed after stop, forcing cleanup early', {
+                      roomState: roomToDisconnect.state,
+                    });
+                    try {
+                      roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
+                    } catch {}
+                    disconnectedHandler();
+                  }
+                } catch (e) {
+                  logger.debug('[RandomChatSession] Error forcing early stop cleanup', e);
+                }
+              }, 1200);
+            }
           } else {
             // Если комната уже отключена, сразу вызываем обработчик
             logger.debug('[RandomChatSession] Room already disconnected, triggering cleanup');
@@ -3030,6 +3079,56 @@ export class RandomChatSession extends SimpleEventEmitter {
     return this.disconnectPromise;
   }
 
+  // livekit-client иногда оставляет активный ws/engine на мобилках даже после room.disconnect().
+  // Это приводит к WARN "ping timeout triggered" уже после завершения сессии.
+  // Делаем best-effort cleanup через внутренние поля (не публичный API) — строго в try/catch.
+  private forceDisposeRoom(room: Room, context: 'disconnected' | 'timeout' | string): void {
+    try {
+      try { (room as any)?.removeAllListeners?.(); } catch {}
+
+      const engine: any = (room as any)?.engine;
+      try { engine?.close?.(); } catch {}
+      try { engine?.client?.close?.(); } catch {}
+      try { engine?.signalClient?.close?.(); } catch {}
+      try { engine?.signalClient?.ws?.close?.(); } catch {}
+      try { engine?.signalClient?.socket?.close?.(); } catch {}
+      try { engine?.signalClient?.transport?.close?.(); } catch {}
+
+      logger.debug('[RandomChatSession] forceDisposeRoom complete', {
+        context,
+        roomState: (room as any)?.state,
+      });
+    } catch (e) {
+      logger.debug('[RandomChatSession] forceDisposeRoom failed (ignored)', {
+        context,
+        error: (e as any)?.message || String(e || ''),
+      });
+    }
+  }
+
+  // Закрываем ТОЛЬКО signal transport (ws/socket) без engine.close().
+  // Это безопаснее для сценария Next/переподключений и помогает убрать WARN "ping timeout triggered".
+  private forceCloseSignalTransport(room: Room, context: string): void {
+    try {
+      const engine: any = (room as any)?.engine;
+      const sc: any = engine?.signalClient;
+      try { sc?.close?.(); } catch {}
+      try { sc?.ws?.close?.(); } catch {}
+      try { sc?.socket?.close?.(); } catch {}
+      try { sc?.transport?.close?.(); } catch {}
+
+      logger.debug('[RandomChatSession] forceCloseSignalTransport complete', {
+        context,
+        roomState: (room as any)?.state,
+      });
+    } catch (e) {
+      logger.debug('[RandomChatSession] forceCloseSignalTransport failed (ignored)', {
+        context,
+        error: (e as any)?.message || String(e || ''),
+      });
+    }
+  }
+
   private async safeDisconnect(room: Room): Promise<void> {
     if (!room) return;
     if (room.state === 'disconnected') {
@@ -3039,6 +3138,37 @@ export class RandomChatSession extends SimpleEventEmitter {
       await room.disconnect();
     } catch (e) {
       logger.warn('[RandomChatSession] Error disconnecting stale room', e);
+    }
+  }
+
+  /**
+   * Best-effort Room.disconnect that tries to KEEP local tracks alive.
+   *
+   * IMPORTANT:
+   * In many livekit-client versions the signature is `disconnect(stopTracks?: boolean)`.
+   * Passing an object (even `{ stopTracks:false }`) would be treated as truthy => stopTracks=true,
+   * which ends local camera/mic tracks and causes black flicker in the "Вы" block.
+   *
+   * So we always try boolean `false` first, and only then fallback to no-args.
+   */
+  private async disconnectRoomKeepTracks(room: Room, context: string): Promise<void> {
+    const disconnectFn: any = (room as any)?.disconnect;
+    if (typeof disconnectFn !== 'function') return;
+    try {
+      await disconnectFn.call(room, false);
+      return;
+    } catch (e1: any) {
+      try {
+        await disconnectFn.call(room);
+        return;
+      } catch (e2: any) {
+        logger.debug('[RandomChatSession] disconnectRoomKeepTracks failed', {
+          context,
+          e1: (e1 as any)?.message || String(e1 || ''),
+          e2: (e2 as any)?.message || String(e2 || ''),
+          roomState: (room as any)?.state,
+        });
+      }
     }
   }
 
@@ -3249,32 +3379,33 @@ export class RandomChatSession extends SimpleEventEmitter {
       }
     }
     
-    // КРИТИЧНО: Всегда эмитим remoteStream даже если трек уже был добавлен
-    // Это гарантирует обновление UI при изменении треков
-    // КРИТИЧНО: Обновляем remoteViewKey при каждом изменении треков для принудительного обновления RTCView
-    // Для видео трека обновляем ключ более агрессивно, особенно если трек изменился
+    // Always emit remoteStream even if the track was already present; this updates UI state.
+    // IMPORTANT: remoteViewKey drives RTCView remounts; bump it only when we *actually* need a remount,
+    // otherwise Android can show black flickers during steady-state.
+    const prevRemoteViewKey = this.remoteViewKey;
     if (isVideoTrack) {
-      // Для видео трека всегда обновляем ключ, чтобы гарантировать обновление RTCView
-      // Это особенно важно при первом получении видео трека
-      this.remoteViewKey = Date.now();
-      logger.debug('[RandomChatSession] Updated remoteViewKey for video track', {
-        remoteViewKey: this.remoteViewKey,
-        trackId: track.sid,
-        wasVideoTrackChanged,
-        streamId: this.remoteStream.id,
-        trackReady: track.mediaStreamTrack?.readyState,
-        trackMuted: track.isMuted,
-      });
+      const hadVideoBefore = !!oldVideoTrackSid;
+      const shouldRemountForVideo = !hadVideoBefore || wasVideoTrackChanged;
+      if (shouldRemountForVideo) {
+        this.remoteViewKey = Date.now();
+        logger.debug('[RandomChatSession] Updated remoteViewKey for video track', {
+          remoteViewKey: this.remoteViewKey,
+          trackId: track.sid,
+          wasVideoTrackChanged,
+          streamId: this.remoteStream.id,
+          trackReady: track.mediaStreamTrack?.readyState,
+          trackMuted: track.isMuted,
+        });
+      }
     } else if (publication.kind === Track.Kind.Audio && !this.remoteVideoTrack) {
-      // Для аудио трека обновляем ключ только если видео трека еще нет
+      // Audio-only room (no video yet): a single bump helps RTCView mount once.
       this.remoteViewKey = Date.now();
     }
     
-    // КРИТИЧНО: Эмитим события в правильном порядке - сначала remoteViewKeyChanged, потом remoteStream
-    // Это гарантирует, что компонент обновится с правильным ключом
-    // КРИТИЧНО: Эмитим события синхронно для немедленного обновления RTCView
-    // Задержка была удалена, так как она вызывала зависание видео
-    this.emit('remoteViewKeyChanged', this.remoteViewKey);
+    // Emit remoteViewKeyChanged ONLY when it changed.
+    if (this.remoteViewKey !== prevRemoteViewKey) {
+      this.emit('remoteViewKeyChanged', this.remoteViewKey);
+    }
     this.emit('remoteStream', this.remoteStream);
     this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
     this.config.onRemoteStreamChange?.(this.remoteStream);

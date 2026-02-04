@@ -54,7 +54,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   // Логирование для отладки на Android
   useEffect(() => {
     if (Platform.OS === 'android' && localStream) {
-      logger.info('[LocalVideo] Local stream state', {
+      logger.debug('[LocalVideo] Local stream state', {
         streamId: localStream.id,
         hasVideoTrack: !!videoTrack,
         isVideoTrackLive,
@@ -76,7 +76,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       if (videoTrack && videoTrack.readyState === 'live') {
         setForceUpdateKey((prev) => {
           const next = prev + 1;
-          logger.info('[LocalVideo] Android: force-update RTCView', {
+          logger.debug('[LocalVideo] Android: force-update RTCView', {
             streamId: localStream.id,
             trackId: videoTrack.id,
             trackEnabled: videoTrack.enabled,
@@ -142,7 +142,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       ? `local-video-${localStream.id}-${localRenderKey}-${forceUpdateKey}-${isVideoTrackEnabled ? 1 : 0}`
       : `local-video-${localStream.id}-${localRenderKey}`;
     
-    logger.info('[LocalVideo] ✅ Рендерим RTCView', {
+    logger.debug('[LocalVideo] Render RTCView', {
       platform: Platform.OS,
       streamURL: localStreamURL ? localStreamURL.substring(0, 50) + '...' : 'null',
       key: rtcViewKey,

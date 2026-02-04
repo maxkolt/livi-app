@@ -1008,11 +1008,16 @@ io.on('connection', async (sock: AuthedSocket) => {
       
       // Способ 1: Отправка через комнату (если комната существует)
       if (room && room.size > 0) {
-        io.to(id).emit('call:ended', { 
-          callId: id, 
+        // ВАЖНО: roomId всегда является идентификатором комнаты (`room_...`),
+        // а callId (если был передан клиентом) — это отдельный идентификатор звонка (timestamp).
+        // Раньше мы отправляли callId=id, из-за чего часть клиентов, которые сравнивают только callId,
+        // не распознавали завершение и звонок "закрывался" только у одного.
+        io.to(id).emit('call:ended', {
+          callId: callId || undefined,
           roomId: id,
           reason: 'ended',
-          scope: 'room'
+          scope: 'room',
+          resolvedRoomId: id,
         });
         logger.info('📤 [call:end] ✅ Отправлено call:ended через комнату', {
           roomId: id,
@@ -1025,18 +1030,19 @@ io.on('connection', async (sock: AuthedSocket) => {
       for (const sid of socketsToNotify) {
         const socket = io.sockets.sockets.get(sid);
         if (socket) {
-          socket.emit('call:ended', { 
-            callId: id, 
+          socket.emit('call:ended', {
+            callId: callId || undefined,
             roomId: id,
             reason: 'ended',
-            scope: 'direct'
+            scope: 'direct',
+            resolvedRoomId: id,
           });
           notifiedSockets.push(sid);
           logger.info('📤 [call:end] ✅ Отправлено call:ended напрямую сокету', {
             socketId: sid,
             userId: (socket as any)?.data?.userId,
             roomId: id,
-            callId: id
+            callId: callId || id,
           });
         }
       }
