@@ -3377,6 +3377,32 @@ export class RandomChatSession extends SimpleEventEmitter {
         });
         this.remoteViewKey = Date.now();
       }
+      
+      // КРИТИЧНО: Синхронизируем начальное состояние камеры из трека, чтобы новый собеседник
+      // видел заглушку "Отошел", если партнёр подключился с выключенной камерой (cam-toggle мог
+      // прийти раньше matchRoomId и быть проигнорирован).
+      const isInitialVideoTrack = !oldVideoTrackSid || wasVideoTrackChanged;
+      if (isInitialVideoTrack) {
+        const enabledFromTrack = !track.isMuted;
+        this.remoteCamEnabled = enabledFromTrack;
+        this.config.callbacks.onRemoteCamStateChange?.(enabledFromTrack);
+        this.config.onRemoteCamStateChange?.(enabledFromTrack);
+        logger.debug('[RandomChatSession] Initial remote cam state from video track', {
+          isMuted: track.isMuted,
+          remoteCamEnabled: this.remoteCamEnabled,
+        });
+      }
+    }
+    
+    // КРИТИЧНО: Если у удалённого участника нет видео-трека (только аудио — камера выкл),
+    // сразу помечаем камеру как выключенную и уведомляем UI, иначе заглушка "Отошел" не покажется.
+    if (!this.remoteVideoTrack) {
+      this.remoteCamEnabled = false;
+      this.config.callbacks.onRemoteCamStateChange?.(false);
+      this.config.onRemoteCamStateChange?.(false);
+      logger.debug('[RandomChatSession] Remote has no video track, setting remoteCamEnabled=false', {
+        hasAudioTrack: !!this.remoteAudioTrack,
+      });
     }
     
     // Always emit remoteStream even if the track was already present; this updates UI state.
