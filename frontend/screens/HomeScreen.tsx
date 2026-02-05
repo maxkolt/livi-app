@@ -3225,7 +3225,7 @@ const handleClearNick = useCallback(async () => {
       <View style={{ position: 'relative' }}>
         <IconButton
           icon="chat-processing"
-          size={22}
+          size={23}
           iconColor={LIVI.white}
           style={[styles.actionBtn, styles.actionBtnGap]}
           onPress={handlePress}
@@ -3240,7 +3240,7 @@ const handleClearNick = useCallback(async () => {
   };
   const renderRightActions = (id: string) => (
     <View style={styles.swipeRight}>
-      <IconButton icon="close" size={22} iconColor="#fff" style={{ backgroundColor: LIVI.red, marginRight: 12 }} onPress={() => handleRemoveFriend(id)} />
+      <IconButton icon="close" size={23} iconColor="#fff" style={[styles.actionBtn, { backgroundColor: LIVI.red, marginRight: 12 }]} onPress={() => handleRemoveFriend(id)} />
     </View>
   );
 
@@ -3329,7 +3329,7 @@ const handleClearNick = useCallback(async () => {
         <View style={{ position: 'relative' }}>
           <IconButton
             icon="video"
-            size={22}
+            size={23}
             iconColor={busy ? '#ddd' : LIVI.white}
             style={[styles.inviteBtn, busy ? styles.inviteBtnDisabled : null]}
             disabled={busy}
@@ -3352,7 +3352,7 @@ const handleClearNick = useCallback(async () => {
           />
           {busy && Platform.OS === 'android' && (
             <View style={styles.videoIconOverlay}>
-              <MaterialIcons name="videocam" size={22} color="rgba(136, 136, 136, 0.3)" />
+              <MaterialIcons name="videocam" size={23} color="rgba(136, 136, 136, 0.3)" />
             </View>
           )}
         </View>
@@ -3794,8 +3794,8 @@ const handleClearNick = useCallback(async () => {
                   onPress={() => setMenuOpen(false)}
                   activeOpacity={0.85}
                   style={{
-                    width: Platform.OS === 'ios' ? 40 : 36,
-                    height: Platform.OS === 'ios' ? 40 : 36,
+                    width: Platform.OS === 'ios' ? 40 : 38,
+                    height: Platform.OS === 'ios' ? 40 : 38,
                     borderRadius: Platform.OS === 'ios' ? 16 : 14,
                     backgroundColor: 'rgba(255,255,255,0.06)',
                     borderWidth: 1,
@@ -3814,8 +3814,8 @@ const handleClearNick = useCallback(async () => {
                     activeOpacity={0.85}
                     disabled={wiping}
                     style={{
-                      width: Platform.OS === 'ios' ? 40 : 36,
-                      height: Platform.OS === 'ios' ? 40 : 36,
+                      width: Platform.OS === 'ios' ? 40 : 38,
+                      height: Platform.OS === 'ios' ? 40 : 38,
                       borderRadius: Platform.OS === 'ios' ? 16 : 14,
                       backgroundColor: 'rgba(255,90,103,0.1)',
                       borderWidth: 1,
@@ -3829,13 +3829,13 @@ const handleClearNick = useCallback(async () => {
                     <Ionicons name="trash" size={Platform.OS === 'ios' ? 20 : 18} color="rgba(255,90,103,0.6)" />
                   </TouchableOpacity>
                 )}
-                {!(tab === 'settings' && handleWipeAccount) && <View style={{ width: Platform.OS === 'ios' ? 40 : 36 }} />}
+                {!(tab === 'settings' && handleWipeAccount) && <View style={{ width: Platform.OS === 'ios' ? 40 : 38 }} />}
               </View>
 
               <View style={styles.segmentCapsule}>
                 {renderSegBtn('friends', L('tabFriends'), 'account-multiple', 'left')}
                 <View style={styles.segDivider} />
-                {renderSegBtn('settings', L('tabSettings'), 'cog', 'mid')}
+                {renderSegBtn('settings', L('tabSettings'), 'account-edit', 'mid')}
                 <View style={styles.segDivider} />
                 {renderSegBtn('more', L('tabMore'), 'dots-horizontal', 'right')}
               </View>
@@ -3982,8 +3982,8 @@ const handleClearNick = useCallback(async () => {
                 position: 'absolute',
                 top: insets.top + (Platform.OS === "android" ? 35 : 16),
                 left: Platform.OS === 'ios' ? 15 : 17,
-                width: Platform.OS === 'ios' ? 40 : 36,
-                height: Platform.OS === 'ios' ? 40 : 36,
+                width: Platform.OS === 'ios' ? 40 : 38,
+                height: Platform.OS === 'ios' ? 40 : 38,
                 borderRadius: Platform.OS === 'ios' ? 16 : 14,
                 backgroundColor: 'rgba(255,255,255,0.06)',
                 borderWidth: 1,
@@ -4108,8 +4108,8 @@ const handleClearNick = useCallback(async () => {
                 position: 'absolute',
                 top: insets.top + (Platform.OS === "android" ? 35 : 16),
                 left: Platform.OS === 'ios' ? 15 : 17,
-                width: Platform.OS === 'ios' ? 40 : 36,
-                height: Platform.OS === 'ios' ? 40 : 36,
+                width: Platform.OS === 'ios' ? 40 : 38,
+                height: Platform.OS === 'ios' ? 40 : 38,
                 borderRadius: Platform.OS === 'ios' ? 16 : 14,
                 backgroundColor: 'rgba(255,255,255,0.06)',
                 borderWidth: 1,
@@ -4258,8 +4258,8 @@ const handleClearNick = useCallback(async () => {
                 position: 'absolute',
                 top: insets.top + (Platform.OS === "android" ? 35 : 16),
                 left: Platform.OS === 'ios' ? 15 : 17,
-                width: Platform.OS === 'ios' ? 40 : 36,
-                height: Platform.OS === 'ios' ? 40 : 36,
+                width: Platform.OS === 'ios' ? 40 : 38,
+                height: Platform.OS === 'ios' ? 40 : 38,
                 borderRadius: Platform.OS === 'ios' ? 16 : 14,
                 backgroundColor: 'rgba(255,255,255,0.06)',
                 borderWidth: 1,

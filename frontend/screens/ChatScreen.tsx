@@ -11,6 +11,7 @@ import {
   Alert,
   ActionSheetIOS,
   FlatList,
+  ScrollView,
   KeyboardAvoidingView,
   Keyboard,
   Linking,
@@ -99,6 +100,116 @@ function parseTextWithUrls(text: string): { type: 'text' | 'url'; value: string 
 function openMessageUrl(raw: string): void {
   const url = raw.startsWith('http://') || raw.startsWith('https://') ? raw : `https://${raw}`;
   Linking.openURL(url).catch(() => {});
+}
+
+const REACTION_EMOJIS_PAGE_1 = ['👍', '😊', '❤️', '😮', '😢', '👎'];
+const REACTION_EMOJIS_PAGE_2 = ['😉', '😂', '😍', '😭', '🙏', '🔥'];
+
+function ReactionBarModal({
+  visible,
+  onClose,
+  onPickEmoji,
+  isDark,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onPickEmoji: (emoji: string) => void;
+  isDark: boolean;
+}) {
+  const scrollRef = React.useRef<ScrollView>(null);
+  const hintBounce = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (visible) {
+      scrollRef.current?.scrollTo({ x: 0, animated: false });
+    }
+  }, [visible]);
+
+  React.useEffect(() => {
+    if (!visible) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(hintBounce, { toValue: 6, duration: 500, useNativeDriver: true }),
+        Animated.timing(hintBounce, { toValue: 0, duration: 500, useNativeDriver: true }),
+      ]),
+      { iterations: -1 }
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [visible, hintBounce]);
+
+  const barWidth = Math.min(320, Dimensions.get('window').width * 0.88);
+
+  const barStyle = {
+    width: barWidth,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    backgroundColor: isDark ? '#1e2329' : '#2d3238',
+    borderRadius: 24,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)' as const,
+  };
+
+  const renderEmojiRow = (emojis: string[]) => (
+    <View style={{ flexDirection: 'row', flex: 1, justifyContent: 'space-between', alignItems: 'center' }}>
+      {emojis.map((emoji) => (
+        <Pressable
+          key={emoji}
+          onPress={() => onPickEmoji(emoji)}
+          style={{ padding: 6, minWidth: 36, alignItems: 'center', justifyContent: 'center' }}
+          hitSlop={8}
+        >
+          <Text style={{ fontSize: 24 }}>{emoji}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <Pressable
+        style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }}
+        onPress={onClose}
+      >
+        <Pressable onPress={() => {}} style={{ width: barWidth, overflow: 'hidden' }}>
+          <ScrollView
+            ref={scrollRef}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            decelerationRate="fast"
+            snapToInterval={barWidth}
+            snapToAlignment="start"
+            contentContainerStyle={{ flexGrow: 1 }}
+            style={{ borderRadius: 24, overflow: 'hidden' }}
+          >
+            {/* Страница 1: эффект слева + 6 эмодзи ровно по полосе */}
+            <View style={barStyle}>
+              <Animated.View
+                style={{
+                  marginRight: 6,
+                  paddingRight: 8,
+                  borderRightWidth: 1,
+                  borderRightColor: 'rgba(255,255,255,0.15)',
+                  transform: [{ translateX: hintBounce }],
+                  justifyContent: 'center',
+                }}
+              >
+                <Ionicons name="chevron-back" size={18} color="rgba(255,255,255,0.8)" />
+              </Animated.View>
+              {renderEmojiRow(REACTION_EMOJIS_PAGE_1)}
+            </View>
+            {/* Страница 2: ещё 6 эмодзи ровно по полосе */}
+            <View style={barStyle}>
+              {renderEmojiRow(REACTION_EMOJIS_PAGE_2)}
+            </View>
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
 }
 
 export default function ChatScreen({ route, navigation }: Props) {
@@ -968,6 +1079,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         to: msg.to,
         timestamp: new Date(msg.timestamp),
         read: !!msg.read,
+        reactions: Array.isArray((msg as any).reactions) ? (msg as any).reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
       }));
 
       const serverIdSet = new Set(formatted.map((m: any) => String(m?.id || '')));
@@ -2037,8 +2149,14 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [selectionMode, selectedMessageIds, messages]);
 
   const selectAllLoaded = React.useCallback(() => {
-    setSelectedMessageIds(new Set(messages.map((m) => String(m?.id || '')).filter(Boolean)));
-  }, [messages]);
+    const ids = messages.map((m) => String(m?.id || '')).filter(Boolean);
+    const allSelected = ids.length > 0 && ids.every((id) => selectedMessageIds.has(id));
+    if (allSelected) {
+      setSelectedMessageIds(new Set());
+    } else {
+      setSelectedMessageIds(new Set(ids));
+    }
+  }, [messages, selectedMessageIds]);
 
   const batchDeleteSelected = React.useCallback(async () => {
     const ids = Array.from(selectedMessageIds);
@@ -2420,6 +2538,19 @@ export default function ChatScreen({ route, navigation }: Props) {
     lastTapForReactionRef.current = { time: now, id: item.id };
     animateMessagePress(item.id);
   }, [animateMessagePress]);
+
+  /** Нажатие на реакцию — снять свою реакцию (toggle), обновляется у обоих. */
+  const handleReactionPress = React.useCallback((messageId: string, emoji: string) => {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (String(m?.id) !== messageId) return m;
+        const reactions = Array.isArray(m.reactions) ? m.reactions : [];
+        const next = reactions.filter((r: any) => !(r.emoji === emoji && r.userId === currentUserId));
+        return { ...m, reactions: next };
+      })
+    );
+    sendMessageReaction(messageId, emoji, peerId).catch(() => {});
+  }, [currentUserId, peerId]);
 
   const sendMessage = async () => {
     if (!messageText.trim() || !currentUserId) return;
@@ -3056,7 +3187,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
   // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
-  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onMessagePress, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed }: any) => {
+  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed }: any) => {
     const [imageLoadError, setImageLoadError] = React.useState(false);
     const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
     const [isDownloading, setIsDownloading] = React.useState(false);
@@ -3393,7 +3524,10 @@ export default function ChatScreen({ route, navigation }: Props) {
                 gap: 10,
               }}
             >
-              <View
+              <Pressable
+                onPress={() => {
+                  try { onPressAudio?.(item); } catch {}
+                }}
                 style={{
                   width: 36,
                   height: 36,
@@ -3406,7 +3540,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 }}
               >
                 <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color={LIVI.white} />
-              </View>
+              </Pressable>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '600' }}>{t('chatVoiceMessage', lang)}</Text>
                 <Text style={{ marginTop: 2, color: LIVI.titan, fontSize: 12, fontWeight: '500' }}>
@@ -3592,9 +3726,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 return;
               }
               if (String(item?.type || '') === 'audio') {
-                animateMessagePress(item.id, () => {
-                  try { onPressAudio?.(item); } catch {}
-                });
+                onMessagePress?.(item);
                 return;
               }
               onMessagePress?.(item);
@@ -3671,7 +3803,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           </View>
           </TouchableOpacity>
 
-          {/* Реакции: овальное облачко снизу справа от сообщения */}
+          {/* Реакции: по нажатию снимается (toggle), у обоих — будто пузырь лопается */}
           {(() => {
             const reactions = Array.isArray(item.reactions) ? item.reactions : [];
             if (reactions.length === 0) return null;
@@ -3681,21 +3813,22 @@ export default function ChatScreen({ route, navigation }: Props) {
             });
             const list = Object.entries(byEmoji).map(([emoji, count]) => ({ emoji, count }));
             return (
-              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 2, flexWrap: 'wrap' }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: -6, flexWrap: 'wrap' }}>
                 {list.map(({ emoji, count }, idx) => (
-                  <View
+                  <Pressable
                     key={emoji}
-                    style={[
+                    onPress={() => onReactionPress?.(item.id, emoji)}
+                    style={({ pressed }) => [
                       {
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      backgroundColor: isDark ? 'rgba(58,61,66,0.95)' : 'rgba(58,61,66,0.9)',
-                      borderRadius: 12,
-                      paddingHorizontal: 8,
-                      paddingVertical: 4,
-                      borderWidth: 1,
-                      borderColor: 'rgba(255,255,255,0.08)',
-                    },
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN,
+                        borderRadius: 12,
+                        paddingHorizontal: 8,
+                        paddingVertical: 4,
+                        opacity: pressed ? 0.85 : 1,
+                        transform: [{ scale: pressed ? 0.92 : 1 }],
+                      },
                       idx > 0 ? { marginLeft: 4 } : {},
                     ]}
                   >
@@ -3703,7 +3836,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     {count > 1 && (
                       <Text style={{ fontSize: 11, color: LIVI.text, marginLeft: 2, opacity: 0.9 }}>{count}</Text>
                     )}
-                  </View>
+                  </Pressable>
                 ))}
               </View>
             );
@@ -3771,11 +3904,12 @@ export default function ChatScreen({ route, navigation }: Props) {
       onRetryFailed={retryFailedOutgoingMessage}
       onLongPressMessage={handleLongPressMessage}
       onMessagePress={handleMessagePress}
+      onReactionPress={handleReactionPress}
       selectionMode={selectionMode}
       isSelected={selectedMessageIds.has(String(item.id))}
       onToggleSelect={toggleSelectMessage}
     />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, selectionMode, selectedMessageIds, toggleSelectMessage]);
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, handleReactionPress, selectionMode, selectedMessageIds, toggleSelectMessage]);
 
   return (
     <SafeAreaView 
@@ -4488,48 +4622,17 @@ export default function ChatScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {/* Полоса реакций: двойной тап по сообщению */}
+      {/* Полоса реакций: двойной тап по сообщению; свайп вправо — ещё 6 эмодзи */}
       {reactionBarForMessageId !== null && (
-        <Modal
-          transparent
+        <ReactionBarModal
           visible={true}
-          animationType="fade"
-          onRequestClose={() => setReactionBarForMessageId(null)}
-        >
-          <Pressable
-            style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }}
-            onPress={() => setReactionBarForMessageId(null)}
-          >
-            <Pressable
-              onPress={() => {}}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                backgroundColor: isDark ? '#1e2329' : '#2d3238',
-                borderRadius: 24,
-                paddingHorizontal: 12,
-                paddingVertical: 8,
-                gap: 4,
-                borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.1)',
-              }}
-            >
-              {['👍', '😊', '❤️', '😮', '😢', '👎'].map((emoji) => (
-                <Pressable
-                  key={emoji}
-                  onPress={() => {
-                    sendMessageReaction(reactionBarForMessageId, emoji, peerId).catch(() => {});
-                    setReactionBarForMessageId(null);
-                  }}
-                  style={{ padding: 8 }}
-                  hitSlop={8}
-                >
-                  <Text style={{ fontSize: 24 }}>{emoji}</Text>
-                </Pressable>
-              ))}
-            </Pressable>
-          </Pressable>
-        </Modal>
+          onClose={() => setReactionBarForMessageId(null)}
+          onPickEmoji={(emoji) => {
+            sendMessageReaction(reactionBarForMessageId, emoji, peerId).catch(() => {});
+            setReactionBarForMessageId(null);
+          }}
+          isDark={isDark}
+        />
       )}
 
       {/* Android: bottom sheet с действиями над сообщением */}
@@ -5070,10 +5173,10 @@ export default function ChatScreen({ route, navigation }: Props) {
           >
             <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14 }}>
               <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.92)', fontSize: 18, fontWeight: '700' }}>
-                Удалить сообщение?
+                {t('chatDeleteMessageTitle', lang)}
               </Text>
               <Text style={{ marginTop: 8, color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)', fontSize: 14, lineHeight: 18 }}>
-                Это действие нельзя отменить.
+                {t('chatActionCannotUndo', lang)}
               </Text>
             </View>
 
