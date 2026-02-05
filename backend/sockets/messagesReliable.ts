@@ -446,7 +446,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       const limit = payload.limit || 50;
       messages = messages.slice(-limit);
 
-      // Форматируем сообщения для отправки
+      // Форматируем сообщения для отправки (включая реакции)
       const formattedMessages = messages.map((msg: any) => ({
         id: msg.id,
         from: msg.from.toString(),
@@ -458,7 +458,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         size: msg.size,
         duration: msg.duration,
         timestamp: msg.timestamp.toISOString(),
-        read: msg.read
+        read: msg.read,
+        reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : []
       }));
 
       ack?.({ 
@@ -569,6 +570,65 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       return ack?.({ ok: true });
     } catch (e: any) {
       console.error('[message:read] error:', e?.message || e);
+      return ack?.({ ok: false, error: 'server_error' });
+    }
+  });
+
+  /** ===== Реакция на сообщение (добавить/снять эмодзи) ===== */
+  sock.on('message:react', async (payload: {
+    messageId: string;
+    emoji: string;
+    with: string; // peerId чата
+  }, ack?: Function) => {
+    try {
+      const me = meId();
+      const messageId = String(payload?.messageId || '').trim();
+      const emoji = String(payload?.emoji || '').trim();
+      const peerId = String(payload?.with || '').trim();
+
+      if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
+      if (!messageId || !emoji || !isOid(peerId)) return ack?.({ ok: false, error: 'bad_payload' });
+
+      const isFriend = await areFriendsCached(me, peerId);
+      if (!isFriend) return ack?.({ ok: false, error: 'not_friends' });
+
+      const friendship = await getOrCreateFriendship(me, peerId);
+      if (!friendship) return ack?.({ ok: false, error: 'friendship_not_found' });
+
+      const msg = (friendship as any).findMessageById?.(messageId);
+      if (!msg) return ack?.({ ok: false, error: 'message_not_found' });
+
+      const current: { emoji: string; userId: string }[] = Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: String(r.emoji), userId: String(r.userId) })) : [];
+      const hasMine = current.some((r) => r.emoji === emoji && r.userId === me);
+      const newReactions = hasMine
+        ? current.filter((r) => !(r.emoji === emoji && r.userId === me))
+        : [...current, { emoji, userId: me }];
+
+      const path = msg.type === 'text' ? 'textMessages' : msg.type === 'image' ? 'imageMessages' : 'audioMessages';
+      const fid = (friendship as any)._id;
+      await FriendshipMessages.updateOne(
+        { _id: fid, [`${path}.id`]: messageId },
+        { $set: { [`${path}.$.reactions`]: newReactions } }
+      ).exec();
+
+      // Обновляем кэш в памяти
+      try {
+        const arr = (friendship as any).getMessagesArray?.(msg.type);
+        const idx = arr?.findIndex?.((m: any) => m.id === messageId);
+        if (arr && idx !== undefined && idx >= 0) arr[idx].reactions = newReactions;
+      } catch {}
+
+      const payloadOut = { messageId, reactions: newReactions };
+      const emitToUser = (userId: string) => {
+        const sockets = Array.from(io.sockets.sockets.values()).filter((s: any) => s.data?.userId === userId);
+        sockets.forEach((s: any) => s.emit('message:reaction', payloadOut));
+      };
+      emitToUser(me);
+      emitToUser(peerId);
+
+      return ack?.({ ok: true, reactions: newReactions });
+    } catch (e: any) {
+      console.error('[message:react] error:', e?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });

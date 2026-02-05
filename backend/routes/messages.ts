@@ -178,6 +178,7 @@ router.get('/messages', async (req, res) => {
       duration: msg.duration,
       timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
       read: !!msg.read,
+      reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
     }));
 
     return res.json({ ok: true, messages: formatted, hasMore: allMessages.length > limit });

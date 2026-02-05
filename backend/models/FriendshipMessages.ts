@@ -1,5 +1,11 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
+// Реакция на сообщение (эмодзи + кто поставил)
+export interface IMessageReaction {
+  emoji: string;
+  userId: string;
+}
+
 // Интерфейс для отдельного сообщения
 export interface IMessageItem {
   id: string; // Уникальный ID сообщения
@@ -13,6 +19,7 @@ export interface IMessageItem {
   duration?: number; // seconds (optional, for audio)
   timestamp: Date;
   read: boolean;
+  reactions?: IMessageReaction[]; // Реакции (эмодзи + userId)
 }
 
 // Интерфейс для документа дружбы с сообщениями
@@ -72,6 +79,13 @@ const MessageItemSchema = new Schema<IMessageItem>({
   read: {
     type: Boolean,
     default: false
+  },
+  reactions: {
+    type: [{
+      emoji: { type: String, required: true },
+      userId: { type: String, required: true }
+    }],
+    default: undefined
   }
 }, { _id: false }); // Отключаем автоматический _id для вложенных документов
 
