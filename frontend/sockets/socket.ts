@@ -1878,6 +1878,22 @@ export function onMessageReadReceipt(
   return () => { socket.off("message:read_receipt", h); };
 }
 
+/** Поставить/снять реакцию на сообщение. with = peerId чата. */
+export function sendMessageReaction(messageId: string, emoji: string, withPeerId: string) {
+  return emitAck<{ ok: boolean; reactions?: { emoji: string; userId: string }[]; error?: string }>(
+    "message:react",
+    { messageId, emoji, with: withPeerId }
+  );
+}
+
+export function onMessageReaction(
+  cb: (data: { messageId: string; reactions: { emoji: string; userId: string }[] }) => void
+): () => void {
+  const h = (data: any) => cb(data);
+  socket.on("message:reaction", h);
+  return () => socket.off("message:reaction", h);
+}
+
 export function getUnreadMessageCount(fromUserId: string) {
   return emitAck<{ ok: boolean; count?: number; error?: string }>(
     "message:unread_count",

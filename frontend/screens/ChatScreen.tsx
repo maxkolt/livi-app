@@ -13,6 +13,7 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Keyboard,
+  Linking,
   Modal,
   Pressable,
   Animated,
@@ -52,6 +53,8 @@ import {
   onChatTyping,
   onMessageReceived,
   onMessageReadReceipt,
+  onMessageReaction,
+  sendMessageReaction,
   markMessagesAsRead,
   sendReadReceipt,
   onUserPresence,
@@ -80,6 +83,23 @@ type RouteParams = {
   peerOnline?: boolean;
 };
 type Props = { route: { params?: RouteParams }; navigation: any };
+
+/** Разбивает текст на сегменты «текст» и «ссылка» для отображения кликабельных URL в сообщениях. */
+function parseTextWithUrls(text: string): { type: 'text' | 'url'; value: string }[] {
+  if (!text || typeof text !== 'string') return [{ type: 'text', value: '' }];
+  const regex = /(https?:\/\/[^\s<>"\]]+|www\.[^\s<>"\]]+)/gi;
+  const parts = text.split(regex).filter(Boolean);
+  return parts.map((part) => ({
+    type: /^(https?:\/\/|www\.)/i.test(part) ? 'url' : 'text',
+    value: part,
+  }));
+}
+
+/** Нормализует URL для открытия (добавляет https:// для www.). */
+function openMessageUrl(raw: string): void {
+  const url = raw.startsWith('http://') || raw.startsWith('https://') ? raw : `https://${raw}`;
+  Linking.openURL(url).catch(() => {});
+}
 
 export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
@@ -196,6 +216,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Multi-select (режим "Выбрать")
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  // Для панели реакций: id сообщения, по которому дважды нажали (показать полосу эмодзи)
+  const [reactionBarForMessageId, setReactionBarForMessageId] = useState<string | null>(null);
   const [forwardToast, setForwardToast] = useState<{ visible: boolean; ok: boolean; text: string }>({
     visible: false,
     ok: true,
@@ -766,6 +788,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           from: message.from,
           to: message.to,
           timestamp: new Date(message.timestamp),
+          reactions: Array.isArray((message as any).reactions) ? (message as any).reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
         };
         
         // КРИТИЧНО: Логируем входящие сообщения с изображениями для отладки
@@ -814,6 +837,15 @@ export default function ChatScreen({ route, navigation }: Props) {
         ...prev, 
         [receipt.messageId]: 'read'
       }));
+    });
+
+    // Слушатель реакций на сообщения
+    const unsubscribeReaction = onMessageReaction((data) => {
+      setMessages((prev) =>
+        prev.map((msg) =>
+          String(msg?.id) === data.messageId ? { ...msg, reactions: data.reactions || [] } : msg
+        )
+      );
     });
 
     // Отслеживаем подтверждение доставки, если прилетает отдельным событием
@@ -878,6 +910,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     return () => {
       unsubscribeReceived();
       unsubscribeReadReceipt();
+      unsubscribeReaction();
       unsubscribeChatCleared();
       unsubscribeMessageDeleted();
       unsubscribeDelivered();
@@ -1063,6 +1096,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               to: msg.to,
               timestamp: new Date(msg.timestamp),
               read: !!msg.read,
+              reactions: Array.isArray((msg as any).reactions) ? (msg as any).reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
             };
           });
           
@@ -2373,6 +2407,20 @@ export default function ChatScreen({ route, navigation }: Props) {
     });
   }, [getMessageAnimation]);
 
+  // Двойной тап по облачку сообщения — показать полосу реакций
+  const lastTapForReactionRef = useRef({ time: 0, id: '' });
+  const handleMessagePress = React.useCallback((item: any) => {
+    const now = Date.now();
+    const prev = lastTapForReactionRef.current;
+    if (prev.id === item.id && now - prev.time < 400) {
+      setReactionBarForMessageId(item.id);
+      lastTapForReactionRef.current = { time: 0, id: '' };
+      return;
+    }
+    lastTapForReactionRef.current = { time: now, id: item.id };
+    animateMessagePress(item.id);
+  }, [animateMessagePress]);
+
   const sendMessage = async () => {
     if (!messageText.trim() || !currentUserId) return;
     
@@ -3008,7 +3056,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
   // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
-  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed }: any) => {
+  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onMessagePress, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed }: any) => {
     const [imageLoadError, setImageLoadError] = React.useState(false);
     const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
     const [isDownloading, setIsDownloading] = React.useState(false);
@@ -3536,71 +3584,131 @@ export default function ChatScreen({ route, navigation }: Props) {
           </Pressable>
         )}
 
-        <TouchableOpacity
-          onPress={() => {
-            if (canToggle) {
-              onToggleSelect?.(String(item.id));
-              return;
-            }
-            if (String(item?.type || '') === 'audio') {
+        <View style={{ alignSelf: isMyMessage ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
+          <TouchableOpacity
+            onPress={() => {
+              if (canToggle) {
+                onToggleSelect?.(String(item.id));
+                return;
+              }
+              if (String(item?.type || '') === 'audio') {
+                animateMessagePress(item.id, () => {
+                  try { onPressAudio?.(item); } catch {}
+                });
+                return;
+              }
+              onMessagePress?.(item);
+            }}
+            onLongPress={() => {
               animateMessagePress(item.id, () => {
-                try { onPressAudio?.(item); } catch {}
+                onLongPressMessage(item);
               });
-              return;
-            }
-            animateMessagePress(item.id);
-          }}
-          onLongPress={() => {
-            animateMessagePress(item.id, () => {
-              onLongPressMessage(item);
+            }}
+            activeOpacity={0.7}
+            style={{
+              padding: 12,
+              backgroundColor: isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: BORDER_COLOR,
+              maxWidth: '100%',
+            }}
+          >
+          {/* Основной контент */}
+          {renderContent()}
+          
+          {/* Текст сообщения (если есть), ссылки кликабельны */}
+          {item.type === 'text' && (() => {
+            const baseStyle = {
+              color: LIVI.white,
+              fontSize: 16,
+              marginBottom: 3,
+              lineHeight: 22,
+              fontWeight: '400' as const,
+            };
+            const linkStyle = {
+              ...baseStyle,
+              color: '#7eb8ff',
+              textDecorationLine: 'underline' as const,
+            };
+            const segments = parseTextWithUrls(String(item.text ?? ''));
+            return (
+              <Text style={baseStyle}>
+                {segments.map((seg, idx) =>
+                  seg.type === 'url' ? (
+                    <Text
+                      key={idx}
+                      onPress={() => openMessageUrl(seg.value)}
+                      style={linkStyle}
+                    >
+                      {seg.value}
+                    </Text>
+                  ) : (
+                    <Text key={idx}>{seg.value}</Text>
+                  )
+                )}
+              </Text>
+            );
+          })()}
+          
+          {/* Нижняя строка: время + статус в стиле Telegram */}
+          <View style={{ 
+            flexDirection: 'row', 
+            alignItems: 'center', 
+            justifyContent: 'flex-end',
+            marginTop: item.type !== 'text' ? 4 : 1,
+          }}>
+            <Text style={{ 
+              color: LIVI.text, 
+              fontSize: 12,
+              marginRight: isMyMessage ? 4 : 0,
+              opacity: 0.8,
+              fontWeight: '500',
+            }}>
+              {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </Text>
+            {renderStatusIcons()}
+          </View>
+          </TouchableOpacity>
+
+          {/* Реакции: овальное облачко снизу справа от сообщения */}
+          {(() => {
+            const reactions = Array.isArray(item.reactions) ? item.reactions : [];
+            if (reactions.length === 0) return null;
+            const byEmoji: Record<string, number> = {};
+            reactions.forEach((r: { emoji: string }) => {
+              byEmoji[r.emoji] = (byEmoji[r.emoji] || 0) + 1;
             });
-          }}
-          activeOpacity={0.7}
-          style={{
-            padding: 12,
-            backgroundColor: isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN,
-            borderRadius: 16,
-            borderWidth: 1,
-            borderColor: BORDER_COLOR,
-            maxWidth: '80%',
-          }}
-        >
-        {/* Основной контент */}
-        {renderContent()}
-        
-        {/* Текст сообщения (если есть) */}
-        {item.type === 'text' && (
-          <Text style={{ 
-            color: LIVI.white, 
-            fontSize: 16, 
-            // меньше воздуха между текстом и временем
-            marginBottom: 3,
-            lineHeight: 22,
-            fontWeight: '400',
-          }}>
-            {item.text}
-          </Text>
-        )}
-        
-        {/* Нижняя строка: время + статус в стиле Telegram */}
-        <View style={{ 
-          flexDirection: 'row', 
-          alignItems: 'center', 
-          justifyContent: 'flex-end',
-          marginTop: item.type !== 'text' ? 4 : 1,
-        }}>
-          <Text style={{ 
-            color: LIVI.text, 
-            fontSize: 12,
-            marginRight: isMyMessage ? 4 : 0,
-            opacity: 0.8,
-            fontWeight: '500',
-          }}>
-            {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </Text>
-          {renderStatusIcons()}
+            const list = Object.entries(byEmoji).map(([emoji, count]) => ({ emoji, count }));
+            return (
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 2, flexWrap: 'wrap' }}>
+                {list.map(({ emoji, count }, idx) => (
+                  <View
+                    key={emoji}
+                    style={[
+                      {
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      backgroundColor: isDark ? 'rgba(58,61,66,0.95)' : 'rgba(58,61,66,0.9)',
+                      borderRadius: 12,
+                      paddingHorizontal: 8,
+                      paddingVertical: 4,
+                      borderWidth: 1,
+                      borderColor: 'rgba(255,255,255,0.08)',
+                    },
+                      idx > 0 ? { marginLeft: 4 } : {},
+                    ]}
+                  >
+                    <Text style={{ fontSize: 14 }}>{emoji}</Text>
+                    {count > 1 && (
+                      <Text style={{ fontSize: 11, color: LIVI.text, marginLeft: 2, opacity: 0.9 }}>{count}</Text>
+                    )}
+                  </View>
+                ))}
+              </View>
+            );
+          })()}
         </View>
-        </TouchableOpacity>
 
         {selectionMode && isMyMessage && (
           <Pressable
@@ -3662,11 +3770,12 @@ export default function ChatScreen({ route, navigation }: Props) {
       onToggleRetryUi={(id: string) => setRetryUiForId((prev) => (prev === id ? null : id))}
       onRetryFailed={retryFailedOutgoingMessage}
       onLongPressMessage={handleLongPressMessage}
+      onMessagePress={handleMessagePress}
       selectionMode={selectionMode}
       isSelected={selectedMessageIds.has(String(item.id))}
       onToggleSelect={toggleSelectMessage}
     />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, selectionMode, selectedMessageIds, toggleSelectMessage]);
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, selectionMode, selectedMessageIds, toggleSelectMessage]);
 
   return (
     <SafeAreaView 
@@ -4377,6 +4486,50 @@ export default function ChatScreen({ route, navigation }: Props) {
             </TouchableOpacity>
           </View>
         </View>
+      )}
+
+      {/* Полоса реакций: двойной тап по сообщению */}
+      {reactionBarForMessageId !== null && (
+        <Modal
+          transparent
+          visible={true}
+          animationType="fade"
+          onRequestClose={() => setReactionBarForMessageId(null)}
+        >
+          <Pressable
+            style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }}
+            onPress={() => setReactionBarForMessageId(null)}
+          >
+            <Pressable
+              onPress={() => {}}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: isDark ? '#1e2329' : '#2d3238',
+                borderRadius: 24,
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                gap: 4,
+                borderWidth: 1,
+                borderColor: 'rgba(255,255,255,0.1)',
+              }}
+            >
+              {['👍', '😊', '❤️', '😮', '😢', '👎'].map((emoji) => (
+                <Pressable
+                  key={emoji}
+                  onPress={() => {
+                    sendMessageReaction(reactionBarForMessageId, emoji, peerId).catch(() => {});
+                    setReactionBarForMessageId(null);
+                  }}
+                  style={{ padding: 8 }}
+                  hitSlop={8}
+                >
+                  <Text style={{ fontSize: 24 }}>{emoji}</Text>
+                </Pressable>
+              ))}
+            </Pressable>
+          </Pressable>
+        </Modal>
       )}
 
       {/* Android: bottom sheet с действиями над сообщением */}
