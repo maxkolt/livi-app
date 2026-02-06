@@ -3279,7 +3279,7 @@ const handleClearNick = useCallback(async () => {
         style={[
           styles.actionBtn,
           {
-            marginRight: 12,
+            marginRight: 6,
             backgroundColor: 'rgba(255,90,103,0.18)',
             borderWidth: 1,
             borderColor: 'rgba(200,50,65,0.7)',

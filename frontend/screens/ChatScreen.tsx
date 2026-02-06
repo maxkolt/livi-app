@@ -2401,7 +2401,11 @@ export default function ChatScreen({ route, navigation }: Props) {
       </TouchableOpacity>
 
       <View style={{ flex: 1, alignItems: "center" }}>
-        <Text style={{ color: LIVI.white, fontSize: 18, fontWeight: "700" }}>
+        <Text style={{
+          color: LIVI.titan,
+          fontSize: 18,
+          fontWeight: "700",
+        }}>
           {selectionMode ? t('chatSelectedCount', lang).replace('{count}', String(selectedCount)) : peerNameState}
         </Text>
         {!selectionMode && (
@@ -2473,6 +2477,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           uri={fullAvatarUri || undefined}
           size={36}
           fallbackText={headerInitial}
+          fallbackTextStyle={{ color: LIVI.titan }}
           // If no avatar: match back button background + 1px outline
           containerStyle={
             fullAvatarUri
