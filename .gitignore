@@ -14,6 +14,14 @@ backend/node_modules/
 frontend/.env
 backend/.env
 
+# Nested clone (duplicate repo, not needed for release)
+/livi-app/
+
+# Load test / tools (livekit-cli clone + run-loadtest-*.js, run-turn-stress.js)
+tools/
+# TURN check script (for load-test verification, not needed in release)
+backend/scripts/check-turn.js
+
 # Build outputs
 dist/
 build/

@@ -67,9 +67,9 @@ frontend/android/app/build/outputs/bundle/release/app-release.aab
 1. Установите приложение на тестовое устройство
 2. Подключите устройство через USB
 3. Включите USB отладку
-4. Выполните:
+4. Выполните в терминале (из корня проекта):
    ```bash
-   ./scripts/debug-crash.sh
+   adb logcat | grep -E "ReactNative|com.kolt12max.livi"
    ```
 5. Откройте приложение на устройстве
 6. Скопируйте логи с ошибками
@@ -85,7 +85,7 @@ frontend/android/app/build/outputs/bundle/release/app-release.aab
 
 2. **Сохранить логи в файл:**
    ```bash
-   ./save-app-logs.sh
+   adb logcat -d > app-logs.txt
    ```
 
 ## ⚠️ Важно

@@ -20,6 +20,7 @@ import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, CamSide } from '../types';
 import socket from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
+import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
@@ -2375,6 +2376,16 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     // КРИТИЧНО: Создаем промис подключения для защиты от множественных вызовов
     const connectionPromise = (async (): Promise<boolean> => {
+      // ICE/TURN: используем креды с /api/turn-credentials для стабильности на мобильной сети/VPN
+      let rtcConfig: RTCConfiguration | undefined = undefined;
+      try {
+        rtcConfig = await getIceConfiguration(false);
+      } catch (e: any) {
+        logger.warn('[VideoCallSession] Failed to load ICE config, using LiveKit defaults', {
+          error: e?.message || String(e),
+        });
+      }
+
       // Publish defaults:
       // - Start reasonably high on capable devices (720p capture is handled separately),
       // - Allow network-based adaptation via simulcast layers.
@@ -2393,6 +2404,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         // Отключаем dynacast/adaptiveStream, чтобы LiveKit не мьютил треки и не слал quality updates для "unknown track"
         adaptiveStream: false,
         dynacast: false,
+        ...(rtcConfig ? { rtcConfig } : {}),
         publishDefaults: {
           // Allow higher ceiling on high-capture devices; WebRTC congestion control will still scale down.
           videoEncoding: { maxBitrate: isHighCapture ? 2_500_000 : 1_200_000, maxFramerate: 30 },
