@@ -1038,9 +1038,11 @@ function AppContent() {
             }
           }}
         >
-          <Stack.Navigator screenOptions={{ 
+          <Stack.Navigator screenOptions={{
             headerShown: false,
             contentStyle: { backgroundColor: 'transparent' },
+            animation: 'fade',
+            animationDuration: 450,
           }}>
               <Stack.Screen name="Home" component={HomeScreen} />
               <Stack.Screen
@@ -1049,7 +1051,8 @@ function AppContent() {
                 options={{
                   presentation: 'card',
                   gestureEnabled: true,
-                  animation: 'slide_from_right' as any,
+                  animation: 'fade',
+                  animationDuration: 450,
                   contentStyle: { backgroundColor: 'transparent' },
                 }}
               />
@@ -1059,11 +1062,20 @@ function AppContent() {
                 options={{
                   presentation: 'card',
                   gestureEnabled: true,
-                  animation: 'slide_from_right' as any,
+                  animation: 'fade',
+                  animationDuration: 450,
                   contentStyle: { backgroundColor: 'transparent' },
                 }}
               />
-              <Stack.Screen name="Chat" component={ChatScreen} />
+              <Stack.Screen
+                name="Chat"
+                component={ChatScreen}
+                options={{
+                  animation: 'fade',
+                  animationDuration: 450,
+                  gestureEnabled: true,
+                }}
+              />
             </Stack.Navigator>
           </NavigationContainer>
 

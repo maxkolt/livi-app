@@ -1,6 +1,7 @@
 // screens/HomeScreen.tsx
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
+  BackHandler,
   StatusBar,
   StyleSheet,
   Text,
@@ -20,7 +21,9 @@ import {
   ActivityIndicator,
   Linking,
   Share,
+  Vibration,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 
 import { syncMyStreamProfile } from '../chat/cometchat';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
@@ -614,6 +617,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       ? 'rgba(59, 68, 83, 0.10)' // чуть легче на Android
       : 'rgba(59, 68, 83, 0.15)'; // iOS
 
+  // На Android: при открытом меню кнопка "Назад" закрывает меню (возврат на страницу приветствия), а не выходит из приложения
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!menuOpen) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setMenuOpen(false);
+      return true; // перехватываем — не выходим из приложения
+    });
+    return () => sub.remove();
+  }, [menuOpen]);
+
   /* profile state */
   const [saving, setSaving] = useState(false);
   // Синхронный guard от двойного тапа "Сохранить" (state обновляется не мгновенно)
@@ -745,6 +759,24 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   
   // ===== Share/Invite modal =====
   const [shareVisible, setShareVisible] = useState(false);
+
+  // На Android: при открытых модалках "Support the project" и "Invite a friend" кнопка "Назад" закрывает модалку
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!donateVisible && !shareVisible) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (donateVisible) {
+        setDonateVisible(false);
+        return true;
+      }
+      if (shareVisible) {
+        setShareVisible(false);
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [donateVisible, shareVisible]);
   const [inviteLink, setInviteLink] = useState<string>('');
   
   // ===== Invite request modal =====
@@ -3240,7 +3272,21 @@ const handleClearNick = useCallback(async () => {
   };
   const renderRightActions = (id: string) => (
     <View style={styles.swipeRight}>
-      <IconButton icon="close" size={23} iconColor="#fff" style={[styles.actionBtn, { backgroundColor: LIVI.red, marginRight: 12 }]} onPress={() => handleRemoveFriend(id)} />
+      <IconButton
+        icon="close"
+        size={23}
+        iconColor="rgb(255,90,103)"
+        style={[
+          styles.actionBtn,
+          {
+            marginRight: 12,
+            backgroundColor: 'rgba(255,90,103,0.18)',
+            borderWidth: 1,
+            borderColor: 'rgba(200,50,65,0.7)',
+          },
+        ]}
+        onPress={() => handleRemoveFriend(id)}
+      />
     </View>
   );
 
@@ -3791,8 +3837,11 @@ const handleClearNick = useCallback(async () => {
             <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
               <View style={styles.sheetTopBar}>
                 <TouchableOpacity
-                  onPress={() => setMenuOpen(false)}
-                  activeOpacity={0.85}
+                  onPress={() => {
+                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
+                    setMenuOpen(false);
+                  }}
+                  activeOpacity={0.5}
                   style={{
                     width: Platform.OS === 'ios' ? 40 : 38,
                     height: Platform.OS === 'ios' ? 40 : 38,
@@ -3976,8 +4025,11 @@ const handleClearNick = useCallback(async () => {
               </>
             )}
             <TouchableOpacity
-              onPress={() => setDonateVisible(false)}
-              activeOpacity={0.85}
+              onPress={() => {
+                try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
+                setDonateVisible(false);
+              }}
+              activeOpacity={0.5}
               style={{
                 position: 'absolute',
                 top: insets.top + (Platform.OS === "android" ? 35 : 16),
@@ -4102,8 +4154,11 @@ const handleClearNick = useCallback(async () => {
               </>
             )}
             <TouchableOpacity
-              onPress={() => setShareVisible(false)}
-              activeOpacity={0.85}
+              onPress={() => {
+                try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
+                setShareVisible(false);
+              }}
+              activeOpacity={0.5}
               style={{
                 position: 'absolute',
                 top: insets.top + (Platform.OS === "android" ? 35 : 16),

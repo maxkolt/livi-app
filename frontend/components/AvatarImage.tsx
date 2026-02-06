@@ -5,7 +5,7 @@ import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { getAvatarUri } from '../utils/avatarCache';
 
-interface AvatarImageProps {
+export interface AvatarImageProps {
   userId?: string;
   avatarVer?: number;
   uri?: string; // для обратной совместимости или локальных файлов

@@ -1,6 +1,7 @@
 // screens/ChatScreen.tsx
 import React, { useEffect, useState, useRef } from "react";
 import {
+  BackHandler,
   View,
   Text,
   TouchableOpacity,
@@ -324,6 +325,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [showForwardPicker, setShowForwardPicker] = useState(false);
   const [forwardFriends, setForwardFriends] = useState<any[]>([]);
   const [forwardLoading, setForwardLoading] = useState(false);
+  // Выбранные друзья для пересылки (несколько получателей)
+  const [forwardSelectedFriendIds, setForwardSelectedFriendIds] = useState<Set<string>>(new Set());
   // Multi-select (режим "Выбрать")
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
@@ -1906,6 +1909,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const openForwardPicker = React.useCallback(async () => {
     setShowForwardPicker(true);
+    setForwardSelectedFriendIds(new Set());
     setForwardLoading(true);
     try {
       // Грузим ВСЕХ друзей (страницами), чтобы список был полный
@@ -1935,25 +1939,17 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   }, []);
 
-  const forwardSelectedMessageTo = React.useCallback(async (friend: any) => {
-    try {
-      const to = String(friend?._id || '').trim();
-      if (!to) return;
-
-      setShowForwardPicker(false);
-      hideMessageActions();
-
+  // Отправка выбранных сообщений одному получателю. Возвращает число успешно отправленных.
+  const forwardToRecipient = React.useCallback(
+    async (to: string): Promise<number> => {
       const normalizeForwardMediaUri = (u: string) => {
         const resolved = resolveMediaUri(u);
-        // локальные file:// нельзя пересылать
         if (/^file:\/\//i.test(resolved)) return '';
         return resolved;
       };
 
-      // Если включён режим выбора — пересылаем все выбранные сообщения (текст + медиа)
       if (selectionMode) {
         const selected = messages.filter((m) => selectedMessageIds.has(String(m?.id || '')));
-
         const forwardables: any[] = [];
         for (const m of selected) {
           const type = String(m?.type || '').trim();
@@ -1970,46 +1966,26 @@ export default function ChatScreen({ route, navigation }: Props) {
             if (uri) forwardables.push({ type: 'audio', uri, name: m?.name, size: m?.size, duration: m?.duration });
           }
         }
-
-        if (forwardables.length === 0) {
-          setNoticeKind('info');
-          setNoticeTitle(t('chatForwardTitle', lang));
-          setNoticeMessage(t('chatForwardNoSuitable', lang));
-          setNoticeVisible(true);
-          return;
-        }
-
+        if (forwardables.length === 0) return 0;
         let okCount = 0;
         for (const payload of forwardables) {
           const r: any = await sendSocketMessage({ to, ...payload });
           if (r?.ok) okCount += 1;
         }
-
-        setSelectionMode(false);
-        setSelectedMessageIds(new Set());
-        showForwardToastBadge(okCount > 0, okCount > 0 ? t('chatSent', lang) : t('chatSendFailed', lang));
-        return;
+        return okCount;
       }
 
-      // Обычный режим — пересылаем одно выбранное сообщение
       const type = String(selectedMessage?.type || '').trim();
       if (type === 'text') {
         const txt = String(selectedMessage?.text ?? '').trim();
-        if (!txt) return;
+        if (!txt) return 0;
         const r: any = await sendSocketMessage({ to, text: txt, type: 'text' });
-        showForwardToastBadge(!!r?.ok, r?.ok ? t('chatSent', lang) : t('chatSendFailed', lang));
-        return;
+        return r?.ok ? 1 : 0;
       }
       if (type === 'image') {
         const rawUri = String(selectedMessage?.uri ?? '').trim();
         const uri = rawUri ? normalizeForwardMediaUri(rawUri) : '';
-        if (!uri) {
-          setNoticeKind('info');
-          setNoticeTitle(t('chatForwardTitle', lang));
-          setNoticeMessage(t('chatForwardImageNotReady', lang));
-          setNoticeVisible(true);
-          return;
-        }
+        if (!uri) return 0;
         const r: any = await sendSocketMessage({
           to,
           type: 'image',
@@ -2017,19 +1993,12 @@ export default function ChatScreen({ route, navigation }: Props) {
           name: selectedMessage?.name,
           size: selectedMessage?.size,
         });
-        showForwardToastBadge(!!r?.ok, r?.ok ? t('chatSent', lang) : t('chatSendFailed', lang));
-        return;
+        return r?.ok ? 1 : 0;
       }
       if (type === 'audio') {
         const rawUri = String(selectedMessage?.uri ?? '').trim();
         const uri = rawUri ? normalizeForwardMediaUri(rawUri) : '';
-        if (!uri) {
-          setNoticeKind('info');
-          setNoticeTitle(t('chatForwardTitle', lang));
-          setNoticeMessage(t('chatForwardVoiceNotReady', lang));
-          setNoticeVisible(true);
-          return;
-        }
+        if (!uri) return 0;
         const r: any = await sendSocketMessage({
           to,
           type: 'audio',
@@ -2038,16 +2007,118 @@ export default function ChatScreen({ route, navigation }: Props) {
           size: selectedMessage?.size,
           duration: selectedMessage?.duration,
         });
-        showForwardToastBadge(!!r?.ok, r?.ok ? t('chatSent', lang) : t('chatSendFailed', lang));
+        return r?.ok ? 1 : 0;
+      }
+      return 0;
+    },
+    [selectionMode, messages, selectedMessageIds, selectedMessage, resolveMediaUri]
+  );
+
+  const forwardToSelectedFriends = React.useCallback(async () => {
+    const ids = Array.from(forwardSelectedFriendIds);
+    if (ids.length === 0) return;
+    const friends = forwardFriends.filter((f) => ids.includes(String(f?._id || '')));
+    if (friends.length === 0) return;
+
+    const normalizeForwardMediaUri = (u: string) => {
+      const resolved = resolveMediaUri(u);
+      if (/^file:\/\//i.test(resolved)) return '';
+      return resolved;
+    };
+
+    // Проверка «есть что пересылать» один раз (для режима выбора и одного сообщения)
+    if (selectionMode) {
+      const selected = messages.filter((m) => selectedMessageIds.has(String(m?.id || '')));
+      let hasAny = false;
+      for (const m of selected) {
+        const type = String(m?.type || '').trim();
+        if (type === 'text' && String(m?.text || '').trim()) hasAny = true;
+        else if (type === 'image' && normalizeForwardMediaUri(String(m?.uri || ''))) hasAny = true;
+        else if (type === 'audio' && normalizeForwardMediaUri(String(m?.uri || ''))) hasAny = true;
+        if (hasAny) break;
+      }
+      if (!hasAny) {
+        setNoticeKind('info');
+        setNoticeTitle(t('chatForwardTitle', lang));
+        setNoticeMessage(t('chatForwardNoSuitable', lang));
+        setNoticeVisible(true);
         return;
       }
-    } catch {}
-  }, [selectedMessage, hideMessageActions, showForwardToastBadge, selectionMode, messages, selectedMessageIds, resolveMediaUri, lang]);
+    } else if (selectedMessage) {
+      const type = String(selectedMessage?.type || '').trim();
+      if (type === 'text' && !String(selectedMessage?.text ?? '').trim()) return;
+      if (type === 'image' && !normalizeForwardMediaUri(String(selectedMessage?.uri ?? ''))) return;
+      if (type === 'audio' && !normalizeForwardMediaUri(String(selectedMessage?.uri ?? ''))) return;
+    }
+
+    let totalOk = 0;
+    try {
+      for (const f of friends) {
+        const to = String(f?._id || '').trim();
+        if (!to) continue;
+        totalOk += await forwardToRecipient(to);
+      }
+    } finally {
+      setShowForwardPicker(false);
+      hideMessageActions();
+      setForwardSelectedFriendIds(new Set());
+      if (selectionMode) {
+        setSelectionMode(false);
+        setSelectedMessageIds(new Set());
+      }
+      showForwardToastBadge(totalOk > 0, totalOk > 0 ? t('chatSent', lang) : t('chatSendFailed', lang));
+    }
+  }, [
+    forwardSelectedFriendIds,
+    forwardFriends,
+    selectionMode,
+    messages,
+    selectedMessageIds,
+    selectedMessage,
+    forwardToRecipient,
+    hideMessageActions,
+    showForwardToastBadge,
+    resolveMediaUri,
+    lang,
+  ]);
+
+  const forwardSelectedMessageTo = React.useCallback(
+    async (friend: any) => {
+      const to = String(friend?._id || '').trim();
+      if (!to) return;
+      const count = await forwardToRecipient(to);
+      setShowForwardPicker(false);
+      hideMessageActions();
+      if (selectionMode) {
+        setSelectionMode(false);
+        setSelectedMessageIds(new Set());
+      }
+      showForwardToastBadge(count > 0, count > 0 ? t('chatSent', lang) : t('chatSendFailed', lang));
+    },
+    [forwardToRecipient, hideMessageActions, showForwardToastBadge, selectionMode, lang]
+  );
 
   const exitSelectionMode = React.useCallback(() => {
     setSelectionMode(false);
     setSelectedMessageIds(new Set());
   }, []);
+
+  // На Android: системная кнопка «Назад» — шаг назад (закрыть чат или выйти из режима выбора), а не на страницу приветствия
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (selectionMode) {
+        exitSelectionMode();
+        return true;
+      }
+      if (navigation?.goBack) {
+        navigation.goBack();
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [selectionMode, exitSelectionMode, navigation]);
 
   const toggleSelectMessage = React.useCallback((id: string) => {
     const mid = String(id || '').trim();
@@ -2310,10 +2381,11 @@ export default function ChatScreen({ route, navigation }: Props) {
     >
       <TouchableOpacity
         onPress={() => {
+          try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
           if (selectionMode) exitSelectionMode();
           else navigation.goBack();
         }}
-        activeOpacity={0.85}
+        activeOpacity={0.5}
         style={{
           width: 36,
           height: 36,
@@ -4975,47 +5047,64 @@ export default function ChatScreen({ route, navigation }: Props) {
                   data={forwardFriends}
                   keyExtractor={(it: any) => String(it?._id || Math.random())}
                   showsVerticalScrollIndicator={false}
-                  renderItem={({ item }) => (
-                    <Pressable
-                      onPress={() => void forwardSelectedMessageTo(item)}
-                      style={({ pressed }) => ({
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        paddingVertical: 10,
-                        paddingHorizontal: 8,
-                        borderRadius: 14,
-                        overflow: 'hidden', // чтобы ripple/подсветка были только со скруглением
-                        // На некоторых Android ripple рисуется квадратом поверх скругления,
-                        // поэтому используем только нашу подсветку через backgroundColor.
-                        backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.10)' : 'rgba(123,97,255,0.08)') : 'transparent',
-                      })}
-                    >
-                      <AvatarImage
-                        userId={String(item._id)}
-                        avatarVer={Number(item.avatarVer || 0)}
-                        uri={item.avatarThumbB64 || undefined}
-                        size={44}
-                        fallbackText={String((item.nick || '--').trim()?.[0] || '--').toUpperCase()}
-                        containerStyle={{
-                          borderWidth: 1,
-                          borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
-                          overflow: 'hidden',
+                  renderItem={({ item }) => {
+                    const friendId = String(item?._id || '');
+                    const isSelected = forwardSelectedFriendIds.has(friendId);
+                    return (
+                      <Pressable
+                        onPress={() => {
+                          setForwardSelectedFriendIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(friendId)) next.delete(friendId);
+                            else next.add(friendId);
+                            return next;
+                          });
                         }}
-                        fallbackTextStyle={{ color: LIVI.white, fontSize: 16 }}
-                      />
-                      <View style={{ marginLeft: 12, flex: 1 }}>
-                        <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600' }}>
-                          {(item.nick && String(item.nick).trim()) || '—'}
-                        </Text>
-                        {typeof item.online === 'boolean' && (
-                          <Text style={{ color: item.online ? '#55d187' : 'rgba(255,255,255,0.45)', fontSize: 12 }}>
-                            {item.online ? t('online', lang) : t('offline', lang)}
+                        style={({ pressed }) => ({
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          paddingVertical: 10,
+                          paddingHorizontal: 8,
+                          borderRadius: 14,
+                          overflow: 'hidden',
+                          backgroundColor: pressed
+                            ? isDark
+                              ? 'rgba(123,97,255,0.10)'
+                              : 'rgba(123,97,255,0.08)'
+                            : isSelected
+                              ? isDark
+                                ? 'rgba(123,97,255,0.12)'
+                                : 'rgba(123,97,255,0.10)'
+                              : 'transparent',
+                        })}
+                      >
+                        <AvatarImage
+                          userId={friendId}
+                          avatarVer={Number(item.avatarVer || 0)}
+                          uri={item.avatarThumbB64 || undefined}
+                          size={44}
+                          fallbackText={String((item.nick || '--').trim()?.[0] || '--').toUpperCase()}
+                          containerStyle={{
+                            borderWidth: 1,
+                            borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
+                            overflow: 'hidden',
+                            ...(isDark ? {} : { backgroundColor: 'rgba(0,0,0,0.08)' }),
+                          }}
+                          fallbackTextStyle={isDark ? { color: LIVI.white, fontSize: 16 } : { color: 'rgba(0,0,0,0.45)', fontSize: 16 }}
+                        />
+                        <View style={{ marginLeft: 12, flex: 1, justifyContent: 'center' }}>
+                          <Text style={{ color: isDark ? LIVI.white : LIVI.text, fontSize: 16, fontWeight: '600' }}>
+                            {(item.nick && String(item.nick).trim()) || '—'}
                           </Text>
-                        )}
-                      </View>
-                      <Ionicons name="chevron-forward" size={18} color={LIVI.titan} />
-                    </Pressable>
-                  )}
+                        </View>
+                        <Ionicons
+                          name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                          size={24}
+                          color={isSelected ? '#7B61FF' : LIVI.titan}
+                        />
+                      </Pressable>
+                    );
+                  }}
                   ItemSeparatorComponent={() => (
                     <View style={{ height: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }} />
                   )}
@@ -5028,6 +5117,49 @@ export default function ChatScreen({ route, navigation }: Props) {
               )}
 
               <View style={{ height: 10 }} />
+              <TouchableOpacity
+                onPress={() => void forwardToSelectedFriends()}
+                disabled={forwardSelectedFriendIds.size === 0}
+                style={{
+                  paddingVertical: 14,
+                  backgroundColor:
+                    forwardSelectedFriendIds.size > 0
+                      ? isDark
+                        ? 'rgba(113,91,168,0.1)'
+                        : 'rgba(79, 195, 247, 0.15)'
+                      : 'transparent',
+                  borderWidth: forwardSelectedFriendIds.size > 0 ? StyleSheet.hairlineWidth : 1,
+                  borderColor:
+                    forwardSelectedFriendIds.size > 0
+                      ? isDark
+                        ? '#715BA8'
+                        : '#4FC3F7'
+                      : isDark
+                        ? 'rgba(255,255,255,0.2)'
+                        : 'rgba(0,0,0,0.15)',
+                  borderRadius: 12,
+                  marginBottom: 8,
+                }}
+                activeOpacity={0.85}
+              >
+                <Text
+                  style={{
+                    color:
+                      forwardSelectedFriendIds.size > 0
+                        ? isDark
+                          ? '#B8A9E8'
+                          : '#4FC3F7'
+                        : LIVI.titan,
+                    fontSize: 16,
+                    fontWeight: '600',
+                    textAlign: 'center',
+                  }}
+                >
+                  {forwardSelectedFriendIds.size > 0
+                    ? `${t('chatActionForward', lang)} (${forwardSelectedFriendIds.size})`
+                    : t('chatActionForward', lang)}
+                </Text>
+              </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => setShowForwardPicker(false)}
                 style={{
