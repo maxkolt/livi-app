@@ -105,6 +105,8 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     uiSettings: 'Настройки интерфейса',
     chooseLanguage: 'Выбрать язык',
     baseLang: 'Базовый',
+    updateDownloadNew: 'Скачайте новое обновление',
+    updateBtn: 'Обновить',
 
     // — Опасная зона
     dangerZone: 'Очистка аккаунта',
@@ -293,6 +295,8 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     uiSettings: 'Interface settings',
     chooseLanguage: 'Choose language',
     baseLang: 'Base',
+    updateDownloadNew: 'Download the new update',
+    updateBtn: 'Update',
   
     // — Danger zone
     dangerZone: 'Danger zone',

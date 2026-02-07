@@ -114,6 +114,12 @@ import socket, {
   requestFriend,
   acceptInvite,
 } from '../sockets/socket';
+import {
+  isUpdateAvailable,
+  shouldShowUpdateBadge,
+  markUpdateBadgeShown,
+  PLAY_STORE_UPDATE_URL,
+} from '../utils/updateCheck';
 
 
 
@@ -609,6 +615,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [menuOpen, setMenuOpen] = useState(false);
   const [tab, setTab] = useState<'friends' | 'settings' | 'more'>('friends');
 
+  /* обновление приложения: бейдж раз в сутки, индикатор у «Ещё», кнопка в табе Ещё */
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [showUpdateBadge, setShowUpdateBadgeState] = useState(false);
+  const updateBadgeShownRef = useRef(false);
+  const updateSpinAnim = useRef(new Animated.Value(0)).current;
+
   // Единый фон для "титановой" кнопки меню и кружка аватара (в светлой теме),
   // чтобы элементы выглядели консистентно.
   const MENU_CHROME_BG = isDark
@@ -627,6 +639,67 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     });
     return () => sub.remove();
   }, [menuOpen]);
+
+  // Проверка доступности обновления (при старте и при возврате в приложение)
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const available = await isUpdateAvailable();
+        if (!cancelled) setUpdateAvailable(!!available);
+      } catch {}
+    };
+    check();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') check();
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, []);
+
+  // Показать бейдж «Скачайте обновление» раз в сутки (проверяем при появлении updateAvailable)
+  useEffect(() => {
+    if (!updateAvailable) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const should = await shouldShowUpdateBadge();
+        if (!cancelled && should && !updateBadgeShownRef.current) {
+          updateBadgeShownRef.current = true;
+          setShowUpdateBadgeState(true);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [updateAvailable]);
+
+  // Автоскрытие бейджа через 5 секунд
+  useEffect(() => {
+    if (!showUpdateBadge) return;
+    const t = setTimeout(() => {
+      setShowUpdateBadgeState(false);
+      markUpdateBadgeShown();
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [showUpdateBadge]);
+
+  // Анимация вращения иконки обновления (две стрелки по кругу)
+  useEffect(() => {
+    if (!updateAvailable) return;
+    const loop = Animated.loop(
+      Animated.timing(updateSpinAnim, {
+        toValue: 1,
+        duration: 1500,
+        useNativeDriver: true,
+        easing: Easing.linear,
+      })
+    );
+    updateSpinAnim.setValue(0);
+    loop.start();
+    return () => loop.stop();
+  }, [updateAvailable, updateSpinAnim]);
 
   /* profile state */
   const [saving, setSaving] = useState(false);
@@ -3607,6 +3680,32 @@ const handleClearNick = useCallback(async () => {
           </Text>
         </View>
       </TouchableOpacity>
+
+      {/* Кнопка «Обновить»: только при доступном обновлении, иконка с вращением, переход в Google Play */}
+      {updateAvailable && (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => Linking.openURL(PLAY_STORE_UPDATE_URL)}
+          style={{
+            backgroundColor: 'rgba(255,255,255,0.05)',
+            borderColor: LIVI.border,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderRadius: 12,
+            paddingVertical: 14,
+            paddingHorizontal: 14,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 10,
+            marginTop: 8,
+          }}
+        >
+          <Animated.View style={{ transform: [{ rotate: updateSpinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }] }}>
+            <List.Icon icon="refresh" color={LIVI.white} style={{ margin: 0 }} />
+          </Animated.View>
+          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '600' }}>{L('updateBtn')}</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 
@@ -3766,6 +3865,64 @@ const handleClearNick = useCallback(async () => {
       >
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
+      {/* Выпадающий бейдж «Скачайте новое обновление»: раз в сутки, 5 сек, X закрыть, тап — переход в Google Play */}
+      {showUpdateBadge && (
+        <View
+          style={{
+            position: 'absolute',
+            top: insets.top + (Platform.OS === 'android' ? 8 : 4),
+            left: 14,
+            right: 14,
+            zIndex: 1000,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingVertical: 12,
+            paddingHorizontal: 14,
+            borderRadius: 12,
+            backgroundColor: isDark ? 'rgba(13,14,16,0.96)' : 'rgba(255,255,255,0.96)',
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: LIVI.border,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.2,
+            shadowRadius: 8,
+            elevation: 6,
+          }}
+        >
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={{ flex: 1 }}
+            onPress={() => {
+              setShowUpdateBadgeState(false);
+              markUpdateBadgeShown();
+              Linking.openURL(PLAY_STORE_UPDATE_URL);
+            }}
+          >
+            <Text
+              style={{
+                color: isDark ? LIVI.white : LIVI.text,
+                fontSize: 15,
+                fontWeight: '600',
+              }}
+              numberOfLines={1}
+            >
+              {L('updateDownloadNew')}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            onPress={() => {
+              setShowUpdateBadgeState(false);
+              markUpdateBadgeShown();
+            }}
+            style={{ paddingLeft: 12, paddingVertical: 4 }}
+          >
+            <Ionicons name="close" size={22} color={isDark ? LIVI.titan : LIVI.text2} />
+          </TouchableOpacity>
+        </View>
+      )}
+
       <View style={[styles.topBar, { backgroundColor: 'transparent' }] }>
         <Text style={[styles.brand, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>LiVi</Text>
 
@@ -3886,7 +4043,7 @@ const handleClearNick = useCallback(async () => {
                 <View style={styles.segDivider} />
                 {renderSegBtn('settings', L('tabSettings'), 'account-edit', 'mid')}
                 <View style={styles.segDivider} />
-                {renderSegBtn('more', L('tabMore'), 'dots-horizontal', 'right')}
+                {renderMoreSegBtn()}
               </View>
 
               <Divider style={{ backgroundColor: LIVI.border, marginTop: 12 }} />
@@ -4433,6 +4590,25 @@ const handleClearNick = useCallback(async () => {
       </Portal>
     </SafeAreaView>
   );
+
+  /* Кнопка «Ещё»: красный индикатор обновления (если есть) + вертикальные белые точки + подпись */
+  function renderMoreSegBtn() {
+    const active = tab === 'more';
+    const label = L('tabMore');
+    return (
+      <TouchableOpacity key="more" activeOpacity={0.9} onPress={() => setTab('more')} style={[styles.segItem, styles.segRight]}>
+        {active && <View style={[StyleSheet.absoluteFill, styles.segActiveBg]} />}
+        {active && <View style={styles.segTopShadow} />}
+        <View style={styles.segContent}>
+          {updateAvailable && (
+            <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,90,103,0.95)', marginRight: 6 }} />
+          )}
+          <List.Icon icon="dots-vertical" color={LIVI.white} style={{ margin: 0, marginRight: 8 }} />
+          <Text style={styles.segLabel}>{label}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  }
 
   /* segmented button */
   function renderSegBtn(value: 'friends' | 'settings' | 'more', label: string, icon: string, rounded: 'left' | 'mid' | 'right') {
