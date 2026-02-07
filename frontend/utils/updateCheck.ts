@@ -40,7 +40,13 @@ export function getCurrentAppVersion(): string {
 
 let cachedLatest: string | null = null;
 let cachedAt = 0;
-const CACHE_MS = 60 * 60 * 1000; // 1 час
+const CACHE_MS = 2 * 60 * 1000; // 2 минуты (чаще проверяем при возврате в приложение)
+
+/** Сбросить кэш версии (при возврате в приложение — запросить свежую версию с сервера). */
+export function clearUpdateCheckCache(): void {
+  cachedLatest = null;
+  cachedAt = 0;
+}
 
 /** Загружает latestAppVersion с бэкенда (с кэшем 1 ч). */
 export async function fetchLatestAppVersion(): Promise<string | null> {

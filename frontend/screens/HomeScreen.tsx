@@ -118,6 +118,7 @@ import {
   isUpdateAvailable,
   shouldShowUpdateBadge,
   markUpdateBadgeShown,
+  clearUpdateCheckCache,
   PLAY_STORE_UPDATE_URL,
 } from '../utils/updateCheck';
 
@@ -651,7 +652,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     };
     check();
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') check();
+      if (state === 'active') {
+        clearUpdateCheckCache(); // при возврате в приложение — запросить свежую версию с сервера
+        check();
+      }
     });
     return () => {
       cancelled = true;
