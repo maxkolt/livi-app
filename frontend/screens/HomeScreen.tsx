@@ -685,9 +685,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => clearTimeout(t);
   }, [showUpdateBadge]);
 
-  // Анимация вращения иконки обновления (две стрелки по кругу)
+  // Анимация вращения иконки обновления (две стрелки по кругу); перезапуск при входе на вкладку «Ещё»
   useEffect(() => {
-    if (!updateAvailable) return;
+    if (!updateAvailable || tab !== 'more') return;
     const loop = Animated.loop(
       Animated.timing(updateSpinAnim, {
         toValue: 1,
@@ -699,7 +699,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     updateSpinAnim.setValue(0);
     loop.start();
     return () => loop.stop();
-  }, [updateAvailable, updateSpinAnim]);
+  }, [updateAvailable, updateSpinAnim, tab]);
 
   /* profile state */
   const [saving, setSaving] = useState(false);
@@ -3552,7 +3552,7 @@ const handleClearNick = useCallback(async () => {
   );
 
   const MoreTab = () => (
-    <View style={{ padding: 16, gap: 16 }}>
+    <View style={{ padding: 16, gap: 16, flex: 1 }}>
 
 
       {/* UI Settings */}
@@ -3681,30 +3681,32 @@ const handleClearNick = useCallback(async () => {
         </View>
       </TouchableOpacity>
 
-      {/* Кнопка «Обновить»: только при доступном обновлении, иконка с вращением, переход в Google Play */}
+      {/* Кнопка «Обновить»: рамка как у «Пригласить друзей», фон прозрачный, шрифт тонкий */}
       {updateAvailable && (
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onPress={() => Linking.openURL(PLAY_STORE_UPDATE_URL)}
-          style={{
-            backgroundColor: 'rgba(255,255,255,0.05)',
-            borderColor: LIVI.border,
-            borderWidth: StyleSheet.hairlineWidth,
-            borderRadius: 12,
-            paddingVertical: 14,
-            paddingHorizontal: 14,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 10,
-            marginTop: 8,
-          }}
-        >
-          <Animated.View style={{ transform: [{ rotate: updateSpinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }] }}>
-            <List.Icon icon="refresh" color={LIVI.white} style={{ margin: 0 }} />
-          </Animated.View>
-          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '600' }}>{L('updateBtn')}</Text>
-        </TouchableOpacity>
+        <View style={{ marginTop: 'auto', marginBottom: 50, alignItems: 'center', alignSelf: 'stretch' }}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => Linking.openURL(PLAY_STORE_UPDATE_URL)}
+            style={{
+              backgroundColor: 'transparent',
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: '#5A5F69',
+              borderRadius: 24,
+              paddingVertical: 8,
+              paddingHorizontal: 14,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              minWidth: 120,
+            }}
+          >
+            <Animated.View style={{ transform: [{ rotate: updateSpinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }] }}>
+              <ExpoImage source={require('../assets/icon-update.png')} style={{ width: 18, height: 18 }} contentFit="contain" />
+            </Animated.View>
+            <Text style={{ color: LIVI.text2, fontSize: 14, fontWeight: '300' }}>{L('updateBtn')}</Text>
+          </TouchableOpacity>
+        </View>
       )}
     </View>
   );
@@ -3865,66 +3867,70 @@ const handleClearNick = useCallback(async () => {
       >
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
-      {/* Выпадающий бейдж «Скачайте новое обновление»: раз в сутки, 5 сек, X закрыть, тап — переход в Google Play */}
-      {showUpdateBadge && (
-        <View
-          style={{
-            position: 'absolute',
-            top: insets.top + (Platform.OS === 'android' ? 8 : 4),
-            left: 14,
-            right: 14,
-            zIndex: 1000,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingVertical: 12,
-            paddingHorizontal: 14,
-            borderRadius: 12,
-            backgroundColor: isDark ? 'rgba(13,14,16,0.96)' : 'rgba(255,255,255,0.96)',
-            borderWidth: StyleSheet.hairlineWidth,
-            borderColor: LIVI.border,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.2,
-            shadowRadius: 8,
-            elevation: 6,
-          }}
-        >
-          <TouchableOpacity
-            activeOpacity={0.85}
-            style={{ flex: 1 }}
-            onPress={() => {
-              setShowUpdateBadgeState(false);
-              markUpdateBadgeShown();
-              Linking.openURL(PLAY_STORE_UPDATE_URL);
-            }}
-          >
-            <Text
-              style={{
-                color: isDark ? LIVI.white : LIVI.text,
-                fontSize: 15,
-                fontWeight: '600',
-              }}
-              numberOfLines={1}
-            >
-              {L('updateDownloadNew')}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            onPress={() => {
-              setShowUpdateBadgeState(false);
-              markUpdateBadgeShown();
-            }}
-            style={{ paddingLeft: 12, paddingVertical: 4 }}
-          >
-            <Ionicons name="close" size={22} color={isDark ? LIVI.titan : LIVI.text2} />
-          </TouchableOpacity>
-        </View>
-      )}
-
       <View style={[styles.topBar, { backgroundColor: 'transparent' }] }>
         <Text style={[styles.brand, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>LiVi</Text>
+
+        {/* Бейдж «Скачайте обновление»: между LiVi и меню, градиент только в рамке 0.3px, скруглённые углы, 5 сек автоскрытие, X закрыть, тап — Google Play */}
+        {showUpdateBadge && (
+          <View style={{ padding: 0.3, borderRadius: 12, marginHorizontal: 8, position: 'relative', overflow: 'hidden', alignSelf: 'center', minWidth: 180, maxHeight: Platform.OS === 'ios' ? 42 : 34 }}>
+            <LinearGradient
+              colors={isDark ? ['#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0', '#14b8a6'] : ['#a78bfa', '#FFF8F0', '#B0B5BF', '#a78bfa']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[StyleSheet.absoluteFillObject, { borderRadius: 12 }]}
+            />
+            {/* Верхняя линия рамки — те же цвета, горизонтальный градиент (светлое правее) */}
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0.3, borderTopLeftRadius: 12, borderTopRightRadius: 12, overflow: 'hidden', zIndex: 2 }}>
+              <LinearGradient
+                colors={isDark ? ['#14b8a6', '#00b5ff', '#FFF8F0', '#3b82f6'] : ['#a78bfa', '#8b6cf0', '#a78bfa']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={[StyleSheet.absoluteFillObject, { borderTopLeftRadius: 12, borderTopRightRadius: 12 }]}
+              />
+            </View>
+            {/* Нижняя линия рамки — меньше белого и серого */}
+            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 0.3, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, overflow: 'hidden', zIndex: 2 }}>
+              <LinearGradient
+                colors={isDark ? ['#14b8a6', '#00b5ff', '#3b82f6'] : ['#a78bfa', '#8b6cf0', '#a78bfa']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={[StyleSheet.absoluteFillObject, { borderBottomLeftRadius: 12, borderBottomRightRadius: 12 }]}
+              />
+            </View>
+            {/* Только рамка в градиенте; середина — сплошной фон страницы */}
+            <View style={{ margin: 0.3, borderRadius: 11.7, flexDirection: 'row', alignItems: 'center', paddingLeft: 10, paddingRight: 2, backgroundColor: theme.colors.background, flex: 1, paddingTop: 0, paddingBottom: 0, zIndex: 1 }}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={{ flex: 1, justifyContent: 'center', minWidth: 140 }}
+                onPress={() => {
+                  setShowUpdateBadgeState(false);
+                  markUpdateBadgeShown();
+                  Linking.openURL(PLAY_STORE_UPDATE_URL);
+                }}
+              >
+                <Text style={{ color: isDark ? LIVI.titan : LIVI.textThemeWhite, fontSize: 13, fontWeight: '600', lineHeight: 13, ...(Platform.OS === 'android' && { includeFontPadding: false }) }} numberOfLines={1}>{L('updateDownloadNew')}</Text>
+              </TouchableOpacity>
+              <View style={{ width: 0.3, alignSelf: 'stretch', marginVertical: 4, marginLeft: 2, overflow: 'hidden', borderRadius: 1 }}>
+                <LinearGradient
+                  colors={isDark ? ['#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0'] : ['#a78bfa', '#FFF8F0', '#B0B5BF']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 0, y: 1 }}
+                  style={{ flex: 1, width: 0.3 }}
+                />
+              </View>
+              <TouchableOpacity
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                onPress={() => {
+                  setShowUpdateBadgeState(false);
+                  markUpdateBadgeShown();
+                }}
+                style={{ paddingVertical: 2, paddingHorizontal: 2 }}
+              >
+                <Ionicons name="close" size={18} color={isDark ? LIVI.text : LIVI.textThemeWhite} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         <View style={{ position: 'relative' }}>
           <IconButton 
@@ -4591,19 +4597,25 @@ const handleClearNick = useCallback(async () => {
     </SafeAreaView>
   );
 
-  /* Кнопка «Ещё»: красный индикатор обновления (если есть) + вертикальные белые точки + подпись */
+  /* Кнопка «Ещё»: индикатор обновления — картинка img-update.png (красный круг со стрелкой) */
   function renderMoreSegBtn() {
     const active = tab === 'more';
     const label = L('tabMore');
     return (
-      <TouchableOpacity key="more" activeOpacity={0.9} onPress={() => setTab('more')} style={[styles.segItem, styles.segRight]}>
+      <TouchableOpacity key="more" activeOpacity={0.9} onPress={() => setTab('more')} style={[styles.segItem, styles.segRight, { position: 'relative' }]}>
         {active && <View style={[StyleSheet.absoluteFill, styles.segActiveBg]} />}
         {active && <View style={styles.segTopShadow} />}
-        <View style={styles.segContent}>
-          {updateAvailable && (
-            <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,90,103,0.95)', marginRight: 6 }} />
-          )}
-          <List.Icon icon="dots-vertical" color={LIVI.white} style={{ margin: 0, marginRight: 8 }} />
+        {updateAvailable && (
+          <View style={{ position: 'absolute', right: 7, top: 2, bottom: 0, justifyContent: 'center', width: 22, alignItems: 'center', zIndex: 1 }} pointerEvents="none">
+            <ExpoImage
+              source={require('../assets/icon-update.png')}
+              style={{ width: 16, height: 16 }}
+              contentFit="contain"
+            />
+          </View>
+        )}
+        <View style={[styles.segContent, { marginLeft: -18 }]}>
+          <List.Icon icon="dots-horizontal" color={LIVI.white} style={{ margin: 0, marginRight: 8 }} />
           <Text style={styles.segLabel}>{label}</Text>
         </View>
       </TouchableOpacity>

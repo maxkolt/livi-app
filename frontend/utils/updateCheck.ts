@@ -69,10 +69,11 @@ export async function isUpdateAvailable(): Promise<boolean> {
   return isVersionLess(current, latest);
 }
 
-/** Показывать ли бейдж «Скачайте обновление» (раз в сутки). */
+/** Показывать ли бейдж «Скачайте обновление» (раз в сутки; в __DEV__ — всегда, чтобы проверить UI). */
 export async function shouldShowUpdateBadge(): Promise<boolean> {
   const available = await isUpdateAvailable();
   if (!available) return false;
+  if (__DEV__) return true; // в dev всегда показываем бейдж для проверки UI
   try {
     const raw = await AsyncStorage.getItem(LAST_UPDATE_BADGE_SHOWN_KEY);
     const last = raw ? parseInt(raw, 10) : 0;
