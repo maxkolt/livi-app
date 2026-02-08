@@ -4621,7 +4621,7 @@ const handleClearNick = useCallback(async () => {
           <View style={{ position: 'absolute', right: 7, top: 2, bottom: 0, justifyContent: 'center', width: 22, alignItems: 'center', zIndex: 1 }} pointerEvents="none">
             <ExpoImage
               source={require('../assets/icon-update.png')}
-              style={{ width: 16, height: 16 }}
+              style={{ width: 14, height: 14 }}
               contentFit="contain"
             />
           </View>
