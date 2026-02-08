@@ -3729,7 +3729,7 @@ const handleClearNick = useCallback(async () => {
     const letter = displayAvatarLetter(savedNick);
     const wrapperStyle: StyleProp<ViewStyle> = {
       alignItems: "center",
-      marginTop: Platform.OS === "android" ? 12 : (12 + 20), // Добавляем 20px для iOS
+      marginTop: Platform.OS === "android" ? 20 : (12 + 20), // чуть ниже на Android (аватар + ник)
       marginBottom: -65,
     };
 
@@ -3884,33 +3884,33 @@ const handleClearNick = useCallback(async () => {
 
         {/* Бейдж «Скачайте обновление»: между LiVi и меню, градиент только в рамке 0.3px, скруглённые углы, 5 сек автоскрытие, X закрыть, тап — Google Play */}
         {showUpdateBadge && (
-          <View style={{ padding: 0.3, borderRadius: 12, marginHorizontal: 8, position: 'relative', overflow: 'hidden', alignSelf: 'center', minWidth: 180, maxHeight: Platform.OS === 'ios' ? 42 : 34 }}>
+          <View style={{ padding: 0.3, borderRadius: 18, marginHorizontal: 8, position: 'relative', overflow: 'hidden', alignSelf: 'center', minWidth: 180, maxHeight: Platform.OS === 'ios' ? 42 : 34 }}>
             <LinearGradient
               colors={isDark ? ['#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0', '#14b8a6'] : ['#a78bfa', '#FFF8F0', '#B0B5BF', '#a78bfa']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
-              style={[StyleSheet.absoluteFillObject, { borderRadius: 12 }]}
+              style={[StyleSheet.absoluteFillObject, { borderRadius: 18 }]}
             />
             {/* Верхняя линия рамки — те же цвета, горизонтальный градиент (светлое правее) */}
-            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0.3, borderTopLeftRadius: 12, borderTopRightRadius: 12, overflow: 'hidden', zIndex: 2 }}>
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0.3, borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden', zIndex: 2 }}>
               <LinearGradient
                 colors={isDark ? ['#14b8a6', '#00b5ff', '#FFF8F0', '#3b82f6'] : ['#a78bfa', '#8b6cf0', '#a78bfa']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
-                style={[StyleSheet.absoluteFillObject, { borderTopLeftRadius: 12, borderTopRightRadius: 12 }]}
+                style={[StyleSheet.absoluteFillObject, { borderTopLeftRadius: 18, borderTopRightRadius: 18 }]}
               />
             </View>
             {/* Нижняя линия рамки — меньше белого и серого */}
-            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 0.3, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, overflow: 'hidden', zIndex: 2 }}>
+            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 0.3, borderBottomLeftRadius: 18, borderBottomRightRadius: 18, overflow: 'hidden', zIndex: 2 }}>
               <LinearGradient
                 colors={isDark ? ['#14b8a6', '#00b5ff', '#3b82f6'] : ['#a78bfa', '#8b6cf0', '#a78bfa']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
-                style={[StyleSheet.absoluteFillObject, { borderBottomLeftRadius: 12, borderBottomRightRadius: 12 }]}
+                style={[StyleSheet.absoluteFillObject, { borderBottomLeftRadius: 18, borderBottomRightRadius: 18 }]}
               />
             </View>
             {/* Только рамка в градиенте; середина — сплошной фон страницы */}
-            <View style={{ margin: 0.3, borderRadius: 11.7, flexDirection: 'row', alignItems: 'center', paddingLeft: 10, paddingRight: 2, backgroundColor: theme.colors.background, flex: 1, paddingTop: 0, paddingBottom: 0, zIndex: 1 }}>
+            <View style={{ margin: 0.3, borderRadius: 17.7, flexDirection: 'row', alignItems: 'center', paddingLeft: 10, paddingRight: 4, backgroundColor: theme.colors.background, flex: 1, paddingTop: 0, paddingBottom: 0, zIndex: 1 }}>
               <TouchableOpacity
                 activeOpacity={0.85}
                 style={{ flex: 1, justifyContent: 'center', minWidth: 140 }}
@@ -3920,9 +3920,9 @@ const handleClearNick = useCallback(async () => {
                   Linking.openURL(PLAY_STORE_UPDATE_URL);
                 }}
               >
-                <Text style={{ color: isDark ? LIVI.titan : LIVI.textThemeWhite, fontSize: 13, fontWeight: '600', lineHeight: 13, ...(Platform.OS === 'android' && { includeFontPadding: false }) }} numberOfLines={1}>{L('updateDownloadNew')}</Text>
+                <Text style={{ color: isDark ? LIVI.text : LIVI.textThemeWhite, fontSize: 13, fontWeight: '400', lineHeight: 13, ...(Platform.OS === 'android' && { includeFontPadding: false }) }} numberOfLines={1}>{L('updateDownloadNew')}</Text>
               </TouchableOpacity>
-              <View style={{ width: 0.3, alignSelf: 'stretch', marginVertical: 4, marginLeft: 2, overflow: 'hidden', borderRadius: 1 }}>
+              <View style={{ width: 0.3, alignSelf: 'stretch', marginVertical: 6, marginLeft: 0, overflow: 'hidden', borderRadius: 1 }}>
                 <LinearGradient
                   colors={isDark ? ['#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0'] : ['#a78bfa', '#FFF8F0', '#B0B5BF']}
                   start={{ x: 0, y: 0 }}
@@ -3948,12 +3948,12 @@ const handleClearNick = useCallback(async () => {
           <IconButton 
             icon="menu" 
             size={Platform.OS === "ios" ? 28 : 24} 
-            iconColor={isDark ? LIVI.white : LIVI.textThemeWhite} 
+            iconColor={isDark ? LIVI.text : LIVI.textThemeWhite} 
             style={[
               styles.menuBtn,
               { 
                 backgroundColor: MENU_CHROME_BG,
-                borderColor: isDark ? theme.colors.outline : LIVI.textThemeWhite,
+                borderColor: isDark ? LIVI.text : LIVI.textThemeWhite,
                 borderWidth: StyleSheet.hairlineWidth,
               }
             ]} 
@@ -3986,7 +3986,7 @@ const handleClearNick = useCallback(async () => {
 
       {renderCenterTopProfile()}
 
-      <View style={styles.center}>
+      <View style={[styles.center, Platform.OS === 'android' && { marginTop: 50 }]}>
         <Text style={[styles.title, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>{L('welcomeTitle')}</Text>
         <Text style={[styles.subtitle, { color: isDark ? LIVI.text2 : LIVI.textThemeWhite }]}>{L('welcomeSubtitle')}</Text>
       </View>
@@ -3997,7 +3997,7 @@ const handleClearNick = useCallback(async () => {
         isDark={isDark}
         onPress={() => navigation.navigate("RandomChat", { returnTo: { name: 'Home' } })}
         label={L("startSearchBtn")}
-        style={{ marginBottom: 60 }}
+        style={{ marginBottom: 40 }}
         backgroundColor={theme.colors.background as string}
       />
 
@@ -4654,7 +4654,7 @@ const handleClearNick = useCallback(async () => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: LIVI.bg, paddingHorizontal: 14, paddingBottom: 10, justifyContent: 'center' },
   topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
-  brand: { color: LIVI.text, fontSize: Platform.OS === "ios" ? 39 : 30, fontWeight: Platform.OS === "ios" ? '600' : '800', letterSpacing: 0.3, paddingHorizontal: Platform.OS === "android" ? 10 : 0 },
+  brand: { color: LIVI.text, fontSize: Platform.OS === "ios" ? 39 : 35, fontWeight: Platform.OS === "ios" ? '600' : '800', letterSpacing: 0.3 },
   menuBtn: { backgroundColor: LIVI.glass, borderRadius: 14 },
   // Симметричные отступы: левый край -> аватар = правый край -> иконка чата.
   // Горизонтальные отступы задаются contentContainerStyle у FlatList (paddingHorizontal: 16),
