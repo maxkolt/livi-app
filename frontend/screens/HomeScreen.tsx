@@ -3476,17 +3476,14 @@ const handleClearNick = useCallback(async () => {
   
 
   const InviteButton = ({ friend }: { friend: Friend }) => {
-    if (!friend.online) return null;
-
     const { displayName } = getFriendDisplay(friend);
     // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) для корректной работы с пропущенными звонками
     const friendIdStr = String(friend.id);
     const missedCount = missedByUser[friendIdStr] || 0;
 
-    // УПРОЩЕНО: Определяем статус "Занято" для 1-на-1
-    const isOnline = friend.online;
+    // Кнопка видеозвонка показывается всегда; дизейблится и бейдж «Занят» только когда друг занят в видеочате
     const isFriendBusy = friend.isBusy || false; // Флаг от сервера через presence:update
-    const busy = isOnline && isFriendBusy;
+    const busy = isFriendBusy;
     const pulse = React.useRef(new Animated.Value(0)).current;
     useEffect(() => {
       if (busy) {
@@ -3605,7 +3602,7 @@ const handleClearNick = useCallback(async () => {
             }}            
             right={() => (
               <View style={styles.rowRightActions}>
-                {item.online && <InviteButton friend={item} />}
+                <InviteButton friend={item} />
                 <ChatButton friend={item} />
               </View>
             )}

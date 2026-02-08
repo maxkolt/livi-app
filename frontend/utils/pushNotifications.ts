@@ -1,9 +1,14 @@
 import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
+import { CommonActions } from '@react-navigation/native';
 import { API_BASE } from '../sockets/socket';
+import { acceptCall, declineCall } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
+
+/** ID категории уведомления входящего звонка с кнопками «Поднять» / «Положить» */
+export const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
 
 export async function clearNotificationIndicators() {
   // Android launchers usually show the badge based on *active* notifications in the tray.
@@ -17,18 +22,26 @@ export async function clearNotificationIndicators() {
   } catch {}
 }
 
+// Состояние приложения: для звонков показываем пуш только когда приложение в фоне/убито
+let appStateRef = AppState.currentState;
+AppState.addEventListener('change', (next) => {
+  appStateRef = next;
+});
+
 // Показывать уведомления даже в foreground (для сообщений).
-// Для звонков — не показываем системное уведомление, т.к. звонок должен работать только внутри приложения.
+// Для звонков: в активном приложении показываем модалку по сокету; в фоне/убитом — показываем пуш на телефоне.
 Notifications.setNotificationHandler({
   handleNotification: async (n) => {
     const type = String((n as any)?.request?.content?.data?.type || '');
     if (type === 'call') {
+      const showCallNotification = appStateRef !== 'active';
       return {
-        shouldShowAlert: false,
-        shouldShowBanner: false,
-        shouldShowList: false,
-        shouldPlaySound: false,
+        shouldShowAlert: showCallNotification,
+        shouldShowBanner: showCallNotification,
+        shouldShowList: showCallNotification,
+        shouldPlaySound: showCallNotification,
         shouldSetBadge: false,
+        ...(Platform.OS === 'android' && showCallNotification ? { channelId: 'calls' } : {}),
       };
     }
     return {
@@ -51,17 +64,41 @@ async function waitForNavReady(ms = 9000) {
   return null;
 }
 
-async function navigateFromPushData(data: any) {
+async function navigateToVideoCallIncoming(peerUserId: string, callId: string) {
+  const nav = await waitForNavReady();
+  if (!nav) return;
+  nav.dispatch(
+    CommonActions.reset({
+      index: 1,
+      routes: [
+        { name: 'Home' as any },
+        {
+          name: 'VideoCall' as any,
+          params: {
+            peerUserId,
+            directCall: true,
+            directInitiator: false,
+            callId,
+            isIncoming: true,
+          },
+        },
+      ],
+    })
+  );
+}
+
+/**
+ * Обработка ответа на уведомление (тап по уведомлению или по кнопке «Поднять»/«Положить»).
+ * actionIdentifier: 'answer' = Поднять, 'decline' = Положить, DEFAULT = тап по телу уведомления.
+ */
+async function handleNotificationResponse(data: any, actionIdentifier: string) {
   try {
     const type = String(data?.type || '');
     if (!type) return;
 
-    const nav = await waitForNavReady();
-    if (!nav) return;
-
     if (type === 'message') {
-      // Clear system notification badge/tray since user is going to the chat.
-      // This prevents stuck launcher badges on Android.
+      const nav = await waitForNavReady();
+      if (!nav) return;
       await clearNotificationIndicators();
       const peerId = String(data?.from || '');
       const peerName = String(data?.fromNick || '').trim() || '—';
@@ -74,18 +111,39 @@ async function navigateFromPushData(data: any) {
       const peerUserId = String(data?.from || '');
       const callId = String(data?.callId || '');
       if (!peerUserId) return;
-      nav.navigate('VideoCall', {
-        peerUserId,
-        directCall: true,
-        directInitiator: false,
-        isIncoming: true,
-        ...(callId ? { callId } : {}),
-      } as any);
-      return;
+
+      const isAnswer = actionIdentifier === 'answer';
+      const isDecline = actionIdentifier === 'decline';
+      const isDefaultTap = actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER;
+
+      if (isDecline) {
+        try {
+          declineCall(callId);
+        } catch (e) {
+          logger.warn('[push] declineCall from notification failed', { callId, error: (e as Error)?.message });
+        }
+        return;
+      }
+
+      if (isAnswer || isDefaultTap) {
+        await navigateToVideoCallIncoming(peerUserId, callId);
+        if (isAnswer) {
+          try {
+            acceptCall(callId);
+          } catch (e) {
+            logger.warn('[push] acceptCall from notification failed', { callId, error: (e as Error)?.message });
+          }
+        }
+      }
     }
   } catch (e) {
-    logger.warn('[push] navigateFromPushData failed', e as any);
+    logger.warn('[push] handleNotificationResponse failed', e as any);
   }
+}
+
+/** Устаревший путь: только навигация по data (тап по уведомлению без кнопок). */
+async function navigateFromPushData(data: any) {
+  await handleNotificationResponse(data, Notifications.DEFAULT_ACTION_IDENTIFIER);
 }
 
 export async function ensureAndroidNotificationChannels() {
@@ -111,6 +169,22 @@ export async function ensureAndroidNotificationChannels() {
 }
 
 /**
+ * Регистрирует категорию уведомления входящего звонка с кнопками «Поднять» и «Положить».
+ * Вызывается при инициализации прав на уведомления.
+ */
+async function ensureIncomingCallNotificationCategory() {
+  try {
+    await Notifications.setNotificationCategoryAsync(INCOMING_CALL_CATEGORY_ID, [
+      { identifier: 'answer', buttonTitle: 'Поднять' },
+      { identifier: 'decline', buttonTitle: 'Положить' },
+    ]);
+    logger.debug('[push] incoming call notification category registered');
+  } catch (e) {
+    logger.warn('[push] setNotificationCategoryAsync failed', e as any);
+  }
+}
+
+/**
  * Requests OS notification permission on startup (Android 13+ and iOS).
  * On older Android versions there is no runtime prompt, but this will still
  * return the current permission status.
@@ -118,6 +192,10 @@ export async function ensureAndroidNotificationChannels() {
 export async function ensureInitialNotificationPermissions(): Promise<void> {
   try {
     await ensureAndroidNotificationChannels();
+  } catch {}
+
+  try {
+    await ensureIncomingCallNotificationCategory();
   } catch {}
 
   try {
@@ -268,19 +346,21 @@ export function addNotificationListeners() {
     } catch {}
   });
 
-  // 1) Если приложение было "убито" и открылось по тапу по пушу
+  // 1) Если приложение было "убито" и открылось по тапу по пушу или по кнопке
   (async () => {
     try {
       const last = await Notifications.getLastNotificationResponseAsync();
       const data = (last as any)?.notification?.request?.content?.data;
-      if (data) await navigateFromPushData(data);
+      const actionId = (last as any)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
+      if (data) await handleNotificationResponse(data, actionId);
     } catch {}
   })();
 
-  // 2) Если приложение в фоне/foreground и пользователь нажал на пуш
+  // 2) Если приложение в фоне/foreground и пользователь нажал на пуш или на кнопку «Поднять»/«Положить»
   const sub2 = Notifications.addNotificationResponseReceivedListener(async (r) => {
     const data = (r as any)?.notification?.request?.content?.data;
-    if (data) await navigateFromPushData(data);
+    const actionId = (r as any)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
+    if (data) await handleNotificationResponse(data, actionId);
   });
 
   // (опционально) можно слушать received для аналитики

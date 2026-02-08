@@ -311,9 +311,10 @@ router.post('/push-test', async (req, res) => {
       title,
       body,
       channelId: kind === 'call' ? 'calls' : 'messages',
+      ...(kind === 'call' ? { categoryId: 'incoming_call' } : {}),
       data:
         kind === 'call'
-          ? { type: 'call', from: String(userId), fromNick: '', callId: `test_${Date.now()}` }
+          ? { type: 'call', from: String(userId), fromNick: 'Тест', callId: `test_${Date.now()}` }
           : { type: 'message', from: String(userId), fromNick: '', messageId: `test_${Date.now()}` },
     });
 

@@ -31,9 +31,7 @@ import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl } from './routes/livekit';
-// sendPushToUser intentionally not used here:
-// - message pushes are sent in sockets/messagesReliable.ts
-// - calls should work only inside the app (no push)
+import { sendPushToUser } from './utils/push';
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 
@@ -1445,9 +1443,6 @@ io.on('connection', async (sock: AuthedSocket) => {
           }
         } catch {}
         
-        // ⛔️ ВАЖНО: не отправляем PUSH для входящего звонка.
-        // Звонок должен работать только внутри приложения (через сокеты).
-
         // Если получатель онлайн — дублируем через сокеты для мгновенного UI
         if (peerSocket) {
           const recipientSockets = Array.from(io.sockets.sockets.values()).filter((s) =>
@@ -1456,12 +1451,27 @@ io.on('connection', async (sock: AuthedSocket) => {
           for (const recipientSocket of recipientSockets) {
             try {
               (recipientSocket as any).emit('call:incoming', { callId, from: me, fromNick });
-              // Также отправляем friend:call:incoming для совместимости
               (recipientSocket as any).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
             } catch {}
           }
           io.to(`u:${peerId}`).emit('call:incoming', { callId, from: me, fromNick });
           io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
+        }
+
+        // Push для входящего звонка: когда друг офлайн или приложение в фоне — показываем уведомление на телефоне
+        try {
+          const callTitle = fromNick ? `${fromNick}` : 'Входящий звонок';
+          const callBody = fromNick ? `${fromNick} звонит вам` : 'Входящий видеозвонок';
+          await sendPushToUser(peerId, {
+            kind: 'call',
+            title: callTitle,
+            body: callBody,
+            channelId: 'calls',
+            categoryId: 'incoming_call',
+            data: { type: 'call', callId, from: me, fromNick: fromNick || '' },
+          });
+        } catch (pushErr: any) {
+          logger.warn('[call:initiate] push to recipient failed', { peerId, error: pushErr?.message });
         }
       } catch {}
 
