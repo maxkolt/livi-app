@@ -37,6 +37,11 @@ declare module '@cometchat/chat-uikit-react-native/src/shared/helper/functions' 
 }
 
 // Упрощенные типы, чтобы не падала проверка типов из исходников CometChat
+declare module '*.wav' {
+  const src: number;
+  export default src;
+}
+
 declare module '@cometchat/chat-uikit-react-native' {
   const CometChatUIKit: any;
   export default CometChatUIKit;

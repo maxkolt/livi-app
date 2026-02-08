@@ -24,6 +24,7 @@ import {
   Vibration,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import { Audio } from 'expo-av';
 
 import { syncMyStreamProfile } from '../chat/cometchat';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
@@ -1112,6 +1113,59 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [wave1, wave2, wave3]);
 
   const pendingCancelRef = useRef(false);
+  const outgoingCallSoundRef = useRef<Audio.Sound | null>(null);
+
+  // Звук вызова при открытой модалке исходящего видеозвонка (разговорный динамик сверху). Исходящий вызов — 20 сек без ответа, звук тоже до 20 сек.
+  const OUTGOING_CALL_SOUND_DURATION_MS = 20000;
+  useEffect(() => {
+    if (!calling.visible) {
+      const sound = outgoingCallSoundRef.current;
+      if (sound) {
+        outgoingCallSoundRef.current = null;
+        sound.stopAsync().catch(() => {});
+        sound.unloadAsync().catch(() => {});
+      }
+      return;
+    }
+    let cancelled = false;
+    let stopTimer: ReturnType<typeof setTimeout> | null = null;
+    (async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          allowsRecordingIOS: true,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: false,
+          playThroughEarpieceAndroid: true,
+        });
+        const { sound } = await Audio.Sound.createAsync(
+          require('../assets/phone-calling-1b.wav'),
+          { shouldPlay: false, isLooping: true }
+        );
+        if (cancelled) {
+          sound.unloadAsync().catch(() => {});
+          return;
+        }
+        await sound.setVolumeAsync(0.4);
+        outgoingCallSoundRef.current = sound;
+        await sound.playAsync();
+
+        stopTimer = setTimeout(() => {
+          if (outgoingCallSoundRef.current === sound) {
+            outgoingCallSoundRef.current = null;
+            sound.stopAsync().catch(() => {});
+            sound.unloadAsync().catch(() => {});
+          }
+        }, OUTGOING_CALL_SOUND_DURATION_MS);
+      } catch {
+        // игнорируем ошибки загрузки/воспроизведения
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (stopTimer != null) clearTimeout(stopTimer);
+    };
+  }, [calling.visible]);
 
   const handleStartVideoCall = useCallback(async (friend: Friend) => {
     try {

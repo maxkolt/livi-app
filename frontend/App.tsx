@@ -10,7 +10,7 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, Modal } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
@@ -1104,9 +1104,22 @@ function AppContent() {
             </Stack.Navigator>
           </NavigationContainer>
 
-          {/* Global incoming call modal (не отображается поверх VideoCall) */}
-          {incoming && (
-            <View pointerEvents="box-none" style={[StyleSheet.absoluteFill, { zIndex: 9999 }]}>
+          {/* Global incoming call modal — в нативном Modal, поверх всех модалок и страниц (не отображается поверх VideoCall) */}
+          <Modal
+            visible={!!incoming}
+            transparent
+            animationType="fade"
+            statusBarTranslucent
+            onRequestClose={() => {
+              if (incoming) {
+                try { declineCall(incoming.callId); } catch {}
+                setIncoming(null);
+                stopAnim();
+              }
+            }}
+          >
+            {incoming ? (
+            <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
               <BlurView
                 intensity={Platform.OS === 'android' ? 100 : 85}
                 tint="dark"
@@ -1222,7 +1235,8 @@ function AppContent() {
                 </View>
               </View>
             </View>
-          )}
+            ) : null}
+          </Modal>
 
           {/* Глобальный PiP оверлей - виден на всех страницах когда pip.visible === true */}
           <PiPOverlay />
