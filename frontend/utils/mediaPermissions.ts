@@ -1,10 +1,36 @@
 import { Camera } from 'expo-camera';
 import { Audio } from 'expo-av';
+import { Platform, PermissionsAndroid } from 'react-native';
 import { logger } from './logger';
 
 /**
- * Запрашивает разрешения на камеру и микрофон при первом запуске приложения.
- * На iOS это гарантирует показ системного диалога сразу после переустановки.
+ * Запрашивает разрешение «Устройства рядом» (Bluetooth) на Android 12+ при старте.
+ * Системный диалог: «Разрешить приложению LiVi находить устройства поблизости…»
+ */
+async function requestNearbyDevicesPermissionAndroid(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  const ver = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
+  if (!Number.isFinite(ver) || ver < 31) return; // BLUETOOTH_CONNECT с Android 12 (API 31)
+
+  const perm = (PermissionsAndroid as any)?.PERMISSIONS?.BLUETOOTH_CONNECT;
+  if (!perm) return;
+
+  try {
+    const already = await PermissionsAndroid.check(perm);
+    if (already) return;
+  } catch {}
+
+  try {
+    const res = await PermissionsAndroid.request(perm);
+    logger.info('[mediaPermissions] Nearby devices (BLUETOOTH_CONNECT) permission:', res);
+  } catch (e) {
+    logger.warn('[mediaPermissions] Nearby devices permission request failed', e);
+  }
+}
+
+/**
+ * Запрашивает разрешения на камеру, микрофон и «Устройства рядом» при первом запуске приложения.
+ * На iOS — камера и микрофон. На Android — камера, микрофон и (с Android 12) «Устройства рядом».
  */
 export async function ensureInitialMediaPermissions(): Promise<void> {
   try {
@@ -26,4 +52,6 @@ export async function ensureInitialMediaPermissions(): Promise<void> {
   } catch (e) {
     logger.warn('[mediaPermissions] Failed to request microphone permission', e);
   }
+
+  await requestNearbyDevicesPermissionAndroid();
 }
