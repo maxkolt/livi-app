@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { DeviceEventEmitter, PermissionsAndroid, Platform } from 'react-native';
+import { DeviceEventEmitter, InteractionManager, PermissionsAndroid, Platform } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
 import { logger } from '../../../utils/logger';
 
@@ -229,18 +229,22 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
       }
     };
 
-    // Start routing after permission check so native BT manager can actually start.
+    let cancelled = false;
+
+    // Start routing after permission check; defer InCallManager.start until after navigation/animations
+    // to avoid main-thread contention (Choreographer "Skipped N frames" / AudioDeviceBroker lock).
     (async () => {
       if (didStartRef.current) return;
       const ok = await ensureBluetoothConnectPermission();
       didStartRef.current = true;
-      applyRouting();
-      if (!ok) {
-        logger.warn('[useAudioRouting] BLUETOOTH_CONNECT not granted; Bluetooth routing may not work on Android 12+');
-      }
+      InteractionManager.runAfterInteractions(() => {
+        if (cancelled) return;
+        applyRouting();
+        if (!ok) {
+          logger.warn('[useAudioRouting] BLUETOOTH_CONNECT not granted; Bluetooth routing may not work on Android 12+');
+        }
+      });
     })();
-
-    let cancelled = false;
 
     // Bootstrap + short polling window:
     // Bluetooth SCO may take 1-3s to become available; we actively query status via chooseAudioRoute()

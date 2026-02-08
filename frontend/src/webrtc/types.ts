@@ -67,6 +67,9 @@ export interface WebRTCSessionConfig {
   getPipRemoteStream?: () => MediaStream | null;
   getResume?: () => boolean;
   getFromPiP?: () => boolean;
+
+  /** Вызывается, когда эта сессия пропустила подключение (другая сессия уже подключается к комнате). Компонент должен переключиться на переданную сессию. */
+  onSwitchToConnectingSession?: (session: unknown) => void;
   
   // Callbacks shortcuts (для удобства доступа)
   onLocalStreamChange?: (stream: MediaStream | null) => void;

@@ -10,7 +10,7 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
@@ -898,19 +898,44 @@ function AppContent() {
       setIncoming(null);
       stopAnim();
       try {
-        if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
+        const currentRoute = navRef.getCurrentRoute();
+        if (navRef.isReady() && currentRoute?.name !== 'VideoCall') {
+          const fromUserId = (data as any)?.fromUserId ?? (data as any)?.from;
+          const myUserId = getCurrentUserId();
+          const isCaller = myUserId && fromUserId && myUserId !== fromUserId;
+          // Caller: we initiated, the other accepted → directInitiator: true, peerUserId = callee (who accepted).
+          // Callee: we accepted → we're already on VideoCall (navigated on Accept tap); skip or rare edge case.
+          const params = isCaller
+            ? { directCall: true, directInitiator: true, callId: (data as any)?.callId, peerUserId: fromUserId }
+            : { directCall: true, directInitiator: false, callId: (data as any)?.callId, isIncoming: true, peerUserId: fromUserId ?? undefined };
           logger.info('[App] 🚀 Navigating to VideoCall screen', {
             callId: data?.callId,
+            peerUserId: fromUserId,
+            isCaller,
           });
-          navRef.dispatch(
-            CommonActions.reset({
-              index: 1,
-              routes: [
-                { name: 'Home' as any },
-                { name: 'VideoCall' as any, params: { directCall: true } },
-              ],
-            })
-          );
+          // Defer navigation for caller to avoid ANR: socket callback returns fast, heavy mount runs after current frame.
+          const doNavigate = () => {
+            try {
+              if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
+                navRef.dispatch(
+                  CommonActions.reset({
+                    index: 1,
+                    routes: [
+                      { name: 'Home' as any },
+                      { name: 'VideoCall' as any, params },
+                    ],
+                  })
+                );
+              }
+            } catch (err) {
+              logger.error('[App] ❌ Error in deferred navigation to VideoCall', { error: err, callId: data?.callId });
+            }
+          };
+          if (isCaller) {
+            InteractionManager.runAfterInteractions(doNavigate);
+          } else {
+            doNavigate();
+          }
         } else {
           logger.info('[App] ⏭️ Already on VideoCall screen, skipping navigation', {
             callId: data?.callId,
@@ -1124,11 +1149,12 @@ function AppContent() {
                       gap: 12,
                     }}
                   >
-  {/* Принять */}
+  {/* Принять — сначала закрываем модалку и переходим на VideoCall, потом acceptCall; иначе при падении acceptCall пользователь залипает на модалке */}
   <TouchableOpacity
     onPress={async () => {
-      try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
-      acceptCall(incoming.callId);
+      const callId = incoming?.callId;
+      const from = incoming?.from;
+      if (!callId || !from) return;
       setIncoming(null);
       stopAnim();
       if (navRef.isReady()) {
@@ -1137,11 +1163,13 @@ function AppContent() {
             index: 1,
             routes: [
               { name: 'Home' as any },
-              { name: 'VideoCall' as any, params: { peerUserId: incoming.from, directCall: true, directInitiator: false } },
+              { name: 'VideoCall' as any, params: { peerUserId: from, directCall: true, directInitiator: false, callId, isIncoming: true } },
             ],
           })
         );
       }
+      try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
+      try { acceptCall(callId); } catch (e) { logger.error('[App] acceptCall failed (user already navigated to VideoCall)', { error: e, callId }); }
     }}
     activeOpacity={0.7}
     style={{
@@ -1185,7 +1213,7 @@ function AppContent() {
                   <PanGestureHandler onGestureEvent={() => {}} onHandlerStateChange={({ nativeEvent }: any) => {
                     if (nativeEvent.state === 5) {
                       const dx = nativeEvent.translationX || 0;
-                      if (dx > 60) { acceptCall(incoming.callId); setIncoming(null); stopAnim(); if (navRef.isReady()) { navRef.dispatch(CommonActions.reset({ index: 1, routes: [ { name: 'Home' as any }, { name: 'VideoCall' as any, params: { peerUserId: incoming.from, directCall: true, directInitiator: false } } ] })); } }
+                      if (dx > 60) { const c = incoming?.callId; const f = incoming?.from; if (c && f) { setIncoming(null); stopAnim(); if (navRef.isReady()) { navRef.dispatch(CommonActions.reset({ index: 1, routes: [ { name: 'Home' as any }, { name: 'VideoCall' as any, params: { peerUserId: f, directCall: true, directInitiator: false, callId: c, isIncoming: true } } ] })); } try { acceptCall(c); } catch (e) { logger.error('[App] acceptCall failed (swipe)', { error: e, callId: c }); } } }
                       else if (dx < -60) { declineCall(incoming.callId); setIncoming(null); stopAnim(); }
                     }
                   }}>

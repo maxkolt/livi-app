@@ -15,6 +15,7 @@ import {
   Animated,
   BackHandler,
   Easing,
+  InteractionManager,
 } from 'react-native';
 import { useNavigation, useFocusEffect, usePreventRemove } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -861,6 +862,30 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       },
       getPipLocalStream: () => pip.localStream,
       getPipRemoteStream: () => pip.remoteStream,
+      onSwitchToConnectingSession: (connectingSession: unknown) => {
+        const s = connectingSession as any;
+        if (!s || sessionRef.current === s) return;
+        logger.info('[VideoCall] Переключаемся на сессию, которая подключается к комнате', {
+          hadSession: !!sessionRef.current,
+          hasRoom: !!s?.room,
+          currentRoomName: s?.currentRoomName,
+        });
+        sessionRef.current = s;
+        (global as any).__webrtcSessionRef.current = s;
+        setSessionTick((t) => t + 1);
+        const remote = s.getRemoteStream?.();
+        const local = s.getLocalStream?.();
+        if (remote) {
+          remoteStreamRef.current = remote;
+          setRemoteStream(remote);
+          remoteStreamReceivedAtRef.current = Date.now();
+        }
+        if (local) {
+          localStreamRef.current = local;
+          setLocalStream(local);
+          setLocalRenderKey((k: number) => k + 1);
+        }
+      },
     };
     
     const session = new VideoCallSession(config);
@@ -924,11 +949,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           return;
         }
 
-        // Запрашиваем токен и подключаемся напрямую
-        session.connectAsInitiatorAfterAccepted(existingCallId, friendId).catch((e) => {
-          logger.error('[VideoCall] Error connecting as initiator after accepted:', e);
-          setStarted(false);
-          setLoading(false);
+        // Откладываем подключение до после первого кадра — меньше ANR у инициатора
+        InteractionManager.runAfterInteractions(() => {
+          session.connectAsInitiatorAfterAccepted(existingCallId, friendId).catch((e) => {
+            logger.error('[VideoCall] Error connecting as initiator after accepted:', e);
+            setStarted(false);
+            setLoading(false);
+          });
         });
         return;
       }
@@ -971,11 +998,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       currentCallIdRef.current = incomingCallId;
       setStarted(true);
       setLoading(true);
-      
-      session.acceptCall(incomingCallId, fromUserId).catch((e) => {
-        logger.error('[VideoCall] Error accepting incoming call:', e);
-        setStarted(false);
-        setLoading(false);
+      // Откладываем старт камеры/подключения до после первого кадра — меньше ANR при принятии из чата
+      InteractionManager.runAfterInteractions(() => {
+        session.acceptCall(incomingCallId, fromUserId).catch((e) => {
+          logger.error('[VideoCall] Error accepting incoming call:', e);
+          setStarted(false);
+          setLoading(false);
+        });
       });
     } else if (route?.params?.roomId || route?.params?.callId) {
       // Восстановление активного звонка

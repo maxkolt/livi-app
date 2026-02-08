@@ -1,7 +1,7 @@
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { Buffer } from 'buffer';
 import AudioRecord from 'react-native-audio-record';
-import { Platform } from 'react-native';
+import { InteractionManager, Platform } from 'react-native';
 import * as Device from 'expo-device';
 import {
   Room,
@@ -114,12 +114,14 @@ export class VideoCallSession extends SimpleEventEmitter {
       hasCallbacks: !!config.callbacks,
     });
     
-    // КРИТИЧНО: Принудительно очищаем предыдущую комнату при создании новой сессии
-    // Это решает проблему когда после рандомного чата комната остаётся в состоянии connecting
+    // КРИТИЧНО: Принудительно очищаем предыдущую комнату при создании новой сессии.
+    // disconnect() только при state === 'connected', иначе LiveKit бросает "cannot send signal request before connected".
     if (this.room) {
       try {
         this.room.removeAllListeners();
-        this.room.disconnect();
+        if (this.room.state === 'connected') {
+          this.room.disconnect();
+        }
       } catch {}
       this.room = null;
     }
@@ -134,22 +136,22 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Это решает проблему, когда call:accepted приходит до того, как VideoCallSession создан
     const pendingCallAccepted = (global as any).__pendingCallAcceptedRef?.current;
     if (pendingCallAccepted) {
-      logger.info('[VideoCallSession] 🔄 Found pending call:accepted event, processing it now', {
+      logger.info('[VideoCallSession] 🔄 Found pending call:accepted event, will process after first frame', {
         callId: pendingCallAccepted.callId,
         roomId: pendingCallAccepted.roomId,
         myUserId: config.myUserId,
       });
       // Очищаем сохраненное событие
       (global as any).__pendingCallAcceptedRef.current = null;
-      // Обрабатываем событие асинхронно, чтобы не блокировать конструктор
-      setTimeout(() => {
+      // Откладываем подключение до после первого кадра — снижает ANR при переходе на VideoCall
+      InteractionManager.runAfterInteractions(() => {
         this.handleCallAccepted(pendingCallAccepted).catch((e) => {
           logger.error('[VideoCallSession] ❌ Failed to handle pending call:accepted', {
             error: e,
             callId: pendingCallAccepted.callId,
           });
         });
-      }, 100);
+      });
     }
   }
 
@@ -158,10 +160,12 @@ export class VideoCallSession extends SimpleEventEmitter {
   async callFriend(friendUserId: string): Promise<void> {
     // КРИТИЧНО: Очищаем старую комнату перед новым звонком
     if (this.room) {
-      logger.info('[VideoCallSession] Cleaning up old room before callFriend');
+      logger.info('[VideoCallSession] Cleaning up old room before callFriend', { roomState: this.room.state });
       try {
         this.room.removeAllListeners();
-        this.room.disconnect();
+        if (this.room.state === 'connected') {
+          this.room.disconnect();
+        }
       } catch {}
       this.room = null;
       this.isDisconnecting = false;
@@ -188,12 +192,15 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   async acceptCall(callId: string, fromUserId: string): Promise<void> {
-    // КРИТИЧНО: Очищаем старую комнату перед принятием звонка
+    // КРИТИЧНО: Очищаем старую комнату перед принятием звонка. disconnect() только если комната уже connected,
+    // иначе LiveKit бросает "cannot send signal request before connected, type: leave" и первая попытка подключения падает.
     if (this.room) {
-      logger.info('[VideoCallSession] Cleaning up old room before acceptCall');
+      logger.info('[VideoCallSession] Cleaning up old room before acceptCall', { roomState: this.room.state });
       try {
         this.room.removeAllListeners();
-        this.room.disconnect();
+        if (this.room.state === 'connected') {
+          this.room.disconnect();
+        }
       } catch {}
       this.room = null;
       this.isDisconnecting = false;
@@ -224,10 +231,12 @@ export class VideoCallSession extends SimpleEventEmitter {
   async connectAsInitiatorAfterAccepted(callId: string, peerUserId: string): Promise<void> {
     // КРИТИЧНО: Очищаем старую комнату
     if (this.room) {
-      logger.info('[VideoCallSession] Cleaning up old room before connectAsInitiatorAfterAccepted');
+      logger.info('[VideoCallSession] Cleaning up old room before connectAsInitiatorAfterAccepted', { roomState: this.room.state });
       try {
         this.room.removeAllListeners();
-        this.room.disconnect();
+        if (this.room.state === 'connected') {
+          this.room.disconnect();
+        }
       } catch {}
       this.room = null;
       this.isDisconnecting = false;
@@ -336,6 +345,17 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     this.endCallInProgress = true;
+    // КРИТИЧНО: Сразу помечаем звонок завершённым, чтобы асинхронный код (handleCallAccepted, connectToLiveKit)
+    // видел ended и не выполнял пост-подключение / setLocalDescription после disconnect
+    this.ended = true;
+
+    // Сбрасываем блокировку комнаты сразу, чтобы следующий звонок не видел старую сессию
+    const roomLock = (global as any).__connectingToRoomRef as { roomName: string | null; session: VideoCallSession | null } | undefined;
+    if (roomLock?.session === this) {
+      roomLock.roomName = null;
+      roomLock.session = null;
+      logger.info('[VideoCallSession] 🔓 Сброшена блокировка __connectingToRoomRef в endCall');
+    }
 
     logger.info('[VideoCallSession] 🛑 endCall вызван', {
       callId: this.callId,
@@ -389,7 +409,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config.setWasFriendCallEnded?.(true);
     this.emit('callEnded');
     logger.info('[VideoCallSession] ✅ Состояние сессии сброшено и callEnded событие отправлено');
-    this.ended = true;
     this.endCallInProgress = false;
   }
 
@@ -711,6 +730,19 @@ export class VideoCallSession extends SimpleEventEmitter {
         logger.error('[VideoCallSession] Error restoring call state', e);
       }
     }
+  }
+
+  /**
+   * Отписывает сессию от сокета и помечает её завершённой БЕЗ отправки call:end.
+   * Используется когда эта сессия "пропустила" call:accepted (другая сессия подключается),
+   * чтобы не накапливать зомби-сессии со 2–4 звонка и не слать лишний call:end.
+   */
+  private detachFromCall(): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.socketOffs.forEach((off) => off());
+    this.socketOffs = [];
+    logger.info('[VideoCallSession] 🔌 Сессия отключена от сокета (skip path), handlers сняты');
   }
 
   cleanup(): void {
@@ -1063,6 +1095,20 @@ export class VideoCallSession extends SimpleEventEmitter {
     const targetRoomName = data.livekitRoomName ?? data.roomId ?? null;
     const callId = data.callId ?? null;
     
+    // КРИТИЧНО: Обрабатывать call:accepted должна только "активная" сессия (та, что в глобальном ref).
+    // Иначе несколько экземпляров сессии (например, до очистки старых при ремаунте) все подключаются к комнате
+    // и одна попытка падает с "could not establish pc connection".
+    const globalSession = (global as any).__webrtcSessionRef?.current;
+    if (globalSession != null && globalSession !== this) {
+      logger.info('[VideoCallSession] ⏭️ Another session is active, skipping call:accepted', {
+        callId,
+        roomName: targetRoomName,
+        myUserId: this.config.myUserId,
+      });
+      this.detachFromCall();
+      return;
+    }
+    
     // КРИТИЧНО: Защита от повторной обработки одного и того же события
     // Проверяем, не обрабатывали ли мы уже это событие
     if (this.lastProcessedCallAccepted && 
@@ -1077,6 +1123,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       return;
     }
+    
+    // Сразу помечаем событие как обрабатываемое, чтобы параллельные вызовы (дубликаты/другие подписки) не стартовали второе подключение
+    this.lastProcessedCallAccepted = { callId, roomName: targetRoomName, timestamp: Date.now() };
     
     logger.info('[VideoCallSession] 📥 Received call:accepted event', {
       callId: data.callId,
@@ -1136,8 +1185,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     
-    // Сохраняем информацию о том, что начинаем обработку события
-    this.lastProcessedCallAccepted = { callId, roomName: targetRoomName, timestamp: Date.now() };
+    // lastProcessedCallAccepted уже установлен в начале handleCallAccepted
 
     this.roomId = roomId;
     this.callId = callId;
@@ -1187,6 +1235,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         try {
           const result = await this.connectingPromise;
           if (result && this.room && this.room.state === 'connected' && this.currentRoomName === targetRoomName) {
+            if (this.ended) return;
             logger.info('[VideoCallSession] ✅ Reused existing connection to room', {
               roomName: this.currentRoomName,
             });
@@ -1200,13 +1249,47 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       }
       
+      // Глобальная блокировка: на устройстве к одной комнате подключается только одна сессия.
+      // При ремаунте VideoCall новый экземпляр перезаписывает __webrtcSessionRef, и без этой блокировки
+      // несколько сессий успевают стартовать подключение → лоадер/залипание у второго участника.
+      if (!(global as any).__connectingToRoomRef) {
+        (global as any).__connectingToRoomRef = { roomName: null as string | null, session: null as VideoCallSession | null };
+      }
+      const roomLock = (global as any).__connectingToRoomRef as { roomName: string | null; session: VideoCallSession | null };
+      if (roomLock.roomName === targetRoomName && roomLock.session != null && roomLock.session !== this) {
+        logger.info('[VideoCallSession] ⏭️ Another session is already connecting to this room, skipping', {
+          roomName: targetRoomName,
+          myUserId: this.config.myUserId,
+        });
+        // КРИТИЧНО: UI привязан к __webrtcSessionRef; эта сессия не подключается — переключаем ref на ту, что подключается,
+        // иначе у пользователя вечный спиннер и чёрный экран (особенно на 3–4 звонке при ремаунте).
+        const globalRef = (global as any).__webrtcSessionRef;
+        if (globalRef && typeof globalRef.current !== 'undefined') {
+          globalRef.current = roomLock.session;
+          logger.info('[VideoCallSession] ✅ Переключили __webrtcSessionRef на сессию, которая подключается к комнате', {
+            roomName: targetRoomName,
+          });
+        }
+        this.config.onSwitchToConnectingSession?.(roomLock.session);
+        // КРИТИЧНО: отписываем эту сессию от сокета, чтобы не накапливать зомби к 3–4 звонку
+        this.detachFromCall();
+        return;
+      }
+      roomLock.roomName = targetRoomName;
+      roomLock.session = this;
+      
       // КРИТИЧНО: Используем retry механизм для надежного подключения при проблемах с сетью
       let connected = false;
       let lastError: Error | null = null;
       const maxRetries = 3;
       const retryDelay = 500; // 500ms между попытками
       
+      try {
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        if (this.ended) {
+          logger.info('[VideoCallSession] ⏭️ Stopping retries: call ended (call:ended received)');
+          break;
+        }
         try {
           const connectRequestId = ++this.connectRequestId;
           logger.info('[VideoCallSession] Connection attempt', {
@@ -1227,7 +1310,7 @@ export class VideoCallSession extends SimpleEventEmitter {
             break;
           } else {
             // Если подключение не удалось, но это не из-за stale request, пробуем еще раз
-            if (attempt < maxRetries) {
+            if (attempt < maxRetries && !this.ended) {
               logger.warn('[VideoCallSession] Connection attempt failed, retrying', {
                 attempt,
                 maxRetries,
@@ -1239,19 +1322,25 @@ export class VideoCallSession extends SimpleEventEmitter {
           }
         } catch (e) {
           lastError = e as Error;
-          logger.warn('[VideoCallSession] Connection attempt error', {
-            attempt,
-            maxRetries,
-            error: e,
-            willRetry: attempt < maxRetries,
-          });
-          if (attempt < maxRetries) {
+          if (!this.ended) {
+            logger.warn('[VideoCallSession] Connection attempt error', {
+              attempt,
+              maxRetries,
+              error: e,
+              willRetry: attempt < maxRetries,
+            });
+          }
+          if (attempt < maxRetries && !this.ended) {
             await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
           }
         }
       }
       
       if (!connected) {
+        if (this.ended) {
+          logger.info('[VideoCallSession] Call ended before connection completed, skipping');
+          return;
+        }
         logger.error('[VideoCallSession] ❌ Failed to connect to LiveKit after all retries', {
           roomName: data.livekitRoomName,
           myUserId: this.config.myUserId,
@@ -1263,6 +1352,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (this.room && 
             this.room.state === 'connected' && 
             this.currentRoomName === targetRoomName) {
+          if (this.ended) return;
           logger.info('[VideoCallSession] ✅ Room connected via another request, continuing', {
             roomName: this.currentRoomName,
           });
@@ -1274,6 +1364,11 @@ export class VideoCallSession extends SimpleEventEmitter {
         return;
       }
       
+      // КРИТИЧНО: Если звонок уже завершён (call:ended), не обновлять UI и не эмитить callAnswered
+      if (this.ended) {
+        logger.info('[VideoCallSession] ⏭️ Skipping post-connect (call already ended)');
+        return;
+      }
       // КРИТИЧНО: НЕ устанавливаем loading=false сразу - пусть он остается true пока не придет remoteStream
       // loading будет установлен в false в handleTrackSubscribed когда придет remoteStream
       // Это предотвращает черный экран при принятии звонка
@@ -1283,6 +1378,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.config.setFriendCallAccepted?.(true);
       this.emit('callAnswered');
       return;
+      } finally {
+        if ((global as any).__connectingToRoomRef?.session === this) {
+          (global as any).__connectingToRoomRef.roomName = null;
+          (global as any).__connectingToRoomRef.session = null;
+        }
+      }
     }
     
     // Fallback: запрашиваем токен через API
@@ -1296,6 +1397,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         try {
           const result = await this.connectingPromise;
           if (result && this.room && this.room.state === 'connected' && this.currentRoomName === targetRoomName) {
+            if (this.ended) return;
             logger.info('[VideoCallSession] ✅ Reused existing connection to room (fallback)', {
               roomName: this.currentRoomName,
             });
@@ -1327,6 +1429,10 @@ export class VideoCallSession extends SimpleEventEmitter {
           const retryDelay = 500;
           
           for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            if (this.ended) {
+              logger.info('[VideoCallSession] ⏭️ Stopping retries (fallback): call ended');
+              break;
+            }
             try {
               const connectRequestId = ++this.connectRequestId;
               logger.info('[VideoCallSession] Connection attempt (fallback)', {
@@ -1345,7 +1451,7 @@ export class VideoCallSession extends SimpleEventEmitter {
                 });
                 break;
               } else {
-                if (attempt < maxRetries) {
+                if (attempt < maxRetries && !this.ended) {
                   logger.warn('[VideoCallSession] Connection attempt failed (fallback), retrying', {
                     attempt,
                     maxRetries,
@@ -1356,19 +1462,25 @@ export class VideoCallSession extends SimpleEventEmitter {
                 }
               }
             } catch (e) {
-              logger.warn('[VideoCallSession] Connection attempt error (fallback)', {
-                attempt,
-                maxRetries,
-                error: e,
-                willRetry: attempt < maxRetries,
-              });
-              if (attempt < maxRetries) {
+              if (!this.ended) {
+                logger.warn('[VideoCallSession] Connection attempt error (fallback)', {
+                  attempt,
+                  maxRetries,
+                  error: e,
+                  willRetry: attempt < maxRetries,
+                });
+              }
+              if (attempt < maxRetries && !this.ended) {
                 await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
               }
             }
           }
           
           if (!connected) {
+            if (this.ended) {
+              logger.info('[VideoCallSession] Call ended before connection completed (fallback), skipping');
+              return;
+            }
             logger.error('[VideoCallSession] ❌ Failed to connect to LiveKit after all retries (fallback)', {
               roomId,
               maxRetries,
@@ -1377,6 +1489,7 @@ export class VideoCallSession extends SimpleEventEmitter {
             if (this.room && 
                 this.room.state === 'connected' && 
                 this.currentRoomName === targetRoomName) {
+              if (this.ended) return;
               logger.info('[VideoCallSession] ✅ Room connected via another request (fallback), continuing', {
                 roomName: this.currentRoomName,
               });
@@ -1388,6 +1501,10 @@ export class VideoCallSession extends SimpleEventEmitter {
             return;
           }
           
+          if (this.ended) {
+            logger.info('[VideoCallSession] ⏭️ Skipping post-connect (fallback): call already ended');
+            return;
+          }
           // КРИТИЧНО: НЕ устанавливаем loading=false сразу - пусть он остается true пока не придет remoteStream
           // loading будет установлен в false в handleTrackSubscribed когда придет remoteStream
           // Это предотвращает черный экран при принятии звонка
@@ -2125,6 +2242,11 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async connectToLiveKit(url: string, token: string, connectRequestId: number, targetRoomName?: string): Promise<boolean> {
+    // КРИТИЧНО: Если звонок уже завершён (call:ended), не подключаться — избегаем "подключения к пустой комнате"
+    if (this.ended) {
+      logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
+      return false;
+    }
     // КРИТИЧНО: Защита от множественных одновременных вызовов connectToLiveKit
     // Если уже идет подключение к той же комнате, ждем его завершения
     if (this.connectingPromise && targetRoomName) {
@@ -2258,11 +2380,13 @@ export class VideoCallSession extends SimpleEventEmitter {
           hasDisconnectPromise: !!this.disconnectPromise
         });
         
-        // Принудительная очистка застрявшей комнаты
+        // Принудительная очистка застрявшей комнаты (disconnect только если комната уже connected)
         try {
           if (this.room) {
             this.room.removeAllListeners();
-            try { this.room.disconnect(); } catch {}
+            if (this.room.state === 'connected') {
+              try { this.room.disconnect(); } catch {}
+            }
           }
         } catch {}
         this.room = null;
@@ -2826,21 +2950,28 @@ export class VideoCallSession extends SimpleEventEmitter {
       const isInvalidApiKey = errorMessage.includes('invalid API key') || 
                                errorMessage.includes('401') ||
                                errorMessage.includes('Unauthorized');
-      
-      logger.error('[VideoCallSession] Error connecting to LiveKit', {
-        error: errorMessage,
-        errorCode: e?.code,
-        errorName: e?.name,
-        url,
-        urlHost: url ? new URL(url).hostname : 'unknown',
-        targetRoomName,
-        hasToken: !!token,
-        tokenLength: token?.length || 0,
-        tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
-        roomState: room?.state,
-        isInvalidApiKey,
-        stack: e?.stack,
-      });
+      const isClientDisconnect = errorMessage.includes('Client initiated disconnect') || errorMessage.includes('user initiated disconnect');
+      if (this.ended || isClientDisconnect) {
+        logger.info('[VideoCallSession] Connect aborted (call ended or user disconnect)', {
+          ended: this.ended,
+          error: errorMessage,
+        });
+      } else {
+        logger.error('[VideoCallSession] Error connecting to LiveKit', {
+          error: errorMessage,
+          errorCode: e?.code,
+          errorName: e?.name,
+          url,
+          urlHost: url ? new URL(url).hostname : 'unknown',
+          targetRoomName,
+          hasToken: !!token,
+          tokenLength: token?.length || 0,
+          tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
+          roomState: room?.state,
+          isInvalidApiKey,
+          stack: e?.stack,
+        });
+      }
       
       // Если ошибка связана с API ключом, логируем дополнительную информацию
       if (isInvalidApiKey) {

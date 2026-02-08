@@ -78,6 +78,7 @@ async function navigateFromPushData(data: any) {
         peerUserId,
         directCall: true,
         directInitiator: false,
+        isIncoming: true,
         ...(callId ? { callId } : {}),
       } as any);
       return;
