@@ -26,16 +26,16 @@ function isVersionLess(current: string, latest: string): boolean {
   return false;
 }
 
-/** Текущая версия приложения (из app.json / expo). */
+/** Текущая версия приложения. В релизе приоритет у nativeApplicationVersion (реальная версия из системы). */
 export function getCurrentAppVersion(): string {
-  const v = (Constants.expoConfig as any)?.version ?? '';
-  if (v) return String(v).trim();
   try {
     const { nativeApplicationVersion } = require('expo-application');
-    return String(nativeApplicationVersion ?? '0').trim();
-  } catch {
-    return '0';
-  }
+    const native = nativeApplicationVersion ? String(nativeApplicationVersion).trim() : '';
+    if (native) return native;
+  } catch {}
+  const v = (Constants.expoConfig as any)?.version ?? '';
+  if (v) return String(v).trim();
+  return '0';
 }
 
 let cachedLatest: string | null = null;
@@ -48,10 +48,10 @@ export function clearUpdateCheckCache(): void {
   cachedAt = 0;
 }
 
-/** Загружает latestAppVersion с бэкенда (с кэшем 1 ч). */
+/** Загружает latestAppVersion с бэкенда (с кэшем 2 мин). При ошибке — одна повторная попытка через 1 с (релиз, холодный старт). */
 export async function fetchLatestAppVersion(): Promise<string | null> {
   if (cachedLatest !== null && Date.now() - cachedAt < CACHE_MS) return cachedLatest;
-  try {
+  const tryFetch = async (): Promise<string | null> => {
     const res = await fetch(APP_SETTINGS_URL, { method: 'GET' });
     if (!res.ok) return null;
     const data = await res.json();
@@ -61,39 +61,63 @@ export async function fetchLatestAppVersion(): Promise<string | null> {
       cachedAt = Date.now();
       return latest;
     }
-  } catch {
-    // ignore
-  }
+    return null;
+  };
+  try {
+    const result = await tryFetch();
+    if (result) return result;
+  } catch {}
+  await new Promise((r) => setTimeout(r, 1000));
+  try {
+    return await tryFetch();
+  } catch {}
   return null;
 }
 
 /** Есть ли доступное обновление (текущая версия меньше той, что на сервере). */
 export async function isUpdateAvailable(): Promise<boolean> {
   const latest = await fetchLatestAppVersion();
-  if (!latest) return false;
   const current = getCurrentAppVersion();
-  return isVersionLess(current, latest);
+  const available = !!(latest && isVersionLess(current, latest));
+  if (__DEV__) {
+    console.log('[UpdateCheck] current:', current, 'latest from server:', latest ?? '(null)', '→ update available:', available);
+  }
+  return available;
 }
 
-/** Показывать ли бейдж «Скачайте обновление» (раз в сутки; в __DEV__ — всегда, чтобы проверить UI). */
+/** Показывать ли бейдж «Скачайте обновление». В релизе — при каждом входе, если есть обновление; в __DEV__ — раз в сутки (или всегда для проверки UI). */
 export async function shouldShowUpdateBadge(): Promise<boolean> {
   const available = await isUpdateAvailable();
   if (!available) return false;
-  if (__DEV__) return true; // в dev всегда показываем бейдж для проверки UI
-  try {
-    const raw = await AsyncStorage.getItem(LAST_UPDATE_BADGE_SHOWN_KEY);
-    const last = raw ? parseInt(raw, 10) : 0;
-    if (Number.isNaN(last) || Date.now() - last >= BADGE_COOLDOWN_MS) return true;
-  } catch {
-    return true;
+  if (__DEV__) {
+    // в dev можно ограничить показ раз в сутки или показывать всегда
+    try {
+      const raw = await AsyncStorage.getItem(LAST_UPDATE_BADGE_SHOWN_KEY);
+      const last = raw ? parseInt(raw, 10) : 0;
+      if (Number.isNaN(last) || Date.now() - last >= BADGE_COOLDOWN_MS) return true;
+    } catch {
+      return true;
+    }
+    return false;
   }
-  return false;
+  // в релизе — показывать бейдж при каждом входе, если приложение не обновлено
+  return true;
 }
 
 /** Отметить, что бейдж показан (сбрасывает показ на 24 ч). */
 export async function markUpdateBadgeShown(): Promise<void> {
   try {
     await AsyncStorage.setItem(LAST_UPDATE_BADGE_SHOWN_KEY, String(Date.now()));
+  } catch {
+    // ignore
+  }
+}
+
+/** Сбросить кулдаун показа бейджа (для тестов; в __DEV__ можно вызвать из консоли). */
+export async function clearUpdateCooldownForTesting(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(LAST_UPDATE_BADGE_SHOWN_KEY);
+    if (__DEV__) console.log('[UpdateCheck] Cooldown cleared for testing');
   } catch {
     // ignore
   }

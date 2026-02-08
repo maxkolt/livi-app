@@ -644,10 +644,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Проверка доступности обновления (при старте и при возврате в приложение)
   useEffect(() => {
     let cancelled = false;
+    clearUpdateCheckCache(); // при каждом запуске — свежая проверка, чтобы после установки обновления индикатор и кнопка «Обновить» исчезли
     const check = async () => {
       try {
         const available = await isUpdateAvailable();
-        if (!cancelled) setUpdateAvailable(!!available);
+        if (!cancelled) {
+          setUpdateAvailable(!!available);
+          if (available) {
+            setShowUpdateBadgeState(true); // при каждом входе показывать бейдж, если есть обновление
+          } else {
+            setShowUpdateBadgeState(false); // после обновления — сразу убрать бейдж и индикатор
+          }
+        }
       } catch {}
     };
     check();
@@ -663,15 +671,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     };
   }, []);
 
-  // Показать бейдж «Скачайте обновление» раз в сутки (проверяем при появлении updateAvailable)
+  // Показать бейдж «Скачайте обновление»: в релизе — при каждом входе; в dev — раз в сутки
   useEffect(() => {
     if (!updateAvailable) return;
     let cancelled = false;
     (async () => {
       try {
         const should = await shouldShowUpdateBadge();
-        if (!cancelled && should && !updateBadgeShownRef.current) {
-          updateBadgeShownRef.current = true;
+        if (!cancelled && should) {
+          if (__DEV__) updateBadgeShownRef.current = true;
           setShowUpdateBadgeState(true);
         }
       } catch {}
