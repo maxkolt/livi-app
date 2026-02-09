@@ -1481,7 +1481,18 @@ io.on('connection', async (sock: AuthedSocket) => {
             body: callBody,
             channelId: 'calls',
             categoryId: 'incoming_call',
-            data: { type: 'call', callId, from: me, fromNick: fromNick || '' },
+            // categoryId в data — для Android (expo читает из remoteMessage.data). tag — один и тот же, чтобы новое уведомление заменяло предыдущее.
+            // sticky + autoDismiss: false — уведомление не исчезает само и не смахивается, висит до ответа/отмены или call_ended (~20 сек).
+            data: {
+              type: 'call',
+              callId,
+              from: me,
+              fromNick: fromNick || '',
+              categoryId: 'incoming_call',
+              tag: 'incoming_call',
+              sticky: 'true',
+              autoDismiss: 'false',
+            },
           });
           logger.info('[call:initiate] call push sent to Expo', { peerId });
         } catch (pushErr: any) {

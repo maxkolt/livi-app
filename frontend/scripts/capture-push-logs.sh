@@ -31,13 +31,20 @@ echo ""
 # Очищаем буфер logcat
 adb logcat -c
 
-# Пишем ВСЕ логи в файл; в консоль — только релевантные теги (push/FCM/Firebase/call)
-adb logcat -v time 2>&1 | tee "$LOG_FILE" | grep --line-buffered -iE "ReactNativeJS|Firebase|FCM|GCM|expo.*notif|push|call:incoming|notification|sendPushToUser|call:initiate|\[push\]|ExponentPush|kolt12max" || true
+# Пишем ВСЕ логи в файл; в консоль — только релевантные теги
+FILTER_RE='ReactNativeJS|Firebase|FCM|GCM|expo|push|call|notification|RemoteMessage|NotificationsService|categoryId|incoming_call|kolt12max\.livi'
+adb logcat -v time 2>&1 | tee "$LOG_FILE" | grep --line-buffered -iE "$FILTER_RE" || true
 
 echo ""
 echo "Логи сохранены: $LOG_FILE"
-echo "Релевантные строки (push/FCM/call) в: $FILTERED"
-grep -iE "ReactNativeJS|Firebase|FCM|GCM|expo|push|call:incoming|notification|sendPushToUser|call:initiate|\[push\]|ExponentPush|kolt12max" "$LOG_FILE" > "$FILTERED" 2>/dev/null || true
+echo "Релевантные строки в: $FILTERED"
+grep -iE "$FILTER_RE" "$LOG_FILE" > "$FILTERED" 2>/dev/null || true
 wc -l "$FILTERED" 2>/dev/null || true
 echo ""
-echo "Если пустые — пуш до устройства не дошёл. Проверь backend: при call:initiate вызывается sendPushToUser?"
+echo "Проверка уведомления:"
+echo "  1. Пуш не пришёл — в FILTERED нет FirebaseMessaging/onMessageReceived; проверь backend (call:initiate, sendPushToUser)."
+echo "  2. Показывается «старое» уведомление — возможно один и тот же tag/ID переиспользуется или не сбрасывается; ищи в логе 'postNotification' для com.kolt12max.livi."
+echo ""
+echo "Команды для разбора после Ctrl+C:"
+echo "  grep -i 'FirebaseMessaging\\|RemoteMessage\\|onMessageReceived' $FILTERED"
+echo "  grep -i 'kolt12max.livi.*[Nn]otif' $LOG_FILE"

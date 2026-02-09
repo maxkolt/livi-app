@@ -46,6 +46,8 @@ export async function sendPushToUser(userId: string, msg: Omit<ExpoPushMessage, 
       return;
     }
 
+    logger.info('[push] sendPushToUser: sending', { userId, kind: msg.kind, tokenCount: tokens.length });
+
     const messages: ExpoPushMessage[] = tokens.map((to) => ({
       to,
       sound: 'default',

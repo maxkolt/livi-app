@@ -763,6 +763,11 @@ function AppContent() {
       setTimeout(() => {
         registerHandler();
       }, 200);
+      // После reauth перерегистрируем push-токен, чтобы backend получал его (важно для dev и после выхода из фона)
+      setTimeout(() => {
+        const uid = getCurrentUserId?.();
+        if (uid) registerAndSendPushToken(uid);
+      }, 2500);
     };
 
     // Регистрируем сразу при монтировании

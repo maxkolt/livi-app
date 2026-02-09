@@ -54,7 +54,9 @@ Notifications.setNotificationHandler({
         shouldShowList: showCallNotification,
         shouldPlaySound: showCallNotification,
         shouldSetBadge: false,
-        ...(Platform.OS === 'android' && showCallNotification ? { channelId: 'calls' } : {}),
+        ...(Platform.OS === 'android' && showCallNotification
+          ? { channelId: 'calls', priority: Notifications.AndroidNotificationPriority.MAX }
+          : {}),
       };
     }
     return {
@@ -345,6 +347,7 @@ export async function registerAndSendPushToken(userId?: string) {
       logger.debug('[push] Skipping push token registration warning in dev (FCM not configured)', {
         message: msg.slice(0, 220),
       });
+      console.warn('[push] В dev пуш-токен не зарегистрирован (FCM не настроен в этой сборке). Уведомления о звонках не придут. Собери dev-client с google-services.json или проверяй на релизной сборке.');
       return;
     }
 
