@@ -718,8 +718,8 @@ function AppContent() {
 
   React.useEffect(() => {
     // Закрытие по внешнему запросу (например, из ChatScreen)
-    const offReq = onRequestCloseIncoming?.(() => { setIncoming(null); stopAnim(); });
-    const offClose = onCloseIncoming?.(() => { setIncoming(null); stopAnim(); });
+    const offReq = onRequestCloseIncoming?.(() => { stopIncomingCallAlert(); setIncoming(null); stopAnim(); });
+    const offClose = onCloseIncoming?.(() => { stopIncomingCallAlert(); setIncoming(null); stopAnim(); });
     
     // Регистрируем через обертку (основной способ)
     // УБРАНО: Дублирующий прямой слушатель - он регистрируется в отдельном useEffect для переподключения
@@ -831,6 +831,7 @@ function AppContent() {
   React.useEffect(() => {
     const offDecl = onCallDeclined?.(async (d) => {
       logger.debug('Call declined received', { callId: d?.callId });
+      stopIncomingCallAlert();
       // Мгновенно закрываем UI
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       try {
@@ -857,6 +858,7 @@ function AppContent() {
     });
     const offCancel = onCallCanceled?.(async (d) => {
       logger.debug('Call canceled received', { callId: d?.callId });
+      stopIncomingCallAlert();
       // КРИТИЧНО: Обновляем canceledCallsRef для защиты от гонки событий
       try {
         const id = String((d as any)?.callId || '');
@@ -900,6 +902,7 @@ function AppContent() {
         hasLivekitRoomName: !!(data as any)?.livekitRoomName,
       });
       
+      stopIncomingCallAlert();
       setIncoming(null);
       stopAnim();
       try {
@@ -953,6 +956,7 @@ function AppContent() {
     // Обработчик таймаута
     const offTimeout = onCallTimeout?.(async (d) => {
       logger.debug('Call timeout received', { callId: d?.callId });
+      stopIncomingCallAlert();
       // Мгновенно закрываем UI
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       try {
@@ -992,7 +996,7 @@ function AppContent() {
             // если уже пришёл реальный timeout/cancel для этого звонка — не инкрементим повторно
             const cid = String((cur as any)?.callId || '');
             if (cid && (timedOutCallsRef.current.has(cid) || canceledCallsRef.current.has(cid))) {
-              setIncoming(null); stopAnim();
+              stopIncomingCallAlert(); setIncoming(null); stopAnim();
               return;
             }
             const key = 'missed_calls_by_user_v1';
@@ -1005,8 +1009,8 @@ function AppContent() {
               try { emitMissedIncrement(uid); } catch {}
               try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
             }
-          } catch {}
-          setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+            } catch {}
+          stopIncomingCallAlert(); setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
         }
       } catch {}
     }, 20000);
@@ -1118,6 +1122,7 @@ function AppContent() {
             onRequestClose={() => {
               if (incoming) {
                 try { declineCall(incoming.callId); } catch {}
+                stopIncomingCallAlert();
                 setIncoming(null);
                 stopAnim();
               }
@@ -1173,6 +1178,7 @@ function AppContent() {
       const callId = incoming?.callId;
       const from = incoming?.from;
       if (!callId || !from) return;
+      stopIncomingCallAlert();
       setIncoming(null);
       stopAnim();
       if (navRef.isReady()) {
@@ -1209,6 +1215,7 @@ function AppContent() {
     onPress={async () => {
       try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
       declineCall(incoming.callId);
+      stopIncomingCallAlert();
       setIncoming(null);
       stopAnim();
     }}
@@ -1231,8 +1238,8 @@ function AppContent() {
                   <PanGestureHandler onGestureEvent={() => {}} onHandlerStateChange={({ nativeEvent }: any) => {
                     if (nativeEvent.state === 5) {
                       const dx = nativeEvent.translationX || 0;
-                      if (dx > 60) { const c = incoming?.callId; const f = incoming?.from; if (c && f) { setIncoming(null); stopAnim(); if (navRef.isReady()) { navRef.dispatch(CommonActions.reset({ index: 1, routes: [ { name: 'Home' as any }, { name: 'VideoCall' as any, params: { peerUserId: f, directCall: true, directInitiator: false, callId: c, isIncoming: true } } ] })); } try { acceptCall(c); } catch (e) { logger.error('[App] acceptCall failed (swipe)', { error: e, callId: c }); } } }
-                      else if (dx < -60) { declineCall(incoming.callId); setIncoming(null); stopAnim(); }
+                      if (dx > 60) { const c = incoming?.callId; const f = incoming?.from; if (c && f) { stopIncomingCallAlert(); setIncoming(null); stopAnim(); if (navRef.isReady()) { navRef.dispatch(CommonActions.reset({ index: 1, routes: [ { name: 'Home' as any }, { name: 'VideoCall' as any, params: { peerUserId: f, directCall: true, directInitiator: false, callId: c, isIncoming: true } } ] })); } try { acceptCall(c); } catch (e) { logger.error('[App] acceptCall failed (swipe)', { error: e, callId: c }); } } }
+                      else if (dx < -60) { declineCall(incoming.callId); stopIncomingCallAlert(); setIncoming(null); stopAnim(); }
                     }
                   }}>
                     <View pointerEvents="none" style={{ position: 'absolute', inset: 0 }} />

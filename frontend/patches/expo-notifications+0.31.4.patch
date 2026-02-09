@@ -1,0 +1,18 @@
+diff --git a/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt b/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
+index 0000000..1111111 100644
+--- a/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
++++ b/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
+@@ -153,5 +153,12 @@ open class ExpoNotificationBuilder(
+     } else {
+       builder.setLargeIcon(largeIcon)
+     }
++
++    // Full-screen intent for incoming call: show app on lock screen / over other apps (Android 10+)
++    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && notificationContent.categoryId == "incoming_call") {
++      val fullScreenPendingIntent = createNotificationResponseIntent(context, notification, defaultAction)
++      builder.setFullScreenIntent(fullScreenPendingIntent, true)
++    }
++
+     return builder.build()
+   }
+ 

@@ -3407,7 +3407,17 @@ const handleClearNick = useCallback(async () => {
           icon="chat-processing"
           size={23}
           iconColor={LIVI.white}
-          style={[styles.actionBtn, styles.actionBtnGap]}
+          style={[
+            styles.actionBtnGap,
+            {
+              width: 37,
+              height: 37,
+              borderRadius: 10,
+              backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+              borderWidth: 1,
+              borderColor: isDark ? 'rgba(255,255,255,0.12)' : ((theme.colors?.outline as string) || 'rgba(0,0,0,0.12)'),
+            },
+          ]}
           onPress={handlePress}
         />
         {count > 0 && (
@@ -3522,7 +3532,17 @@ const handleClearNick = useCallback(async () => {
             icon="video"
             size={23}
             iconColor={busy ? '#ddd' : LIVI.white}
-            style={[styles.inviteBtn, busy ? styles.inviteBtnDisabled : null]}
+            style={[
+              {
+                width: 37,
+                height: 37,
+                borderRadius: 10,
+                backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+                borderWidth: 1,
+                borderColor: isDark ? 'rgba(255,255,255,0.12)' : ((theme.colors?.outline as string) || 'rgba(0,0,0,0.12)'),
+              },
+              busy ? styles.inviteBtnDisabled : null,
+            ]}
             disabled={busy}
             onPress={() => {
               // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) и УДАЛЯЕМ ключ вместо установки в 0

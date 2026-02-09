@@ -310,7 +310,7 @@ router.post('/push-test', async (req, res) => {
       kind,
       title,
       body,
-      channelId: kind === 'call' ? 'calls_v2' : 'messages',
+      channelId: kind === 'call' ? 'calls' : 'messages',
       ...(kind === 'call' ? { categoryId: 'incoming_call' } : {}),
       data:
         kind === 'call'

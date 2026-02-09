@@ -45,15 +45,16 @@ export function stopIncomingCallAlert() {
   if (!started) return;
   started = false;
 
+  // Сначала обрываем вибрацию, чтобы не было задержки до следующего тика
+  try {
+    Vibration.cancel();
+  } catch {}
+
   try {
     if (iosVibeTimer) {
       clearInterval(iosVibeTimer);
       iosVibeTimer = null;
     }
-  } catch {}
-
-  try {
-    Vibration.cancel();
   } catch {}
 
   try {

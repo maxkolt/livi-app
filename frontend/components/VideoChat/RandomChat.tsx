@@ -2007,11 +2007,14 @@ const styles = StyleSheet.create({
     fontSize: 22,
   },
   bottomRow: {
-    width: Platform.OS === 'android' ? '100%' : '93%',
+    // Ширина как у карточек (блок «Вы»): на iOS 94%, на Android 100%
+    width: Platform.OS === 'android' ? '100%' : '94%',
     flexDirection: 'row',
-    gap: Platform.OS === "android" ? 14 : 16,
+    gap: Platform.OS === "android" ? 11 : 16,
     marginTop: Platform.OS === "android" ? 5 : 10,
     marginBottom: Platform.OS === "android" ? 4 : 32,
+    // Смещаем кнопки к центру: «Начать» от левого края, «Далее» от правого
+    paddingHorizontal: Platform.OS === "android" ? 2 : 16,
   },
   bigBtn: {
     flex: 1,

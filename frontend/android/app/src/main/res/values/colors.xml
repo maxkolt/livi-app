@@ -3,4 +3,5 @@
   <color name="iconBackground">#ffffff</color>
   <color name="colorPrimary">#023c69</color>
   <color name="colorPrimaryDark">#0B0B0C</color>
+  <color name="navigationBarColor">#38000000</color>
 </resources>

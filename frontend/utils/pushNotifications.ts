@@ -55,7 +55,7 @@ Notifications.setNotificationHandler({
             data: { type: 'missed_call', from: fromUserId, fromNick },
             ...(Platform.OS === 'android' ? { channelId: 'missed_call' } : {}),
           },
-          trigger: { seconds: 0.2 },
+          trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
         });
       } catch (e) {
         logger.warn('[push] failed to show missed_call notification', e as any);
@@ -205,11 +205,10 @@ export async function ensureAndroidNotificationChannels() {
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   });
 
-  // Звонки (как "очень важное уведомление", не CallKit)
+  // Звонки (приложение закрыто/в фоне). Без своего vibrationPattern — используется системная вибрация по умолчанию, учитывается интенсивность в настройках телефона.
   await Notifications.setNotificationChannelAsync('calls', {
     name: 'Calls',
     importance: Notifications.AndroidImportance.MAX,
-    vibrationPattern: [0, 600, 400, 600, 400, 600],
     sound: 'default',
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   });
@@ -379,10 +378,9 @@ export async function registerAndSendPushToken(userId?: string) {
       msg.includes('FirebaseApp.initializeApp');
 
     if (__DEV__ && looksLikeFcmSetupError) {
-      logger.debug('[push] Skipping push token registration warning in dev (FCM not configured)', {
+      logger.debug('[push] В dev пуш-токен не зарегистрирован (FCM не настроен). Уведомления о звонках не придут. Собери с google-services.json или проверяй на релизной сборке.', {
         message: msg.slice(0, 220),
       });
-      console.warn('[push] В dev пуш-токен не зарегистрирован (FCM не настроен в этой сборке). Уведомления о звонках не придут. Собери dev-client с google-services.json или проверяй на релизной сборке.');
       return;
     }
 

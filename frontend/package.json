@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.tsx",
   "scripts": {
+    "postinstall": "(cd node_modules/expo-notifications && patch -p1 --forward -r - < ../../patches/expo-notifications+0.31.4.patch) || true",
     "start:lan": "LAN_IP=$(node ./scripts/lan-ip.js) EXPO_PACKAGER_HOSTNAME=$LAN_IP REACT_NATIVE_PACKAGER_HOSTNAME=$LAN_IP expo start --dev-client --host lan --port 8081",
     "start:lan:clean": "LAN_IP=$(node ./scripts/lan-ip.js) EXPO_PACKAGER_HOSTNAME=$LAN_IP REACT_NATIVE_PACKAGER_HOSTNAME=$LAN_IP expo start --dev-client --host lan --port 8081 -c",
     "start:usb": "node ./scripts/adb-reverse-usb.js 8081 && EXPO_PACKAGER_HOSTNAME=127.0.0.1 REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 expo start --dev-client --host localhost --port 8081",
