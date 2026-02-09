@@ -1462,6 +1462,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         try {
           const callTitle = fromNick ? `${fromNick}` : 'Входящий звонок';
           const callBody = fromNick ? `${fromNick} звонит вам` : 'Входящий видеозвонок';
+          logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
           await sendPushToUser(peerId, {
             kind: 'call',
             title: callTitle,
@@ -1470,6 +1471,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             categoryId: 'incoming_call',
             data: { type: 'call', callId, from: me, fromNick: fromNick || '' },
           });
+          logger.info('[call:initiate] call push sent to Expo', { peerId });
         } catch (pushErr: any) {
           logger.warn('[call:initiate] push to recipient failed', { peerId, error: pushErr?.message });
         }

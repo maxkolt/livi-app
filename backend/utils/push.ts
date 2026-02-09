@@ -41,7 +41,10 @@ export async function sendPushToUser(userId: string, msg: Omit<ExpoPushMessage, 
       .map((r: any) => String(r.token || ''))
       .filter((t) => Expo.isExpoPushToken(t));
 
-    if (!tokens.length) return;
+    if (!tokens.length) {
+      logger.warn('[push] sendPushToUser: no tokens for user', { userId, kind: msg.kind });
+      return;
+    }
 
     const messages: ExpoPushMessage[] = tokens.map((to) => ({
       to,
