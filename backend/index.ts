@@ -1433,7 +1433,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             kind: 'call',
             title: '',
             body: '',
-            channelId: 'calls_v2',
+            channelId: 'calls',
             data: { type: 'call_ended', callId },
           });
         } catch (e: any) {
@@ -1470,30 +1470,19 @@ io.on('connection', async (sock: AuthedSocket) => {
           io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
         }
 
-        // Push для входящего звонка: в стиле Telegram — заголовок = имя, подпись = «Входящий вызов», кнопки Ответить/Отклонить
+        // Push для входящего звонка: заголовок — имя один раз, тело — «звонит вам»; категория с кнопками Поднять/Отменить
         try {
-          const callTitle = fromNick ? `${fromNick}`.trim() || 'Входящий звонок' : 'Входящий звонок';
-          const callBody = 'Входящий вызов';
+          const callTitle = fromNick ? `${fromNick}` : 'Входящий звонок';
+          const callBody = 'звонит вам';
           logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
           await sendPushToUser(peerId, {
             kind: 'call',
             title: callTitle,
             body: callBody,
-            channelId: 'calls_v2',
+            channelId: 'calls',
             categoryId: 'incoming_call',
-            // categoryId в data — для Android (expo читает из remoteMessage.data). tag — один и тот же, чтобы новое уведомление заменяло предыдущее.
-            // sticky + autoDismiss: false — уведомление не исчезает само и не смахивается, висит до ответа/отмены или call_ended (~20 сек).
-            data: {
-              type: 'call',
-              callId,
-              from: me,
-              fromNick: fromNick || '',
-              categoryId: 'incoming_call',
-              tag: 'incoming_call',
-              sticky: 'true',
-              autoDismiss: 'false',
-              subtitle: 'Входящий вызов', // Android: вторая строка под заголовком (как в Telegram)
-            },
+            // categoryId в data — для Android (expo читает из remoteMessage.data). tag — один и тот же, чтобы новое уведомление заменяло предыдущее (не «старое»).
+            data: { type: 'call', callId, from: me, fromNick: fromNick || '', categoryId: 'incoming_call', tag: 'incoming_call' },
           });
           logger.info('[call:initiate] call push sent to Expo', { peerId });
         } catch (pushErr: any) {
@@ -1806,6 +1795,18 @@ io.on('connection', async (sock: AuthedSocket) => {
     // чтобы оба клиента синхронно закрыли UI входящего/исходящего звонка
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
+    // Пуш получателю (заблокированный экран): сбросить уведомление о звонке и прекратить вибрацию
+    try {
+      await sendPushToUser(link.b, {
+        kind: 'call',
+        title: '',
+        body: '',
+        channelId: 'calls',
+        data: { type: 'call_ended', callId: id },
+      });
+    } catch (e: any) {
+      logger.warn('[call:cancel] call_ended push failed', { peerId: link.b, error: e?.message });
+    }
     cleanupCall(id, 'canceled');
   });
 

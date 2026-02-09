@@ -72,6 +72,7 @@ import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onRequestCloseIncoming, emitCloseIncoming } from '../utils/globalEvents';
+import { clearNotificationIndicators } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
 // УБРАНО: forceClearUserDataOnly не используется - вместо этого используется hardLocalReset() и clearAllUserData() из socket.ts
@@ -1115,7 +1116,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const pendingCancelRef = useRef(false);
   const outgoingCallSoundRef = useRef<Audio.Sound | null>(null);
 
-  // Звук вызова при открытой модалке исходящего видеозвонка (разговорный динамик сверху). Исходящий вызов — 20 сек без ответа, звук тоже до 20 сек.
+  // Звук вызова при открытой модалке исходящего видеозвонка. Основной (медиа) динамик — иначе в разговорном тихо даже на 1.0. Исходящий вызов — 20 сек, звук до 20 сек.
   const OUTGOING_CALL_SOUND_DURATION_MS = 20000;
   useEffect(() => {
     if (!calling.visible) {
@@ -1136,7 +1137,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           allowsRecordingIOS: true,
           staysActiveInBackground: false,
           shouldDuckAndroid: false,
-          playThroughEarpieceAndroid: true,
+          playThroughEarpieceAndroid: false, // основной динамик — разговорный тихо даже при 1.0
         });
         const { sound } = await Audio.Sound.createAsync(
           require('../assets/phone-calling-1b.wav'),
@@ -1146,8 +1147,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           sound.unloadAsync().catch(() => {});
           return;
         }
-        // На Android повышаем громкость в разговорном динамике (playThroughEarpieceAndroid: true)
-        const volume = Platform.OS === 'android' ? 2.4 : 1.5;
+        const volume = 0.1; // 0.0–1.0; на основном динамике разница 0.4/0.9 слышна
         await sound.setVolumeAsync(volume);
         outgoingCallSoundRef.current = sound;
         await sound.playAsync();
@@ -2277,6 +2277,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       });
     }
   }, [menuOpen, tab, friends]);
+
+  // При заходе во вкладку «Друзья» (увидел от кого пропущенный) — сбрасываем уведомление в шторке и бейдж
+  useEffect(() => {
+    if (tab === 'friends') {
+      clearNotificationIndicators().catch(() => {});
+    }
+  }, [tab]);
 
   // ===== inCall busy flag: слушаем старт/конец звонков и отмечаем друзей как занятых =====
   useEffect(() => {

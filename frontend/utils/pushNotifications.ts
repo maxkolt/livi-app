@@ -6,8 +6,9 @@ import { API_BASE } from '../sockets/socket';
 import { acceptCall, declineCall } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
+import { stopIncomingCallAlert } from './incomingCallAlert';
 
-/** ID категории уведомления входящего звонка с кнопками «Ответить» / «Отклонить» (как в Telegram) */
+/** ID категории уведомления входящего звонка с кнопками «Поднять» / «Положить» */
 export const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
 
 export async function clearNotificationIndicators() {
@@ -33,10 +34,10 @@ AppState.addEventListener('change', (next) => {
 Notifications.setNotificationHandler({
   handleNotification: async (n) => {
     const type = String((n as any)?.request?.content?.data?.type || '');
-    // Через ~20 сек backend шлёт call_ended — сбрасываем уведомление о звонке, новое не показываем
+    // Таймаут или отмена: только останавливаем вибрацию; уведомление в шторке и бейдж оставляем (пропущенный вызов).
     if (type === 'call_ended') {
       try {
-        await Notifications.dismissAllNotificationsAsync();
+        stopIncomingCallAlert();
       } catch {}
       return {
         shouldShowAlert: false,
@@ -54,9 +55,7 @@ Notifications.setNotificationHandler({
         shouldShowList: showCallNotification,
         shouldPlaySound: showCallNotification,
         shouldSetBadge: false,
-        ...(Platform.OS === 'android' && showCallNotification
-          ? { channelId: 'calls_v2', priority: Notifications.AndroidNotificationPriority.MAX }
-          : {}),
+        ...(Platform.OS === 'android' && showCallNotification ? { channelId: 'calls' } : {}),
       };
     }
     return {
@@ -103,8 +102,8 @@ async function navigateToVideoCallIncoming(peerUserId: string, callId: string) {
 }
 
 /**
- * Обработка ответа на уведомление (тап по уведомлению или по кнопке «Ответить»/«Отклонить»).
- * actionIdentifier: 'answer' = Ответить, 'decline' = Отклонить, DEFAULT = тап по телу уведомления.
+ * Обработка ответа на уведомление (тап по уведомлению или по кнопке «Поднять»/«Положить»).
+ * actionIdentifier: 'answer' = Поднять, 'decline' = Положить, DEFAULT = тап по телу уведомления.
  */
 async function handleNotificationResponse(data: any, actionIdentifier: string) {
   try {
@@ -133,6 +132,9 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
 
       if (isDecline) {
         try {
+          stopIncomingCallAlert();
+        } catch {}
+        try {
           declineCall(callId);
         } catch (e) {
           logger.warn('[push] declineCall from notification failed', { callId, error: (e as Error)?.message });
@@ -144,6 +146,9 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
       }
 
       if (isAnswer || isDefaultTap) {
+        try {
+          stopIncomingCallAlert();
+        } catch {}
         await navigateToVideoCallIncoming(peerUserId, callId);
         if (isAnswer) {
           try {
@@ -179,26 +184,25 @@ export async function ensureAndroidNotificationChannels() {
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   });
 
-  // Звонки: новый канал calls_v2 (старый "calls" на устройстве не обновляет вибрацию)
-  const callVibration20s: number[] = [0, 2500, 2000, 3000, 2000, 0, 2500, 2000, 3000, 2000];
-  await Notifications.setNotificationChannelAsync('calls_v2', {
+  // Звонки (как "очень важное уведомление", не CallKit)
+  await Notifications.setNotificationChannelAsync('calls', {
     name: 'Calls',
     importance: Notifications.AndroidImportance.MAX,
-    vibrationPattern: callVibration20s,
+    vibrationPattern: [0, 600, 400, 600, 400, 600],
     sound: 'default',
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   });
 }
 
 /**
- * Регистрирует категорию уведомления входящего звонка в стиле Telegram:
- * две кнопки — «Ответить» (принять), «Отклонить» (красная, isDestructive).
+ * Регистрирует категорию уведомления входящего звонка: справа две кнопки —
+ * «Поднять» (принять), «Отменить» (красная, isDestructive).
  */
 async function ensureIncomingCallNotificationCategory() {
   try {
     await Notifications.setNotificationCategoryAsync(INCOMING_CALL_CATEGORY_ID, [
-      { identifier: 'answer', buttonTitle: 'Ответить' },
-      { identifier: 'decline', buttonTitle: 'Отклонить', options: { isDestructive: true } },
+      { identifier: 'answer', buttonTitle: 'Поднять' },
+      { identifier: 'decline', buttonTitle: 'Отменить', options: { isDestructive: true } },
     ]);
     logger.debug('[push] incoming call notification category registered');
   } catch (e) {
@@ -377,25 +381,15 @@ export function addNotificationListeners() {
     } catch {}
   })();
 
-  // 2) Если приложение в фоне/foreground и пользователь нажал на пуш или на кнопку «Ответить»/«Отклонить»
+  // 2) Если приложение в фоне/foreground и пользователь нажал на пуш или на кнопку «Поднять»/«Положить»
   const sub2 = Notifications.addNotificationResponseReceivedListener(async (r) => {
     const data = (r as any)?.notification?.request?.content?.data;
     const actionId = (r as any)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
     if (data) await handleNotificationResponse(data, actionId);
   });
 
-  // Логируем входящий push (для отладки sticky/autoDismiss у звонков)
-  const sub1 = Notifications.addNotificationReceivedListener((n) => {
-    const data = (n as any)?.request?.content?.data;
-    if (data && String(data?.type) === 'call') {
-      logger.info('[push] incoming call notification received', {
-        hasSticky: 'sticky' in (data || {}),
-        sticky: data?.sticky,
-        hasAutoDismiss: 'autoDismiss' in (data || {}),
-        autoDismiss: data?.autoDismiss,
-      });
-    }
-  });
+  // (опционально) можно слушать received для аналитики
+  const sub1 = Notifications.addNotificationReceivedListener((_n) => {});
   return () => {
     sub1.remove();
     sub2.remove();
