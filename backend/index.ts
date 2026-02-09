@@ -1433,7 +1433,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             kind: 'call',
             title: '',
             body: '',
-            channelId: 'calls',
+            channelId: 'calls_v2',
             data: { type: 'call_ended', callId },
           });
         } catch (e: any) {
@@ -1479,7 +1479,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             kind: 'call',
             title: callTitle,
             body: callBody,
-            channelId: 'calls',
+            channelId: 'calls_v2',
             categoryId: 'incoming_call',
             // categoryId в data — для Android (expo читает из remoteMessage.data). tag — один и тот же, чтобы новое уведомление заменяло предыдущее.
             // sticky + autoDismiss: false — уведомление не исчезает само и не смахивается, висит до ответа/отмены или call_ended (~20 сек).

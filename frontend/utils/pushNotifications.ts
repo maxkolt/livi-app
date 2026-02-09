@@ -55,7 +55,7 @@ Notifications.setNotificationHandler({
         shouldPlaySound: showCallNotification,
         shouldSetBadge: false,
         ...(Platform.OS === 'android' && showCallNotification
-          ? { channelId: 'calls', priority: Notifications.AndroidNotificationPriority.MAX }
+          ? { channelId: 'calls_v2', priority: Notifications.AndroidNotificationPriority.MAX }
           : {}),
       };
     }
@@ -179,11 +179,12 @@ export async function ensureAndroidNotificationChannels() {
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   });
 
-  // Звонки (как "очень важное уведомление", не CallKit)
-  await Notifications.setNotificationChannelAsync('calls', {
+  // Звонки: новый канал calls_v2 (старый "calls" на устройстве не обновляет вибрацию)
+  const callVibration20s: number[] = [0, 2500, 2000, 3000, 2000, 0, 2500, 2000, 3000, 2000];
+  await Notifications.setNotificationChannelAsync('calls_v2', {
     name: 'Calls',
     importance: Notifications.AndroidImportance.MAX,
-    vibrationPattern: [0, 600, 400, 600, 400, 600],
+    vibrationPattern: callVibration20s,
     sound: 'default',
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   });

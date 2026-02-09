@@ -8,11 +8,15 @@
 //
 // Expo will read this file instead of app.json automatically.
 const appJson = require("./app.json");
+const path = require("path");
 
 const variant = String(process.env.LIVI_APP_VARIANT || "").toLowerCase();
 const isDevVariant = variant === "dev";
 
 const expo = { ...(appJson.expo || {}) };
+
+// Патч expo-notifications: при call_ended снимаем уведомление звонка в фоне (Android)
+expo.plugins = [...(expo.plugins || []), path.join(__dirname, "plugins", "withExpoNotificationsCallEndedPatch.js")];
 
 if (isDevVariant) {
   expo.name = expo.name ? `${expo.name} Dev` : "LiVi Dev";
