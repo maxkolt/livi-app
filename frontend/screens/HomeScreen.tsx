@@ -1146,7 +1146,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           sound.unloadAsync().catch(() => {});
           return;
         }
-        await sound.setVolumeAsync(0.4);
+        // На Android повышаем громкость в разговорном динамике (playThroughEarpieceAndroid: true)
+        const volume = Platform.OS === 'android' ? 0.85 : 0.4;
+        await sound.setVolumeAsync(volume);
         outgoingCallSoundRef.current = sound;
         await sound.playAsync();
 

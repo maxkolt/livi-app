@@ -48,29 +48,41 @@ export function clearUpdateCheckCache(): void {
   cachedAt = 0;
 }
 
-/** Загружает latestAppVersion с бэкенда (с кэшем 2 мин). При ошибке — одна повторная попытка через 1 с (релиз, холодный старт). */
+/** Таймаут запроса (при VPN/медленной сети запрос может идти дольше). */
+const FETCH_TIMEOUT_MS = 15000;
+
+/** Загружает latestAppVersion с бэкенда (с кэшем 2 мин). При ошибке — две повторные попытки с паузой (релиз, VPN, холодный старт). */
 export async function fetchLatestAppVersion(): Promise<string | null> {
   if (cachedLatest !== null && Date.now() - cachedAt < CACHE_MS) return cachedLatest;
   const tryFetch = async (): Promise<string | null> => {
-    const res = await fetch(APP_SETTINGS_URL, { method: 'GET' });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const latest = (data?.latestAppVersion ?? '').trim();
-    if (latest) {
-      cachedLatest = latest;
-      cachedAt = Date.now();
-      return latest;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(APP_SETTINGS_URL, { method: 'GET', signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (!res.ok) return null;
+      const data = await res.json();
+      const latest = (data?.latestAppVersion ?? '').trim();
+      if (latest) {
+        cachedLatest = latest;
+        cachedAt = Date.now();
+        return latest;
+      }
+      return null;
+    } catch (e) {
+      clearTimeout(timeoutId);
+      throw e;
     }
-    return null;
   };
-  try {
-    const result = await tryFetch();
-    if (result) return result;
-  } catch {}
-  await new Promise((r) => setTimeout(r, 1000));
-  try {
-    return await tryFetch();
-  } catch {}
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const result = await tryFetch();
+      if (result) return result;
+    } catch {
+      // Сеть/VPN/таймаут — повтор через 2 с
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
   return null;
 }
 
