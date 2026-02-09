@@ -1470,10 +1470,10 @@ io.on('connection', async (sock: AuthedSocket) => {
           io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
         }
 
-        // Push для входящего звонка: заголовок — имя один раз, тело — «звонит вам»; категория с кнопками Поднять/Отменить
+        // Push для входящего звонка: в стиле Telegram — заголовок = имя, подпись = «Входящий вызов», кнопки Ответить/Отклонить
         try {
-          const callTitle = fromNick ? `${fromNick}` : 'Входящий звонок';
-          const callBody = 'звонит вам';
+          const callTitle = fromNick ? `${fromNick}`.trim() || 'Входящий звонок' : 'Входящий звонок';
+          const callBody = 'Входящий вызов';
           logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
           await sendPushToUser(peerId, {
             kind: 'call',
@@ -1492,6 +1492,7 @@ io.on('connection', async (sock: AuthedSocket) => {
               tag: 'incoming_call',
               sticky: 'true',
               autoDismiss: 'false',
+              subtitle: 'Входящий вызов', // Android: вторая строка под заголовком (как в Telegram)
             },
           });
           logger.info('[call:initiate] call push sent to Expo', { peerId });
