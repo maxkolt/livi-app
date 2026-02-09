@@ -1427,14 +1427,21 @@ io.on('connection', async (sock: AuthedSocket) => {
         try {
           io.to(`u:${link.b}`).emit('call:timeout', { callId });
         } catch {}
-        // Пуш получателю: через ~20 сек уведомление о звонке должно исчезнуть (клиент по type: call_ended сбросит все)
+        // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации
+        let fromNick: string | undefined;
+        try {
+          if (isMongoReady()) {
+            const u = await User.findById(link.a).select('nick').lean();
+            if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+          }
+        } catch {}
         try {
           await sendPushToUser(link.b, {
             kind: 'call',
             title: '',
             body: '',
             channelId: 'calls',
-            data: { type: 'call_ended', callId },
+            data: { type: 'call_ended', callId, from: link.a, fromNick: fromNick || '' },
           });
         } catch (e: any) {
           logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
@@ -1795,14 +1802,21 @@ io.on('connection', async (sock: AuthedSocket) => {
     // чтобы оба клиента синхронно закрыли UI входящего/исходящего звонка
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
-    // Пуш получателю (заблокированный экран): сбросить уведомление о звонке и прекратить вибрацию
+    // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации
+    let fromNick: string | undefined;
+    try {
+      if (isMongoReady()) {
+        const u = await User.findById(link.a).select('nick').lean();
+        if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+      }
+    } catch {}
     try {
       await sendPushToUser(link.b, {
         kind: 'call',
         title: '',
         body: '',
         channelId: 'calls',
-        data: { type: 'call_ended', callId: id },
+        data: { type: 'call_ended', callId: id, from: link.a, fromNick: fromNick || '' },
       });
     } catch (e: any) {
       logger.warn('[call:cancel] call_ended push failed', { peerId: link.b, error: e?.message });

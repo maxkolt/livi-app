@@ -34,11 +34,32 @@ AppState.addEventListener('change', (next) => {
 Notifications.setNotificationHandler({
   handleNotification: async (n) => {
     const type = String((n as any)?.request?.content?.data?.type || '');
-    // Таймаут или отмена: только останавливаем вибрацию; уведомление в шторке и бейдж оставляем (пропущенный вызов).
+    // Таймаут или отмена: останавливаем вибрацию (снимаем уведомление), затем показываем «Пропущенный вызов» без вибрации.
     if (type === 'call_ended') {
+      const data = (n as any)?.request?.content?.data || {};
+      const fromNick = String(data.fromNick || '').trim();
+      const fromUserId = String(data.from || '');
       try {
         stopIncomingCallAlert();
       } catch {}
+      try {
+        await Notifications.dismissAllNotificationsAsync();
+      } catch {}
+      try {
+        const title = 'Пропущенный вызов';
+        const body = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title,
+            body,
+            data: { type: 'missed_call', from: fromUserId, fromNick },
+            ...(Platform.OS === 'android' ? { channelId: 'missed_call' } : {}),
+          },
+          trigger: { seconds: 0.2 },
+        });
+      } catch (e) {
+        logger.warn('[push] failed to show missed_call notification', e as any);
+      }
       return {
         shouldShowAlert: false,
         shouldShowBanner: false,
@@ -190,6 +211,15 @@ export async function ensureAndroidNotificationChannels() {
     importance: Notifications.AndroidImportance.MAX,
     vibrationPattern: [0, 600, 400, 600, 400, 600],
     sound: 'default',
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+  });
+
+  // Пропущенный вызов — без вибрации, только текст в шторке
+  await Notifications.setNotificationChannelAsync('missed_call', {
+    name: 'Пропущенный вызов',
+    importance: Notifications.AndroidImportance.HIGH,
+    vibrationPattern: [0],
+    sound: undefined,
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   });
 }
