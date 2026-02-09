@@ -33,6 +33,19 @@ AppState.addEventListener('change', (next) => {
 Notifications.setNotificationHandler({
   handleNotification: async (n) => {
     const type = String((n as any)?.request?.content?.data?.type || '');
+    // Через ~20 сек backend шлёт call_ended — сбрасываем уведомление о звонке, новое не показываем
+    if (type === 'call_ended') {
+      try {
+        await Notifications.dismissAllNotificationsAsync();
+      } catch {}
+      return {
+        shouldShowAlert: false,
+        shouldShowBanner: false,
+        shouldShowList: false,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      };
+    }
     if (type === 'call') {
       const showCallNotification = appStateRef !== 'active';
       return {
@@ -122,6 +135,9 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
         } catch (e) {
           logger.warn('[push] declineCall from notification failed', { callId, error: (e as Error)?.message });
         }
+        try {
+          await clearNotificationIndicators();
+        } catch {}
         return;
       }
 
@@ -134,6 +150,9 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
             logger.warn('[push] acceptCall from notification failed', { callId, error: (e as Error)?.message });
           }
         }
+        try {
+          await clearNotificationIndicators();
+        } catch {}
       }
     }
   } catch (e) {
@@ -169,14 +188,14 @@ export async function ensureAndroidNotificationChannels() {
 }
 
 /**
- * Регистрирует категорию уведомления входящего звонка с кнопками «Поднять» и «Положить».
- * Вызывается при инициализации прав на уведомления.
+ * Регистрирует категорию уведомления входящего звонка: справа две кнопки —
+ * «Поднять» (принять), «Отменить» (красная, isDestructive).
  */
 async function ensureIncomingCallNotificationCategory() {
   try {
     await Notifications.setNotificationCategoryAsync(INCOMING_CALL_CATEGORY_ID, [
       { identifier: 'answer', buttonTitle: 'Поднять' },
-      { identifier: 'decline', buttonTitle: 'Положить' },
+      { identifier: 'decline', buttonTitle: 'Отменить', options: { isDestructive: true } },
     ]);
     logger.debug('[push] incoming call notification category registered');
   } catch (e) {
@@ -334,14 +353,12 @@ export async function registerAndSendPushToken(userId?: string) {
 }
 
 export function addNotificationListeners() {
-  // When app becomes active, clear notification indicators.
-  // This matches user expectation: after opening/reading in-app, the launcher badge should go away.
+  // Не сбрасываем все уведомления при переходе приложения в активное состояние:
+  // иначе уведомление о входящем звонке исчезает, как только пользователь открыл приложение.
+  // Очистка происходит при открытии чата (ChatScreen) или при ответе на пуш.
   let appStateRef = AppState.currentState;
   const appStateSub = AppState.addEventListener('change', (next) => {
     try {
-      if (appStateRef.match(/inactive|background/) && next === 'active') {
-        void clearNotificationIndicators();
-      }
       appStateRef = next;
     } catch {}
   });

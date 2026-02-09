@@ -1427,6 +1427,18 @@ io.on('connection', async (sock: AuthedSocket) => {
         try {
           io.to(`u:${link.b}`).emit('call:timeout', { callId });
         } catch {}
+        // Пуш получателю: через ~20 сек уведомление о звонке должно исчезнуть (клиент по type: call_ended сбросит все)
+        try {
+          await sendPushToUser(link.b, {
+            kind: 'call',
+            title: '',
+            body: '',
+            channelId: 'calls',
+            data: { type: 'call_ended', callId },
+          });
+        } catch (e: any) {
+          logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
+        }
         cleanupCall(callId, 'timeout');
       }, 20000);
       const link = callsById.get(callId);
@@ -1458,10 +1470,10 @@ io.on('connection', async (sock: AuthedSocket) => {
           io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
         }
 
-        // Push для входящего звонка: когда друг офлайн или приложение в фоне — показываем уведомление на телефоне
+        // Push для входящего звонка: заголовок — имя один раз, тело — «звонит вам»; категория с кнопками Поднять/Отменить
         try {
           const callTitle = fromNick ? `${fromNick}` : 'Входящий звонок';
-          const callBody = fromNick ? `${fromNick} звонит вам` : 'Входящий видеозвонок';
+          const callBody = 'звонит вам';
           logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
           await sendPushToUser(peerId, {
             kind: 'call',
