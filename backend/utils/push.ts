@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 import type { ExpoPushTicket } from 'expo-server-sdk';
 import PushTokenModel from '../models/PushToken';
@@ -11,9 +12,16 @@ let firebaseApp: unknown = null;
 function getFirebaseMessaging(): { send: (msg: unknown) => Promise<string> } | null {
   if (!firebaseApp) {
     try {
-      const key = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-      if (key) {
-        const cred = JSON.parse(key) as object;
+      let cred: object | null = null;
+      const path = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+      const json = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+      if (path) {
+        const raw = readFileSync(path, 'utf8');
+        cred = JSON.parse(raw) as object;
+      } else if (json) {
+        cred = JSON.parse(json) as object;
+      }
+      if (cred) {
         const admin = require('firebase-admin');
         firebaseApp = admin.initializeApp({ credential: admin.credential.cert(cred) });
         logger.info('[push] Firebase Admin initialized (FCM data-only for calls)');
@@ -127,10 +135,25 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   };
 
   const messaging = getFirebaseMessaging();
-  const expoTokens: string[] = [];
-
   type Rec = { token: string; platform: string; fcmToken?: string };
   const list = recs as unknown as Rec[];
+  const androidWithFcm = list.filter((r) => r.platform === 'android' && r.fcmToken).length;
+  const androidTotal = list.filter((r) => r.platform === 'android').length;
+  logger.info('[push] sendCallPushToRecipient', {
+    userId,
+    hasFirebase: !!messaging,
+    androidTokensWithFcm: androidWithFcm,
+    androidTokensTotal: androidTotal,
+    totalTokens: list.length,
+  });
+  if (!messaging && androidTotal > 0) {
+    logger.warn('[push] FCM not configured (FIREBASE_SERVICE_ACCOUNT_JSON missing or invalid). Call pushes will use Expo only — native incoming call screen may NOT show when app is in background.');
+  }
+  if (messaging && androidTotal > 0 && androidWithFcm === 0) {
+    logger.warn('[push] No Android FCM tokens for user — call push will use Expo. Ensure app registered push token with fcmToken (open app, check token register 200 OK).');
+  }
+
+  const expoTokens: string[] = [];
   for (const r of list) {
     if (r.platform === 'android' && r.fcmToken && messaging) {
       try {
