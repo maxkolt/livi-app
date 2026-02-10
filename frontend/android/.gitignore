@@ -14,3 +14,7 @@ local.properties
 
 # Bundle artifacts
 *.jsbundle
+
+# Release signing (secrets)
+keystore.properties
+*.jks

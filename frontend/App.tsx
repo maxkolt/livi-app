@@ -29,8 +29,9 @@ import PiPOverlay from "./src/pip/PiPOverlay";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native';
-import { addNotificationListeners, ensureInitialNotificationPermissions, registerAndSendPushToken } from './utils/pushNotifications';
+import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, registerAndSendPushToken } from './utils/pushNotifications';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
+import { setupCallKeep, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo } from './utils/callKeep';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
@@ -123,7 +124,49 @@ function AppContent() {
   React.useEffect(() => {
     void hydrateLang();
   }, [hydrateLang]);
-  
+
+  // CallKeep (нативный экран звонка на Android): selfManaged + задержка
+  React.useEffect(() => {
+    const t = setTimeout(() => void setupCallKeep(), 3000);
+    return () => clearTimeout(t);
+  }, []);
+
+  // События answer/end от нативного экрана звонка (Android) — регистрируем после возможного setup
+  React.useEffect(() => {
+    let unsub: (() => void) | undefined;
+    const t = setTimeout(() => {
+      unsub = registerCallKeepEvents({
+        onAnswer: (callId) => {
+          const info = getPendingCallInfo(callId);
+          if (!info || !navRef.isReady()) return;
+          stopIncomingCallAlert();
+          setIncoming(null);
+          navRef.dispatch(
+            CommonActions.reset({
+              index: 1,
+              routes: [
+                { name: 'Home' as any },
+                { name: 'VideoCall' as any, params: { peerUserId: info.from, directCall: true, directInitiator: false, callId, isIncoming: true } },
+              ],
+            })
+          );
+          try { acceptCall(callId); } catch {}
+          reportAnswerIncomingCall(callId);
+        },
+        onEnd: (callId) => {
+          try { declineCall(callId); } catch {}
+          stopIncomingCallAlert();
+          setIncoming(null);
+          reportRejectCall(callId);
+        },
+      });
+    }, 4000);
+    return () => {
+      clearTimeout(t);
+      unsub?.();
+    };
+  }, []);
+
   // Убрали постоянные логи для уменьшения шума
   const [routeName, setRouteName] = React.useState<string | undefined>(undefined);
   const lastLoggedRouteRef = React.useRef<string | undefined>(undefined);
@@ -296,6 +339,24 @@ function AppContent() {
     };
   }, []);
 
+  // ===== Deep Linking: входящий звонок livi://incoming-call (full-screen intent / пуш) =====
+  const handleIncomingCallDeepLink = async (url: string) => {
+    try {
+      const m = url.match(/livi:\/\/incoming-call[?]?(.*)/i);
+      if (!m) return;
+      const search = m[1] || '';
+      const params = new URLSearchParams(search.startsWith('?') ? search : `?${search}`);
+      const callId = params.get('callId') || params.get('call_id') || '';
+      const from = params.get('from') || params.get('userId') || '';
+      if (callId && from) {
+        logger.info('[App] Opening incoming call from deep link', { callId, from });
+        await openIncomingCallScreen(from, callId);
+      }
+    } catch (e) {
+      logger.warn('[App] handleIncomingCallDeepLink failed', e);
+    }
+  };
+
   // ===== Deep Linking обработка для реферальных ссылок =====
   const INVITE_LINK_KEY = 'pending_invite_code';
   React.useEffect(() => {
@@ -304,6 +365,7 @@ function AppContent() {
       try {
         const initialUrl = await Linking.getInitialURL();
         if (initialUrl) {
+          await handleIncomingCallDeepLink(initialUrl);
           handleInviteLink(initialUrl);
         }
       } catch (e) {
@@ -313,6 +375,7 @@ function AppContent() {
 
     // Обработка ссылки во время работы приложения
     const handleUrl = (event: { url: string }) => {
+      handleIncomingCallDeepLink(event.url);
       handleInviteLink(event.url);
     };
 
@@ -650,7 +713,7 @@ function AppContent() {
   // КРИТИЧНО: Обработчик входящего звонка - должен быть всегда зарегистрирован
   // Используем useRef для хранения функции, чтобы она не пересоздавалась
   const handleIncomingCall = React.useCallback((d: { callId: string; from: string; fromNick?: string }) => {
-    logger.debug('Received call:incoming event', { callId: d.callId, from: d.from, fromNick: d.fromNick });
+    logger.info('[call:incoming] received', { callId: d.callId, from: d.from, fromNick: d.fromNick });
     
     // КРИТИЧНО: Используем актуальное значение навигации напрямую, а не routeName (который обновляется асинхронно)
     // Fallback: если навигация не готова, разрешаем показать модалку (лучше показать, чем пропустить)
@@ -697,12 +760,12 @@ function AppContent() {
 
     if (shouldShowGlobal) {
       logger.debug('Showing incoming call modal', { callId: d.callId, from: d.from, fromNick: d.fromNick, currentRoute });
-      // КРИТИЧНО: если пользователь печатает в чате — закрываем клавиатуру,
-      // иначе она может перекрыть кнопки принять/отклонить на входящем экране.
       try { Keyboard.dismiss(); } catch {}
       setIncoming(d);
       startAnim();
-      // Запомним последнего звонящего для любых экранов
+      if (isCallKeepAvailable()) {
+        displayIncomingCall(d.callId, d.from, d.fromNick ?? '', true);
+      }
       try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
     } else {
       logger.debug('Skipping global modal - on video/random screen, will show in peer block', { callId: d.callId, from: d.from, currentRoute });
@@ -1194,6 +1257,7 @@ function AppContent() {
       }
       try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
       try { acceptCall(callId); } catch (e) { logger.error('[App] acceptCall failed (user already navigated to VideoCall)', { error: e, callId }); }
+      reportAnswerIncomingCall(callId);
     }}
     activeOpacity={0.7}
     style={{
@@ -1218,6 +1282,7 @@ function AppContent() {
       stopIncomingCallAlert();
       setIncoming(null);
       stopAnim();
+      reportRejectCall(incoming.callId);
     }}
     activeOpacity={0.7}
     style={{
@@ -1238,8 +1303,8 @@ function AppContent() {
                   <PanGestureHandler onGestureEvent={() => {}} onHandlerStateChange={({ nativeEvent }: any) => {
                     if (nativeEvent.state === 5) {
                       const dx = nativeEvent.translationX || 0;
-                      if (dx > 60) { const c = incoming?.callId; const f = incoming?.from; if (c && f) { stopIncomingCallAlert(); setIncoming(null); stopAnim(); if (navRef.isReady()) { navRef.dispatch(CommonActions.reset({ index: 1, routes: [ { name: 'Home' as any }, { name: 'VideoCall' as any, params: { peerUserId: f, directCall: true, directInitiator: false, callId: c, isIncoming: true } } ] })); } try { acceptCall(c); } catch (e) { logger.error('[App] acceptCall failed (swipe)', { error: e, callId: c }); } } }
-                      else if (dx < -60) { declineCall(incoming.callId); stopIncomingCallAlert(); setIncoming(null); stopAnim(); }
+                      if (dx > 60) { const c = incoming?.callId; const f = incoming?.from; if (c && f) { stopIncomingCallAlert(); setIncoming(null); stopAnim(); if (navRef.isReady()) { navRef.dispatch(CommonActions.reset({ index: 1, routes: [ { name: 'Home' as any }, { name: 'VideoCall' as any, params: { peerUserId: f, directCall: true, directInitiator: false, callId: c, isIncoming: true } } ] })); } try { acceptCall(c); } catch (e) { logger.error('[App] acceptCall failed (swipe)', { error: e, callId: c }); } reportAnswerIncomingCall(c); } }
+                      else if (dx < -60) { declineCall(incoming.callId); stopIncomingCallAlert(); setIncoming(null); stopAnim(); reportRejectCall(incoming.callId); }
                     }
                   }}>
                     <View pointerEvents="none" style={{ position: 'absolute', inset: 0 }} />
@@ -1275,24 +1340,19 @@ export default function App() {
 
   const endCallImpl = (callId: string | null, roomId: string | null) => {
     console.log('[App] 🔥 endCallImpl вызван', { callId, roomId });
-    
-    // КРИТИЧНО: Сначала вызываем локальную очистку (если функция зарегистрирована)
-    // Это нужно чтобы очистить PeerConnection, стримы и метр микрофона
-    // даже когда экран звонка размонтирован (пользователь в PiP)
-    // session.endCall() уже отправит call:end на сервер, поэтому здесь не нужно дублировать
+    reportEndCallToCallKeep(callId);
+    setCallKeepAvailable(true);
     try {
       const cleanupFn = (global as any).__endCallCleanupRef?.current;
       if (cleanupFn && typeof cleanupFn === 'function') {
         console.log('[App] Вызываем cleanupFunction из __endCallCleanupRef');
         cleanupFn();
       } else {
-        // Fallback: если cleanupFunction не установлена, вызываем session.endCall() напрямую
         const session = (global as any).__webrtcSessionRef?.current;
         if (session && typeof session.endCall === 'function') {
           console.log('[App] Вызываем session.endCall() напрямую (cleanupFunction не установлена)');
           session.endCall();
         } else {
-          // Последний fallback: отправляем call:end напрямую на сервер
           console.log('[App] Отправляем call:end напрямую на сервер (fallback)');
           socket.emit('call:end', { 
             callId: callId || undefined, 

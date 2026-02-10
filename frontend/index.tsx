@@ -1,6 +1,8 @@
 import './shims/nativeEventEmitterShim';
 import 'react-native-gesture-handler';
 import 'react-native-reanimated';
+// Ранняя загрузка модуля пуша, чтобы захватить getLastNotificationResponseAsync до монтирования App (важно для входящего звонка из фона/убитого приложения)
+import './utils/pushNotifications';
 
 import { Alert } from 'react-native';
 import { registerRootComponent } from 'expo';

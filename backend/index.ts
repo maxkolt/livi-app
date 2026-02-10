@@ -1462,20 +1462,21 @@ io.on('connection', async (sock: AuthedSocket) => {
           }
         } catch {}
         
-        // Если получатель онлайн — дублируем через сокеты для мгновенного UI
-        if (peerSocket) {
-          const recipientSockets = Array.from(io.sockets.sockets.values()).filter((s) =>
-            String((s as any)?.data?.userId || '') === String(peerId)
-          );
-          for (const recipientSocket of recipientSockets) {
-            try {
-              (recipientSocket as any).emit('call:incoming', { callId, from: me, fromNick });
-              (recipientSocket as any).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
-            } catch {}
-          }
-          io.to(`u:${peerId}`).emit('call:incoming', { callId, from: me, fromNick });
-          io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
+        // Всегда шлём в комнату u:peerId (получатель получает после reauth); при наличии сокета — дублируем напрямую
+        const recipientSockets = Array.from(io.sockets.sockets.values()).filter((s) =>
+          String((s as any)?.data?.userId || '') === String(peerId)
+        );
+        for (const recipientSocket of recipientSockets) {
+          try {
+            (recipientSocket as any).emit('call:incoming', { callId, from: me, fromNick });
+            (recipientSocket as any).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
+          } catch {}
         }
+        const room = io.sockets.adapter.rooms.get(`u:${peerId}`);
+        const roomSize = room ? room.size : 0;
+        logger.info('[call:initiate] emitting call:incoming to recipient', { peerId, callId, recipientSocketsCount: recipientSockets.length, roomUSize: roomSize });
+        io.to(`u:${peerId}`).emit('call:incoming', { callId, from: me, fromNick });
+        io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
 
         // Push для входящего звонка: заголовок — имя один раз, тело — «звонит вам»; категория с кнопками Поднять/Отменить
         try {

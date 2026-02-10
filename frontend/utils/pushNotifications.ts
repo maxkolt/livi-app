@@ -7,6 +7,7 @@ import { acceptCall, declineCall } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
+import { displayIncomingCall, isCallKeepAvailable } from './callKeep';
 
 /** ID категории уведомления входящего звонка с кнопками «Поднять» / «Положить» */
 export const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
@@ -28,6 +29,13 @@ let appStateRef = AppState.currentState;
 AppState.addEventListener('change', (next) => {
   appStateRef = next;
 });
+
+// КРИТИЧНО: Захватываем «последний ответ на уведомление» сразу при загрузке модуля,
+// чтобы не потерять его к моменту вызова addNotificationListeners (когда приложение открыто из пуша о звонке).
+const lastNotificationResponsePromise = Notifications.getLastNotificationResponseAsync();
+export function getColdStartNotificationResponse(): Promise<Notifications.NotificationResponse | null> {
+  return lastNotificationResponsePromise;
+}
 
 // Показывать уведомления даже в foreground (для сообщений).
 // Для звонков: в активном приложении показываем модалку по сокету; в фоне/убитом — показываем пуш на телефоне.
@@ -122,6 +130,14 @@ async function navigateToVideoCallIncoming(peerUserId: string, callId: string) {
   );
 }
 
+/** Открыть экран входящего звонка (для deep link livi://incoming-call и full-screen intent). */
+export async function openIncomingCallScreen(peerUserId: string, callId: string): Promise<void> {
+  try {
+    stopIncomingCallAlert();
+  } catch {}
+  await navigateToVideoCallIncoming(peerUserId, callId);
+}
+
 /**
  * Обработка ответа на уведомление (тап по уведомлению или по кнопке «Поднять»/«Положить»).
  * actionIdentifier: 'answer' = Поднять, 'decline' = Положить, DEFAULT = тап по телу уведомления.
@@ -171,12 +187,11 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
           stopIncomingCallAlert();
         } catch {}
         await navigateToVideoCallIncoming(peerUserId, callId);
-        if (isAnswer) {
-          try {
-            acceptCall(callId);
-          } catch (e) {
-            logger.warn('[push] acceptCall from notification failed', { callId, error: (e as Error)?.message });
-          }
+        // Вызываем acceptCall при любом «принять»: кнопка «Поднять» или тап по уведомлению (в т.ч. full-screen)
+        try {
+          acceptCall(callId);
+        } catch (e) {
+          logger.warn('[push] acceptCall from notification failed', { callId, error: (e as Error)?.message });
         }
         try {
           await clearNotificationIndicators();
@@ -205,11 +220,12 @@ export async function ensureAndroidNotificationChannels() {
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   });
 
-  // Звонки (приложение закрыто/в фоне). Без своего vibrationPattern — используется системная вибрация по умолчанию, учитывается интенсивность в настройках телефона.
+  // Звонки (приложение закрыто/в фоне). Та же вибрация, что и при входящем в приложении (incomingCallAlert): [0, 700, 900].
   await Notifications.setNotificationChannelAsync('calls', {
     name: 'Calls',
     importance: Notifications.AndroidImportance.MAX,
     sound: 'default',
+    vibrationPattern: [0, 700, 900],
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   });
 
@@ -399,14 +415,19 @@ export function addNotificationListeners() {
     } catch {}
   });
 
-  // 1) Если приложение было "убито" и открылось по тапу по пушу или по кнопке
+  // 1) Если приложение было "убито" и открылось по тапу по пушу или по кнопке — используем заранее захваченный ответ
   (async () => {
     try {
-      const last = await Notifications.getLastNotificationResponseAsync();
+      const last = await getColdStartNotificationResponse();
       const data = (last as any)?.notification?.request?.content?.data;
       const actionId = (last as any)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
-      if (data) await handleNotificationResponse(data, actionId);
-    } catch {}
+      if (data) {
+        logger.info('[push] cold start: handling notification response', { type: data?.type, actionId });
+        await handleNotificationResponse(data, actionId);
+      }
+    } catch (e) {
+      logger.warn('[push] cold start handle failed', e as any);
+    }
   })();
 
   // 2) Если приложение в фоне/foreground и пользователь нажал на пуш или на кнопку «Поднять»/«Положить»
@@ -416,8 +437,15 @@ export function addNotificationListeners() {
     if (data) await handleNotificationResponse(data, actionId);
   });
 
-  // (опционально) можно слушать received для аналитики
-  const sub1 = Notifications.addNotificationReceivedListener((_n) => {});
+  // При получении пуша о звонке — показать нативный экран входящего (CallKeep, Android)
+  const sub1 = Notifications.addNotificationReceivedListener((n) => {
+    try {
+      const data = (n as any)?.request?.content?.data;
+      if (data?.type === 'call' && data?.callId && data?.from && isCallKeepAvailable()) {
+        displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
+      }
+    } catch {}
+  });
   return () => {
     sub1.remove();
     sub2.remove();

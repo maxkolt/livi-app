@@ -41,6 +41,7 @@ import { usePiP as usePiPHook } from './hooks/usePiP';
 import { useIncomingCall } from './hooks/useIncomingCall';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import InCallManager from 'react-native-incall-manager';
+import { reportEndCallToCallKeep } from '../../utils/callKeep';
 
 type Props = { 
   route?: { 
@@ -1127,9 +1128,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         return;
       }
       
-      // КРИТИЧНО: Устанавливаем флаг СРАЗУ, чтобы предотвратить повторные вызовы
+      const idToReport = callId ?? currentCallIdRef.current ?? null;
+      reportEndCallToCallKeep(idToReport);
+
       isEndingCallRef.current = true;
-      
+
       logger.info('[VideoCall] 🔴 callEnded event - переход в неактивное состояние', {
         roomId,
         callId,
@@ -1434,14 +1437,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }
     
     try {
-      // Менее шумно: оставляем одну сводную INFO строку (детали — в debug).
+      const idToReport = callId ?? currentCallIdRef.current ?? (session as any)?.callId ?? null;
+      reportEndCallToCallKeep(idToReport);
+
       logger.info('[VideoCall] Ending call (stop camera/mic)', {
         roomId,
         callId,
         partnerId,
         timestamp: Date.now()
       });
-      
+
       // Закрываем PiP если открыт
       if (pipRef.current.visible) {
         pipRef.current.hidePiP();

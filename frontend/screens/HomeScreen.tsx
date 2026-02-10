@@ -689,16 +689,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => { cancelled = true; };
   }, [updateAvailable]);
 
-  // Автоскрытие бейджа через 5 секунд
-  useEffect(() => {
-    if (!showUpdateBadge) return;
-    const t = setTimeout(() => {
-      setShowUpdateBadgeState(false);
-      markUpdateBadgeShown();
-    }, 5000);
-    return () => clearTimeout(t);
-  }, [showUpdateBadge]);
-
   // Анимация вращения иконки обновления (две стрелки по кругу); перезапуск при входе на вкладку «Ещё»
   useEffect(() => {
     if (!updateAvailable || tab !== 'more') return;
@@ -725,6 +715,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Синхронная загрузка профиля при инициализации
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
+  // Автоскрытие бейджа «Скачайте обновление» через 5 сек — только когда заглушка уже скрыта (пользователь видит страницу приветствия).
+  // Иначе при долгой заглушке (например VPN 20+ сек) бейдж успевает исчезнуть до перехода на приветствие.
+  const splashVisible = !dataLoaded || (dataLoaded && !profileLoaded);
+  useEffect(() => {
+    if (!showUpdateBadge || splashVisible) return;
+    const t = setTimeout(() => {
+      setShowUpdateBadgeState(false);
+      markUpdateBadgeShown();
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [showUpdateBadge, splashVisible]);
   const [nick, setNick] = useState('');
   // На медленных девайсах (Android 8.1/старые модели) setState может "догонять" ввод,
   // и при нажатии "Сохранить" в тот же момент на сервер может уйти только первая буква.
