@@ -201,4 +201,3 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     }
   }
 }
-
