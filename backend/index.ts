@@ -31,7 +31,7 @@ import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl } from './routes/livekit';
-import { sendPushToUser } from './utils/push';
+import { sendPushToUser, sendCallPushToRecipient } from './utils/push';
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 
@@ -1486,17 +1486,12 @@ io.on('connection', async (sock: AuthedSocket) => {
         io.to(`u:${peerId}`).emit('call:incoming', { callId, from: me, fromNick });
         io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
 
-        // Push для входящего звонка: только data (без title/body), чтобы FCM всегда вызывал onMessageReceived
-        // при убитом/фоновом приложении — тогда показывается нативный экран CallKeep, а не просто уведомление.
+        // Push для входящего звонка: Android с FCM-токеном — data-only через FCM (onMessageReceived в фоне);
+        // остальные — через Expo без title/body. Так показывается нативный экран CallKeep при убитом/фоне.
         try {
           logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
-          await sendPushToUser(peerId, {
-            kind: 'call',
-            channelId: 'calls',
-            categoryId: 'incoming_call',
-            data: { type: 'call', callId, from: me, fromNick: fromNick || '', categoryId: 'incoming_call', tag: 'incoming_call' },
-          });
-          logger.info('[call:initiate] call push sent to Expo', { peerId });
+          await sendCallPushToRecipient(peerId, { callId, from: me, fromNick: fromNick || '' });
+          logger.info('[call:initiate] call push sent', { peerId });
         } catch (pushErr: any) {
           logger.warn('[call:initiate] push to recipient failed', { peerId, error: pushErr?.message });
         }

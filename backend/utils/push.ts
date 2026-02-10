@@ -7,29 +7,50 @@ const expo = new Expo();
 
 type PushKind = 'message' | 'call';
 
+let firebaseApp: unknown = null;
+function getFirebaseMessaging(): { send: (msg: unknown) => Promise<string> } | null {
+  if (!firebaseApp) {
+    try {
+      const key = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+      if (key) {
+        const cred = JSON.parse(key) as object;
+        const admin = require('firebase-admin');
+        firebaseApp = admin.initializeApp({ credential: admin.credential.cert(cred) });
+        logger.info('[push] Firebase Admin initialized (FCM data-only for calls)');
+      }
+    } catch (e) {
+      logger.warn('[push] Firebase Admin init failed (call push will use Expo only)', { error: (e as Error)?.message });
+    }
+  }
+  return firebaseApp ? require('firebase-admin').messaging() : null;
+}
+
 export async function upsertExpoPushToken(opts: {
   userId: string;
   installId?: string;
   platform: 'android' | 'ios';
   token: string;
+  fcmToken?: string;
 }) {
-  const { userId, installId, platform, token } = opts;
+  const { userId, installId, platform, token, fcmToken } = opts;
   if (!Expo.isExpoPushToken(token)) {
     throw new Error('invalid_expo_push_token');
   }
 
-  // token уникальный, поэтому upsert делаем по token
+  const update: Record<string, unknown> = {
+    userId,
+    installId: String(installId || ''),
+    platform,
+    token,
+    updatedAtMs: Date.now(),
+  };
+  if (platform === 'android' && typeof fcmToken === 'string' && fcmToken.length > 0) {
+    update.fcmToken = fcmToken;
+  }
+
   await PushTokenModel.updateOne(
     { token },
-    {
-      $set: {
-        userId,
-        installId: String(installId || ''),
-        platform,
-        token,
-        updatedAtMs: Date.now(),
-      },
-    },
+    { $set: update },
     { upsert: true }
   ).exec();
 }
@@ -77,6 +98,77 @@ export async function sendPushToUser(userId: string, msg: Omit<ExpoPushMessage, 
     }
   } catch (e) {
     logger.warn('[push] sendPushToUser failed', e as any);
+  }
+}
+
+/** Данные входящего звонка для пуша */
+export type CallPushData = {
+  callId: string;
+  from: string;
+  fromNick: string;
+};
+
+/**
+ * Отправка пуша о входящем звонке: на Android с FCM-токеном — data-only через FCM (onMessageReceived в фоне),
+ * остальным — через Expo (без title/body). Так нативный экран звонка показывается при убитом/фоновом приложении.
+ */
+export async function sendCallPushToRecipient(userId: string, data: CallPushData): Promise<void> {
+  const recs = await PushTokenModel.find({ userId }).select('token platform fcmToken').lean();
+  if (!recs?.length) {
+    logger.warn('[push] sendCallPushToRecipient: no tokens for user', { userId });
+    return;
+  }
+
+  const fcmData = {
+    type: 'call',
+    callId: data.callId,
+    from: data.from,
+    fromNick: data.fromNick || '',
+  };
+
+  const messaging = getFirebaseMessaging();
+  const expoTokens: string[] = [];
+
+  type Rec = { token: string; platform: string; fcmToken?: string };
+  const list = recs as unknown as Rec[];
+  for (const r of list) {
+    if (r.platform === 'android' && r.fcmToken && messaging) {
+      try {
+        await messaging.send({
+          token: r.fcmToken,
+          data: Object.fromEntries(Object.entries(fcmData).map(([k, v]) => [k, String(v)])),
+          android: { priority: 'high' },
+          // без notification — только data, чтобы в фоне вызывался onMessageReceived
+        });
+        logger.info('[push] call push sent via FCM (data-only)', { userId });
+      } catch (e) {
+        logger.warn('[push] FCM send failed, falling back to Expo for this device', { error: (e as Error)?.message });
+        if (Expo.isExpoPushToken(r.token)) expoTokens.push(r.token);
+      }
+    } else {
+      if (Expo.isExpoPushToken(r.token)) expoTokens.push(r.token);
+    }
+  }
+
+  if (expoTokens.length > 0) {
+    logger.info('[push] sendCallPushToRecipient: sending via Expo (fallback or iOS)', { userId, tokenCount: expoTokens.length });
+    const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
+      to,
+      sound: 'default',
+      priority: 'high',
+      kind: 'call' as PushKind,
+      channelId: 'calls',
+      categoryId: 'incoming_call',
+      data: { ...fcmData, categoryId: 'incoming_call', tag: 'incoming_call' },
+    }));
+    const chunks = expo.chunkPushNotifications(messages);
+    for (const chunk of chunks) {
+      try {
+        await expo.sendPushNotificationsAsync(chunk);
+      } catch (e) {
+        logger.warn('[push] sendCallPushToRecipient Expo failed', e as any);
+      }
+    }
   }
 }
 

@@ -28,7 +28,7 @@ eas build --profile development --platform ios
 npx expo start --dev-client
 ```
 
-Теперь приложение поддерживает WebRTC и другие нативные модули, включая `react-native-webrtc`. Все функции видеочата будут работать как задумано.
+Теперь приложение поддерживает WebRTC и другие нативные модули, включая `react-native-webrtc`. Все функции видеочата будут работать как задумано. Нативный экран входящего видеозвонка (CallKeep/Telecom) тоже требует такого билда — в Expo Go и чистом Managed Workflow он недоступен (нужны iOS CallKit/PushKit и Android FCM + Telecom API).
 
 ## TURN (важно для VPN/моб.сети/CGNAT)
 

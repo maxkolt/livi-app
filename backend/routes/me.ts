@@ -242,8 +242,8 @@ router.post('/push-token', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'no_installId' });
     }
 
-    // Basic abuse protection: token updates are rare
-    const rl = checkRateLimit(`push_token:${installId}`, 10, 60 * 60_000);
+    // Защита от спама: лимит щедрый, т.к. приложение перерегистрирует токен при каждом запуске и при реконнекте сокета
+    const rl = checkRateLimit(`push_token:${installId}`, 60, 60 * 60_000);
     if (!rl.ok) {
       res.setHeader('Retry-After', String(rl.retryAfterSec || 3600));
       return res.status(429).json({ ok: false, error: 'rate_limited' });
@@ -264,7 +264,7 @@ router.post('/push-token', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
-    const { token, platform } = (req.body || {}) as { token?: string; platform?: 'ios' | 'android' };
+    const { token, platform, fcmToken } = (req.body || {}) as { token?: string; platform?: 'ios' | 'android'; fcmToken?: string };
 
     if (!token || typeof token !== 'string') {
       return res.status(400).json({ ok: false, error: 'token_required' });
@@ -273,7 +273,7 @@ router.post('/push-token', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'platform_required' });
     }
 
-    await upsertExpoPushToken({ userId, installId, platform, token });
+    await upsertExpoPushToken({ userId, installId, platform, token, fcmToken: typeof fcmToken === 'string' ? fcmToken : undefined });
     logger.info('[push] token registered', {
       userId: String(userId),
       platform,

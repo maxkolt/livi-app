@@ -299,37 +299,30 @@ export async function registerAndSendPushToken(userId?: string) {
       return;
     }
 
-    // --- DEV helper: get *device* push token (FCM on Android) for Firebase "Test on device" ---
-    // Firebase Console expects an FCM registration token. Expo's push token (ExponentPushToken[...])
-    // is a different thing.
+    // FCM token (Android): для data-only пуша звонка — бэкенд шлёт в FCM, onMessageReceived вызывается в фоне → нативный экран.
+    let fcmToken: string | undefined;
     try {
       const deviceTokenResp = await Notifications.getDevicePushTokenAsync();
       const deviceToken = (deviceTokenResp as any)?.data;
       const deviceType = String((deviceTokenResp as any)?.type || '');
-      if (deviceToken) {
+      if (deviceToken && Platform.OS === 'android') {
+        fcmToken = String(deviceToken);
         logger.info('[push] device push token acquired', {
           type: deviceType,
-          tokenPrefix: String(deviceToken).slice(0, 18),
+          tokenPrefix: fcmToken.slice(0, 18),
         });
         if (__DEV__) {
-          // Intentionally log full token in dev for copy/paste into Firebase Console test dialog.
-          // Do NOT rely on this in production logs.
-          console.log('[push][DEV] DEVICE_PUSH_TOKEN (copy into Firebase Test on device):', String(deviceToken));
+          console.log('[push][DEV] DEVICE_PUSH_TOKEN (copy into Firebase Test on device):', fcmToken);
         }
       }
     } catch (e) {
-      // В dev окружении FCM часто не настроен (или dev-client/сборка без google-services),
-      // поэтому getDevicePushTokenAsync может падать с FirebaseApp.initializeApp.
-      // Это НЕ мешает Expo push token (ExponentPushToken[...]) и не должно спамить WARN.
       const msg = String((e as any)?.message || e || '');
       const looksLikeFcmSetupError =
         msg.includes('fcm-credentials') ||
         msg.includes('Default FirebaseApp is not initialized') ||
         msg.includes('FirebaseApp.initializeApp');
       if (__DEV__ && looksLikeFcmSetupError) {
-        logger.debug('[push] skipping device push token warning (FCM not configured)', {
-          message: msg.slice(0, 220),
-        });
+        logger.debug('[push] skipping device push token warning (FCM not configured)', { message: msg.slice(0, 220) });
       } else {
         logger.warn('[push] failed to get device push token', e as any);
       }
@@ -367,6 +360,7 @@ export async function registerAndSendPushToken(userId?: string) {
       body: JSON.stringify({
         token,
         platform: Platform.OS,
+        ...(Platform.OS === 'android' && fcmToken ? { fcmToken } : {}),
       }),
     }).catch((e) => {
       logger.warn('[push] failed to register token (network)', e);

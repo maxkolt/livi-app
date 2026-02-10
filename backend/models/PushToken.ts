@@ -8,6 +8,8 @@ const PushTokenSchema = new mongoose.Schema(
     installId: { type: String, default: '', index: true },
     platform: { type: String, enum: ['android', 'ios'], required: true, index: true },
     token: { type: String, required: true, unique: true, index: true },
+    /** FCM registration token (Android only). Для data-only пуша звонка — onMessageReceived вызывается в фоне. */
+    fcmToken: { type: String, default: '', index: true },
     updatedAtMs: { type: Number, default: () => Date.now(), index: true },
   },
   { timestamps: true }
