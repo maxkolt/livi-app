@@ -4,9 +4,28 @@ import 'react-native-reanimated';
 // Ранняя загрузка модуля пуша, чтобы захватить getLastNotificationResponseAsync до монтирования App (важно для входящего звонка из фона/убитого приложения)
 import './utils/pushNotifications';
 
-import { Alert } from 'react-native';
+import { Alert, AppRegistry, Platform } from 'react-native';
 import { registerRootComponent } from 'expo';
 import App from './App';
+import { setupCallKeep, displayIncomingCall } from './utils/callKeep';
+import * as Notifications from 'expo-notifications';
+
+// Headless-задача: пуш о звонке пришёл при убитом/фоновом приложении → нативный FCM запустил этот таск → показываем CallKeep
+AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (data: { type?: string; callId?: string; from?: string; fromNick?: string } | null) => {
+  if (Platform.OS !== 'android') return;
+  console.log('[headless] RNCallKeepBackgroundMessage received', data ? { type: data.type, callId: data?.callId, from: data?.from } : null);
+  if (!data || data.type !== 'call' || !data.callId || !data.from) return;
+  try {
+    await setupCallKeep();
+    displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
+    console.log('[headless] displayIncomingCall done', data.callId);
+    try {
+      await Notifications.dismissAllNotificationsAsync();
+    } catch {}
+  } catch (e) {
+    console.warn('[headless] RNCallKeepBackgroundMessage failed', e);
+  }
+});
 
 // Глобальный обработчик ошибок для предотвращения крашей
 try {

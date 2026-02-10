@@ -15,8 +15,9 @@
   <!-- CallKeep: foreground service для микрофона в фоне при звонке (Android 11+) -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
-  <!-- CallKeep selfManaged: READ_CALL_LOG требуется по документации -->
+  <!-- CallKeep selfManaged: READ_CALL_LOG, READ_PHONE_NUMBERS (TelecomManager.getPhoneAccount на части устройств) -->
   <uses-permission android:name="android.permission.READ_CALL_LOG"/>
+  <uses-permission android:name="android.permission.READ_PHONE_NUMBERS"/>
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
@@ -28,6 +29,18 @@
     <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
+    <!-- Убираем дефолтный FCM-сервис Expo, подменяем своим (расширяет Expo): звонок → headless → CallKeep. -->
+    <service
+      android:name="expo.modules.notifications.service.ExpoFirebaseMessagingService"
+      tools:node="remove"
+      xmlns:tools="http://schemas.android.com/tools"/>
+    <service
+      android:name=".LiviFirebaseMessagingService"
+      android:exported="false">
+      <intent-filter android:priority="-1">
+        <action android:name="com.google.firebase.MESSAGING_EVENT"/>
+      </intent-filter>
+    </service>
     <!-- CallKeep: ConnectionService для нативного экрана входящего звонка (Android) -->
     <service
       android:name="io.wazo.callkeep.VoiceConnectionService"

@@ -748,6 +748,8 @@ const callsById = new Map<string, CallLink>();
 const callOfUser = new Map<string, { with: string; callId: string }>();
 // Активный callId для конкретного socket.id (после accept)
 const activeCallBySocket = new Map<string, string>();
+/** callId -> roomId после call:accept (для call:end, когда клиент присылает только callId, напр. принятие из пуша) */
+const callIdToRoomId = new Map<string, string>();
 // Пользователь занят рандом-видеочатом (по userId) — используется также для findRandom
 
 function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'canceled' | 'timeout') {
@@ -873,8 +875,12 @@ io.on('connection', async (sock: AuthedSocket) => {
         userId: (sock as any)?.data?.userId
       });
       
-      // КРИТИЧНО: Приоритетно берем roomId из параметров, затем из сокет-данных, затем из activeCallBySocket, и только потом callId
-      const resolvedRoomId = roomId || (sock as any)?.data?.roomId || activeCallBySocket.get(sock.id);
+      // КРИТИЧНО: Приоритетно берем roomId из параметров, сокет-данных, activeCallBySocket; если передан только callId — смотрим callIdToRoomId (принятие из пуша)
+      const resolvedRoomId =
+        roomId ||
+        (sock as any)?.data?.roomId ||
+        activeCallBySocket.get(sock.id) ||
+        (callId ? callIdToRoomId.get(String(callId)) : undefined);
       const id = String(resolvedRoomId || callId || '');
       
       logger.debug('📥 [call:end] Resolved call identifier', {
@@ -1045,13 +1051,15 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       }
       
-      logger.info('✅ [call:end] Call cleanup completed', { 
+      if (callId) callIdToRoomId.delete(String(callId));
+
+      logger.info('✅ [call:end] Call cleanup completed', {
         callId: id,
         roomId: id,
         participants: socketsToNotify.size,
         notifiedSockets: Array.from(socketsToNotify)
       });
-      
+
     } catch (e) {
       logger.error('❌ [call:end] Call end handler error', { error: (e as any)?.message || String(e) });
     }
@@ -1478,18 +1486,14 @@ io.on('connection', async (sock: AuthedSocket) => {
         io.to(`u:${peerId}`).emit('call:incoming', { callId, from: me, fromNick });
         io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
 
-        // Push для входящего звонка: заголовок — имя один раз, тело — «звонит вам»; категория с кнопками Поднять/Отменить
+        // Push для входящего звонка: только data (без title/body), чтобы FCM всегда вызывал onMessageReceived
+        // при убитом/фоновом приложении — тогда показывается нативный экран CallKeep, а не просто уведомление.
         try {
-          const callTitle = fromNick ? `${fromNick}` : 'Входящий звонок';
-          const callBody = 'звонит вам';
           logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
           await sendPushToUser(peerId, {
             kind: 'call',
-            title: callTitle,
-            body: callBody,
             channelId: 'calls',
             categoryId: 'incoming_call',
-            // categoryId в data — для Android (expo читает из remoteMessage.data). tag — один и тот же, чтобы новое уведомление заменяло предыдущее (не «старое»).
             data: { type: 'call', callId, from: me, fromNick: fromNick || '', categoryId: 'incoming_call', tag: 'incoming_call' },
           });
           logger.info('[call:initiate] call push sent to Expo', { peerId });
@@ -1593,10 +1597,11 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.debug('Participant B joined room', { socketId: bSock.id, roomId, callId: id });
       } catch {}
       
-      // КРИТИЧНО: Сохраняем roomId в activeCallBySocket, а не callId, чтобы fallback для call:end всегда был корректным именем комнаты
+      // КРИТИЧНО: Сохраняем roomId в activeCallBySocket и callId -> roomId для call:end, когда клиент присылает только callId (принятие из пуша)
       try { activeCallBySocket.set(aSock.id, roomId); } catch {}
       try { activeCallBySocket.set(bSock.id, roomId); } catch {}
-      
+      try { callIdToRoomId.set(id, roomId); } catch {}
+
       // Устанавливаем busy для обоих
       (aSock as any).data = (aSock as any).data || {};
       (aSock as any).data.busy = true;

@@ -772,8 +772,13 @@ function AppContent() {
     }
   }, [routeName, startAnim]);
 
-  // Сохраняем обработчик в ref для использования в fallback
+  // Сохраняем обработчик в ref для использования в fallback и для пуша
   incomingCallHandlerRef.current = handleIncomingCall;
+  (global as any).__setIncomingCallFromPush = (data: any) => {
+    if (data?.callId && data?.from && incomingCallHandlerRef.current) {
+      incomingCallHandlerRef.current({ callId: String(data.callId), from: String(data.from), fromNick: data?.fromNick ?? '' });
+    }
+  };
 
   // КРИТИЧНО: Общий прямой обработчик для перерегистрации при переподключении
   // Используем одну функцию для всех случаев чтобы избежать конфликтов
@@ -814,7 +819,7 @@ function AppContent() {
           socket.off('call:incoming', sharedDirectHandlerRef.current);
         }
         socket.on('call:incoming', directHandler);
-        logger.debug('Registered/re-registered call:incoming handler');
+        logger.info('[call:incoming] socket handler registered');
       } catch (e) {
         logger.warn('Failed to register call:incoming handler:', e);
       }

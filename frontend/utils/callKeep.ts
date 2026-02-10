@@ -2,10 +2,12 @@
  * CallKeep (ConnectionService) — нативный экран входящего звонка на Android.
  * Инициализация, displayIncomingCall, обработка answer/end.
  */
-import { Platform } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
 import { logger } from './logger';
 
 let isSetup = false;
+/** Разрешение READ_PHONE_NUMBERS выдано (иначе VoiceConnectionService падает с SecurityException) */
+let hasPhoneNumbersPermission = false;
 /** callId (uuid) -> { from, fromNick } для навигации при answer из нативного UI */
 const pendingCallByUuid: Record<string, { from: string; fromNick?: string }> = {};
 
@@ -13,6 +15,24 @@ const pendingCallByUuid: Record<string, { from: string; fromNick?: string }> = {
 export async function setupCallKeep(): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
   if (isSetup) return true;
+
+  try {
+    const status = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS);
+    if (status) {
+      hasPhoneNumbersPermission = true;
+    } else {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS,
+        { title: 'Доступ к звонкам', message: 'Нужен для отображения входящих видеозвонков в системном экране.', buttonPositive: 'Разрешить' }
+      );
+      hasPhoneNumbersPermission = granted === PermissionsAndroid.RESULTS.GRANTED;
+      if (!hasPhoneNumbersPermission) {
+        logger.warn('[callKeep] READ_PHONE_NUMBERS not granted — нативный экран звонка отключён, только модалка в приложении');
+      }
+    }
+  } catch (e) {
+    logger.warn('[callKeep] READ_PHONE_NUMBERS check/request failed', e as Error);
+  }
 
   try {
     const RNCallKeep = require('react-native-callkeep');
@@ -49,15 +69,34 @@ export async function setupCallKeep(): Promise<boolean> {
 }
 
 export function isCallKeepAvailable(): boolean {
-  return Platform.OS === 'android' && isSetup;
+  return Platform.OS === 'android' && isSetup && hasPhoneNumbersPermission;
 }
+
+/** Дедупликация: один и тот же callId не показываем в CallKeep повторно (сокет + пуш могут вызвать несколько раз). */
+const lastDisplayedCallId = { id: '' as string, at: 0 };
+const DISPLAY_DEBOUNCE_MS = 3000;
 
 /**
  * Показать входящий звонок в нативном UI (полный экран / уведомление).
- * Вызывать при получении входящего (сокет или пуш).
+ * Вызывать при получении входящего (сокет или пуш). Повторные вызовы для того же callId игнорируются.
  */
 export function displayIncomingCall(callId: string, fromUserId: string, fromNick?: string, hasVideo = true): void {
-  if (Platform.OS !== 'android' || !isSetup) return;
+  if (Platform.OS !== 'android') return;
+  if (!isSetup || !hasPhoneNumbersPermission) {
+    logger.warn('[callKeep] displayIncomingCall skipped (no setup or no READ_PHONE_NUMBERS)', {
+      callId,
+      isSetup,
+      hasPhoneNumbersPermission,
+    });
+    return;
+  }
+  const now = Date.now();
+  if (lastDisplayedCallId.id === callId && now - lastDisplayedCallId.at < DISPLAY_DEBOUNCE_MS) {
+    logger.debug('[callKeep] displayIncomingCall skipped (duplicate)', { callId });
+    return;
+  }
+  lastDisplayedCallId.id = callId;
+  lastDisplayedCallId.at = now;
   try {
     pendingCallByUuid[callId] = { from: fromUserId, fromNick };
     const RNCallKeep = require('react-native-callkeep');

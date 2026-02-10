@@ -186,13 +186,13 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
         try {
           stopIncomingCallAlert();
         } catch {}
-        await navigateToVideoCallIncoming(peerUserId, callId);
-        // Вызываем acceptCall при любом «принять»: кнопка «Поднять» или тап по уведомлению (в т.ч. full-screen)
+        // Сначала сообщаем серверу о принятии, чтобы звонящий получил call:accepted и начал сессию
         try {
           acceptCall(callId);
         } catch (e) {
           logger.warn('[push] acceptCall from notification failed', { callId, error: (e as Error)?.message });
         }
+        await navigateToVideoCallIncoming(peerUserId, callId);
         try {
           await clearNotificationIndicators();
         } catch {}
@@ -437,12 +437,19 @@ export function addNotificationListeners() {
     if (data) await handleNotificationResponse(data, actionId);
   });
 
-  // При получении пуша о звонке — показать нативный экран входящего (CallKeep, Android)
+  // При получении пуша о звонке — показать нативный экран (CallKeep) и модалку в приложении (fallback, если сокет не доставил)
   const sub1 = Notifications.addNotificationReceivedListener((n) => {
     try {
       const data = (n as any)?.request?.content?.data;
-      if (data?.type === 'call' && data?.callId && data?.from && isCallKeepAvailable()) {
-        displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
+      if (data?.type === 'call' && data?.callId && data?.from) {
+        logger.info('[push] incoming call notification received', { callId: data.callId, from: data.from });
+        if (isCallKeepAvailable()) {
+          displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
+        }
+        const setFromPush = (global as any).__setIncomingCallFromPush;
+        if (typeof setFromPush === 'function') {
+          setFromPush(data);
+        }
       }
     } catch {}
   });
