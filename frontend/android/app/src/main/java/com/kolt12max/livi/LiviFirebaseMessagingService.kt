@@ -19,7 +19,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
 
         var type = data["type"]
         var callId = data["callId"]
-        var from = data["from"]
+        var from = data["from"] ?: data["fromUserId"]
         var fromNick = data["fromNick"] ?: ""
 
         // Expo может отправлять payload в data["body"] как JSON
@@ -28,7 +28,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 val body = JSONObject(data["body"]!!)
                 type = body.optString("type", "").takeIf { it.isNotEmpty() }
                 callId = body.optString("callId", "").takeIf { it.isNotEmpty() }
-                from = body.optString("from", "").takeIf { it.isNotEmpty() }
+                from = body.optString("from", "").takeIf { it.isNotEmpty() } ?: body.optString("fromUserId", "").takeIf { it.isNotEmpty() }
                 fromNick = body.optString("fromNick", "")
             } catch (e: Exception) {
                 Log.w(TAG, "FCM parse body failed", e)

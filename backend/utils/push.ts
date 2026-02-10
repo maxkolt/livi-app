@@ -133,6 +133,13 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     from: data.from,
     fromNick: data.fromNick || '',
   };
+  // FCM data payload: ключ "from" зарезервирован, используем fromUserId для FCM
+  const fcmDataPayload: Record<string, string> = {
+    type: 'call',
+    callId: data.callId,
+    fromUserId: data.from,
+    fromNick: data.fromNick || '',
+  };
 
   const messaging = getFirebaseMessaging();
   type Rec = { token: string; platform: string; fcmToken?: string };
@@ -159,7 +166,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
       try {
         await messaging.send({
           token: r.fcmToken,
-          data: Object.fromEntries(Object.entries(fcmData).map(([k, v]) => [k, String(v)])),
+          data: Object.fromEntries(Object.entries(fcmDataPayload).map(([k, v]) => [k, String(v)])),
           android: { priority: 'high' },
           // без notification — только data, чтобы в фоне вызывался onMessageReceived
         });
