@@ -5,6 +5,7 @@ import { onCallIncoming, onCallCanceled, acceptCall, declineCall } from '../../.
 import socket from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { startIncomingCallAlert, stopIncomingCallAlert } from '../../../utils/incomingCallAlert';
+import { syncAppBadgeFromMissedCount } from '../../../utils/pushNotifications';
 
 interface UseIncomingCallProps {
   myUserId?: string;
@@ -123,6 +124,7 @@ export const useIncomingCall = ({
       const from = d?.from ? String(d.from) : undefined;
       if (from && from !== String(myUserId || '')) {
         await incMissed(from);
+        syncAppBadgeFromMissedCount().catch(() => {});
       }
 
       setIncomingOverlay(false);
@@ -157,6 +159,7 @@ export const useIncomingCall = ({
       stopIncomingCallAlert();
       if (uid) {
         incMissed(uid);
+        syncAppBadgeFromMissedCount().catch(() => {});
       }
     };
 
@@ -194,23 +197,13 @@ export const useIncomingCall = ({
     };
   }, [routeParams?.directCall, friendCallAccepted, session, currentCallIdRef]);
 
-  // Обработка call:declined через socket
+  // Обработка call:declined через socket (получатель — инициатор; отклонил тот, кому звонили)
   useEffect(() => {
-    const handleDeclined = async (d?: any) => {
-      // ВАЖНО: Это событие ТОЛЬКО для звонков друзей, НЕ для рандомного чата
+    const handleDeclined = (d?: any) => {
       const isFriendCall = !!routeParams?.directCall || friendCallAccepted || !!currentCallIdRef.current;
-      if (!isFriendCall) {
-        return;
-      }
+      if (!isFriendCall) return;
 
-      // КРИТИЧНО: Увеличиваем счетчик пропущенных только если отменил инициатор, а не мы сами
-      // (как в эталонном файле)
-      const from = d?.from ? String(d.from) : undefined;
-      if (from && from !== String(myUserId || '')) {
-        await incMissed(from);
-        logger.info('[useIncomingCall] call:declined - увеличили счетчик пропущенных (отменил инициатор)', { from });
-      }
-
+      // Пропущенным не считаем: тот, кому звонили, явно отклонил — счётчик не увеличиваем
       setIncomingOverlay(false);
       setIncomingFriendCall(null);
       setIncomingCall(null);
@@ -218,11 +211,8 @@ export const useIncomingCall = ({
     };
 
     socket.on('call:declined', handleDeclined);
-
-    return () => {
-      socket.off('call:declined', handleDeclined);
-    };
-  }, [routeParams?.directCall, friendCallAccepted, myUserId, incMissed, currentCallIdRef]);
+    return () => socket.off('call:declined', handleDeclined);
+  }, [routeParams?.directCall, friendCallAccepted, currentCallIdRef]);
 
   // Обработка события incomingCall из session
   // Используем ref для session, чтобы не пересоздавать подписки при каждом изменении
@@ -299,6 +289,7 @@ export const useIncomingCall = ({
       if (uid) {
         map[uid] = 0;
         await AsyncStorage.setItem(key, JSON.stringify(map));
+        syncAppBadgeFromMissedCount().catch(() => {});
       }
     } catch {}
 

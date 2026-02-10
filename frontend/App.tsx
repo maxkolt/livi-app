@@ -29,7 +29,7 @@ import PiPOverlay from "./src/pip/PiPOverlay";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native';
-import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken } from './utils/pushNotifications';
+import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount } from './utils/pushNotifications';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
 import { setupCallKeep, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo } from './utils/callKeep';
 import { useLang } from './store/lang';
@@ -380,7 +380,7 @@ function AppContent() {
         const callId = params.get('callId') || params.get('call_id') || '';
         if (callId) {
           logger.info('[App] decline-call deep link', { callId });
-          handleDeclineCallFromDeepLink(callId);
+          await handleDeclineCallFromDeepLink(callId);
           return true;
         }
       }
@@ -934,32 +934,11 @@ function AppContent() {
 
   // Закрываем входящую модалку, если звонящий отменил вызов
   React.useEffect(() => {
-    const offDecl = onCallDeclined?.(async (d) => {
+    const offDecl = onCallDeclined?.((d) => {
       logger.debug('Call declined received', { callId: d?.callId });
       stopIncomingCallAlert();
-      // Мгновенно закрываем UI
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
-      try {
-        // Помечаем callId как отменённый (инициатор нажал Отменить)
-        try {
-          const id = String((d as any)?.callId || '');
-          if (id) canceledCallsRef.current.set(id, Date.now());
-        } catch {}
-        // Инкремент только у получателя: проверяем, совпадает ли с последним входящим
-        const lastFrom = await AsyncStorage.getItem('last_incoming_from');
-        if (lastFrom && String(lastFrom) === String(d?.from || '')) {
-          const key = 'missed_calls_by_user_v1';
-          const raw = await AsyncStorage.getItem(key);
-          const map = raw ? JSON.parse(raw) : {};
-          map[lastFrom] = (map[lastFrom] || 0) + 1;
-          await AsyncStorage.setItem(key, JSON.stringify(map));
-          // сразу пушим в UI
-          try { emitMissedIncrement(lastFrom); } catch {}
-          // и очищаем маркер
-          try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
-        }
-      } catch {}
-      // Никакой навигации — пользователь остаётся там, где был
+      // call:declined = тот, кому звонили, отклонил — пропущенным не считаем, счётчик не увеличиваем
     });
     const offCancel = onCallCanceled?.(async (d) => {
       logger.debug('Call canceled received', { callId: d?.callId });
@@ -982,6 +961,7 @@ function AppContent() {
           map[uid] = (map[uid] || 0) + 1;
           await AsyncStorage.setItem(key, JSON.stringify(map));
           try { emitMissedIncrement(uid); } catch {}
+          syncAppBadgeFromMissedCount().catch(() => {});
           // очищаем маркер
           try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
         }
@@ -1080,6 +1060,7 @@ function AppContent() {
           map[uid] = (map[uid] || 0) + 1;
           await AsyncStorage.setItem(key, JSON.stringify(map));
           try { emitMissedIncrement(uid); } catch {}
+          syncAppBadgeFromMissedCount().catch(() => {});
           // очищаем маркер, чтобы у звонящего не сработали другие обработчики
           try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
         }
@@ -1112,6 +1093,7 @@ function AppContent() {
               map[uid] = (map[uid] || 0) + 1;
               await AsyncStorage.setItem(key, JSON.stringify(map));
               try { emitMissedIncrement(uid); } catch {}
+              syncAppBadgeFromMissedCount().catch(() => {});
               try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
             }
             } catch {}
@@ -1384,6 +1366,7 @@ export default function App() {
     console.log('[App] 🔥 endCallImpl вызван', { callId, roomId });
     reportEndCallToCallKeep(callId);
     setCallKeepAvailable(true);
+    clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
     try {
       const cleanupFn = (global as any).__endCallCleanupRef?.current;
       if (cleanupFn && typeof cleanupFn === 'function') {

@@ -72,7 +72,7 @@ import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onRequestCloseIncoming, emitCloseIncoming } from '../utils/globalEvents';
-import { clearNotificationIndicators } from '../utils/pushNotifications';
+import { clearNotificationIndicators, syncAppBadgeFromMissedCount } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
 // УБРАНО: forceClearUserDataOnly не используется - вместо этого используется hardLocalReset() и clearAllUserData() из socket.ts
@@ -2801,8 +2801,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const userIdStr = String(userId);
       setMissedByUser((prev) => {
         const next = { ...prev, [userIdStr]: (prev[userIdStr] || 0) + 1 };
-        // КРИТИЧНО: Сохраняем в AsyncStorage сразу после обновления состояния
-        AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(() => {});
+        // КРИТИЧНО: Сохраняем в AsyncStorage и синхронизируем бейдж после записи
+        AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next))
+          .then(() => syncAppBadgeFromMissedCount())
+          .catch(() => {});
         logger.debug('[HomeScreen] Missed call incremented', { userId: userIdStr, count: next[userIdStr] });
         return next;
       });

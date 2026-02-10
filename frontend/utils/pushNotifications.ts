@@ -2,6 +2,7 @@ import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { CommonActions } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE } from '../sockets/socket';
 import { acceptCall, declineCall } from '../sockets/socket';
 import { getInstallId } from './installId';
@@ -9,16 +10,35 @@ import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
 import { displayIncomingCall, isCallKeepAvailable } from './callKeep';
 
+const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
+
 /** ID категории уведомления входящего звонка с кнопками «Поднять» / «Положить» */
 export const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
 
-export async function clearNotificationIndicators() {
-  // Android launchers usually show the badge based on *active* notifications in the tray.
-  // If we don't dismiss them, the badge can stay even after the user read messages inside the app.
+/** Синхронизировать бейдж иконки с суммарным числом пропущенных звонков. */
+export async function syncAppBadgeFromMissedCount(): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    const total = Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
+    await Notifications.setBadgeCountAsync(Math.min(99, total));
+  } catch (e) {
+    try { await Notifications.setBadgeCountAsync(0); } catch {}
+  }
+}
+
+/** Убрать уведомления из шторки и выставить бейдж по пропущенным (после отклонения/завершения звонка). */
+export async function clearCallRelatedNotificationsAndSyncBadge(): Promise<void> {
   try {
     await Notifications.dismissAllNotificationsAsync();
   } catch {}
-  // iOS badge (and some Android launchers) can also be controlled explicitly.
+  await syncAppBadgeFromMissedCount();
+}
+
+export async function clearNotificationIndicators() {
+  try {
+    await Notifications.dismissAllNotificationsAsync();
+  } catch {}
   try {
     await Notifications.setBadgeCountAsync(0);
   } catch {}
@@ -152,7 +172,7 @@ export async function openAnswerCallScreen(peerUserId: string, callId: string): 
 }
 
 /** Отклонить звонок (для livi://decline-call из нативного IncomingCallActivity). */
-export function handleDeclineCallFromDeepLink(callId: string): void {
+export async function handleDeclineCallFromDeepLink(callId: string): Promise<void> {
   try {
     stopIncomingCallAlert();
   } catch {}
@@ -161,6 +181,7 @@ export function handleDeclineCallFromDeepLink(callId: string): void {
   } catch (e) {
     logger.warn('[push] declineCall from decline-call deep link failed', { callId, error: (e as Error)?.message });
   }
+  await clearCallRelatedNotificationsAndSyncBadge();
 }
 
 /**
@@ -201,9 +222,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
         } catch (e) {
           logger.warn('[push] declineCall from notification failed', { callId, error: (e as Error)?.message });
         }
-        try {
-          await clearNotificationIndicators();
-        } catch {}
+        await clearCallRelatedNotificationsAndSyncBadge();
         return;
       }
 

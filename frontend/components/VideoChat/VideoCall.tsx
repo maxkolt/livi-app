@@ -42,6 +42,7 @@ import { useIncomingCall } from './hooks/useIncomingCall';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import InCallManager from 'react-native-incall-manager';
 import { reportEndCallToCallKeep } from '../../utils/callKeep';
+import { clearCallRelatedNotificationsAndSyncBadge } from '../../utils/pushNotifications';
 
 type Props = { 
   route?: { 
@@ -1181,6 +1182,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         session.cleanup();
       }
       clearSessionRefs();
+      clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
 
       // КРИТИЧНО: Сбрасываем флаг через небольшую задержку, чтобы дать состоянию обновиться
       setTimeout(() => {
@@ -1494,6 +1496,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         session.cleanup();
       }
       clearSessionRefs();
+      clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
 
       // КРИТИЧНО: Сбрасываем флаг через небольшую задержку, чтобы дать состоянию обновиться
       setTimeout(() => {
