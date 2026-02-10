@@ -1,14 +1,23 @@
 package com.kolt12max.livi
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.util.Log
+import android.widget.RemoteViews
+import androidx.core.content.ContextCompat
+import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.RemoteMessage
 import expo.modules.notifications.service.ExpoFirebaseMessagingService
 import org.json.JSONObject
 
 /**
  * Единственный FCM-сервис приложения: расширяет Expo и перехватывает пуши о звонке.
- * Для type=call запускает headless JS → CallKeep (нативный экран входящего звонка при убитом/фоне).
+ * Для type=call показывает уведомление с full-screen intent → IncomingCallActivity (как WhatsApp/Telegram).
  * Остальные пуши передаёт в Expo (super.onMessageReceived).
  */
 class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
@@ -36,26 +45,106 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
 
         if (type == "call" && callId != null && from != null) {
-            Log.d(TAG, "FCM call push: callId=$callId from=$from fromNick=$fromNick")
-            val intent = Intent().apply {
-                setClassName(applicationContext, "io.wazo.callkeep.RNCallKeepBackgroundMessagingService")
-                putExtra("type", "call")
-                putExtra("callId", callId)
-                putExtra("from", from)
-                putExtra("fromNick", fromNick)
+            if (MainActivity.isInForeground) {
+                Log.d(TAG, "FCM call push: app in foreground, skip notification (in-app UI will handle)")
+                return
             }
-            try {
-                applicationContext.startService(intent)
-                Log.d(TAG, "FCM started RNCallKeepBackgroundMessagingService")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to start RNCallKeepBackgroundMessagingService", e)
-            }
+            Log.d(TAG, "FCM call push: full-screen intent (WhatsApp/Telegram style) callId=$callId from=$from")
+            showIncomingCallFullScreenIntent(callId, from, fromNick)
             return
         }
         super.onMessageReceived(remoteMessage)
     }
 
+    private fun showIncomingCallFullScreenIntent(callId: String, from: String, fromNick: String) {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID_CALLS,
+                getString(R.string.incoming_call_title),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                setSound(null, null)
+                setVibrationPattern(longArrayOf(0, 500, 200, 500))
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        val fullScreenIntent = Intent(this, IncomingCallActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            putExtra(IncomingCallActivity.EXTRA_CALL_ID, callId)
+            putExtra(IncomingCallActivity.EXTRA_FROM, from)
+            putExtra(IncomingCallActivity.EXTRA_FROM_NICK, fromNick)
+        }
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            this,
+            NOTIFICATION_ID_INCOMING_CALL,
+            fullScreenIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val answerUri = Uri.parse("livi://answer-call?callId=${Uri.encode(callId)}&from=${Uri.encode(from)}&fromNick=${Uri.encode(fromNick)}")
+        val answerIntent = Intent(Intent.ACTION_VIEW, answerUri).apply {
+            setClassName(applicationContext, "com.kolt12max.livi.MainActivity")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        }
+        val answerPendingIntent = PendingIntent.getActivity(
+            this,
+            NOTIFICATION_ID_INCOMING_CALL + 1,
+            answerIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val declineUri = Uri.parse("livi://decline-call?callId=${Uri.encode(callId)}")
+        val declineIntent = Intent(Intent.ACTION_VIEW, declineUri).apply {
+            setClassName(applicationContext, "com.kolt12max.livi.MainActivity")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        }
+        val declinePendingIntent = PendingIntent.getActivity(
+            this,
+            NOTIFICATION_ID_INCOMING_CALL + 2,
+            declineIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val title = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_title)
+        val subtitle = getString(R.string.incoming_call_title)
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID_CALLS)
+            .setSmallIcon(android.R.drawable.ic_menu_call)
+            .setContentTitle(title)
+            .setContentText(subtitle)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setAutoCancel(true)
+            .setTimeoutAfter(45_000)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+
+        try {
+            val declineColor = ContextCompat.getColor(this, R.color.notification_call_decline)
+            val acceptColor = ContextCompat.getColor(this, R.color.notification_call_accept)
+            val customView = RemoteViews(packageName, R.layout.notification_incoming_call).apply {
+                setTextViewText(R.id.notification_title, title)
+                setTextViewText(R.id.notification_text, subtitle)
+                setInt(R.id.notification_btn_decline, "setTextColor", declineColor)
+                setInt(R.id.notification_btn_accept, "setTextColor", acceptColor)
+                setOnClickPendingIntent(R.id.notification_btn_decline, declinePendingIntent)
+                setOnClickPendingIntent(R.id.notification_btn_accept, answerPendingIntent)
+            }
+            builder.setCustomContentView(customView).setCustomHeadsUpContentView(customView)
+        } catch (e: Exception) {
+            Log.e(TAG, "Custom notification view failed, using default", e)
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.incoming_call_decline), declinePendingIntent)
+                .addAction(android.R.drawable.ic_menu_call, getString(R.string.incoming_call_accept), answerPendingIntent)
+        }
+
+        notificationManager.notify(NOTIFICATION_ID_INCOMING_CALL, builder.build())
+        Log.d(TAG, "FCM: notification with full-screen intent posted")
+    }
+
     companion object {
         private const val TAG = "LiviFCM"
+        const val CHANNEL_ID_CALLS = "livi_incoming_call"
+        const val NOTIFICATION_ID_INCOMING_CALL = 1001
     }
 }

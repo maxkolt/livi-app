@@ -34,10 +34,12 @@
       android:name="expo.modules.notifications.service.ExpoFirebaseMessagingService"
       tools:node="remove"
       xmlns:tools="http://schemas.android.com/tools"/>
+    <!-- Приоритет выше дефолтного, чтобы наш сервис получал FCM до других обработчиков -->
     <service
       android:name=".LiviFirebaseMessagingService"
-      android:exported="false">
-      <intent-filter android:priority="-1">
+      android:exported="false"
+      android:directBootAware="true">
+      <intent-filter android:priority="1">
         <action android:name="com.google.firebase.MESSAGING_EVENT"/>
       </intent-filter>
     </service>
@@ -77,6 +79,20 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="livi" android:host="incoming-call"/>
       </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="livi" android:host="answer-call"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="livi" android:host="decline-call"/>
+      </intent-filter>
     </activity>
+    <!-- Full-screen incoming call (WhatsApp/Telegram style): показывается поверх блокировки при FCM-пуше о звонке -->
+    <activity android:name=".IncomingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true" android:launchMode="singleInstance"/>
   </application>
 </manifest>

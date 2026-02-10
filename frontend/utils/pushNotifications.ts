@@ -138,6 +138,31 @@ export async function openIncomingCallScreen(peerUserId: string, callId: string)
   await navigateToVideoCallIncoming(peerUserId, callId);
 }
 
+/** Открыть приложение и принять звонок (для livi://answer-call из нативного IncomingCallActivity). */
+export async function openAnswerCallScreen(peerUserId: string, callId: string): Promise<void> {
+  try {
+    stopIncomingCallAlert();
+  } catch {}
+  try {
+    acceptCall(callId);
+  } catch (e) {
+    logger.warn('[push] acceptCall from answer-call deep link failed', { callId, error: (e as Error)?.message });
+  }
+  await navigateToVideoCallIncoming(peerUserId, callId);
+}
+
+/** Отклонить звонок (для livi://decline-call из нативного IncomingCallActivity). */
+export function handleDeclineCallFromDeepLink(callId: string): void {
+  try {
+    stopIncomingCallAlert();
+  } catch {}
+  try {
+    declineCall(callId);
+  } catch (e) {
+    logger.warn('[push] declineCall from decline-call deep link failed', { callId, error: (e as Error)?.message });
+  }
+}
+
 /**
  * Обработка ответа на уведомление (тап по уведомлению или по кнопке «Поднять»/«Положить»).
  * actionIdentifier: 'answer' = Поднять, 'decline' = Положить, DEFAULT = тап по телу уведомления.

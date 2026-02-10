@@ -29,7 +29,7 @@ import PiPOverlay from "./src/pip/PiPOverlay";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native';
-import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, registerAndSendPushToken } from './utils/pushNotifications';
+import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken } from './utils/pushNotifications';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
 import { setupCallKeep, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo } from './utils/callKeep';
 import { useLang } from './store/lang';
@@ -339,7 +339,7 @@ function AppContent() {
     };
   }, []);
 
-  // ===== Deep Linking: входящий звонок livi://incoming-call (full-screen intent / пуш) =====
+  // ===== Deep Linking: звонки livi://incoming-call | livi://answer-call | livi://decline-call =====
   const handleIncomingCallDeepLink = async (url: string) => {
     try {
       const m = url.match(/livi:\/\/incoming-call[?]?(.*)/i);
@@ -348,35 +348,72 @@ function AppContent() {
       const params = new URLSearchParams(search.startsWith('?') ? search : `?${search}`);
       const callId = params.get('callId') || params.get('call_id') || '';
       const from = params.get('from') || params.get('userId') || '';
+      const fromNick = params.get('fromNick') ?? '';
       if (callId && from) {
-        logger.info('[App] Opening incoming call from deep link', { callId, from });
-        await openIncomingCallScreen(from, callId);
+        logger.info('[App] Incoming call deep link: showing native CallKeep UI', { callId, from });
+        if (Platform.OS === 'android') {
+          await setupCallKeep();
+          displayIncomingCall(callId, from, fromNick, true);
+        } else {
+          await openIncomingCallScreen(from, callId);
+        }
       }
     } catch (e) {
       logger.warn('[App] handleIncomingCallDeepLink failed', e);
     }
   };
 
+  const handleCallDeepLink = async (url: string) => {
+    try {
+      if (/livi:\/\/answer-call/i.test(url)) {
+        const params = new URLSearchParams(url.replace(/^[^?]*\?/, ''));
+        const callId = params.get('callId') || params.get('call_id') || '';
+        const from = params.get('from') || params.get('userId') || '';
+        if (callId && from) {
+          logger.info('[App] answer-call deep link: opening call', { callId, from });
+          await openAnswerCallScreen(from, callId);
+          return true;
+        }
+      }
+      if (/livi:\/\/decline-call/i.test(url)) {
+        const params = new URLSearchParams(url.replace(/^[^?]*\?/, ''));
+        const callId = params.get('callId') || params.get('call_id') || '';
+        if (callId) {
+          logger.info('[App] decline-call deep link', { callId });
+          handleDeclineCallFromDeepLink(callId);
+          return true;
+        }
+      }
+    } catch (e) {
+      logger.warn('[App] handleCallDeepLink failed', e);
+    }
+    return false;
+  };
+
   // ===== Deep Linking обработка для реферальных ссылок =====
   const INVITE_LINK_KEY = 'pending_invite_code';
   React.useEffect(() => {
-    // Обработка ссылки при открытии приложения
     const handleInitialUrl = async () => {
       try {
         const initialUrl = await Linking.getInitialURL();
         if (initialUrl) {
-          await handleIncomingCallDeepLink(initialUrl);
-          handleInviteLink(initialUrl);
+          const handled = await handleCallDeepLink(initialUrl);
+          if (!handled) {
+            await handleIncomingCallDeepLink(initialUrl);
+            handleInviteLink(initialUrl);
+          }
         }
       } catch (e) {
         logger.warn('Failed to get initial URL:', e);
       }
     };
 
-    // Обработка ссылки во время работы приложения
-    const handleUrl = (event: { url: string }) => {
-      handleIncomingCallDeepLink(event.url);
-      handleInviteLink(event.url);
+    const handleUrl = async (event: { url: string }) => {
+      const handled = await handleCallDeepLink(event.url);
+      if (!handled) {
+        await handleIncomingCallDeepLink(event.url);
+        handleInviteLink(event.url);
+      }
     };
 
     const subscription = Linking.addEventListener('url', handleUrl);

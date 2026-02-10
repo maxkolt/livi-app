@@ -4,4 +4,15 @@
   <color name="colorPrimary">#023c69</color>
   <color name="colorPrimaryDark">#0B0B0C</color>
   <color name="navigationBarColor">#38000000</color>
+  <!-- Кнопки уведомления входящего звонка -->
+  <color name="notification_call_decline">#FF5A67</color>
+  <color name="notification_call_accept">#34C759</color>
+  <!-- Карточка как в Telegram: тёмный фон, бейдж трубки -->
+  <color name="notification_card_background">#2D2D2D</color>
+  <color name="notification_phone_badge">#1E88E5</color>
+  <!-- Круглые кнопки IncomingCallActivity: тёмный фон с прозрачностью + светлая рамка -->
+  <color name="incoming_btn_accept_bg">#CC2F5C2F</color>
+  <color name="incoming_btn_accept_border">#4CAF50</color>
+  <color name="incoming_btn_decline_bg">#CC5C2F2F</color>
+  <color name="incoming_btn_decline_border">#E57373</color>
 </resources>

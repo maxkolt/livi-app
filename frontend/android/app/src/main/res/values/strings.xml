@@ -2,4 +2,8 @@
   <string name="app_name">LiVi</string>
   <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
   <string name="expo_splash_screen_status_bar_translucent" translatable="false">false</string>
+  <!-- Full-screen incoming call (WhatsApp/Telegram style) -->
+  <string name="incoming_call_title">Входящий видеозвонок</string>
+  <string name="incoming_call_accept">Принять</string>
+  <string name="incoming_call_decline">Отклонить</string>
 </resources>

@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="@drawable/notification_card_background">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <!-- Логотип LiVi -->
+        <ImageView
+            android:id="@+id/notification_logo"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:src="@mipmap/ic_launcher_round"
+            android:contentDescription="@string/app_name"
+            android:scaleType="centerCrop"
+            android:layout_marginEnd="14dp" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/notification_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:maxLines="1"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/notification_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="14sp"
+                android:textColor="#B0B0B0"
+                android:maxLines="1"
+                android:ellipsize="end" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Разделитель: TextView с фоном (View не везде поддерживается в RemoteViews) -->
+    <TextView
+        android:id="@+id/notification_divider_h"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#33FFFFFF"
+        android:layout_marginTop="12dp"
+        android:layout_marginBottom="8dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center">
+
+        <TextView
+            android:id="@+id/notification_btn_decline"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="@string/incoming_call_decline"
+            android:textColor="@color/notification_call_decline"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:background="?android:attr/selectableItemBackground" />
+
+        <TextView
+            android:id="@+id/notification_divider_v"
+            android:layout_width="1dp"
+            android:layout_height="24dp"
+            android:background="#44FFFFFF" />
+
+        <TextView
+            android:id="@+id/notification_btn_accept"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="@string/incoming_call_accept"
+            android:textColor="@color/notification_call_accept"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:background="?android:attr/selectableItemBackground" />
+    </LinearLayout>
+</LinearLayout>
