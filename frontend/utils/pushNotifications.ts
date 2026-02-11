@@ -1,10 +1,10 @@
-import { AppState, Platform } from 'react-native';
+import { AppState, NativeModules, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { CommonActions } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE } from '../sockets/socket';
-import { acceptCall, declineCall } from '../sockets/socket';
+import { acceptCall, declineCall, ensureSocketConnected } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
@@ -158,12 +158,13 @@ export async function openIncomingCallScreen(peerUserId: string, callId: string)
   await navigateToVideoCallIncoming(peerUserId, callId);
 }
 
-/** Открыть приложение и принять звонок (для livi://answer-call из нативного IncomingCallActivity). */
+/** Открыть приложение и принять звонок (для livi://answer-call из нативного IncomingCallActivity). Ждём сокет, чтобы call:accept дошёл до сервера и звонящий получил call:accepted и перешёл на видеозвонок. */
 export async function openAnswerCallScreen(peerUserId: string, callId: string): Promise<void> {
   try {
     stopIncomingCallAlert();
   } catch {}
   try {
+    await ensureSocketConnected(5000);
     acceptCall(callId);
   } catch (e) {
     logger.warn('[push] acceptCall from answer-call deep link failed', { callId, error: (e as Error)?.message });
@@ -171,17 +172,30 @@ export async function openAnswerCallScreen(peerUserId: string, callId: string): 
   await navigateToVideoCallIncoming(peerUserId, callId);
 }
 
-/** Отклонить звонок (для livi://decline-call из нативного IncomingCallActivity). */
+/** После отклонения из вне приложения — увести приложение в фон, чтобы пользователь остался на экране блокировки или в меню телефона. */
+function moveAppToBackAfterDecline() {
+  if (Platform.OS !== 'android') return;
+  try {
+    const LiviAppModule = NativeModules.LiviAppModule;
+    if (LiviAppModule?.moveTaskToBack) {
+      LiviAppModule.moveTaskToBack(true);
+    }
+  } catch {}
+}
+
+/** Отклонить звонок (для livi://decline-call из нативного IncomingCallActivity). Ждём сокет, чтобы call:decline дошёл до сервера и у звонящего завершился вызов. После этого уводим приложение в фон. */
 export async function handleDeclineCallFromDeepLink(callId: string): Promise<void> {
   try {
     stopIncomingCallAlert();
   } catch {}
   try {
+    await ensureSocketConnected(5000);
     declineCall(callId);
   } catch (e) {
     logger.warn('[push] declineCall from decline-call deep link failed', { callId, error: (e as Error)?.message });
   }
   await clearCallRelatedNotificationsAndSyncBadge();
+  moveAppToBackAfterDecline();
 }
 
 /**
@@ -218,11 +232,13 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
           stopIncomingCallAlert();
         } catch {}
         try {
+          await ensureSocketConnected(5000);
           declineCall(callId);
         } catch (e) {
           logger.warn('[push] declineCall from notification failed', { callId, error: (e as Error)?.message });
         }
         await clearCallRelatedNotificationsAndSyncBadge();
+        moveAppToBackAfterDecline();
         return;
       }
 
@@ -230,8 +246,9 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
         try {
           stopIncomingCallAlert();
         } catch {}
-        // Сначала сообщаем серверу о принятии, чтобы звонящий получил call:accepted и начал сессию
+        // Сначала ждём сокет и сообщаем серверу о принятии, чтобы звонящий получил call:accepted и оба попали на видеозвонок
         try {
+          await ensureSocketConnected(5000);
           acceptCall(callId);
         } catch (e) {
           logger.warn('[push] acceptCall from notification failed', { callId, error: (e as Error)?.message });
@@ -475,13 +492,13 @@ export function addNotificationListeners() {
     if (data) await handleNotificationResponse(data, actionId);
   });
 
-  // При получении пуша о звонке — показать нативный экран (CallKeep) и модалку в приложении (fallback, если сокет не доставил)
+  // При получении пуша о звонке — нативный экран (CallKeep) только когда приложение не на переднем плане; иначе только модалка в приложении
   const sub1 = Notifications.addNotificationReceivedListener((n) => {
     try {
       const data = (n as any)?.request?.content?.data;
       if (data?.type === 'call' && data?.callId && data?.from) {
         logger.info('[push] incoming call notification received', { callId: data.callId, from: data.from });
-        if (isCallKeepAvailable()) {
+        if (isCallKeepAvailable() && AppState.currentState !== 'active') {
           displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
         }
         const setFromPush = (global as any).__setIncomingCallFromPush;

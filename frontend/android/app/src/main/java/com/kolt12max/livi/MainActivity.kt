@@ -1,5 +1,7 @@
 package com.kolt12max.livi
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 
@@ -15,6 +17,29 @@ class MainActivity : ReactActivity() {
   override fun onResume() {
     super.onResume()
     isInForeground = true
+    restoreNavigationBarVisibility()
+  }
+
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    // После ответа/отмены вызова из IncomingCallActivity на части устройств
+    // пропадает кнопка «Недавние» (три полоски). Явно восстанавливаем отображение
+    // системной навигационной панели при получении фокуса.
+    if (hasFocus) {
+      restoreNavigationBarVisibility()
+    }
+  }
+
+  private fun restoreNavigationBarVisibility() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      window.insetsController?.apply {
+        show(android.view.WindowInsets.Type.navigationBars())
+        systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_DEFAULT
+      }
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+      @Suppress("DEPRECATION")
+      window.decorView.systemUiVisibility = 0
+    }
   }
 
   override fun onPause() {
@@ -23,11 +48,19 @@ class MainActivity : ReactActivity() {
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
-    // Set the theme to AppTheme BEFORE onCreate to support
-    // coloring the background, status bar, and navigation bar.
-    // This is required for expo-splash-screen.
-    setTheme(R.style.AppTheme);
+    // При запуске по livi://decline-call — прозрачная тема: пользователь видит экран блокировки/лаунчер, не страницу приветствия.
+    if (isDeclineCallIntent(intent)) {
+      setTheme(R.style.Theme_App_Translucent)
+    } else {
+      setTheme(R.style.AppTheme)
+    }
     super.onCreate(null)
+  }
+
+  private fun isDeclineCallIntent(i: Intent?): Boolean {
+    val data: Uri? = i?.data ?: return false
+    if (i.action != Intent.ACTION_VIEW) return false
+    return data?.scheme == "livi" && data?.host == "decline-call"
   }
 
   /**

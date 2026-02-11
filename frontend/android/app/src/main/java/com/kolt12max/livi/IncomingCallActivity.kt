@@ -6,10 +6,14 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
@@ -17,7 +21,7 @@ import java.nio.charset.StandardCharsets
  * Полноэкранный экран входящего звонка (full-screen intent, как WhatsApp/Telegram).
  * Показывается поверх блокировки и других приложений при FCM-пуше о звонке.
  * Принять → открывает MainActivity с livi://answer-call → приложение подключается к звонку.
- * Отклонить → открывает MainActivity с livi://decline-call → приложение отправляет decline на сервер.
+ * Отклонить → по HTTP на сервер (без открытия приложения), иначе livi://decline-call.
  */
 class IncomingCallActivity : AppCompatActivity() {
 
@@ -32,6 +36,8 @@ class IncomingCallActivity : AppCompatActivity() {
 
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
 
+        startRepeatingVibration()
+
         val callId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
         val from = intent.getStringExtra(EXTRA_FROM) ?: ""
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
@@ -40,12 +46,92 @@ class IncomingCallActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.call_subtitle).text = getString(R.string.incoming_call_title)
 
         findViewById<ImageButton>(R.id.btn_accept).setOnClickListener {
+            stopRepeatingVibration()
             val answerUri = "livi://answer-call?callId=${Uri.encode(callId)}&from=${Uri.encode(from)}&fromNick=${URLEncoder.encode(fromNick, StandardCharsets.UTF_8.toString())}"
             startMainWithDeepLink(answerUri)
             finish()
         }
 
         findViewById<ImageButton>(R.id.btn_decline).setOnClickListener {
+            stopRepeatingVibration()
+            declineCallFromNative(callId)
+        }
+    }
+
+    override fun onDestroy() {
+        stopRepeatingVibration()
+        super.onDestroy()
+    }
+
+    private fun startRepeatingVibration() {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        } ?: return
+        if (!vibrator.hasVibrator()) return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val pattern = longArrayOf(0, 500, 200, 500)
+                val effect = VibrationEffect.createWaveform(pattern, 0)
+                vibrator.vibrate(effect)
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(longArrayOf(0, 500, 200, 500), 0)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "startRepeatingVibration failed", e)
+        }
+    }
+
+    private fun stopRepeatingVibration() {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        } ?: return
+        try {
+            vibrator.cancel()
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "stopRepeatingVibration failed", e)
+        }
+    }
+
+    /**
+     * Отклонение: по HTTP без открытия приложения (нет мерцания, инициатор сразу получает call:declined).
+     * Если installId/serverUrl нет — fallback на livi://decline-call.
+     */
+    private fun declineCallFromNative(callId: String) {
+        val prefs = applicationContext.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
+        val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
+        val serverUrl = prefs.getString(LiviAppModule.KEY_SERVER_URL, null)?.takeIf { it.isNotBlank() }
+        if (installId != null && serverUrl != null) {
+            Thread {
+                try {
+                    val url = URL("$serverUrl/api/calls/decline")
+                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    conn.requestMethod = "POST"
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.setRequestProperty("x-install-id", installId)
+                    conn.doOutput = true
+                    conn.connectTimeout = 8000
+                    conn.readTimeout = 8000
+                    conn.outputStream.use { os ->
+                        os.write("{\"callId\":\"${callId.replace("\"", "\\\"")}\"}".toByteArray(Charsets.UTF_8))
+                    }
+                    val code = conn.responseCode
+                    if (code !in 200..299) {
+                        android.util.Log.w(TAG, "decline HTTP $code")
+                    }
+                    conn.disconnect()
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "decline HTTP failed", e)
+                }
+            }.start()
+            finish()
+        } else {
             val declineUri = "livi://decline-call?callId=${Uri.encode(callId)}"
             startMainWithDeepLink(declineUri)
             finish()
@@ -61,6 +147,7 @@ class IncomingCallActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val TAG = "IncomingCallActivity"
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"

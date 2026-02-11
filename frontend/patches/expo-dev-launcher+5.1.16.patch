@@ -1,0 +1,46 @@
+diff --git a/bundle/providers/PendingDeepLinkProvider.tsx b/bundle/providers/PendingDeepLinkProvider.tsx
+index 1234567..abcdefg 100644
+--- a/bundle/providers/PendingDeepLinkProvider.tsx
++++ b/bundle/providers/PendingDeepLinkProvider.tsx
+@@ -26,16 +26,28 @@ export function PendingDeepLinkProvider({
+   const modalStack = useModalStack();
+   const [pendingDeepLink, setPendingDeepLink] = React.useState(initialPendingDeepLink);
+ 
++  const passLiviCallLinkToApp = (url: string, retries = 10): boolean => {
++    if (!url || !/^livi:\/\/(decline-call|answer-call|incoming-call)/.test(url)) return false;
++    const ref = (global as any).__handleCallDeepLinkRef;
++    if (ref?.current) {
++      ref.current(url);
++      return true;
++    }
++    if (retries > 0) {
++      setTimeout(() => passLiviCallLinkToApp(url, retries - 1), 100);
++      return true;
++    }
++    return false;
++  };
++
+   React.useEffect(() => {
+     getPendingDeepLink().then((url) => {
+       if (url) {
+         setPendingDeepLink(url);
+-        modalStack.push(() => <DeepLinkModal pendingDeepLink={url} />);
++        if (!passLiviCallLinkToApp(url)) {
++          modalStack.push(() => <DeepLinkModal pendingDeepLink={url} />);
++        }
+       }
+     });
+   }, []);
+ 
+   React.useEffect(() => {
+     const listener = addDeepLinkListener(({ url }) => {
+       if (url) {
+         setPendingDeepLink(url);
+-        modalStack.push(() => <DeepLinkModal pendingDeepLink={url} />);
++        if (!passLiviCallLinkToApp(url)) {
++          modalStack.push(() => <DeepLinkModal pendingDeepLink={url} />);
++        }
+       }
+     });
+ 
+     return () => {

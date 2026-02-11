@@ -338,7 +338,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
-  endCall(): void {
+  endCall(overrideCallId?: string | null, overrideRoomId?: string | null): void {
     // Idempotency: endCall can be invoked from multiple places (UI + cleanup + socket events).
     // Make it safe to call multiple times without triggering warnings or duplicate actions.
     if (this.ended || this.endCallInProgress) {
@@ -357,17 +357,20 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.info('[VideoCallSession] 🔓 Сброшена блокировка __connectingToRoomRef в endCall');
     }
 
+    // КРИТИЧНО: Используем переданные из UI callId/roomId как fallback (инициатор может не иметь их в сессии до завершения connectAsInitiatorAfterAccepted)
+    const callIdToSend = overrideCallId ?? this.callId;
+    const roomIdToSend = overrideRoomId ?? this.roomId;
+
     logger.info('[VideoCallSession] 🛑 endCall вызван', {
       callId: this.callId,
       roomId: this.roomId,
+      overrideCallId,
+      overrideRoomId,
+      callIdToSend,
+      roomIdToSend,
       partnerId: this.partnerId,
       partnerUserId: this.partnerUserId,
     });
-    
-    // КРИТИЧНО: Сохраняем callId и roomId ПЕРЕД очисткой состояния
-    // Это гарантирует, что call:end будет отправлен на сервер с правильными значениями
-    const callIdToSend = this.callId;
-    const roomIdToSend = this.roomId;
     
     // Останавливаем локальные треки и сбрасываем состояние
     void this.disconnectRoom('user');

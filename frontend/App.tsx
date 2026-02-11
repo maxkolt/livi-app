@@ -10,11 +10,11 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, Modal } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, Modal, NativeModules } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, checkInviteLink, getCurrentUserId } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE } from "./sockets/socket";
 import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
@@ -30,6 +30,7 @@ import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native';
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount } from './utils/pushNotifications';
+import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
 import { setupCallKeep, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo } from './utils/callKeep';
 import { useLang } from './store/lang';
@@ -136,11 +137,16 @@ function AppContent() {
     let unsub: (() => void) | undefined;
     const t = setTimeout(() => {
       unsub = registerCallKeepEvents({
-        onAnswer: (callId) => {
+        onAnswer: async (callId) => {
           const info = getPendingCallInfo(callId);
           if (!info || !navRef.isReady()) return;
           stopIncomingCallAlert();
           setIncoming(null);
+          try {
+            await ensureSocketConnected(5000);
+            acceptCall(callId);
+          } catch {}
+          reportAnswerIncomingCall(callId);
           navRef.dispatch(
             CommonActions.reset({
               index: 1,
@@ -150,8 +156,6 @@ function AppContent() {
               ],
             })
           );
-          try { acceptCall(callId); } catch {}
-          reportAnswerIncomingCall(callId);
         },
         onEnd: (callId) => {
           try { declineCall(callId); } catch {}
@@ -389,6 +393,30 @@ function AppContent() {
     }
     return false;
   };
+
+  // Глобальный обработчик для deep link livi:// (decline-call, answer-call, incoming-call): expo-dev-launcher в dev перехватывает ссылки и показывает модалку — патч вызывает этот ref и не показывает модалку, чтобы отмена/принятие звонка сработали
+  const handleCallDeepLinkRef = React.useRef<(url: string) => Promise<boolean>>(async () => false);
+  handleCallDeepLinkRef.current = handleCallDeepLink;
+  React.useEffect(() => {
+    (global as any).__handleCallDeepLinkRef = handleCallDeepLinkRef;
+    return () => {
+      delete (global as any).__handleCallDeepLinkRef;
+    };
+  }, []);
+
+  // Сохраняем installId и serverUrl в натив для отклонения звонка по HTTP из IncomingCallActivity без открытия приложения
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const LiviAppModule = NativeModules.LiviAppModule;
+    if (!LiviAppModule?.setInstallIdForDecline || !LiviAppModule?.setServerUrlForDecline) return;
+    (async () => {
+      try {
+        const [installId, url] = await Promise.all([getInstallId(), Promise.resolve(API_BASE)]);
+        if (installId) LiviAppModule.setInstallIdForDecline(installId);
+        if (url) LiviAppModule.setServerUrlForDecline(url);
+      } catch {}
+    })();
+  }, []);
 
   // ===== Deep Linking обработка для реферальных ссылок =====
   const INVITE_LINK_KEY = 'pending_invite_code';
@@ -800,7 +828,8 @@ function AppContent() {
       try { Keyboard.dismiss(); } catch {}
       setIncoming(d);
       startAnim();
-      if (isCallKeepAvailable()) {
+      // Внутри приложения (на переднем плане) — только модалка; CallKeep/уведомление не показываем
+      if (isCallKeepAvailable() && AppState.currentState !== 'active') {
         displayIncomingCall(d.callId, d.from, d.fromNick ?? '', true);
       }
       try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}

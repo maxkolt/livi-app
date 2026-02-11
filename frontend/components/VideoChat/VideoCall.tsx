@@ -940,6 +940,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         
         setPartnerUserId(friendId);
         currentCallIdRef.current = existingCallId;
+        setCallId(existingCallId);
         setStarted(true);
         setLoading(true);
         
@@ -1480,8 +1481,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setWasFriendCallEnded(true);
       setPartnerInPiP(false);
       
-      // КРИТИЧНО: Вызываем endCall в session (это также остановит стрим)
-      session.endCall();
+      // КРИТИЧНО: Передаём callId/roomId из UI как fallback — у инициатора сессия может не иметь их в момент нажатия «Завершить»
+      const idToSend = callId ?? currentCallIdRef.current ?? (session as any)?.getCallId?.() ?? null;
+      const roomToSend = roomId ?? (session as any)?.getRoomId?.() ?? null;
+      session.endCall(idToSend ?? undefined, roomToSend ?? undefined);
       
       // КРИТИЧНО: Очищаем локальный стрим в состоянии компонента СРАЗУ
       setLocalStream(null);

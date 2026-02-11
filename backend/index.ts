@@ -761,6 +761,44 @@ function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'cancele
   callOfUser.delete(link.b);
 }
 
+/** Отклонение звонка по HTTP (из IncomingCallActivity без открытия приложения). Auth по x-install-id. */
+app.post('/api/calls/decline', async (req, res) => {
+  try {
+    const userId = (req as any).userId;
+    if (!userId || !isOid(userId)) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    const callId = String(req.body?.callId || '').trim();
+    if (!callId) {
+      return res.status(400).json({ ok: false, error: 'callId_required' });
+    }
+    const link = callsById.get(callId);
+    if (!link) {
+      return res.json({ ok: true }); // уже завершён — не ошибка
+    }
+    if (link.b !== userId) {
+      return res.status(403).json({ ok: false, error: 'only_callee_can_decline' });
+    }
+    const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
+    const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
+    if (aSock) {
+      (aSock as any).data = (aSock as any).data || {};
+      (aSock as any).data.busy = false;
+      await emitPresenceUpdateToFriends(io, link.a, false);
+    }
+    if (bSock) {
+      (bSock as any).data = (bSock as any).data || {};
+      (bSock as any).data.busy = false;
+      await emitPresenceUpdateToFriends(io, link.b, false);
+    }
+    try { io.to(`u:${link.a}`).emit('call:declined', { callId, from: link.b }); } catch {}
+    cleanupCall(callId, 'declined');
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
+
 /* ========= Socket.IO ========= */
 io.on('connection', async (sock: AuthedSocket) => {
   sock.on('whoami', (payload?: any, ack?: Function) => {

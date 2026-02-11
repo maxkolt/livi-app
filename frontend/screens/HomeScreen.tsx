@@ -4069,20 +4069,22 @@ const handleClearNick = useCallback(async () => {
 
       {renderCenterTopProfile()}
 
-      <View style={[styles.center, Platform.OS === 'android' && { marginTop: 50 }]}>
-        <Text style={[styles.title, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>{L('welcomeTitle')}</Text>
-        <Text style={[styles.subtitle, { color: isDark ? LIVI.text2 : LIVI.textThemeWhite }]}>{L('welcomeSubtitle')}</Text>
+      <View style={[styles.welcomeBlock, Platform.OS === 'android' && { marginTop: 50 }]}>
+        <View style={styles.welcomeTextBlock}>
+          <Text style={[styles.title, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>{L('welcomeTitle')}</Text>
+          <Text style={[styles.subtitle, { color: isDark ? LIVI.text2 : LIVI.textThemeWhite }]}>{L('welcomeSubtitle')}</Text>
+        </View>
+        <View style={styles.noticeSlot}>
+          {NoticeView}
+        </View>
+        <AnimatedBorderButton
+          isDark={isDark}
+          onPress={() => navigation.navigate("RandomChat", { returnTo: { name: 'Home' } })}
+          label={L("startSearchBtn")}
+          style={{ marginBottom: 40 }}
+          backgroundColor={theme.colors.background as string}
+        />
       </View>
-
-      {NoticeView}
-
-      <AnimatedBorderButton
-        isDark={isDark}
-        onPress={() => navigation.navigate("RandomChat", { returnTo: { name: 'Home' } })}
-        label={L("startSearchBtn")}
-        style={{ marginBottom: 40 }}
-        backgroundColor={theme.colors.background as string}
-      />
 
       {menuOpen && (
         <View style={styles.overlayMenu}>
@@ -4905,16 +4907,25 @@ const styles = StyleSheet.create({
   avatarImgFull: { width: '100%', height: '100%' },
   avatarStub: { backgroundColor: 'rgba(255,255,255,0.30)' },
 
-  // notice
+  // Блок приветствия: заголовок по центру (как раньше), слот для бейджа между подзаголовком и кнопкой, кнопка «Начать поиск»
+  welcomeBlock: { flex: 1, alignItems: 'center' },
+  welcomeTextBlock: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 35 },
+  noticeSlot: {
+    minHeight: 72,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+  },
+  // notice (бейдж «Друг удалён» и др.): по центру между подзаголовком и кнопкой
   notice: {
-    position: 'absolute',  
-    bottom: Platform.OS === 'ios' ? 250 : 200,
-    left: '10%', 
-    right: '10%', 
     borderRadius: 14,
-    paddingVertical: 12, paddingHorizontal: 16, 
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '80%',
+    alignSelf: 'center',
   },
   noticeText: { color: LIVI.text2, fontSize: 14, fontWeight: '500', textAlign: 'center' },
 

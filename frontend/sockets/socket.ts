@@ -484,6 +484,16 @@ async function waitForConnect(ms = 8000): Promise<void> {
   });
 }
 
+/** Ждёт подключения сокета (с таймаутом). Нужно при отмене вызова из вне приложения, чтобы call:decline дошёл до сервера и caller получил call:declined. */
+export async function ensureSocketConnected(ms = 5000): Promise<void> {
+  if (socket.connected) return;
+  try {
+    await waitForConnect(ms);
+  } catch {
+    // Таймаут — всё равно вызываем declineCall ниже, emit может уйти в очередь
+  }
+}
+
 type AnyObj = Record<string, any>;
 export async function emitAck<T = any>(
   event: string,
