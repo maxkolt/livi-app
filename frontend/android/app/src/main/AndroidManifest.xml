@@ -94,5 +94,11 @@
     </activity>
     <!-- Full-screen incoming call (WhatsApp/Telegram style): показывается поверх блокировки при FCM-пуше о звонке -->
     <activity android:name=".IncomingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true" android:launchMode="singleInstance"/>
+    <!-- «Отклонить» в уведомлении: HTTP decline без открытия приложения (нет Deep link received) -->
+    <receiver android:name=".DeclineCallReceiver" android:exported="false">
+      <intent-filter>
+        <action android:name="com.kolt12max.livi.DECLINE_CALL"/>
+      </intent-filter>
+    </receiver>
   </application>
 </manifest>

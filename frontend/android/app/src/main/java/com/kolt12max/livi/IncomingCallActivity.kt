@@ -1,8 +1,10 @@
 package com.kolt12max.livi
 
 import android.app.NotificationManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -22,8 +24,12 @@ import java.nio.charset.StandardCharsets
  * Показывается поверх блокировки и других приложений при FCM-пуше о звонке.
  * Принять → открывает MainActivity с livi://answer-call → приложение подключается к звонку.
  * Отклонить → по HTTP на сервер (без открытия приложения), иначе livi://decline-call.
+ * При отмене инициатором приходит FCM call_canceled → broadcast → finish() без мельканий.
  */
 class IncomingCallActivity : AppCompatActivity() {
+
+    private var currentCallId: String = ""
+    private var callCanceledReceiver: BroadcastReceiver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,9 +44,10 @@ class IncomingCallActivity : AppCompatActivity() {
 
         startRepeatingVibration()
 
-        val callId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
+        currentCallId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
         val from = intent.getStringExtra(EXTRA_FROM) ?: ""
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
+        val callId = currentCallId
 
         findViewById<TextView>(R.id.caller_name).text = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_title)
         findViewById<TextView>(R.id.call_subtitle).text = getString(R.string.incoming_call_title)
@@ -56,9 +63,27 @@ class IncomingCallActivity : AppCompatActivity() {
             stopRepeatingVibration()
             declineCallFromNative(callId)
         }
+
+        callCanceledReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val canceledCallId = intent?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
+                if (canceledCallId == currentCallId) {
+                    stopRepeatingVibration()
+                    finish()
+                }
+            }
+        }
+        val filter = IntentFilter(LiviFirebaseMessagingService.ACTION_CALL_CANCELED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(callCanceledReceiver, filter, Context.RECEIVER_EXPORTED_NONE)
+        } else {
+            registerReceiver(callCanceledReceiver, filter)
+        }
     }
 
     override fun onDestroy() {
+        callCanceledReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        callCanceledReceiver = null
         stopRepeatingVibration()
         super.onDestroy()
     }

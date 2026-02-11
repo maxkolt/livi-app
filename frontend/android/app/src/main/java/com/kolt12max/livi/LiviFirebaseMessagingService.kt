@@ -53,6 +53,17 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             showIncomingCallFullScreenIntent(callId, from, fromNick)
             return
         }
+        if (type == "call_canceled" && callId != null) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
+            val intent = Intent(ACTION_CALL_CANCELED).apply {
+                setPackage(packageName)
+                putExtra(EXTRA_CALL_ID, callId)
+            }
+            sendBroadcast(intent)
+            Log.d(TAG, "FCM call_canceled: notification canceled, broadcast sent callId=$callId")
+            return
+        }
         super.onMessageReceived(remoteMessage)
     }
 
@@ -95,12 +106,12 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val declineUri = Uri.parse("livi://decline-call?callId=${Uri.encode(callId)}")
-        val declineIntent = Intent(Intent.ACTION_VIEW, declineUri).apply {
-            setClassName(applicationContext, "com.kolt12max.livi.MainActivity")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        // «Отклонить» — через BroadcastReceiver: HTTP decline без открытия приложения (нет модалки Deep link received)
+        val declineIntent = Intent(this, DeclineCallReceiver::class.java).apply {
+            action = DeclineCallReceiver.ACTION_DECLINE_CALL
+            putExtra(DeclineCallReceiver.EXTRA_CALL_ID, callId)
         }
-        val declinePendingIntent = PendingIntent.getActivity(
+        val declinePendingIntent = PendingIntent.getBroadcast(
             this,
             NOTIFICATION_ID_INCOMING_CALL + 2,
             declineIntent,
@@ -146,5 +157,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         private const val TAG = "LiviFCM"
         const val CHANNEL_ID_CALLS = "livi_incoming_call"
         const val NOTIFICATION_ID_INCOMING_CALL = 1001
+        const val ACTION_CALL_CANCELED = "com.kolt12max.livi.CALL_CANCELED"
+        const val EXTRA_CALL_ID = "callId"
     }
 }

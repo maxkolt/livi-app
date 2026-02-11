@@ -170,6 +170,9 @@ export async function openAnswerCallScreen(peerUserId: string, callId: string): 
     logger.warn('[push] acceptCall from answer-call deep link failed', { callId, error: (e as Error)?.message });
   }
   await navigateToVideoCallIncoming(peerUserId, callId);
+  try {
+    await clearCallRelatedNotificationsAndSyncBadge();
+  } catch {}
 }
 
 /** После отклонения из вне приложения — увести приложение в фон, чтобы пользователь остался на экране блокировки или в меню телефона. */

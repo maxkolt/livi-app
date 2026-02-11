@@ -31,7 +31,7 @@ import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl } from './routes/livekit';
-import { sendPushToUser, sendCallPushToRecipient } from './utils/push';
+import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient } from './utils/push';
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 
@@ -779,6 +779,7 @@ app.post('/api/calls/decline', async (req, res) => {
     if (link.b !== userId) {
       return res.status(403).json({ ok: false, error: 'only_callee_can_decline' });
     }
+    logger.info('[api/calls/decline] callee declined via HTTP', { callId, caller: link.a, callee: link.b });
     const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
     const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
     if (aSock) {
@@ -1841,6 +1842,8 @@ io.on('connection', async (sock: AuthedSocket) => {
     // чтобы оба клиента синхронно закрыли UI входящего/исходящего звонка
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
+    // FCM data-only получателю: на устройстве сразу снимаем уведомление и закрываем IncomingCallActivity без мельканий
+    try { await sendCallCanceledToRecipient(link.b, id); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
     // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации
     let fromNick: string | undefined;
     try {

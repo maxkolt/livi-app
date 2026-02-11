@@ -201,3 +201,32 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     }
   }
 }
+
+/**
+ * Инициатор отменил вызов — шлём callee FCM data-only call_canceled,
+ * чтобы на устройстве получателя сразу сняли уведомление и закрыли IncomingCallActivity без мельканий.
+ */
+export async function sendCallCanceledToRecipient(calleeUserId: string, callId: string): Promise<void> {
+  const messaging = getFirebaseMessaging();
+  if (!messaging) return;
+  const recs = await PushTokenModel.find({ userId: calleeUserId })
+    .select('platform fcmToken')
+    .lean();
+  type Rec = { platform: string; fcmToken?: string };
+  const list = (recs || []) as unknown as Rec[];
+  for (const r of list) {
+    if (r.platform === 'android' && r.fcmToken) {
+      try {
+        await messaging.send({
+          token: r.fcmToken,
+          data: { type: 'call_canceled', callId: String(callId) },
+          android: { priority: 'high' },
+        });
+        logger.info('[push] call_canceled sent via FCM (data-only)', { userId: calleeUserId });
+        break;
+      } catch (e) {
+        logger.warn('[push] FCM call_canceled failed', { userId: calleeUserId, error: (e as Error)?.message });
+      }
+    }
+  }
+}

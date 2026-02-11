@@ -1232,8 +1232,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       incomingCallHook.setIncomingCall(null);
       incomingCallHook.setIncomingOverlay(false);
       
-      // КРИТИЧНО: Очищаем состояние сессии для инициатора
-      // Если мы инициатор и звонок был отклонен, нужно очистить состояние
+      // КРИТИЧНО: Очищаем состояние сессии для инициатора и уходим с экрана
+      // Если мы инициатор и звонок был отклонен, нужно очистить состояние и закрыть модалку
       if (route?.params?.directInitiator) {
         setStarted(false);
         setLoading(false);
@@ -1254,6 +1254,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         setLocalStream(null);
         setCamOn(false);
         setMicOn(false);
+        // Закрываем экран исходящего звонка — возврат на предыдущий экран (Chat/Home)
+        if (navigation?.canGoBack?.()) {
+          navigation.goBack();
+        } else {
+          (navigation as any).navigate?.('Home');
+        }
       }
     };
     
