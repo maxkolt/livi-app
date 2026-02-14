@@ -8,8 +8,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.util.Log
-import android.widget.RemoteViews
-import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.RemoteMessage
 import expo.modules.notifications.service.ExpoFirebaseMessagingService
@@ -131,6 +129,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         val title = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_title)
         val subtitle = getString(R.string.incoming_call_title)
 
+        // Только full-screen intent → нативный IncomingCallActivity. Без кастомного heads-up (серая панель),
+        // чтобы не дублировать UI: один экран входящего звонка вместо двух.
         val builder = NotificationCompat.Builder(this, CHANNEL_ID_CALLS)
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentTitle(title)
@@ -140,24 +140,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             .setAutoCancel(true)
             .setTimeoutAfter(45_000)
             .setPriority(NotificationCompat.PRIORITY_MAX)
-
-        try {
-            val declineColor = ContextCompat.getColor(this, R.color.notification_call_decline)
-            val acceptColor = ContextCompat.getColor(this, R.color.notification_call_accept)
-            val customView = RemoteViews(packageName, R.layout.notification_incoming_call).apply {
-                setTextViewText(R.id.notification_title, title)
-                setTextViewText(R.id.notification_text, subtitle)
-                setInt(R.id.notification_btn_decline, "setTextColor", declineColor)
-                setInt(R.id.notification_btn_accept, "setTextColor", acceptColor)
-                setOnClickPendingIntent(R.id.notification_btn_decline, declinePendingIntent)
-                setOnClickPendingIntent(R.id.notification_btn_accept, answerPendingIntent)
-            }
-            builder.setCustomContentView(customView).setCustomHeadsUpContentView(customView)
-        } catch (e: Exception) {
-            Log.e(TAG, "Custom notification view failed, using default", e)
-            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.incoming_call_decline), declinePendingIntent)
-                .addAction(android.R.drawable.ic_menu_call, getString(R.string.incoming_call_accept), answerPendingIntent)
-        }
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.incoming_call_decline), declinePendingIntent)
+            .addAction(android.R.drawable.ic_menu_call, getString(R.string.incoming_call_accept), answerPendingIntent)
 
         notificationManager.notify(NOTIFICATION_ID_INCOMING_CALL, builder.build())
         Log.d(TAG, "FCM: notification with full-screen intent posted")

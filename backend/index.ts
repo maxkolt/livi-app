@@ -767,7 +767,9 @@ function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'cancele
 app.post('/api/calls/decline', async (req, res) => {
   try {
     const userId = (req as any).userId;
+    const installId = (req as any).installId;
     if (!userId || !isOid(userId)) {
+      logger.warn('[api/calls/decline] unauthorized', { hasInstallId: !!installId, installIdPrefix: installId ? String(installId).slice(0, 20) : '' });
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
     const callId = String(req.body?.callId || '').trim();

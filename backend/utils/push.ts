@@ -240,7 +240,6 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
           android: { priority: 'high' },
         });
         logger.info('[push] call_declined sent via FCM (data-only) to caller', { userId: callerUserId });
-        break;
       } catch (e) {
         const errMsg = String((e as Error)?.message ?? '');
         const isInvalidToken =
@@ -283,7 +282,6 @@ export async function sendCallCanceledToRecipient(calleeUserId: string, callId: 
           android: { priority: 'high' },
         });
         logger.info('[push] call_canceled sent via FCM (data-only)', { userId: calleeUserId });
-        break;
       } catch (e) {
         const errMsg = String((e as Error)?.message ?? '');
         const isInvalidToken =
