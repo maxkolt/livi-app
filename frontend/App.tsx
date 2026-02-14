@@ -1056,6 +1056,7 @@ function AppContent() {
       stopIncomingCallAlert();
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       try { emitCloseOutgoingCall(); } catch {}
+      try { closeOutgoingCallActivity(); } catch {}
       // call:declined = тот, кому звонили, отклонил — пропущенным не считаем, счётчик не увеличиваем
     });
     const offCancel = onCallCanceled?.(async (d) => {

@@ -5,7 +5,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -102,46 +101,24 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val answerUri = Uri.parse("livi://answer-call?callId=${Uri.encode(callId)}&from=${Uri.encode(from)}&fromNick=${Uri.encode(fromNick)}")
-        val answerIntent = Intent(Intent.ACTION_VIEW, answerUri).apply {
-            setClassName(applicationContext, "com.kolt12max.livi.MainActivity")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-        }
-        val answerPendingIntent = PendingIntent.getActivity(
-            this,
-            NOTIFICATION_ID_INCOMING_CALL + 1,
-            answerIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // «Отклонить» — через BroadcastReceiver: HTTP decline без открытия приложения (нет модалки Deep link received)
-        val declineIntent = Intent(this, DeclineCallReceiver::class.java).apply {
-            action = DeclineCallReceiver.ACTION_DECLINE_CALL
-            putExtra(DeclineCallReceiver.EXTRA_CALL_ID, callId)
-        }
-        val declinePendingIntent = PendingIntent.getBroadcast(
-            this,
-            NOTIFICATION_ID_INCOMING_CALL + 2,
-            declineIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
+        // Уведомление: full-screen intent → нативный экран; в шторке — текст как раньше; тап по уведомлению → снова нативный экран.
+        // setContentIntent = тап из шторки открывает IncomingCallActivity, если звонок ещё идёт.
         val title = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_title)
         val subtitle = getString(R.string.incoming_call_title)
-
-        // Только full-screen intent → нативный IncomingCallActivity. Без кастомного heads-up (серая панель),
-        // чтобы не дублировать UI: один экран входящего звонка вместо двух.
+        val smallIconRes = resources.getIdentifier("ic_launcher", "mipmap", packageName).takeIf { it != 0 }
+            ?: android.R.drawable.ic_menu_call
         val builder = NotificationCompat.Builder(this, CHANNEL_ID_CALLS)
-            .setSmallIcon(android.R.drawable.ic_menu_call)
+            .setSmallIcon(smallIconRes)
             .setContentTitle(title)
             .setContentText(subtitle)
+            .setContentIntent(fullScreenPendingIntent)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
             .setTimeoutAfter(45_000)
             .setPriority(NotificationCompat.PRIORITY_MAX)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.incoming_call_decline), declinePendingIntent)
-            .addAction(android.R.drawable.ic_menu_call, getString(R.string.incoming_call_accept), answerPendingIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
         notificationManager.notify(NOTIFICATION_ID_INCOMING_CALL, builder.build())
         Log.d(TAG, "FCM: notification with full-screen intent posted")

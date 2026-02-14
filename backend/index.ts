@@ -798,6 +798,8 @@ app.post('/api/calls/decline', async (req, res) => {
     }
     try { io.to(`u:${link.a}`).emit('call:declined', { callId, from: link.b }); } catch {}
     try { await sendCallDeclinedToCaller(link.a, callId); } catch (e: any) { logger.warn('[api/calls/decline] sendCallDeclinedToCaller failed', { error: e?.message }); }
+    // Отклонение получателем — не пропущенный вызов; call_ended получателю не шлём
+    logger.info('[api/calls/decline] call ended for both: caller notified (socket+FCM), callee closed native screen', { callId, caller: link.a, callee: link.b });
     cleanupCall(callId, 'declined');
     return res.json({ ok: true });
   } catch (e: any) {
@@ -847,16 +849,19 @@ app.post('/api/calls/cancel', async (req, res) => {
       }
     } catch {}
     try {
+      const missedTitle = 'Пропущенный вызов';
+      const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
       await sendPushToUser(link.b, {
         kind: 'call',
-        title: '',
-        body: '',
-        channelId: 'calls',
+        title: missedTitle,
+        body: missedBody,
+        channelId: 'missed_call',
         data: { type: 'call_ended', callId, from: link.a, fromNick: fromNick || '' },
       });
     } catch (e: any) {
       logger.warn('[api/calls/cancel] call_ended push failed', { peerId: link.b, error: e?.message });
     }
+    logger.info('[api/calls/cancel] call ended for both: callee notified (socket+FCM+missed push), caller closed native screen', { callId, caller: link.a, callee: link.b });
     cleanupCall(callId, 'canceled');
     return res.json({ ok: true });
   } catch (e: any) {
@@ -1635,16 +1640,19 @@ io.on('connection', async (sock: AuthedSocket) => {
           }
         } catch {}
         try {
+          const missedTitle = 'Пропущенный вызов';
+          const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
           await sendPushToUser(link.b, {
             kind: 'call',
-            title: '',
-            body: '',
-            channelId: 'calls',
+            title: missedTitle,
+            body: missedBody,
+            channelId: 'missed_call',
             data: { type: 'call_ended', callId, from: link.a, fromNick: fromNick || '' },
           });
         } catch (e: any) {
           logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
         }
+        logger.info('[call:timeout] call ended for both: callee notified (socket+missed push), caller gets timeout', { callId, caller: link.a, callee: link.b });
         cleanupCall(callId, 'timeout');
       }, 20000);
       const link = callsById.get(callId);
@@ -1952,6 +1960,8 @@ io.on('connection', async (sock: AuthedSocket) => {
     
     try { io.to(`u:${link.a}`).emit('call:declined', { callId: id, from: link.b }); } catch {}
     try { await sendCallDeclinedToCaller(link.a, id); } catch (e: any) { logger.warn('[call:decline] sendCallDeclinedToCaller failed', { error: e?.message }); }
+    // Отклонение получателем — не пропущенный вызов; call_ended получателю не шлём
+    logger.info('[call:decline] call ended for both: caller notified (socket+FCM), callee closed', { callId: id, caller: link.a, callee: link.b });
     cleanupCall(id, 'declined');
   });
 
@@ -1991,16 +2001,19 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
     } catch {}
     try {
+      const missedTitle = 'Пропущенный вызов';
+      const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
       await sendPushToUser(link.b, {
         kind: 'call',
-        title: '',
-        body: '',
-        channelId: 'calls',
+        title: missedTitle,
+        body: missedBody,
+        channelId: 'missed_call',
         data: { type: 'call_ended', callId: id, from: link.a, fromNick: fromNick || '' },
       });
     } catch (e: any) {
       logger.warn('[call:cancel] call_ended push failed', { peerId: link.b, error: e?.message });
     }
+    logger.info('[call:cancel] call ended for both: both notified (socket+FCM, callee got missed push)', { callId: id, caller: link.a, callee: link.b });
     cleanupCall(id, 'canceled');
   });
 

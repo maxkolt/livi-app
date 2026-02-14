@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Build
 import android.os.Handler
@@ -26,6 +27,8 @@ class LiviOutgoingCallService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var mediaPlayer: MediaPlayer? = null
     private var timeoutRunnable: Runnable? = null
+    private var savedAudioMode: Int = AudioManager.MODE_NORMAL
+    private var savedSpeakerphone: Boolean = false
     private var callId: String = ""
     private var toUserId: String = ""
     private var toNick: String = ""
@@ -88,11 +91,17 @@ class LiviOutgoingCallService : Service() {
 
     private fun startSound() {
         try {
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            savedAudioMode = am.mode
+            savedSpeakerphone = am.isSpeakerphoneOn
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            am.isSpeakerphoneOn = false
+
             val mp = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                 )
                 setOnErrorListener { _, what, extra ->
@@ -104,7 +113,7 @@ class LiviOutgoingCallService : Service() {
                 mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
             }
             mp.isLooping = true
-            mp.setVolume(0.7f, 0.7f)
+            mp.setVolume(0.3f, 0.3f)
             mp.setOnPreparedListener { it.start() }
             mp.prepareAsync()
             mediaPlayer = mp
@@ -163,6 +172,11 @@ class LiviOutgoingCallService : Service() {
             }
         } catch (_: Exception) {}
         mediaPlayer = null
+        try {
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.mode = savedAudioMode
+            am.isSpeakerphoneOn = savedSpeakerphone
+        } catch (_: Exception) {}
         super.onDestroy()
     }
 

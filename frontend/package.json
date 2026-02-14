@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.tsx",
   "scripts": {
-    "postinstall": "(cd node_modules/expo-notifications && patch -p1 --forward -r - < ../../patches/expo-notifications+0.31.4.patch) || true; (cd node_modules/expo-dev-launcher && patch -p1 --forward -r - < ../../patches/expo-dev-launcher+5.1.16.patch) || true; (cd node_modules/react-native-callkeep && patch -p1 --forward -r - < ../../patches/react-native-callkeep+4.3.16.patch) || true",
+    "postinstall": "(cd node_modules/expo-notifications && patch -p1 --forward -r - < ../../patches/expo-notifications+0.31.4.patch) || true; (cd node_modules/expo-dev-launcher && patch -p1 --forward -r - < ../../patches/expo-dev-launcher+5.1.16.patch) || true; (cd node_modules/react-native-callkeep && patch -p1 --forward -r - < ../../patches/react-native-callkeep+4.3.16.patch) || true; (cd node_modules/@expo/config-plugins && patch -p1 --forward -r - < ../../patches/expo-config-plugins+10.1.2.patch) || true",
     "start:lan": "LAN_IP=$(node ./scripts/lan-ip.js) EXPO_PACKAGER_HOSTNAME=$LAN_IP REACT_NATIVE_PACKAGER_HOSTNAME=$LAN_IP expo start --dev-client --host lan --port 8081",
     "start:lan:clean": "LAN_IP=$(node ./scripts/lan-ip.js) EXPO_PACKAGER_HOSTNAME=$LAN_IP REACT_NATIVE_PACKAGER_HOSTNAME=$LAN_IP expo start --dev-client --host lan --port 8081 -c",
     "start:usb": "node ./scripts/adb-reverse-usb.js 8081 && EXPO_PACKAGER_HOSTNAME=127.0.0.1 REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 expo start --dev-client --host localhost --port 8081",
@@ -14,6 +14,8 @@
     "android": "expo run:android",
     "android:install": "adb install -r android/app/build/outputs/apk/debug/app-debug.apk",
     "android:build-install": "cd android && ./gradlew assembleDebug -q && cd .. && adb install -r android/app/build/outputs/apk/debug/app-debug.apk",
+    "android:build-install-device": "cd android && ./gradlew assembleDebug -q && cd .. && node ./scripts/install-apk-one-device.js",
+    "android:install-device": "node ./scripts/install-apk-one-device.js",
     "android:install-all": "cd android && ./gradlew assembleDebug -q && cd .. && node ./scripts/install-apk-all-devices.js",
     "android:dev": "LIVI_APP_VARIANT=dev expo run:android",
     "android:dev:run": "node ./scripts/adb-reverse-usb.js 8081 && EXPO_PACKAGER_HOSTNAME=127.0.0.1 REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 LIVI_APP_VARIANT=dev expo start --dev-client --host localhost --port 8081",

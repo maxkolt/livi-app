@@ -3944,18 +3944,28 @@ const handleClearNick = useCallback(async () => {
     );
   };
 
-  // Показ уведомления «Звонок завершён» и, при необходимости, авто-открытие меню друзей
+  // Показ уведомления «Звонок завершён», авто-открытие меню друзей, переход на вкладку «Друзья» (тап по «Пропущенный вызов»).
   useEffect(() => {
     const ended = (route as any)?.params?.callEnded;
     const openFriendsMenu = (route as any)?.params?.openFriendsMenu;
+    const openFriendsTab = (route as any)?.params?.openFriendsTab;
     if (ended) {
       showNotice(t('callEnded', lang), 'success', 3000);
     }
     if (openFriendsMenu) {
       setMenuOpen(true);
     }
-    if (ended || openFriendsMenu) {
-      try { navigation.setParams?.({ callEnded: undefined, openFriendsMenu: undefined }); } catch {}
+    if (openFriendsTab) {
+      setTab('friends');
+    }
+    if (ended || openFriendsMenu || openFriendsTab) {
+      try {
+        navigation.setParams?.({
+          callEnded: undefined,
+          openFriendsMenu: undefined,
+          openFriendsTab: undefined,
+        });
+      } catch {}
     }
   }, [route, navigation, showNotice]);
 

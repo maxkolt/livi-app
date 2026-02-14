@@ -8,7 +8,7 @@ import { acceptCall, declineCall, ensureSocketConnected } from '../sockets/socke
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
-import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast } from './callKeep';
+import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen } from './callKeep';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 
@@ -100,6 +100,17 @@ Notifications.setNotificationHandler({
       };
     }
     if (type === 'call') {
+      // На Android не показываем Expo-уведомление о звонке — только нативный IncomingCallActivity
+      // (при FCM пуше его показывает LiviFirebaseMessagingService; при Expo пуше откроем нативный экран из addNotificationReceivedListener).
+      if (Platform.OS === 'android') {
+        return {
+          shouldShowAlert: false,
+          shouldShowBanner: false,
+          shouldShowList: false,
+          shouldPlaySound: false,
+          shouldSetBadge: false,
+        };
+      }
       const showCallNotification = appStateRef !== 'active';
       return {
         shouldShowAlert: showCallNotification,
@@ -107,7 +118,6 @@ Notifications.setNotificationHandler({
         shouldShowList: showCallNotification,
         shouldPlaySound: showCallNotification,
         shouldSetBadge: false,
-        ...(Platform.OS === 'android' && showCallNotification ? { channelId: 'calls' } : {}),
       };
     }
     return {
@@ -192,10 +202,15 @@ function moveAppToBackAfterDecline() {
   } catch {}
 }
 
-/** Отклонить звонок (для livi://decline-call из нативного IncomingCallActivity). Ждём сокет, чтобы call:decline дошёл до сервера и у звонящего завершился вызов. После этого уводим приложение в фон. */
+/** Отклонить звонок (для livi://decline-call из нативного IncomingCallActivity). Ждём сокет, чтобы call:decline дошёл до сервера и у звонящего завершился вызов. После этого уводим приложение в фон.
+ * Отклонение получателем не считается пропущенным вызовом — очищаем last_incoming_from. */
 export async function handleDeclineCallFromDeepLink(callId: string): Promise<void> {
   try {
     stopIncomingCallAlert();
+  } catch {}
+  // Отклонение с нашей стороны — не пропущенный вызов; сбрасываем маркер, чтобы нигде не считать как пропущенный
+  try {
+    await AsyncStorage.removeItem('last_incoming_from');
   } catch {}
   try {
     await ensureSocketConnected(5000);
@@ -221,6 +236,21 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
       try {
         (global as any).__onCallEndedFromPush?.();
       } catch {}
+      return;
+    }
+
+    if (type === 'missed_call') {
+      const nav = await waitForNavReady();
+      if (!nav) return;
+      try {
+        await clearCallRelatedNotificationsAndSyncBadge();
+      } catch {}
+      nav.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [{ name: 'Home' as never, params: { openFriendsTab: true } }],
+        })
+      );
       return;
     }
 
@@ -509,13 +539,16 @@ export function addNotificationListeners() {
     if (data) await handleNotificationResponse(data, actionId);
   });
 
-  // При получении пуша о звонке: на Android в фоне FCM уже показывает IncomingCallActivity; на iOS — CallKeep когда не active
+  // При получении пуша о звонке: на Android показываем только нативный IncomingCallActivity
+  // (Expo-уведомление скрыто в setNotificationHandler; при FCM пуше экран открывает LiviFirebaseMessagingService).
   const sub1 = Notifications.addNotificationReceivedListener((n) => {
     try {
       const data = (n as any)?.request?.content?.data;
       if (data?.type === 'call' && data?.callId && data?.from) {
         logger.info('[push] incoming call notification received', { callId: data.callId, from: data.from });
-        if (Platform.OS !== 'android' && isCallKeepAvailable() && AppState.currentState !== 'active') {
+        if (Platform.OS === 'android') {
+          launchIncomingCallActivityScreen(data.callId, data.from, data.fromNick ?? '');
+        } else if (isCallKeepAvailable() && AppState.currentState !== 'active') {
           displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
         }
         const setFromPush = (global as any).__setIncomingCallFromPush;

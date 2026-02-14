@@ -53,8 +53,11 @@ class OutgoingCallActivity : AppCompatActivity() {
 
         closeReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                LiviOutgoingCallService.stop(this@OutgoingCallActivity)
-                finish()
+                val broadcastCallId = intent?.getStringExtra(EXTRA_CALL_ID) ?: ""
+                if (broadcastCallId.isEmpty() || broadcastCallId == this@OutgoingCallActivity.callId) {
+                    LiviOutgoingCallService.stop(this@OutgoingCallActivity)
+                    finish()
+                }
             }
         }
         val filter = IntentFilter(ACTION_CLOSE_OUTGOING_CALL)

@@ -35,6 +35,8 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Убираем уведомление полностью — при входящем звонке только нативный экран, без шторки и баннера
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -42,14 +44,11 @@ class IncomingCallActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         setContentView(R.layout.activity_incoming_call)
 
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
-
         startRepeatingVibration()
-
         currentCallId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
+        val callId = currentCallId
         val from = intent.getStringExtra(EXTRA_FROM) ?: ""
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
-        val callId = currentCallId
         LiviOngoingCallHelper.setIncomingCall(this, callId, from, fromNick)
 
         findViewById<TextView>(R.id.caller_name).text = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_unknown)
@@ -100,7 +99,7 @@ class IncomingCallActivity : AppCompatActivity() {
             registerReceiver(callAnsweredReceiver, filterAnswered)
         }
 
-        // Назад: экран уходит в фон, звонок продолжается, вернуться по уведомлению в шторке.
+        // Назад: экран уходит в фон (уведомление не показываем — только нативный экран при входящем).
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 moveTaskToBack(true)
@@ -108,9 +107,14 @@ class IncomingCallActivity : AppCompatActivity() {
         })
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Уведомление не показываем ни в шторке, ни в строке состояния
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+    }
+
     /**
-     * Домой / Недавние: то же поведение, что и «Назад» — экран уходит в фон, звонок продолжается,
-     * вернуться по уведомлению в шторке (без завершения экрана и без принятия/отклонения).
+     * Домой / Недавние: экран уходит в фон без завершения (принять/отклонить — в приложении).
      */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
@@ -119,6 +123,7 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         LiviOngoingCallHelper.clearOngoingCall(applicationContext)
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         callCanceledReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         callCanceledReceiver = null
         callAnsweredReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
