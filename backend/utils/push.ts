@@ -172,7 +172,24 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
         });
         logger.info('[push] call push sent via FCM (data-only)', { userId });
       } catch (e) {
-        logger.warn('[push] FCM send failed, falling back to Expo for this device', { error: (e as Error)?.message });
+        const errMsg = String((e as Error)?.message ?? '');
+        const isInvalidToken =
+          errMsg.includes('Requested entity was not found') ||
+          errMsg.includes('unregistered') ||
+          errMsg.includes('registration-token-not-registered');
+        if (isInvalidToken) {
+          try {
+            await PushTokenModel.updateOne(
+              { userId, token: r.token },
+              { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
+            ).exec();
+            logger.info('[push] removed invalid FCM token for user', { userId, tokenPrefix: String(r.token).slice(0, 18) });
+          } catch (dbErr) {
+            logger.warn('[push] failed to remove invalid FCM token', { userId, error: (dbErr as Error)?.message });
+          }
+        } else {
+          logger.warn('[push] FCM send failed, falling back to Expo for this device', { error: errMsg });
+        }
         if (Expo.isExpoPushToken(r.token)) expoTokens.push(r.token);
       }
     } else {
@@ -210,9 +227,9 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
   const messaging = getFirebaseMessaging();
   if (!messaging) return;
   const recs = await PushTokenModel.find({ userId: callerUserId })
-    .select('platform fcmToken')
+    .select('token platform fcmToken')
     .lean();
-  type Rec = { platform: string; fcmToken?: string };
+  type Rec = { token: string; platform: string; fcmToken?: string };
   const list = (recs || []) as unknown as Rec[];
   for (const r of list) {
     if (r.platform === 'android' && r.fcmToken) {
@@ -225,7 +242,21 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
         logger.info('[push] call_declined sent via FCM (data-only) to caller', { userId: callerUserId });
         break;
       } catch (e) {
-        logger.warn('[push] FCM call_declined to caller failed', { userId: callerUserId, error: (e as Error)?.message });
+        const errMsg = String((e as Error)?.message ?? '');
+        const isInvalidToken =
+          errMsg.includes('Requested entity was not found') ||
+          errMsg.includes('unregistered') ||
+          errMsg.includes('registration-token-not-registered');
+        if (isInvalidToken) {
+          try {
+            await PushTokenModel.updateOne(
+              { userId: callerUserId, token: r.token },
+              { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
+            ).exec();
+            logger.info('[push] removed invalid FCM token (call_declined)', { userId: callerUserId });
+          } catch {}
+        }
+        logger.warn('[push] FCM call_declined to caller failed', { userId: callerUserId, error: errMsg });
       }
     }
   }
@@ -239,9 +270,9 @@ export async function sendCallCanceledToRecipient(calleeUserId: string, callId: 
   const messaging = getFirebaseMessaging();
   if (!messaging) return;
   const recs = await PushTokenModel.find({ userId: calleeUserId })
-    .select('platform fcmToken')
+    .select('token platform fcmToken')
     .lean();
-  type Rec = { platform: string; fcmToken?: string };
+  type Rec = { token: string; platform: string; fcmToken?: string };
   const list = (recs || []) as unknown as Rec[];
   for (const r of list) {
     if (r.platform === 'android' && r.fcmToken) {
@@ -254,7 +285,21 @@ export async function sendCallCanceledToRecipient(calleeUserId: string, callId: 
         logger.info('[push] call_canceled sent via FCM (data-only)', { userId: calleeUserId });
         break;
       } catch (e) {
-        logger.warn('[push] FCM call_canceled failed', { userId: calleeUserId, error: (e as Error)?.message });
+        const errMsg = String((e as Error)?.message ?? '');
+        const isInvalidToken =
+          errMsg.includes('Requested entity was not found') ||
+          errMsg.includes('unregistered') ||
+          errMsg.includes('registration-token-not-registered');
+        if (isInvalidToken) {
+          try {
+            await PushTokenModel.updateOne(
+              { userId: calleeUserId, token: r.token },
+              { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
+            ).exec();
+            logger.info('[push] removed invalid FCM token (call_canceled)', { userId: calleeUserId });
+          } catch {}
+        }
+        logger.warn('[push] FCM call_canceled failed', { userId: calleeUserId, error: errMsg });
       }
     }
   }

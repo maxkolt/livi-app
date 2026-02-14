@@ -470,7 +470,9 @@ function AppContent() {
           const handled = await handleCallDeepLink(initialUrl);
           if (!handled) {
             await handleIncomingCallDeepLink(initialUrl);
-            handleInviteLink(initialUrl);
+            if (!initialUrl.includes('expo-development-client') && !/^exp\+livi-video-chat:\/\//i.test(initialUrl)) {
+              handleInviteLink(initialUrl);
+            }
           }
         }
       } catch (e) {
@@ -482,7 +484,9 @@ function AppContent() {
       const handled = await handleCallDeepLink(event.url);
       if (!handled) {
         await handleIncomingCallDeepLink(event.url);
-        handleInviteLink(event.url);
+        if (!event.url.includes('expo-development-client') && !/^exp\+livi-video-chat:\/\//i.test(event.url)) {
+          handleInviteLink(event.url);
+        }
       }
     };
 
@@ -504,8 +508,11 @@ function AppContent() {
   // Функция обработки реферальной ссылки
   const handleInviteLink = async (url: string) => {
     try {
-      logger.info('[App] Processing invite link:', url);
-      
+      if (url.includes('expo-development-client') || /^exp\+livi-video-chat:\/\//i.test(url)) {
+        return;
+      }
+      logger.debug('[App] Processing invite link:', url);
+
       // Парсим URL: 
       // - livi://invite/{code} (custom scheme для тестирования)
       // - https://livi.app/invite/{code} (Universal Links для продакшена)
@@ -819,9 +826,20 @@ function AppContent() {
 
   // КРИТИЧНО: Обработчик входящего звонка - должен быть всегда зарегистрирован
   // Используем useRef для хранения функции, чтобы она не пересоздавалась
+  const INCOMING_CALL_DEBOUNCE_MS = 3000;
+  const lastProcessedIncomingRef = React.useRef<{ callId: string; at: number } | null>(null);
+
   const handleIncomingCall = React.useCallback((d: { callId: string; from: string; fromNick?: string }) => {
-    logger.info('[call:incoming] received', { callId: d.callId, from: d.from, fromNick: d.fromNick });
-    
+    const callId = String(d?.callId ?? '');
+    const now = Date.now();
+    const last = lastProcessedIncomingRef.current;
+    if (callId && last?.callId === callId && now - last.at < INCOMING_CALL_DEBOUNCE_MS) {
+      logger.debug('[call:incoming] debounced duplicate', { callId });
+      return;
+    }
+    lastProcessedIncomingRef.current = callId ? { callId, at: now } : null;
+    logger.debug('[call:incoming] received', { callId: d.callId, from: d.from, fromNick: d.fromNick });
+
     // КРИТИЧНО: Используем актуальное значение навигации напрямую, а не routeName (который обновляется асинхронно)
     // Fallback: если навигация не готова, разрешаем показать модалку (лучше показать, чем пропустить)
     let currentRoute: string | undefined = undefined;

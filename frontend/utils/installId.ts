@@ -6,6 +6,8 @@ import { getAndroidId, getIosIdForVendorAsync } from 'expo-application';
 const KEY = 'livi.installId';
 const randomId = () => `inst_${Math.random().toString(36).slice(2, 10)}`;
 
+let installIdLoggedOnce = false;
+
 /** На Android при первом запуске (нет сохранённого id) используем стабильный Android ID,
  * чтобы после переустановки приложения тот же телефон получил тот же installId и подтянул данные из MongoDB. */
 function getStableAndroidInstallIdSync(): string | null {
@@ -28,7 +30,8 @@ async function getStableAndroidInstallId(): Promise<string | null> {
   if (id) return id;
   await new Promise((r) => setTimeout(r, 400));
   id = getStableAndroidInstallIdSync();
-  if (__DEV__) {
+  if (__DEV__ && !installIdLoggedOnce) {
+    installIdLoggedOnce = true;
     if (id) console.log('[installId] Using stable Android ID (data will restore after reinstall)');
     else console.warn('[installId] Android ID unavailable after retry — using random ID (data will not restore after reinstall)');
   }
@@ -69,7 +72,8 @@ export async function getInstallId(): Promise<string> {
 
   if (Platform.OS !== 'web') await setSecure(KEY, id);
   await AsyncStorage.setItem(KEY, id);
-  if (__DEV__) {
+  if (__DEV__ && !installIdLoggedOnce) {
+    installIdLoggedOnce = true;
     const type = id.startsWith('inst_android_') ? 'Android ID (stable)' : id.startsWith('inst_ios_') ? 'IDFV (stable)' : 'random';
     console.log('[installId]', type, '→', id.slice(0, 24) + (id.length > 24 ? '…' : ''));
   }

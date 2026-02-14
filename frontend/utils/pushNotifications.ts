@@ -385,7 +385,7 @@ export async function registerAndSendPushToken(userId?: string) {
       const deviceType = String((deviceTokenResp as any)?.type || '');
       if (deviceToken && Platform.OS === 'android') {
         fcmToken = String(deviceToken);
-        logger.info('[push] device push token acquired', {
+        logger.debug('[push] device push token acquired', {
           type: deviceType,
           tokenPrefix: fcmToken.slice(0, 18),
         });
@@ -417,7 +417,7 @@ export async function registerAndSendPushToken(userId?: string) {
     const token = tokenResp?.data;
     if (!token) return;
     try {
-      logger.info('[push] expo token acquired', {
+      logger.debug('[push] expo token acquired', {
         userId,
         tokenPrefix: String(token).slice(0, 18),
         platform: Platform.OS,
@@ -448,7 +448,7 @@ export async function registerAndSendPushToken(userId?: string) {
     try {
       if (resp && typeof resp?.ok === 'boolean') {
         const text = await resp.text().catch(() => '');
-        logger.info('[push] token register response', {
+        logger.debug('[push] token register response', {
           ok: resp.ok,
           status: resp.status,
           body: text ? text.slice(0, 200) : '',
