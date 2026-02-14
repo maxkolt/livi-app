@@ -64,6 +64,16 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             Log.d(TAG, "FCM call_canceled: notification canceled, broadcast sent callId=$callId")
             return
         }
+        // Получатель отклонил — закрыть нативный экран исходящего у звонящего (сокет в фоне может быть отключён).
+        if (type == "call_declined" && callId != null) {
+            val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
+                setPackage(packageName)
+                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+            }
+            sendBroadcast(closeIntent)
+            Log.d(TAG, "FCM call_declined: broadcast sent to close OutgoingCallActivity callId=$callId")
+            return
+        }
         super.onMessageReceived(remoteMessage)
     }
 

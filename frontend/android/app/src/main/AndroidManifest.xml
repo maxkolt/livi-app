@@ -15,6 +15,7 @@
   <!-- CallKeep: foreground service для микрофона в фоне при звонке (Android 11+) -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
   <!-- CallKeep selfManaged: READ_CALL_LOG, READ_PHONE_NUMBERS (TelecomManager.getPhoneAccount на части устройств) -->
   <uses-permission android:name="android.permission.READ_CALL_LOG"/>
   <uses-permission android:name="android.permission.READ_PHONE_NUMBERS"/>
@@ -91,9 +92,19 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="livi" android:host="decline-call"/>
       </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="livi" android:host="cancel-outgoing"/>
+      </intent-filter>
     </activity>
     <!-- Full-screen incoming call (WhatsApp/Telegram style): показывается поверх блокировки при FCM-пуше о звонке -->
-    <activity android:name=".IncomingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true" android:launchMode="singleInstance"/>
+    <activity android:name=".IncomingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:launchMode="singleInstance" android:finishOnTaskLaunch="false"/>
+    <!-- Нативный экран исходящего видеозвонка (вместо in-app модалки при CallKeep) -->
+    <activity android:name=".OutgoingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:launchMode="singleInstance" android:finishOnTaskLaunch="false"/>
+    <!-- Исходящий вызов в фоне: WAV в динамике, уведомление, таймаут 20 сек -->
+    <service android:name=".LiviOutgoingCallService" android:exported="false" android:foregroundServiceType="mediaPlayback"/>
     <!-- «Отклонить» в уведомлении: HTTP decline без открытия приложения (нет Deep link received) -->
     <receiver android:name=".DeclineCallReceiver" android:exported="false">
       <intent-filter>

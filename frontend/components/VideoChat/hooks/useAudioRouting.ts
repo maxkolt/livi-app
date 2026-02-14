@@ -73,11 +73,12 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
     try { InCallManager.start({ media: 'video', ringback: '' }); } catch {}
     // Ensure Android audio focus is requested (some devices won't switch routes reliably without it).
     try { (InCallManager as any).requestAudioFocus?.(); } catch {}
-    // IMPORTANT: do NOT force speakerphone globally. We'll deterministically pick a route on Android.
-    setSpeakerAuto(); // keep "auto" as baseline; chooseAudioRoute will override per-device.
-    // Do not call setSpeakerphoneOn(true) here; InCallManager.start({media:'video'}) will default appropriately.
-    // Also do not force WebRTC mediaDevices speaker; let OS route.
-    // Не трогаем BT SCO агрессивно — это ломает роутинг на части устройств.
+    // Android: по умолчанию звук в видеозвонке идёт в громкий динамик, не в верхний (earpiece).
+    if (Platform.OS === 'android') {
+      try { InCallManager.setSpeakerphoneOn(true); } catch {}
+    } else {
+      setSpeakerAuto(); // iOS: keep "auto" so wired/Bluetooth can take over.
+    }
     configureIOSAudioSession();
     log('[useAudioRouting] applyRouting()', {
       platform: Platform.OS,

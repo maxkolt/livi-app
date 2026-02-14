@@ -55,6 +55,18 @@ class MainActivity : ReactActivity() {
       setTheme(R.style.AppTheme)
     }
     super.onCreate(null)
+    // Кнопка Домой свернула приложение во время звонка → при тапе по иконке снова показываем экран звонка, а не главный.
+    if (isLaunchedFromLauncher(intent) && LiviOngoingCallHelper.launchOngoingCallActivityIfNeeded(this)) {
+      finish()
+    }
+  }
+
+  /** Запуск из лаунчера (тап по иконке), не по deep link (livi://...). */
+  private fun isLaunchedFromLauncher(i: Intent?): Boolean {
+    if (i?.action != Intent.ACTION_MAIN) return false
+    if (i.categories?.contains(Intent.CATEGORY_LAUNCHER) != true) return false
+    val data = i.data ?: return true
+    return data.scheme != "livi"
   }
 
   private fun isDeclineCallIntent(i: Intent?): Boolean {

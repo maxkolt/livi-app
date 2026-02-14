@@ -6,6 +6,7 @@ type Listener<T> = (payload: T) => void;
 const missedListeners = new Set<Listener<{ userId: string }>>();
 const closeIncomingListeners = new Set<Listener<{}>>();
 const closeIncomingRequestListeners = new Set<Listener<{}>>();
+const closeOutgoingCallListeners = new Set<Listener<{}>>();
 
 export function onMissedIncrement(cb: Listener<{ userId: string }>): () => void {
   missedListeners.add(cb);
@@ -40,6 +41,19 @@ export function onRequestCloseIncoming(cb: () => void): () => void {
 
 export function emitRequestCloseIncoming() {
   for (const l of closeIncomingRequestListeners) {
+    try { (l as any)({}); } catch {}
+  }
+}
+
+/** Закрыть модалку исходящего вызова (когда абонент отклонил/отменил/таймаут вне приложения). */
+export function onCloseOutgoingCall(cb: () => void): () => void {
+  const h = () => cb();
+  closeOutgoingCallListeners.add(h as any);
+  return () => { closeOutgoingCallListeners.delete(h as any); };
+}
+
+export function emitCloseOutgoingCall() {
+  for (const l of closeOutgoingCallListeners) {
     try { (l as any)({}); } catch {}
   }
 }

@@ -8,7 +8,7 @@ import { acceptCall, declineCall, ensureSocketConnected } from '../sockets/socke
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
-import { displayIncomingCall, isCallKeepAvailable } from './callKeep';
+import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast } from './callKeep';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 
@@ -65,28 +65,31 @@ Notifications.setNotificationHandler({
     // Таймаут или отмена: останавливаем вибрацию (снимаем уведомление), затем показываем «Пропущенный вызов» без вибрации.
     if (type === 'call_ended') {
       const data = (n as any)?.request?.content?.data || {};
-      const fromNick = String(data.fromNick || '').trim();
-      const fromUserId = String(data.from || '');
+      const endedFromActive = !!data.endedFromActive;
       try {
         stopIncomingCallAlert();
       } catch {}
       try {
         await Notifications.dismissAllNotificationsAsync();
       } catch {}
-      try {
-        const title = 'Пропущенный вызов';
-        const body = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title,
-            body,
-            data: { type: 'missed_call', from: fromUserId, fromNick },
-            ...(Platform.OS === 'android' ? { channelId: 'missed_call' } : {}),
-          },
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
-        });
-      } catch (e) {
-        logger.warn('[push] failed to show missed_call notification', e as any);
+      if (!endedFromActive) {
+        const fromNick = String(data.fromNick || '').trim();
+        const fromUserId = String(data.from || '');
+        try {
+          const title = 'Пропущенный вызов';
+          const body = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title,
+              body,
+              data: { type: 'missed_call', from: fromUserId, fromNick },
+              ...(Platform.OS === 'android' ? { channelId: 'missed_call' } : {}),
+            },
+            trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
+          });
+        } catch (e) {
+          logger.warn('[push] failed to show missed_call notification', e as any);
+        }
       }
       return {
         shouldShowAlert: false,
@@ -169,6 +172,9 @@ export async function openAnswerCallScreen(peerUserId: string, callId: string): 
   } catch (e) {
     logger.warn('[push] acceptCall from answer-call deep link failed', { callId, error: (e as Error)?.message });
   }
+  if (Platform.OS === 'android') {
+    sendCallAnsweredBroadcast(callId);
+  }
   await navigateToVideoCallIncoming(peerUserId, callId);
   try {
     await clearCallRelatedNotificationsAndSyncBadge();
@@ -209,6 +215,14 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
   try {
     const type = String(data?.type || '');
     if (!type) return;
+
+    if (type === 'call_ended' && data?.endedFromActive) {
+      await clearCallRelatedNotificationsAndSyncBadge();
+      try {
+        (global as any).__onCallEndedFromPush?.();
+      } catch {}
+      return;
+    }
 
     if (type === 'message') {
       const nav = await waitForNavReady();
@@ -495,13 +509,13 @@ export function addNotificationListeners() {
     if (data) await handleNotificationResponse(data, actionId);
   });
 
-  // При получении пуша о звонке — нативный экран (CallKeep) только когда приложение не на переднем плане; иначе только модалка в приложении
+  // При получении пуша о звонке: на Android в фоне FCM уже показывает IncomingCallActivity; на iOS — CallKeep когда не active
   const sub1 = Notifications.addNotificationReceivedListener((n) => {
     try {
       const data = (n as any)?.request?.content?.data;
       if (data?.type === 'call' && data?.callId && data?.from) {
         logger.info('[push] incoming call notification received', { callId: data.callId, from: data.from });
-        if (isCallKeepAvailable() && AppState.currentState !== 'active') {
+        if (Platform.OS !== 'android' && isCallKeepAvailable() && AppState.currentState !== 'active') {
           displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
         }
         const setFromPush = (global as any).__setIncomingCallFromPush;

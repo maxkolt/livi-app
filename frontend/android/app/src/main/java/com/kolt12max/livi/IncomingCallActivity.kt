@@ -14,6 +14,7 @@ import android.os.VibratorManager
 import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import java.net.URL
 import java.net.URLEncoder
@@ -30,6 +31,7 @@ class IncomingCallActivity : AppCompatActivity() {
 
     private var currentCallId: String = ""
     private var callCanceledReceiver: BroadcastReceiver? = null
+    private var callAnsweredReceiver: BroadcastReceiver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,8 +50,9 @@ class IncomingCallActivity : AppCompatActivity() {
         val from = intent.getStringExtra(EXTRA_FROM) ?: ""
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
         val callId = currentCallId
+        LiviOngoingCallHelper.setIncomingCall(this, callId, from, fromNick)
 
-        findViewById<TextView>(R.id.caller_name).text = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_title)
+        findViewById<TextView>(R.id.caller_name).text = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_unknown)
         findViewById<TextView>(R.id.call_subtitle).text = getString(R.string.incoming_call_title)
 
         findViewById<ImageButton>(R.id.btn_accept).setOnClickListener {
@@ -75,15 +78,51 @@ class IncomingCallActivity : AppCompatActivity() {
         }
         val filter = IntentFilter(LiviFirebaseMessagingService.ACTION_CALL_CANCELED)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(callCanceledReceiver, filter, Context.RECEIVER_EXPORTED_NONE)
+            registerReceiver(callCanceledReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(callCanceledReceiver, filter)
         }
+
+        // При ответе из уведомления (livi://answer-call) JS шлёт broadcast — закрываем экран.
+        callAnsweredReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val answeredCallId = intent?.getStringExtra(EXTRA_CALL_ID) ?: return
+                if (answeredCallId == currentCallId) {
+                    stopRepeatingVibration()
+                    finish()
+                }
+            }
+        }
+        val filterAnswered = IntentFilter(ACTION_CALL_ANSWERED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(callAnsweredReceiver, filterAnswered, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(callAnsweredReceiver, filterAnswered)
+        }
+
+        // Назад: экран уходит в фон, звонок продолжается, вернуться по уведомлению в шторке.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                moveTaskToBack(true)
+            }
+        })
+    }
+
+    /**
+     * Домой / Недавние: то же поведение, что и «Назад» — экран уходит в фон, звонок продолжается,
+     * вернуться по уведомлению в шторке (без завершения экрана и без принятия/отклонения).
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        moveTaskToBack(true)
     }
 
     override fun onDestroy() {
+        LiviOngoingCallHelper.clearOngoingCall(applicationContext)
         callCanceledReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         callCanceledReceiver = null
+        callAnsweredReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        callAnsweredReceiver = null
         stopRepeatingVibration()
         super.onDestroy()
     }
@@ -176,5 +215,6 @@ class IncomingCallActivity : AppCompatActivity() {
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"
+        const val ACTION_CALL_ANSWERED = "com.kolt12max.livi.CALL_ANSWERED"
     }
 }

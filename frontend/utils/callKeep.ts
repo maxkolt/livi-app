@@ -2,8 +2,11 @@
  * CallKeep (ConnectionService) — нативный экран входящего звонка на Android.
  * Инициализация, displayIncomingCall, обработка answer/end.
  */
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import { logger } from './logger';
+
+/** Единый источник таймаута исходящего вызова (мс). Передаётся в натив при старте, используется в HomeScreen/App и в LiviOutgoingCallService. */
+export const OUTGOING_CALL_TIMEOUT_MS = 20_000;
 
 let isSetup = false;
 /** Разрешение READ_PHONE_NUMBERS выдано (иначе VoiceConnectionService падает с SecurityException) */
@@ -72,9 +75,85 @@ export function isCallKeepAvailable(): boolean {
   return Platform.OS === 'android' && isSetup && hasPhoneNumbersPermission;
 }
 
-/** Дедупликация: один и тот же callId не показываем в CallKeep повторно (сокет + пуш могут вызвать несколько раз). */
+/** Закрыть нативный экран исходящего (OutgoingCallActivity) при принятии/отклонении/таймауте. */
+export function closeOutgoingCallActivity(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.closeOutgoingCallActivity?.();
+  } catch {}
+}
+
+/** Дедупликация: один и тот же callId не показываем повторно (сокет + пуш могут вызвать несколько раз). */
 const lastDisplayedCallId = { id: '' as string, at: 0 };
 const DISPLAY_DEBOUNCE_MS = 3000;
+
+/**
+ * Единый UI входящего на Android: открыть нативный IncomingCallActivity (foreground и из livi://incoming-call).
+ * Вызывать вместо displayIncomingCall когда приложение на переднем плане или из deep link.
+ */
+export function launchIncomingCallActivityScreen(callId: string, from: string, fromNick?: string): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    const now = Date.now();
+    if (lastDisplayedCallId.id === callId && now - lastDisplayedCallId.at < DISPLAY_DEBOUNCE_MS) {
+      logger.debug('[callKeep] launchIncomingCallActivityScreen skipped (duplicate)', { callId });
+      return;
+    }
+    lastDisplayedCallId.id = callId;
+    lastDisplayedCallId.at = now;
+    const LiviAppModule = NativeModules.LiviAppModule;
+    if (LiviAppModule?.launchIncomingCallActivity) {
+      LiviAppModule.launchIncomingCallActivity(callId, from, fromNick ?? '');
+      logger.info('[callKeep] launchIncomingCallActivityScreen', { callId, from });
+    }
+  } catch (e) {
+    logger.warn('[callKeep] launchIncomingCallActivityScreen failed', e as Error);
+  }
+}
+
+/** Отправить broadcast «call_answered» чтобы IncomingCallActivity закрылась (при ответе из уведомления). */
+export function sendCallAnsweredBroadcast(callId: string): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.sendCallAnsweredBroadcast?.(callId);
+  } catch {}
+}
+
+/** Открыть настройки уведомлений приложения (Android 8+). Для входящих звонков поверх блокировки пользователь может включить полноэкранные уведомления. */
+export function openAppNotificationSettings(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.openAppNotificationSettings?.();
+  } catch {}
+}
+
+/** Передать нативу таймаут исходящего вызова (единый источник с OUTGOING_CALL_TIMEOUT_MS). Вызывать при старте приложения. */
+export function setOutgoingCallTimeoutMs(ms: number): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.setOutgoingCallTimeoutMs?.(ms);
+  } catch {}
+}
+
+/**
+ * Показать исходящий звонок в нативном UI (полный экран / уведомление).
+ * Вызывать после startCall, когда получен callId с сервера.
+ * Уведомление в шторке одно — от LiviOutgoingCallService (звук, тап в экран, 20с таймаут).
+ * CallKeep.startCall не вызываем, чтобы не дублировать уведомление.
+ */
+export function displayOutgoingCall(callId: string, toUserId: string, toNick?: string, _hasVideo = true): void {
+  if (Platform.OS !== 'android') return;
+  if (!isSetup || !hasPhoneNumbersPermission) return;
+  try {
+    const LiviAppModule = NativeModules.LiviAppModule;
+    if (LiviAppModule?.launchOutgoingCallActivity) {
+      LiviAppModule.launchOutgoingCallActivity(callId, toUserId, toNick ?? toUserId);
+    }
+    logger.info('[callKeep] displayOutgoingCall', { callId, to: toUserId });
+  } catch (e) {
+    logger.warn('[callKeep] displayOutgoingCall failed', e as Error);
+  }
+}
 
 /**
  * Показать входящий звонок в нативном UI (полный экран / уведомление).

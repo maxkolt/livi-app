@@ -20,12 +20,18 @@ index 1234567..abcdefg 100644
 +    return false;
 +  };
 +
++  const isLiviCallLink = (u: string) => /^livi:\/\/(decline-call|answer-call|incoming-call)/.test(u);
++
    React.useEffect(() => {
      getPendingDeepLink().then((url) => {
        if (url) {
          setPendingDeepLink(url);
--        modalStack.push(() => <DeepLinkModal pendingDeepLink={url} />);
-+        if (!passLiviCallLinkToApp(url)) {
+-        if (!passLiviCallLinkToApp(url)) {
+-          modalStack.push(() => <DeepLinkModal pendingDeepLink={url} />);
+-        }
++        if (isLiviCallLink(url)) {
++          passLiviCallLinkToApp(url);
++        } else if (!passLiviCallLinkToApp(url)) {
 +          modalStack.push(() => <DeepLinkModal pendingDeepLink={url} />);
 +        }
        }
@@ -36,8 +42,12 @@ index 1234567..abcdefg 100644
      const listener = addDeepLinkListener(({ url }) => {
        if (url) {
          setPendingDeepLink(url);
--        modalStack.push(() => <DeepLinkModal pendingDeepLink={url} />);
-+        if (!passLiviCallLinkToApp(url)) {
+-        if (!passLiviCallLinkToApp(url)) {
+-          modalStack.push(() => <DeepLinkModal pendingDeepLink={url} />);
+-        }
++        if (isLiviCallLink(url)) {
++          passLiviCallLinkToApp(url);
++        } else if (!passLiviCallLinkToApp(url)) {
 +          modalStack.push(() => <DeepLinkModal pendingDeepLink={url} />);
 +        }
        }

@@ -71,7 +71,8 @@ const LinearGradient: any = (() => {
 import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onMissedIncrement, onRequestCloseIncoming, emitCloseIncoming } from '../utils/globalEvents';
+import { onMissedIncrement, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall } from '../utils/globalEvents';
+import { displayOutgoingCall, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS } from '../utils/callKeep';
 import { clearNotificationIndicators, syncAppBadgeFromMissedCount } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
@@ -108,6 +109,7 @@ import socket, {
   getMyProfile,
   onCallAccepted,
   onCallDeclined,
+  onCallCanceled,
   onCallTimeout,
   onCallRoomFull,
   onDisconnected,
@@ -415,7 +417,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const [blurIntensity, setBlurIntensity] = useState<number>(isDark ? 15 : 20);
   const titanOpacity = useRef(new Animated.Value(0.25)).current;
-  const borderWidth = 2; // Тонкий бордер
+  const borderWidth = 0.7; // Рамка кнопки «Начать поиск»
 
   // Цвета из палитры эквалайзера для темной темы - зациклены для непрерывности
   const darkColors = [
@@ -604,6 +606,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [refreshing, setRefreshing] = useState(false);
   const friendsRef = useRef<Friend[]>([]);
   useEffect(() => { friendsRef.current = friends; }, [friends]);
+
+  // Закрытие свайпа строки при нажатии «Видеозвонок», чтобы не видеть кнопку удаления друга до появления нативного экрана
+  const openSwipeableRef = useRef<React.ElementRef<typeof Swipeable> | null>(null);
+  const swipeableRefsMap = useRef<Record<string, React.ElementRef<typeof Swipeable>>>({});
+  const [swipeActionsHiddenForCall, setSwipeActionsHiddenForCall] = useState<string | null>(null);
   
   // ===== friends cache (cold start UX) =====
   // При холодном старте сокет/идентификация могут занять 1-3+ сек, из-за чего вкладка "Друзья" выглядит пустой.
@@ -1116,11 +1123,50 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   const pendingCancelRef = useRef(false);
   const outgoingCallSoundRef = useRef<Audio.Sound | null>(null);
+  const callingVisibleRef = useRef(false);
+  callingVisibleRef.current = calling.visible;
 
-  // Звук вызова при открытой модалке исходящего видеозвонка. Основной (медиа) динамик — иначе в разговорном тихо даже на 1.0. Исходящий вызов — 20 сек, звук до 20 сек.
+  // При переподключении сокета закрываем модалку исходящего: отмена могла произойти вне приложения (фон/закрытие), call:cancel мы не получили
+  useEffect(() => {
+    const onConnect = () => {
+      if (callingVisibleRef.current) {
+        setCalling({ visible: false, friend: null, callId: null });
+        stopWaves();
+      }
+    };
+    socket.on('connect', onConnect);
+    return () => { socket.off('connect', onConnect); };
+  }, [stopWaves]);
+
+  // Закрытие модалки исходящего по событию извне (абонент отклонил на нативном экране/отменил/таймаут — событие приходит в App, эмитится emitCloseOutgoingCall)
+  useEffect(() => {
+    const unsub = onCloseOutgoingCall(() => {
+      setCalling({ visible: false, friend: null, callId: null });
+      stopWaves();
+    });
+    return unsub;
+  }, [stopWaves]);
+
+  // Сброс скрытия правых действий свайпа, когда исходящий вызов закрыт (убирает мелькание кнопки «Удалить»)
+  useEffect(() => {
+    if (!calling.visible) setSwipeActionsHiddenForCall(null);
+  }, [calling.visible]);
+
+  // Прямая подписка на call:declined пока висит модалка исходящего — чтобы гарантированно закрыть при отклонении на нативном экране
+  useEffect(() => {
+    if (!calling.visible) return;
+    const handler = () => {
+      setCalling({ visible: false, friend: null, callId: null });
+      stopWaves();
+    };
+    socket.on('call:declined', handler);
+    return () => { socket.off('call:declined', handler); };
+  }, [calling.visible, stopWaves]);
+
+  // Звук вызова: в модалке — из JS (WAV в цикле); на нативном экране — из OutgoingCallActivity (тот же WAV).
   const OUTGOING_CALL_SOUND_DURATION_MS = 20000;
   useEffect(() => {
-    if (!calling.visible) {
+    if (!calling.visible || isCallKeepAvailable()) {
       const sound = outgoingCallSoundRef.current;
       if (sound) {
         outgoingCallSoundRef.current = null;
@@ -1171,12 +1217,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [calling.visible]);
 
   const handleStartVideoCall = useCallback(async (friend: Friend) => {
+    setSwipeActionsHiddenForCall(friend.id);
+    openSwipeableRef.current?.close?.();
     try {
       setCalling({ visible: true, friend, callId: null });
       startWaves();
       const r: any = await startCall(friend.id);
       if (!r?.ok) throw new Error(r?.error || 'call_failed');
       setCalling((c) => ({ ...c, callId: r.callId || null }));
+
+      // Нативный экран исходящего — всегда пробуем показать; внутри displayOutgoingCall проверка isSetup и разрешений
+      if (r.callId) {
+        displayOutgoingCall(r.callId, friend.id, friend.name ?? '', true);
+      }
 
       // Если пользователь успел нажать «Отменить» до прихода callId — шлём отмену сразу после ack
       if (pendingCancelRef.current && r.callId) {
@@ -1191,6 +1244,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const offAccepted = onCallAccepted?.(({ callId }) => {
         if (cleaned) return; cleaned = true;
         logger.debug('Call accepted', { callId });
+        if (callId) try { reportEndCallToCallKeep(callId); } catch {}
+        try { closeOutgoingCallActivity(); } catch {}
         // Приняли прямой звонок — сбрасываем бейдж пропущенных для этого друга
         // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) и УДАЛЯЕМ ключ вместо установки в 0
         try {
@@ -1211,18 +1266,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
-        // Переход в экран видеочата (мы инициатор) с передачей callId
-        navigation.navigate('VideoCall', { 
-          directCall: true, 
-          directInitiator: true, 
-          peerUserId: friend.id, 
-          myUserId: getCurrentUserId(), // FIX: use getCurrentUserId() instead of currentUserId
-          callId: callId, // ← ДОБАВЛЕНО: передаём callId
-          returnTo: { name: 'Home', params: { openFriendsMenu: true } } 
-        });
+        // Навигация на VideoCall — единая точка входа в App.tsx (onCallAccepted)
       });
       const offDeclined = onCallDeclined?.(() => {
         if (cleaned) return; cleaned = true;
+        try { closeOutgoingCallActivity(); } catch {}
         // Получатель отклонил: инициатор НЕ увеличивает пропущенные
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
@@ -1230,6 +1278,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       });
       const offTimeout = onCallTimeout?.(() => {
         if (cleaned) return; cleaned = true;
+        try { closeOutgoingCallActivity(); } catch {}
         // Таймаут: у инициатора счётчик не увеличиваем, просто закрываем UI
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
@@ -1242,25 +1291,34 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         setRoomFull({ visible: true, name: friend.name || '' });
         setTimeout(() => setRoomFull({ visible: false, name: '' }), 2000);
       });
+      const offCancel = onCallCanceled?.(() => {
+        if (cleaned) return; cleaned = true;
+        try { closeOutgoingCallActivity(); } catch {}
+        setCalling({ visible: false, friend: null, callId: null });
+        stopWaves();
+      });
 
-      // Таймаут на клиенте (20 сек) как safeguard
+      // Таймаут на клиенте (единый с нативом OUTGOING_CALL_TIMEOUT_MS) как safeguard
+      const callIdForTimeout = r.callId;
       setTimeout(() => {
         if (!cleaned) {
           cleaned = true;
+          try { closeOutgoingCallActivity(); } catch {}
+          if (callIdForTimeout) try { reportEndCallToCallKeep(callIdForTimeout); } catch {}
           setCalling({ visible: false, friend: null, callId: null });
           stopWaves();
           showNotice(t('noAnswer', lang), 'error', 1800);
         }
-      }, 20000);
+      }, OUTGOING_CALL_TIMEOUT_MS);
 
       // Очистка будет при срабатывании одного из событий или таймаута
-      return () => { offAccepted?.(); offDeclined?.(); offTimeout?.(); offRoomFull?.(); };
+      return () => { offAccepted?.(); offDeclined?.(); offTimeout?.(); offRoomFull?.(); offCancel?.(); };
     } catch (e: any) {
       setCalling({ visible: false, friend: null, callId: null });
       stopWaves();
       showNotice(t('callStartFailed', lang), 'error', 2000);
     }
-  }, [navigation, showNotice, startWaves, stopWaves]);
+  }, [navigation, showNotice, startWaves, stopWaves, lang]);
 
   const handleCancelCall = useCallback(() => {
     if (calling.callId) {
@@ -3431,25 +3489,28 @@ const handleClearNick = useCallback(async () => {
       </View>
     );
   };
-  const renderRightActions = (id: string) => (
-    <View style={styles.swipeRight}>
-      <IconButton
-        icon="close"
-        size={23}
-        iconColor="rgb(255,90,103)"
-        style={[
-          styles.actionBtn,
-          {
-            marginRight: 6,
-            backgroundColor: 'rgba(255,90,103,0.18)',
-            borderWidth: 1,
-            borderColor: 'rgba(200,50,65,0.7)',
-          },
-        ]}
-        onPress={() => handleRemoveFriend(id)}
-      />
-    </View>
-  );
+  const renderRightActions = (id: string) => {
+    if (swipeActionsHiddenForCall === id) return <View style={styles.swipeRight} />;
+    return (
+      <View style={styles.swipeRight}>
+        <IconButton
+          icon="close"
+          size={23}
+          iconColor="rgb(255,90,103)"
+          style={[
+            styles.actionBtn,
+            {
+              marginRight: 6,
+              backgroundColor: 'rgba(255,90,103,0.18)',
+              borderWidth: 1,
+              borderColor: 'rgba(200,50,65,0.7)',
+            },
+          ]}
+          onPress={() => handleRemoveFriend(id)}
+        />
+      </View>
+    );
+  };
 
   const handleRemoveFriend = useCallback(
     async (peerId: string) => {
@@ -3593,7 +3654,12 @@ const handleClearNick = useCallback(async () => {
       refreshing={refreshing}
       onRefresh={onRefreshFriends}
       renderItem={({ item }) => (
-        <Swipeable renderRightActions={() => renderRightActions(item.id)}>
+        <Swipeable
+          ref={(r) => { if (r) swipeableRefsMap.current[item.id] = r; }}
+          onSwipeableOpen={() => { openSwipeableRef.current = swipeableRefsMap.current[item.id] ?? null; }}
+          onSwipeableClose={() => { if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) openSwipeableRef.current = null; }}
+          renderRightActions={() => renderRightActions(item.id)}
+        >
           <List.Item
             style={[styles.listRow, styles.listRowAligned]}
             contentStyle={{ marginLeft: 0 }}
@@ -4223,8 +4289,8 @@ const handleClearNick = useCallback(async () => {
           </View>
         </View>
       )}
-      {/* ───── Исходящий видеозвонок (caller modal) ───── */}
-      {calling.visible && (
+      {/* ───── Исходящий видеозвонок: нативный экран при CallKeep, иначе модалка в приложении ───── */}
+      {calling.visible && !isCallKeepAvailable() && (
         <View style={styles.overlayModal} pointerEvents="box-none">
           <BlurView intensity={Platform.OS === 'android' ? 100 : 85} tint="dark" style={StyleSheet.absoluteFill} />
           <View
@@ -4256,14 +4322,23 @@ const handleClearNick = useCallback(async () => {
               {t('callingYouCall', lang).replace('{name}', displayName(calling.friend?.name))}
             </Text>
             <Text style={{ color: LIVI.text2, marginTop: 6 }}>{t('callingWaiting', lang)}</Text>
-            <View style={{ flexDirection: 'row', gap: 12, marginTop: 18 }}>
-            <TouchableOpacity
-  onPress={handleCancelCall}
-  activeOpacity={0.6} // делаем заметнее
-  style={[styles.confirmBtn, { backgroundColor: 'rgba(255,90,103,0.18)', width: 96 }]}
->
-  <Text style={[styles.confirmBtnText, { color: LIVI.white }]}>{t('cancelCall', lang)}</Text>
-</TouchableOpacity>
+            <View style={{ alignItems: 'center', marginTop: 300 }}>
+              <TouchableOpacity
+                onPress={handleCancelCall}
+                activeOpacity={0.6}
+                style={{
+                  width: 76,
+                  height: 76,
+                  borderRadius: 38,
+                  backgroundColor: 'rgba(255,90,103,0.25)',
+                  borderWidth: 2,
+                  borderColor: 'rgba(255,90,103,0.5)',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <MaterialIcons name="call-end" size={28} color="#fff" />
+              </TouchableOpacity>
             </View>
           </Animated.View>
         </View>
@@ -4912,7 +4987,7 @@ const styles = StyleSheet.create({
   welcomeTextBlock: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 35 },
   noticeSlot: {
     minHeight: 72,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     alignItems: 'center',
     width: '100%',
   },

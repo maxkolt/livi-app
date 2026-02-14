@@ -203,6 +203,35 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
 }
 
 /**
+ * Получатель отклонил вызов — шлём caller FCM data-only call_declined,
+ * чтобы на устройстве звонящего сразу закрыли OutgoingCallActivity (сокет в фоне может быть отключён).
+ */
+export async function sendCallDeclinedToCaller(callerUserId: string, callId: string): Promise<void> {
+  const messaging = getFirebaseMessaging();
+  if (!messaging) return;
+  const recs = await PushTokenModel.find({ userId: callerUserId })
+    .select('platform fcmToken')
+    .lean();
+  type Rec = { platform: string; fcmToken?: string };
+  const list = (recs || []) as unknown as Rec[];
+  for (const r of list) {
+    if (r.platform === 'android' && r.fcmToken) {
+      try {
+        await messaging.send({
+          token: r.fcmToken,
+          data: { type: 'call_declined', callId: String(callId) },
+          android: { priority: 'high' },
+        });
+        logger.info('[push] call_declined sent via FCM (data-only) to caller', { userId: callerUserId });
+        break;
+      } catch (e) {
+        logger.warn('[push] FCM call_declined to caller failed', { userId: callerUserId, error: (e as Error)?.message });
+      }
+    }
+  }
+}
+
+/**
  * Инициатор отменил вызов — шлём callee FCM data-only call_canceled,
  * чтобы на устройстве получателя сразу сняли уведомление и закрыли IncomingCallActivity без мельканий.
  */

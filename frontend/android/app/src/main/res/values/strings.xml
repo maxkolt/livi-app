@@ -4,6 +4,14 @@
   <string name="expo_splash_screen_status_bar_translucent" translatable="false">false</string>
   <!-- Full-screen incoming call (WhatsApp/Telegram style) -->
   <string name="incoming_call_title">Входящий видеозвонок</string>
+  <string name="incoming_call_unknown">Кто-то звонит</string>
   <string name="incoming_call_accept">Принять</string>
   <string name="incoming_call_decline">Отклонить</string>
+  <!-- Outgoing call (native screen) -->
+  <string name="outgoing_call_title">Исходящий видеозвонок</string>
+  <string name="outgoing_call_subtitle">Вызов…</string>
+  <string name="outgoing_call_subtitle_base">Вызов</string>
+  <string name="outgoing_call_cancel">Отменить</string>
+  <string name="outgoing_call_notification_channel">Исходящий вызов</string>
+  <string name="outgoing_call_notification_title">LiVi — видеозвонок</string>
 </resources>

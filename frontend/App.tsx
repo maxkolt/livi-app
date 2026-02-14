@@ -10,12 +10,12 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, Modal, NativeModules } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE } from "./sockets/socket";
-import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE } from "./sockets/socket";
+import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
@@ -32,7 +32,7 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs } from './utils/callKeep';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
@@ -126,6 +126,9 @@ function AppContent() {
     void hydrateLang();
   }, [hydrateLang]);
 
+  // Ref для различения в onEnd: мы принимающий (отклонили входящий) или звонящий (отменили исходящий)
+  const incomingCallIdRef = React.useRef<string | null>(null);
+
   // CallKeep (нативный экран звонка на Android): selfManaged + задержка
   React.useEffect(() => {
     const t = setTimeout(() => void setupCallKeep(), 3000);
@@ -140,6 +143,7 @@ function AppContent() {
         onAnswer: async (callId) => {
           const info = getPendingCallInfo(callId);
           if (!info || !navRef.isReady()) return;
+          incomingCallIdRef.current = null;
           stopIncomingCallAlert();
           setIncoming(null);
           try {
@@ -158,10 +162,31 @@ function AppContent() {
           );
         },
         onEnd: (callId) => {
-          try { declineCall(callId); } catch {}
+          const routeName = navRef.getCurrentRoute()?.name;
+          if (routeName === 'VideoCall') {
+            const endFn = (global as any).__endCallFromNativeRef?.current;
+            if (typeof endFn === 'function') endFn(callId, null);
+          } else {
+            const isCallee = incomingCallIdRef.current === callId;
+            if (isCallee) {
+              // Принимающий нажал X на нативном экране — отклоняем входящий; сервер пошлёт call:declined звонящему
+              incomingCallIdRef.current = null;
+              try { declineCall(callId); } catch {}
+              stopIncomingCallAlert();
+              setIncoming(null);
+              try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+            } else {
+              // Звонящий отменил с нативного экрана — отменяем исходящий и сразу закрываем модалку
+              try { cancelCall(callId); } catch {}
+              try { emitCloseOutgoingCall(); } catch {}
+            }
+          }
+          incomingCallIdRef.current = null;
+          reportEndCallToCallKeep(callId);
           stopIncomingCallAlert();
           setIncoming(null);
           reportRejectCall(callId);
+          clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
         },
       });
     }, 4000);
@@ -178,6 +203,9 @@ function AppContent() {
 
   // ==== incoming call (global, когда не на экране видеозвонка) ====
   const [incoming, setIncoming] = React.useState<{ callId: string; from: string; fromNick?: string } | null>(null);
+  React.useEffect(() => {
+    incomingCallIdRef.current = incoming?.callId ?? null;
+  }, [incoming]);
   const bounce = React.useRef(new Animated.Value(0)).current;
   const wave1 = React.useRef(new Animated.Value(0)).current;
   const wave2 = React.useRef(new Animated.Value(0)).current;
@@ -354,10 +382,10 @@ function AppContent() {
       const from = params.get('from') || params.get('userId') || '';
       const fromNick = params.get('fromNick') ?? '';
       if (callId && from) {
-        logger.info('[App] Incoming call deep link: showing native CallKeep UI', { callId, from });
+        logger.info('[App] Incoming call deep link: showing native IncomingCallActivity', { callId, from });
         if (Platform.OS === 'android') {
           await setupCallKeep();
-          displayIncomingCall(callId, from, fromNick, true);
+          launchIncomingCallActivityScreen(callId, from, fromNick);
         } else {
           await openIncomingCallScreen(from, callId);
         }
@@ -388,6 +416,19 @@ function AppContent() {
           return true;
         }
       }
+      if (/livi:\/\/cancel-outgoing/i.test(url)) {
+        const params = new URLSearchParams(url.replace(/^[^?]*\?/, ''));
+        const callId = params.get('callId') || params.get('call_id') || '';
+        if (callId) {
+          logger.info('[App] cancel-outgoing deep link', { callId });
+          try { cancelCall(callId); } catch {}
+          setTimeout(() => { try { cancelCall(callId); } catch {} }, 150);
+          try { reportEndCallToCallKeep(callId); } catch {}
+          try { emitCloseOutgoingCall(); } catch {}
+          try { closeOutgoingCallActivity(); } catch {}
+          return true;
+        }
+      }
     } catch (e) {
       logger.warn('[App] handleCallDeepLink failed', e);
     }
@@ -404,7 +445,7 @@ function AppContent() {
     };
   }, []);
 
-  // Сохраняем installId и serverUrl в натив для отклонения звонка по HTTP из IncomingCallActivity без открытия приложения
+  // Сохраняем installId, serverUrl и таймаут исходящего в натив (отклонение по HTTP, LiviOutgoingCallService)
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
     const LiviAppModule = NativeModules.LiviAppModule;
@@ -414,6 +455,7 @@ function AppContent() {
         const [installId, url] = await Promise.all([getInstallId(), Promise.resolve(API_BASE)]);
         if (installId) LiviAppModule.setInstallIdForDecline(installId);
         if (url) LiviAppModule.setServerUrlForDecline(url);
+        setOutgoingCallTimeoutMs(OUTGOING_CALL_TIMEOUT_MS);
       } catch {}
     })();
   }, []);
@@ -824,19 +866,20 @@ function AppContent() {
       (isOnVideoScreen && isInactiveVideoState);
 
     if (shouldShowGlobal) {
-      logger.debug('Showing incoming call modal', { callId: d.callId, from: d.from, fromNick: d.fromNick, currentRoute });
+      logger.debug('Incoming call — показываем нативный IncomingCallActivity', { callId: d.callId, from: d.from, fromNick: d.fromNick, currentRoute });
+      incomingCallIdRef.current = d.callId;
       try { Keyboard.dismiss(); } catch {}
-      setIncoming(d);
-      startAnim();
-      // Внутри приложения (на переднем плане) — только модалка; CallKeep/уведомление не показываем
-      if (isCallKeepAvailable() && AppState.currentState !== 'active') {
+      // Единый UI: нативный IncomingCallActivity (foreground — из сокета; background — из FCM full-screen)
+      if (Platform.OS === 'android') {
+        launchIncomingCallActivityScreen(d.callId, d.from, d.fromNick ?? '');
+      } else if (isCallKeepAvailable()) {
         displayIncomingCall(d.callId, d.from, d.fromNick ?? '', true);
       }
       try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
     } else {
       logger.debug('Skipping global modal - on video/random screen, will show in peer block', { callId: d.callId, from: d.from, currentRoute });
     }
-  }, [routeName, startAnim]);
+  }, [routeName]);
 
   // Сохраняем обработчик в ref для использования в fallback и для пуша
   incomingCallHandlerRef.current = handleIncomingCall;
@@ -921,6 +964,31 @@ function AppContent() {
     };
   }, []);
 
+  // При получении call:ended (второй участник завершил с нативного экрана/уведомления) — закрываем модалки и уведомления у обоих
+  React.useEffect(() => {
+    const onCallEnded = () => {
+      stopIncomingCallAlert();
+      setIncoming(null);
+      stopAnim();
+      try { emitCloseOutgoingCall(); } catch {}
+      try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+      clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
+    };
+    socket.on('call:ended', onCallEnded);
+    return () => { socket.off('call:ended', onCallEnded); };
+  }, [stopAnim]);
+
+  // Тап по уведомлению «звонок завершён» (другой положил трубку) — уйти с экрана видеозвонка и снять уведомления
+  React.useEffect(() => {
+    (global as any).__onCallEndedFromPush = () => {
+      if (navRef.isReady() && navRef.getCurrentRoute()?.name === 'VideoCall') {
+        navRef.dispatch(CommonActions.navigate('Home'));
+      }
+      clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
+    };
+    return () => { delete (global as any).__onCallEndedFromPush; };
+  }, []);
+
   // КРИТИЧНО: Перерегистрация обработчика при возврате из спящего режима (AppState change)
   React.useEffect(() => {
     const { AppState } = require('react-native');
@@ -965,12 +1033,16 @@ function AppContent() {
   React.useEffect(() => {
     const offDecl = onCallDeclined?.((d) => {
       logger.debug('Call declined received', { callId: d?.callId });
+      incomingCallIdRef.current = null;
+      if (d?.callId) try { reportEndCallToCallKeep(d.callId); } catch {}
       stopIncomingCallAlert();
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+      try { emitCloseOutgoingCall(); } catch {}
       // call:declined = тот, кому звонили, отклонил — пропущенным не считаем, счётчик не увеличиваем
     });
     const offCancel = onCallCanceled?.(async (d) => {
       logger.debug('Call canceled received', { callId: d?.callId });
+      incomingCallIdRef.current = null;
       stopIncomingCallAlert();
       // КРИТИЧНО: Обновляем canceledCallsRef для защиты от гонки событий
       try {
@@ -978,7 +1050,7 @@ function AppContent() {
         if (id) canceledCallsRef.current.set(id, Date.now());
       } catch {}
       // Мгновенно закрываем UI
-      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
       // Никакой навигации — остаёмся на текущем экране
       // Инкремент пропущенного (на стороне получателя)
       try {
@@ -1003,7 +1075,7 @@ function AppContent() {
         from: data?.from,
         currentRoute: navRef.getCurrentRoute()?.name,
       });
-      
+      try { emitCloseOutgoingCall(); } catch {}
       // КРИТИЧНО: Сохраняем событие call:accepted в глобальный ref на случай, если VideoCallSession еще не создан
       // Это решает проблему, когда call:accepted приходит до того, как VideoCallSession создан
       if (!(global as any).__pendingCallAcceptedRef) {
@@ -1070,9 +1142,11 @@ function AppContent() {
     // Обработчик таймаута
     const offTimeout = onCallTimeout?.(async (d) => {
       logger.debug('Call timeout received', { callId: d?.callId });
+      incomingCallIdRef.current = null;
+      if (d?.callId) try { reportEndCallToCallKeep(d.callId); } catch {}
       stopIncomingCallAlert();
       // Мгновенно закрываем UI
-      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
       try {
         const id = String((d as any)?.callId || '');
         if (id) {
@@ -1129,7 +1203,7 @@ function AppContent() {
           stopIncomingCallAlert(); setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
         }
       } catch {}
-    }, 20000);
+    }, OUTGOING_CALL_TIMEOUT_MS);
     return () => { try { clearTimeout(t); } catch {} };
   }, [incoming, stopAnim]);
 
@@ -1229,145 +1303,6 @@ function AppContent() {
             </Stack.Navigator>
           </NavigationContainer>
 
-          {/* Global incoming call modal — в нативном Modal, поверх всех модалок и страниц (не отображается поверх VideoCall) */}
-          <Modal
-            visible={!!incoming}
-            transparent
-            animationType="fade"
-            statusBarTranslucent
-            onRequestClose={() => {
-              if (incoming) {
-                try { declineCall(incoming.callId); } catch {}
-                stopIncomingCallAlert();
-                setIncoming(null);
-                stopAnim();
-              }
-            }}
-          >
-            {incoming ? (
-            <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-              <BlurView
-                intensity={Platform.OS === 'android' ? 100 : 85}
-                tint="dark"
-                style={StyleSheet.absoluteFill}
-              />
-              <View
-                style={[
-                  StyleSheet.absoluteFill,
-                  // Android: сильнее затемняем задний фон
-                  { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.35)' },
-                ]}
-              />
-              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                <View style={{ width: '100%', padding: 18, borderRadius: Platform.OS === 'android' ? 0 : 16, backgroundColor: Platform.OS === 'ios' ? 'transparent' : 'rgba(13,14,16,0.9)', borderWidth: Platform.OS === 'ios' ? 0 : (Platform.OS === 'android' ? 0 : StyleSheet.hairlineWidth), borderColor: 'rgba(255,255,255,0.12)', alignItems: 'center', ...(Platform.OS === 'android' ? { ...StyleSheet.absoluteFillObject, justifyContent: 'center' } : {}) }}>
-                  <View style={{ width: 140, height: 140, alignItems: 'center', justifyContent: 'center' }}>
-                    <Animated.View style={{
-                      position: 'absolute', width: 120, height: 120, borderRadius: 60, borderWidth: 2, borderColor: 'rgba(255,255,255,0.35)',
-                      opacity: wave1.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] }),
-                      transform: [{ scale: wave1.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1.35] }) }, { translateX: -24 }],
-                    }} />
-                    <Animated.View style={{
-                      position: 'absolute', width: 120, height: 120, borderRadius: 60, borderWidth: 2, borderColor: 'rgba(255,255,255,0.35)',
-                      opacity: wave2.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] }),
-                      transform: [{ scale: wave2.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1.35] }) }, { translateX: 24 }],
-                    }} />
-                    <Animated.View style={{ transform: [{ translateY: bounce.interpolate({ inputRange: [-1, 0, 1], outputRange: [-6, 0, -6] }) }, { rotate: bounce.interpolate({ inputRange: [-1, 1], outputRange: ['-8deg', '8deg'] }) }] }}>
-                      <MaterialIcons name="call" size={48} color="#4FC3F7" />
-                    </Animated.View>
-                  </View>
-                  <Text style={{ color: '#fff', fontWeight: '700', marginTop: 10 }}>{t('incomingCallTitle', lang)}</Text>
-                  <Text style={{ color: '#e5e7eb', marginTop: 4 }}>{incoming.fromNick || `id: ${String(incoming.from || '').slice(0, 5)}`}</Text>
-
-                  <View
-                    style={{
-                      position: 'absolute',
-                      left: 18,
-                      right: 18,
-                      bottom: Math.max(insets.bottom, 14) + 18,
-                      flexDirection: 'row',
-                      gap: 12,
-                    }}
-                  >
-  {/* Принять — сначала закрываем модалку и переходим на VideoCall, потом acceptCall; иначе при падении acceptCall пользователь залипает на модалке */}
-  <TouchableOpacity
-    onPress={async () => {
-      const callId = incoming?.callId;
-      const from = incoming?.from;
-      if (!callId || !from) return;
-      stopIncomingCallAlert();
-      setIncoming(null);
-      stopAnim();
-      if (navRef.isReady()) {
-        navRef.dispatch(
-          CommonActions.reset({
-            index: 1,
-            routes: [
-              { name: 'Home' as any },
-              { name: 'VideoCall' as any, params: { peerUserId: from, directCall: true, directInitiator: false, callId, isIncoming: true } },
-            ],
-          })
-        );
-      }
-      try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
-      try { acceptCall(callId); } catch (e) { logger.error('[App] acceptCall failed (user already navigated to VideoCall)', { error: e, callId }); }
-      reportAnswerIncomingCall(callId);
-    }}
-    activeOpacity={0.7}
-    style={{
-      flex: 1,
-      height: 52,
-      borderRadius: 10,
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: 'rgba(52,199,89,0.18)',  // прозрачный зелёный
-      borderWidth: 1,
-      borderColor: 'rgba(36,150,65,0.7)',       // бордер темнее
-    }}
-  >
-    <Text style={{ color: 'rgb(52,199,89)', fontWeight: '700' }}>{t('accept', lang)}</Text>
-  </TouchableOpacity>
-
-  {/* Отклонить */}
-  <TouchableOpacity
-    onPress={async () => {
-      try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
-      declineCall(incoming.callId);
-      stopIncomingCallAlert();
-      setIncoming(null);
-      stopAnim();
-      reportRejectCall(incoming.callId);
-    }}
-    activeOpacity={0.7}
-    style={{
-      flex: 1,
-      height: 52,
-      borderRadius: 10,
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: 'rgba(255,90,103,0.18)', // прозрачный красный
-      borderWidth: 1,
-      borderColor: 'rgba(200,50,65,0.7)',       // бордер темнее
-    }}
-  >
-    <Text style={{ color: 'rgb(255,90,103)', fontWeight: '700' }}>{t('decline', lang)}</Text>
-  </TouchableOpacity>
-</View>
-
-                  <PanGestureHandler onGestureEvent={() => {}} onHandlerStateChange={({ nativeEvent }: any) => {
-                    if (nativeEvent.state === 5) {
-                      const dx = nativeEvent.translationX || 0;
-                      if (dx > 60) { const c = incoming?.callId; const f = incoming?.from; if (c && f) { stopIncomingCallAlert(); setIncoming(null); stopAnim(); if (navRef.isReady()) { navRef.dispatch(CommonActions.reset({ index: 1, routes: [ { name: 'Home' as any }, { name: 'VideoCall' as any, params: { peerUserId: f, directCall: true, directInitiator: false, callId: c, isIncoming: true } } ] })); } try { acceptCall(c); } catch (e) { logger.error('[App] acceptCall failed (swipe)', { error: e, callId: c }); } reportAnswerIncomingCall(c); } }
-                      else if (dx < -60) { declineCall(incoming.callId); stopIncomingCallAlert(); setIncoming(null); stopAnim(); reportRejectCall(incoming.callId); }
-                    }
-                  }}>
-                    <View pointerEvents="none" style={{ position: 'absolute', inset: 0 }} />
-                  </PanGestureHandler>
-                </View>
-              </View>
-            </View>
-            ) : null}
-          </Modal>
-
           {/* Глобальный PiP оверлей - виден на всех страницах когда pip.visible === true */}
           <PiPOverlay />
 
@@ -1396,6 +1331,9 @@ export default function App() {
     reportEndCallToCallKeep(callId);
     setCallKeepAvailable(true);
     clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
+    // Закрываем модалки: исходящий у звонящего, входящий у принимающего — без смены экрана
+    try { emitCloseOutgoingCall(); } catch {}
+    try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
     try {
       const cleanupFn = (global as any).__endCallCleanupRef?.current;
       if (cleanupFn && typeof cleanupFn === 'function') {
@@ -1418,6 +1356,13 @@ export default function App() {
       console.warn('[App] Error calling endCall cleanup:', e);
     }
   };
+
+  const endCallImplRef = React.useRef<(cid: string | null, rid: string | null) => void>(endCallImpl);
+  endCallImplRef.current = endCallImpl;
+  React.useEffect(() => {
+    (global as any).__endCallFromNativeRef = endCallImplRef;
+    return () => { delete (global as any).__endCallFromNativeRef; };
+  }, []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

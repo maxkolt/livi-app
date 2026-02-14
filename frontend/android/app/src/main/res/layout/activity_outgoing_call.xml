@@ -12,16 +12,15 @@
         android:paddingRight="24dp"
         android:paddingBottom="48dp">
 
-        <!-- Надписи смещены вверх -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:gravity="center_horizontal"
-            android:layout_marginTop="40dp">
+            android:layout_marginTop="80dp">
 
             <TextView
-                android:id="@+id/caller_name"
+                android:id="@+id/callee_name"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:textSize="34sp"
@@ -33,20 +32,18 @@
                 android:id="@+id/call_subtitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/incoming_call_title"
+                android:text="@string/outgoing_call_subtitle"
                 android:textSize="14sp"
                 android:textColor="#B0B0B0"
                 android:layout_marginTop="6dp"
                 android:gravity="center" />
         </LinearLayout>
 
-        <!-- Гибкое пространство между надписями и кнопками -->
         <View
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1" />
 
-        <!-- Круглые кнопки внизу: слева красная "положить", справа зелёная "принять" -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -55,25 +52,12 @@
             android:layout_marginTop="24dp">
 
             <ImageButton
-                android:id="@+id/btn_decline"
+                android:id="@+id/btn_cancel"
                 android:layout_width="64dp"
                 android:layout_height="64dp"
-                android:layout_marginEnd="80dp"
                 android:background="@drawable/btn_decline_round"
                 android:src="@android:drawable/ic_menu_close_clear_cancel"
-                android:contentDescription="@string/incoming_call_decline"
-                android:scaleType="centerInside"
-                android:padding="16dp"
-                android:tint="#FFFFFF" />
-
-            <ImageButton
-                android:id="@+id/btn_accept"
-                android:layout_width="64dp"
-                android:layout_height="64dp"
-                android:layout_marginStart="80dp"
-                android:background="@drawable/btn_accept_round"
-                android:src="@android:drawable/ic_menu_call"
-                android:contentDescription="@string/incoming_call_accept"
+                android:contentDescription="@string/outgoing_call_cancel"
                 android:scaleType="centerInside"
                 android:padding="16dp"
                 android:tint="#FFFFFF" />

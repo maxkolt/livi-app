@@ -1,14 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Фон: #1B1C22 → картинка по центру → сверху немного тёмного стекла -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
-        <bitmap
-            android:src="@drawable/bg_incoming_call"
-            android:gravity="fill" />
+        <shape android:shape="rectangle">
+            <solid android:color="#1B1C22" />
+        </shape>
     </item>
-    <!-- Тёмное стекло поверх -->
+    <item
+        android:drawable="@mipmap/ic_launcher_round"
+        android:gravity="center"
+        android:width="152dp"
+        android:height="152dp" />
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="#CC000000" />
+            <solid android:color="#A6000000" />
         </shape>
     </item>
 </layer-list>

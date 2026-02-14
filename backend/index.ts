@@ -31,7 +31,7 @@ import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl } from './routes/livekit';
-import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient } from './utils/push';
+import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallDeclinedToCaller } from './utils/push';
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 
@@ -750,6 +750,8 @@ const callOfUser = new Map<string, { with: string; callId: string }>();
 const activeCallBySocket = new Map<string, string>();
 /** callId -> roomId после call:accept (для call:end, когда клиент присылает только callId, напр. принятие из пуша) */
 const callIdToRoomId = new Map<string, string>();
+/** Участник не был подключён в момент call:accept — при reauth отправим ему call:accepted и он подключится в комнату */
+const activeRoomByUserId = new Map<string, { callId: string; roomId: string; livekitRoomName: string; peerUserId: string }>();
 // Пользователь занят рандом-видеочатом (по userId) — используется также для findRandom
 
 function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'canceled' | 'timeout') {
@@ -793,7 +795,67 @@ app.post('/api/calls/decline', async (req, res) => {
       await emitPresenceUpdateToFriends(io, link.b, false);
     }
     try { io.to(`u:${link.a}`).emit('call:declined', { callId, from: link.b }); } catch {}
+    try { await sendCallDeclinedToCaller(link.a, callId); } catch (e: any) { logger.warn('[api/calls/decline] sendCallDeclinedToCaller failed', { error: e?.message }); }
     cleanupCall(callId, 'declined');
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
+
+/** Отмена звонка по HTTP (из нативного OutgoingCallActivity при таймауте 20с). Auth по x-install-id. Только инициатор. */
+app.post('/api/calls/cancel', async (req, res) => {
+  try {
+    const userId = (req as any).userId;
+    if (!userId || !isOid(userId)) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    const callId = String(req.body?.callId || '').trim();
+    if (!callId) {
+      return res.status(400).json({ ok: false, error: 'callId_required' });
+    }
+    const link = callsById.get(callId);
+    if (!link) {
+      return res.json({ ok: true }); // уже завершён — не ошибка
+    }
+    if (link.a !== userId) {
+      return res.status(403).json({ ok: false, error: 'only_caller_can_cancel' });
+    }
+    logger.info('[api/calls/cancel] caller canceled via HTTP (timeout)', { callId, caller: link.a, callee: link.b });
+    const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
+    const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
+    if (aSock) {
+      (aSock as any).data = (aSock as any).data || {};
+      (aSock as any).data.busy = false;
+      await emitPresenceUpdateToFriends(io, link.a, false);
+    }
+    if (bSock) {
+      (bSock as any).data = (bSock as any).data || {};
+      (bSock as any).data.busy = false;
+      await emitPresenceUpdateToFriends(io, link.b, false);
+    }
+    try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
+    try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
+    try { await sendCallCanceledToRecipient(link.b, callId); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
+    let fromNick: string | undefined;
+    try {
+      if (isMongoReady()) {
+        const u = await User.findById(link.a).select('nick').lean();
+        if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+      }
+    } catch {}
+    try {
+      await sendPushToUser(link.b, {
+        kind: 'call',
+        title: '',
+        body: '',
+        channelId: 'calls',
+        data: { type: 'call_ended', callId, from: link.a, fromNick: fromNick || '' },
+      });
+    } catch (e: any) {
+      logger.warn('[api/calls/cancel] call_ended push failed', { peerId: link.b, error: e?.message });
+    }
+    cleanupCall(callId, 'canceled');
     return res.json({ ok: true });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
@@ -855,6 +917,34 @@ io.on('connection', async (sock: AuthedSocket) => {
       bindUserIdentity(io, sock, mappedUserId);
       emitPresence(io);
 
+      // Если пользователь был в ожидании принятого звонка (принятие было вне приложения) — отправляем call:accepted и подключаем в комнату
+      const pendingRoom = activeRoomByUserId.get(mappedUserId);
+      if (pendingRoom) {
+        try {
+          activeRoomByUserId.delete(mappedUserId);
+          const token = await createToken({ identity: mappedUserId, roomName: pendingRoom.livekitRoomName });
+          sock.join(pendingRoom.roomId);
+          activeCallBySocket.set(sock.id, pendingRoom.roomId);
+          (sock as any).data = (sock as any).data || {};
+          (sock as any).data.busy = true;
+          (sock as any).data.roomId = pendingRoom.roomId;
+          (sock as any).data.partnerSid = null;
+          (sock as any).data.inCall = true;
+          sock.emit('call:accepted', {
+            callId: pendingRoom.callId,
+            from: null,
+            fromUserId: pendingRoom.peerUserId,
+            roomId: pendingRoom.roomId,
+            livekitToken: token,
+            livekitRoomName: pendingRoom.livekitRoomName,
+            livekitUrl: getLiveKitUrl() || null,
+          });
+          logger.info('[reauth] Sent call:accepted to reconnected participant', { userId: mappedUserId, roomId: pendingRoom.roomId, callId: pendingRoom.callId });
+        } catch (e: any) {
+          logger.warn('[reauth] Failed to send pending call:accepted', { userId: mappedUserId, error: e?.message });
+        }
+      }
+
       // If client sent userId in payload and it differs, log it.
       const claimed = String(payload?.userId || '').trim();
       if (claimed && isOid(claimed) && claimed !== mappedUserId) {
@@ -902,6 +992,35 @@ io.on('connection', async (sock: AuthedSocket) => {
     // Привязываем пользователя к сокету
     bindUserIdentity(io, sock, String(bindUid));
     emitPresence(io);
+    // Участник переподключился — если был принятый звонок без него, отправляем call:accepted
+    const pendingRoom = activeRoomByUserId.get(String(bindUid));
+    if (pendingRoom) {
+      (async () => {
+        try {
+          activeRoomByUserId.delete(String(bindUid));
+          const token = await createToken({ identity: String(bindUid), roomName: pendingRoom.livekitRoomName });
+          sock.join(pendingRoom.roomId);
+          activeCallBySocket.set(sock.id, pendingRoom.roomId);
+          (sock as any).data = (sock as any).data || {};
+          (sock as any).data.busy = true;
+          (sock as any).data.roomId = pendingRoom.roomId;
+          (sock as any).data.partnerSid = null;
+          (sock as any).data.inCall = true;
+          sock.emit('call:accepted', {
+            callId: pendingRoom.callId,
+            from: null,
+            fromUserId: pendingRoom.peerUserId,
+            roomId: pendingRoom.roomId,
+            livekitToken: token,
+            livekitRoomName: pendingRoom.livekitRoomName,
+            livekitUrl: getLiveKitUrl() || null,
+          });
+          logger.info('[connect] Sent call:accepted to reconnected participant (initial bind)', { userId: bindUid, roomId: pendingRoom.roomId });
+        } catch (e: any) {
+          logger.warn('[connect] Failed to send pending call:accepted', { userId: bindUid, error: e?.message });
+        }
+      })();
+    }
   }
 
   // === call:end → транслируем call:ended обоим участникам (УПРОЩЕНО для 1-на-1) ===
@@ -1091,6 +1210,37 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
       
       if (callId) callIdToRoomId.delete(String(callId));
+      // Очищаем ожидание повторного входа в комнату (инициатор мог переподключиться и уже получил call:accepted)
+      try {
+        const parts = String(id).match(/^room_(.+)_(.+)$/);
+        if (parts) {
+          activeRoomByUserId.delete(parts[1]);
+          activeRoomByUserId.delete(parts[2]);
+        }
+      } catch {}
+
+      // Пуш второму участнику (если приложение в фоне/убито) — снять уведомление о звонке и закрыть UI при открытии
+      const senderUserId = (sock as any)?.data?.userId;
+      if (senderUserId) {
+        try {
+          const fromUser = await User.findById(senderUserId).select('nick').lean();
+          const fromNick = (fromUser as any)?.nick ?? '';
+          for (const sid of socketsToNotify) {
+            if (sid === sock.id) continue;
+            const peerSocket = io.sockets.sockets.get(sid);
+            const peerUserId = peerSocket ? (peerSocket as any)?.data?.userId : null;
+            if (peerUserId && peerUserId !== senderUserId) {
+              await sendPushToUser(peerUserId, {
+                kind: 'call',
+                data: { type: 'call_ended', from: senderUserId, fromNick, callId: callId || id, endedFromActive: true },
+              });
+              break;
+            }
+          }
+        } catch (e: any) {
+          logger.warn('[call:end] send call_ended push failed', { error: e?.message });
+        }
+      }
 
       logger.info('✅ [call:end] Call cleanup completed', {
         callId: id,
@@ -1602,11 +1752,13 @@ io.on('connection', async (sock: AuthedSocket) => {
     
     logger.debug('Call accepted', { callId: id });
     
-    // Найдём активные сокеты обоих участников
+    // КРИТИЧНО: Принятие возможно даже если инициатор (A) офлайн — он получит call:accepted при reauth
     const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a) as AuthedSocket | undefined;
-    const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b) as AuthedSocket | undefined;
+    const bSock = (sock as any)?.data?.userId === link.b ? (sock as AuthedSocket) : Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b) as AuthedSocket | undefined;
     
-    if (aSock && bSock) {
+    if (!bSock) return;
+    
+    {
       // КРИТИЧНО: Используем user IDs для имени комнаты, чтобы совпадало с LiveKit
       // Это гарантирует что оба участника подключатся к одной LiveKit комнате
       let roomId: string;
@@ -1621,32 +1773,25 @@ io.on('connection', async (sock: AuthedSocket) => {
         console.log('[call:accept] FALLBACK roomId from socket IDs', { aSockId: aSock.id, bSockId: bSock.id, roomId });
       }
       
-      // КРИТИЧНО: Принимающий ОБЯЗАТЕЛЬНО присоединяется к комнате
-      try { 
-        aSock.join(roomId);
-        logger.debug('Participant A joined room', { socketId: aSock.id, roomId, callId: id });
-      } catch {}
-      try { 
-        bSock.join(roomId);
-        logger.debug('Participant B joined room', { socketId: bSock.id, roomId, callId: id });
-      } catch {}
+      // КРИТИЧНО: Присоединяем к комнате всех, кто сейчас подключён; инициатор может подключиться позже (reauth)
+      try { if (aSock) { aSock.join(roomId); logger.debug('Participant A joined room', { socketId: aSock.id, roomId, callId: id }); } } catch {}
+      try { bSock.join(roomId); logger.debug('Participant B joined room', { socketId: bSock.id, roomId, callId: id }); } catch {}
       
-      // КРИТИЧНО: Сохраняем roomId в activeCallBySocket и callId -> roomId для call:end, когда клиент присылает только callId (принятие из пуша)
-      try { activeCallBySocket.set(aSock.id, roomId); } catch {}
-      try { activeCallBySocket.set(bSock.id, roomId); } catch {}
       try { callIdToRoomId.set(id, roomId); } catch {}
+      try { if (aSock) activeCallBySocket.set(aSock.id, roomId); } catch {}
+      try { activeCallBySocket.set(bSock.id, roomId); } catch {}
 
-      // Устанавливаем busy для обоих
-      (aSock as any).data = (aSock as any).data || {};
-      (aSock as any).data.busy = true;
-      (aSock as any).data.roomId = roomId;
-      (aSock as any).data.partnerSid = bSock.id;
-      (aSock as any).data.inCall = true;
-      
+      if (aSock) {
+        (aSock as any).data = (aSock as any).data || {};
+        (aSock as any).data.busy = true;
+        (aSock as any).data.roomId = roomId;
+        (aSock as any).data.partnerSid = bSock.id;
+        (aSock as any).data.inCall = true;
+      }
       (bSock as any).data = (bSock as any).data || {};
       (bSock as any).data.busy = true;
       (bSock as any).data.roomId = roomId;
-      (bSock as any).data.partnerSid = aSock.id;
+      (bSock as any).data.partnerSid = aSock?.id ?? null;
       (bSock as any).data.inCall = true;
       
       // Рассылаем presence:update (только друзьям)
@@ -1721,7 +1866,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           });
           aSock.emit('call:accepted', { 
             callId: id, 
-            from: bSock.id, 
+            from: bSock?.id, 
             fromUserId: link.b, 
             roomId,
             livekitToken: livekitTokenA,
@@ -1746,7 +1891,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           });
           bSock.emit('call:accepted', { 
             callId: id, 
-            from: aSock.id, 
+            from: aSock?.id, 
             fromUserId: link.a, 
             roomId,
             livekitToken: livekitTokenB,
@@ -1759,34 +1904,24 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       }
       
-      // Также отправляем через комнаты ТОЛЬКО если прямых сокетов нет (fallback).
-      // Иначе возникали дубликаты call:accepted -> двойное создание VideoCallSession на клиентах.
+      // Инициатор (A) офлайн — сохраняем данные; при reauth отправим call:accepted и он подключится в комнату
+      if (!aSock) {
+        try {
+          activeRoomByUserId.set(link.a, { callId: id, roomId, livekitRoomName, peerUserId: link.b });
+          logger.info('[call:accept] Caller offline, stored pending call for reauth', { userId: link.a, roomId, callId: id });
+        } catch {}
+      }
+      // Fallback: отправить через комнату, если прямой сокет не найден (редкий случай)
       try {
-        if (!aSock) {
-          io.to(`u:${link.a}`).emit('call:accepted', { 
-            callId: id, 
-            from: bSock?.id, 
-            fromUserId: link.b, 
-            roomId,
-            livekitToken: livekitTokenA,
-            livekitRoomName,
-            livekitUrl: getLiveKitUrl() || null,
-          });
-        }
         if (!bSock) {
           io.to(`u:${link.b}`).emit('call:accepted', { 
-            callId: id, 
-            from: aSock?.id, 
-            fromUserId: link.a, 
-            roomId,
-            livekitToken: livekitTokenB,
-            livekitRoomName,
-            livekitUrl: getLiveKitUrl() || null,
+            callId: id, from: aSock?.id, fromUserId: link.a, roomId,
+            livekitToken: livekitTokenB, livekitRoomName, livekitUrl: getLiveKitUrl() || null,
           });
         }
       } catch {}
       
-      logger.debug('Direct call room established', { roomId, callId: id, participants: 2 });
+      logger.debug('Direct call room established', { roomId, callId: id, aConnected: !!aSock, bConnected: !!bSock });
     }
     
     cleanupCall(id, 'accepted');
@@ -1814,6 +1949,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
     
     try { io.to(`u:${link.a}`).emit('call:declined', { callId: id, from: link.b }); } catch {}
+    try { await sendCallDeclinedToCaller(link.a, id); } catch (e: any) { logger.warn('[call:decline] sendCallDeclinedToCaller failed', { error: e?.message }); }
     cleanupCall(id, 'declined');
   });
 
