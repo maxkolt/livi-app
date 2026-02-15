@@ -302,6 +302,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       return pendingCallAcceptedCallId.also { pendingCallAcceptedCallId = null }
     }
 
+    /** Вызвать из MainActivity.onResume при intent с EXTRA_PENDING_CALL_ACCEPTED_CALL_ID — React запросит call:accepted и перейдёт на VideoCall. */
+    @JvmStatic
+    fun emitPendingCallAcceptedEvent() {
+      reactContextRef?.runOnUiQueueThread {
+        reactContextRef?.emitDeviceEvent("LiviPendingCallAccepted", null)
+      }
+    }
+
     /** Вызвать из IncomingCallActivity при нажатии X — React очистит состояние входящего. */
     @JvmStatic
     fun emitIncomingCallDeclinedByUser(callId: String) {

@@ -165,7 +165,7 @@ async function waitForNavReady(ms = 9000) {
   while (Date.now() - start < ms) {
     const nav = (global as any).__navRef;
     if (nav?.isReady?.()) return nav;
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 80));
   }
   return null;
 }

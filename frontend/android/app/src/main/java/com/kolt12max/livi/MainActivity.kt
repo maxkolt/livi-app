@@ -14,10 +14,26 @@ import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
 
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+  }
+
   override fun onResume() {
     super.onResume()
     isInForeground = true
     restoreNavigationBarVisibility()
+    // FCM call_accepted запустил MainActivity — закрыть нативный экран исходящего (если ещё открыт) и уведомить JS
+    val pendingCallId = intent?.getStringExtra(EXTRA_PENDING_CALL_ACCEPTED_CALL_ID)
+    if (!pendingCallId.isNullOrBlank()) {
+      intent?.removeExtra(EXTRA_PENDING_CALL_ACCEPTED_CALL_ID)
+      val closeOutgoing = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
+        setPackage(packageName)
+        putExtra(OutgoingCallActivity.EXTRA_CALL_ID, pendingCallId)
+      }
+      sendBroadcast(closeOutgoing)
+      LiviAppModule.emitPendingCallAcceptedEvent()
+    }
   }
 
   override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -116,6 +132,8 @@ class MainActivity : ReactActivity() {
   }
 
   companion object {
+    const val EXTRA_PENDING_CALL_ACCEPTED_CALL_ID = "pending_call_accepted_call_id"
+
     /** true когда приложение на переднем плане (в т.ч. во время видеозвонка) — тогда не показываем heads-up уведомление о звонке */
     @JvmField
     var isInForeground = false

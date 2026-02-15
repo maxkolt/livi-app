@@ -1138,6 +1138,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => { socket.off('connect', onConnect); };
   }, [stopWaves]);
 
+  // Ref текущего исходящего callId — fallback для App: при подключении сокета запросить call:accepted, если FCM не сработал (инициатор на нативном экране)
+  useEffect(() => {
+    (global as any).__outgoingCallIdRef = (global as any).__outgoingCallIdRef ?? { current: null };
+    (global as any).__outgoingCallIdRef.current = calling.visible && calling.callId ? calling.callId : null;
+    return () => {
+      if ((global as any).__outgoingCallIdRef?.current === calling.callId) (global as any).__outgoingCallIdRef.current = null;
+    };
+  }, [calling.visible, calling.callId]);
+
   // Закрытие модалки исходящего по событию извне (абонент отклонил на нативном экране/отменил/таймаут — событие приходит в App, эмитится emitCloseOutgoingCall)
   useEffect(() => {
     const unsub = onCloseOutgoingCall(() => {

@@ -26,27 +26,36 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         val data = remoteMessage.data ?: emptyMap()
-        Log.d(TAG, "FCM onMessageReceived data keys: ${data.keys}")
+        val keysStr = data.keys.joinToString(", ")
+        val typeRaw = data["type"]
+        val callIdRaw = data["callId"]
+        Log.e(TAG, "FCM onMessageReceived keys=[$keysStr] type=$typeRaw callId=$callIdRaw")
 
-        var type = data["type"]
-        var callId = data["callId"]
+        var type = typeRaw
+        var callId = callIdRaw
         var from = data["from"] ?: data["fromUserId"]
         var fromNick = data["fromNick"] ?: ""
 
-        // Expo может отправлять payload в data["body"] как JSON
-        if (type == null && data["body"] != null) {
+        // Expo присылает пуши с keys=[projectId, experienceId, scopeKey, body] — type/callId внутри body
+        if (data["body"] != null) {
             try {
                 val body = JSONObject(data["body"]!!)
-                type = body.optString("type", "").takeIf { it.isNotEmpty() }
-                callId = body.optString("callId", "").takeIf { it.isNotEmpty() }
-                from = body.optString("from", "").takeIf { it.isNotEmpty() } ?: body.optString("fromUserId", "").takeIf { it.isNotEmpty() }
-                fromNick = body.optString("fromNick", "")
+                val bodyType = body.optString("type", "").takeIf { it.isNotEmpty() }
+                val bodyCallId = body.optString("callId", "").takeIf { it.isNotEmpty() }
+                if (bodyType != null || bodyCallId != null) {
+                    if (type == null) type = bodyType
+                    if (callId == null) callId = bodyCallId
+                    if (from == null) from = body.optString("from", "").takeIf { it.isNotEmpty() } ?: body.optString("fromUserId", "").takeIf { it.isNotEmpty() }
+                    if (fromNick.isEmpty()) fromNick = body.optString("fromNick", "")
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "FCM parse body failed", e)
             }
         }
 
-        if (type == "call" && callId != null && from != null) {
+        val typeNorm = type?.trim()?.lowercase() ?: ""
+
+        if (typeNorm == "call" && callId != null && from != null) {
             if (MainActivity.isInForeground) {
                 Log.d(TAG, "FCM call push: app in foreground, skip notification (in-app UI will handle)")
                 return
@@ -72,7 +81,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
             return
         }
-        if (type == "call_canceled" && callId != null) {
+        if (typeNorm == "call_canceled" && callId != null) {
             EndedCallIds.add(this, callId)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
@@ -95,41 +104,73 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             Log.d(TAG, "FCM call_canceled: ended id stored, notification canceled, broadcast + startActivity(close) callId=$callId")
             return
         }
-        // Абонент принял вызов — вывести MainActivity на передний план; сохранить callId для JS (call:getAccepted → call:accepted → переход на VideoCall).
-        if (type == "call_accepted" && callId != null) {
+        // Абонент принял вызов — закрыть нативный экран исходящего, вывести MainActivity, сохранить callId для JS (call:getAccepted → call:accepted → переход на VideoCall).
+        if (typeNorm == "call_accepted" && callId != null) {
+            Log.e(TAG, "FCM call_accepted received: closing outgoing, starting MainActivity callId=$callId")
+            // 1) Broadcast — если OutgoingCallActivity на экране, закроется по нему
+            val closeOutgoing = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
+                setPackage(packageName)
+                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+            }
+            sendBroadcast(closeOutgoing)
+            LiviOutgoingCallService.stop(this)
             LiviAppModule.setPendingCallAcceptedCallId(callId)
+            // 2) Запуск OutgoingCallActivity с EXTRA_CLOSE_IMMEDIATELY — если broadcast не дошёл (приложение в фоне), активность откроется и сразу finish()
+            val closeActivityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
+                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+            }
+            try {
+                startActivity(closeActivityIntent)
+            } catch (e: Exception) {
+                Log.w(TAG, "FCM call_accepted: startActivity OutgoingCallActivity(close) failed", e)
+            }
             val mainIntent = Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(MainActivity.EXTRA_PENDING_CALL_ACCEPTED_CALL_ID, callId)
             }
             try {
                 startActivity(mainIntent)
-                Log.d(TAG, "FCM call_accepted: brought MainActivity to front callId=$callId")
+                Log.d(TAG, "FCM call_accepted: closed outgoing, brought MainActivity to front callId=$callId")
             } catch (e: Exception) {
                 Log.w(TAG, "FCM call_accepted: startActivity MainActivity failed", e)
             }
             return
         }
         // Получатель отклонил — закрыть нативный экран исходящего у звонящего (сокет в фоне может быть отключён).
-        if (type == "call_declined" && callId != null) {
+        if (typeNorm == "call_declined" && callId != null) {
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(packageName)
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
             sendBroadcast(closeIntent)
-            // Если приложение в фоне/убито, broadcast не дойдёт — запускаем активность с флагом «сразу закрыть»
             val activityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
-            try {
-                startActivity(activityIntent)
-            } catch (e: Exception) {
-                Log.w(TAG, "FCM call_declined: startActivity close OutgoingCall failed", e)
-            }
+            try { startActivity(activityIntent) } catch (e: Exception) { Log.w(TAG, "FCM call_declined: startActivity failed", e) }
             Log.d(TAG, "FCM call_declined: broadcast + startActivity(close) callId=$callId")
             return
         }
+        // Звонок завершён (второй абонент положил трубку) — закрыть экран исходящего у инициатора.
+        if (typeNorm == "call_ended" && callId != null) {
+            val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
+                setPackage(packageName)
+                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+            }
+            sendBroadcast(closeIntent)
+            val activityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
+                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+            }
+            try { startActivity(activityIntent) } catch (e: Exception) { Log.w(TAG, "FCM call_ended: startActivity failed", e) }
+            Log.d(TAG, "FCM call_ended: broadcast + startActivity(close) callId=$callId")
+            return
+        }
+        Log.w(TAG, "FCM unhandled: typeNorm=$typeNorm type=$type callId=$callId keys=[$keysStr] → forwarding to Expo")
         super.onMessageReceived(remoteMessage)
     }
 

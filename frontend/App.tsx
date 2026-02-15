@@ -160,9 +160,19 @@ function AppContent() {
       try { stopIncomingCallAlert(); } catch {}
       try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
     });
+    const sub3 = emitter.addListener('LiviPendingCallAccepted', () => {
+      const LiviAppModule = NativeModules.LiviAppModule;
+      LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
+        if (callId) {
+          logger.info('[App] LiviPendingCallAccepted: requesting call:accepted', { callId });
+          try { requestCallAccepted(callId); } catch {}
+        }
+      });
+    });
     return () => {
       sub1.remove();
       sub2.remove();
+      sub3.remove();
     };
   }, []);
 
@@ -998,6 +1008,25 @@ function AppContent() {
       setTimeout(() => {
         registerHandler();
       }, 200);
+      // FCM call_accepted вывел приложение — запросить call:accepted (инициатор перейдёт на VideoCall). Fallback: ref от HomeScreen, если нативный pending не сработал.
+      if (Platform.OS === 'android') {
+        setTimeout(() => {
+          const LiviAppModule = NativeModules.LiviAppModule;
+          LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
+            if (callId) {
+              logger.info('[App] Socket connected with pending call_accepted, requesting call:accepted', { callId });
+              try { requestCallAccepted(callId); } catch {}
+              return;
+            }
+            const refCallId = (global as any).__outgoingCallIdRef?.current;
+            if (refCallId) {
+              logger.info('[App] Socket connected with outgoing callId ref (FCM fallback), requesting call:accepted', { callId: refCallId });
+              (global as any).__outgoingCallIdRef.current = null;
+              try { requestCallAccepted(refCallId); } catch {}
+            }
+          });
+        }, 400);
+      }
       // После reauth перерегистрируем push-токен, чтобы backend получал его (важно для dev и после выхода из фона)
       setTimeout(() => {
         const uid = getCurrentUserId?.();
@@ -1062,7 +1091,7 @@ function AppContent() {
           try { requestCallAccepted(callId); } catch {}
         }
       });
-    }, 800);
+    }, 500);
     return () => clearTimeout(t);
   }, []);
 

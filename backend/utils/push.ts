@@ -316,6 +316,51 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
 }
 
 /**
+ * Абонент принял вызов, а инициатор офлайн (сокет отключён) — шлём инициатору call_accepted.
+ * Отправляем через Expo (sendPushToUser), т.к. на устройстве пуши приходят в формате body — так же, как call_ended.
+ * Дублируем прямым FCM на случай, если у инициатора только fcmToken без Expo token.
+ */
+export async function sendCallAcceptedToCaller(callerUserId: string, callId: string): Promise<void> {
+  try {
+    await sendPushToUser(callerUserId, {
+      kind: 'call',
+      title: '',
+      body: '',
+      data: { type: 'call_accepted', callId: String(callId) },
+    });
+    logger.info('[push] call_accepted sent via Expo to caller', { userId: callerUserId, callId });
+  } catch (e) {
+    logger.warn('[push] Expo call_accepted to caller failed', { userId: callerUserId, error: (e as Error)?.message });
+  }
+  const messaging = getFirebaseMessaging();
+  if (messaging) {
+    const recs = await PushTokenModel.find({ userId: callerUserId })
+      .select('token platform fcmToken')
+      .lean();
+    type Rec = { token: string; platform: string; fcmToken?: string };
+    const list = (recs || []) as unknown as Rec[];
+    for (const r of list) {
+      if (r.platform === 'android' && r.fcmToken) {
+        try {
+          await messaging.send({
+            token: r.fcmToken,
+            data: { type: 'call_accepted', callId: String(callId) },
+            android: { priority: 'high' },
+          });
+          logger.info('[push] call_accepted sent via FCM (data-only) to caller', { userId: callerUserId, callId });
+        } catch (e) {
+          const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
+          const isInvalidToken =
+            isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
+          if (isInvalidToken) await removeInvalidFcmToken(callerUserId, r);
+          logger.warn('[push] FCM call_accepted to caller failed', { userId: callerUserId, error: errMsg, isInvalidToken });
+        }
+      }
+    }
+  }
+}
+
+/**
  * Инициатор отменил вызов — шлём callee FCM data-only call_canceled,
  * чтобы на устройстве получателя сразу сняли уведомление и закрыли IncomingCallActivity.
  * Дублируем через Expo: при недоставке FCM получатель всё равно закроет экран по пушу.
