@@ -26,15 +26,22 @@ class IncomingCallForegroundService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
 
+    private var answeredReceiver: BroadcastReceiver? = null
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val callId = intent?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID)
             ?: return stopAndReturn()
         val from = intent.getStringExtra(EXTRA_FROM) ?: return stopAndReturn()
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
+        val headsUpOnly = intent.getBooleanExtra(EXTRA_HEADS_UP_ONLY, false)
 
         currentCallId = callId
         LiviFirebaseMessagingService.ensureCallChannel(this)
-        val notification = LiviFirebaseMessagingService.buildIncomingCallNotification(this, callId, from, fromNick)
+        val notification = if (headsUpOnly) {
+            LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
+        } else {
+            LiviFirebaseMessagingService.buildIncomingCallNotification(this, callId, from, fromNick)
+        }
         ServiceCompat.startForeground(
             this,
             LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL,
@@ -42,21 +49,20 @@ class IncomingCallForegroundService : Service() {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         )
 
-        // Явный запуск полноэкранной активности (поверх блокировки и домашнего экрана)
-        val activityIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (!headsUpOnly) {
+            val activityIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(activityIntent)
+            Log.d(TAG, "IncomingCallForegroundService: full-screen; activity started")
+        } else {
+            Log.d(TAG, "IncomingCallForegroundService: heads-up only (Accept/Decline on notification)")
         }
-        startActivity(activityIntent)
-        Log.d(TAG, "IncomingCallForegroundService: notification kept for full-screen; activity started")
 
-        // Уведомление не снимаем сразу — на заблокированном экране full-screen intent срабатывает от него.
-        // Останавливаем сервис, когда IncomingCallActivity откроется (broadcast) или по таймауту.
         activityShownReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, i: Intent?) {
                 val shownCallId = i?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
-                if (shownCallId == currentCallId) {
-                    cleanupAndStop()
-                }
+                if (shownCallId == currentCallId) cleanupAndStop()
             }
         }
         val filter = IntentFilter(ACTION_INCOMING_CALL_ACTIVITY_SHOWN)
@@ -64,6 +70,19 @@ class IncomingCallForegroundService : Service() {
             registerReceiver(activityShownReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(activityShownReceiver, filter)
+        }
+
+        answeredReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, i: Intent?) {
+                val answeredCallId = i?.getStringExtra(IncomingCallActivity.EXTRA_CALL_ID) ?: return
+                if (answeredCallId == currentCallId) cleanupAndStop()
+            }
+        }
+        val filterAnswered = IntentFilter(IncomingCallActivity.ACTION_CALL_ANSWERED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(answeredReceiver, filterAnswered, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(answeredReceiver, filterAnswered)
         }
 
         timeoutRunnable = Runnable {
@@ -82,6 +101,10 @@ class IncomingCallForegroundService : Service() {
             try { unregisterReceiver(it) } catch (_: Exception) {}
         }
         activityShownReceiver = null
+        answeredReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        answeredReceiver = null
         currentCallId = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -101,5 +124,7 @@ class IncomingCallForegroundService : Service() {
         const val EXTRA_FROM_NICK = "fromNick"
         /** Broadcast: IncomingCallActivity открылась, сервис может снять уведомление и остановиться */
         const val ACTION_INCOMING_CALL_ACTIVITY_SHOWN = "com.kolt12max.livi.INCOMING_CALL_ACTIVITY_SHOWN"
+        /** Режим «только heads-up»: не запускать IncomingCallActivity, уведомление с кнопками Принять/Отклонить */
+        const val EXTRA_HEADS_UP_ONLY = "heads_up_only"
     }
 }

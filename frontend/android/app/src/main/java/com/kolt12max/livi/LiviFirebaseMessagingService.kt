@@ -1,13 +1,17 @@
 package com.kolt12max.livi
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.util.Log
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.RemoteMessage
 import expo.modules.notifications.service.ExpoFirebaseMessagingService
@@ -47,23 +51,25 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 Log.d(TAG, "FCM call push: app in foreground, skip notification (in-app UI will handle)")
                 return
             }
-            // Опционально: ConnectionService (CallKeep) — на части устройств покажет системный экран звонка
-            LiviAppModule.tryStartCallKeepHeadlessTask(callId, from, fromNick) { _ -> }
-            // Всегда показываем свой экран: активность + уведомление с full-screen intent + foreground-сервис.
-            // Без этого на многих устройствах вне приложения и на заблокированном экране ничего не видно.
-            val activityIntent = buildIncomingCallActivityIntent(this, callId, from, fromNick)
-            try {
-                activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(activityIntent)
-                Log.d(TAG, "FCM call push: activity launch attempted")
-            } catch (e: Exception) {
-                Log.w(TAG, "FCM call push: startActivity failed", e)
+            val deviceLocked = isDeviceLocked()
+            if (deviceLocked) {
+                // Заблокированный экран: полноэкранный нативный экран входящего + full-screen intent
+                LiviAppModule.tryStartCallKeepHeadlessTask(callId, from, fromNick) { _ -> }
+                val activityIntent = buildIncomingCallActivityIntent(this, callId, from, fromNick)
+                try {
+                    activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(activityIntent)
+                    Log.d(TAG, "FCM call push: activity launch (device locked)")
+                } catch (e: Exception) {
+                    Log.w(TAG, "FCM call push: startActivity failed", e)
+                }
+                ensureCallChannel(this)
+                startIncomingCallForegroundService(callId, from, fromNick, headsUpOnly = false)
+            } else {
+                // Экран не заблокирован: только heads-up уведомление с кнопками Принять/Отклонить, без перехода на нативный экран по тапу
+                ensureCallChannel(this)
+                startIncomingCallForegroundService(callId, from, fromNick, headsUpOnly = true)
             }
-            ensureCallChannel(this)
-            val notification = buildIncomingCallNotification(this, callId, from, fromNick)
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID_INCOMING_CALL, notification)
-            Log.d(TAG, "FCM call push: notification posted (full-screen intent), starting IncomingCallForegroundService")
-            startIncomingCallForegroundService(callId, from, fromNick)
             return
         }
         if (type == "call_canceled" && callId != null) {
@@ -113,36 +119,59 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         super.onMessageReceived(remoteMessage)
     }
 
-    private fun startIncomingCallForegroundService(callId: String, from: String, fromNick: String) {
-        val activityIntent = buildIncomingCallActivityIntent(this, callId, from, fromNick).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    private fun isDeviceLocked(): Boolean {
+        val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager ?: return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+            @Suppress("DEPRECATION")
+            km.isKeyguardLocked
+        } else {
+            false
         }
+    }
+
+    private fun startIncomingCallForegroundService(callId: String, from: String, fromNick: String, headsUpOnly: Boolean = false) {
         val serviceIntent = Intent(this, IncomingCallForegroundService::class.java).apply {
             putExtra(EXTRA_CALL_ID, callId)
             putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
             putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick)
+            putExtra(IncomingCallForegroundService.EXTRA_HEADS_UP_ONLY, headsUpOnly)
         }
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(serviceIntent)
-            } else {
-                startService(serviceIntent)
+        if (!headsUpOnly) {
+            val activityIntent = buildIncomingCallActivityIntent(this, callId, from, fromNick).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-        } catch (e: Exception) {
-            // Android 12+: запуск foreground из фона может быть запрещён — сразу открываем полноэкранную активность
-            Log.w(TAG, "startForegroundService failed, launching activity directly", e)
-            startActivity(activityIntent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "startForegroundService failed, launching activity directly", e)
+                startActivity(activityIntent)
+            }
+        } else {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "startForegroundService (headsUpOnly) failed", e)
+            }
         }
     }
 
     companion object {
         private const val TAG = "LiviFCM"
-        const val CHANNEL_ID_CALLS = "livi_incoming_call"
+        /** ID канала: HIGH чтобы full-screen intent срабатывал (нативный экран поверх домашнего). */
+        const val CHANNEL_ID_CALLS = "livi_incoming_call_v3"
         const val NOTIFICATION_ID_INCOMING_CALL = 1001
         const val ACTION_CALL_CANCELED = "com.kolt12max.livi.CALL_CANCELED"
         const val EXTRA_CALL_ID = "callId"
 
-        /** Создаёт канал уведомлений для входящих звонков. IMPORTANCE_HIGH/MAX для приоритета full-screen. */
+        /** Канал входящих звонков: HIGH — чтобы full-screen intent сработал и нативный экран показался поверх домашнего. */
         @JvmStatic
         fun ensureCallChannel(context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -182,7 +211,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
         }
 
-        /** Собирает уведомление входящего звонка с full-screen intent (для foreground-сервиса). */
+        /** Собирает уведомление входящего звонка с full-screen intent (для заблокированного экрана). */
         @JvmStatic
         fun buildIncomingCallNotification(context: Context, callId: String, from: String, fromNick: String): Notification {
             val fullScreenIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)
@@ -208,8 +237,69 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setTimeoutAfter(45_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setDefaults(NotificationCompat.DEFAULT_ALL)
                 .setVibrate(longArrayOf(0, 500, 200, 500))
+                .build()
+        }
+
+        private const val REQUEST_ACCEPT = 2001
+        private const val REQUEST_DECLINE = 2002
+        private const val REQUEST_CONTENT = 2003
+
+        /** Heads-up уведомление с кнопками Принять/Отклонить; тап по уведомлению открывает приложение на главную, без нативного экрана входящего. */
+        @JvmStatic
+        fun buildIncomingCallNotificationHeadsUpOnly(context: Context, callId: String, from: String, fromNick: String): Notification {
+            val title = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_title)
+            val subtitle = context.getString(R.string.incoming_call_title)
+            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
+                ?: android.R.drawable.ic_menu_call
+
+            val contentIntent = Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            val contentPending = PendingIntent.getActivity(
+                context,
+                REQUEST_CONTENT,
+                contentIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val declineIntent = Intent(DeclineCallReceiver.ACTION_DECLINE_CALL).apply {
+                setPackage(context.packageName)
+                putExtra(DeclineCallReceiver.EXTRA_CALL_ID, callId)
+            }
+            val declinePending = PendingIntent.getBroadcast(
+                context,
+                REQUEST_DECLINE,
+                declineIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val answerUri = "livi://answer-call?callId=${Uri.encode(callId)}&from=${Uri.encode(from)}&fromNick=${URLEncoder.encode(fromNick, StandardCharsets.UTF_8.name())}"
+            val answerIntent = Intent(Intent.ACTION_VIEW, Uri.parse(answerUri)).apply {
+                setClassName(context, "com.kolt12max.livi.MainActivity")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            }
+            val answerPending = PendingIntent.getActivity(
+                context,
+                REQUEST_ACCEPT,
+                answerIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            return NotificationCompat.Builder(context, CHANNEL_ID_CALLS)
+                .setSmallIcon(smallIconRes)
+                .setContentTitle(title)
+                .setContentText(subtitle)
+                .setContentIntent(contentPending)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setTimeoutAfter(45_000)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setVibrate(longArrayOf(0, 500, 200, 500))
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, context.getString(R.string.incoming_call_decline), declinePending)
+                .addAction(android.R.drawable.ic_menu_call, context.getString(R.string.incoming_call_accept), answerPending)
                 .build()
         }
     }

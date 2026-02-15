@@ -91,9 +91,21 @@ const DISPLAY_DEBOUNCE_MS = 3000;
  * Единый UI входящего на Android: открыть нативный IncomingCallActivity (foreground и из livi://incoming-call).
  * Вызывать вместо displayIncomingCall когда приложение на переднем плане или из deep link.
  */
-export function launchIncomingCallActivityScreen(callId: string, from: string, fromNick?: string): void {
+/**
+ * Если checkEnded === true, перед показом проверяет isEndedCallId (для запоздалого Expo-пуша «call»).
+ */
+export async function launchIncomingCallActivityScreen(
+  callId: string,
+  from: string,
+  fromNick?: string,
+  checkEnded?: boolean
+): Promise<void> {
   if (Platform.OS !== 'android') return;
   try {
+    if (checkEnded && (await isEndedCallId(callId))) {
+      logger.debug('[callKeep] launchIncomingCallActivityScreen skipped (call already ended)', { callId });
+      return;
+    }
     const now = Date.now();
     if (lastDisplayedCallId.id === callId && now - lastDisplayedCallId.at < DISPLAY_DEBOUNCE_MS) {
       logger.debug('[callKeep] launchIncomingCallActivityScreen skipped (duplicate)', { callId });
@@ -108,6 +120,17 @@ export function launchIncomingCallActivityScreen(callId: string, from: string, f
     }
   } catch (e) {
     logger.warn('[callKeep] launchIncomingCallActivityScreen failed', e as Error);
+  }
+}
+
+/** Уже завершён/отменён ли звонок? Чтобы не показывать входящий при запоздалом пуше «call». */
+export function isEndedCallId(callId: string): Promise<boolean> {
+  if (Platform.OS !== 'android' || !callId?.trim()) return Promise.resolve(false);
+  try {
+    const p = NativeModules.LiviAppModule?.isEndedCallId?.(callId.trim());
+    return Promise.resolve(p).then((v) => !!v).catch(() => false);
+  } catch {
+    return Promise.resolve(false);
   }
 }
 

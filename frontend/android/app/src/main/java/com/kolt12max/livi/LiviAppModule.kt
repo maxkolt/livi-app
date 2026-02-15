@@ -96,6 +96,20 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     EndedCallIds.add(reactApplicationContext, callId)
   }
 
+  /** Уже завершён/отменён ли этот звонок? Чтобы не показывать входящий при запоздалом Expo-пуше «call». */
+  @ReactMethod
+  fun isEndedCallId(callId: String, promise: Promise) {
+    if (callId.isBlank()) {
+      promise.resolve(false)
+      return
+    }
+    try {
+      promise.resolve(EndedCallIds.isEnded(reactApplicationContext, callId.trim()))
+    } catch (e: Exception) {
+      promise.resolve(false)
+    }
+  }
+
   /** Инициатор отменил вызов — пуш пришёл через Expo. То же, что FCM call_canceled: EndedCallIds, снять уведомление, broadcast чтобы IncomingCallActivity закрылась. */
   @ReactMethod
   fun notifyCallCanceled(callId: String) {
