@@ -226,12 +226,16 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
         });
         logger.info('[push] call push sent via FCM (data-only)', { userId });
       } catch (e) {
-        const errMsg = String((e as Error)?.message ?? '');
+        const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
         const errCode = (e as { code?: string })?.code;
-        const isInvalidToken = isFcmInvalidTokenError(e);
-        logger.warn('[push] FCM call push error', { userId, errMsg, errCode, isInvalidToken, raw: String(e) });
+        // Явно по тексту ошибки: Firebase часто отдаёт "Requested entity was not found." при невалидном токене
+        const isInvalidToken =
+          isFcmInvalidTokenError(e) ||
+          /requested entity was not found|not found|unregistered|invalid.registration.token/i.test(errMsg);
+        logger.warn('[push] FCM call push error', { userId, errMsg, errCode, isInvalidToken });
         if (isInvalidToken) {
-          await removeInvalidFcmToken(userId, r);
+          const removed = await removeInvalidFcmToken(userId, r);
+          if (!removed) logger.warn('[push] FCM invalid token not removed (no match in DB)', { userId });
         } else {
           logger.warn('[push] FCM send failed, falling back to Expo for this device', { error: errMsg });
         }
@@ -288,12 +292,11 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
           });
           logger.info('[push] call_declined sent via FCM (data-only) to caller', { userId: callerUserId });
         } catch (e) {
-          const errMsg = String((e as Error)?.message ?? '');
-          const isInvalidToken = isFcmInvalidTokenError(e);
-          if (isInvalidToken) {
-            await removeInvalidFcmToken(callerUserId, r);
-          }
-          logger.warn('[push] FCM call_declined to caller failed', { userId: callerUserId, error: errMsg });
+          const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
+          const isInvalidToken =
+            isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
+          if (isInvalidToken) await removeInvalidFcmToken(callerUserId, r);
+          logger.warn('[push] FCM call_declined to caller failed', { userId: callerUserId, error: errMsg, isInvalidToken });
         }
       }
     }
@@ -336,12 +339,11 @@ export async function sendCallCanceledToRecipient(calleeUserId: string, callId: 
           });
           logger.info('[push] call_canceled sent via FCM (data-only)', { userId: calleeUserId });
         } catch (e) {
-          const errMsg = String((e as Error)?.message ?? '');
-          const isInvalidToken = isFcmInvalidTokenError(e);
-          if (isInvalidToken) {
-            await removeInvalidFcmToken(calleeUserId, r);
-          }
-          logger.warn('[push] FCM call_canceled failed', { userId: calleeUserId, error: errMsg });
+          const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
+          const isInvalidToken =
+            isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
+          if (isInvalidToken) await removeInvalidFcmToken(calleeUserId, r);
+          logger.warn('[push] FCM call_canceled failed', { userId: calleeUserId, error: errMsg, isInvalidToken });
         }
       }
     }

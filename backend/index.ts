@@ -1779,10 +1779,10 @@ io.on('connection', async (sock: AuthedSocket) => {
         roomId = `room_${sortedUserIds[0]}_${sortedUserIds[1]}`;
         console.log('[call:accept] roomId from user IDs', { linkA: link.a, linkB: link.b, roomId });
       } else {
-        // Fallback на socket IDs если user IDs недоступны
-        const sorted = [aSock.id, bSock.id].sort();
+        // Fallback на socket IDs если user IDs недоступны (aSock может быть undefined — инициатор офлайн)
+        const sorted = [aSock?.id ?? 'unknown', bSock.id].sort();
         roomId = `room_${sorted[0]}_${sorted[1]}`;
-        console.log('[call:accept] FALLBACK roomId from socket IDs', { aSockId: aSock.id, bSockId: bSock.id, roomId });
+        console.log('[call:accept] FALLBACK roomId from socket IDs', { aSockId: aSock?.id, bSockId: bSock.id, roomId });
       }
       
       // КРИТИЧНО: Присоединяем к комнате всех, кто сейчас подключён; инициатор может подключиться позже (reauth)
@@ -1819,7 +1819,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       let livekitTokenB: string | null = null;
       let livekitRoomName: string = roomId;
       
-      const livekitIdentityA = link.a || `socket:${aSock.id}`;
+      const livekitIdentityA = link.a || (aSock ? `socket:${aSock.id}` : 'unknown');
       const livekitIdentityB = link.b || `socket:${bSock.id}`;
       
       if (link.a && link.b) {
@@ -1831,7 +1831,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       console.log('[call:accept] Creating LiveKit tokens', {
         linkA: link.a,
         linkB: link.b,
-        aSockId: aSock.id,
+        aSockId: aSock?.id,
         bSockId: bSock.id,
         aSockUserId: (aSock as any)?.data?.userId,
         bSockUserId: (bSock as any)?.data?.userId,
