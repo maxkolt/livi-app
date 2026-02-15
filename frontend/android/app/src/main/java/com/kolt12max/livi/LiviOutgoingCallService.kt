@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -32,9 +34,25 @@ class LiviOutgoingCallService : Service() {
     private var callId: String = ""
     private var toUserId: String = ""
     private var toNick: String = ""
+    private var closeReceiver: BroadcastReceiver? = null
 
     override fun onCreate() {
         super.onCreate()
+        closeReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val broadcastCallId = intent?.getStringExtra(OutgoingCallActivity.EXTRA_CALL_ID) ?: ""
+                if (broadcastCallId.isEmpty() || broadcastCallId == this@LiviOutgoingCallService.callId) {
+                    android.util.Log.d(TAG, "close broadcast received, stopping service callId=$callId")
+                    stopSelf()
+                }
+            }
+        }
+        val filter = IntentFilter(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(closeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(closeReceiver, filter)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -129,7 +147,10 @@ class LiviOutgoingCallService : Service() {
         timeoutRunnable = Runnable {
             timeoutRunnable = null
             cancelCallByHttp(callId)
-            sendBroadcast(Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL))
+            val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
+                setPackage(applicationContext.packageName)
+            }
+            sendBroadcast(closeIntent)
             stopSelf()
         }
         mainHandler.postDelayed(timeoutRunnable!!, timeoutMs)
@@ -163,6 +184,8 @@ class LiviOutgoingCallService : Service() {
     }
 
     override fun onDestroy() {
+        closeReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        closeReceiver = null
         timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
         timeoutRunnable = null
         try {

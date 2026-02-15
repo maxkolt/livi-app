@@ -69,7 +69,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun closeOutgoingCallActivity() {
     LiviOngoingCallHelper.clearOngoingCall(reactApplicationContext)
-    reactApplicationContext.sendBroadcast(Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL))
+    val intent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
+      setPackage(reactApplicationContext.packageName)
+    }
+    reactApplicationContext.sendBroadcast(intent)
   }
 
   /** Единый UI входящего: открыть нативный IncomingCallActivity (foreground и из deep link livi://incoming-call). */

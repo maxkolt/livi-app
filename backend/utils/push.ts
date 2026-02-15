@@ -8,6 +8,25 @@ const expo = new Expo();
 
 type PushKind = 'message' | 'call';
 
+/** Коды ошибок Firebase Admin при невалидном/устаревшем FCM-токене — такой токен нужно снять с записи. */
+const FCM_INVALID_TOKEN_CODES = [
+  'messaging/registration-token-not-registered',
+  'messaging/invalid-registration-token',
+  'messaging/invalid-argument',
+] as const;
+
+function isFcmInvalidTokenError(e: unknown): boolean {
+  const err = e as { message?: string; code?: string };
+  const msg = String(err?.message ?? '');
+  const code = String(err?.code ?? '');
+  if (FCM_INVALID_TOKEN_CODES.includes(code as any)) return true;
+  return (
+    msg.includes('Requested entity was not found') ||
+    msg.includes('unregistered') ||
+    msg.includes('registration-token-not-registered')
+  );
+}
+
 let firebaseApp: unknown = null;
 function getFirebaseMessaging(): { send: (msg: unknown) => Promise<string> } | null {
   if (!firebaseApp) {
@@ -173,11 +192,9 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
         logger.info('[push] call push sent via FCM (data-only)', { userId });
       } catch (e) {
         const errMsg = String((e as Error)?.message ?? '');
-        const isInvalidToken =
-          errMsg.includes('Requested entity was not found') ||
-          errMsg.includes('unregistered') ||
-          errMsg.includes('registration-token-not-registered');
-        logger.info('[push] FCM call push error', { userId, errMsg, isInvalidToken });
+        const errCode = (e as { code?: string })?.code;
+        const isInvalidToken = isFcmInvalidTokenError(e);
+        logger.info('[push] FCM call push error', { userId, errMsg, errCode, isInvalidToken });
         if (isInvalidToken) {
           try {
             await PushTokenModel.updateOne(
@@ -245,10 +262,7 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
           logger.info('[push] call_declined sent via FCM (data-only) to caller', { userId: callerUserId });
         } catch (e) {
           const errMsg = String((e as Error)?.message ?? '');
-          const isInvalidToken =
-            errMsg.includes('Requested entity was not found') ||
-            errMsg.includes('unregistered') ||
-            errMsg.includes('registration-token-not-registered');
+          const isInvalidToken = isFcmInvalidTokenError(e);
           if (isInvalidToken) {
             try {
               await PushTokenModel.updateOne(
@@ -302,10 +316,7 @@ export async function sendCallCanceledToRecipient(calleeUserId: string, callId: 
           logger.info('[push] call_canceled sent via FCM (data-only)', { userId: calleeUserId });
         } catch (e) {
           const errMsg = String((e as Error)?.message ?? '');
-          const isInvalidToken =
-            errMsg.includes('Requested entity was not found') ||
-            errMsg.includes('unregistered') ||
-            errMsg.includes('registration-token-not-registered');
+          const isInvalidToken = isFcmInvalidTokenError(e);
           if (isInvalidToken) {
             try {
               await PushTokenModel.updateOne(
