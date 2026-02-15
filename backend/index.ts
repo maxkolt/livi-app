@@ -797,6 +797,7 @@ app.post('/api/calls/decline', async (req, res) => {
       await emitPresenceUpdateToFriends(io, link.b, false);
     }
     try { io.to(`u:${link.a}`).emit('call:declined', { callId, from: link.b }); } catch {}
+    logger.info('[api/calls/decline] sending call_declined push to caller', { callId, caller: link.a, callee: link.b });
     try { await sendCallDeclinedToCaller(link.a, callId); } catch (e: any) { logger.warn('[api/calls/decline] sendCallDeclinedToCaller failed', { error: e?.message }); }
     // Отклонение получателем — не пропущенный вызов; call_ended получателю не шлём
     logger.info('[api/calls/decline] call ended for both: caller notified (socket+FCM), callee closed native screen', { callId, caller: link.a, callee: link.b });
@@ -840,6 +841,7 @@ app.post('/api/calls/cancel', async (req, res) => {
     }
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
+    logger.info('[api/calls/cancel] sending call_canceled push to callee', { callId, caller: link.a, callee: link.b });
     try { await sendCallCanceledToRecipient(link.b, callId); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
     let fromNick: string | undefined;
     try {
@@ -1959,6 +1961,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
     
     try { io.to(`u:${link.a}`).emit('call:declined', { callId: id, from: link.b }); } catch {}
+    logger.info('[call:decline] sending call_declined push to caller', { callId: id, caller: link.a, callee: link.b });
     try { await sendCallDeclinedToCaller(link.a, id); } catch (e: any) { logger.warn('[call:decline] sendCallDeclinedToCaller failed', { error: e?.message }); }
     // Отклонение получателем — не пропущенный вызов; call_ended получателю не шлём
     logger.info('[call:decline] call ended for both: caller notified (socket+FCM), callee closed', { callId: id, caller: link.a, callee: link.b });
@@ -1990,6 +1993,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     // чтобы оба клиента синхронно закрыли UI входящего/исходящего звонка
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
+    logger.info('[call:cancel] sending call_canceled push to callee', { callId: id, caller: link.a, callee: link.b });
     // FCM data-only получателю: на устройстве сразу снимаем уведомление и закрываем IncomingCallActivity без мельканий
     try { await sendCallCanceledToRecipient(link.b, id); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
     // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации

@@ -177,6 +177,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
           errMsg.includes('Requested entity was not found') ||
           errMsg.includes('unregistered') ||
           errMsg.includes('registration-token-not-registered');
+        logger.info('[push] FCM call push error', { userId, errMsg, isInvalidToken });
         if (isInvalidToken) {
           try {
             await PushTokenModel.updateOne(
@@ -225,6 +226,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
  * Если FCM не доходит — шлём через Expo, клиент закроет экран из addNotificationReceivedListener.
  */
 export async function sendCallDeclinedToCaller(callerUserId: string, callId: string): Promise<void> {
+  logger.info('[push] sendCallDeclinedToCaller start', { callerUserId, callId });
   const messaging = getFirebaseMessaging();
   if (messaging) {
     const recs = await PushTokenModel.find({ userId: callerUserId })
@@ -281,6 +283,7 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
  * Дублируем через Expo: при недоставке FCM получатель всё равно закроет экран по пушу.
  */
 export async function sendCallCanceledToRecipient(calleeUserId: string, callId: string): Promise<void> {
+  logger.info('[push] sendCallCanceledToRecipient start', { calleeUserId, callId });
   const messaging = getFirebaseMessaging();
   if (messaging) {
     const recs = await PushTokenModel.find({ userId: calleeUserId })

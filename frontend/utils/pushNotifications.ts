@@ -101,7 +101,10 @@ Notifications.setNotificationHandler({
       };
     }
     if (type === 'call_declined') {
+      const data = (n as any)?.request?.content?.data || {};
+      logger.info('[push] call_declined received (handler)', { callId: data?.callId });
       try { closeOutgoingCallActivity(); } catch {}
+      logger.info('[push] closeOutgoingCallActivity called after call_declined');
       return {
         shouldShowAlert: false,
         shouldShowBanner: false,
@@ -112,9 +115,11 @@ Notifications.setNotificationHandler({
     }
     if (type === 'call_canceled') {
       const data = (n as any)?.request?.content?.data || {};
+      logger.info('[push] call_canceled received (handler)', { callId: data?.callId });
       if (data?.callId) {
         try { notifyCallCanceled(String(data.callId)); } catch {}
         try { addEndedCallId(String(data.callId)); } catch {}
+        logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled');
       }
       return {
         shouldShowAlert: false,
@@ -257,13 +262,17 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
     if (!type) return;
 
     if (type === 'call_declined') {
+      logger.info('[push] call_declined received (handleNotificationResponse)', { callId: data?.callId });
       try { closeOutgoingCallActivity(); } catch {}
+      logger.info('[push] closeOutgoingCallActivity called after call_declined (response)');
       return;
     }
     if (type === 'call_canceled') {
+      logger.info('[push] call_canceled received (handleNotificationResponse)', { callId: data?.callId });
       if (data?.callId) {
         try { notifyCallCanceled(String(data.callId)); } catch {}
         try { addEndedCallId(String(data.callId)); } catch {}
+        logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled (response)');
       }
       return;
     }
@@ -584,12 +593,16 @@ export function addNotificationListeners() {
     try {
       const data = (n as any)?.request?.content?.data;
       if (data?.type === 'call_declined') {
+        logger.info('[push] call_declined received (notificationReceived)', { callId: data?.callId });
         try { closeOutgoingCallActivity(); } catch {}
+        logger.info('[push] closeOutgoingCallActivity called after call_declined (received)');
         return;
       }
       if (data?.type === 'call_canceled' && data?.callId) {
+        logger.info('[push] call_canceled received (notificationReceived)', { callId: data.callId });
         try { notifyCallCanceled(String(data.callId)); } catch {}
         try { addEndedCallId(String(data.callId)); } catch {}
+        logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled (received)');
         return;
       }
       if (data?.type === 'call' && data?.callId && data?.from) {
