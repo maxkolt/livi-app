@@ -1,0 +1,37 @@
+diff --git a/android/src/main/java/expo/modules/devlauncher/modules/DevLauncherInternalModule.kt b/android/src/main/java/expo/modules/devlauncher/modules/DevLauncherInternalModule.kt
+index 1234567..abcdefg 100644
+--- a/android/src/main/java/expo/modules/devlauncher/modules/DevLauncherInternalModule.kt
++++ b/android/src/main/java/expo/modules/devlauncher/modules/DevLauncherInternalModule.kt
+@@ -118,11 +118,16 @@ class DevLauncherInternalModule : Module(), DevLauncherKoinComponent {
+     }
+ 
+     AsyncFunction("getPendingDeepLink") { promise: Promise ->
+-      intentRegistry.intent?.data?.let {
+-        promise.resolve(it.toString())
++      intentRegistry.intent?.data?.toString()?.let { url ->
++        // Не отдавать livi:// звонки в dev launcher — иначе показывается "Deep link received"; приложение получит URL через Linking.getInitialURL()
++        if (url.matches(Regex("^livi://(answer-call|decline-call|incoming-call).*"))) {
++          promise.resolve(null)
++          return@AsyncFunction
++        }
++        promise.resolve(url)
+         return@AsyncFunction
+       }
+ 
+       promise.resolve(intentRegistry.intent?.action)
+@@ -224,9 +229,10 @@ class DevLauncherInternalModule : Module(), DevLauncherKoinComponent {
+   }
+ 
+   private fun onNewPendingIntent(intent: Intent) {
+-    intent.data?.toString()?.let {
+-      this@DevLauncherInternalModule.sendEvent(ON_NEW_DEEP_LINK_EVENT, bundleOf(
+-        "url" to it
+-      ))
+-    }
++    val url = intent.data?.toString() ?: return
++    if (url.matches(Regex("^livi://(answer-call|decline-call|incoming-call).*"))) return
++    this@DevLauncherInternalModule.sendEvent(ON_NEW_DEEP_LINK_EVENT, bundleOf(
++      "url" to url
++    ))
+   }
+ }

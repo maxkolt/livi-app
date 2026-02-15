@@ -1,0 +1,19 @@
+diff --git a/build/android/Package.js b/build/android/Package.js
+--- a/build/android/Package.js
++++ b/build/android/Package.js
+@@ -282,7 +282,13 @@ async function getApplicationIdAsync(projectRoot) {
+   const buildGradle = await _fs().default.promises.readFile(buildGradlePath, 'utf8');
+   const matchResult = buildGradle.match(/applicationId ['"](.*)['"]/);
+   // TODO add fallback for legacy cases to read from AndroidManifest.xml
+-  return matchResult?.[1] ?? null;
++  const baseId = matchResult?.[1] ?? null;
++  if (!baseId) return null;
++  // If build.gradle has applicationIdSuffix (e.g. ".dev" in debug block), return base + suffix so Expo run:android finds the installed app
++  const suffixMatch = buildGradle.match(/applicationIdSuffix\s+['"]([^'"]+)['"]/);
++  if (suffixMatch) {
++    return baseId + suffixMatch[1];
++  }
++  return baseId;
+ }
+ 
+ /**
