@@ -10,7 +10,7 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
@@ -133,6 +133,27 @@ function AppContent() {
   React.useEffect(() => {
     const t = setTimeout(() => void setupCallKeep(), 3000);
     return () => clearTimeout(t);
+  }, []);
+
+  // События от нативных экранов: инициатор нажал X на исходящем / получатель нажал X на входящем — очищаем состояние
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return () => {};
+    const emitter = new NativeEventEmitter();
+    const sub1 = emitter.addListener('OutgoingCallCanceledByUser', () => {
+      (global as any).__outgoingCanceledByNativeRef = (global as any).__outgoingCanceledByNativeRef ?? { current: false };
+      (global as any).__outgoingCanceledByNativeRef.current = true;
+      try { emitCloseOutgoingCall(); } catch {}
+    });
+    const sub2 = emitter.addListener('IncomingCallDeclinedByUser', () => {
+      incomingCallIdRef.current = null;
+      setIncoming(null);
+      try { stopIncomingCallAlert(); } catch {}
+      try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+    });
+    return () => {
+      sub1.remove();
+      sub2.remove();
+    };
   }, []);
 
   // События answer/end от нативного экрана звонка (Android) — регистрируем после возможного setup
@@ -982,9 +1003,10 @@ function AppContent() {
     };
   }, []);
 
-  // При получении call:ended (второй участник завершил с нативного экрана/уведомления) — закрываем модалки и уведомления у обоих
+  // При получении call:ended (второй участник завершил с нативного экрана/уведомления) — закрываем модалки, reportEndCallToCallKeep, уведомления у обоих
   React.useEffect(() => {
-    const onCallEnded = () => {
+    const onCallEnded = (data?: { callId?: string }) => {
+      if (data?.callId) try { reportEndCallToCallKeep(data.callId); } catch {}
       stopIncomingCallAlert();
       setIncoming(null);
       stopAnim();
@@ -1062,6 +1084,7 @@ function AppContent() {
     const offCancel = onCallCanceled?.(async (d) => {
       logger.debug('Call canceled received', { callId: d?.callId });
       incomingCallIdRef.current = null;
+      if ((d as any)?.callId) try { reportEndCallToCallKeep((d as any).callId); } catch {}
       stopIncomingCallAlert();
       // КРИТИЧНО: Обновляем canceledCallsRef для защиты от гонки событий
       try {

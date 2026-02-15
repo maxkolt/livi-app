@@ -111,6 +111,14 @@ export function launchIncomingCallActivityScreen(callId: string, from: string, f
   }
 }
 
+/** Пометить звонок как завершённый на нативной стороне (при push call_ended). Чтобы при позднем/дублирующем пуше «call» не показывался экран входящего. */
+export function addEndedCallId(callId: string): void {
+  if (Platform.OS !== 'android' || !callId?.trim()) return;
+  try {
+    NativeModules.LiviAppModule?.addEndedCallId?.(callId.trim());
+  } catch {}
+}
+
 /** Отправить broadcast «call_answered» чтобы IncomingCallActivity закрылась (при ответе из уведомления). */
 export function sendCallAnsweredBroadcast(callId: string): void {
   if (Platform.OS !== 'android') return;
@@ -119,12 +127,32 @@ export function sendCallAnsweredBroadcast(callId: string): void {
   } catch {}
 }
 
-/** Открыть настройки уведомлений приложения (Android 8+). Для входящих звонков поверх блокировки пользователь может включить полноэкранные уведомления. */
+/** Открыть настройки уведомлений приложения (Android 8+). Включите «Полноэкранные уведомления» или «Показ как всплывающее окно», чтобы входящие звонки открывались на весь экран. */
 export function openAppNotificationSettings(): void {
   if (Platform.OS !== 'android') return;
   try {
     NativeModules.LiviAppModule?.openAppNotificationSettings?.();
   } catch {}
+}
+
+/** Проверить, разрешены ли уведомления для приложения. Если нет — входящие звонки в фоне не покажут полноэкранный экран. */
+export function areNotificationsEnabled(): Promise<boolean> {
+  if (Platform.OS !== 'android') return Promise.resolve(true);
+  try {
+    return NativeModules.LiviAppModule?.areNotificationsEnabled?.() ?? Promise.resolve(true);
+  } catch {
+    return Promise.resolve(true);
+  }
+}
+
+/** Проверить, разрешены ли полноэкранные уведомления (Android 14+). На старых версиях возвращает true. */
+export function canUseFullScreenIntent(): Promise<boolean> {
+  if (Platform.OS !== 'android') return Promise.resolve(true);
+  try {
+    return NativeModules.LiviAppModule?.canUseFullScreenIntent?.() ?? Promise.resolve(true);
+  } catch {
+    return Promise.resolve(true);
+  }
 }
 
 /** Передать нативу таймаут исходящего вызова (единый источник с OUTGOING_CALL_TIMEOUT_MS). Вызывать при старте приложения. */
@@ -133,6 +161,38 @@ export function setOutgoingCallTimeoutMs(ms: number): void {
   try {
     NativeModules.LiviAppModule?.setOutgoingCallTimeoutMs?.(ms);
   } catch {}
+}
+
+/**
+ * Показать нативный экран исходящего вызова сразу (без задержки на ответ сервера).
+ * Вызывать в момент нажатия кнопки видеозвонка. После получения callId вызвать notifyOutgoingCallId(callId).
+ */
+export function displayOutgoingCallImmediate(toUserId: string, toNick?: string): void {
+  if (Platform.OS !== 'android') return;
+  if (!isSetup || !hasPhoneNumbersPermission) return;
+  try {
+    const LiviAppModule = NativeModules.LiviAppModule;
+    if (LiviAppModule?.launchOutgoingCallActivityWithoutCallId) {
+      LiviAppModule.launchOutgoingCallActivityWithoutCallId(toUserId, toNick ?? toUserId);
+      logger.info('[callKeep] displayOutgoingCallImmediate', { to: toUserId });
+    } else if (LiviAppModule?.launchOutgoingCallActivity) {
+      LiviAppModule.launchOutgoingCallActivity('', toUserId, toNick ?? toUserId);
+      logger.info('[callKeep] displayOutgoingCallImmediate (fallback)', { to: toUserId });
+    }
+  } catch (e) {
+    logger.warn('[callKeep] displayOutgoingCallImmediate failed', e as Error);
+  }
+}
+
+/** Передать callId уже открытому нативному экрану исходящего (после ответа сервера). Запускает звук и таймаут 20с. */
+export function notifyOutgoingCallId(callId: string): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.notifyOutgoingCallId?.(callId);
+    logger.info('[callKeep] notifyOutgoingCallId', { callId });
+  } catch (e) {
+    logger.warn('[callKeep] notifyOutgoingCallId failed', e as Error);
+  }
 }
 
 /**

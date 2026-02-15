@@ -35,8 +35,28 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val callIdFromIntent = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
+        // КРИТИЧНО: Если звонок уже отменён/завершён (пущ пришёл с опозданием или пользователь открыл уведомление позже) — не показывать экран
+        if (callIdFromIntent.isNotEmpty() && EndedCallIds.isEnded(this, callIdFromIntent)) {
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+            val shown = Intent(IncomingCallForegroundService.ACTION_INCOMING_CALL_ACTIVITY_SHOWN).apply {
+                setPackage(packageName)
+                putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callIdFromIntent)
+            }
+            sendBroadcast(shown)
+            finish()
+            return
+        }
         // Убираем уведомление полностью — при входящем звонке только нативный экран, без шторки и баннера
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+        // Сообщаем IncomingCallForegroundService, что экран открыт — сервис снимет уведомление и остановится (важно для заблокированного/домашнего экрана)
+        if (callIdFromIntent.isNotEmpty()) {
+            val shown = Intent(IncomingCallForegroundService.ACTION_INCOMING_CALL_ACTIVITY_SHOWN).apply {
+                setPackage(packageName)
+                putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callIdFromIntent)
+            }
+            sendBroadcast(shown)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -45,7 +65,7 @@ class IncomingCallActivity : AppCompatActivity() {
         setContentView(R.layout.activity_incoming_call)
 
         startRepeatingVibration()
-        currentCallId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
+        currentCallId = callIdFromIntent
         val callId = currentCallId
         val from = intent.getStringExtra(EXTRA_FROM) ?: ""
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
@@ -63,6 +83,8 @@ class IncomingCallActivity : AppCompatActivity() {
 
         findViewById<ImageButton>(R.id.btn_decline).setOnClickListener {
             stopRepeatingVibration()
+            LiviAppModule.emitIncomingCallDeclinedByUser(callId)
+            EndedCallIds.add(this, callId)
             declineCallFromNative(callId)
         }
 

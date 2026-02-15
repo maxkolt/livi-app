@@ -8,7 +8,7 @@ import { acceptCall, declineCall, ensureSocketConnected } from '../sockets/socke
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
-import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen } from './callKeep';
+import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity } from './callKeep';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 
@@ -66,6 +66,7 @@ Notifications.setNotificationHandler({
     if (type === 'call_ended') {
       const data = (n as any)?.request?.content?.data || {};
       const endedFromActive = !!data.endedFromActive;
+      if (data?.callId) addEndedCallId(String(data.callId));
       try {
         stopIncomingCallAlert();
       } catch {}
@@ -99,19 +100,29 @@ Notifications.setNotificationHandler({
         shouldSetBadge: false,
       };
     }
+    if (type === 'call_declined') {
+      try { closeOutgoingCallActivity(); } catch {}
+      return {
+        shouldShowAlert: false,
+        shouldShowBanner: false,
+        shouldShowList: false,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      };
+    }
     if (type === 'call') {
-      // На Android не показываем Expo-уведомление о звонке — только нативный IncomingCallActivity
-      // (при FCM пуше его показывает LiviFirebaseMessagingService; при Expo пуше откроем нативный экран из addNotificationReceivedListener).
+      // Когда приложение не активно: показываем Expo-уведомление, т.к. FCM часто не доходит (Requested entity was not found).
+      // По тапу откроем приложение и покажем нативный экран или навигацию к звонку; addNotificationReceivedListener тоже вызовет launchIncomingCallActivityScreen при доставке в фоне.
+      const showCallNotification = appStateRef !== 'active';
       if (Platform.OS === 'android') {
         return {
-          shouldShowAlert: false,
-          shouldShowBanner: false,
-          shouldShowList: false,
-          shouldPlaySound: false,
+          shouldShowAlert: showCallNotification,
+          shouldShowBanner: showCallNotification,
+          shouldShowList: showCallNotification,
+          shouldPlaySound: showCallNotification,
           shouldSetBadge: false,
         };
       }
-      const showCallNotification = appStateRef !== 'active';
       return {
         shouldShowAlert: showCallNotification,
         shouldShowBanner: showCallNotification,
@@ -231,11 +242,18 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
     const type = String(data?.type || '');
     if (!type) return;
 
-    if (type === 'call_ended' && data?.endedFromActive) {
-      await clearCallRelatedNotificationsAndSyncBadge();
-      try {
-        (global as any).__onCallEndedFromPush?.();
-      } catch {}
+    if (type === 'call_declined') {
+      try { closeOutgoingCallActivity(); } catch {}
+      return;
+    }
+    if (type === 'call_ended') {
+      if (data?.callId) addEndedCallId(String(data.callId));
+      if (data?.endedFromActive) {
+        await clearCallRelatedNotificationsAndSyncBadge();
+        try {
+          (global as any).__onCallEndedFromPush?.();
+        } catch {}
+      }
       return;
     }
 
@@ -544,6 +562,10 @@ export function addNotificationListeners() {
   const sub1 = Notifications.addNotificationReceivedListener((n) => {
     try {
       const data = (n as any)?.request?.content?.data;
+      if (data?.type === 'call_declined') {
+        try { closeOutgoingCallActivity(); } catch {}
+        return;
+      }
       if (data?.type === 'call' && data?.callId && data?.from) {
         logger.info('[push] incoming call notification received', { callId: data.callId, from: data.from });
         if (Platform.OS === 'android') {

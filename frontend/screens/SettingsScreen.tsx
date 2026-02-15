@@ -1,11 +1,12 @@
 // screens/SettingsScreen.tsx
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, View, Platform, ActionSheetIOS, ActivityIndicator } from 'react-native';
+import { Alert, View, Platform, ActionSheetIOS, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import SettingsTab from '../components/SettingsTab';
 import { useMe } from '../store/me';
 import { useLang } from '../store/lang';
 import { t } from '../utils/i18n';
+import { openAppNotificationSettings, areNotificationsEnabled } from '../utils/callKeep';
 import { getClient } from '../chat/cometchat';
 import { uploadAvatarToCloudinary, normalizeLocalImageUri } from '../utils/uploadAvatar';
 import { getInstallId } from '../utils/installId';
@@ -61,6 +62,7 @@ export default function SettingsScreen() {
   useEffect(() => {}, [localAvatarUri]);
 
   const pushedRef = useRef<string>('');
+  const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
 
   /** Синхронизация с глобальным состоянием me */
   useEffect(() => {
@@ -480,6 +482,12 @@ export default function SettingsScreen() {
     }
   }, []);
 
+  // Проверка уведомлений (Android) для блока «Полноэкранные входящие звонки»
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    areNotificationsEnabled().then(setNotificationsEnabled).catch(() => setNotificationsEnabled(null));
+  }, []);
+
   // Показываем SplashLoader пока данные не загружены
   if (!profileLoaded) {
     return (
@@ -531,6 +539,34 @@ export default function SettingsScreen() {
           },
         }}
       />
+      {Platform.OS === 'android' && (
+        <TouchableOpacity
+          onPress={openAppNotificationSettings}
+          style={{
+            marginHorizontal: 20,
+            marginBottom: 24,
+            paddingVertical: 14,
+            paddingHorizontal: 16,
+            backgroundColor: notificationsEnabled === false ? 'rgba(255,90,103,0.12)' : 'rgba(255,255,255,0.06)',
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: notificationsEnabled === false ? 'rgba(255,90,103,0.3)' : 'rgba(255,255,255,0.1)',
+          }}
+        >
+          <Text style={{ color: '#B7C0CF', fontSize: 15, fontWeight: '600', marginBottom: 4 }}>
+            {lang === 'ru' ? 'Полноэкранные входящие звонки' : 'Full-screen incoming calls'}
+          </Text>
+          <Text style={{ color: '#8A8F99', fontSize: 13 }}>
+            {notificationsEnabled === false
+              ? (lang === 'ru'
+                ? 'Уведомления выключены — входящий видеозвонок не будет показываться на экране блокировки и при закрытом приложении. Нажмите, чтобы открыть настройки и включить уведомления и «Полноэкранные уведомления».'
+                : 'Notifications are off — incoming video calls will not show on lock screen or when app is closed. Tap to open settings and enable notifications and "Full screen intent".')
+              : (lang === 'ru'
+                ? 'Чтобы входящий видеозвонок открывался на весь экран (и на блокировке) — откройте настройки и включите «Полноэкранные уведомления» или «Показ как всплывающее окно».'
+                : 'To show incoming video calls on full screen (and on lock screen), open settings and enable "Full screen intent" or "Show as pop-up".')}
+          </Text>
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 }

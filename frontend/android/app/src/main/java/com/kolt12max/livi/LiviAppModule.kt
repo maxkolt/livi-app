@@ -1,12 +1,20 @@
 package com.kolt12max.livi
 
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
+import android.util.Log
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.jstasks.HeadlessJsTaskConfig
+import com.facebook.react.jstasks.HeadlessJsTaskContext
 
 /**
  * Нативный модуль: moveTaskToBack после decline; хранение installId и serverUrl
@@ -15,7 +23,25 @@ import com.facebook.react.bridge.ReactMethod
  */
 class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
+  init {
+    LiviAppModule.reactContextRef = reactApplicationContext
+  }
+
   override fun getName(): String = NAME
+
+  /** Показать нативный экран исходящего сразу (без callId). callId придёт позже через notifyOutgoingCallId. */
+  @ReactMethod
+  fun launchOutgoingCallActivityWithoutCallId(toUserId: String, toNick: String?) {
+    val ctx = reactApplicationContext
+    LiviOngoingCallHelper.setOutgoingCall(ctx, "", toUserId, toNick ?: "")
+    val intent = Intent(ctx, OutgoingCallActivity::class.java).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      putExtra(OutgoingCallActivity.EXTRA_CALL_ID, "")
+      putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, toUserId)
+      putExtra(OutgoingCallActivity.EXTRA_TO_NICK, toNick ?: "")
+    }
+    ctx.startActivity(intent)
+  }
 
   @ReactMethod
   fun launchOutgoingCallActivity(callId: String, toUserId: String, toNick: String?) {
@@ -28,6 +54,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       putExtra(OutgoingCallActivity.EXTRA_TO_NICK, toNick ?: "")
     }
     ctx.startActivity(intent)
+  }
+
+  /** Передать callId уже открытому экрану исходящего (после ответа сервера). */
+  @ReactMethod
+  fun notifyOutgoingCallId(callId: String) {
+    val intent = Intent(OutgoingCallActivity.ACTION_OUTGOING_CALL_ID_READY).apply {
+      setPackage(reactApplicationContext.packageName)
+      putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+    }
+    reactApplicationContext.sendBroadcast(intent)
   }
 
   @ReactMethod
@@ -48,6 +84,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       putExtra(IncomingCallActivity.EXTRA_FROM_NICK, fromNick ?: "")
     }
     ctx.startActivity(intent)
+  }
+
+  /** Пометить callId как завершённый (отмена/таймаут). IncomingCallActivity не покажет экран для этого callId. Вызывать из JS при получении push call_ended, т.к. FCM call_canceled может не дойти. */
+  @ReactMethod
+  fun addEndedCallId(callId: String) {
+    if (callId.isBlank()) return
+    EndedCallIds.add(reactApplicationContext, callId)
   }
 
   /** При обработке livi://answer-call — закрыть IncomingCallActivity по callId (если открыта из уведомления). */
@@ -86,7 +129,29 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       .apply()
   }
 
-  /** Открыть настройки уведомлений приложения (Android 8+). Пользователь может включить «Полноэкранные уведомления» для входящих звонков. */
+  /** Проверить, разрешены ли уведомления для приложения (Android 4.4+). Если выключены — нативный экран входящего в фоне не покажется. */
+  @ReactMethod
+  fun areNotificationsEnabled(promise: Promise) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      promise.resolve(nm.areNotificationsEnabled())
+    } else {
+      promise.resolve(true)
+    }
+  }
+
+  /** Проверить, разрешены ли полноэкранные уведомления (Android 14+). На старых версиях возвращает true. */
+  @ReactMethod
+  fun canUseFullScreenIntent(promise: Promise) {
+    if (Build.VERSION.SDK_INT >= 34) {
+      val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      promise.resolve(nm.canUseFullScreenIntent())
+    } else {
+      promise.resolve(true)
+    }
+  }
+
+  /** Открыть настройки уведомлений приложения (Android 8+). Включите «Полноэкранные уведомления» или «Показ как всплывающее окно» для входящих звонков. */
   @ReactMethod
   fun openAppNotificationSettings() {
     val ctx = reactApplicationContext
@@ -123,5 +188,60 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     const val KEY_INSTALL_ID = "install_id"
     const val KEY_SERVER_URL = "server_url"
     const val KEY_OUTGOING_CALL_TIMEOUT_MS = "outgoing_call_timeout_ms"
+    private const val HEADLESS_TASK_CALL_KEEP = "RNCallKeepBackgroundMessage"
+
+    private var reactContextRef: ReactApplicationContext? = null
+
+    /**
+     * Пытается запустить headless-задачу CallKeep (ConnectionService) для входящего звонка.
+     * Вызывается из FCM при type=call. Если задача запущена — системный UI звонка (как в Telegram).
+     * Callback вызывается на main thread; true = headless запущен, не показывать своё уведомление/активность.
+     */
+    @JvmStatic
+    fun tryStartCallKeepHeadlessTask(callId: String, from: String, fromNick: String, callback: (Boolean) -> Unit) {
+      val ctx = reactContextRef
+      if (ctx == null) {
+        Handler(Looper.getMainLooper()).post { callback(false) }
+        return
+      }
+      Handler(Looper.getMainLooper()).post {
+        var started = false
+        try {
+          if (ctx.hasActiveReactInstance()) {
+            val data = Arguments.createMap().apply {
+              putString("type", "call")
+              putString("callId", callId)
+              putString("from", from)
+              putString("fromNick", fromNick)
+            }
+            val config = HeadlessJsTaskConfig(HEADLESS_TASK_CALL_KEEP, data, 10_000L, false)
+            HeadlessJsTaskContext.getInstance(ctx).startTask(config)
+            started = true
+            Log.d(NAME, "headless task started for callId=$callId")
+          }
+        } catch (e: Exception) {
+          Log.w(NAME, "headless task start failed", e)
+        }
+        callback(started)
+      }
+    }
+
+    /** Вызвать из OutgoingCallActivity при нажатии X — React очистит состояние исходящего. */
+    @JvmStatic
+    fun emitOutgoingCallCanceledByUser() {
+      reactContextRef?.runOnUiQueueThread {
+        reactContextRef?.emitDeviceEvent("OutgoingCallCanceledByUser", null)
+      }
+    }
+
+    /** Вызвать из IncomingCallActivity при нажатии X — React очистит состояние входящего. */
+    @JvmStatic
+    fun emitIncomingCallDeclinedByUser(callId: String) {
+      reactContextRef?.runOnUiQueueThread {
+        val params = Arguments.createMap()
+        params.putString("callId", callId)
+        reactContextRef?.emitDeviceEvent("IncomingCallDeclinedByUser", params)
+      }
+    }
   }
 }

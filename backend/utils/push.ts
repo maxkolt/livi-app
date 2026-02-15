@@ -222,42 +222,56 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
 /**
  * Получатель отклонил вызов — шлём caller FCM data-only call_declined,
  * чтобы на устройстве звонящего сразу закрыли OutgoingCallActivity (сокет в фоне может быть отключён).
+ * Если FCM не доходит — шлём через Expo, клиент закроет экран из addNotificationReceivedListener.
  */
 export async function sendCallDeclinedToCaller(callerUserId: string, callId: string): Promise<void> {
   const messaging = getFirebaseMessaging();
-  if (!messaging) return;
-  const recs = await PushTokenModel.find({ userId: callerUserId })
-    .select('token platform fcmToken')
-    .lean();
-  type Rec = { token: string; platform: string; fcmToken?: string };
-  const list = (recs || []) as unknown as Rec[];
-  for (const r of list) {
-    if (r.platform === 'android' && r.fcmToken) {
-      try {
-        await messaging.send({
-          token: r.fcmToken,
-          data: { type: 'call_declined', callId: String(callId) },
-          android: { priority: 'high' },
-        });
-        logger.info('[push] call_declined sent via FCM (data-only) to caller', { userId: callerUserId });
-      } catch (e) {
-        const errMsg = String((e as Error)?.message ?? '');
-        const isInvalidToken =
-          errMsg.includes('Requested entity was not found') ||
-          errMsg.includes('unregistered') ||
-          errMsg.includes('registration-token-not-registered');
-        if (isInvalidToken) {
-          try {
-            await PushTokenModel.updateOne(
-              { userId: callerUserId, token: r.token },
-              { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
-            ).exec();
-            logger.info('[push] removed invalid FCM token (call_declined)', { userId: callerUserId });
-          } catch {}
+  if (messaging) {
+    const recs = await PushTokenModel.find({ userId: callerUserId })
+      .select('token platform fcmToken')
+      .lean();
+    type Rec = { token: string; platform: string; fcmToken?: string };
+    const list = (recs || []) as unknown as Rec[];
+    for (const r of list) {
+      if (r.platform === 'android' && r.fcmToken) {
+        try {
+          await messaging.send({
+            token: r.fcmToken,
+            data: { type: 'call_declined', callId: String(callId) },
+            android: { priority: 'high' },
+          });
+          logger.info('[push] call_declined sent via FCM (data-only) to caller', { userId: callerUserId });
+        } catch (e) {
+          const errMsg = String((e as Error)?.message ?? '');
+          const isInvalidToken =
+            errMsg.includes('Requested entity was not found') ||
+            errMsg.includes('unregistered') ||
+            errMsg.includes('registration-token-not-registered');
+          if (isInvalidToken) {
+            try {
+              await PushTokenModel.updateOne(
+                { userId: callerUserId, token: r.token },
+                { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
+              ).exec();
+              logger.info('[push] removed invalid FCM token (call_declined)', { userId: callerUserId });
+            } catch {}
+          }
+          logger.warn('[push] FCM call_declined to caller failed', { userId: callerUserId, error: errMsg });
         }
-        logger.warn('[push] FCM call_declined to caller failed', { userId: callerUserId, error: errMsg });
       }
     }
+  }
+  // Всегда шлём ещё и через Expo: при недоставке FCM (invalid token и т.д.) экран исходящего у звонящего закроется по Expo.
+  try {
+    await sendPushToUser(callerUserId, {
+      kind: 'message',
+      title: '',
+      body: '',
+      data: { type: 'call_declined', callId: String(callId) },
+    });
+    logger.info('[push] call_declined sent via Expo to caller', { userId: callerUserId });
+  } catch (e) {
+    logger.warn('[push] Expo call_declined to caller failed', { userId: callerUserId, error: (e as Error)?.message });
   }
 }
 

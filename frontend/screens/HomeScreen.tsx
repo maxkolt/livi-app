@@ -72,7 +72,7 @@ import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall } from '../utils/globalEvents';
-import { displayOutgoingCall, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS } from '../utils/callKeep';
+import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS } from '../utils/callKeep';
 import { clearNotificationIndicators, syncAppBadgeFromMissedCount } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
@@ -1222,19 +1222,25 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     try {
       setCalling({ visible: true, friend, callId: null });
       startWaves();
+      // Нативный экран исходящего — показываем сразу без задержки (до ответа сервера)
+      displayOutgoingCallImmediate(friend.id, friend.name ?? '');
+
       const r: any = await startCall(friend.id);
       if (!r?.ok) throw new Error(r?.error || 'call_failed');
       setCalling((c) => ({ ...c, callId: r.callId || null }));
 
-      // Нативный экран исходящего — всегда пробуем показать; внутри displayOutgoingCall проверка isSetup и разрешений
+      // Передаём callId уже открытому нативному экрану (запускает звук и таймаут 20с)
       if (r.callId) {
-        displayOutgoingCall(r.callId, friend.id, friend.name ?? '', true);
+        notifyOutgoingCallId(r.callId);
       }
 
-      // Если пользователь успел нажать «Отменить» до прихода callId — шлём отмену сразу после ack
-      if (pendingCancelRef.current && r.callId) {
+      // Если пользователь успел нажать «Отменить» (в приложении или X на нативном экране) до прихода callId — отменяем на сервере
+      const canceledByNative = (global as any).__outgoingCanceledByNativeRef?.current === true;
+      if ((pendingCancelRef.current || canceledByNative) && r.callId) {
+        if (canceledByNative) (global as any).__outgoingCanceledByNativeRef.current = false;
         try { cancelCall(r.callId); } catch {}
         pendingCancelRef.current = false;
+        try { closeOutgoingCallActivity(); } catch {}
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
         return;
@@ -1323,6 +1329,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const handleCancelCall = useCallback(() => {
     if (calling.callId) {
       try {
+        reportEndCallToCallKeep(calling.callId);
+        closeOutgoingCallActivity();
         cancelCall(calling.callId);
         // Повторно через 150мс на случай сетевой гонки
         setTimeout(() => { try { cancelCall(calling.callId!); } catch {} }, 150);

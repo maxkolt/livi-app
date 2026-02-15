@@ -22,9 +22,12 @@ import androidx.appcompat.app.AppCompatActivity
 class OutgoingCallActivity : AppCompatActivity() {
 
     private var closeReceiver: BroadcastReceiver? = null
+    private var callIdReadyReceiver: BroadcastReceiver? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private var dotsRunnable: Runnable? = null
     private var callId: String = ""
+    private var toUserId: String = ""
+    private var toNick: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,17 +39,41 @@ class OutgoingCallActivity : AppCompatActivity() {
         setContentView(R.layout.activity_outgoing_call)
 
         callId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
-        val toUserId = intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""
-        val toNick = intent.getStringExtra(EXTRA_TO_NICK) ?: ""
+        toUserId = intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""
+        toNick = intent.getStringExtra(EXTRA_TO_NICK) ?: ""
 
         findViewById<TextView>(R.id.callee_name).text = if (toNick.isNotEmpty()) toNick else getString(R.string.outgoing_call_title)
         val subtitleView = findViewById<TextView>(R.id.call_subtitle)
         startDotsAnimation(subtitleView)
 
-        LiviOutgoingCallService.start(this, callId, toUserId, toNick)
+        if (callId.isNotEmpty()) {
+            LiviOutgoingCallService.start(this, callId, toUserId, toNick)
+        } else {
+            callIdReadyReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    val id = intent?.getStringExtra(EXTRA_CALL_ID) ?: return
+                    if (id.isNotEmpty()) {
+                        this@OutgoingCallActivity.callId = id
+                        LiviOngoingCallHelper.setOutgoingCall(this@OutgoingCallActivity, id, toUserId, toNick)
+                        LiviOutgoingCallService.start(this@OutgoingCallActivity, id, toUserId, toNick)
+                        callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+                        callIdReadyReceiver = null
+                    }
+                }
+            }
+            val filterReady = IntentFilter(ACTION_OUTGOING_CALL_ID_READY)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(callIdReadyReceiver, filterReady, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(callIdReadyReceiver, filterReady)
+            }
+        }
 
         findViewById<ImageButton>(R.id.btn_cancel).setOnClickListener {
-            LiviOutgoingCallService.cancelCallOnServer(this, callId)
+            LiviAppModule.emitOutgoingCallCanceledByUser()
+            if (callId.isNotEmpty()) {
+                LiviOutgoingCallService.cancelCallOnServer(this, callId)
+            }
             LiviOutgoingCallService.stop(this)
             finish()
         }
@@ -106,6 +133,8 @@ class OutgoingCallActivity : AppCompatActivity() {
         dotsRunnable = null
         closeReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         closeReceiver = null
+        callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        callIdReadyReceiver = null
         super.onDestroy()
     }
 
@@ -115,5 +144,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         const val EXTRA_TO_USER_ID = "toUserId"
         const val EXTRA_TO_NICK = "toNick"
         const val ACTION_CLOSE_OUTGOING_CALL = "com.kolt12max.livi.CLOSE_OUTGOING_CALL"
+        /** Broadcast: JS получил callId с сервера — запустить сервис (звук, таймаут). */
+        const val ACTION_OUTGOING_CALL_ID_READY = "com.kolt12max.livi.OUTGOING_CALL_ID_READY"
     }
 }
