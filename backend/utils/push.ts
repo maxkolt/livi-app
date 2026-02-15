@@ -15,18 +15,51 @@ const FCM_INVALID_TOKEN_CODES = [
   'messaging/invalid-argument',
 ] as const;
 
+/** Фразы в сообщении об ошибке FCM, по которым считаем токен невалидным. */
+const FCM_INVALID_PHRASES = [
+  'requested entity was not found',
+  'not found',
+  'unregistered',
+  'registration-token-not-registered',
+  'invalid-registration-token',
+];
+
 function isFcmInvalidTokenError(e: unknown): boolean {
-  const err = e as { message?: string; code?: string };
-  const msg = String(err?.message ?? '').toLowerCase();
+  const err = e as { message?: string; code?: string; errorInfo?: { message?: string } };
+  const msg = String(err?.message ?? err?.errorInfo?.message ?? '').toLowerCase();
   const code = String(err?.code ?? '');
+  const raw = String(e).toLowerCase();
   if (FCM_INVALID_TOKEN_CODES.includes(code as any)) return true;
-  return (
-    msg.includes('requested entity was not found') ||
-    msg.includes('not found') ||
-    msg.includes('unregistered') ||
-    msg.includes('registration-token-not-registered') ||
-    msg.includes('invalid-registration-token')
-  );
+  const fromMsgOrRaw = (phrase: string) => msg.includes(phrase) || raw.includes(phrase);
+  return FCM_INVALID_PHRASES.some(fromMsgOrRaw);
+}
+
+/** Удалить невалидный FCM-токен из БД: по fcmToken (надёжно), иначе по Expo token. */
+async function removeInvalidFcmToken(userId: string, r: { token: string; fcmToken?: string }): Promise<boolean> {
+  if (!r.fcmToken) return false;
+  try {
+    let result = await PushTokenModel.updateOne(
+      { userId, fcmToken: r.fcmToken },
+      { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
+    ).exec();
+    let modified = (result as { modifiedCount?: number })?.modifiedCount ?? 0;
+    if (modified === 0) {
+      result = await PushTokenModel.updateOne(
+        { userId, token: r.token },
+        { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
+      ).exec();
+      modified = (result as { modifiedCount?: number })?.modifiedCount ?? 0;
+    }
+    if (modified > 0) {
+      logger.warn('[push] removed invalid FCM token', { userId, tokenPrefix: String(r.token).slice(0, 20) });
+      return true;
+    }
+    logger.warn('[push] removeInvalidFcmToken: no document matched', { userId, byFcmToken: !!r.fcmToken });
+    return false;
+  } catch (dbErr) {
+    logger.warn('[push] failed to remove invalid FCM token', { userId, error: (dbErr as Error)?.message });
+    return false;
+  }
 }
 
 let firebaseApp: unknown = null;
@@ -196,17 +229,9 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
         const errMsg = String((e as Error)?.message ?? '');
         const errCode = (e as { code?: string })?.code;
         const isInvalidToken = isFcmInvalidTokenError(e);
-        logger.warn('[push] FCM call push error', { userId, errMsg, errCode, isInvalidToken });
+        logger.warn('[push] FCM call push error', { userId, errMsg, errCode, isInvalidToken, raw: String(e) });
         if (isInvalidToken) {
-          try {
-            const result = await PushTokenModel.updateOne(
-              { userId, token: r.token },
-              { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
-            ).exec();
-            logger.warn('[push] removed invalid FCM token for user', { userId, tokenPrefix: String(r.token).slice(0, 18), matched: (result as { modifiedCount?: number })?.modifiedCount });
-          } catch (dbErr) {
-            logger.warn('[push] failed to remove invalid FCM token', { userId, error: (dbErr as Error)?.message });
-          }
+          await removeInvalidFcmToken(userId, r);
         } else {
           logger.warn('[push] FCM send failed, falling back to Expo for this device', { error: errMsg });
         }
@@ -266,13 +291,7 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
           const errMsg = String((e as Error)?.message ?? '');
           const isInvalidToken = isFcmInvalidTokenError(e);
           if (isInvalidToken) {
-            try {
-              await PushTokenModel.updateOne(
-                { userId: callerUserId, token: r.token },
-                { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
-              ).exec();
-              logger.info('[push] removed invalid FCM token (call_declined)', { userId: callerUserId });
-            } catch {}
+            await removeInvalidFcmToken(callerUserId, r);
           }
           logger.warn('[push] FCM call_declined to caller failed', { userId: callerUserId, error: errMsg });
         }
@@ -320,13 +339,7 @@ export async function sendCallCanceledToRecipient(calleeUserId: string, callId: 
           const errMsg = String((e as Error)?.message ?? '');
           const isInvalidToken = isFcmInvalidTokenError(e);
           if (isInvalidToken) {
-            try {
-              await PushTokenModel.updateOne(
-                { userId: calleeUserId, token: r.token },
-                { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
-              ).exec();
-              logger.info('[push] removed invalid FCM token (call_canceled)', { userId: calleeUserId });
-            } catch {}
+            await removeInvalidFcmToken(calleeUserId, r);
           }
           logger.warn('[push] FCM call_canceled failed', { userId: calleeUserId, error: errMsg });
         }
