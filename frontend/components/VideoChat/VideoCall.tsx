@@ -228,6 +228,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       (global as any).__isInactiveStateRef = { current: false };
     };
   }, [isInactiveState]);
+
+  // Ref текущего собеседника и активного звонка — чтобы App не показывал «входящий» от того же пользователя (дубликат после отмены на нативном экране)
+  const hasActiveCallWithPartnerRef = !!(roomId || callId || partnerId) && !isInactiveState;
+  useEffect(() => {
+    (global as any).__videoCallPartnerUserIdRef = { current: hasActiveCallWithPartnerRef ? partnerUserId : null };
+    (global as any).__videoCallActiveRef = { current: hasActiveCallWithPartnerRef };
+    return () => {
+      (global as any).__videoCallPartnerUserIdRef = { current: null };
+      (global as any).__videoCallActiveRef = { current: false };
+    };
+  }, [hasActiveCallWithPartnerRef, partnerUserId]);
   const [friendCallAccepted, setFriendCallAccepted] = useState(false);
   const [buttonsOpacity] = useState(new Animated.Value(1));
   const incomingCallBounce = useRef(new Animated.Value(0)).current;
@@ -278,13 +289,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     pipRef.current = pip;
   }, [pip]);
   
-  // Хук для входящих звонков
+  // Хук для входящих звонков (игнорируем входящий от текущего собеседника при активном звонке)
   const incomingCallHook = useIncomingCall({
     myUserId,
     routeParams: route?.params,
     friendCallAccepted,
     currentCallIdRef,
     session: sessionRef.current,
+    partnerUserId,
+    hasActiveCallWithPartner: hasActiveCallWithPartnerRef,
     onAccept: async (callId: string, fromUserId: string) => {
       if (fromUserId) {
         setPartnerUserId(fromUserId);

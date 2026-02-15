@@ -95,6 +95,20 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             Log.d(TAG, "FCM call_canceled: ended id stored, notification canceled, broadcast + startActivity(close) callId=$callId")
             return
         }
+        // Абонент принял вызов — вывести MainActivity на передний план; сохранить callId для JS (call:getAccepted → call:accepted → переход на VideoCall).
+        if (type == "call_accepted" && callId != null) {
+            LiviAppModule.setPendingCallAcceptedCallId(callId)
+            val mainIntent = Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            try {
+                startActivity(mainIntent)
+                Log.d(TAG, "FCM call_accepted: brought MainActivity to front callId=$callId")
+            } catch (e: Exception) {
+                Log.w(TAG, "FCM call_accepted: startActivity MainActivity failed", e)
+            }
+            return
+        }
         // Получатель отклонил — закрыть нативный экран исходящего у звонящего (сокет в фоне может быть отключён).
         if (type == "call_declined" && callId != null) {
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {

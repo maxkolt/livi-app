@@ -14,7 +14,7 @@ import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, S
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE } from "./sockets/socket";
 import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
@@ -92,6 +92,14 @@ const navRef = createNavigationContainerRef<RootStackParamList>();
 // (безопасно: используется только для navigate на Home при разрыве вызова)
 (global as any).__navRef = navRef;
 
+// Звонки, для которых уже пришло call:ended по сокету. Не переходить на VideoCall по call:accepted для такого callId (избегаем мелькания и «произвольных» переходов).
+const endedCallIdsFromSocket = new Set<string>();
+const ENDED_CALL_IDS_TTL_MS = 120000;
+function addEndedCallIdFromSocket(callId: string) {
+  endedCallIdsFromSocket.add(callId);
+  setTimeout(() => endedCallIdsFromSocket.delete(callId), ENDED_CALL_IDS_TTL_MS);
+}
+
 const isVideoSessionRoute = (routeName?: string | null) =>
   routeName === 'VideoCall' || routeName === 'RandomChat';
 
@@ -121,7 +129,9 @@ function AppContent() {
   const lang = useLang((s) => s.lang);
   const hydrateLang = useLang((s) => s.hydrate);
   const insets = useSafeAreaInsets();
-  
+  /** Пока true — не скрываем оверлей. После обработки initial URL (в т.ч. answer-call) ставим true, чтобы не мелькала Home у принимающего. */
+  const [initialUrlProcessed, setInitialUrlProcessed] = React.useState(false);
+
   React.useEffect(() => {
     void hydrateLang();
   }, [hydrateLang]);
@@ -498,6 +508,8 @@ function AppContent() {
         }
       } catch (e) {
         logger.warn('Failed to get initial URL:', e);
+      } finally {
+        setInitialUrlProcessed(true);
       }
     };
 
@@ -891,14 +903,21 @@ function AppContent() {
       }
     } catch {}
 
+    // На экране видеозвонка с активным звонком — входящий от того же собеседника игнорируем (дубликат после отмены на нативном экране у звонящего)
+    const isOnVideoScreen = isVideoSessionRoute(currentRoute);
+    const isInactiveVideoState = !!(global as any)?.__isInactiveStateRef?.current;
+    const videoCallPartner = (global as any)?.__videoCallPartnerUserIdRef?.current;
+    const videoCallActive = (global as any)?.__videoCallActiveRef?.current;
+    if (isOnVideoScreen && !isInactiveVideoState && videoCallActive && videoCallPartner && String(d.from) === String(videoCallPartner)) {
+      logger.debug('[call:incoming] Ignoring incoming from current partner (active VideoCall)', { callId: d.callId, from: d.from });
+      return;
+    }
+
     // КРИТИЧНО: Показываем глобальную модалку если:
     // 1) НЕ на экране видеозвонка/рандомчата, ИЛИ
     // 2) Навигация не готова (безопаснее показать), ИЛИ
     // 3) Мы на VideoCall/RandomChat, но видеосессия УЖЕ завершена (неактивное состояние) —
     //    тогда модалка должна быть как у "неактивного видеочата": во весь экран.
-    const isOnVideoScreen = isVideoSessionRoute(currentRoute);
-    const isInactiveVideoState = !!(global as any)?.__isInactiveStateRef?.current;
-
     const shouldShowGlobal =
       !isOnVideoScreen ||
       !currentRoute ||
@@ -1006,7 +1025,10 @@ function AppContent() {
   // При получении call:ended (второй участник завершил с нативного экрана/уведомления) — закрываем модалки, reportEndCallToCallKeep, уведомления у обоих
   React.useEffect(() => {
     const onCallEnded = (data?: { callId?: string }) => {
-      if (data?.callId) try { reportEndCallToCallKeep(data.callId); } catch {}
+      if (data?.callId) {
+        addEndedCallIdFromSocket(data.callId);
+        try { reportEndCallToCallKeep(data.callId); } catch {}
+      }
       stopIncomingCallAlert();
       setIncoming(null);
       stopAnim();
@@ -1029,6 +1051,21 @@ function AppContent() {
     return () => { delete (global as any).__onCallEndedFromPush; };
   }, []);
 
+  // При старте приложения (в т.ч. по FCM call_accepted) — запросить call:accepted, если нативный модуль сохранил callId
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const t = setTimeout(() => {
+      const LiviAppModule = NativeModules.LiviAppModule;
+      LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
+        if (callId) {
+          logger.info('[App] Launch with pending call_accepted, requesting call:accepted', { callId });
+          try { requestCallAccepted(callId); } catch {}
+        }
+      });
+    }, 800);
+    return () => clearTimeout(t);
+  }, []);
+
   // КРИТИЧНО: Перерегистрация обработчика при возврате из спящего режима (AppState change)
   React.useEffect(() => {
     const { AppState } = require('react-native');
@@ -1036,6 +1073,25 @@ function AppContent() {
 
     const handleAppStateChange = (nextAppState: string) => {
       if (appStateRef.match(/inactive|background/) && nextAppState === 'active') {
+        // Если пользователь нажал X на нативном экране исходящего — событие могло не дойти до JS; при возврате в приложение очищаем состояние
+        const canceledByNative = (global as any).__outgoingCanceledByNativeRef?.current === true;
+        if (canceledByNative) {
+          (global as any).__outgoingCanceledByNativeRef.current = false;
+          try { emitCloseOutgoingCall(); } catch {}
+        }
+        if (Platform.OS === 'android') {
+          const LiviAppModule = NativeModules.LiviAppModule;
+          LiviAppModule?.getAndClearOutgoingCanceledByUserFlag?.()?.then?.((flag: boolean) => {
+            if (flag) try { emitCloseOutgoingCall(); } catch {}
+          });
+          // FCM call_accepted вывел приложение — запросить call:accepted у сервера → переход на VideoCall
+          LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
+            if (callId) {
+              logger.info('[App] Pending call_accepted from FCM, requesting call:accepted', { callId });
+              try { requestCallAccepted(callId); } catch {}
+            }
+          });
+        }
         // Приложение вернулось из спящего режима - перерегистрируем обработчик
         logger.debug('App returned from sleep - re-registering call:incoming handler');
         setTimeout(() => {
@@ -1117,7 +1173,20 @@ function AppContent() {
         from: data?.from,
         currentRoute: navRef.getCurrentRoute()?.name,
       });
-      try { emitCloseOutgoingCall(); } catch {}
+      const callId = data?.callId ? String(data.callId) : '';
+      // Не переходить на VideoCall, если по сокету уже пришло call:ended (звонок уже завершён) — избегаем мелькания и лишних сессий
+      if (callId && endedCallIdsFromSocket.has(callId)) {
+        logger.info('[App] ⏭️ call:accepted ignored (call already ended)', { callId });
+        try { emitCloseOutgoingCall(); } catch {}
+        try { closeOutgoingCallActivity(); } catch {}
+        if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
+        stopIncomingCallAlert();
+        setIncoming(null);
+        stopAnim();
+        try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+        clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
+        return;
+      }
       // КРИТИЧНО: Сохраняем событие call:accepted в глобальный ref на случай, если VideoCallSession еще не создан
       // Это решает проблему, когда call:accepted приходит до того, как VideoCallSession создан
       if (!(global as any).__pendingCallAcceptedRef) {
@@ -1149,7 +1218,6 @@ function AppContent() {
             peerUserId: fromUserId,
             isCaller,
           });
-          // Defer navigation for caller to avoid ANR: socket callback returns fast, heavy mount runs after current frame.
           const doNavigate = () => {
             try {
               if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
@@ -1164,21 +1232,20 @@ function AppContent() {
                 );
               }
             } catch (err) {
-              logger.error('[App] ❌ Error in deferred navigation to VideoCall', { error: err, callId: data?.callId });
+              logger.error('[App] ❌ Error navigating to VideoCall', { error: err, callId: data?.callId });
             }
           };
-          if (isCaller) {
-            InteractionManager.runAfterInteractions(doNavigate);
-          } else {
-            doNavigate();
-          }
+          // Сначала навигация на VideoCall, потом закрытие нативного экрана — при закрытии исходящего пользователь сразу видит экран видеозвонка
+          doNavigate();
+          try { emitCloseOutgoingCall(); } catch {}
+          try { closeOutgoingCallActivity(); } catch {}
         } else {
-          logger.info('[App] ⏭️ Already on VideoCall screen, skipping navigation', {
-            callId: data?.callId,
-          });
+          logger.info('[App] ⏭️ Already on VideoCall screen, skipping navigation', { callId: data?.callId });
         }
       } catch (e) {
         logger.error('[App] ❌ Error navigating to VideoCall', { error: e, callId: data?.callId });
+        try { emitCloseOutgoingCall(); } catch {}
+        try { closeOutgoingCallActivity(); } catch {}
       }
     });
     // Обработчик таймаута
@@ -1344,6 +1411,14 @@ function AppContent() {
               />
             </Stack.Navigator>
           </NavigationContainer>
+
+          {/* До обработки initial URL (answer-call и т.д.) не показываем контент — иначе у принимающего мелькает Home перед VideoCall */}
+          {!initialUrlProcessed && (
+            <View
+              style={[StyleSheet.absoluteFill, { backgroundColor: (theme.colors?.background as string) || '#151F33' }]}
+              pointerEvents="none"
+            />
+          )}
 
           {/* Глобальный PiP оверлей - виден на всех страницах когда pip.visible === true */}
           <PiPOverlay />

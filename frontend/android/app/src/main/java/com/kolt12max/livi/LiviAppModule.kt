@@ -75,6 +75,18 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     reactApplicationContext.sendBroadcast(intent)
   }
 
+  /** Прочитать и сбросить флаг «пользователь нажал X на нативном экране исходящего». Вызывать из JS при переходе в active. */
+  @ReactMethod
+  fun getAndClearOutgoingCanceledByUserFlag(promise: Promise) {
+    promise.resolve(LiviAppModule.getAndClearOutgoingCanceledByUserFlag())
+  }
+
+  /** FCM call_accepted: прочитать и сбросить callId; JS отправит call:getAccepted и получит call:accepted → переход на VideoCall. */
+  @ReactMethod
+  fun getAndClearPendingCallAcceptedCallId(promise: Promise) {
+    promise.resolve(LiviAppModule.getAndClearPendingCallAcceptedCallId())
+  }
+
   /** Единый UI входящего: открыть нативный IncomingCallActivity (foreground и из deep link livi://incoming-call). */
   @ReactMethod
   fun launchIncomingCallActivity(callId: String, from: String, fromNick: String?) {
@@ -256,12 +268,38 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       }
     }
 
+    /** Флаг: пользователь нажал X на нативном экране исходящего. Читается из JS при переходе в active (на случай потери события). */
+    @Volatile
+    var outgoingCanceledByUserFlag: Boolean = false
+      private set
+
     /** Вызвать из OutgoingCallActivity при нажатии X — React очистит состояние исходящего. */
     @JvmStatic
     fun emitOutgoingCallCanceledByUser() {
+      outgoingCanceledByUserFlag = true
       reactContextRef?.runOnUiQueueThread {
         reactContextRef?.emitDeviceEvent("OutgoingCallCanceledByUser", null)
       }
+    }
+
+    @JvmStatic
+    fun getAndClearOutgoingCanceledByUserFlag(): Boolean {
+      return outgoingCanceledByUserFlag.also { outgoingCanceledByUserFlag = false }
+    }
+
+    /** FCM call_accepted: сохранить callId до старта MainActivity; React вызовет getAndClearPendingCallAcceptedCallId и отправит call:getAccepted. */
+    @Volatile
+    var pendingCallAcceptedCallId: String? = null
+      private set
+
+    @JvmStatic
+    fun setPendingCallAcceptedCallId(callId: String?) {
+      pendingCallAcceptedCallId = callId
+    }
+
+    @JvmStatic
+    fun getAndClearPendingCallAcceptedCallId(): String? {
+      return pendingCallAcceptedCallId.also { pendingCallAcceptedCallId = null }
     }
 
     /** Вызвать из IncomingCallActivity при нажатии X — React очистит состояние входящего. */

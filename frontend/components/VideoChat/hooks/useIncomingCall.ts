@@ -13,6 +13,10 @@ interface UseIncomingCallProps {
   friendCallAccepted: boolean;
   currentCallIdRef: React.MutableRefObject<string | null>;
   session?: any; // VideoCallSession (может быть null при первом вызове)
+  /** Текущий собеседник на экране видеозвонка; входящий от него при активном звонке игнорируем (дубликат после отмены на нативном экране у звонящего). */
+  partnerUserId?: string | null;
+  /** Есть активный звонок (комната/партнёр) — вместе с partnerUserId отфильтровываем дубликаты call:incoming. */
+  hasActiveCallWithPartner?: boolean;
   onAccept?: (callId: string, fromUserId: string) => void;
   onDecline?: (callId: string) => void;
 }
@@ -27,6 +31,8 @@ export const useIncomingCall = ({
   friendCallAccepted,
   currentCallIdRef,
   session,
+  partnerUserId,
+  hasActiveCallWithPartner,
   onAccept,
   onDecline,
 }: UseIncomingCallProps) => {
@@ -73,6 +79,12 @@ export const useIncomingCall = ({
   // Обработка входящих звонков через socket
   useEffect(() => {
     const offIncoming = onCallIncoming?.((d) => {
+      // Не показывать входящий от того же собеседника, с которым уже идёт активный звонок (дубликат после отмены на нативном экране у звонящего)
+      if (hasActiveCallWithPartner && partnerUserId && String(d?.from) === String(partnerUserId)) {
+        logger.debug('[useIncomingCall] Ignoring incoming from current partner (active call)', { from: d?.from, partnerUserId });
+        return;
+      }
+
       // Фиксируем экран на момент входящего звонка, чтобы вернуть пользователя туда после завершения
       try {
         const nav = (global as any).__navRef;
@@ -94,7 +106,7 @@ export const useIncomingCall = ({
     return () => {
       offIncoming?.();
     };
-  }, []);
+  }, [hasActiveCallWithPartner, partnerUserId]);
 
   // 🔔 Рингтон/вибрация для входящего (когда входящий показывается внутри экрана звонка/пира)
   useEffect(() => {

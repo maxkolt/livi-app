@@ -2225,6 +2225,11 @@ export function declineCall(callId: string) {
   socket.emit('call:decline', { callId });
 }
 
+/** Запросить payload call:accepted у сервера (после FCM call_accepted, когда приложение вывели на передний план). */
+export function requestCallAccepted(callId: string) {
+  socket.emit('call:getAccepted', { callId });
+}
+
 export function onCallIncoming(cb: (d: { callId: string; from: string; fromNick?: string }) => void): () => void {
   const h = (d: any) => {
     logger.debug('Socket received call:incoming', { callId: d.callId, from: d.from, fromNick: d.fromNick });

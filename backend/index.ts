@@ -31,7 +31,7 @@ import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl } from './routes/livekit';
-import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallDeclinedToCaller } from './utils/push';
+import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallDeclinedToCaller, sendCallAcceptedToCaller } from './utils/push';
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 
@@ -1916,12 +1916,16 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       }
       
-      // Инициатор (A) офлайн — сохраняем данные; при reauth отправим call:accepted и он подключится в комнату
-      if (!aSock) {
-        try {
-          activeRoomByUserId.set(link.a, { callId: id, roomId, livekitRoomName, peerUserId: link.b });
-          logger.info('[call:accept] Caller offline, stored pending call for reauth', { userId: link.a, roomId, callId: id });
-        } catch {}
+      // Всегда сохраняем pending room для инициатора (для reauth и для call:getAccepted, когда инициатор на нативном экране и событие по сокету не обработалось)
+      try {
+        activeRoomByUserId.set(link.a, { callId: id, roomId, livekitRoomName, peerUserId: link.b });
+        if (!aSock) logger.info('[call:accept] Caller offline, stored pending call for reauth', { userId: link.a, roomId, callId: id });
+      } catch {}
+      // Всегда шлём FCM инициатору: при экране исходящего сокет может быть отключён или событие не доходит — FCM выведет приложение, по getAccepted получим call:accepted
+      try {
+        await sendCallAcceptedToCaller(link.a, id);
+      } catch (e: any) {
+        logger.warn('[call:accept] sendCallAcceptedToCaller failed', { callerUserId: link.a, error: e?.message });
       }
       // Fallback: отправить через комнату, если прямой сокет не найден (редкий случай)
       try {
@@ -1937,6 +1941,36 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
     
     cleanupCall(id, 'accepted');
+  });
+
+  // Инициатор получил FCM call_accepted и вывел приложение — запрашивает payload call:accepted (сокет мог не доставить событие с нативного экрана исходящего)
+  sock.on('call:getAccepted', async ({ callId: reqCallId }: { callId?: string }) => {
+    const id = String(reqCallId || '');
+    const userId = (sock as any)?.data?.userId;
+    if (!userId) return;
+    const pendingRoom = activeRoomByUserId.get(userId);
+    if (!pendingRoom || pendingRoom.callId !== id) return;
+    try {
+      const token = await createToken({ identity: userId, roomName: pendingRoom.livekitRoomName });
+      sock.join(pendingRoom.roomId);
+      activeCallBySocket.set(sock.id, pendingRoom.roomId);
+      (sock as any).data = (sock as any).data || {};
+      (sock as any).data.busy = true;
+      (sock as any).data.roomId = pendingRoom.roomId;
+      (sock as any).data.inCall = true;
+      sock.emit('call:accepted', {
+        callId: pendingRoom.callId,
+        from: null,
+        fromUserId: pendingRoom.peerUserId,
+        roomId: pendingRoom.roomId,
+        livekitToken: token,
+        livekitRoomName: pendingRoom.livekitRoomName,
+        livekitUrl: getLiveKitUrl() || null,
+      });
+      logger.info('[call:getAccepted] Sent call:accepted to caller', { userId, callId: id });
+    } catch (e: any) {
+      logger.warn('[call:getAccepted] Failed to send call:accepted', { userId, callId: id, error: e?.message });
+    }
   });
 
   sock.on('call:decline', async ({ callId }: { callId?: string }) => {
