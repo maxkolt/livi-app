@@ -31,6 +31,12 @@ class OutgoingCallActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // FCM call_declined может запустить активность с флагом «сразу закрыть» (приложение было в фоне/убито — broadcast не дошёл)
+        if (intent.getBooleanExtra(EXTRA_CLOSE_IMMEDIATELY, false)) {
+            LiviOutgoingCallService.stop(this)
+            finish()
+            return
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -102,6 +108,14 @@ class OutgoingCallActivity : AppCompatActivity() {
         })
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_CLOSE_IMMEDIATELY, false)) {
+            LiviOutgoingCallService.stop(this)
+            finish()
+        }
+    }
+
     /**
      * Домой / Недавние: то же поведение, что и «Назад» — экран уходит в фон, вызов продолжается,
      * вернуться по уведомлению в шторке (без завершения экрана и без отмены вызова).
@@ -143,6 +157,8 @@ class OutgoingCallActivity : AppCompatActivity() {
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_TO_USER_ID = "toUserId"
         const val EXTRA_TO_NICK = "toNick"
+        /** FCM call_declined запускает активность с этим флагом, чтобы закрыть экран, если broadcast не дошёл (приложение в фоне/убито). */
+        const val EXTRA_CLOSE_IMMEDIATELY = "close_immediately"
         const val ACTION_CLOSE_OUTGOING_CALL = "com.kolt12max.livi.CLOSE_OUTGOING_CALL"
         /** Broadcast: JS получил callId с сервера — запустить сервис (звук, таймаут). */
         const val ACTION_OUTGOING_CALL_ID_READY = "com.kolt12max.livi.OUTGOING_CALL_ID_READY"

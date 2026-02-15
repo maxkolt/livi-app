@@ -75,7 +75,18 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(EXTRA_CALL_ID, callId)
             }
             sendBroadcast(intent)
-            Log.d(TAG, "FCM call_canceled: ended id stored, notification canceled, broadcast sent callId=$callId")
+            // Если приложение в фоне/убито, broadcast не дойдёт — запускаем активность с флагом «только закрыть»
+            val activityIntent = Intent(this, IncomingCallActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(IncomingCallActivity.EXTRA_JUST_CLOSE, true)
+                putExtra(IncomingCallActivity.EXTRA_CALL_ID, callId)
+            }
+            try {
+                startActivity(activityIntent)
+            } catch (e: Exception) {
+                Log.w(TAG, "FCM call_canceled: startActivity close IncomingCall failed", e)
+            }
+            Log.d(TAG, "FCM call_canceled: ended id stored, notification canceled, broadcast + startActivity(close) callId=$callId")
             return
         }
         // Получатель отклонил — закрыть нативный экран исходящего у звонящего (сокет в фоне может быть отключён).
@@ -85,7 +96,18 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
             sendBroadcast(closeIntent)
-            Log.d(TAG, "FCM call_declined: broadcast sent to close OutgoingCallActivity callId=$callId")
+            // Если приложение в фоне/убито, broadcast не дойдёт — запускаем активность с флагом «сразу закрыть»
+            val activityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
+                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+            }
+            try {
+                startActivity(activityIntent)
+            } catch (e: Exception) {
+                Log.w(TAG, "FCM call_declined: startActivity close OutgoingCall failed", e)
+            }
+            Log.d(TAG, "FCM call_declined: broadcast + startActivity(close) callId=$callId")
             return
         }
         super.onMessageReceived(remoteMessage)

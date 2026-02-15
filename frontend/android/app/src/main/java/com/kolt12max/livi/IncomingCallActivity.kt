@@ -36,6 +36,13 @@ class IncomingCallActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val callIdFromIntent = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
+        // FCM call_canceled может запустить активность с флагом «только закрыть» (приложение в фоне/убито — broadcast не дошёл)
+        if (intent.getBooleanExtra(EXTRA_JUST_CLOSE, false) && callIdFromIntent.isNotEmpty()) {
+            EndedCallIds.add(this, callIdFromIntent)
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+            finish()
+            return
+        }
         // КРИТИЧНО: Если звонок уже отменён/завершён (пущ пришёл с опозданием или пользователь открыл уведомление позже) — не показывать экран
         if (callIdFromIntent.isNotEmpty() && EndedCallIds.isEnded(this, callIdFromIntent)) {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
@@ -237,11 +244,26 @@ class IncomingCallActivity : AppCompatActivity() {
         startActivity(intent)
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_JUST_CLOSE, false)) {
+            val cid = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
+            if (cid.isNotEmpty()) {
+                EndedCallIds.add(this, cid)
+                (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+            }
+            stopRepeatingVibration()
+            finish()
+        }
+    }
+
     companion object {
         private const val TAG = "IncomingCallActivity"
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"
+        /** FCM call_canceled запускает активность с этим флагом, чтобы закрыть экран без показа UI (приложение в фоне/убито). */
+        const val EXTRA_JUST_CLOSE = "just_close"
         const val ACTION_CALL_ANSWERED = "com.kolt12max.livi.CALL_ANSWERED"
     }
 }
