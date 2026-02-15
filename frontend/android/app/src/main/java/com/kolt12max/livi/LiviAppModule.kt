@@ -93,6 +93,19 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     EndedCallIds.add(reactApplicationContext, callId)
   }
 
+  /** Инициатор отменил вызов — пуш пришёл через Expo. То же, что FCM call_canceled: EndedCallIds, снять уведомление, broadcast чтобы IncomingCallActivity закрылась. */
+  @ReactMethod
+  fun notifyCallCanceled(callId: String) {
+    if (callId.isBlank()) return
+    EndedCallIds.add(reactApplicationContext, callId)
+    (reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+    val intent = Intent(LiviFirebaseMessagingService.ACTION_CALL_CANCELED).apply {
+      setPackage(reactApplicationContext.packageName)
+      putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
+    }
+    reactApplicationContext.sendBroadcast(intent)
+  }
+
   /** При обработке livi://answer-call — закрыть IncomingCallActivity по callId (если открыта из уведомления). */
   @ReactMethod
   fun sendCallAnsweredBroadcast(callId: String) {

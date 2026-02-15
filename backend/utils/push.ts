@@ -277,42 +277,55 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
 
 /**
  * Инициатор отменил вызов — шлём callee FCM data-only call_canceled,
- * чтобы на устройстве получателя сразу сняли уведомление и закрыли IncomingCallActivity без мельканий.
+ * чтобы на устройстве получателя сразу сняли уведомление и закрыли IncomingCallActivity.
+ * Дублируем через Expo: при недоставке FCM получатель всё равно закроет экран по пушу.
  */
 export async function sendCallCanceledToRecipient(calleeUserId: string, callId: string): Promise<void> {
   const messaging = getFirebaseMessaging();
-  if (!messaging) return;
-  const recs = await PushTokenModel.find({ userId: calleeUserId })
-    .select('token platform fcmToken')
-    .lean();
-  type Rec = { token: string; platform: string; fcmToken?: string };
-  const list = (recs || []) as unknown as Rec[];
-  for (const r of list) {
-    if (r.platform === 'android' && r.fcmToken) {
-      try {
-        await messaging.send({
-          token: r.fcmToken,
-          data: { type: 'call_canceled', callId: String(callId) },
-          android: { priority: 'high' },
-        });
-        logger.info('[push] call_canceled sent via FCM (data-only)', { userId: calleeUserId });
-      } catch (e) {
-        const errMsg = String((e as Error)?.message ?? '');
-        const isInvalidToken =
-          errMsg.includes('Requested entity was not found') ||
-          errMsg.includes('unregistered') ||
-          errMsg.includes('registration-token-not-registered');
-        if (isInvalidToken) {
-          try {
-            await PushTokenModel.updateOne(
-              { userId: calleeUserId, token: r.token },
-              { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
-            ).exec();
-            logger.info('[push] removed invalid FCM token (call_canceled)', { userId: calleeUserId });
-          } catch {}
+  if (messaging) {
+    const recs = await PushTokenModel.find({ userId: calleeUserId })
+      .select('token platform fcmToken')
+      .lean();
+    type Rec = { token: string; platform: string; fcmToken?: string };
+    const list = (recs || []) as unknown as Rec[];
+    for (const r of list) {
+      if (r.platform === 'android' && r.fcmToken) {
+        try {
+          await messaging.send({
+            token: r.fcmToken,
+            data: { type: 'call_canceled', callId: String(callId) },
+            android: { priority: 'high' },
+          });
+          logger.info('[push] call_canceled sent via FCM (data-only)', { userId: calleeUserId });
+        } catch (e) {
+          const errMsg = String((e as Error)?.message ?? '');
+          const isInvalidToken =
+            errMsg.includes('Requested entity was not found') ||
+            errMsg.includes('unregistered') ||
+            errMsg.includes('registration-token-not-registered');
+          if (isInvalidToken) {
+            try {
+              await PushTokenModel.updateOne(
+                { userId: calleeUserId, token: r.token },
+                { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
+              ).exec();
+              logger.info('[push] removed invalid FCM token (call_canceled)', { userId: calleeUserId });
+            } catch {}
+          }
+          logger.warn('[push] FCM call_canceled failed', { userId: calleeUserId, error: errMsg });
         }
-        logger.warn('[push] FCM call_canceled failed', { userId: calleeUserId, error: errMsg });
       }
     }
+  }
+  try {
+    await sendPushToUser(calleeUserId, {
+      kind: 'message',
+      title: '',
+      body: '',
+      data: { type: 'call_canceled', callId: String(callId) },
+    });
+    logger.info('[push] call_canceled sent via Expo to callee', { userId: calleeUserId });
+  } catch (e) {
+    logger.warn('[push] Expo call_canceled to callee failed', { userId: calleeUserId, error: (e as Error)?.message });
   }
 }

@@ -8,7 +8,7 @@ import { acceptCall, declineCall, ensureSocketConnected } from '../sockets/socke
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
-import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity } from './callKeep';
+import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled } from './callKeep';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 
@@ -102,6 +102,20 @@ Notifications.setNotificationHandler({
     }
     if (type === 'call_declined') {
       try { closeOutgoingCallActivity(); } catch {}
+      return {
+        shouldShowAlert: false,
+        shouldShowBanner: false,
+        shouldShowList: false,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      };
+    }
+    if (type === 'call_canceled') {
+      const data = (n as any)?.request?.content?.data || {};
+      if (data?.callId) {
+        try { notifyCallCanceled(String(data.callId)); } catch {}
+        try { addEndedCallId(String(data.callId)); } catch {}
+      }
       return {
         shouldShowAlert: false,
         shouldShowBanner: false,
@@ -244,6 +258,13 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
 
     if (type === 'call_declined') {
       try { closeOutgoingCallActivity(); } catch {}
+      return;
+    }
+    if (type === 'call_canceled') {
+      if (data?.callId) {
+        try { notifyCallCanceled(String(data.callId)); } catch {}
+        try { addEndedCallId(String(data.callId)); } catch {}
+      }
       return;
     }
     if (type === 'call_ended') {
@@ -564,6 +585,11 @@ export function addNotificationListeners() {
       const data = (n as any)?.request?.content?.data;
       if (data?.type === 'call_declined') {
         try { closeOutgoingCallActivity(); } catch {}
+        return;
+      }
+      if (data?.type === 'call_canceled' && data?.callId) {
+        try { notifyCallCanceled(String(data.callId)); } catch {}
+        try { addEndedCallId(String(data.callId)); } catch {}
         return;
       }
       if (data?.type === 'call' && data?.callId && data?.from) {

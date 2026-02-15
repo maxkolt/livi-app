@@ -119,6 +119,14 @@ export function addEndedCallId(callId: string): void {
   } catch {}
 }
 
+/** Инициатор отменил вызов — пуш пришёл через Expo. Закрыть IncomingCallActivity и снять уведомление (то же, что FCM call_canceled). */
+export function notifyCallCanceled(callId: string): void {
+  if (Platform.OS !== 'android' || !callId?.trim()) return;
+  try {
+    NativeModules.LiviAppModule?.notifyCallCanceled?.(callId.trim());
+  } catch {}
+}
+
 /** Отправить broadcast «call_answered» чтобы IncomingCallActivity закрылась (при ответе из уведомления). */
 export function sendCallAnsweredBroadcast(callId: string): void {
   if (Platform.OS !== 'android') return;
