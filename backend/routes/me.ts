@@ -273,12 +273,14 @@ router.post('/push-token', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'platform_required' });
     }
 
-    await upsertExpoPushToken({ userId, installId, platform, token, fcmToken: typeof fcmToken === 'string' ? fcmToken : undefined });
+    const fcm = typeof fcmToken === 'string' && fcmToken.length > 0 ? fcmToken : undefined;
+    await upsertExpoPushToken({ userId, installId, platform, token, fcmToken: fcm });
     logger.info('[push] token registered', {
       userId: String(userId),
       platform,
       installId: String(installId || ''),
       tokenPrefix: String(token).slice(0, 18),
+      hasFcmToken: !!fcm,
     });
     return res.json({ ok: true });
   } catch (e: any) {
