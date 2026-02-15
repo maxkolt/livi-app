@@ -3,8 +3,7 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { CommonActions } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_BASE } from '../sockets/socket';
-import { acceptCall, declineCall, ensureSocketConnected } from '../sockets/socket';
+import { API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, acceptCall, declineCall, ensureSocketConnected } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
@@ -103,6 +102,7 @@ Notifications.setNotificationHandler({
     if (type === 'call_declined') {
       const data = (n as any)?.request?.content?.data || {};
       logger.info('[push] call_declined received (handler)', { callId: data?.callId });
+      try { setOutgoingCallScreenVisible(false); } catch {}
       try { closeOutgoingCallActivity(); } catch {}
       logger.info('[push] closeOutgoingCallActivity called after call_declined');
       return {
@@ -117,6 +117,7 @@ Notifications.setNotificationHandler({
       const data = (n as any)?.request?.content?.data || {};
       logger.info('[push] call_canceled received (handler)', { callId: data?.callId });
       if (data?.callId) {
+        try { setIncomingCallScreenVisible(false); } catch {}
         try { notifyCallCanceled(String(data.callId)); } catch {}
         try { addEndedCallId(String(data.callId)); } catch {}
         logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled');
@@ -203,6 +204,7 @@ export async function openIncomingCallScreen(peerUserId: string, callId: string)
 
 /** Открыть приложение и принять звонок (для livi://answer-call из нативного IncomingCallActivity). Ждём сокет, чтобы call:accept дошёл до сервера и звонящий получил call:accepted и перешёл на видеозвонок. */
 export async function openAnswerCallScreen(peerUserId: string, callId: string): Promise<void> {
+  try { setIncomingCallScreenVisible(false); } catch {}
   try {
     stopIncomingCallAlert();
   } catch {}
@@ -235,6 +237,7 @@ function moveAppToBackAfterDecline() {
 /** Отклонить звонок (для livi://decline-call из нативного IncomingCallActivity). Ждём сокет, чтобы call:decline дошёл до сервера и у звонящего завершился вызов. После этого уводим приложение в фон.
  * Отклонение получателем не считается пропущенным вызовом — очищаем last_incoming_from. */
 export async function handleDeclineCallFromDeepLink(callId: string): Promise<void> {
+  try { setIncomingCallScreenVisible(false); } catch {}
   try {
     stopIncomingCallAlert();
   } catch {}
@@ -263,6 +266,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
 
     if (type === 'call_declined') {
       logger.info('[push] call_declined received (handleNotificationResponse)', { callId: data?.callId });
+      try { setOutgoingCallScreenVisible(false); } catch {}
       try { closeOutgoingCallActivity(); } catch {}
       logger.info('[push] closeOutgoingCallActivity called after call_declined (response)');
       return;
@@ -270,6 +274,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
     if (type === 'call_canceled') {
       logger.info('[push] call_canceled received (handleNotificationResponse)', { callId: data?.callId });
       if (data?.callId) {
+        try { setIncomingCallScreenVisible(false); } catch {}
         try { notifyCallCanceled(String(data.callId)); } catch {}
         try { addEndedCallId(String(data.callId)); } catch {}
         logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled (response)');
@@ -594,12 +599,14 @@ export function addNotificationListeners() {
       const data = (n as any)?.request?.content?.data;
       if (data?.type === 'call_declined') {
         logger.info('[push] call_declined received (notificationReceived)', { callId: data?.callId });
+        try { setOutgoingCallScreenVisible(false); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
         logger.info('[push] closeOutgoingCallActivity called after call_declined (received)');
         return;
       }
       if (data?.type === 'call_canceled' && data?.callId) {
         logger.info('[push] call_canceled received (notificationReceived)', { callId: data.callId });
+        try { setIncomingCallScreenVisible(false); } catch {}
         try { notifyCallCanceled(String(data.callId)); } catch {}
         try { addEndedCallId(String(data.callId)); } catch {}
         logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled (received)');

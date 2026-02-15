@@ -75,6 +75,47 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     reactApplicationContext.sendBroadcast(intent)
   }
 
+  /**
+   * Вывести MainActivity на передний план (сценарий «только сокет»: call:accepted пришёл по сокету,
+   * FCM call_accepted не сработал — закрываем исходящий и показываем экран видеозвонка).
+   * Дублируем логику FCM: broadcast + принудительное закрытие OutgoingCallActivity через startActivity(EXTRA_CLOSE_IMMEDIATELY), затем MainActivity.
+   * Вызывать из JS после навигации на VideoCall и closeOutgoingCallActivity().
+   */
+  @ReactMethod
+  fun bringMainActivityToFront() {
+    val ctx = reactApplicationContext
+    LiviOngoingCallHelper.clearOngoingCall(ctx)
+    // 1) Broadcast — закрыть OutgoingCallActivity, если на экране
+    val closeOutgoing = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
+      setPackage(ctx.packageName)
+    }
+    ctx.sendBroadcast(closeOutgoing)
+    LiviOutgoingCallService.stop(ctx)
+    // 2) Принудительно закрыть OutgoingCallActivity (как FCM): если broadcast не дошёл, активность получит intent и finish()
+    val closeActivityIntent = Intent(ctx, OutgoingCallActivity::class.java).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+      putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
+    }
+    try {
+      ctx.startActivity(closeActivityIntent)
+      Log.d(NAME, "bringMainActivityToFront: sent close intent to OutgoingCallActivity")
+    } catch (e: Exception) {
+      Log.w(NAME, "bringMainActivityToFront: startActivity OutgoingCall(close) failed", e)
+    }
+    // 3) Вывести MainActivity на передний план после задержки, чтобы OutgoingCallActivity успела обработать onNewIntent и finish() (Samsung A35 и др.)
+    val mainIntent = Intent(ctx, MainActivity::class.java).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    }
+    Handler(Looper.getMainLooper()).postDelayed({
+      try {
+        ctx.startActivity(mainIntent)
+        Log.d(NAME, "bringMainActivityToFront: MainActivity brought to front")
+      } catch (e: Exception) {
+        Log.w(NAME, "bringMainActivityToFront: startActivity MainActivity failed", e)
+      }
+    }, 500)
+  }
+
   /** Прочитать и сбросить флаг «пользователь нажал X на нативном экране исходящего». Вызывать из JS при переходе в active. */
   @ReactMethod
   fun getAndClearOutgoingCanceledByUserFlag(promise: Promise) {

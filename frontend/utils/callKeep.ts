@@ -4,6 +4,7 @@
  */
 import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import { logger } from './logger';
+import { setIncomingCallScreenVisible } from '../sockets/socket';
 
 /** Единый источник таймаута исходящего вызова (мс). Передаётся в натив при старте, используется в HomeScreen/App и в LiviOutgoingCallService. */
 export const OUTGOING_CALL_TIMEOUT_MS = 20_000;
@@ -83,6 +84,17 @@ export function closeOutgoingCallActivity(): void {
   } catch {}
 }
 
+/**
+ * Вывести MainActivity на передний план (сценарий «только сокет»: call:accepted пришёл по сокету,
+ * FCM не сработал — после навигации на VideoCall и closeOutgoingCallActivity вызывать, чтобы пользователь увидел экран видеозвонка).
+ */
+export function bringMainActivityToFront(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.bringMainActivityToFront?.();
+  } catch {}
+}
+
 /** Дедупликация: один и тот же callId не показываем повторно (сокет + пуш могут вызвать несколько раз). */
 const lastDisplayedCallId = { id: '' as string, at: 0 };
 const DISPLAY_DEBOUNCE_MS = 3000;
@@ -116,6 +128,7 @@ export async function launchIncomingCallActivityScreen(
     const LiviAppModule = NativeModules.LiviAppModule;
     if (LiviAppModule?.launchIncomingCallActivity) {
       LiviAppModule.launchIncomingCallActivity(callId, from, fromNick ?? '');
+      setIncomingCallScreenVisible(true);
       logger.info('[callKeep] launchIncomingCallActivityScreen', { callId, from });
     }
   } catch (e) {

@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
 import android.widget.ImageButton
@@ -111,6 +112,7 @@ class OutgoingCallActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra(EXTRA_CLOSE_IMMEDIATELY, false)) {
+            Log.d(TAG, "onNewIntent: EXTRA_CLOSE_IMMEDIATELY -> finishing")
             LiviOutgoingCallService.stop(this)
             finish()
         }

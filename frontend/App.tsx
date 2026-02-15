@@ -14,7 +14,7 @@ import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, S
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible } from "./sockets/socket";
 import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
@@ -32,7 +32,7 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs } from './utils/callKeep';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
@@ -157,6 +157,7 @@ function AppContent() {
     const sub2 = emitter.addListener('IncomingCallDeclinedByUser', () => {
       incomingCallIdRef.current = null;
       setIncoming(null);
+      try { setIncomingCallScreenVisible(false); } catch {}
       try { stopIncomingCallAlert(); } catch {}
       try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
     });
@@ -185,6 +186,7 @@ function AppContent() {
           const info = getPendingCallInfo(callId);
           if (!info || !navRef.isReady()) return;
           incomingCallIdRef.current = null;
+          try { setIncomingCallScreenVisible(false); } catch {}
           stopIncomingCallAlert();
           setIncoming(null);
           try {
@@ -213,6 +215,7 @@ function AppContent() {
               // Принимающий нажал X на нативном экране — отклоняем входящий; сервер пошлёт call:declined звонящему
               incomingCallIdRef.current = null;
               try { declineCall(callId); } catch {}
+              try { setIncomingCallScreenVisible(false); } catch {}
               stopIncomingCallAlert();
               setIncoming(null);
               try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
@@ -224,6 +227,7 @@ function AppContent() {
           }
           incomingCallIdRef.current = null;
           reportEndCallToCallKeep(callId);
+          try { setIncomingCallScreenVisible(false); } catch {}
           stopIncomingCallAlert();
           setIncoming(null);
           reportRejectCall(callId);
@@ -465,6 +469,7 @@ function AppContent() {
           try { cancelCall(callId); } catch {}
           setTimeout(() => { try { cancelCall(callId); } catch {} }, 150);
           try { reportEndCallToCallKeep(callId); } catch {}
+          try { setOutgoingCallScreenVisible(false); } catch {}
           try { emitCloseOutgoingCall(); } catch {}
           try { closeOutgoingCallActivity(); } catch {}
           return true;
@@ -963,8 +968,8 @@ function AppContent() {
 
   React.useEffect(() => {
     // Закрытие по внешнему запросу (например, из ChatScreen)
-    const offReq = onRequestCloseIncoming?.(() => { stopIncomingCallAlert(); setIncoming(null); stopAnim(); });
-    const offClose = onCloseIncoming?.(() => { stopIncomingCallAlert(); setIncoming(null); stopAnim(); });
+    const offReq = onRequestCloseIncoming?.(() => { try { setIncomingCallScreenVisible(false); } catch {} stopIncomingCallAlert(); setIncoming(null); stopAnim(); });
+    const offClose = onCloseIncoming?.(() => { try { setIncomingCallScreenVisible(false); } catch {} stopIncomingCallAlert(); setIncoming(null); stopAnim(); });
     
     // Регистрируем через обертку (основной способ)
     // УБРАНО: Дублирующий прямой слушатель - он регистрируется в отдельном useEffect для переподключения
@@ -1162,6 +1167,7 @@ function AppContent() {
       if (d?.callId) try { reportEndCallToCallKeep(d.callId); } catch {}
       stopIncomingCallAlert();
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+      try { setOutgoingCallScreenVisible(false); } catch {}
       try { emitCloseOutgoingCall(); } catch {}
       try { closeOutgoingCallActivity(); } catch {}
       // call:declined = тот, кому звонили, отклонил — пропущенным не считаем, счётчик не увеличиваем
@@ -1170,6 +1176,7 @@ function AppContent() {
       logger.debug('Call canceled received', { callId: d?.callId });
       incomingCallIdRef.current = null;
       if ((d as any)?.callId) try { reportEndCallToCallKeep((d as any).callId); } catch {}
+      try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
       // КРИТИЧНО: Обновляем canceledCallsRef для защиты от гонки событий
       try {
@@ -1206,6 +1213,8 @@ function AppContent() {
       // Не переходить на VideoCall, если по сокету уже пришло call:ended (звонок уже завершён) — избегаем мелькания и лишних сессий
       if (callId && endedCallIdsFromSocket.has(callId)) {
         logger.info('[App] ⏭️ call:accepted ignored (call already ended)', { callId });
+        try { setOutgoingCallScreenVisible(false); } catch {}
+        try { setIncomingCallScreenVisible(false); } catch {}
         try { emitCloseOutgoingCall(); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
         if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
@@ -1228,6 +1237,7 @@ function AppContent() {
         hasLivekitRoomName: !!(data as any)?.livekitRoomName,
       });
       
+      try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
       setIncoming(null);
       stopAnim();
@@ -1266,15 +1276,24 @@ function AppContent() {
           };
           // Сначала навигация на VideoCall, потом закрытие нативного экрана — при закрытии исходящего пользователь сразу видит экран видеозвонка
           doNavigate();
+          try { setOutgoingCallScreenVisible(false); } catch {}
           try { emitCloseOutgoingCall(); } catch {}
           try { closeOutgoingCallActivity(); } catch {}
+          // Сценарий «только сокет»: FCM call_accepted не пришёл — явно выводим MainActivity на передний план, чтобы инициатор увидел экран видеозвонка
+          if (isCaller) {
+            logger.info('[App] 📱 bringMainActivityToFront (socket-only path, caller)');
+            try { bringMainActivityToFront(); } catch {}
+          }
         } else {
           logger.info('[App] ⏭️ Already on VideoCall screen, skipping navigation', { callId: data?.callId });
         }
       } catch (e) {
         logger.error('[App] ❌ Error navigating to VideoCall', { error: e, callId: data?.callId });
+        try { setOutgoingCallScreenVisible(false); } catch {}
+        try { setIncomingCallScreenVisible(false); } catch {}
         try { emitCloseOutgoingCall(); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
+        try { bringMainActivityToFront(); } catch {}
       }
     });
     // Обработчик таймаута
@@ -1282,6 +1301,7 @@ function AppContent() {
       logger.debug('Call timeout received', { callId: d?.callId });
       incomingCallIdRef.current = null;
       if (d?.callId) try { reportEndCallToCallKeep(d.callId); } catch {}
+      try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
       // Мгновенно закрываем UI
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
@@ -1323,6 +1343,7 @@ function AppContent() {
             // если уже пришёл реальный timeout/cancel для этого звонка — не инкрементим повторно
             const cid = String((cur as any)?.callId || '');
             if (cid && (timedOutCallsRef.current.has(cid) || canceledCallsRef.current.has(cid))) {
+              try { setIncomingCallScreenVisible(false); } catch {}
               stopIncomingCallAlert(); setIncoming(null); stopAnim();
               return;
             }
@@ -1338,6 +1359,7 @@ function AppContent() {
               try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
             }
             } catch {}
+          try { setIncomingCallScreenVisible(false); } catch {}
           stopIncomingCallAlert(); setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
         }
       } catch {}

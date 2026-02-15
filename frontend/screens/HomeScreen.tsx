@@ -117,6 +117,7 @@ import socket, {
   checkInviteLink,
   requestFriend,
   acceptInvite,
+  setOutgoingCallScreenVisible,
 } from '../sockets/socket';
 import {
   isUpdateAvailable,
@@ -1231,6 +1232,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     try {
       setCalling({ visible: true, friend, callId: null });
       startWaves();
+      // Не отключать сокет при «background», пока на нативном экране исходящего — инициатор должен получить call:accepted
+      setOutgoingCallScreenVisible(true);
       // Нативный экран исходящего — показываем сразу без задержки (до ответа сервера)
       displayOutgoingCallImmediate(friend.id, friend.name ?? '');
 
@@ -1249,6 +1252,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (canceledByNative) (global as any).__outgoingCanceledByNativeRef.current = false;
         try { cancelCall(r.callId); } catch {}
         pendingCancelRef.current = false;
+        try { setOutgoingCallScreenVisible(false); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
@@ -1260,6 +1264,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (cleaned) return; cleaned = true;
         logger.debug('Call accepted', { callId });
         if (callId) try { reportEndCallToCallKeep(callId); } catch {}
+        try { setOutgoingCallScreenVisible(false); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
         // Приняли прямой звонок — сбрасываем бейдж пропущенных для этого друга
         // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) и УДАЛЯЕМ ключ вместо установки в 0
@@ -1285,6 +1290,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       });
       const offDeclined = onCallDeclined?.(() => {
         if (cleaned) return; cleaned = true;
+        try { setOutgoingCallScreenVisible(false); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
         // Получатель отклонил: инициатор НЕ увеличивает пропущенные
         setCalling({ visible: false, friend: null, callId: null });
@@ -1293,6 +1299,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       });
       const offTimeout = onCallTimeout?.(() => {
         if (cleaned) return; cleaned = true;
+        try { setOutgoingCallScreenVisible(false); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
         // Таймаут: у инициатора счётчик не увеличиваем, просто закрываем UI
         setCalling({ visible: false, friend: null, callId: null });
@@ -1308,6 +1315,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       });
       const offCancel = onCallCanceled?.(() => {
         if (cleaned) return; cleaned = true;
+        try { setOutgoingCallScreenVisible(false); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
@@ -1318,6 +1326,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       setTimeout(() => {
         if (!cleaned) {
           cleaned = true;
+          try { setOutgoingCallScreenVisible(false); } catch {}
           try { closeOutgoingCallActivity(); } catch {}
           if (callIdForTimeout) try { reportEndCallToCallKeep(callIdForTimeout); } catch {}
           setCalling({ visible: false, friend: null, callId: null });
@@ -1329,6 +1338,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Очистка будет при срабатывании одного из событий или таймаута
       return () => { offAccepted?.(); offDeclined?.(); offTimeout?.(); offRoomFull?.(); offCancel?.(); };
     } catch (e: any) {
+      try { setOutgoingCallScreenVisible(false); } catch {}
       setCalling({ visible: false, friend: null, callId: null });
       stopWaves();
       showNotice(t('callStartFailed', lang), 'error', 2000);
@@ -1339,6 +1349,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (calling.callId) {
       try {
         reportEndCallToCallKeep(calling.callId);
+        setOutgoingCallScreenVisible(false);
         closeOutgoingCallActivity();
         cancelCall(calling.callId);
         // Повторно через 150мс на случай сетевой гонки

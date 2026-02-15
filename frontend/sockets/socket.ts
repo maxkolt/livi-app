@@ -334,6 +334,41 @@ setTimeout(() => {
 // Самый надёжный способ без изменения сервера — отключать сокет при уходе в фон.
 let __lastAppState: AppStateStatus = AppState.currentState;
 let __realtimePaused = __lastAppState !== 'active';
+/** Пока на нативном экране исходящего (OutgoingCallActivity) — не отключать сокет при «background», чтобы инициатор получил call:accepted. */
+let __outgoingCallScreenVisible = false;
+/** Пока на нативном экране входящего (IncomingCallActivity) — не отключать сокет при «background», чтобы получатель мог принять/отклонить по сокету. */
+let __incomingCallScreenVisible = false;
+/** Пока активен видеозвонок (подключение к LiveKit или комната connected) — не отключать сокет при «background», чтобы избежать negotiation disconnected / m-line errors. */
+let __activeVideoCall = false;
+
+export function setOutgoingCallScreenVisible(visible: boolean): void {
+  __outgoingCallScreenVisible = visible;
+  if (!visible && (__lastAppState !== 'active' && __lastAppState !== 'inactive')) {
+    // Экран исходящего закрыт, а приложение в фоне — отключаем сокет
+    __realtimePaused = true;
+    try { (socket as any).io.opts.reconnection = false; } catch {}
+    if (socket?.connected) socket.disconnect();
+  }
+}
+
+export function setIncomingCallScreenVisible(visible: boolean): void {
+  __incomingCallScreenVisible = visible;
+  if (!visible && (__lastAppState !== 'active' && __lastAppState !== 'inactive')) {
+    __realtimePaused = true;
+    try { (socket as any).io.opts.reconnection = false; } catch {}
+    if (socket?.connected) socket.disconnect();
+  }
+}
+
+export function setActiveVideoCall(active: boolean): void {
+  __activeVideoCall = active;
+  if (!active && (__lastAppState !== 'active' && __lastAppState !== 'inactive')) {
+    __realtimePaused = true;
+    try { (socket as any).io.opts.reconnection = false; } catch {}
+    if (socket?.connected) socket.disconnect();
+  }
+}
+
 try {
   AppState.addEventListener('change', (nextState) => {
     try {
@@ -344,6 +379,8 @@ try {
       __lastAppState = nextState;
 
       if (wasForeground && !isForeground) {
+        // На нативном экране исходящего/входящего или во время видеозвонка не отключать сокет
+        if (__outgoingCallScreenVisible || __incomingCallScreenVisible || __activeVideoCall) return;
         // App -> background => offline
         __realtimePaused = true;
         try {
@@ -359,6 +396,9 @@ try {
       if (!wasForeground && isForeground) {
         // App -> foreground => online (reconnect)
         __realtimePaused = false;
+        __outgoingCallScreenVisible = false;
+        __incomingCallScreenVisible = false;
+        __activeVideoCall = false;
         try { (socket as any).io.opts.reconnection = true; } catch {}
         // applyAuthAndConnect already sets installId/userId and connects with timeouts.
         applyAuthAndConnect().catch(() => {});

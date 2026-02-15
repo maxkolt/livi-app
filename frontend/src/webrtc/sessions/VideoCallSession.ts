@@ -18,7 +18,7 @@ import {
 } from 'livekit-client';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, CamSide } from '../types';
-import socket from '../../../sockets/socket';
+import socket, { setActiveVideoCall } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
@@ -1400,6 +1400,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.emit('callAnswered');
       return;
       } finally {
+        setActiveVideoCall(false);
         if ((global as any).__connectingToRoomRef?.session === this) {
           (global as any).__connectingToRoomRef.roomName = null;
           (global as any).__connectingToRoomRef.session = null;
@@ -2558,6 +2559,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         },
       });
       this.room = room;
+      setActiveVideoCall(true);
       this.registerRoomEvents(room);
 
       try {
@@ -2978,7 +2980,9 @@ export class VideoCallSession extends SimpleEventEmitter {
           error: errorMessage,
         });
       } else {
-        logger.error('[VideoCallSession] Error connecting to LiveKit', {
+        const isTransientPcError = /could not establish pc connection|pc connection|negotiation (disconnected|timed out)|transport error/i.test(errorMessage);
+        const logFn = isTransientPcError ? logger.warn : logger.error;
+        logFn('[VideoCallSession] Error connecting to LiveKit', {
           error: errorMessage,
           errorCode: e?.code,
           errorName: e?.name,
@@ -3017,6 +3021,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (this.room === room) {
         this.room = null;
         this.currentRoomName = null;
+        setActiveVideoCall(false);
       }
       
       // КРИТИЧНО: Не считаем запрос "stale" если он для той же комнаты
@@ -3073,6 +3078,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private async disconnectRoom(reason: 'user' | 'server' = 'user'): Promise<void> {
     this.clearLocalVideoWatchdog();
+    setActiveVideoCall(false);
     // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
     // Если уже идет отключение, возвращаем существующий промис
     if (this.isDisconnecting && this.disconnectPromise) {
@@ -3140,11 +3146,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (disconnectedHandler) {
           roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
         }
-        // Best-effort: если LiveKit "завис" и Disconnected не пришёл, пытаемся принудительно добить соединение,
-        // чтобы не получать WARN "ping timeout triggered" уже ПОСЛЕ завершения звонка.
-        // Важно: НЕ делаем removeAllListeners() ДО попытки disconnect(), чтобы не сломать внутренние обработчики LiveKit.
-        try { roomToDisconnect.disconnect(); } catch {}
-        // После повторной попытки отключения можно безопасно снять внешние listeners, чтобы прекратить лог-спам.
+        // disconnect() только если комната была connected, иначе "cannot send signal request before connected, type: leave"
+        if (roomToDisconnect.state === 'connected') {
+          try { roomToDisconnect.disconnect(); } catch {}
+        }
         try { roomToDisconnect.removeAllListeners(); } catch {}
         // Дополнительно принудительно закрываем внутренний engine/ws.
         this.forceDisposeRoom(roomToDisconnect, 'timeout');
@@ -3169,20 +3174,34 @@ export class VideoCallSession extends SimpleEventEmitter {
       // КРИТИЧНО: НЕ вызываем room.removeAllListeners() перед disconnect()
       // Это удаляет внутренние обработчики LiveKit (ping/pong, корректное завершение),
       // что приводит к "ping timeout" и "connection state mismatch" ошибкам.
-      // room.disconnect() сам корректно завершит соединение и очистит ресурсы.
-      
-      // Вызываем disconnect и ждем события Disconnected
+      // room.disconnect() отправляет "leave" на сервер — вызывать только если state === 'connected',
+      // иначе LiveKit бросает "cannot send signal request before connected, type: leave".
       (async () => {
+        if (roomToDisconnect.state !== 'connected') {
+          logger.debug('[VideoCallSession] Room not connected yet, skipping disconnect()', { state: roomToDisconnect.state });
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+          this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:not_connected');
+          if (this.room === roomToDisconnect) {
+            this.room = null;
+            this.currentRoomName = null;
+          }
+          if (disconnectedHandler) {
+            roomToDisconnect.off(RoomEvent.Disconnected, disconnectedHandler);
+            disconnectedHandler();
+          }
+          return;
+        }
         try {
           await roomToDisconnect.disconnect();
           logger.debug('[VideoCallSession] Room disconnect() called, waiting for Disconnected event');
         } catch (e: any) {
-          // Игнорируем ошибки отключения если комната уже отключена или еще не подключена
           const errorMessage = e?.message || String(e || '');
           if (!errorMessage.includes('before connected') && !errorMessage.includes('already disconnected')) {
             logger.warn('[VideoCallSession] Error disconnecting room', e);
           }
-          // Даже при ошибке ждем события Disconnected или таймаута
         }
       })();
     });
