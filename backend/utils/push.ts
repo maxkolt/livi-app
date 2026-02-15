@@ -17,13 +17,15 @@ const FCM_INVALID_TOKEN_CODES = [
 
 function isFcmInvalidTokenError(e: unknown): boolean {
   const err = e as { message?: string; code?: string };
-  const msg = String(err?.message ?? '');
+  const msg = String(err?.message ?? '').toLowerCase();
   const code = String(err?.code ?? '');
   if (FCM_INVALID_TOKEN_CODES.includes(code as any)) return true;
   return (
-    msg.includes('Requested entity was not found') ||
+    msg.includes('requested entity was not found') ||
+    msg.includes('not found') ||
     msg.includes('unregistered') ||
-    msg.includes('registration-token-not-registered')
+    msg.includes('registration-token-not-registered') ||
+    msg.includes('invalid-registration-token')
   );
 }
 
@@ -194,14 +196,14 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
         const errMsg = String((e as Error)?.message ?? '');
         const errCode = (e as { code?: string })?.code;
         const isInvalidToken = isFcmInvalidTokenError(e);
-        logger.info('[push] FCM call push error', { userId, errMsg, errCode, isInvalidToken });
+        logger.warn('[push] FCM call push error', { userId, errMsg, errCode, isInvalidToken });
         if (isInvalidToken) {
           try {
-            await PushTokenModel.updateOne(
+            const result = await PushTokenModel.updateOne(
               { userId, token: r.token },
               { $unset: { fcmToken: 1 }, $set: { updatedAtMs: Date.now() } }
             ).exec();
-            logger.info('[push] removed invalid FCM token for user', { userId, tokenPrefix: String(r.token).slice(0, 18) });
+            logger.warn('[push] removed invalid FCM token for user', { userId, tokenPrefix: String(r.token).slice(0, 18), matched: (result as { modifiedCount?: number })?.modifiedCount });
           } catch (dbErr) {
             logger.warn('[push] failed to remove invalid FCM token', { userId, error: (dbErr as Error)?.message });
           }
