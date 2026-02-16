@@ -23,12 +23,10 @@ class IncomingCallForegroundService : Service() {
     private var currentCallId: String? = null
     private var currentFrom: String? = null
     private var currentFromNick: String? = null
-    private var headsUpOnlyMode: Boolean = false
     private var activityShownReceiver: BroadcastReceiver? = null
     private var callEndedReceiver: BroadcastReceiver? = null
     private val handler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
-    private var headsUpRefreshRunnable: Runnable? = null
 
     private var answeredReceiver: BroadcastReceiver? = null
 
@@ -42,7 +40,6 @@ class IncomingCallForegroundService : Service() {
         currentCallId = callId
         currentFrom = from
         currentFromNick = fromNick
-        headsUpOnlyMode = headsUpOnly
         LiviFirebaseMessagingService.ensureCallChannel(this)
         val notification = if (headsUpOnly) {
             LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
@@ -64,7 +61,6 @@ class IncomingCallForegroundService : Service() {
             Log.d(TAG, "IncomingCallForegroundService: full-screen; activity started")
         } else {
             Log.d(TAG, "IncomingCallForegroundService: heads-up only (Accept/Decline on notification)")
-            scheduleHeadsUpRefresh()
         }
 
         activityShownReceiver = object : BroadcastReceiver() {
@@ -107,7 +103,20 @@ class IncomingCallForegroundService : Service() {
         }
 
         timeoutRunnable = Runnable {
-            Log.d(TAG, "IncomingCallForegroundService: timeout 20s, stopping")
+            Log.d(TAG, "IncomingCallForegroundService: timeout 20s, closing native screen and stopping")
+            val cid = currentCallId
+            if (!cid.isNullOrEmpty()) {
+                val closeIntent = Intent(this@IncomingCallForegroundService, IncomingCallActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(IncomingCallActivity.EXTRA_JUST_CLOSE, true)
+                    putExtra(IncomingCallActivity.EXTRA_CALL_ID, cid)
+                }
+                try {
+                    startActivity(closeIntent)
+                } catch (e: Exception) {
+                    Log.w(TAG, "IncomingCallForegroundService: startActivity(close) failed", e)
+                }
+            }
             cleanupAndStop()
         }
         handler.postDelayed(timeoutRunnable!!, TIMEOUT_MS)
@@ -115,37 +124,9 @@ class IncomingCallForegroundService : Service() {
         return START_NOT_STICKY
     }
 
-    /** Периодическое обновление уведомления, чтобы heads-up не гас через ~7 сек и оставался до 20 сек. */
-    private fun scheduleHeadsUpRefresh() {
-        headsUpRefreshRunnable?.let { handler.removeCallbacks(it) }
-        var count = 0
-        headsUpRefreshRunnable = object : Runnable {
-            override fun run() {
-                if (currentCallId == null || !headsUpOnlyMode) return
-                if (count >= HEADS_UP_REFRESH_COUNT) return
-                count++
-                val cid = currentCallId ?: return
-                val from = currentFrom ?: return
-                val nick = currentFromNick ?: ""
-                val notification = LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this@IncomingCallForegroundService, cid, from, nick)
-                ServiceCompat.startForeground(
-                    this@IncomingCallForegroundService,
-                    LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                )
-                Log.d(TAG, "IncomingCallForegroundService: heads-up refresh $count")
-                handler.postDelayed(this, HEADS_UP_REFRESH_INTERVAL_MS)
-            }
-        }
-        handler.postDelayed(headsUpRefreshRunnable!!, HEADS_UP_REFRESH_INTERVAL_MS)
-    }
-
     private fun cleanupAndStop() {
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
-        headsUpRefreshRunnable?.let { handler.removeCallbacks(it) }
-        headsUpRefreshRunnable = null
         activityShownReceiver?.let {
             try { unregisterReceiver(it) } catch (_: Exception) {}
         }
@@ -176,8 +157,6 @@ class IncomingCallForegroundService : Service() {
         private const val TAG = "IncomingCallFGS"
         /** 20 сек без ответа — совпадает с таймаутом на сервере; после этого приходит call_ended и «Пропущенный вызов». */
         private const val TIMEOUT_MS = 20_000L
-        private const val HEADS_UP_REFRESH_INTERVAL_MS = 6_000L
-        private const val HEADS_UP_REFRESH_COUNT = 3
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"
         /** Broadcast: IncomingCallActivity открылась, сервис может снять уведомление и остановиться */

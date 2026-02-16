@@ -62,6 +62,7 @@ Notifications.setNotificationHandler({
   handleNotification: async (n) => {
     const type = String((n as any)?.request?.content?.data?.type || '');
     // Таймаут или отмена: останавливаем вибрацию (снимаем уведомление), затем показываем «Пропущенный вызов» без вибрации.
+    // На Android «Пропущенный вызов» показывается только из нативного кода (LiviFirebaseMessagingService), чтобы не было двух одинаковых уведомлений в шторке.
     if (type === 'call_ended') {
       const data = (n as any)?.request?.content?.data || {};
       const endedFromActive = !!data.endedFromActive;
@@ -72,7 +73,7 @@ Notifications.setNotificationHandler({
       try {
         await Notifications.dismissAllNotificationsAsync();
       } catch {}
-      if (!endedFromActive) {
+      if (!endedFromActive && Platform.OS !== 'android') {
         const fromNick = String(data.fromNick || '').trim();
         const fromUserId = String(data.from || '');
         try {

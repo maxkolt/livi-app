@@ -116,5 +116,11 @@
         <action android:name="com.kolt12max.livi.DECLINE_CALL"/>
       </intent-filter>
     </receiver>
+    <!-- Пользователь смахнул уведомление «Пропущенный вызов» — обнулить счётчик для этого userId -->
+    <receiver android:name=".MissedCallDismissedReceiver" android:exported="false">
+      <intent-filter>
+        <action android:name="com.kolt12max.livi.MISSED_CALL_DISMISSED"/>
+      </intent-filter>
+    </receiver>
   </application>
 </manifest>

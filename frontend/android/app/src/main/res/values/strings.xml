@@ -17,4 +17,5 @@
   <!-- Missed call notification -->
   <string name="missed_call_title">Пропущенный вызов</string>
   <string name="missed_call_from">От %s</string>
+  <string name="missed_call_from_count">%d пропущенных от %s</string>
 </resources>

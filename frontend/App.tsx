@@ -416,6 +416,33 @@ function AppContent() {
     };
   }, []);
 
+  // Android: при старте приложения применить пропущенные, показанные из нативного кода (FCM call_ended), чтобы бейдж совпадал с числом уведомлений в шторке
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const LiviAppModule = NativeModules.LiviAppModule;
+    LiviAppModule?.getAndClearPendingMissedCalls?.()?.then?.((arr: string[]) => {
+      if (arr?.length) {
+        (async () => {
+          try {
+            const key = 'missed_calls_by_user_v1';
+            const raw = await AsyncStorage.getItem(key);
+            const map = raw ? JSON.parse(raw) : {};
+            for (const uid of arr) {
+              if (uid) {
+                map[uid] = (map[uid] || 0) + 1;
+                try { emitMissedIncrement(uid); } catch {}
+              }
+            }
+            await AsyncStorage.setItem(key, JSON.stringify(map));
+            await syncAppBadgeFromMissedCount();
+          } catch (e) {
+            logger.warn('[App] getAndClearPendingMissedCalls on mount failed', e);
+          }
+        })();
+      }
+    });
+  }, []);
+
   // ===== Deep Linking: звонки livi://incoming-call | livi://answer-call | livi://decline-call =====
   const handleIncomingCallDeepLink = async (url: string) => {
     try {
@@ -1123,6 +1150,28 @@ function AppContent() {
             if (callId) {
               logger.info('[App] Pending call_accepted from FCM, requesting call:accepted', { callId });
               try { requestCallAccepted(callId); } catch {}
+            }
+          });
+          // Пропущенные, показанные из нативного кода (FCM call_ended) — обновить счётчик и бейдж
+          LiviAppModule?.getAndClearPendingMissedCalls?.()?.then?.((arr: string[]) => {
+            if (arr?.length) {
+              (async () => {
+                try {
+                  const key = 'missed_calls_by_user_v1';
+                  const raw = await AsyncStorage.getItem(key);
+                  const map = raw ? JSON.parse(raw) : {};
+                  for (const uid of arr) {
+                    if (uid) {
+                      map[uid] = (map[uid] || 0) + 1;
+                      try { emitMissedIncrement(uid); } catch {}
+                    }
+                  }
+                  await AsyncStorage.setItem(key, JSON.stringify(map));
+                  await syncAppBadgeFromMissedCount();
+                } catch (e) {
+                  logger.warn('[App] getAndClearPendingMissedCalls apply failed', e);
+                }
+              })();
             }
           });
         }

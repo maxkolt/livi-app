@@ -6,13 +6,15 @@
     android:padding="16dp"
     android:background="@drawable/notification_card_background">
 
+    <!-- Область контента: тап открывает нативный экран входящего (не кнопки) -->
     <LinearLayout
+        android:id="@+id/notification_content_area"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="center_vertical">
+        android:gravity="center_vertical"
+        android:background="?android:attr/selectableItemBackground">
 
-        <!-- Логотип LiVi -->
         <ImageView
             android:id="@+id/notification_logo"
             android:layout_width="40dp"
@@ -28,28 +30,47 @@
             android:layout_weight="1"
             android:orientation="vertical">
 
-            <TextView
-                android:id="@+id/notification_title"
-                android:layout_width="wrap_content"
+            <!-- Имя звонящего и время в одной строке (как на скрине: Tim 19:48) -->
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textSize="16sp"
-                android:textStyle="bold"
-                android:textColor="#FFFFFF"
-                android:maxLines="1"
-                android:ellipsize="end" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/notification_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+                <TextView
+                    android:id="@+id/notification_time"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="#B0B0B0"
+                    android:layout_marginStart="8dp" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/notification_text"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:text="@string/incoming_call_title"
                 android:textSize="14sp"
-                android:textColor="#B0B0B0"
+                android:textColor="#FFFFFF"
                 android:maxLines="1"
-                android:ellipsize="end" />
+                android:ellipsize="end"
+                android:layout_marginTop="2dp" />
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Разделитель: TextView с фоном (View не везде поддерживается в RemoteViews) -->
+    <!-- Разделитель -->
     <TextView
         android:id="@+id/notification_divider_h"
         android:layout_width="match_parent"
@@ -58,6 +79,7 @@
         android:layout_marginTop="12dp"
         android:layout_marginBottom="8dp" />
 
+    <!-- Кнопки Отклонить / Принять (белый текст как на скрине) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -71,7 +93,7 @@
             android:layout_weight="1"
             android:gravity="center"
             android:text="@string/incoming_call_decline"
-            android:textColor="@color/notification_call_decline"
+            android:textColor="#FFFFFF"
             android:textSize="15sp"
             android:textStyle="bold"
             android:background="?android:attr/selectableItemBackground" />
@@ -80,7 +102,7 @@
             android:id="@+id/notification_divider_v"
             android:layout_width="1dp"
             android:layout_height="24dp"
-            android:background="#44FFFFFF" />
+            android:background="#33FFFFFF" />
 
         <TextView
             android:id="@+id/notification_btn_accept"
@@ -89,7 +111,7 @@
             android:layout_weight="1"
             android:gravity="center"
             android:text="@string/incoming_call_accept"
-            android:textColor="@color/notification_call_accept"
+            android:textColor="#FFFFFF"
             android:textSize="15sp"
             android:textStyle="bold"
             android:background="?android:attr/selectableItemBackground" />

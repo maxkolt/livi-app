@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import org.json.JSONObject
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -264,16 +265,106 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       .apply()
   }
 
+  /** Прочитать и очистить список userId пропущенных вызовов, показанных из нативного кода (FCM call_ended). JS при открытии приложения инкрементирует по ним счётчик и обновляет бейдж. */
+  @ReactMethod
+  fun getAndClearPendingMissedCalls(promise: Promise) {
+    try {
+      val list = getAndClearPendingMissedCalls(reactApplicationContext)
+      val arr = Arguments.createArray()
+      list.forEach { arr.pushString(it) }
+      promise.resolve(arr)
+    } catch (e: Exception) {
+      promise.resolve(Arguments.createArray())
+    }
+  }
+
+  /** Снять уведомление «Пропущенный вызов» для userId и обнулить счётчик (при принятии вызова или открытии чата с этим пользователем). */
+  @ReactMethod
+  fun cancelMissedCallNotificationForUser(userId: String) {
+    if (userId.isBlank()) return
+    try {
+      clearMissedCountForUser(reactApplicationContext, userId)
+      val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      nm.cancel(getMissedNotificationIdForUser(userId))
+    } catch (_: Exception) {}
+  }
+
   companion object {
     const val NAME = "LiviAppModule"
     const val PREFS_NAME = "LiviDeclinePrefs"
     const val PREFS_CALL = "LiviCallPrefs"
+    private const val PREFS_PENDING_MISSED = "LiviPendingMissed"
+    private const val KEY_PENDING_MISSED_IDS = "user_ids"
+    private const val PREFS_MISSED_COUNT = "LiviMissedCount"
+    private const val KEY_MISSED_COUNT_BY_USER = "by_user"
+    const val MISSED_NOTIFICATION_ID_BASE = 1002
+    const val ACTION_MISSED_CALL_DISMISSED = "com.kolt12max.livi.MISSED_CALL_DISMISSED"
+    const val EXTRA_USER_ID = "user_id"
     const val KEY_INSTALL_ID = "install_id"
     const val KEY_SERVER_URL = "server_url"
     const val KEY_OUTGOING_CALL_TIMEOUT_MS = "outgoing_call_timeout_ms"
     private const val HEADLESS_TASK_CALL_KEEP = "RNCallKeepBackgroundMessage"
 
     private var reactContextRef: ReactApplicationContext? = null
+
+    /** Вызвать из LiviFirebaseMessagingService при показе «Пропущенный вызов» — чтобы при открытии приложения JS обновил счётчик и бейдж. */
+    @JvmStatic
+    fun addPendingMissedCall(context: Context, userId: String) {
+      if (userId.isBlank()) return
+      val prefs = context.getSharedPreferences(PREFS_PENDING_MISSED, Context.MODE_PRIVATE)
+      val current = prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: ""
+      val list = if (current.isEmpty()) mutableListOf<String>() else current.split(',').toMutableList()
+      list.add(userId.trim())
+      prefs.edit().putString(KEY_PENDING_MISSED_IDS, list.joinToString(",")).apply()
+    }
+
+    @JvmStatic
+    fun getAndClearPendingMissedCalls(context: Context): List<String> {
+      val prefs = context.getSharedPreferences(PREFS_PENDING_MISSED, Context.MODE_PRIVATE)
+      val current = prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: ""
+      prefs.edit().remove(KEY_PENDING_MISSED_IDS).apply()
+      return if (current.isEmpty()) emptyList() else current.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    /** Счётчик пропущенных по userId для одного уведомления на пользователя. Увеличить и вернуть новый счёт. */
+    @JvmStatic
+    fun incrementMissedCountForUser(context: Context, userId: String): Int {
+      if (userId.isBlank()) return 1
+      val prefs = context.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+      val raw = prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"
+      val map = try {
+        JSONObject(raw)
+      } catch (_: Exception) {
+        JSONObject()
+      }
+      val key = userId.trim()
+      val count = map.optInt(key, 0) + 1
+      map.put(key, count)
+      prefs.edit().putString(KEY_MISSED_COUNT_BY_USER, map.toString()).apply()
+      return count
+    }
+
+    /** Обнулить счёт пропущенных для userId (при смахивании уведомления или принятии вызова). */
+    @JvmStatic
+    fun clearMissedCountForUser(context: Context, userId: String) {
+      if (userId.isBlank()) return
+      val prefs = context.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+      val raw = prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"
+      val map = try {
+        JSONObject(raw)
+      } catch (_: Exception) {
+        JSONObject()
+      }
+      map.remove(userId.trim())
+      prefs.edit().putString(KEY_MISSED_COUNT_BY_USER, map.toString()).apply()
+    }
+
+    /** Стабильный ID уведомления «Пропущенный вызов» для userId — одно уведомление на пользователя. */
+    @JvmStatic
+    fun getMissedNotificationIdForUser(userId: String): Int {
+      if (userId.isBlank()) return MISSED_NOTIFICATION_ID_BASE
+      return MISSED_NOTIFICATION_ID_BASE + (userId.hashCode() and 0x7FFF)
+    }
 
     /**
      * Пытается запустить headless-задачу CallKeep (ConnectionService) для входящего звонка.

@@ -640,6 +640,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       ? 'rgba(59, 68, 83, 0.10)' // чуть легче на Android
       : 'rgba(59, 68, 83, 0.15)'; // iOS
 
+  // Внутри кнопки меню: чуть прозрачнее и затемнённее.
+  const MENU_BTN_INNER_BG = isDark
+    ? 'rgba(22, 26, 35, 0.66)' // тёмная тема: ещё темнее
+    : 'rgba(10, 14, 22, 0.54)'; // светлая: ещё темнее
+
   // На Android: при открытом меню кнопка "Назад" закрывает меню (возврат на страницу приветствия), а не выходит из приложения
   useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -1270,6 +1275,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) и УДАЛЯЕМ ключ вместо установки в 0
         try {
           const friendIdStr = String(friend.id);
+          if (Platform.OS === 'android') {
+            try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(friendIdStr); } catch (_) {}
+          }
           setMissedByUser((prev) => {
             const next = { ...prev };
             // Удаляем ключ вместо установки в 0, чтобы не было нулевых значений в объекте
@@ -3639,6 +3647,9 @@ const handleClearNick = useCallback(async () => {
             onPress={() => {
               // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) и УДАЛЯЕМ ключ вместо установки в 0
               const friendIdStr = String(friend.id);
+              if (Platform.OS === 'android') {
+                try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(friendIdStr); } catch (_) {}
+              }
               setMissedByUser((prev) => {
                 const next = { ...prev };
                 // Удаляем ключ вместо установки в 0, чтобы не было нулевых значений в объекте
@@ -4132,20 +4143,23 @@ const handleClearNick = useCallback(async () => {
         )}
 
         <View style={{ position: 'relative' }}>
-          <IconButton 
-            icon="menu" 
-            size={Platform.OS === "ios" ? 28 : 24} 
-            iconColor={isDark ? LIVI.text : LIVI.textThemeWhite} 
+          {/* Рамка через обёртку: одинаковая толщина на прямых и скруглениях (borderWidth на скруглениях рендерится тоньше) */}
+          <View
             style={[
-              styles.menuBtn,
-              { 
-                backgroundColor: MENU_CHROME_BG,
-                borderColor: isDark ? LIVI.text : LIVI.textThemeWhite,
-                borderWidth: StyleSheet.hairlineWidth,
-              }
-            ]} 
-            onPress={() => setMenuOpen(true)} 
-          />
+              styles.menuBtnOuter,
+              { backgroundColor: isDark ? LIVI.text : LIVI.textThemeWhite },
+            ]}
+          >
+            <View style={[styles.menuBtnInner, { backgroundColor: MENU_BTN_INNER_BG }]}>
+              <IconButton
+                icon="menu"
+                size={Platform.OS === "ios" ? 28 : 24}
+                iconColor={isDark ? LIVI.text : LIVI.textThemeWhite}
+                style={styles.menuBtnIcon}
+                onPress={() => setMenuOpen(true)}
+              />
+            </View>
+          </View>
           {(() => {
             // КРИТИЧНО: Проверяем наличие непрочитанных сообщений или пропущенных видеозвонков
             // Фильтруем только значения > 0, игнорируем нулевые и отрицательные
@@ -4854,6 +4868,9 @@ const styles = StyleSheet.create({
   topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
   brand: { color: LIVI.text, fontSize: Platform.OS === "ios" ? 39 : 35, fontWeight: Platform.OS === "ios" ? '600' : '800', letterSpacing: 0.3 },
   menuBtn: { backgroundColor: LIVI.glass, borderRadius: 14 },
+  menuBtnOuter: { borderRadius: 14, padding: 1, alignSelf: 'flex-start' },
+  menuBtnInner: { borderRadius: 13, overflow: 'hidden' },
+  menuBtnIcon: { margin: 0, backgroundColor: 'transparent' },
   // Симметричные отступы: левый край -> аватар = правый край -> иконка чата.
   // Горизонтальные отступы задаются contentContainerStyle у FlatList (paddingHorizontal: 16),
   // поэтому не добавляем дополнительный paddingRight на уровне строки.

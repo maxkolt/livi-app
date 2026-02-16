@@ -16,6 +16,7 @@ import {
   BackHandler,
   Easing,
   InteractionManager,
+  NativeModules,
 } from 'react-native';
 import { useNavigation, useFocusEffect, usePreventRemove } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -514,13 +515,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     const uid = route?.params?.peerUserId || partnerUserId;
     if (!uid) return;
-    
+    const userId = String(uid);
+    if (Platform.OS === 'android') {
+      try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(userId); } catch (_) {}
+    }
     (async () => {
       try {
         const key = 'missed_calls_by_user_v1';
         const raw = await AsyncStorage.getItem(key);
         const data = raw ? JSON.parse(raw) : {};
-        const userId = String(uid);
         if (data && typeof data === 'object' && data[userId]) {
           data[userId] = 0;
           await AsyncStorage.setItem(key, JSON.stringify(data));
