@@ -14,4 +14,7 @@
   <string name="outgoing_call_cancel">Отменить</string>
   <string name="outgoing_call_notification_channel">Исходящий вызов</string>
   <string name="outgoing_call_notification_title">LiVi — видеозвонок</string>
+  <!-- Missed call notification -->
+  <string name="missed_call_title">Пропущенный вызов</string>
+  <string name="missed_call_from">От %s</string>
 </resources>

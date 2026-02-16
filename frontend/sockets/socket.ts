@@ -2301,7 +2301,7 @@ export function onCallCanceled(cb: (d: { callId: string; from: string }) => void
   return () => socket.off('call:cancel', h);
 }
 
-export function onCallTimeout(cb: (d: { callId: string }) => void): () => void {
+export function onCallTimeout(cb: (d: { callId: string; from?: string }) => void): () => void {
   const h = (d: any) => cb(d);
   socket.on('call:timeout', h);
   return () => socket.off('call:timeout', h);

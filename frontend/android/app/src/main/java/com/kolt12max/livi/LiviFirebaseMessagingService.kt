@@ -154,8 +154,23 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             Log.d(TAG, "FCM call_declined: broadcast + startActivity(close) callId=$callId")
             return
         }
-        // Звонок завершён (второй абонент положил трубку) — закрыть экран исходящего у инициатора.
+        // Звонок завершён: у получателя — снять уведомление входящего, остановить сервис, показать «Пропущенный вызов»; у инициатора — закрыть экран исходящего.
         if (typeNorm == "call_ended" && callId != null) {
+            EndedCallIds.add(this, callId)
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
+            val cancelIntent = Intent(ACTION_CALL_CANCELED).apply {
+                setPackage(packageName)
+                putExtra(EXTRA_CALL_ID, callId)
+            }
+            sendBroadcast(cancelIntent)
+            var fromNickEnded = data["fromNick"] ?: ""
+            if (fromNickEnded.isEmpty() && data["body"] != null) {
+                try {
+                    fromNickEnded = org.json.JSONObject(data["body"]!!).optString("fromNick", "")
+                } catch (_: Exception) {}
+            }
+            showMissedCallNotification(from ?: "", fromNickEnded)
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(packageName)
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
@@ -167,7 +182,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
             try { startActivity(activityIntent) } catch (e: Exception) { Log.w(TAG, "FCM call_ended: startActivity failed", e) }
-            Log.d(TAG, "FCM call_ended: broadcast + startActivity(close) callId=$callId")
+            Log.d(TAG, "FCM call_ended: incoming canceled, missed shown, outgoing closed callId=$callId")
             return
         }
         Log.w(TAG, "FCM unhandled: typeNorm=$typeNorm type=$type callId=$callId keys=[$keysStr] → forwarding to Expo")
@@ -182,6 +197,34 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         } else {
             false
         }
+    }
+
+    private fun showMissedCallNotification(fromUserId: String, fromNick: String) {
+        ensureMissedCallChannel(this)
+        val title = getString(R.string.missed_call_title)
+        val body = if (fromNick.isNotEmpty()) getString(R.string.missed_call_from, fromNick) else getString(R.string.incoming_call_title)
+        val smallIconRes = resources.getIdentifier("ic_launcher", "mipmap", packageName).takeIf { it != 0 }
+            ?: android.R.drawable.ic_menu_call
+        val contentIntent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        val contentPending = PendingIntent.getActivity(
+            this,
+            0,
+            contentIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID_MISSED_CALL)
+            .setSmallIcon(smallIconRes)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setContentIntent(contentPending)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID_MISSED_CALL, notification)
     }
 
     private fun startIncomingCallForegroundService(callId: String, from: String, fromNick: String, headsUpOnly: Boolean = false) {
@@ -223,6 +266,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         /** ID канала: HIGH чтобы full-screen intent срабатывал (нативный экран поверх домашнего). */
         const val CHANNEL_ID_CALLS = "livi_incoming_call_v3"
         const val NOTIFICATION_ID_INCOMING_CALL = 1001
+        private const val CHANNEL_ID_MISSED_CALL = "missed_call"
+        private const val NOTIFICATION_ID_MISSED_CALL = 1002
         const val ACTION_CALL_CANCELED = "com.kolt12max.livi.CALL_CANCELED"
         const val EXTRA_CALL_ID = "callId"
 
@@ -240,6 +285,24 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     setVibrationPattern(longArrayOf(0, 500, 200, 500))
                     setLockscreenVisibility(Notification.VISIBILITY_PUBLIC)
                     setDescription(context.getString(R.string.incoming_call_title))
+                }
+                nm.createNotificationChannel(channel)
+            }
+        }
+
+        /** Канал «Пропущенный вызов» — без звука/вибрации. */
+        @JvmStatic
+        fun ensureMissedCallChannel(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                val channel = NotificationChannel(
+                    CHANNEL_ID_MISSED_CALL,
+                    context.getString(R.string.missed_call_title),
+                    NotificationManager.IMPORTANCE_DEFAULT
+                ).apply {
+                    setSound(null, null)
+                    setVibrationPattern(longArrayOf(0))
+                    setLockscreenVisibility(Notification.VISIBILITY_PUBLIC)
                 }
                 nm.createNotificationChannel(channel)
             }
@@ -289,7 +352,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setFullScreenIntent(fullScreenPendingIntent, true)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
-                .setTimeoutAfter(45_000)
+                .setTimeoutAfter(20_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setVibrate(longArrayOf(0, 500, 200, 500))
@@ -300,7 +363,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         private const val REQUEST_DECLINE = 2002
         private const val REQUEST_CONTENT = 2003
 
-        /** Heads-up уведомление с кнопками Принять/Отклонить; тап по уведомлению открывает приложение на главную, без нативного экрана входящего. */
+        /** Heads-up уведомление с кнопками Принять/Отклонить; в шторке показывается развёрнутым с кнопками; тап по уведомлению открывает приложение на главную. */
         @JvmStatic
         fun buildIncomingCallNotificationHeadsUpOnly(context: Context, callId: String, from: String, fromNick: String): Notification {
             val title = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_title)
@@ -341,15 +404,20 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
+            val bigTextStyle = NotificationCompat.BigTextStyle()
+                .setBigContentTitle(title)
+                .bigText(subtitle)
+
             return NotificationCompat.Builder(context, CHANNEL_ID_CALLS)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(title)
                 .setContentText(subtitle)
+                .setStyle(bigTextStyle)
                 .setContentIntent(contentPending)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
-                .setTimeoutAfter(45_000)
+                .setTimeoutAfter(20_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setVibrate(longArrayOf(0, 500, 200, 500))

@@ -1186,10 +1186,11 @@ function AppContent() {
       // Мгновенно закрываем UI
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
       // Никакой навигации — остаёмся на текущем экране
-      // Инкремент пропущенного (на стороне получателя)
+      // Инкремент пропущенного только у получателя (callee), не у инициатора
       try {
         const uid = await AsyncStorage.getItem('last_incoming_from');
-        if (uid) {
+        const callerId = String((d as any)?.from || '');
+        if (uid && callerId && uid === callerId) {
           const key = 'missed_calls_by_user_v1';
           const raw = await AsyncStorage.getItem(key);
           const map = raw ? JSON.parse(raw) : {};
@@ -1197,7 +1198,6 @@ function AppContent() {
           await AsyncStorage.setItem(key, JSON.stringify(map));
           try { emitMissedIncrement(uid); } catch {}
           syncAppBadgeFromMissedCount().catch(() => {});
-          // очищаем маркер
           try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
         }
       } catch {}
@@ -1311,10 +1311,11 @@ function AppContent() {
           timedOutCallsRef.current.set(id, Date.now());
         }
       } catch {}
-      // Инкремент пропущенного — на случай, если HomeScreen ещё не активен
+      // Инкремент пропущенного только у получателя (callee), не у инициатора
       try {
         const uid = await AsyncStorage.getItem('last_incoming_from');
-        if (uid) {
+        const callerId = String((d as any)?.from || '');
+        if (uid && callerId && uid === callerId) {
           const key = 'missed_calls_by_user_v1';
           const raw = await AsyncStorage.getItem(key);
           const map = raw ? JSON.parse(raw) : {};
@@ -1322,7 +1323,6 @@ function AppContent() {
           await AsyncStorage.setItem(key, JSON.stringify(map));
           try { emitMissedIncrement(uid); } catch {}
           syncAppBadgeFromMissedCount().catch(() => {});
-          // очищаем маркер, чтобы у звонящего не сработали другие обработчики
           try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
         }
       } catch {}

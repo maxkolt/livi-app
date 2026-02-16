@@ -1625,13 +1625,13 @@ io.on('connection', async (sock: AuthedSocket) => {
           await emitPresenceUpdateToFriends(io, link.b, false);
         }
         
-        // уведомляем инициатора о таймауте
+        // уведомляем инициатора о таймауте (from = caller, чтобы клиент не считал пропущенным у инициатора)
         try {
-          io.to(`u:${link.a}`).emit('call:timeout', { callId });
+          io.to(`u:${link.a}`).emit('call:timeout', { callId, from: link.a });
         } catch {}
         // уведомим получателя, чтобы оба закрыли модалки
         try {
-          io.to(`u:${link.b}`).emit('call:timeout', { callId });
+          io.to(`u:${link.b}`).emit('call:timeout', { callId, from: link.a });
         } catch {}
         // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации
         let fromNick: string | undefined;
