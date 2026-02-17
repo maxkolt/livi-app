@@ -2437,7 +2437,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           }
           await loadFriends();
         } catch (e) { console.warn('resume error', e); }
-        // При возврате по иконке (не по уведомлению) focus экрана может не сработать — подхватываем пропущенные из AsyncStorage и показываем красную точку на кнопке меню
+        // При возврате по иконке (не по уведомлению) подхватываем пропущенные из AsyncStorage и показываем красную точку на кнопке меню.
+        // Сразу читаем (данные могли быть записаны ранее или из другого входа), затем 400ms и 900ms — чтобы подхватить запись из App.tsx getAndClearPendingMissedCalls.
         const applyMissedFromStorage = () => {
           AsyncStorage.getItem(MISSED_CALLS_KEY).then((raw) => {
             try {
@@ -2458,6 +2459,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             } catch {}
           }).catch(() => {});
         };
+        applyMissedFromStorage();
         if (appActiveMissedTimerRef.current) clearTimeout(appActiveMissedTimerRef.current);
         if (appActiveMissedFallbackRef.current) clearTimeout(appActiveMissedFallbackRef.current);
         appActiveMissedTimerRef.current = setTimeout(() => {

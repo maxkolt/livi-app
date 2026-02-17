@@ -856,20 +856,7 @@ app.post('/api/calls/cancel', async (req, res) => {
     }
     logger.info('[api/calls/cancel] sending call_canceled push to callee', { callId, caller: link.a, callee: link.b });
     try { await sendCallCanceledToRecipient(link.b, callId); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    try {
-      const missedTitle = 'Пропущенный вызов';
-      const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
-      await sendPushToUser(link.b, {
-        kind: 'call',
-        title: missedTitle,
-        body: missedBody,
-        channelId: 'missed_call',
-        data: { type: 'call_ended', callId, from: link.a, fromNick: fromNick || '' },
-      });
-    } catch (e: any) {
-      logger.warn('[api/calls/cancel] call_ended push failed', { peerId: link.b, error: e?.message });
-    }
-    logger.info('[api/calls/cancel] call ended for both: callee notified (socket+FCM+missed push), caller closed native screen', { callId, caller: link.a, callee: link.b });
+    logger.info('[api/calls/cancel] call ended for both: callee notified (socket+FCM), caller closed native screen', { callId, caller: link.a, callee: link.b });
     cleanupCall(callId, 'canceled');
     return res.json({ ok: true });
   } catch (e: any) {
@@ -1651,20 +1638,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         } catch (e: any) {
           logger.warn('[call:timeout] sendCallEndedToRecipient failed', { error: e?.message });
         }
-        try {
-          const missedTitle = 'Пропущенный вызов';
-          const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
-          await sendPushToUser(link.b, {
-            kind: 'call',
-            title: missedTitle,
-            body: missedBody,
-            channelId: 'missed_call',
-            data: { type: 'call_ended', callId, from: link.a, fromNick: fromNick || '' },
-          });
-        } catch (e: any) {
-          logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
-        }
-        logger.info('[call:timeout] call ended for both: callee notified (socket+missed push), caller gets timeout', { callId, caller: link.a, callee: link.b });
+        logger.info('[call:timeout] call ended for both: callee notified (socket+FCM), caller gets timeout', { callId, caller: link.a, callee: link.b });
         cleanupCall(callId, 'timeout');
       }, 20000);
       const link = callsById.get(callId);
@@ -2052,20 +2026,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
     logger.info('[call:cancel] sending call_canceled push to callee', { callId: id, caller: link.a, callee: link.b });
     try { await sendCallCanceledToRecipient(link.b, id); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    try {
-      const missedTitle = 'Пропущенный вызов';
-      const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
-      await sendPushToUser(link.b, {
-        kind: 'call',
-        title: missedTitle,
-        body: missedBody,
-        channelId: 'missed_call',
-        data: { type: 'call_ended', callId: id, from: link.a, fromNick: fromNick || '' },
-      });
-    } catch (e: any) {
-      logger.warn('[call:cancel] call_ended push failed', { peerId: link.b, error: e?.message });
-    }
-    logger.info('[call:cancel] call ended for both: both notified (socket+FCM, callee got missed push)', { callId: id, caller: link.a, callee: link.b });
+    logger.info('[call:cancel] call ended for both: both notified (socket+FCM)', { callId: id, caller: link.a, callee: link.b });
     cleanupCall(id, 'canceled');
   });
 
