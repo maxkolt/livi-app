@@ -154,6 +154,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             return
         }
         // Звонок завершён: снять уведомление входящего, закрыть экран исходящего. «Пропущенный вызов» только если разговор не был принят (таймаут/отмена), не после завершения с видеочата/PiP.
+        // КРИТИЧНО: Если приложение в foreground, каллею уже пришёл socket call:cancel — не показываем уведомление и не добавляем в pending (иначе двойной учёт и мерцание от startActivity).
         if (typeNorm == "call_ended" && callId != null) {
             EndedCallIds.add(this, callId)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -164,7 +165,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
             sendBroadcast(cancelIntent)
             val endedFromActive = "true" == data["endedFromActive"]
-            if (!endedFromActive) {
+            val inForeground = MainActivity.isInForeground
+            if (!endedFromActive && !inForeground) {
                 var fromNickEnded = data["fromNick"] ?: ""
                 if (fromNickEnded.isEmpty() && data["body"] != null) {
                     try {
@@ -178,13 +180,15 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
             sendBroadcast(closeIntent)
-            val activityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
-                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+            if (!inForeground) {
+                val activityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
+                    putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+                }
+                try { startActivity(activityIntent) } catch (e: Exception) { Log.w(TAG, "FCM call_ended: startActivity failed", e) }
             }
-            try { startActivity(activityIntent) } catch (e: Exception) { Log.w(TAG, "FCM call_ended: startActivity failed", e) }
-            Log.d(TAG, "FCM call_ended: incoming canceled, missed=${!endedFromActive}, outgoing closed callId=$callId")
+            Log.d(TAG, "FCM call_ended: incoming canceled, missed=${!endedFromActive}, inForeground=$inForeground callId=$callId")
             return
         }
         Log.w(TAG, "FCM unhandled: typeNorm=$typeNorm type=$type callId=$callId keys=[$keysStr] → forwarding to Expo")

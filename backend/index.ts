@@ -841,8 +841,6 @@ app.post('/api/calls/cancel', async (req, res) => {
     }
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
-    logger.info('[api/calls/cancel] sending call_canceled push to callee', { callId, caller: link.a, callee: link.b });
-    try { await sendCallCanceledToRecipient(link.b, callId); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
     let fromNick: string | undefined;
     try {
       if (isMongoReady()) {
@@ -850,11 +848,14 @@ app.post('/api/calls/cancel', async (req, res) => {
         if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
       }
     } catch {}
+    // Сначала FCM call_ended (пропущенный), чтобы каллею гарантированно показалось уведомление и добавилось в pending; затем call_canceled — закрыть входящий экран
     try {
       await sendCallEndedToRecipient(link.b, callId, link.a, fromNick || '');
     } catch (e: any) {
       logger.warn('[api/calls/cancel] sendCallEndedToRecipient failed', { error: e?.message });
     }
+    logger.info('[api/calls/cancel] sending call_canceled push to callee', { callId, caller: link.a, callee: link.b });
+    try { await sendCallCanceledToRecipient(link.b, callId); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
     try {
       const missedTitle = 'Пропущенный вызов';
       const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
@@ -2036,9 +2037,6 @@ io.on('connection', async (sock: AuthedSocket) => {
     // чтобы оба клиента синхронно закрыли UI входящего/исходящего звонка
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
-    logger.info('[call:cancel] sending call_canceled push to callee', { callId: id, caller: link.a, callee: link.b });
-    // FCM data-only получателю: на устройстве сразу снимаем уведомление и закрываем IncomingCallActivity без мельканий
-    try { await sendCallCanceledToRecipient(link.b, id); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
     let fromNick: string | undefined;
     try {
       if (isMongoReady()) {
@@ -2046,11 +2044,14 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
       }
     } catch {}
+    // Сначала FCM call_ended (пропущенный), затем call_canceled — чтобы у каллея не пропадали индикаторы пропущенного
     try {
       await sendCallEndedToRecipient(link.b, id, link.a, fromNick || '');
     } catch (e: any) {
       logger.warn('[call:cancel] sendCallEndedToRecipient failed', { error: e?.message });
     }
+    logger.info('[call:cancel] sending call_canceled push to callee', { callId: id, caller: link.a, callee: link.b });
+    try { await sendCallCanceledToRecipient(link.b, id); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
     try {
       const missedTitle = 'Пропущенный вызов';
       const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
