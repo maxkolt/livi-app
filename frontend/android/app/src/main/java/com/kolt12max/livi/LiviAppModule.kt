@@ -278,6 +278,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /** Прочитать и сбросить флаг «открыть вкладку Друзья» (тап по уведомлению о пропущенном вызове). Возвращает true, если нужно перейти на вкладку Друзья. */
+  @ReactMethod
+  fun getAndClearPendingOpenTabFriends(promise: Promise) {
+    try {
+      val value = getAndClearPendingOpenTabFriends(reactApplicationContext)
+      promise.resolve(value)
+    } catch (e: Exception) {
+      promise.resolve(false)
+    }
+  }
+
   /** Снять уведомление «Пропущенный вызов» для userId и обнулить счётчик (при принятии вызова или открытии чата с этим пользователем). */
   @ReactMethod
   fun cancelMissedCallNotificationForUser(userId: String) {
@@ -303,11 +314,27 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     const val KEY_INSTALL_ID = "install_id"
     const val KEY_SERVER_URL = "server_url"
     const val KEY_OUTGOING_CALL_TIMEOUT_MS = "outgoing_call_timeout_ms"
+    private const val PREFS_OPEN_TAB = "LiviOpenTab"
+    private const val KEY_PENDING_OPEN_TAB_FRIENDS = "pending_open_tab_friends"
     private const val HEADLESS_TASK_CALL_KEEP = "RNCallKeepBackgroundMessage"
 
     private var reactContextRef: ReactApplicationContext? = null
 
-    /** Вызвать из LiviFirebaseMessagingService при показе «Пропущенный вызов» — чтобы при открытии приложения JS обновил счётчик и бейдж. */
+    /** Вызвать из MainActivity при intent с EXTRA_OPEN_TAB_FRIENDS (тап по уведомлению «Пропущенный вызов»). */
+    @JvmStatic
+    fun setPendingOpenTabFriends(context: Context) {
+      context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE).edit().putBoolean(KEY_PENDING_OPEN_TAB_FRIENDS, true).apply()
+    }
+
+    @JvmStatic
+    fun getAndClearPendingOpenTabFriends(context: Context): Boolean {
+      val prefs = context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE)
+      val value = prefs.getBoolean(KEY_PENDING_OPEN_TAB_FRIENDS, false)
+      prefs.edit().remove(KEY_PENDING_OPEN_TAB_FRIENDS).apply()
+      return value
+    }
+
+    /** Вызвать из LiviFirebaseMessagingService при показе «Пропущенный вызов» — чтобы при открытии приложения JS обновил счётчик и бейдж. КРИТИЧНО: commit() вместо apply(), иначе при убийстве процесса после FCM запись может не успеть на диск и getAndClearPendingMissedCalls вернёт []. */
     @JvmStatic
     fun addPendingMissedCall(context: Context, userId: String) {
       if (userId.isBlank()) return
@@ -315,7 +342,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       val current = prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: ""
       val list = if (current.isEmpty()) mutableListOf<String>() else current.split(',').toMutableList()
       list.add(userId.trim())
-      prefs.edit().putString(KEY_PENDING_MISSED_IDS, list.joinToString(",")).apply()
+      prefs.edit().putString(KEY_PENDING_MISSED_IDS, list.joinToString(",")).commit()
     }
 
     @JvmStatic

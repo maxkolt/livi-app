@@ -405,3 +405,47 @@ export async function sendCallCanceledToRecipient(calleeUserId: string, callId: 
     logger.warn('[push] Expo call_canceled to callee failed', { userId: calleeUserId, error: (e as Error)?.message });
   }
 }
+
+/**
+ * Пропущенный вызов (таймаут/отмена) — шлём callee FCM data-only call_ended.
+ * Нативный LiviFirebaseMessagingService показывает «Пропущенный вызов» и вызывает addPendingMissedCall,
+ * чтобы при открытии по иконке JS получил список и показал красную точку на кнопке меню.
+ */
+export async function sendCallEndedToRecipient(
+  calleeUserId: string,
+  callId: string,
+  fromUserId: string,
+  fromNick: string
+): Promise<void> {
+  const messaging = getFirebaseMessaging();
+  if (!messaging) return;
+  const recs = await PushTokenModel.find({ userId: calleeUserId })
+    .select('token platform fcmToken')
+    .lean();
+  type Rec = { token: string; platform: string; fcmToken?: string };
+  const list = (recs || []) as unknown as Rec[];
+  for (const r of list) {
+    if (r.platform === 'android' && r.fcmToken) {
+      try {
+        await messaging.send({
+          token: r.fcmToken,
+          data: {
+            type: 'call_ended',
+            callId: String(callId),
+            from: String(fromUserId),
+            fromNick: String(fromNick || ''),
+            endedFromActive: 'false',
+          },
+          android: { priority: 'high' },
+        });
+        logger.info('[push] call_ended (missed) sent via FCM to callee', { userId: calleeUserId, from: fromUserId });
+      } catch (e) {
+        const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
+        const isInvalidToken =
+          isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
+        if (isInvalidToken) await removeInvalidFcmToken(calleeUserId, r);
+        logger.warn('[push] FCM call_ended (missed) failed', { userId: calleeUserId, error: errMsg, isInvalidToken });
+      }
+    }
+  }
+}

@@ -31,7 +31,7 @@ import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl } from './routes/livekit';
-import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallDeclinedToCaller, sendCallAcceptedToCaller } from './utils/push';
+import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallEndedToRecipient, sendCallDeclinedToCaller, sendCallAcceptedToCaller } from './utils/push';
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 
@@ -851,6 +851,11 @@ app.post('/api/calls/cancel', async (req, res) => {
       }
     } catch {}
     try {
+      await sendCallEndedToRecipient(link.b, callId, link.a, fromNick || '');
+    } catch (e: any) {
+      logger.warn('[api/calls/cancel] sendCallEndedToRecipient failed', { error: e?.message });
+    }
+    try {
       const missedTitle = 'Пропущенный вызов';
       const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
       await sendPushToUser(link.b, {
@@ -1633,7 +1638,6 @@ io.on('connection', async (sock: AuthedSocket) => {
         try {
           io.to(`u:${link.b}`).emit('call:timeout', { callId, from: link.a });
         } catch {}
-        // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации
         let fromNick: string | undefined;
         try {
           if (isMongoReady()) {
@@ -1641,6 +1645,11 @@ io.on('connection', async (sock: AuthedSocket) => {
             if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
           }
         } catch {}
+        try {
+          await sendCallEndedToRecipient(link.b, callId, link.a, fromNick || '');
+        } catch (e: any) {
+          logger.warn('[call:timeout] sendCallEndedToRecipient failed', { error: e?.message });
+        }
         try {
           const missedTitle = 'Пропущенный вызов';
           const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
@@ -2030,7 +2039,6 @@ io.on('connection', async (sock: AuthedSocket) => {
     logger.info('[call:cancel] sending call_canceled push to callee', { callId: id, caller: link.a, callee: link.b });
     // FCM data-only получателю: на устройстве сразу снимаем уведомление и закрываем IncomingCallActivity без мельканий
     try { await sendCallCanceledToRecipient(link.b, id); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации
     let fromNick: string | undefined;
     try {
       if (isMongoReady()) {
@@ -2038,6 +2046,11 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
       }
     } catch {}
+    try {
+      await sendCallEndedToRecipient(link.b, id, link.a, fromNick || '');
+    } catch (e: any) {
+      logger.warn('[call:cancel] sendCallEndedToRecipient failed', { error: e?.message });
+    }
     try {
       const missedTitle = 'Пропущенный вызов';
       const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';

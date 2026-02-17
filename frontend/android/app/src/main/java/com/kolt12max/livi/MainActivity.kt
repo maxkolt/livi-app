@@ -23,6 +23,11 @@ class MainActivity : ReactActivity() {
     super.onResume()
     isInForeground = true
     restoreNavigationBarVisibility()
+    // Тап по уведомлению «Пропущенный вызов» — открыть вкладку Друзья
+    if (intent?.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false) == true) {
+      intent?.removeExtra(EXTRA_OPEN_TAB_FRIENDS)
+      LiviAppModule.setPendingOpenTabFriends(this)
+    }
     // FCM call_accepted запустил MainActivity — закрыть нативный экран исходящего (если ещё открыт) и уведомить JS
     val pendingCallId = intent?.getStringExtra(EXTRA_PENDING_CALL_ACCEPTED_CALL_ID)
     if (!pendingCallId.isNullOrBlank()) {
@@ -71,6 +76,10 @@ class MainActivity : ReactActivity() {
       setTheme(R.style.AppTheme)
     }
     super.onCreate(null)
+    // Тап по уведомлению «Пропущенный вызов»: ставим флаг сразу в onCreate, чтобы JS успел его прочитать при монтировании (onResume может вызваться позже).
+    if (intent?.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false) == true) {
+      LiviAppModule.setPendingOpenTabFriends(this)
+    }
     // Кнопка Домой свернула приложение во время звонка → при тапе по иконке снова показываем экран звонка, а не главный.
     if (isLaunchedFromLauncher(intent) && LiviOngoingCallHelper.launchOngoingCallActivityIfNeeded(this)) {
       finish()
@@ -133,6 +142,7 @@ class MainActivity : ReactActivity() {
 
   companion object {
     const val EXTRA_PENDING_CALL_ACCEPTED_CALL_ID = "pending_call_accepted_call_id"
+    const val EXTRA_OPEN_TAB_FRIENDS = "open_tab_friends"
 
     /** true когда приложение на переднем плане (в т.ч. во время видеозвонка) — тогда не показываем heads-up уведомление о звонке */
     @JvmField

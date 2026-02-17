@@ -290,10 +290,29 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
           (global as any).__onCallEndedFromPush?.();
         } catch {}
       }
+      // На Android при холодном старте по тапу «Пропущенный вызов» Expo часто возвращает call_ended (а не missed_call). Открываем Home с меню и вкладкой Друзья и передаём кто звонил.
+      // Глобал __pendingMissedCallFromUserId — запасной путь, если route.params придут с задержкой после reset.
+      const fromUserId = String(data?.from || '').trim();
+      if (fromUserId && actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER && Platform.OS === 'android') {
+        try { (global as any).__pendingMissedCallFromUserId = fromUserId; } catch {}
+        const nav = await waitForNavReady();
+        if (nav) {
+          try { await clearCallRelatedNotificationsAndSyncBadge(); } catch {}
+          nav.dispatch(
+            CommonActions.reset({
+              index: 0,
+              routes: [{ name: 'Home' as never, params: { openFriendsMenu: true, openFriendsTab: true, missedCallFromUserId: fromUserId } }],
+            })
+          );
+          logger.info('[push] call_ended with from: opened Home with openFriendsMenu (missed call tap)', { fromUserId });
+        }
+      }
       return;
     }
 
     if (type === 'missed_call') {
+      const fromUserId = String(data?.from || '').trim();
+      if (fromUserId) try { (global as any).__pendingMissedCallFromUserId = fromUserId; } catch {}
       const nav = await waitForNavReady();
       if (!nav) return;
       try {
@@ -302,7 +321,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
       nav.dispatch(
         CommonActions.reset({
           index: 0,
-          routes: [{ name: 'Home' as never, params: { openFriendsTab: true } }],
+          routes: [{ name: 'Home' as never, params: { openFriendsMenu: true, openFriendsTab: true, ...(fromUserId ? { missedCallFromUserId: fromUserId } : {}) } }],
         })
       );
       return;
