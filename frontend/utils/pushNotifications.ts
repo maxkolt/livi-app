@@ -70,9 +70,11 @@ Notifications.setNotificationHandler({
       try {
         stopIncomingCallAlert();
       } catch {}
-      try {
-        await Notifications.dismissAllNotificationsAsync();
-      } catch {}
+      if (Platform.OS !== 'android') {
+        try {
+          await Notifications.dismissAllNotificationsAsync();
+        } catch {}
+      }
       if (!endedFromActive && Platform.OS !== 'android') {
         const fromNick = String(data.fromNick || '').trim();
         const fromUserId = String(data.from || '');

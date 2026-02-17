@@ -500,10 +500,11 @@ function AppContent() {
               }
             }
             await AsyncStorage.setItem(key, JSON.stringify(map));
-            await syncAppBadgeFromMissedCount();
           }
+          await syncAppBadgeFromMissedCount();
         } catch (e) {
           logger.warn('[App] getAndClearPendingMissedCalls on active failed', e);
+          try { await syncAppBadgeFromMissedCount(); } catch {}
         }
         const open = await (LiviAppModule?.getAndClearPendingOpenTabFriends?.() ?? Promise.resolve(false));
         if (!open) return;
