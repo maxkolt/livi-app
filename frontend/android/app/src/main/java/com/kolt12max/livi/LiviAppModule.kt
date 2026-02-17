@@ -334,7 +334,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       return value
     }
 
-    /** Вызвать из LiviFirebaseMessagingService при показе «Пропущенный вызов» — чтобы при открытии приложения JS обновил счётчик и бейдж. КРИТИЧНО: commit() вместо apply(), иначе при убийстве процесса после FCM запись может не успеть на диск и getAndClearPendingMissedCalls вернёт []. */
+    /** Вызвать из LiviFirebaseMessagingService при показе «Пропущенный вызов» — чтобы при открытии приложения JS обновил счётчик и бейдж. */
     @JvmStatic
     fun addPendingMissedCall(context: Context, userId: String) {
       if (userId.isBlank()) return
@@ -342,7 +342,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       val current = prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: ""
       val list = if (current.isEmpty()) mutableListOf<String>() else current.split(',').toMutableList()
       list.add(userId.trim())
-      prefs.edit().putString(KEY_PENDING_MISSED_IDS, list.joinToString(",")).commit()
+      prefs.edit().putString(KEY_PENDING_MISSED_IDS, list.joinToString(",")).apply()
     }
 
     @JvmStatic

@@ -417,7 +417,7 @@ function AppContent() {
   }, []);
 
   // Android: при старте приложения применить пропущенные, показанные из нативного кода (FCM call_ended), чтобы бейдж совпадал с числом уведомлений в шторке
-  // И при тапе по уведомлению «Пропущенный вызов» — перейти на вкладку Друзья и передать кто звонил (missedCallFromUserId), чтобы индикатор у друга отобразился
+  // И при тапе по уведомлению «Пропущенный вызов» — перейти на вкладку Друзья
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
     const LiviAppModule = NativeModules.LiviAppModule;
@@ -425,32 +425,23 @@ function AppContent() {
     let cancelled = false;
     const GO_TO_FRIENDS_RETRIES = 25;
     const GO_TO_FRIENDS_DELAY_MS = 100;
-    const goToFriends = (retryCount = 0, missedCallUserIds?: string[]) => {
+    const goToFriends = (retryCount = 0) => {
       if (cancelled) return;
       if (navRef.isReady()) {
-        const params: { openFriendsMenu: boolean; openFriendsTab: boolean; missedCallFromUserId?: string } = {
-          openFriendsMenu: true,
-          openFriendsTab: true,
-        };
-        if (missedCallUserIds?.length && missedCallUserIds[0]) {
-          params.missedCallFromUserId = missedCallUserIds[0];
-        }
-        navRef.dispatch(CommonActions.navigate({ name: 'Home', params }));
+        navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openFriendsMenu: true, openFriendsTab: true } }));
         return;
       }
       if (retryCount < GO_TO_FRIENDS_RETRIES) {
-        setTimeout(() => goToFriends(retryCount + 1, missedCallUserIds), GO_TO_FRIENDS_DELAY_MS);
+        setTimeout(() => goToFriends(retryCount + 1), GO_TO_FRIENDS_DELAY_MS);
       }
     };
     (async () => {
-      let missedArr: string[] = [];
       try {
         const arr = await (LiviAppModule?.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]));
-        missedArr = arr && Array.isArray(arr) ? arr.filter((u: unknown) => u) : [];
-        if (missedArr.length && !cancelled) {
+        if (arr?.length && !cancelled) {
           const raw = await AsyncStorage.getItem(key);
           const map = raw ? JSON.parse(raw) : {};
-          for (const uid of missedArr) {
+          for (const uid of arr) {
             if (uid) {
               map[uid] = (map[uid] || 0) + 1;
               try { emitMissedIncrement(uid); } catch {}
@@ -464,11 +455,11 @@ function AppContent() {
       }
       if (cancelled) return;
       const open = await (LiviAppModule?.getAndClearPendingOpenTabFriends?.() ?? Promise.resolve(false));
-      if (open) goToFriends(0, missedArr);
+      if (open) goToFriends();
     })();
     const t1 = setTimeout(() => {
       LiviAppModule?.getAndClearPendingOpenTabFriends?.()?.then?.((open: boolean) => {
-        if (open && !cancelled) goToFriends(0);
+        if (open && !cancelled) goToFriends();
       });
     }, 600);
     return () => {
@@ -477,55 +468,22 @@ function AppContent() {
     };
   }, []);
 
-  // Android: при возврате в приложение (тап по уведомлению «Пропущенный вызов» или по иконке) — сначала применить pending missed в AsyncStorage, затем при open tab friends открыть меню/Друзья и передать кто звонил
+  // Android: при возврате в приложение (тап по уведомлению «Пропущенный вызов») — открыть меню и вкладку Друзья
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
-    const key = 'missed_calls_by_user_v1';
-    const LiviAppModule = NativeModules.LiviAppModule;
     const sub = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
-      (async () => {
-        let missedArr: string[] = [];
-        try {
-          const arr = await (LiviAppModule?.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]));
-          missedArr = arr && Array.isArray(arr) ? arr.filter((u: unknown) => u) : [];
-          logger.info('[App] App became active: getAndClearPendingMissedCalls result', { count: missedArr.length, uids: missedArr });
-          if (missedArr.length) {
-            const raw = await AsyncStorage.getItem(key);
-            const map = raw ? JSON.parse(raw) : {};
-            for (const uid of missedArr) {
-              if (uid) {
-                map[uid] = (map[uid] || 0) + 1;
-                try { emitMissedIncrement(uid); } catch {}
-              }
-            }
-            await AsyncStorage.setItem(key, JSON.stringify(map));
-          }
-          await syncAppBadgeFromMissedCount();
-        } catch (e) {
-          logger.warn('[App] getAndClearPendingMissedCalls on active failed', e);
-          try { await syncAppBadgeFromMissedCount(); } catch {}
-        }
-        const open = await (LiviAppModule?.getAndClearPendingOpenTabFriends?.() ?? Promise.resolve(false));
+      NativeModules.LiviAppModule?.getAndClearPendingOpenTabFriends?.()?.then?.((open: boolean) => {
         if (!open) return;
-        const go = (retry = 0, missedCallFromUserId?: string) => {
+        const go = (retry = 0) => {
           if (navRef.isReady()) {
-            const params: { openFriendsMenu: boolean; openFriendsTab: boolean; missedCallFromUserId?: string } = {
-              openFriendsMenu: true,
-              openFriendsTab: true,
-            };
-            if (missedCallFromUserId) params.missedCallFromUserId = missedCallFromUserId;
-            navRef.dispatch(CommonActions.navigate({ name: 'Home', params }));
+            navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openFriendsMenu: true, openFriendsTab: true } }));
             return;
           }
-          if (retry < 15) setTimeout(() => go(retry + 1, missedCallFromUserId), 100);
+          if (retry < 15) setTimeout(() => go(retry + 1), 100);
         };
-        const uid = missedArr[0] ?? (await AsyncStorage.getItem(key).then((raw) => {
-          const map = raw ? JSON.parse(raw) : {};
-          return typeof map === 'object' && map !== null ? Object.keys(map).find((k) => (map[k] as number) > 0) : undefined;
-        }).catch(() => undefined));
-        go(0, uid);
-      })();
+        go();
+      });
     });
     return () => sub.remove();
   }, []);

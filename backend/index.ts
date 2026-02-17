@@ -31,7 +31,7 @@ import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl } from './routes/livekit';
-import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallEndedToRecipient, sendCallDeclinedToCaller, sendCallAcceptedToCaller } from './utils/push';
+import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallDeclinedToCaller, sendCallAcceptedToCaller } from './utils/push';
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 
@@ -763,17 +763,6 @@ function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'cancele
   callOfUser.delete(link.b);
 }
 
-/** Удаляет звонок из карты и возвращает link, если он был. Только один вызов (HTTP cancel / socket cancel / timeout) получит link и пошлёт push — остальные получат null и не дублируют. */
-function removeCallOnce(callId: string): CallLink | null {
-  const link = callsById.get(callId);
-  if (!link) return null;
-  if (link.timer) { try { clearTimeout(link.timer); } catch {} }
-  callsById.delete(callId);
-  callOfUser.delete(link.a);
-  callOfUser.delete(link.b);
-  return link;
-}
-
 /** Отклонение звонка по HTTP (из IncomingCallActivity без открытия приложения). Auth по x-install-id. */
 app.post('/api/calls/decline', async (req, res) => {
   try {
@@ -830,11 +819,13 @@ app.post('/api/calls/cancel', async (req, res) => {
     if (!callId) {
       return res.status(400).json({ ok: false, error: 'callId_required' });
     }
-    const existing = callsById.get(callId);
-    if (!existing) return res.json({ ok: true });
-    if (existing.a !== userId) return res.status(403).json({ ok: false, error: 'only_caller_can_cancel' });
-    const link = removeCallOnce(callId);
-    if (!link) return res.json({ ok: true }); // уже завершён timeout/socket — не дублируем push
+    const link = callsById.get(callId);
+    if (!link) {
+      return res.json({ ok: true }); // уже завершён — не ошибка
+    }
+    if (link.a !== userId) {
+      return res.status(403).json({ ok: false, error: 'only_caller_can_cancel' });
+    }
     logger.info('[api/calls/cancel] caller canceled via HTTP (timeout)', { callId, caller: link.a, callee: link.b });
     const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
     const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
@@ -850,6 +841,8 @@ app.post('/api/calls/cancel', async (req, res) => {
     }
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
+    logger.info('[api/calls/cancel] sending call_canceled push to callee', { callId, caller: link.a, callee: link.b });
+    try { await sendCallCanceledToRecipient(link.b, callId); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
     let fromNick: string | undefined;
     try {
       if (isMongoReady()) {
@@ -858,12 +851,20 @@ app.post('/api/calls/cancel', async (req, res) => {
       }
     } catch {}
     try {
-      await sendCallEndedToRecipient(link.b, callId, link.a, fromNick || '');
+      const missedTitle = 'Пропущенный вызов';
+      const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
+      await sendPushToUser(link.b, {
+        kind: 'call',
+        title: missedTitle,
+        body: missedBody,
+        channelId: 'missed_call',
+        data: { type: 'call_ended', callId, from: link.a, fromNick: fromNick || '' },
+      });
     } catch (e: any) {
-      logger.warn('[api/calls/cancel] sendCallEndedToRecipient failed', { error: e?.message });
+      logger.warn('[api/calls/cancel] call_ended push failed', { peerId: link.b, error: e?.message });
     }
-    try { await sendCallCanceledToRecipient(link.b, callId); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    logger.info('[api/calls/cancel] v2: call_ended only (no Expo missed) → 1 notification; callee notified (socket+FCM)', { callId, caller: link.a, callee: link.b });
+    logger.info('[api/calls/cancel] call ended for both: callee notified (socket+FCM+missed push), caller closed native screen', { callId, caller: link.a, callee: link.b });
+    cleanupCall(callId, 'canceled');
     return res.json({ ok: true });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
@@ -1605,8 +1606,8 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       // таймаут 20с
       const timer = setTimeout(async () => {
-        const link = removeCallOnce(callId);
-        if (!link) return; // уже завершён HTTP cancel / socket cancel — не дублируем push
+        const link = callsById.get(callId);
+        if (!link) return;
         
         // Снимаем busy статус с обоих участников при таймауте
         const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
@@ -1632,6 +1633,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         try {
           io.to(`u:${link.b}`).emit('call:timeout', { callId, from: link.a });
         } catch {}
+        // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации
         let fromNick: string | undefined;
         try {
           if (isMongoReady()) {
@@ -1640,11 +1642,20 @@ io.on('connection', async (sock: AuthedSocket) => {
           }
         } catch {}
         try {
-          await sendCallEndedToRecipient(link.b, callId, link.a, fromNick || '');
+          const missedTitle = 'Пропущенный вызов';
+          const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
+          await sendPushToUser(link.b, {
+            kind: 'call',
+            title: missedTitle,
+            body: missedBody,
+            channelId: 'missed_call',
+            data: { type: 'call_ended', callId, from: link.a, fromNick: fromNick || '' },
+          });
         } catch (e: any) {
-          logger.warn('[call:timeout] sendCallEndedToRecipient failed', { error: e?.message });
+          logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
         }
-        logger.info('[call:timeout] v2: call_ended only (no Expo missed); callee notified (socket+FCM)', { callId, caller: link.a, callee: link.b });
+        logger.info('[call:timeout] call ended for both: callee notified (socket+missed push), caller gets timeout', { callId, caller: link.a, callee: link.b });
+        cleanupCall(callId, 'timeout');
       }, 20000);
       const link = callsById.get(callId);
       if (link) link.timer = timer;
@@ -1993,12 +2004,8 @@ io.on('connection', async (sock: AuthedSocket) => {
 
   sock.on('call:cancel', async ({ callId }: { callId?: string }) => {
     const id = String(callId || '');
-    const me = String((sock as any)?.data?.userId || '');
-    const existing = callsById.get(id);
-    if (!existing) return;
-    if (existing.a !== me) return; // только инициатор может отменить
-    const link = removeCallOnce(id);
-    if (!link) return; // уже завершён HTTP cancel / timeout — не дублируем push
+    const link = callsById.get(id);
+    if (!link) return;
     
     // Снимаем busy статус с обоих участников при отмене
     const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
@@ -2016,8 +2023,14 @@ io.on('connection', async (sock: AuthedSocket) => {
       await emitPresenceUpdateToFriends(io, link.b, false);
     }
     
+    // уведомим получателя и инициатора одинаковым событием call:cancel,
+    // чтобы оба клиента синхронно закрыли UI входящего/исходящего звонка
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
+    logger.info('[call:cancel] sending call_canceled push to callee', { callId: id, caller: link.a, callee: link.b });
+    // FCM data-only получателю: на устройстве сразу снимаем уведомление и закрываем IncomingCallActivity без мельканий
+    try { await sendCallCanceledToRecipient(link.b, id); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
+    // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации
     let fromNick: string | undefined;
     try {
       if (isMongoReady()) {
@@ -2026,12 +2039,20 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
     } catch {}
     try {
-      await sendCallEndedToRecipient(link.b, id, link.a, fromNick || '');
+      const missedTitle = 'Пропущенный вызов';
+      const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
+      await sendPushToUser(link.b, {
+        kind: 'call',
+        title: missedTitle,
+        body: missedBody,
+        channelId: 'missed_call',
+        data: { type: 'call_ended', callId: id, from: link.a, fromNick: fromNick || '' },
+      });
     } catch (e: any) {
-      logger.warn('[call:cancel] sendCallEndedToRecipient failed', { error: e?.message });
+      logger.warn('[call:cancel] call_ended push failed', { peerId: link.b, error: e?.message });
     }
-    try { await sendCallCanceledToRecipient(link.b, id); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    logger.info('[call:cancel] v2: call_ended only (no Expo missed); both notified (socket+FCM)', { callId: id, caller: link.a, callee: link.b });
+    logger.info('[call:cancel] call ended for both: both notified (socket+FCM, callee got missed push)', { callId: id, caller: link.a, callee: link.b });
+    cleanupCall(id, 'canceled');
   });
 
   // Обработчик: партнер ушел (активировал PiP)
@@ -2173,10 +2194,7 @@ function printLanUrls(port: number) {
   }
 }
 
-server.listen(PORT, HOST, () => {
-  printLanUrls(PORT);
-  logger.info('[backend] push v2: missed=call_ended only, call_canceled Expo=iOS only — deploy built OK');
-});
+server.listen(PORT, HOST, () => printLanUrls(PORT));
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {

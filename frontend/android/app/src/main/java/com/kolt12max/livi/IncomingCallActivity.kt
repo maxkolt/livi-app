@@ -223,8 +223,6 @@ class IncomingCallActivity : AppCompatActivity() {
                     if (code !in 200..299) {
                         android.util.Log.w(TAG, "decline HTTP $code")
                     }
-                    // Читаем тело ответа, иначе сервер может не завершить запрос (буфер не сливается)
-                    conn.inputStream?.use { it.readBytes() }
                     conn.disconnect()
                 } catch (e: Exception) {
                     android.util.Log.w(TAG, "decline HTTP failed", e)

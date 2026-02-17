@@ -361,20 +361,19 @@ export async function sendCallAcceptedToCaller(callerUserId: string, callId: str
 }
 
 /**
- * Инициатор отменил вызов — callee получает только FCM data-only call_canceled (Android),
- * чтобы снять входящий экран. Expo call_canceled шлём только на iOS, иначе на Android
- * будет два уведомления (нативное «Пропущенный вызов» + пустое от Expo).
+ * Инициатор отменил вызов — шлём callee FCM data-only call_canceled,
+ * чтобы на устройстве получателя сразу сняли уведомление и закрыли IncomingCallActivity.
+ * Дублируем через Expo: при недоставке FCM получатель всё равно закроет экран по пушу.
  */
 export async function sendCallCanceledToRecipient(calleeUserId: string, callId: string): Promise<void> {
   logger.info('[push] sendCallCanceledToRecipient start', { calleeUserId, callId });
   const messaging = getFirebaseMessaging();
-  const recs = await PushTokenModel.find({ userId: calleeUserId })
-    .select('token platform fcmToken')
-    .lean();
-  type Rec = { token: string; platform: string; fcmToken?: string };
-  const list = (recs || []) as unknown as Rec[];
-
   if (messaging) {
+    const recs = await PushTokenModel.find({ userId: calleeUserId })
+      .select('token platform fcmToken')
+      .lean();
+    type Rec = { token: string; platform: string; fcmToken?: string };
+    const list = (recs || []) as unknown as Rec[];
     for (const r of list) {
       if (r.platform === 'android' && r.fcmToken) {
         try {
@@ -394,94 +393,15 @@ export async function sendCallCanceledToRecipient(calleeUserId: string, callId: 
       }
     }
   }
-
-  const iosTokens = list.filter((r) => r.platform === 'ios' && r.token && Expo.isExpoPushToken(r.token)).map((r) => r.token);
-  if (iosTokens.length > 0) {
-    try {
-      const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
-        to,
-        sound: 'default',
-        priority: 'high',
-        title: '',
-        body: '',
-        data: { type: 'call_canceled', callId: String(callId) },
-      }));
-      const chunks = expo.chunkPushNotifications(messages);
-      for (const chunk of chunks) {
-        await expo.sendPushNotificationsAsync(chunk);
-      }
-      logger.info('[push] call_canceled sent via Expo to iOS callee', { userId: calleeUserId, tokenCount: iosTokens.length });
-    } catch (e) {
-      logger.warn('[push] Expo call_canceled to iOS callee failed', { userId: calleeUserId, error: (e as Error)?.message });
-    }
-  }
-}
-
-/**
- * Пропущенный вызов (таймаут/отмена) — callee получает одно уведомление:
- * - Android: FCM data-only call_ended → нативный «Пропущенный вызов» и addPendingMissedCall.
- * - iOS: Expo push (т.к. FCM в sendCallEndedToRecipient шлём только на android).
- * Не шлём Expo на Android, иначе будет два уведомления и бейдж «2».
- */
-export async function sendCallEndedToRecipient(
-  calleeUserId: string,
-  callId: string,
-  fromUserId: string,
-  fromNick: string
-): Promise<void> {
-  const messaging = getFirebaseMessaging();
-  const recs = await PushTokenModel.find({ userId: calleeUserId })
-    .select('token platform fcmToken')
-    .lean();
-  type Rec = { token: string; platform: string; fcmToken?: string };
-  const list = (recs || []) as unknown as Rec[];
-
-  for (const r of list) {
-    if (r.platform === 'android' && r.fcmToken && messaging) {
-      try {
-        await messaging.send({
-          token: r.fcmToken,
-          data: {
-            type: 'call_ended',
-            callId: String(callId),
-            from: String(fromUserId),
-            fromNick: String(fromNick || ''),
-            endedFromActive: 'false',
-          },
-          android: { priority: 'high' },
-        });
-        logger.info('[push] call_ended (missed) sent via FCM to callee', { userId: calleeUserId, from: fromUserId });
-      } catch (e) {
-        const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
-        const isInvalidToken =
-          isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
-        if (isInvalidToken) await removeInvalidFcmToken(calleeUserId, r);
-        logger.warn('[push] FCM call_ended (missed) failed', { userId: calleeUserId, error: errMsg, isInvalidToken });
-      }
-    }
-  }
-
-  const iosTokens = list.filter((r) => r.platform === 'ios' && r.token && Expo.isExpoPushToken(r.token)).map((r) => r.token);
-  if (iosTokens.length > 0) {
-    const missedTitle = 'Пропущенный вызов';
-    const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
-    const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
-      to,
-      sound: 'default',
-      priority: 'high',
-      title: missedTitle,
-      body: missedBody,
-      channelId: 'missed_call',
-      data: { type: 'call_ended', callId, from: fromUserId, fromNick: fromNick || '' },
-    }));
-    try {
-      const chunks = expo.chunkPushNotifications(messages);
-      for (const chunk of chunks) {
-        await expo.sendPushNotificationsAsync(chunk);
-      }
-      logger.info('[push] call_ended (missed) sent via Expo to iOS callee', { userId: calleeUserId, tokenCount: iosTokens.length });
-    } catch (e) {
-      logger.warn('[push] Expo call_ended (missed) to iOS callee failed', { userId: calleeUserId, error: (e as Error)?.message });
-    }
+  try {
+    await sendPushToUser(calleeUserId, {
+      kind: 'message',
+      title: '',
+      body: '',
+      data: { type: 'call_canceled', callId: String(callId) },
+    });
+    logger.info('[push] call_canceled sent via Expo to callee', { userId: calleeUserId });
+  } catch (e) {
+    logger.warn('[push] Expo call_canceled to callee failed', { userId: calleeUserId, error: (e as Error)?.message });
   }
 }

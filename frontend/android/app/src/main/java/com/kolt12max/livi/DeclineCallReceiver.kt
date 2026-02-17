@@ -39,7 +39,6 @@ class DeclineCallReceiver : BroadcastReceiver() {
                     }
                     val code = conn.responseCode
                     if (code !in 200..299) Log.w(TAG, "decline HTTP $code")
-                    conn.inputStream?.use { it.readBytes() }
                     conn.disconnect()
                 } catch (e: Exception) {
                     Log.w(TAG, "decline HTTP failed", e)

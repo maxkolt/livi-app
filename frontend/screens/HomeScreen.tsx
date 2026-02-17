@@ -625,8 +625,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /* tabs & menu */
   const [menuOpen, setMenuOpen] = useState(false);
   const [tab, setTab] = useState<'friends' | 'settings' | 'more'>('friends');
-  // Красная точка на кнопке меню скрывается при открытии меню; счётчики пропущенных у друзей не очищаем — чтобы было видно, кто звонил
-  const [menuDotDismissed, setMenuDotDismissed] = useState(false);
 
   /* обновление приложения: бейдж раз в сутки, индикатор у «Ещё», кнопка в табе Ещё */
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -646,9 +644,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const MENU_BTN_INNER_BG = isDark
     ? 'rgba(22, 26, 35, 0.66)' // тёмная тема: ещё темнее
     : 'rgba(10, 14, 22, 0.54)'; // светлая: ещё темнее
-
-  // Логирование красного индикатора на кнопке меню только при изменении состояния (для отладки перехода по уведомлению о пропущенном)
-  const menuDotLogRef = useRef<{ show: boolean; missed: number; unread: number } | null>(null);
 
   // На Android: при открытом меню кнопка "Назад" закрывает меню (возврат на страницу приветствия), а не выходит из приложения
   useEffect(() => {
@@ -2227,10 +2222,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Друзей грузим как можно раньше (socket или REST fallback)
       await loadFriends();
       // Инициализация пропущенных видеозвонков из хранилища
-      // КРИТИЧНО: Мержим с текущим состоянием (не заменяем!), иначе при открытии по уведомлению затираем только что добавленный пропущенный вызов
+      // КРИТИЧНО: Нормализуем ключи (преобразуем в строки) для корректной работы
       try {
         const rawMissed = await AsyncStorage.getItem(MISSED_CALLS_KEY);
         const parsed = rawMissed ? JSON.parse(rawMissed) : {};
+        // Нормализуем ключи: преобразуем все ключи в строки
         const normalized: Record<string, number> = {};
         if (parsed && typeof parsed === 'object') {
           Object.keys(parsed).forEach(key => {
@@ -2240,7 +2236,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             }
           });
         }
-        setMissedByUser((prev) => ({ ...prev, ...normalized }));
+        setMissedByUser(normalized);
         setMissedLoaded(true);
         logger.debug('[HomeScreen] Loaded missed calls from storage', { count: Object.keys(normalized).length, normalized });
       } catch (e) {
@@ -2377,31 +2373,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
   }, [menuOpen, tab, friends]);
 
-  // При открытии меню — только скрываем красную точку на кнопке меню; missedByUser не очищаем. Сбрасываем уведомления в шторке и бейдж иконки.
-  // КРИТИЧНО: Скрываем точку только при переходе closed → open (пользователь открыл меню), иначе при возврате из фона по иконке меню могло остаться открытым и мы бы затирали только что показанную точку.
-  const prevMenuOpenRef = useRef(menuOpen);
+  // При заходе во вкладку «Друзья» (увидел от кого пропущенный) — сбрасываем уведомление в шторке и бейдж
   useEffect(() => {
-    const justOpened = !prevMenuOpenRef.current && menuOpen;
-    prevMenuOpenRef.current = menuOpen;
-    if (!menuOpen) return;
-    if (justOpened) setMenuDotDismissed(true);
-    clearNotificationIndicators().catch(() => {});
-  }, [menuOpen]);
-
-  // При заходе во вкладку «Друзья» снимаем все системные уведомления и бейдж — снаружи всё чисто, индикаторы остаются только внутри (меню, бейджи у друзей).
-  useEffect(() => {
-    if (menuOpen && tab === 'friends') {
+    if (tab === 'friends') {
       clearNotificationIndicators().catch(() => {});
     }
-  }, [menuOpen, tab]);
-
-  // Когда меню закрыли и снова есть пропущенные/непрочитанные — показываем красную точку снова
-  useEffect(() => {
-    if (menuOpen) return;
-    const hasAny = Object.values(missedByUser).some((n) => typeof n === 'number' && n > 0) ||
-      Object.values(unreadByUser).some((n) => typeof n === 'number' && n > 0);
-    if (hasAny) setMenuDotDismissed(false);
-  }, [menuOpen, missedByUser, unreadByUser]);
+  }, [tab]);
 
   // ===== inCall busy flag: слушаем старт/конец звонков и отмечаем друзей как занятых =====
   useEffect(() => {
@@ -2419,15 +2396,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   /* ===== app resume ===== */
   const appStateRef = useRef(AppState.currentState);
-  const appActiveMissedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const appActiveMissedFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const sub = AppState.addEventListener('change', async (state) => {
       const wasBg = /inactive|background/.test(appStateRef.current);
       appStateRef.current = state;
       try { setAppIsActive(state === 'active'); } catch {}
       if (wasBg && state === 'active') {
-        logger.info('[HomeScreen] App became active (was background), will read missed from storage in 400ms and 900ms');
         try {
           await waitSocketConnected();
           
@@ -2444,106 +2418,40 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           }
           await loadFriends();
         } catch (e) { console.warn('resume error', e); }
-        // При возврате по иконке (не по уведомлению) подхватываем пропущенные из AsyncStorage и показываем красную точку на кнопке меню.
-        // Сразу читаем (данные могли быть записаны ранее или из другого входа), затем 400ms и 900ms — чтобы подхватить запись из App.tsx getAndClearPendingMissedCalls.
-        const applyMissedFromStorage = () => {
-          AsyncStorage.getItem(MISSED_CALLS_KEY).then((raw) => {
-            try {
-              const parsed = raw ? JSON.parse(raw) : {};
-              const normalized: Record<string, number> = {};
-              if (parsed && typeof parsed === 'object') {
-                Object.keys(parsed).forEach((key) => {
-                  const value = parsed[key];
-                  if (typeof value === 'number' && value > 0) normalized[String(key)] = value;
-                });
-              }
-              if (Object.keys(normalized).length > 0) {
-                setMissedByUser((prev) => ({ ...prev, ...normalized }));
-                setMenuDotDismissed(false);
-                logger.info('[HomeScreen] App became active: applied missed from storage', { count: Object.keys(normalized).length, uids: Object.keys(normalized) });
-              }
-              setMissedLoaded(true);
-            } catch {}
-          }).catch(() => {});
-        };
-        applyMissedFromStorage();
-        if (appActiveMissedTimerRef.current) clearTimeout(appActiveMissedTimerRef.current);
-        if (appActiveMissedFallbackRef.current) clearTimeout(appActiveMissedFallbackRef.current);
-        appActiveMissedTimerRef.current = setTimeout(() => {
-          appActiveMissedTimerRef.current = null;
-          applyMissedFromStorage();
-        }, 400);
-        appActiveMissedFallbackRef.current = setTimeout(() => {
-          appActiveMissedFallbackRef.current = null;
-          applyMissedFromStorage();
-        }, 900);
       }
     });
-    return () => {
-      if (appActiveMissedTimerRef.current) clearTimeout(appActiveMissedTimerRef.current);
-      appActiveMissedTimerRef.current = null;
-      if (appActiveMissedFallbackRef.current) clearTimeout(appActiveMissedFallbackRef.current);
-      appActiveMissedFallbackRef.current = null;
-      sub.remove();
-    };
+    return () => sub.remove();
   }, [syncUserData, ensureIdentity, loadFriends]);
 
 
 
   // Обновляем пропущенные видеозвонки из AsyncStorage при возврате на экран (iOS/Android)
-  // КРИТИЧНО: Мержим с текущим состоянием (не заменяем!). При возврате из фона по тапу на иконку App.tsx пишет pending missed в AsyncStorage асинхронно — делаем повторное чтение с задержкой, чтобы подхватить данные и показать индикатор на кнопке меню
-  const mergeMissedFromStorage = React.useCallback((options?: { resetMenuDot?: boolean }) => {
-    AsyncStorage.getItem(MISSED_CALLS_KEY).then((raw) => {
-      try {
-        const parsed = raw ? JSON.parse(raw) : {};
-        const normalized: Record<string, number> = {};
-        if (parsed && typeof parsed === 'object') {
-          Object.keys(parsed).forEach((key) => {
-            const value = parsed[key];
-            if (typeof value === 'number' && value > 0) {
-              normalized[String(key)] = value;
-            }
-          });
-        }
-        setMissedByUser((prev) => ({ ...prev, ...normalized }));
-        setMissedLoaded(true);
-        // При возврате из фона по иконке отложенное чтение подхватывает пропущенные — показываем красную точку на кнопке меню
-        if (options?.resetMenuDot && Object.keys(normalized).length > 0) {
-          setMenuDotDismissed(false);
-        }
-      } catch {}
-    }).catch(() => {});
-  }, []);
-
-  const focusMissedRereadTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // КРИТИЧНО: Нормализуем ключи (преобразуем в строки) и фильтруем только значения > 0
+  // Также обновляем счетчики непрочитанных сообщений при фокусе
   useEffect(() => {
     const unsub = navigation?.addListener?.('focus', async () => {
       try {
-        if (focusMissedRereadTimerRef.current) {
-          clearTimeout(focusMissedRereadTimerRef.current);
-          focusMissedRereadTimerRef.current = null;
-        }
-        // Первое чтение сразу
+        // Обновляем пропущенные звонки
         const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
+        // Нормализуем ключи: преобразуем все ключи в строки и фильтруем только значения > 0
         const normalized: Record<string, number> = {};
         if (parsed && typeof parsed === 'object') {
           Object.keys(parsed).forEach(key => {
             const value = parsed[key];
+            // КРИТИЧНО: Добавляем только значения > 0, игнорируем нулевые
             if (typeof value === 'number' && value > 0) {
               normalized[String(key)] = value;
             }
           });
         }
-        setMissedByUser((prev) => ({ ...prev, ...normalized }));
+        setMissedByUser(normalized);
         setMissedLoaded(true);
         logger.debug('[HomeScreen] Reloaded missed calls on focus', { 
           count: Object.keys(normalized).length,
           total: Object.keys(parsed).length,
           normalized 
         });
-        // Повторное чтение через 400 ms: при возврате из фона по тапу на иконку App.tsx (getAndClearPendingMissedCalls) пишет в AsyncStorage асинхронно — подхватываем и показываем индикатор на кнопке меню
-        focusMissedRereadTimerRef.current = setTimeout(() => mergeMissedFromStorage({ resetMenuDot: true }), 400);
         
         // КРИТИЧНО: Обновляем счетчики непрочитанных сообщений при фокусе
         if (friends.length > 0) {
@@ -2569,14 +2477,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         logger.warn('[HomeScreen] Error reloading counters on focus:', e);
       }
     });
-    return () => {
-      if (focusMissedRereadTimerRef.current) {
-        clearTimeout(focusMissedRereadTimerRef.current);
-        focusMissedRereadTimerRef.current = null;
-      }
-      try { unsub?.(); } catch {}
-    };
-  }, [navigation, friends, mergeMissedFromStorage]);
+    return () => { try { unsub?.(); } catch {} };
+  }, [navigation, friends]);
 
   /* ===== presence & friend events ===== */
   useEffect(() => {
@@ -2986,12 +2888,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [stopWaves]);
 
   // Мгновенное обновление бейджа при инкременте в App.tsx (главная/меню)
-  // КРИТИЧНО: Обновляем состояние и сохраняем в AsyncStorage синхронно; показываем красную точку на кнопке меню снова
+  // КРИТИЧНО: Обновляем состояние и сохраняем в AsyncStorage синхронно
   useEffect(() => {
     const off = onMissedIncrement(async ({ userId }) => {
       if (!userId) return;
       const userIdStr = String(userId);
-      setMenuDotDismissed(false);
       setMissedByUser((prev) => {
         const next = { ...prev, [userIdStr]: (prev[userIdStr] || 0) + 1 };
         // КРИТИЧНО: Сохраняем в AsyncStorage и синхронизируем бейдж после записи
@@ -3763,19 +3664,19 @@ const handleClearNick = useCallback(async () => {
               handleStartVideoCall(friend);
             }}
           />
-          {missedCount > 0 && (
-            <View style={styles.badgeBubble}>
-              <Text style={{ color: '#fff', fontSize: 8, fontWeight: '800' }}>
-                {missedCount > 99 ? '99+' : missedCount}
-              </Text>
-            </View>
-          )}
           {busy && Platform.OS === 'android' && (
             <View style={styles.videoIconOverlay}>
               <MaterialIcons name="videocam" size={23} color="rgba(136, 136, 136, 0.3)" />
             </View>
           )}
         </View>
+        {missedCount > 0 && (
+          <View style={styles.badgeBubble}>
+            <Text style={{ color: '#fff', fontSize: 8, fontWeight: '800' }}>
+              {missedCount > 99 ? '99+' : missedCount}
+            </Text>
+          </View>
+        )}
       </View>
     );
   };
@@ -4083,47 +3984,18 @@ const handleClearNick = useCallback(async () => {
   };
 
   // Показ уведомления «Звонок завершён», авто-открытие меню друзей, переход на вкладку «Друзья» (тап по «Пропущенный вызов»).
-  // КРИТИЧНО: Сразу добавляем missedCallFromUserId в missedByUser (из params или из глобала __pendingMissedCallFromUserId), затем грузим из AsyncStorage и объединяем.
   useEffect(() => {
     const ended = (route as any)?.params?.callEnded;
     const openFriendsMenu = (route as any)?.params?.openFriendsMenu;
     const openFriendsTab = (route as any)?.params?.openFriendsTab;
-    let missedCallFromUserId = (route as any)?.params?.missedCallFromUserId as string | undefined;
-    const pendingFromGlobal = (global as any).__pendingMissedCallFromUserId as string | undefined;
-    if (pendingFromGlobal && typeof pendingFromGlobal === 'string' && pendingFromGlobal.trim()) {
-      missedCallFromUserId = missedCallFromUserId || String(pendingFromGlobal).trim();
-      try { (global as any).__pendingMissedCallFromUserId = undefined; } catch {}
-    }
-    if (openFriendsMenu || openFriendsTab || missedCallFromUserId || pendingFromGlobal) {
-      logger.info('[HomeScreen] open from missed-call notification', {
-        routeParams: route?.params,
-        openFriendsMenu,
-        openFriendsTab,
-        missedCallFromUserId: missedCallFromUserId || undefined,
-        pendingFromGlobal: pendingFromGlobal ? 'was set' : undefined,
-      });
-    }
     if (ended) {
       showNotice(t('callEnded', lang), 'success', 3000);
     }
-    if (openFriendsMenu || pendingFromGlobal) {
+    if (openFriendsMenu) {
       setMenuOpen(true);
     }
-    if (openFriendsTab || pendingFromGlobal) {
+    if (openFriendsTab) {
       setTab('friends');
-    }
-    // Сразу добавляем звонящего из уведомления (params или глобал) в missedByUser, чтобы индикатор «пропущенный от Tim» был виден
-    if (missedCallFromUserId && missedCallFromUserId.trim()) {
-      const uid = String(missedCallFromUserId).trim();
-      setMissedByUser((prev) => {
-        const next = { ...prev, [uid]: (prev[uid] || 0) + 1 };
-        AsyncStorage.getItem(MISSED_CALLS_KEY).then((raw) => {
-          const parsed = raw ? JSON.parse(raw) : {};
-          parsed[uid] = (parsed[uid] || 0) + 1;
-          AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(parsed)).then(() => syncAppBadgeFromMissedCount()).catch(() => {});
-        }).catch(() => {});
-        return next;
-      });
     }
     if (openFriendsMenu || openFriendsTab) {
       AsyncStorage.getItem(MISSED_CALLS_KEY).then((raw) => {
@@ -4136,34 +4008,17 @@ const handleClearNick = useCallback(async () => {
               if (typeof value === 'number' && value > 0) normalized[String(key)] = value;
             });
           }
-          if (missedCallFromUserId && missedCallFromUserId.trim()) {
-            const uid = String(missedCallFromUserId).trim();
-            normalized[uid] = (normalized[uid] || 0) + 1;
-          }
           setMissedByUser((prev) => ({ ...prev, ...normalized }));
         } catch {}
-        try {
-          navigation.setParams?.({
-            callEnded: undefined,
-            openFriendsMenu: undefined,
-            openFriendsTab: undefined,
-            missedCallFromUserId: undefined,
-          });
-        } catch {}
-      }).catch(() => {
-        try {
-          navigation.setParams?.({
-            callEnded: undefined,
-            openFriendsMenu: undefined,
-            openFriendsTab: undefined,
-            missedCallFromUserId: undefined,
-          });
-        } catch {}
-      });
+      }).catch(() => {});
     }
-    if (ended && !openFriendsMenu && !openFriendsTab) {
+    if (ended || openFriendsMenu || openFriendsTab) {
       try {
-        navigation.setParams?.({ callEnded: undefined });
+        navigation.setParams?.({
+          callEnded: undefined,
+          openFriendsMenu: undefined,
+          openFriendsTab: undefined,
+        });
       } catch {}
     }
   }, [route, navigation, showNotice]);
@@ -4321,24 +4176,23 @@ const handleClearNick = useCallback(async () => {
             </View>
           </View>
           {(() => {
-            // КРИТИЧНО: Проверяем наличие непрочитанных сообщений или пропущенных видеозвонков; точку скрываем, если пользователь уже открыл меню (menuDotDismissed)
+            // КРИТИЧНО: Проверяем наличие непрочитанных сообщений или пропущенных видеозвонков
+            // Фильтруем только значения > 0, игнорируем нулевые и отрицательные
             const unreadValues = Object.values(unreadByUser).filter((n) => typeof n === 'number' && n > 0);
             const missedValues = Object.values(missedByUser).filter((n) => typeof n === 'number' && n > 0);
             const hasUnread = unreadValues.length > 0;
             const hasMissed = missedValues.length > 0;
-            const shouldShow = (hasUnread || hasMissed) && !menuDotDismissed;
-            const openFromMissed = !!(route as any)?.params?.openFriendsMenu || (route as any)?.params?.openFriendsTab;
-            const prev = menuDotLogRef.current;
-            if (prev === null || prev.show !== shouldShow || prev.missed !== missedValues.length || prev.unread !== unreadValues.length) {
-              menuDotLogRef.current = { show: shouldShow, missed: missedValues.length, unread: unreadValues.length };
-              logger.info('[HomeScreen] menu button red indicator', {
-                visible: shouldShow,
-                hasUnread,
-                hasMissed,
+            const shouldShow = hasUnread || hasMissed;
+            
+            // Логируем только если есть проблема (показываем когда не должно или наоборот)
+            if (shouldShow) {
+              logger.debug('[HomeScreen] Showing menu dot notification', { 
+                hasUnread, 
+                hasMissed, 
                 unreadCount: unreadValues.length,
                 missedCount: missedValues.length,
-                openFromMissedNotification: openFromMissed,
-                missedByUser: Object.keys(missedByUser).length ? missedByUser : undefined,
+                totalMissedKeys: Object.keys(missedByUser).length,
+                missedByUser 
               });
             }
             return shouldShow ? <View style={styles.menuDot} /> : null;

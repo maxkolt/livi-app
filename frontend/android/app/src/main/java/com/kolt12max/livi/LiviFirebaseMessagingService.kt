@@ -154,7 +154,6 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             return
         }
         // Звонок завершён: снять уведомление входящего, закрыть экран исходящего. «Пропущенный вызов» только если разговор не был принят (таймаут/отмена), не после завершения с видеочата/PiP.
-        // КРИТИЧНО: Если приложение в foreground, каллею уже пришёл socket call:cancel — не показываем уведомление и не добавляем в pending (иначе двойной учёт и мерцание от startActivity).
         if (typeNorm == "call_ended" && callId != null) {
             EndedCallIds.add(this, callId)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -165,34 +164,27 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
             sendBroadcast(cancelIntent)
             val endedFromActive = "true" == data["endedFromActive"]
-            val inForeground = MainActivity.isInForeground
-            if (!endedFromActive && !inForeground) {
-                // Дедупликация: один call_ended = одно уведомление (на случай двойной доставки FCM или гонки на сервере)
-                val shouldShow = tryClaimMissedCallId(callId)
-                if (shouldShow) {
-                    var fromNickEnded = data["fromNick"] ?: ""
-                    if (fromNickEnded.isEmpty() && data["body"] != null) {
-                        try {
-                            fromNickEnded = org.json.JSONObject(data["body"]!!).optString("fromNick", "")
-                        } catch (_: Exception) {}
-                    }
-                    showMissedCallNotification(callId, from ?: "", fromNickEnded)
+            if (!endedFromActive) {
+                var fromNickEnded = data["fromNick"] ?: ""
+                if (fromNickEnded.isEmpty() && data["body"] != null) {
+                    try {
+                        fromNickEnded = org.json.JSONObject(data["body"]!!).optString("fromNick", "")
+                    } catch (_: Exception) {}
                 }
+                showMissedCallNotification(callId, from ?: "", fromNickEnded)
             }
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(packageName)
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
             sendBroadcast(closeIntent)
-            if (!inForeground) {
-                val activityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
-                    putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
-                }
-                try { startActivity(activityIntent) } catch (e: Exception) { Log.w(TAG, "FCM call_ended: startActivity failed", e) }
+            val activityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
+                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
-            Log.d(TAG, "FCM call_ended: incoming canceled, missed=${!endedFromActive}, inForeground=$inForeground callId=$callId")
+            try { startActivity(activityIntent) } catch (e: Exception) { Log.w(TAG, "FCM call_ended: startActivity failed", e) }
+            Log.d(TAG, "FCM call_ended: incoming canceled, missed=${!endedFromActive}, outgoing closed callId=$callId")
             return
         }
         Log.w(TAG, "FCM unhandled: typeNorm=$typeNorm type=$type callId=$callId keys=[$keysStr] → forwarding to Expo")
@@ -293,21 +285,6 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
 
     companion object {
         private const val TAG = "LiviFCM"
-        private const val MISSED_DEDUPE_MS = 3000L
-        @Volatile private var lastMissedCallId: String? = null
-        @Volatile private var lastMissedTime: Long = 0
-
-        /** Возвращает true, если этот callId ещё не показывали как пропущенный в последние MISSED_DEDUPE_MS (один call_ended = одно уведомление). */
-        @Synchronized
-        @JvmStatic
-        private fun tryClaimMissedCallId(callId: String): Boolean {
-            val now = System.currentTimeMillis()
-            if (callId == lastMissedCallId && (now - lastMissedTime) < MISSED_DEDUPE_MS) return false
-            lastMissedCallId = callId
-            lastMissedTime = now
-            return true
-        }
-
         /** ID канала: HIGH чтобы full-screen intent срабатывал (нативный экран поверх домашнего). */
         const val CHANNEL_ID_CALLS = "livi_incoming_call_v3"
         const val NOTIFICATION_ID_INCOMING_CALL = 1001

@@ -14,10 +14,9 @@ const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 /** ID категории уведомления входящего звонка с кнопками «Поднять» / «Положить» */
 export const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
 
-/** Синхронизировать бейдж иконки с пропущенными. На Android бейдж снаружи = только число системных уведомлений (не вызываем setBadgeCountAsync с числом, чтобы не дублировать). На iOS выставляем total из AsyncStorage. */
+/** Синхронизировать бейдж иконки с суммарным числом пропущенных звонков. */
 export async function syncAppBadgeFromMissedCount(): Promise<void> {
   try {
-    if (Platform.OS === 'android') return;
     const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
     const map = raw ? JSON.parse(raw) : {};
     const total = Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
@@ -71,11 +70,9 @@ Notifications.setNotificationHandler({
       try {
         stopIncomingCallAlert();
       } catch {}
-      if (Platform.OS !== 'android') {
-        try {
-          await Notifications.dismissAllNotificationsAsync();
-        } catch {}
-      }
+      try {
+        await Notifications.dismissAllNotificationsAsync();
+      } catch {}
       if (!endedFromActive && Platform.OS !== 'android') {
         const fromNick = String(data.fromNick || '').trim();
         const fromUserId = String(data.from || '');
@@ -293,29 +290,10 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
           (global as any).__onCallEndedFromPush?.();
         } catch {}
       }
-      // На Android при холодном старте по тапу «Пропущенный вызов» Expo часто возвращает call_ended (а не missed_call). Открываем Home с меню и вкладкой Друзья и передаём кто звонил.
-      // Глобал __pendingMissedCallFromUserId — запасной путь, если route.params придут с задержкой после reset.
-      const fromUserId = String(data?.from || '').trim();
-      if (fromUserId && actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER && Platform.OS === 'android') {
-        try { (global as any).__pendingMissedCallFromUserId = fromUserId; } catch {}
-        const nav = await waitForNavReady();
-        if (nav) {
-          try { await clearCallRelatedNotificationsAndSyncBadge(); } catch {}
-          nav.dispatch(
-            CommonActions.reset({
-              index: 0,
-              routes: [{ name: 'Home' as never, params: { openFriendsMenu: true, openFriendsTab: true, missedCallFromUserId: fromUserId } }],
-            })
-          );
-          logger.info('[push] call_ended with from: opened Home with openFriendsMenu (missed call tap)', { fromUserId });
-        }
-      }
       return;
     }
 
     if (type === 'missed_call') {
-      const fromUserId = String(data?.from || '').trim();
-      if (fromUserId) try { (global as any).__pendingMissedCallFromUserId = fromUserId; } catch {}
       const nav = await waitForNavReady();
       if (!nav) return;
       try {
@@ -324,7 +302,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
       nav.dispatch(
         CommonActions.reset({
           index: 0,
-          routes: [{ name: 'Home' as never, params: { openFriendsMenu: true, openFriendsTab: true, ...(fromUserId ? { missedCallFromUserId: fromUserId } : {}) } }],
+          routes: [{ name: 'Home' as never, params: { openFriendsMenu: true, openFriendsTab: true } }],
         })
       );
       return;
