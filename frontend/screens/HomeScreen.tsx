@@ -2388,6 +2388,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     clearNotificationIndicators().catch(() => {});
   }, [menuOpen]);
 
+  // При заходе во вкладку «Друзья» снимаем все системные уведомления и бейдж — снаружи всё чисто, индикаторы остаются только внутри (меню, бейджи у друзей).
+  useEffect(() => {
+    if (menuOpen && tab === 'friends') {
+      clearNotificationIndicators().catch(() => {});
+    }
+  }, [menuOpen, tab]);
+
   // Когда меню закрыли и снова есть пропущенные/непрочитанные — показываем красную точку снова
   useEffect(() => {
     if (menuOpen) return;

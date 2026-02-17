@@ -14,9 +14,10 @@ const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 /** ID категории уведомления входящего звонка с кнопками «Поднять» / «Положить» */
 export const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
 
-/** Синхронизировать бейдж иконки с суммарным числом пропущенных звонков. */
+/** Синхронизировать бейдж иконки с пропущенными. На Android бейдж снаружи = только число системных уведомлений (не вызываем setBadgeCountAsync с числом, чтобы не дублировать). На iOS выставляем total из AsyncStorage. */
 export async function syncAppBadgeFromMissedCount(): Promise<void> {
   try {
+    if (Platform.OS === 'android') return;
     const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
     const map = raw ? JSON.parse(raw) : {};
     const total = Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);

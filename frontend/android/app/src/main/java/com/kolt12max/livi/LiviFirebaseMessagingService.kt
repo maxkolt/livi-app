@@ -167,13 +167,17 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val endedFromActive = "true" == data["endedFromActive"]
             val inForeground = MainActivity.isInForeground
             if (!endedFromActive && !inForeground) {
-                var fromNickEnded = data["fromNick"] ?: ""
-                if (fromNickEnded.isEmpty() && data["body"] != null) {
-                    try {
-                        fromNickEnded = org.json.JSONObject(data["body"]!!).optString("fromNick", "")
-                    } catch (_: Exception) {}
+                // Дедупликация: один call_ended = одно уведомление (на случай двойной доставки FCM или гонки на сервере)
+                val shouldShow = tryClaimMissedCallId(callId)
+                if (shouldShow) {
+                    var fromNickEnded = data["fromNick"] ?: ""
+                    if (fromNickEnded.isEmpty() && data["body"] != null) {
+                        try {
+                            fromNickEnded = org.json.JSONObject(data["body"]!!).optString("fromNick", "")
+                        } catch (_: Exception) {}
+                    }
+                    showMissedCallNotification(callId, from ?: "", fromNickEnded)
                 }
-                showMissedCallNotification(callId, from ?: "", fromNickEnded)
             }
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(packageName)
@@ -289,6 +293,21 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
 
     companion object {
         private const val TAG = "LiviFCM"
+        private const val MISSED_DEDUPE_MS = 3000L
+        @Volatile private var lastMissedCallId: String? = null
+        @Volatile private var lastMissedTime: Long = 0
+
+        /** Возвращает true, если этот callId ещё не показывали как пропущенный в последние MISSED_DEDUPE_MS (один call_ended = одно уведомление). */
+        @Synchronized
+        @JvmStatic
+        private fun tryClaimMissedCallId(callId: String): Boolean {
+            val now = System.currentTimeMillis()
+            if (callId == lastMissedCallId && (now - lastMissedTime) < MISSED_DEDUPE_MS) return false
+            lastMissedCallId = callId
+            lastMissedTime = now
+            return true
+        }
+
         /** ID канала: HIGH чтобы full-screen intent срабатывал (нативный экран поверх домашнего). */
         const val CHANNEL_ID_CALLS = "livi_incoming_call_v3"
         const val NOTIFICATION_ID_INCOMING_CALL = 1001
