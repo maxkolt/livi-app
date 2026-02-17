@@ -72,7 +72,7 @@ import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall } from '../utils/globalEvents';
-import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS } from '../utils/callKeep';
+import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled } from '../utils/callKeep';
 import { clearNotificationIndicators, syncAppBadgeFromMissedCount } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
@@ -1167,16 +1167,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (!calling.visible) setSwipeActionsHiddenForCall(null);
   }, [calling.visible]);
 
-  // Прямая подписка на call:declined пока висит модалка исходящего — чтобы гарантированно закрыть при отклонении на нативном экране
-  useEffect(() => {
-    if (!calling.visible) return;
-    const handler = () => {
-      setCalling({ visible: false, friend: null, callId: null });
-      stopWaves();
-    };
-    socket.on('call:declined', handler);
-    return () => { socket.off('call:declined', handler); };
-  }, [calling.visible, stopWaves]);
+  // Закрытие по call:declined делают App (closeOutgoingCallActivity) + offDeclined в handleStartVideoCall (setCalling, showNotice).
+  // Прямую подписку socket.on('call:declined') убрали — она давала второй setCalling и двойное мерцание.
 
   // Звук вызова: в модалке — из JS (WAV в цикле); на нативном экране — из OutgoingCallActivity (тот же WAV).
   const OUTGOING_CALL_SOUND_DURATION_MS = 20000;
@@ -1234,6 +1226,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const handleStartVideoCall = useCallback(async (friend: Friend) => {
     setSwipeActionsHiddenForCall(friend.id);
     openSwipeableRef.current?.close?.();
+    clearOutgoingDeclineHandled();
     try {
       setCalling({ visible: true, friend, callId: null });
       startWaves();
@@ -1298,9 +1291,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       });
       const offDeclined = onCallDeclined?.(() => {
         if (cleaned) return; cleaned = true;
-        try { setOutgoingCallScreenVisible(false); } catch {}
-        try { closeOutgoingCallActivity(); } catch {}
-        // Получатель отклонил: инициатор НЕ увеличивает пропущенные
+        logger.info('[decline/инициатор] HomeScreen offDeclined: setCalling(false), stopWaves, showNotice');
+        // Закрытие нативного окна исходящего — только в App.tsx (onCallDeclined), чтобы не было двойного мерцания
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
         showNotice(t('callDeclined', lang), 'error', 1800);

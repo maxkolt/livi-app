@@ -7,7 +7,8 @@ import { API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, a
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
-import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId } from './callKeep';
+import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled } from './callKeep';
+import { emitCloseOutgoingCall } from './globalEvents';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 
@@ -102,10 +103,17 @@ Notifications.setNotificationHandler({
     }
     if (type === 'call_declined') {
       const data = (n as any)?.request?.content?.data || {};
-      logger.info('[push] call_declined received (handler)', { callId: data?.callId });
-      try { setOutgoingCallScreenVisible(false); } catch {}
+      const id = data?.callId ? String(data.callId) : '';
+      logger.info('[decline/инициатор] push setNotificationHandler call_declined', { callId: id, alreadyHandled: id ? isOutgoingDeclineHandled(id) : false });
+      if (id && isOutgoingDeclineHandled(id)) {
+        logger.info('[decline/инициатор] push setNotificationHandler — уже обработан, выходим');
+        return { shouldShowAlert: false, shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
+      }
+      if (id) markOutgoingDeclineHandled(id);
       try { closeOutgoingCallActivity(); } catch {}
-      logger.info('[push] closeOutgoingCallActivity called after call_declined');
+      try { setOutgoingCallScreenVisible(false); } catch {}
+      try { emitCloseOutgoingCall(); } catch {}
+      logger.info('[decline/инициатор] push setNotificationHandler: закрыли и emitCloseOutgoingCall');
       return {
         shouldShowAlert: false,
         shouldShowBanner: false,
@@ -266,10 +274,17 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
     if (!type) return;
 
     if (type === 'call_declined') {
-      logger.info('[push] call_declined received (handleNotificationResponse)', { callId: data?.callId });
-      try { setOutgoingCallScreenVisible(false); } catch {}
+      const id = data?.callId ? String(data.callId) : '';
+      logger.info('[decline/инициатор] push handleNotificationResponse call_declined', { callId: id, alreadyHandled: id ? isOutgoingDeclineHandled(id) : false });
+      if (id && isOutgoingDeclineHandled(id)) {
+        logger.info('[decline/инициатор] push handleNotificationResponse — уже обработан, выходим');
+        return;
+      }
+      if (id) markOutgoingDeclineHandled(id);
       try { closeOutgoingCallActivity(); } catch {}
-      logger.info('[push] closeOutgoingCallActivity called after call_declined (response)');
+      try { setOutgoingCallScreenVisible(false); } catch {}
+      try { emitCloseOutgoingCall(); } catch {}
+      logger.info('[decline/инициатор] push handleNotificationResponse: закрыли и emitCloseOutgoingCall');
       return;
     }
     if (type === 'call_canceled') {
@@ -599,10 +614,17 @@ export function addNotificationListeners() {
     try {
       const data = (n as any)?.request?.content?.data;
       if (data?.type === 'call_declined') {
-        logger.info('[push] call_declined received (notificationReceived)', { callId: data?.callId });
-        try { setOutgoingCallScreenVisible(false); } catch {}
+        const id = data?.callId ? String(data.callId) : '';
+        logger.info('[decline/инициатор] push notificationReceived call_declined', { callId: id, alreadyHandled: id ? isOutgoingDeclineHandled(id) : false });
+        if (id && isOutgoingDeclineHandled(id)) {
+          logger.info('[decline/инициатор] push notificationReceived — уже обработан, выходим');
+          return;
+        }
+        if (id) markOutgoingDeclineHandled(id);
         try { closeOutgoingCallActivity(); } catch {}
-        logger.info('[push] closeOutgoingCallActivity called after call_declined (received)');
+        try { setOutgoingCallScreenVisible(false); } catch {}
+        try { emitCloseOutgoingCall(); } catch {}
+        logger.info('[decline/инициатор] push notificationReceived: закрыли и emitCloseOutgoingCall');
         return;
       }
       if (data?.type === 'call_canceled' && data?.callId) {

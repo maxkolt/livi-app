@@ -32,7 +32,7 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled } from './utils/callKeep';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
@@ -1256,14 +1256,21 @@ function AppContent() {
   // Закрываем входящую модалку, если звонящий отменил вызов
   React.useEffect(() => {
     const offDecl = onCallDeclined?.((d) => {
-      logger.debug('Call declined received', { callId: d?.callId });
+      const id = d?.callId ? String(d.callId) : '';
+      logger.info('[decline/инициатор] App onCallDeclined вызван', { callId: id, alreadyHandled: id ? isOutgoingDeclineHandled(id) : false });
+      if (id && isOutgoingDeclineHandled(id)) {
+        logger.info('[decline/инициатор] App onCallDeclined — уже обработан, выходим');
+        return;
+      }
+      if (id) markOutgoingDeclineHandled(id);
       incomingCallIdRef.current = null;
       if (d?.callId) try { reportEndCallToCallKeep(d.callId); } catch {}
       stopIncomingCallAlert();
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
-      try { setOutgoingCallScreenVisible(false); } catch {}
-      try { emitCloseOutgoingCall(); } catch {}
+      logger.info('[decline/инициатор] App: закрываем нативное окно и сбрасываем visible');
       try { closeOutgoingCallActivity(); } catch {}
+      try { setOutgoingCallScreenVisible(false); } catch {}
+      // Не эмитим emitCloseOutgoingCall — иначе onCloseOutgoingCall вызовет второй setCalling и второе мерцание
       // call:declined = тот, кому звонили, отклонил — пропущенным не считаем, счётчик не увеличиваем
     });
     const offCancel = onCallCanceled?.(async (d) => {

@@ -976,6 +976,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     };
 
     // call:declined = тот, кому звонили, отклонил; инициатор получает это и должен закрыть модалку «Ожидаем ответа»
+    // Не вызываем handleCallEnded() — только emit('callDeclined'), чтобы у инициатора не было двойного мерцания (один раз закрытие из App, без лишнего callEnded)
     const callDeclinedHandler = (data?: { callId?: string; from?: string }) => {
       logger.info('[VideoCallSession] 📡 Socket event call:declined received (callee declined)', {
         callId: data?.callId,
@@ -983,7 +984,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         currentCallId: this.callId,
       });
       this.emit('callDeclined');
-      this.handleCallEnded();
     };
     
     const disconnectedHandler = () => {

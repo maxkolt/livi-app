@@ -76,9 +76,38 @@ export function isCallKeepAvailable(): boolean {
   return Platform.OS === 'android' && isSetup && hasPhoneNumbersPermission;
 }
 
+/** Один раз закрываем исходящий при decline: сокет и пуш оба могут прийти — закрываем только по первому. */
+let outgoingDeclineHandledCallId: string | null = null;
+export function markOutgoingDeclineHandled(callId: string): void {
+  outgoingDeclineHandledCallId = callId;
+}
+export function isOutgoingDeclineHandled(callId: string): boolean {
+  return outgoingDeclineHandledCallId === callId;
+}
+export function clearOutgoingDeclineHandled(): void {
+  outgoingDeclineHandledCallId = null;
+}
+
+/** Дебаунс: не вызывать нативный finish повторно в течение окна (сокет+пуш могут оба вызвать close). */
+const OUTGOING_CLOSE_DEBOUNCE_MS = 1200;
+let lastOutgoingCloseAt = 0;
+
+/** Сбросить дебаунс при открытии нового исходящего (чтобы следующий decline мог закрыть). */
+export function resetOutgoingCloseDebounce(): void {
+  lastOutgoingCloseAt = 0;
+}
+
 /** Закрыть нативный экран исходящего (OutgoingCallActivity) при принятии/отклонении/таймауте. */
 export function closeOutgoingCallActivity(): void {
   if (Platform.OS !== 'android') return;
+  const now = Date.now();
+  const sinceLast = lastOutgoingCloseAt > 0 ? now - lastOutgoingCloseAt : Infinity;
+  if (sinceLast < OUTGOING_CLOSE_DEBOUNCE_MS) {
+    logger.info('[decline/инициатор] callKeep.closeOutgoingCallActivity — пропуск (дебаунс)', { sinceLastMs: Math.round(sinceLast) });
+    return;
+  }
+  lastOutgoingCloseAt = now;
+  logger.info('[decline/инициатор] callKeep.closeOutgoingCallActivity — вызываем нативный finish');
   try {
     NativeModules.LiviAppModule?.closeOutgoingCallActivity?.();
   } catch {}
@@ -214,6 +243,7 @@ export function setOutgoingCallTimeoutMs(ms: number): void {
 export function displayOutgoingCallImmediate(toUserId: string, toNick?: string): void {
   if (Platform.OS !== 'android') return;
   if (!isSetup || !hasPhoneNumbersPermission) return;
+  resetOutgoingCloseDebounce();
   try {
     const LiviAppModule = NativeModules.LiviAppModule;
     if (LiviAppModule?.launchOutgoingCallActivityWithoutCallId) {

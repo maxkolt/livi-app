@@ -362,11 +362,16 @@ export async function sendCallAcceptedToCaller(callerUserId: string, callId: str
 
 /**
  * Инициатор отменил вызов — шлём callee FCM data-only call_canceled,
- * чтобы на устройстве получателя сразу сняли уведомление и закрыли IncomingCallActivity.
- * Дублируем через Expo: при недоставке FCM получатель всё равно закроет экран по пушу.
+ * чтобы на устройстве получателя сняли уведомление «входящий вызов», закрыли экран и показали «пропущенный вызов».
+ * fromUserId/fromNick нужны для нативного уведомления «пропущенный вызов» и счётчика.
  */
-export async function sendCallCanceledToRecipient(calleeUserId: string, callId: string): Promise<void> {
-  logger.info('[push] sendCallCanceledToRecipient start', { calleeUserId, callId });
+export async function sendCallCanceledToRecipient(
+  calleeUserId: string,
+  callId: string,
+  fromUserId: string,
+  fromNick?: string
+): Promise<void> {
+  logger.info('[push] sendCallCanceledToRecipient start', { calleeUserId, callId, fromUserId });
   const messaging = getFirebaseMessaging();
   if (messaging) {
     const recs = await PushTokenModel.find({ userId: calleeUserId })
@@ -379,7 +384,12 @@ export async function sendCallCanceledToRecipient(calleeUserId: string, callId: 
         try {
           await messaging.send({
             token: r.fcmToken,
-            data: { type: 'call_canceled', callId: String(callId) },
+            data: {
+              type: 'call_canceled',
+              callId: String(callId),
+              fromUserId: String(fromUserId),
+              fromNick: String(fromNick ?? ''),
+            },
             android: { priority: 'high' },
           });
           logger.info('[push] call_canceled sent via FCM (data-only)', { userId: calleeUserId });
@@ -398,7 +408,7 @@ export async function sendCallCanceledToRecipient(calleeUserId: string, callId: 
       kind: 'message',
       title: '',
       body: '',
-      data: { type: 'call_canceled', callId: String(callId) },
+      data: { type: 'call_canceled', callId: String(callId), from: fromUserId, fromNick: fromNick ?? '' },
     });
     logger.info('[push] call_canceled sent via Expo to callee', { userId: calleeUserId });
   } catch (e) {

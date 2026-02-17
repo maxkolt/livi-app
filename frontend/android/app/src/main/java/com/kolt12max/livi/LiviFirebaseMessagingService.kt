@@ -64,6 +64,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 Log.d(TAG, "FCM call push: app in foreground, skip notification (in-app UI will handle)")
                 return
             }
+            // Чтобы бейдж иконки был 1, а не 2: снимаем все текущие уведомления; останется только одно — от foreground-сервиса входящего
+            try {
+                (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancelAll()
+            } catch (_: Exception) {}
             // Всегда показываем нативный полноэкранный экран входящего: домашний экран, блокировка, приложение в фоне/закрыто
             if (isDeviceLocked()) {
                 LiviAppModule.tryStartCallKeepHeadlessTask(callId, from, fromNick) { _ -> }
@@ -89,6 +93,20 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(EXTRA_CALL_ID, callId)
             }
             sendBroadcast(intent)
+            // Инициатор отменил — показываем «пропущенный вызов» и счётчик (fromUserId/fromNick в data или body)
+            var fromCanceled = data["fromUserId"] ?: data["from"]
+            var fromNickCanceled = data["fromNick"] ?: ""
+            if (fromCanceled == null && data["body"] != null) {
+                try {
+                    val body = JSONObject(data["body"]!!)
+                    fromCanceled = body.optString("fromUserId", "").takeIf { it.isNotEmpty() }
+                        ?: body.optString("from", "").takeIf { it.isNotEmpty() }
+                    if (fromNickCanceled.isEmpty()) fromNickCanceled = body.optString("fromNick", "")
+                } catch (_: Exception) {}
+            }
+            if (fromCanceled != null && fromCanceled.toString().isNotEmpty()) {
+                showMissedCallNotification(callId, fromCanceled.toString(), fromNickCanceled)
+            }
             // Если приложение в фоне/убито, broadcast не дойдёт — запускаем активность с флагом «только закрыть»
             val activityIntent = Intent(this, IncomingCallActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -100,7 +118,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             } catch (e: Exception) {
                 Log.w(TAG, "FCM call_canceled: startActivity close IncomingCall failed", e)
             }
-            Log.d(TAG, "FCM call_canceled: ended id stored, notification canceled, broadcast + startActivity(close) callId=$callId")
+            Log.d(TAG, "FCM call_canceled: ended id stored, incoming canceled, missed shown, broadcast + startActivity(close) callId=$callId")
             return
         }
         // Абонент принял вызов — закрыть нативный экран исходящего, вывести MainActivity, сохранить callId для JS (call:getAccepted → call:accepted → переход на VideoCall).

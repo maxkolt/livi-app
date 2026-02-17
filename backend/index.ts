@@ -842,7 +842,6 @@ app.post('/api/calls/cancel', async (req, res) => {
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
     logger.info('[api/calls/cancel] sending call_canceled push to callee', { callId, caller: link.a, callee: link.b });
-    try { await sendCallCanceledToRecipient(link.b, callId); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
     let fromNick: string | undefined;
     try {
       if (isMongoReady()) {
@@ -850,20 +849,8 @@ app.post('/api/calls/cancel', async (req, res) => {
         if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
       }
     } catch {}
-    try {
-      const missedTitle = 'Пропущенный вызов';
-      const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
-      await sendPushToUser(link.b, {
-        kind: 'call',
-        title: missedTitle,
-        body: missedBody,
-        channelId: 'missed_call',
-        data: { type: 'call_ended', callId, from: link.a, fromNick: fromNick || '' },
-      });
-    } catch (e: any) {
-      logger.warn('[api/calls/cancel] call_ended push failed', { peerId: link.b, error: e?.message });
-    }
-    logger.info('[api/calls/cancel] call ended for both: callee notified (socket+FCM+missed push), caller closed native screen', { callId, caller: link.a, callee: link.b });
+    try { await sendCallCanceledToRecipient(link.b, callId, link.a, fromNick); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
+    logger.info('[api/calls/cancel] call ended for both: callee got missed from native', { callId, caller: link.a, callee: link.b });
     cleanupCall(callId, 'canceled');
     return res.json({ ok: true });
   } catch (e: any) {
@@ -2028,9 +2015,6 @@ io.on('connection', async (sock: AuthedSocket) => {
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}
     logger.info('[call:cancel] sending call_canceled push to callee', { callId: id, caller: link.a, callee: link.b });
-    // FCM data-only получателю: на устройстве сразу снимаем уведомление и закрываем IncomingCallActivity без мельканий
-    try { await sendCallCanceledToRecipient(link.b, id); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации
     let fromNick: string | undefined;
     try {
       if (isMongoReady()) {
@@ -2038,20 +2022,9 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
       }
     } catch {}
-    try {
-      const missedTitle = 'Пропущенный вызов';
-      const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
-      await sendPushToUser(link.b, {
-        kind: 'call',
-        title: missedTitle,
-        body: missedBody,
-        channelId: 'missed_call',
-        data: { type: 'call_ended', callId: id, from: link.a, fromNick: fromNick || '' },
-      });
-    } catch (e: any) {
-      logger.warn('[call:cancel] call_ended push failed', { peerId: link.b, error: e?.message });
-    }
-    logger.info('[call:cancel] call ended for both: both notified (socket+FCM, callee got missed push)', { callId: id, caller: link.a, callee: link.b });
+    // FCM data-only получателю: снимаем «входящий вызов», показываем «пропущенный вызов», счётчик на иконке
+    try { await sendCallCanceledToRecipient(link.b, id, link.a, fromNick); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
+    logger.info('[call:cancel] call ended for both: both notified (socket+FCM, callee got missed from native)', { callId: id, caller: link.a, callee: link.b });
     cleanupCall(id, 'canceled');
   });
 
