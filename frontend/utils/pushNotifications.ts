@@ -11,13 +11,53 @@ import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, la
 import { emitCloseOutgoingCall } from './globalEvents';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
+/** Флаг: пользователь заходил во вкладку «Друзья» и «увидел» пропущенные — бейдж и уведомления в шторке скрываем, счётчики в приложении не трогаем. */
+const MISSED_BADGE_CLEARED_KEY = 'missed_calls_badge_cleared_v1';
 
 /** ID категории уведомления входящего звонка с кнопками «Поднять» / «Положить» */
 export const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
 
-/** Синхронизировать бейдж иконки с суммарным числом пропущенных звонков. */
+/** Отметить, что пользователь «увидел» пропущенные (зашёл во вкладку Друзья) — бейдж и шторка будут скрыты. */
+export async function setMissedBadgeCleared(): Promise<void> {
+  try {
+    await AsyncStorage.setItem(MISSED_BADGE_CLEARED_KEY, 'true');
+  } catch {}
+}
+
+/** Сбросить флаг «увидел» при новом пропущенном — бейдж и шторка снова показываются. */
+export async function clearMissedBadgeCleared(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(MISSED_BADGE_CLEARED_KEY);
+  } catch {}
+}
+
+/** Снять только уведомления «пропущенный вызов» в шторке (без обнуления счётчиков). Вызывать при заходе в Друзья. Сначала нативный список (тот же источник, что и при показе), затем по AsyncStorage. */
+export async function dismissMissedCallNotificationsOnly(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    if (NativeModules.LiviAppModule?.dismissAllMissedCallNotifications) {
+      NativeModules.LiviAppModule.dismissAllMissedCallNotifications();
+    }
+    if (NativeModules.LiviAppModule?.dismissMissedCallNotificationOnly) {
+      const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+      const map = raw ? (JSON.parse(raw) as Record<string, number>) : {};
+      for (const uid of Object.keys(map || {})) {
+        if (uid && typeof map[uid] === 'number' && map[uid] > 0) {
+          try { NativeModules.LiviAppModule.dismissMissedCallNotificationOnly(String(uid)); } catch (_) {}
+        }
+      }
+    }
+  } catch (_) {}
+}
+
+/** Синхронизировать бейдж иконки: если пользователь уже «увидел» пропущенные (вкладка Друзья) — бейдж 0; иначе — сумма по всем. Уведомления в шторке не снимаются здесь (только при переходе по тапу «Пропущенный вызов»). */
 export async function syncAppBadgeFromMissedCount(): Promise<void> {
   try {
+    const cleared = await AsyncStorage.getItem(MISSED_BADGE_CLEARED_KEY);
+    if (cleared === 'true') {
+      await Notifications.setBadgeCountAsync(0);
+      return;
+    }
     const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
     const map = raw ? JSON.parse(raw) : {};
     const total = Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
@@ -311,7 +351,10 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
     if (type === 'missed_call') {
       const nav = await waitForNavReady();
       if (!nav) return;
+      // Сразу помечаем «увидел» и снимаем уведомления в шторке (бейдж и шторка очищаются)
       try {
+        await setMissedBadgeCleared();
+        await dismissMissedCallNotificationsOnly();
         await clearCallRelatedNotificationsAndSyncBadge();
       } catch {}
       nav.dispatch(
@@ -636,13 +679,15 @@ export function addNotificationListeners() {
         return;
       }
       if (data?.type === 'call' && data?.callId && data?.from) {
+        if (await isEndedCallId(data.callId)) {
+          logger.info('[push] incoming call notification ignored (call already ended)', { callId: data.callId });
+          return;
+        }
         logger.info('[push] incoming call notification received', { callId: data.callId, from: data.from });
         if (Platform.OS === 'android') {
           await launchIncomingCallActivityScreen(data.callId, data.from, data.fromNick ?? '', true);
         } else if (isCallKeepAvailable() && AppState.currentState !== 'active') {
-          if (!(await isEndedCallId(data.callId))) {
-            displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
-          }
+          displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
         }
         const setFromPush = (global as any).__setIncomingCallFromPush;
         if (typeof setFromPush === 'function') {

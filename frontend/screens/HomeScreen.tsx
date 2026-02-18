@@ -73,7 +73,7 @@ import { logger } from '../utils/logger';
 import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled } from '../utils/callKeep';
-import { clearNotificationIndicators, syncAppBadgeFromMissedCount } from '../utils/pushNotifications';
+import { setMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
 // УБРАНО: forceClearUserDataOnly не используется - вместо этого используется hardLocalReset() и clearAllUserData() из socket.ts
@@ -625,6 +625,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /* tabs & menu */
   const [menuOpen, setMenuOpen] = useState(false);
   const [tab, setTab] = useState<'friends' | 'settings' | 'more'>('friends');
+  const tabRef = useRef<'friends' | 'settings' | 'more'>(tab);
+  useEffect(() => {
+    tabRef.current = tab;
+  }, [tab]);
 
   /* обновление приложения: бейдж раз в сутки, индикатор у «Ещё», кнопка в табе Ещё */
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -2365,10 +2369,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
   }, [menuOpen, tab, friends]);
 
-  // При заходе во вкладку «Друзья» (увидел от кого пропущенный) — сбрасываем уведомление в шторке и бейдж
+  // При заходе во вкладку «Друзья» — помечаем «увидел», снимаем уведомления в шторке и обнуляем бейдж
   useEffect(() => {
     if (tab === 'friends') {
-      clearNotificationIndicators().catch(() => {});
+      setMissedBadgeCleared()
+        .then(() => dismissMissedCallNotificationsOnly())
+        .then(() => syncAppBadgeFromMissedCount())
+        .catch(() => {});
     }
   }, [tab]);
 
@@ -2420,9 +2427,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Обновляем пропущенные видеозвонки из AsyncStorage при возврате на экран (iOS/Android)
   // КРИТИЧНО: Нормализуем ключи (преобразуем в строки) и фильтруем только значения > 0
   // Также обновляем счетчики непрочитанных сообщений при фокусе
+  // При фокусе на экране, если открыта вкладка «Друзья» — только помечаем «увидел» (без sync, чтобы не было звука/вибрации)
   useEffect(() => {
     const unsub = navigation?.addListener?.('focus', async () => {
       try {
+        if (tabRef.current === 'friends') {
+          await setMissedBadgeCleared();
+        }
         // Обновляем пропущенные звонки
         const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
@@ -2444,6 +2455,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           total: Object.keys(parsed).length,
           normalized 
         });
+        const badgeCleared = await AsyncStorage.getItem('missed_calls_badge_cleared_v1');
+        if (badgeCleared !== 'true') {
+          await syncAppBadgeFromMissedCount();
+        }
         
         // КРИТИЧНО: Обновляем счетчики непрочитанных сообщений при фокусе
         if (friends.length > 0) {
@@ -3976,6 +3991,7 @@ const handleClearNick = useCallback(async () => {
   };
 
   // Показ уведомления «Звонок завершён», авто-открытие меню друзей, переход на вкладку «Друзья» (тап по «Пропущенный вызов»).
+  // При переходе по тапу «Пропущенный вызов» (openFriendsTab) — снимаем уведомления из шторки и бейдж.
   useEffect(() => {
     const ended = (route as any)?.params?.callEnded;
     const openFriendsMenu = (route as any)?.params?.openFriendsMenu;
@@ -3988,6 +4004,11 @@ const handleClearNick = useCallback(async () => {
     }
     if (openFriendsTab) {
       setTab('friends');
+      // Сразу снимаем уведомления из шторки (дублируем нативный dismiss на случай, если интент не дошёл)
+      dismissMissedCallNotificationsOnly().catch(() => {});
+      setMissedBadgeCleared()
+        .then(() => syncAppBadgeFromMissedCount())
+        .catch(() => {});
     }
     if (openFriendsMenu || openFriendsTab) {
       AsyncStorage.getItem(MISSED_CALLS_KEY).then((raw) => {

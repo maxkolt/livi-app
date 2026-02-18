@@ -29,7 +29,7 @@ import PiPOverlay from "./src/pip/PiPOverlay";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native';
-import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount } from './utils/pushNotifications';
+import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
 import { setupCallKeep, launchIncomingCallActivityScreen, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled } from './utils/callKeep';
@@ -318,6 +318,8 @@ function AppContent() {
   // Храним недавно отменённые/истёкшие вызовы, чтобы избежать гонок событий (declined/timeout перед incoming)
   const canceledCallsRef = React.useRef<Map<string, number>>(new Map());
   const timedOutCallsRef = React.useRef<Map<string, number>>(new Map());
+  // Время последнего инкремента пропущенного по userId (из сокета) — чтобы не дублировать при применении pending с FCM
+  const lastMissedIncrementTimeByUserRef = React.useRef<Record<string, number>>({});
   // Ref для хранения обработчика входящего звонка, чтобы он всегда был доступен
   const incomingCallHandlerRef = React.useRef<((d: { callId: string; from: string; fromNick?: string }) => void) | null>(null);
 
@@ -436,45 +438,62 @@ function AppContent() {
       }
     };
     (async () => {
+      // Сразу проверяем «открыли по тапу Пропущенный вызов» и помечаем «увидел», чтобы ни syncAppBadgeFromMissedCount, ни синхронизация с нативом не пересоздавали уведомление и иконку в статус-баре
+      const open = await (LiviAppModule?.getAndClearPendingOpenTabFriends?.() ?? Promise.resolve(false));
+      if (open) await setMissedBadgeCleared();
       try {
-        const arr = await (LiviAppModule?.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]));
+        const arr = (await (LiviAppModule?.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]))) as string[];
         if (arr?.length && !cancelled) {
           const raw = await AsyncStorage.getItem(key);
           const map = raw ? JSON.parse(raw) : {};
-          for (const uid of arr) {
-            if (uid) {
-              map[uid] = (map[uid] || 0) + 1;
-              try { emitMissedIncrement(uid); } catch {}
-            }
+          const MISSED_APPLY_SKIP_MS = 15000;
+          const uniqueUids = [...new Set(arr.filter((u: string) => u))];
+          for (const uid of uniqueUids) {
+            const lastInc = lastMissedIncrementTimeByUserRef.current[uid];
+            if (lastInc && Date.now() - lastInc < MISSED_APPLY_SKIP_MS) continue;
+            map[uid] = (map[uid] || 0) + 1;
+            try { emitMissedIncrement(uid); } catch {}
           }
           await AsyncStorage.setItem(key, JSON.stringify(map));
+          await clearMissedBadgeCleared();
           await syncAppBadgeFromMissedCount();
         }
       } catch (e) {
         logger.warn('[App] getAndClearPendingMissedCalls on mount failed', e);
       }
       if (cancelled) return;
-      const open = await (LiviAppModule?.getAndClearPendingOpenTabFriends?.() ?? Promise.resolve(false));
+      await syncAppBadgeFromMissedCount();
+      // Синхронизировать счётчик в шторке с источником истины (AsyncStorage) при каждом старте
+      if (Platform.OS === 'android') {
+        try {
+          const badgeCleared = await AsyncStorage.getItem('missed_calls_badge_cleared_v1');
+          const raw2 = await AsyncStorage.getItem(key);
+          const map2 = raw2 ? JSON.parse(raw2) as Record<string, number> : {};
+          const setOnly = badgeCleared === 'true';
+          for (const uid of Object.keys(map2 || {})) {
+            const c = map2[uid];
+            if (uid && typeof c === 'number' && c > 0) {
+              if (setOnly) LiviAppModule?.setMissedCountForUserOnly?.(uid, c);
+              else LiviAppModule?.syncMissedCountForUser?.(uid, c);
+            }
+          }
+        } catch (_) {}
+      }
       if (open) goToFriends();
     })();
-    const t1 = setTimeout(() => {
-      LiviAppModule?.getAndClearPendingOpenTabFriends?.()?.then?.((open: boolean) => {
-        if (open && !cancelled) goToFriends();
-      });
-    }, 600);
     return () => {
       cancelled = true;
-      clearTimeout(t1);
     };
   }, []);
 
-  // Android: при возврате в приложение (тап по уведомлению «Пропущенный вызов») — открыть меню и вкладку Друзья
+  // Android: при возврате в приложение (тап по уведомлению «Пропущенный вызов») — открыть меню и вкладку Друзья; сразу помечаем «увидел», чтобы синхронизация с нативом не пересоздала уведомление
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
     const sub = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
       NativeModules.LiviAppModule?.getAndClearPendingOpenTabFriends?.()?.then?.((open: boolean) => {
         if (!open) return;
+        setMissedBadgeCleared().catch(() => {});
         const go = (retry = 0) => {
           if (navRef.isReady()) {
             navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openFriendsMenu: true, openFriendsTab: true } }));
@@ -1197,22 +1216,40 @@ function AppContent() {
               try { requestCallAccepted(callId); } catch {}
             }
           });
-          // Пропущенные, показанные из нативного кода (FCM call_ended) — обновить счётчик и бейдж
+          // Пропущенные, показанные из нативного кода (FCM call_ended) — обновить счётчик и бейдж (без дубля, если уже учли по сокету)
           LiviAppModule?.getAndClearPendingMissedCalls?.()?.then?.((arr: string[]) => {
             if (arr?.length) {
               (async () => {
                 try {
                   const key = 'missed_calls_by_user_v1';
+                  const badgeCleared = await AsyncStorage.getItem('missed_calls_badge_cleared_v1');
+                  const alreadySeen = badgeCleared === 'true';
                   const raw = await AsyncStorage.getItem(key);
                   const map = raw ? JSON.parse(raw) : {};
-                  for (const uid of arr) {
-                    if (uid) {
-                      map[uid] = (map[uid] || 0) + 1;
-                      try { emitMissedIncrement(uid); } catch {}
-                    }
+                  const MISSED_APPLY_SKIP_MS = 15000;
+                  const uniqueUids = [...new Set(arr.filter((u: string) => u))];
+                  for (const uid of uniqueUids) {
+                    const lastInc = lastMissedIncrementTimeByUserRef.current[uid];
+                    if (lastInc && Date.now() - lastInc < MISSED_APPLY_SKIP_MS) continue;
+                    map[uid] = (map[uid] || 0) + 1;
+                    try { emitMissedIncrement(uid); } catch {}
                   }
                   await AsyncStorage.setItem(key, JSON.stringify(map));
-                  await syncAppBadgeFromMissedCount();
+                  if (!alreadySeen) {
+                    await clearMissedBadgeCleared();
+                    await syncAppBadgeFromMissedCount();
+                  }
+                  if (Platform.OS === 'android' && NativeModules.LiviAppModule) {
+                    try {
+                      for (const uid of Object.keys(map || {})) {
+                        const c = map[uid];
+                        if (uid && typeof c === 'number' && c > 0) {
+                          if (alreadySeen) NativeModules.LiviAppModule.setMissedCountForUserOnly?.(uid, c);
+                          else NativeModules.LiviAppModule.syncMissedCountForUser?.(uid, c);
+                        }
+                      }
+                    } catch (_) {}
+                  }
                 } catch (e) {
                   logger.warn('[App] getAndClearPendingMissedCalls apply failed', e);
                 }
@@ -1292,13 +1329,15 @@ function AppContent() {
         const uid = await AsyncStorage.getItem('last_incoming_from');
         const callerId = String((d as any)?.from || '');
         if (uid && callerId && uid === callerId) {
+          lastMissedIncrementTimeByUserRef.current[uid] = Date.now();
           const key = 'missed_calls_by_user_v1';
           const raw = await AsyncStorage.getItem(key);
           const map = raw ? JSON.parse(raw) : {};
           map[uid] = (map[uid] || 0) + 1;
           await AsyncStorage.setItem(key, JSON.stringify(map));
           try { emitMissedIncrement(uid); } catch {}
-          syncAppBadgeFromMissedCount().catch(() => {});
+          await clearMissedBadgeCleared();
+          await syncAppBadgeFromMissedCount();
           try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
         }
       } catch {}
@@ -1417,13 +1456,15 @@ function AppContent() {
         const uid = await AsyncStorage.getItem('last_incoming_from');
         const callerId = String((d as any)?.from || '');
         if (uid && callerId && uid === callerId) {
+          lastMissedIncrementTimeByUserRef.current[uid] = Date.now();
           const key = 'missed_calls_by_user_v1';
           const raw = await AsyncStorage.getItem(key);
           const map = raw ? JSON.parse(raw) : {};
           map[uid] = (map[uid] || 0) + 1;
           await AsyncStorage.setItem(key, JSON.stringify(map));
           try { emitMissedIncrement(uid); } catch {}
-          syncAppBadgeFromMissedCount().catch(() => {});
+          await clearMissedBadgeCleared();
+          await syncAppBadgeFromMissedCount();
           try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
         }
       } catch {}
@@ -1453,10 +1494,12 @@ function AppContent() {
             const map = raw ? JSON.parse(raw) : {};
             const uid = String(cur.from || '');
             if (uid) {
+              lastMissedIncrementTimeByUserRef.current[uid] = Date.now();
               map[uid] = (map[uid] || 0) + 1;
               await AsyncStorage.setItem(key, JSON.stringify(map));
               try { emitMissedIncrement(uid); } catch {}
-              syncAppBadgeFromMissedCount().catch(() => {});
+              await clearMissedBadgeCleared();
+              await syncAppBadgeFromMissedCount();
               try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
             }
             } catch {}
