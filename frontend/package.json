@@ -17,6 +17,7 @@
     "android:build-install-device": "cd android && ./gradlew assembleDebug -q && cd .. && node ./scripts/install-apk-one-device.js",
     "android:install-device": "node ./scripts/install-apk-one-device.js",
     "android:install-all": "cd android && ./gradlew assembleDebug -q && cd .. && node ./scripts/install-apk-all-devices.js",
+    "android:build-aab": "cd android && rm -f app/build/outputs/bundle/release/app-release.aab && ./gradlew clean bundleRelease && cd .. && echo '\n✅ AAB собран: android/app/build/outputs/bundle/release/app-release.aab\n📤 Загрузи его в Google Play Console → Production → Создать выпуск → Добавить из библиотеки → Вывести на production (100%).\n📱 Обновление придёт пользователям через Play Store автоматически.'",
     "android:dev": "LIVI_APP_VARIANT=dev expo run:android",
     "android:dev:run": "node ./scripts/adb-reverse-usb.js 8081 && EXPO_PACKAGER_HOSTNAME=127.0.0.1 REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 LIVI_APP_VARIANT=dev expo start --dev-client --host localhost --port 8081",
     "ios": "expo run:ios",
