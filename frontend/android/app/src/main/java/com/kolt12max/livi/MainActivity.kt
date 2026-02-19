@@ -4,6 +4,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -17,16 +19,27 @@ class MainActivity : ReactActivity() {
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
+    // Тап по уведомлению «Пропущенный вызов» (приложение уже было в фоне) — сразу снимаем уведомления
+    if (intent.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false)) {
+      intent.removeExtra(EXTRA_OPEN_TAB_FRIENDS)
+      LiviAppModule.dismissAllMissedCallNotificationsFromContext(this)
+      LiviAppModule.setPendingOpenTabFriends(this)
+    }
   }
 
   override fun onResume() {
     super.onResume()
     isInForeground = true
     restoreNavigationBarVisibility()
-    // Тап по уведомлению «Пропущенный вызов» — открыть вкладку Друзья
+    // Тап по уведомлению «Пропущенный вызов» — снять уведомления из шторки и открыть вкладку Друзья (здесь срабатывает и при холодном старте — activity уже готова)
     if (intent?.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false) == true) {
       intent?.removeExtra(EXTRA_OPEN_TAB_FRIENDS)
       LiviAppModule.setPendingOpenTabFriends(this)
+      // Сразу и с небольшой задержкой: на части устройств при холодном старте cancel в первый момент не срабатывает
+      LiviAppModule.dismissAllMissedCallNotificationsFromContext(this)
+      Handler(Looper.getMainLooper()).postDelayed({
+        LiviAppModule.dismissAllMissedCallNotificationsFromContext(this@MainActivity)
+      }, 150)
     }
     // FCM call_accepted запустил MainActivity — закрыть нативный экран исходящего (если ещё открыт) и уведомить JS
     val pendingCallId = intent?.getStringExtra(EXTRA_PENDING_CALL_ACCEPTED_CALL_ID)
@@ -76,7 +89,7 @@ class MainActivity : ReactActivity() {
       setTheme(R.style.AppTheme)
     }
     super.onCreate(null)
-    // Тап по уведомлению «Пропущенный вызов»: ставим флаг сразу в onCreate, чтобы JS успел его прочитать при монтировании (onResume может вызваться позже).
+    // Тап по уведомлению «Пропущенный вызов»: ставим флаг для JS; снятие уведомлений из шторки — в onResume (при холодном старте в onCreate система уведомлений может быть ещё не готова).
     if (intent?.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false) == true) {
       LiviAppModule.setPendingOpenTabFriends(this)
     }

@@ -123,21 +123,11 @@ export const useIncomingCall = ({
     };
   }, [incomingOverlay, incomingCall, friendCallAccepted]);
 
-  // Обработка отмены звонка
+  // Обработка отмены звонка (инкремент пропущенного делается централизованно в App.tsx — здесь только закрываем UI)
   useEffect(() => {
-    const offCancel = onCallCanceled?.(async (d) => {
-      // ВАЖНО: Это событие ТОЛЬКО для звонков друзей, НЕ для рандомного чата
+    const offCancel = onCallCanceled?.(async (_d) => {
       const isFriendCall = !!routeParams?.directCall || friendCallAccepted || !!currentCallIdRef.current;
-      if (!isFriendCall) {
-        return;
-      }
-
-      // Отмена инициатором — закрыть оверлей и отметить пропущенный
-      const from = d?.from ? String(d.from) : undefined;
-      if (from && from !== String(myUserId || '')) {
-        await incMissed(from);
-        syncAppBadgeFromMissedCount().catch(() => {});
-      }
+      if (!isFriendCall) return;
 
       setIncomingOverlay(false);
       setIncomingFriendCall(null);
@@ -148,31 +138,22 @@ export const useIncomingCall = ({
     return () => {
       offCancel?.();
     };
-  }, [routeParams?.directCall, friendCallAccepted, myUserId, incMissed, currentCallIdRef]);
+  }, [routeParams?.directCall, friendCallAccepted, currentCallIdRef]);
 
-  // Обработка таймаута звонка (call:timeout)
+  // Обработка таймаута звонка (инкремент пропущенного — централизованно в App.tsx, здесь только UI и cleanup)
   useEffect(() => {
     const handleTimeout = () => {
-      // ВАЖНО: Это событие ТОЛЬКО для звонков друзей, НЕ для рандомного чата
       const isFriendCall = !!routeParams?.directCall || friendCallAccepted || !!currentCallIdRef.current;
-      if (!isFriendCall) {
-        return;
-      }
+      if (!isFriendCall) return;
 
-      // Очищаем WebRTC состояние
       if (session) {
         session.cleanupAfterFriendCallFailure?.('timeout');
       }
 
-      const uid = incomingFriendCall?.from ? String(incomingFriendCall.from) : undefined;
       setIncomingOverlay(false);
       setIncomingFriendCall(null);
       setIncomingCall(null);
       stopIncomingCallAlert();
-      if (uid) {
-        incMissed(uid);
-        syncAppBadgeFromMissedCount().catch(() => {});
-      }
     };
 
     socket.on('call:timeout', handleTimeout);
@@ -180,7 +161,7 @@ export const useIncomingCall = ({
     return () => {
       socket.off('call:timeout', handleTimeout);
     };
-  }, [routeParams?.directCall, friendCallAccepted, incomingFriendCall, incMissed, session, currentCallIdRef]);
+  }, [routeParams?.directCall, friendCallAccepted, session, currentCallIdRef]);
 
   // Обработка "занят" (call:busy)
   useEffect(() => {

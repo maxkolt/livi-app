@@ -2,6 +2,7 @@ package com.kolt12max.livi
 
 import android.app.NotificationManager
 import android.content.Context
+import android.service.notification.StatusBarNotification
 import android.content.Intent
 import android.os.Build
 import android.os.Handler
@@ -300,6 +301,56 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } catch (_: Exception) {}
   }
 
+  /** Синхронизировать счётчик пропущенных из JS и обновить текст уведомления в шторке (чтобы показывало то же число, что в приложении). */
+  @ReactMethod
+  fun syncMissedCountForUser(userId: String, count: Int) {
+    if (userId.isBlank()) return
+    try {
+      setMissedCountForUser(reactApplicationContext, userId, count.coerceAtLeast(0))
+      LiviFirebaseMessagingService.updateMissedCallNotification(reactApplicationContext, userId, count.coerceAtLeast(0))
+    } catch (_: Exception) {}
+  }
+
+  /** Только снять уведомление «пропущенный вызов» в шторке для userId (счётчик не трогаем — пользователь «увидел» во вкладке Друзья). Вызываем cancel на main thread. */
+  @ReactMethod
+  fun dismissMissedCallNotificationOnly(userId: String) {
+    if (userId.isBlank()) return
+    val uid = userId.trim()
+    Handler(Looper.getMainLooper()).post {
+      try {
+        val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(getMissedNotificationIdForUser(uid))
+      } catch (_: Exception) {}
+    }
+  }
+
+  /** Снять все уведомления «пропущенный вызов» в шторке по списку userId из нативного хранилища (тот же источник, что и при показе). */
+  @ReactMethod
+  fun dismissAllMissedCallNotifications() {
+    Handler(Looper.getMainLooper()).post {
+      try {
+        val prefs = reactApplicationContext.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"
+        val map = try { JSONObject(raw) } catch (_: Exception) { JSONObject() }
+        val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val it = map.keys()
+        while (it.hasNext()) {
+          val key = it.next().toString().trim()
+          if (key.isNotEmpty()) nm.cancel(getMissedNotificationIdForUser(key))
+        }
+      } catch (_: Exception) {}
+    }
+  }
+
+  /** Только выставить счётчик в нативе (без обновления уведомления). Вызывать при старте приложения, если бейдж уже «увиден». */
+  @ReactMethod
+  fun setMissedCountForUserOnly(userId: String, count: Int) {
+    if (userId.isBlank()) return
+    try {
+      setMissedCountForUser(reactApplicationContext, userId, count.coerceAtLeast(0))
+    } catch (_: Exception) {}
+  }
+
   companion object {
     const val NAME = "LiviAppModule"
     const val PREFS_NAME = "LiviDeclinePrefs"
@@ -308,6 +359,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private const val KEY_PENDING_MISSED_IDS = "user_ids"
     private const val PREFS_MISSED_COUNT = "LiviMissedCount"
     private const val KEY_MISSED_COUNT_BY_USER = "by_user"
+    /** callIds, для которых уже показали «пропущенный вызов» (дедуп FCM+Expo). Формат: "callId1:ts,callId2:ts". */
+    private const val PREFS_MISSED_SHOWN_IDS = "LiviMissedShownIds"
+    private const val KEY_MISSED_SHOWN_IDS = "ids"
+    private const val MISSED_SHOWN_EXPIRY_MS = 120_000L
+    private const val KEY_MISSED_NICK_PREFIX = "missed_nick_"
     const val MISSED_NOTIFICATION_ID_BASE = 1002
     const val ACTION_MISSED_CALL_DISMISSED = "com.kolt12max.livi.MISSED_CALL_DISMISSED"
     const val EXTRA_USER_ID = "user_id"
@@ -324,6 +380,34 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun setPendingOpenTabFriends(context: Context) {
       context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE).edit().putBoolean(KEY_PENDING_OPEN_TAB_FRIENDS, true).apply()
+    }
+
+    /** Снять все уведомления «пропущенный вызов» из шторки. Вызывать из MainActivity при тапе по уведомлению (без ожидания JS). */
+    @JvmStatic
+    fun dismissAllMissedCallNotificationsFromContext(context: Context) {
+      try {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        // 1) По списку userId из prefs (источник истины при показе)
+        val prefs = context.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"
+        val map = try { JSONObject(raw) } catch (_: Exception) { JSONObject() }
+        val it = map.keys()
+        while (it.hasNext()) {
+          val key = it.next().toString().trim()
+          if (key.isNotEmpty()) nm.cancel(getMissedNotificationIdForUser(key))
+        }
+        // 2) На API 23+: снять все активные уведомления с ID из диапазона «пропущенный вызов» (на случай рассинхрона prefs)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+          try {
+            @Suppress("DEPRECATION")
+            val active = nm.getActiveNotifications()
+            if (active != null) for (n in active) {
+              val id = n.id
+              if (id >= MISSED_NOTIFICATION_ID_BASE && id < MISSED_NOTIFICATION_ID_BASE + 0x8000) nm.cancel(id)
+            }
+          } catch (_: Exception) {}
+        }
+      } catch (_: Exception) {}
     }
 
     @JvmStatic
@@ -369,6 +453,71 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       map.put(key, count)
       prefs.edit().putString(KEY_MISSED_COUNT_BY_USER, map.toString()).apply()
       return count
+    }
+
+    /** Уже показывали «пропущенный вызов» для этого callId? (дедуп при двойной доставке FCM+Expo) */
+    @JvmStatic
+    fun wasMissedShownForCallId(context: Context, callId: String): Boolean {
+      if (callId.isBlank()) return false
+      val prefs = context.getSharedPreferences(PREFS_MISSED_SHOWN_IDS, Context.MODE_PRIVATE)
+      val raw = prefs.getString(KEY_MISSED_SHOWN_IDS, "") ?: ""
+      val now = System.currentTimeMillis()
+      val entries = raw.split(',').mapNotNull { entry ->
+        val part = entry.trim()
+        if (part.isEmpty()) return@mapNotNull null
+        val idx = part.lastIndexOf(':')
+        if (idx <= 0) return@mapNotNull null
+        val id = part.substring(0, idx)
+        val ts = part.substring(idx + 1).toLongOrNull() ?: 0L
+        if (now - ts > MISSED_SHOWN_EXPIRY_MS) null else id to ts
+      }
+      return entries.any { it.first == callId.trim() }
+    }
+
+    /** Отметить, что для callId уже показали «пропущенный вызов». */
+    @JvmStatic
+    fun markMissedShownForCallId(context: Context, callId: String) {
+      if (callId.isBlank()) return
+      val prefs = context.getSharedPreferences(PREFS_MISSED_SHOWN_IDS, Context.MODE_PRIVATE)
+      val raw = prefs.getString(KEY_MISSED_SHOWN_IDS, "") ?: ""
+      val now = System.currentTimeMillis()
+      val entries = raw.split(',').mapNotNull { entry ->
+        val part = entry.trim()
+        if (part.isEmpty()) return@mapNotNull null
+        val idx = part.lastIndexOf(':')
+        if (idx <= 0) return@mapNotNull null
+        val id = part.substring(0, idx)
+        val ts = part.substring(idx + 1).toLongOrNull() ?: 0L
+        if (now - ts > MISSED_SHOWN_EXPIRY_MS) null else "$id:$ts"
+      }.toMutableList()
+      entries.add("${callId.trim()}:$now")
+      prefs.edit().putString(KEY_MISSED_SHOWN_IDS, entries.takeLast(50).joinToString(",")).apply()
+    }
+
+    /** Сохранить nick для обновления текста уведомления «пропущенный вызов». */
+    @JvmStatic
+    fun saveMissedCallNick(context: Context, userId: String, nick: String) {
+      if (userId.isBlank()) return
+      context.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+        .edit().putString(KEY_MISSED_NICK_PREFIX + userId.trim(), nick).apply()
+    }
+
+    @JvmStatic
+    fun getMissedCallNick(context: Context, userId: String): String {
+      if (userId.isBlank()) return ""
+      return context.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+        .getString(KEY_MISSED_NICK_PREFIX + userId.trim(), "") ?: ""
+    }
+
+    /** Выставить счётчик пропущенных для userId (синхронизация из JS). */
+    @JvmStatic
+    fun setMissedCountForUser(context: Context, userId: String, count: Int) {
+      if (userId.isBlank()) return
+      val prefs = context.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+      val raw = prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"
+      val map = try { JSONObject(raw) } catch (_: Exception) { JSONObject() }
+      map.put(userId.trim(), count.coerceAtLeast(0))
+      prefs.edit().putString(KEY_MISSED_COUNT_BY_USER, map.toString()).apply()
     }
 
     /** Обнулить счёт пропущенных для userId (при смахивании уведомления или принятии вызова). */

@@ -25,9 +25,11 @@ import {
   Dimensions,
   Image,
   StyleSheet,
+  Share,
 } from "react-native";
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
+import { PanGestureHandler, State, GestureHandlerRootView } from "react-native-gesture-handler";
 import { onCloseIncoming, emitCloseIncoming } from '../utils/globalEvents';
 import socket from '../sockets/socket';
 import { Ionicons } from "@expo/vector-icons";
@@ -105,6 +107,9 @@ function openMessageUrl(raw: string): void {
 
 const REACTION_EMOJIS_PAGE_1 = ['👍', '😊', '❤️', '😮', '😢', '👎'];
 const REACTION_EMOJIS_PAGE_2 = ['😉', '😂', '😍', '😭', '🙏', '🔥'];
+/** Порядок в bottom sheet по зажиму: первый ряд — 👍 ❤️ 🙏 🔥 😉 😂, второй — остальные */
+const SHEET_REACTIONS_ROW_1 = ['👍', '❤️', '🙏', '🔥', '😉', '😂'];
+const SHEET_REACTIONS_ROW_2 = ['😊', '😮', '😢', '👎', '😍', '😭'];
 
 function ReactionBarModal({
   visible,
@@ -210,6 +215,86 @@ function ReactionBarModal({
         </Pressable>
       </Pressable>
     </Modal>
+  );
+}
+
+const SHEET_REACTIONS_ALL = [...SHEET_REACTIONS_ROW_1, ...SHEET_REACTIONS_ROW_2];
+const REACTIONS_PAGE_SIZE = 4;
+
+/** Один ряд реакций: по 4 эмодзи на страницу, на первой — стрелка «свайп вправо» */
+function ReactionsRowWithSwipe({
+  selectedMessage,
+  hideMessageActions,
+  sendMessageReaction,
+  peerId,
+  isDark,
+}: {
+  selectedMessage: any;
+  hideMessageActions: () => void;
+  sendMessageReaction: (msgId: string, emoji: string, peerId: string) => Promise<unknown>;
+  peerId: string;
+  isDark: boolean;
+}) {
+  const scrollRef = React.useRef<ScrollView>(null);
+  const rowW = 220 - 24;
+  const arrowBounce = React.useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(arrowBounce, { toValue: 4, duration: 600, useNativeDriver: true }),
+        Animated.timing(arrowBounce, { toValue: 0, duration: 600, useNativeDriver: true }),
+      ]),
+      { iterations: -1 }
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [arrowBounce]);
+  const emojiPress = (emoji: string) => {
+    hideMessageActions();
+    const msgId = selectedMessage?.id != null ? String(selectedMessage.id) : null;
+    if (msgId) sendMessageReaction(msgId, emoji, peerId).catch(() => {});
+  };
+  const emojiStyle = (pressed: boolean) => ({
+    padding: 4,
+    minWidth: 30,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    borderRadius: 10,
+    backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent',
+  });
+  const pages: string[][] = [];
+  for (let i = 0; i < SHEET_REACTIONS_ALL.length; i += REACTIONS_PAGE_SIZE) {
+    pages.push(SHEET_REACTIONS_ALL.slice(i, i + REACTIONS_PAGE_SIZE));
+  }
+  return (
+    <View style={{ borderRadius: 20, overflow: 'hidden', paddingVertical: 4, paddingHorizontal: 4 }}>
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        decelerationRate="fast"
+        snapToInterval={rowW}
+        snapToAlignment="start"
+        contentContainerStyle={{ paddingHorizontal: 4 }}
+        style={{ marginHorizontal: -4 }}
+      >
+        {pages.map((emojis, pageIndex) => (
+          <View key={pageIndex} style={{ width: rowW, flexDirection: 'row', alignItems: 'center', justifyContent: pageIndex === 0 ? 'space-between' : 'space-around', paddingVertical: 2, paddingRight: pageIndex === 0 ? 8 : 0 }}>
+            {emojis.map((emoji) => (
+              <Pressable key={emoji} onPress={() => emojiPress(emoji)} style={({ pressed }) => emojiStyle(pressed)} hitSlop={4}>
+                <Text style={{ fontSize: 20 }}>{emoji}</Text>
+              </Pressable>
+            ))}
+            {pageIndex === 0 && (
+              <Animated.View style={{ marginLeft: 4, transform: [{ translateX: arrowBounce }] }}>
+                <Ionicons name="chevron-forward" size={18} color={isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)'} />
+              </Animated.View>
+            )}
+          </View>
+        ))}
+      </ScrollView>
+    </View>
   );
 }
 
@@ -321,6 +406,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [uploadStatus, setUploadStatus] = useState<Record<string, 'sending' | 'sent' | 'failed'>>({});
   const [showClearMenu, setShowClearMenu] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<any>(null);
+  const [selectedMessageLayout, setSelectedMessageLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const messageActionsLayoutRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const reactionsScrollRef = useRef<ScrollView>(null);
   const [showMessageActions, setShowMessageActions] = useState(false);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
   const [forwardFriends, setForwardFriends] = useState<any[]>([]);
@@ -340,6 +428,46 @@ export default function ChatScreen({ route, navigation }: Props) {
   const messageActionsOpacity = useRef(new Animated.Value(0)).current;
   const messageActionsTranslateY = useRef(new Animated.Value(30)).current;
   const forwardToastOpacity = useRef(new Animated.Value(0)).current;
+  const forwardSheetTranslateY = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (showForwardPicker) forwardSheetTranslateY.setValue(0);
+  }, [showForwardPicker]);
+
+  const onForwardSheetGestureEvent = React.useCallback(
+    (e: { nativeEvent: { translationY: number } }) => {
+      forwardSheetTranslateY.setValue(Math.max(0, e.nativeEvent.translationY));
+    },
+    [],
+  );
+
+  const onForwardSheetHandlerStateChange = React.useCallback(
+    (e: { nativeEvent: { state: number; translationY: number; velocityY: number } }) => {
+      const { state, translationY, velocityY } = e.nativeEvent;
+      if (state === State.END || state === 5) {
+        const screenH = Dimensions.get('window').height;
+        if (translationY > 80 || velocityY > 200) {
+          Animated.timing(forwardSheetTranslateY, {
+            toValue: screenH,
+            duration: 220,
+            useNativeDriver: true,
+          }).start(() => {
+            setShowForwardPicker(false);
+            forwardSheetTranslateY.setValue(0);
+          });
+        } else {
+          Animated.spring(forwardSheetTranslateY, {
+            toValue: 0,
+            useNativeDriver: true,
+            tension: 80,
+            friction: 12,
+          }).start();
+        }
+      }
+    },
+    [],
+  );
+
   // Чтобы не спамить логами при перезагрузках/повторных fetch — логируем каждую картинку из истории один раз
   const loggedHistoryImageIdsRef = useRef<Set<string>>(new Set());
   // И дополнительно ограничиваем общий объём этих логов (в dev), чтобы консоль не шумела
@@ -1270,6 +1398,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
 
   const headerH = 56;
+  const headerTopPadding = 14;
 
   const resolveAvatar = React.useCallback((s?: string) => {
     if (!s) return '';
@@ -1835,33 +1964,45 @@ export default function ChatScreen({ route, navigation }: Props) {
       }),
     ]).start(() => {
       setShowMessageActions(false);
+      setSelectedMessageLayout(null);
+      messageActionsLayoutRef.current = null;
     });
   }, [messageActionsOpacity, messageActionsTranslateY]);
 
-  const showMessageActionsSheet = React.useCallback(() => {
-    setShowMessageActions(true);
-
-    // Haptics on open
-    if (Platform.OS === 'ios') {
-      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(5); }
-    } else {
-      Vibration.vibrate(30);
+  const showMessageActionsSheet = React.useCallback((
+    layout?: { x: number; y: number; width: number; height: number } | null
+  ) => {
+    if (layout && Platform.OS === 'android') {
+      messageActionsLayoutRef.current = layout;
+      setSelectedMessageLayout(layout);
     }
-
-    messageActionsOpacity.setValue(0);
-    messageActionsTranslateY.setValue(30);
-    Animated.parallel([
-      Animated.timing(messageActionsOpacity, {
-        toValue: 1,
-        duration: 180,
-        useNativeDriver: true,
-      }),
-      Animated.timing(messageActionsTranslateY, {
-        toValue: 0,
-        duration: 180,
-        useNativeDriver: true,
-      }),
-    ]).start();
+    const open = () => {
+      setShowMessageActions(true);
+      if (Platform.OS === 'ios') {
+        try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(5); }
+      } else {
+        Vibration.vibrate(30);
+      }
+      messageActionsOpacity.setValue(0);
+      messageActionsTranslateY.setValue(30);
+      Animated.parallel([
+        Animated.timing(messageActionsOpacity, {
+          toValue: 1,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+        Animated.timing(messageActionsTranslateY, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    };
+    if (Platform.OS === 'android' && layout) {
+      requestAnimationFrame(open);
+    } else {
+      open();
+    }
   }, [messageActionsOpacity, messageActionsTranslateY]);
 
   const confirmDeleteSelectedMessage = React.useCallback((m: any) => {
@@ -2081,6 +2222,50 @@ export default function ChatScreen({ route, navigation }: Props) {
     resolveMediaUri,
     lang,
   ]);
+
+  // Переслать в системные приложения (WhatsApp, Telegram, Instagram и др.)
+  const shareForwardToSystem = React.useCallback(async () => {
+    const normalizeUri = (u: string) => {
+      const resolved = resolveMediaUri(u);
+      if (/^file:\/\//i.test(resolved)) return '';
+      return resolved;
+    };
+    let shareText = '';
+    let shareUrl: string | undefined;
+    if (selectionMode) {
+      const selected = messages.filter((m) => selectedMessageIds.has(String(m?.id || '')));
+      const parts: string[] = [];
+      for (const m of selected) {
+        const type = String(m?.type || '').trim();
+        if (type === 'text') parts.push(String(m?.text ?? '').trim());
+        else if (type === 'image') parts.push('🖼 Фото');
+        else if (type === 'audio') parts.push('🎤 Голосовое');
+      }
+      shareText = parts.filter(Boolean).join('\n');
+      const firstMedia = selected.find((m) => String(m?.type || '').trim() !== 'text');
+      if (firstMedia?.uri) shareUrl = normalizeUri(String(firstMedia.uri));
+    } else if (selectedMessage) {
+      const type = String(selectedMessage?.type || '').trim();
+      if (type === 'text') shareText = String(selectedMessage?.text ?? '').trim();
+      else if (type === 'image') {
+        shareText = '🖼 Фото';
+        const raw = String(selectedMessage?.uri ?? '').trim();
+        if (raw) shareUrl = normalizeUri(raw);
+      } else if (type === 'audio') {
+        shareText = '🎤 Голосовое';
+        const raw = String(selectedMessage?.uri ?? '').trim();
+        if (raw) shareUrl = normalizeUri(raw);
+      }
+    }
+    if (!shareText && !shareUrl) return;
+    try {
+      await Share.share({
+        message: shareText || (shareUrl || ''),
+        url: shareUrl && /^https?:\/\//i.test(shareUrl) ? shareUrl : undefined,
+        title: t('chatActionForward', lang),
+      });
+    } catch (_) {}
+  }, [selectionMode, messages, selectedMessageIds, selectedMessage, resolveMediaUri, lang]);
 
   const forwardSelectedMessageTo = React.useCallback(
     async (friend: any) => {
@@ -2370,7 +2555,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const headerEl = React.useMemo(() => (
     <View
       style={{
-        height: headerH,
+        paddingTop: headerTopPadding,
+        height: headerH + headerTopPadding,
         backgroundColor: LIVI.bg,
         borderBottomWidth: BORDER_WIDTH,
         borderBottomColor: BORDER_COLOR,
@@ -2493,6 +2679,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     </View>
   ), [
     headerH,
+    headerTopPadding,
     LIVI.bg,
     LIVI.white,
     LIVI.titan,
@@ -2519,8 +2706,11 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // Stable handler to avoid re-rendering all MessageItem rows on parent re-renders
   const handleLongPressMessage = React.useCallback(
-    (m: any) => {
+    (m: any, layout?: { x: number; y: number; width: number; height: number }) => {
       setSelectedMessage(m);
+      if (!layout && Platform.OS === 'android') {
+        messageActionsLayoutRef.current = null;
+      }
 
       const actionIds = ['copy', 'forward', 'select', 'delete', 'cancel'] as const;
       const options = [
@@ -2554,8 +2744,8 @@ export default function ChatScreen({ route, navigation }: Props) {
         return;
       }
 
-      // Android: custom bottom sheet (чтобы не перекрывать экран большой модалкой)
-      showMessageActionsSheet();
+      // Android: передаём layout при открытии и откладываем показ на следующий кадр
+      showMessageActionsSheet(layout ?? null);
     },
     [confirmDeleteSelectedMessage, copySelectedMessage, openForwardPicker, showMessageActionsSheet, lang]
   );
@@ -3265,9 +3455,22 @@ export default function ChatScreen({ route, navigation }: Props) {
   // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
   // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
   const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed }: any) => {
+    const bubbleRef = React.useRef<View>(null);
     const [imageLoadError, setImageLoadError] = React.useState(false);
     const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
     const [isDownloading, setIsDownloading] = React.useState(false);
+    const fireLongPressWithLayout = React.useCallback(() => {
+      const measure = () => {
+        bubbleRef.current?.measureInWindow((x, y, w, h) => {
+          onLongPressMessage(item, { x, y, width: w, height: h });
+        });
+      };
+      if (Platform.OS === 'android') {
+        requestAnimationFrame(measure);
+      } else {
+        measure();
+      }
+    }, [item, onLongPressMessage]);
     const effectiveReadStatus = readStatus; // 'sending' | 'delivered' | 'read' | 'failed' | 'sent'
     // Fallback логика для определения отправителя если поле sender отсутствует
     let isMyMessage = item.sender === 'me';
@@ -3379,9 +3582,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   });
                 }}
                 onLongPress={() => {
-                  animateMessagePress(item.id, () => {
-                    onLongPressMessage(item);
-                  });
+                  animateMessagePress(item.id, fireLongPressWithLayout);
                 }}
                 activeOpacity={0.9}
               >
@@ -3420,9 +3621,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 });
               }}
               onLongPress={() => {
-                animateMessagePress(item.id, () => {
-                  onLongPressMessage(item);
-                });
+                animateMessagePress(item.id, fireLongPressWithLayout);
               }}
               activeOpacity={0.9}
             >
@@ -3795,7 +3994,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           </Pressable>
         )}
 
-        <View style={{ alignSelf: isMyMessage ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
+        <View ref={bubbleRef} style={{ alignSelf: isMyMessage ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
           <TouchableOpacity
             onPress={() => {
               if (canToggle) {
@@ -3809,9 +4008,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               onMessagePress?.(item);
             }}
             onLongPress={() => {
-              animateMessagePress(item.id, () => {
-                onLongPressMessage(item);
-              });
+              animateMessagePress(item.id, fireLongPressWithLayout);
             }}
             activeOpacity={0.7}
             style={{
@@ -4712,180 +4909,179 @@ export default function ChatScreen({ route, navigation }: Props) {
         />
       )}
 
-      {/* Android: bottom sheet с действиями над сообщением */}
+      {/* Android: одна карточка — сверху реакции, ниже выбранное сообщение, ниже список */}
       {Platform.OS === 'android' && showMessageActions && selectedMessage && (
         <Modal
           transparent
           visible={showMessageActions}
-          animationType="none"
+          animationType="fade"
           onRequestClose={hideMessageActions}
         >
           <Pressable
             onPress={hideMessageActions}
             style={{
               flex: 1,
-              backgroundColor: isDark ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.40)',
+              backgroundColor: isDark ? 'rgba(0,0,0,0.80)' : 'rgba(0,0,0,0.66)',
               justifyContent: 'flex-end',
+              alignItems: 'center',
+              paddingBottom: 100,
             }}
           >
-            <Animated.View
+            <Pressable
+              onPress={() => {}}
               style={{
-                opacity: messageActionsOpacity,
-                transform: [{ translateY: messageActionsTranslateY }],
+                width: 280,
+                alignSelf: 'center',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.25,
+                shadowRadius: 12,
+                elevation: 12,
               }}
             >
-              <Pressable
-                onPress={() => {}}
-                style={{
-                  backgroundColor: isDark ? '#0F1626' : LIVI.surface,
-                  borderTopLeftRadius: 20,
-                  borderTopRightRadius: 20,
-                  paddingTop: 8,
-                  paddingBottom: ANDROID_SHEET_BOTTOM_PAD,
-                  paddingHorizontal: 14,
-                  // убираем тонкую линию сверху — она отличается по девайсам и выглядит как артефакт
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: -6 },
-                  shadowOpacity: 0.20,
-                  shadowRadius: 12,
-                  elevation: 12,
-                }}
-              >
-                {/* handle */}
-                <View style={{ alignItems: 'center', paddingTop: 4, paddingBottom: 8 }}>
-                  <View
-                    style={{
-                      width: 42,
-                      height: 4,
-                      borderRadius: 2,
-                      backgroundColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.18)',
-                    }}
-                  />
+              {(() => {
+                const cardBg = isDark ? 'rgba(30, 35, 41, 0.98)' : 'rgba(45, 50, 56, 0.98)';
+                const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+                const dividerColor = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.10)';
+                const reactionsAll = [...SHEET_REACTIONS_ROW_1, ...SHEET_REACTIONS_ROW_2];
+                const row1 = reactionsAll.slice(0, 5);
+                const row2 = reactionsAll.slice(5, 10);
+                const emojiPress = (emoji: string) => {
+                  hideMessageActions();
+                  const msgId = selectedMessage?.id != null ? String(selectedMessage.id) : null;
+                  if (msgId) sendMessageReaction(msgId, emoji, peerId).catch(() => {});
+                };
+                return (
+                <View style={{ width: 280, alignItems: 'center' }}>
+                  {/* Блок 1: реакции (лежит на фоне модалки) */}
+                  <View style={{ width: 256, borderRadius: 28, overflow: 'hidden', backgroundColor: LIVI.bg, borderWidth: 1, borderColor }}>
+                      <ScrollView
+                        ref={reactionsScrollRef}
+                        horizontal
+                        pagingEnabled
+                        showsHorizontalScrollIndicator={false}
+                        decelerationRate="fast"
+                        snapToInterval={256}
+                        snapToAlignment="start"
+                        contentContainerStyle={{ paddingVertical: 4 }}
+                        style={{ width: 256 }}
+                      >
+                        <View style={{ width: 256, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 }}>
+                          {row1.map((emoji) => (
+                            <Pressable key={emoji} onPress={() => emojiPress(emoji)} style={({ pressed }) => ({ padding: 6, borderRadius: 10, backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent' })} hitSlop={4}>
+                              <Text style={{ fontSize: 22 }}>{emoji}</Text>
+                            </Pressable>
+                          ))}
+                          <Pressable
+                            onPress={() => reactionsScrollRef.current?.scrollTo({ x: 256, animated: true })}
+                            style={({ pressed }) => ({
+                              width: 36,
+                              height: 36,
+                              borderRadius: 18,
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.12)') : (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'),
+                            })}
+                            hitSlop={4}
+                          >
+                            <Ionicons name="chevron-back" size={20} color={isDark ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.7)'} />
+                          </Pressable>
+                        </View>
+                        <View style={{ width: 256, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingHorizontal: 8 }}>
+                          {row2.map((emoji) => (
+                            <Pressable key={emoji} onPress={() => emojiPress(emoji)} style={({ pressed }) => ({ padding: 6, borderRadius: 10, backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent' })} hitSlop={4}>
+                              <Text style={{ fontSize: 22 }}>{emoji}</Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      </ScrollView>
+                  </View>
+                  {/* Отступ 12px — виден фон модалки (на нём лежат оба блока) */}
+                  {/* Блок 2: список действий */}
+                  <View style={{ marginTop: 12, width: 256, borderRadius: 12, overflow: 'hidden', backgroundColor: LIVI.bg, borderWidth: 1, borderColor }}>
+                    {(String(selectedMessage?.text || '').trim() || String(selectedMessage?.uri || '').trim()) && (
+                      <>
+                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
+                        <Pressable
+                          onPress={() => { hideMessageActions(); void copySelectedMessage(selectedMessage); }}
+                          style={({ pressed }) => ({
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            paddingVertical: 12,
+                            paddingHorizontal: 14,
+                            backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
+                          })}
+                        >
+                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '600' }}>{t('chatActionCopy', lang)}</Text>
+                          <Ionicons name="copy-outline" size={20} color={LIVI.titan} />
+                        </Pressable>
+                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
+                        <Pressable
+                          onPress={() => { hideMessageActions(); void openForwardPicker(); }}
+                          style={({ pressed }) => ({
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            paddingVertical: 12,
+                            paddingHorizontal: 14,
+                            backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
+                          })}
+                        >
+                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '600' }}>{t('chatActionForward', lang)}</Text>
+                          <Ionicons name="paper-plane-outline" size={20} color={LIVI.titan} />
+                        </Pressable>
+                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
+                        <Pressable
+                          onPress={() => { hideMessageActions(); enterSelectionModeFromMessage(selectedMessage); }}
+                          style={({ pressed }) => ({
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            paddingVertical: 12,
+                            paddingHorizontal: 14,
+                            backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
+                          })}
+                        >
+                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '600' }}>{t('chatActionSelect', lang)}</Text>
+                          <Ionicons name="checkbox-outline" size={20} color={LIVI.titan} />
+                        </Pressable>
+                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
+                      </>
+                    )}
+                    <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
+                    <Pressable
+                      onPress={() => { hideMessageActions(); confirmDeleteSelectedMessage(selectedMessage); }}
+                      style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        paddingVertical: 12,
+                        paddingHorizontal: 14,
+                        backgroundColor: pressed ? 'rgba(255,90,103,0.08)' : 'transparent',
+                      })}
+                    >
+                      <Text style={{ color: '#FF5A67', fontSize: 15, fontWeight: '700' }}>{t('delete', lang)}</Text>
+                      <Ionicons name="trash-outline" size={20} color="#FF5A67" />
+                    </Pressable>
+                    <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
+                    <Pressable
+                      onPress={hideMessageActions}
+                      style={({ pressed }) => ({
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        paddingVertical: 12,
+                        paddingHorizontal: 14,
+                        backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent',
+                      })}
+                    >
+                      <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '600' }}>{t('cancelAction', lang)}</Text>
+                    </Pressable>
+                  </View>
                 </View>
-
-                {(String(selectedMessage?.text || '').trim() || String(selectedMessage?.uri || '').trim()) && (
-                  <>
-                    <Pressable
-                      onPress={() => {
-                        hideMessageActions();
-                        void copySelectedMessage(selectedMessage);
-                      }}
-                      style={({ pressed }) => ({
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        paddingVertical: 14,
-                        paddingHorizontal: 12,
-                        borderRadius: 14,
-                        overflow: 'hidden',
-                        backgroundColor: pressed
-                          ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
-                          : 'transparent',
-                      })}
-                    >
-                      <Ionicons name="copy-outline" size={20} color={LIVI.titan} />
-                      <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
-                        {t('chatActionCopy', lang)}
-                      </Text>
-                    </Pressable>
-
-                    <Pressable
-                      onPress={() => {
-                        hideMessageActions();
-                        void openForwardPicker();
-                      }}
-                      style={({ pressed }) => ({
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        paddingVertical: 14,
-                        paddingHorizontal: 12,
-                        borderRadius: 14,
-                        overflow: 'hidden',
-                        marginTop: 2,
-                        backgroundColor: pressed
-                          ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
-                          : 'transparent',
-                      })}
-                    >
-                      <Ionicons name="paper-plane-outline" size={20} color={LIVI.titan} />
-                      <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
-                        {t('chatActionForward', lang)}
-                      </Text>
-                    </Pressable>
-
-                    <Pressable
-                      onPress={() => {
-                        enterSelectionModeFromMessage(selectedMessage);
-                      }}
-                      style={({ pressed }) => ({
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        paddingVertical: 14,
-                        paddingHorizontal: 12,
-                        borderRadius: 14,
-                        overflow: 'hidden',
-                        marginTop: 2,
-                        backgroundColor: pressed
-                          ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
-                          : 'transparent',
-                      })}
-                    >
-                      <Ionicons name="checkbox-outline" size={20} color={LIVI.titan} />
-                      <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
-                        {t('chatActionSelect', lang)}
-                      </Text>
-                    </Pressable>
-
-                    <View style={{ height: 10 }} />
-                  </>
-                )}
-
-                <Pressable
-                  onPress={() => {
-                    hideMessageActions();
-                    confirmDeleteSelectedMessage(selectedMessage);
-                  }}
-                  style={({ pressed }) => ({
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    paddingVertical: 14,
-                    paddingHorizontal: 12,
-                    borderRadius: 14,
-                    overflow: 'hidden',
-                    backgroundColor: pressed
-                      ? 'rgba(255,90,103,0.10)'
-                      : (isDark ? 'rgba(255,90,103,0.06)' : 'rgba(255,90,103,0.07)'),
-                    borderWidth: 1,
-                    borderColor: 'rgba(255,90,103,0.22)',
-                  })}
-                >
-                  <Ionicons name="trash-outline" size={20} color="#FF5A67" />
-                  <Text style={{ color: '#FF5A67', fontSize: 16, fontWeight: '700', marginLeft: 12 }}>
-                    {t('delete', lang)}
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={hideMessageActions}
-                  style={({ pressed }) => ({
-                    marginTop: 10,
-                    paddingVertical: 14,
-                    paddingHorizontal: 12,
-                    borderRadius: 14,
-                    overflow: 'hidden',
-                    backgroundColor: pressed
-                      ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)')
-                      : (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'),
-                    borderWidth: 1,
-                    borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)',
-                    alignItems: 'center',
-                  })}
-                >
-                  <Text style={{ color: LIVI.titan, fontSize: 16, fontWeight: '600', textAlign: 'center' }}>
-                    {t('cancelAction', lang)}
-                  </Text>
-                </Pressable>
-              </Pressable>
-            </Animated.View>
+                );
+              })()}
+            </Pressable>
           </Pressable>
         </Modal>
       )}
@@ -5012,24 +5208,37 @@ export default function ChatScreen({ route, navigation }: Props) {
           animationType="fade"
           onRequestClose={() => setShowForwardPicker(false)}
         >
+          <GestureHandlerRootView style={{ flex: 1 }}>
           <Pressable
             onPress={() => setShowForwardPicker(false)}
             style={{ flex: 1, backgroundColor: isDark ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.40)', justifyContent: 'flex-end' }}
           >
+          <PanGestureHandler
+            activeOffsetY={[0, 8]}
+            onGestureEvent={onForwardSheetGestureEvent}
+            onHandlerStateChange={onForwardSheetHandlerStateChange}
+          >
+            <Animated.View
+              style={{
+                transform: [{ translateY: forwardSheetTranslateY }],
+                maxHeight: '70%',
+              }}
+            >
             <Pressable
               onPress={() => {}}
               style={{
-                backgroundColor: isDark ? '#0F1626' : LIVI.surface,
+                backgroundColor: isDark ? '#0F1626' : 'rgba(182, 203, 216, 1)',
                 borderTopLeftRadius: 20,
                 borderTopRightRadius: 20,
                 paddingTop: 8,
                 paddingHorizontal: 14,
                 paddingBottom: ANDROID_SHEET_BOTTOM_PAD,
-                // убираем тонкую линию сверху — выглядит как артефакт на некоторых девайсах
-                maxHeight: '70%',
               }}
             >
-              <View style={{ alignItems: 'center', paddingTop: 4, paddingBottom: 8 }}>
+              <View
+                style={{ width: '100%', alignItems: 'center', paddingTop: 4, paddingBottom: 12, minHeight: 40 }}
+                pointerEvents="box-only"
+              >
                 <View
                   style={{
                     width: 42,
@@ -5039,9 +5248,29 @@ export default function ChatScreen({ route, navigation }: Props) {
                   }}
                 />
               </View>
-              <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700', textAlign: 'center', marginBottom: 10 }}>
-                {`${t('chatActionForward', lang)}…`}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10, paddingHorizontal: 8, position: 'relative' }}>
+                <View style={{ position: 'absolute', left: 0, right: 0, alignItems: 'center', pointerEvents: 'none' }}>
+                  <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700' }}>
+                    {`${t('chatActionForward', lang)}…`}
+                  </Text>
+                </View>
+                <View style={{ flex: 1 }} />
+                <Pressable
+                  onPress={() => void shareForwardToSystem()}
+                  style={({ pressed }) => ({
+                    width: 44,
+                    height: 44,
+                    marginRight: -10,
+                    borderRadius: 22,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'),
+                  })}
+                  hitSlop={8}
+                >
+                  <Ionicons name="share-outline" size={22} color={LIVI.titan} />
+                </Pressable>
+              </View>
 
               {forwardLoading ? (
                 <View style={{ paddingVertical: 18, alignItems: 'center' }}>
@@ -5179,7 +5408,10 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </Text>
               </TouchableOpacity>
             </Pressable>
+            </Animated.View>
+          </PanGestureHandler>
           </Pressable>
+          </GestureHandlerRootView>
         </Modal>
       )}
 

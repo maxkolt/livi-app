@@ -131,7 +131,7 @@ class LiviOutgoingCallService : Service() {
                 mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
             }
             mp.isLooping = true
-            mp.setVolume(0.3f, 0.3f)
+            mp.setVolume(0.2f, 0.2f)
             mp.setOnPreparedListener { it.start() }
             mp.prepareAsync()
             mediaPlayer = mp

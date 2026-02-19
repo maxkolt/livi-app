@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
+  Pressable,
   View,
   FlatList,
   Dimensions,
@@ -33,8 +34,8 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Sharing from 'expo-sharing';
 import SplashLoader from '../components/SplashLoader';
-import { Swipeable } from 'react-native-gesture-handler';
-import { Avatar, Divider, IconButton, List, Surface, Portal, Dialog, Button } from 'react-native-paper';
+import { Swipeable, PinchGestureHandler, State } from 'react-native-gesture-handler';
+import { Avatar, Divider, IconButton, List, Surface, Portal, Dialog, Button, Icon } from 'react-native-paper';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, getAvatarKey, forceImageRefresh } from '../utils/imageOptimization';
@@ -626,9 +627,31 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [menuOpen, setMenuOpen] = useState(false);
   const [tab, setTab] = useState<'friends' | 'settings' | 'more'>('friends');
   const tabRef = useRef<'friends' | 'settings' | 'more'>(tab);
+  const menuOverlayOpacity = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     tabRef.current = tab;
   }, [tab]);
+
+  // Плавное появление оверлея меню — без мерцания при переходе
+  useEffect(() => {
+    if (!menuOpen) return;
+    menuOverlayOpacity.setValue(0);
+    Animated.timing(menuOverlayOpacity, {
+      toValue: 1,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+  }, [menuOpen, menuOverlayOpacity]);
+
+  const closeMenu = useCallback(() => {
+    Animated.timing(menuOverlayOpacity, {
+      toValue: 0,
+      duration: 150,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) setMenuOpen(false);
+    });
+  }, [menuOverlayOpacity]);
 
   /* обновление приложения: бейдж раз в сутки, индикатор у «Ещё», кнопка в табе Ещё */
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -644,21 +667,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       ? 'rgba(59, 68, 83, 0.10)' // чуть легче на Android
       : 'rgba(59, 68, 83, 0.15)'; // iOS
 
-  // Внутри кнопки меню: чуть прозрачнее и затемнённее.
-  const MENU_BTN_INNER_BG = isDark
-    ? 'rgba(22, 26, 35, 0.66)' // тёмная тема: ещё темнее
-    : 'rgba(10, 14, 22, 0.54)'; // светлая: ещё темнее
+  // Внутри кнопки меню: тот же фон, что у кнопки «Начать поиск» (theme.colors.background).
+  const MENU_BTN_INNER_BG = theme.colors.background as string;
 
   // На Android: при открытом меню кнопка "Назад" закрывает меню (возврат на страницу приветствия), а не выходит из приложения
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     if (!menuOpen) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      setMenuOpen(false);
+      closeMenu();
       return true; // перехватываем — не выходим из приложения
     });
     return () => sub.remove();
-  }, [menuOpen]);
+  }, [menuOpen, closeMenu]);
 
   // Проверка доступности обновления (при старте и при возврате в приложение)
   useEffect(() => {
@@ -797,6 +818,58 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   useEffect(() => {
     nickLiveRef.current = nick;
   }, [nick]);
+
+  /* модалка аватара на странице приветствия: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom */
+  const [avatarModalVisible, setAvatarModalVisible] = useState(false);
+  const [modalAvatarUri, setModalAvatarUri] = useState<string>('');
+  const avatarModalPinchScale = useRef(new Animated.Value(1)).current;
+  const avatarModalBaseScale = useRef(new Animated.Value(1)).current;
+  const avatarModalLastScale = useRef(1);
+  const avatarModalScaleNumber = useRef(1);
+
+  useEffect(() => {
+    if (!avatarModalVisible) return;
+    setModalAvatarUri(myFullAvatarUri || avatarUri || '');
+    const uid = resolvedUserId || getCurrentUserId();
+    const ver = myAvatarVer || 0;
+    if (uid && ver > 0) {
+      getFull(uid, ver).then((fullUri) => {
+        if (fullUri) setModalAvatarUri(fullUri);
+      }).catch(() => {});
+    }
+    avatarModalPinchScale.setValue(1);
+    avatarModalBaseScale.setValue(1);
+    avatarModalLastScale.current = 1;
+    avatarModalScaleNumber.current = 1;
+  }, [avatarModalVisible, myFullAvatarUri, avatarUri, myAvatarVer, resolvedUserId, avatarModalPinchScale, avatarModalBaseScale]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!avatarModalVisible) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setAvatarModalVisible(false);
+      return true;
+    });
+    return () => sub.remove();
+  }, [avatarModalVisible]);
+
+  const avatarModalSize = (() => {
+    const { width: sw, height: sh } = Dimensions.get('window');
+    const base = Platform.OS === 'ios' ? 136 : 120;
+    return Math.min(base * 3, Math.floor(0.9 * Math.min(sw, sh)));
+  })();
+  const avatarModalScale = Animated.multiply(avatarModalBaseScale, avatarModalPinchScale);
+  const clampAvatarModal = (v: number, min: number, max: number) => Math.max(min, Math.min(v, max));
+  const onAvatarModalPinchEvent = Animated.event([{ nativeEvent: { scale: avatarModalPinchScale } }], { useNativeDriver: false });
+  const onAvatarModalPinchStateChange = useCallback((e: any) => {
+    if (e.nativeEvent.oldState === State.ACTIVE) {
+      const next = clampAvatarModal(avatarModalLastScale.current * e.nativeEvent.scale, 1, 6);
+      avatarModalLastScale.current = next;
+      avatarModalScaleNumber.current = next;
+      avatarModalBaseScale.setValue(next);
+      avatarModalPinchScale.setValue(1);
+    }
+  }, [avatarModalBaseScale, avatarModalPinchScale]);
 
   const [installId, setInstallId] = useState<string>('');
   const prevAvatarRef = useRef<string>('');
@@ -1205,7 +1278,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           sound.unloadAsync().catch(() => {});
           return;
         }
-        const volume = 0.1; // 0.0–1.0; на основном динамике разница 0.4/0.9 слышна
+        const volume = 0.8; // 0.0–1.0; на основном динамике разница 0.4/0.9 слышна
         await sound.setVolumeAsync(volume);
         outgoingCallSoundRef.current = sound;
         await sound.playAsync();
@@ -3513,13 +3586,11 @@ const handleClearNick = useCallback(async () => {
           iconColor={LIVI.white}
           style={[
             styles.actionBtnGap,
+            styles.friendActionBtnSize,
             {
-              width: 37,
-              height: 37,
-              borderRadius: 10,
-              backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+              backgroundColor: '#2B2B2B',
               borderWidth: 1,
-              borderColor: isDark ? 'rgba(255,255,255,0.12)' : ((theme.colors?.outline as string) || 'rgba(0,0,0,0.12)'),
+              borderColor: 'rgba(255,255,255,0.12)',
             },
           ]}
           onPress={handlePress}
@@ -3542,6 +3613,7 @@ const handleClearNick = useCallback(async () => {
           iconColor="rgb(255,90,103)"
           style={[
             styles.actionBtn,
+            styles.friendActionBtnSize,
             {
               marginRight: 6,
               backgroundColor: 'rgba(255,90,103,0.18)',
@@ -3640,13 +3712,11 @@ const handleClearNick = useCallback(async () => {
             size={23}
             iconColor={busy ? '#ddd' : LIVI.white}
             style={[
+              styles.friendActionBtnSize,
               {
-                width: 37,
-                height: 37,
-                borderRadius: 10,
-                backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+                backgroundColor: '#2B2B2B',
                 borderWidth: 1,
-                borderColor: isDark ? 'rgba(255,255,255,0.12)' : ((theme.colors?.outline as string) || 'rgba(0,0,0,0.12)'),
+                borderColor: 'rgba(255,255,255,0.12)',
               },
               busy ? styles.inviteBtnDisabled : null,
             ]}
@@ -3811,43 +3881,7 @@ const handleClearNick = useCallback(async () => {
         <Text style={{ color: LIVI.text2, marginTop: 6, fontSize: 12 }}>{L('baseLang')}: {defaultLang.toUpperCase()}</Text>
       </View>
 
-      {/* Invite Friends */}
-      <TouchableOpacity 
-        activeOpacity={0.85}
-        onPress={generateInviteLink}
-        style={{ 
-          backgroundColor: 'rgba(77,208,225,0.1)', 
-          borderColor: '#4DD0E1', 
-          borderWidth: StyleSheet.hairlineWidth, 
-          borderRadius: 12, 
-          padding: 14,
-          flexDirection: 'row',
-          alignItems: 'center'
-        }}
-      >
-        <View style={{ 
-          width: 44, 
-          height: 44, 
-          borderRadius: 22, 
-          backgroundColor: '#4DD0E1', 
-          justifyContent: 'center', 
-          alignItems: 'center',
-          marginRight: 14,
-          flexShrink: 0
-        }}>
-          <Ionicons name="share-outline" size={22} color={LIVI.white} />
-        </View>
-        <View style={{ flex: 1, justifyContent: 'center' }}>
-          <Text style={{ color: '#4DD0E1', fontSize: 16, fontWeight: '700', marginBottom: 3, lineHeight: 20 }}>
-            {t('inviteFriendsTitle', lang)}
-          </Text>
-          <Text style={{ color: LIVI.text2, fontSize: 13, lineHeight: 17 }}>
-            {t('inviteFriendsSubtitle', lang)}
-          </Text>
-        </View>
-      </TouchableOpacity>
-
-      {/* Donate */}
+      {/* Donate — рамка 1px сверху/по бокам, 1.5px снизу */}
       <TouchableOpacity 
         activeOpacity={0.85}
         onPress={async () => {
@@ -3855,36 +3889,86 @@ const handleClearNick = useCallback(async () => {
           setDonateVisible(true);
         }}
         style={{ 
-          backgroundColor: 'rgba(113,91,168,0.1)', 
-          borderColor: LIVI.accent, 
-          borderWidth: StyleSheet.hairlineWidth, 
+          backgroundColor: LIVI.accent, 
           borderRadius: 12, 
-          padding: 14,
-          flexDirection: 'row',
-          alignItems: 'center'
+          paddingTop: 1,
+          paddingLeft: 1,
+          paddingRight: 1,
+          paddingBottom: 1.5,
         }}
       >
         <View style={{ 
-          width: 44, 
-          height: 44, 
-          borderRadius: 22, 
-          backgroundColor: LIVI.accent, 
-          justifyContent: 'center', 
-          alignItems: 'center',
-          marginRight: 14,
-          flexShrink: 0
+          backgroundColor: 'rgba(4, 4, 4, 0.8)', 
+          borderTopLeftRadius: 11, 
+          borderTopRightRadius: 11, 
+          borderBottomLeftRadius: 10.5, 
+          borderBottomRightRadius: 10.5, 
+          padding: 14,
+          flexDirection: 'row',
+          alignItems: 'center'
         }}>
-          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '800', letterSpacing: 0.5 }}>
-            LiVi
-          </Text>
+          <View style={{ 
+            width: 44, 
+            height: 44, 
+            borderRadius: 22, 
+            backgroundColor: LIVI.accent, 
+            justifyContent: 'center', 
+            alignItems: 'center',
+            marginRight: 14,
+            flexShrink: 0
+          }}>
+            <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '800', letterSpacing: 0.5 }}>
+              LiVi
+            </Text>
+          </View>
+          <View style={{ flex: 1, justifyContent: 'center' }}>
+            <Text style={{ color: '#B8A9E8', fontSize: 16, fontWeight: '700', marginBottom: 3, lineHeight: 20 }}>
+              {t('supportProjectTitle', lang)}
+            </Text>
+            <Text style={{ color: LIVI.text2, fontSize: 13, lineHeight: 17 }}>
+              {t('supportProjectSubtitle', lang)}
+            </Text>
+          </View>
         </View>
-        <View style={{ flex: 1, justifyContent: 'center' }}>
-          <Text style={{ color: '#B8A9E8', fontSize: 16, fontWeight: '700', marginBottom: 3, lineHeight: 20 }}>
-            {t('supportProjectTitle', lang)}
-          </Text>
-          <Text style={{ color: LIVI.text2, fontSize: 13, lineHeight: 17 }}>
-            {t('supportProjectSubtitle', lang)}
-          </Text>
+      </TouchableOpacity>
+
+      {/* Invite Friends — рамка одной толщины на прямых и закруглённых краях (обёртка с padding) */}
+      <TouchableOpacity 
+        activeOpacity={0.85}
+        onPress={generateInviteLink}
+        style={{ 
+          backgroundColor: '#4DD0E1', 
+          borderRadius: 12, 
+          padding: 1,
+        }}
+      >
+        <View style={{ 
+          backgroundColor: 'rgba(4, 4, 4, 0.8)', 
+          borderRadius: 11, 
+          padding: 14,
+          flexDirection: 'row',
+          alignItems: 'center'
+        }}>
+          <View style={{ 
+            width: 44, 
+            height: 44, 
+            borderRadius: 22, 
+            backgroundColor: '#4DD0E1', 
+            justifyContent: 'center', 
+            alignItems: 'center',
+            marginRight: 14,
+            flexShrink: 0
+          }}>
+            <Ionicons name="share-outline" size={22} color={LIVI.white} />
+          </View>
+          <View style={{ flex: 1, justifyContent: 'center' }}>
+            <Text style={{ color: '#4DD0E1', fontSize: 16, fontWeight: '700', marginBottom: 3, lineHeight: 20 }}>
+              {t('inviteFriendsTitle', lang)}
+            </Text>
+            <Text style={{ color: LIVI.text2, fontSize: 13, lineHeight: 17 }}>
+              {t('inviteFriendsSubtitle', lang)}
+            </Text>
+          </View>
         </View>
       </TouchableOpacity>
 
@@ -3940,8 +4024,9 @@ const handleClearNick = useCallback(async () => {
 
     return (
       <View style={wrapperStyle}>
-        <View style={[styles.centerAvatarWrap, { backgroundColor: MENU_CHROME_BG }]}>
-          {isLocalPreview ? (
+        <Pressable onPress={() => { setModalAvatarUri(myFullAvatarUri || avatarUri || ''); setAvatarModalVisible(true); }} style={{ alignSelf: 'center' }}>
+          <View style={[styles.centerAvatarWrap, { backgroundColor: MENU_CHROME_BG }]}>
+            {isLocalPreview ? (
             // Локальное превью (до загрузки)
             (<ExpoImage
               source={{ uri: avatarUri }}
@@ -3972,7 +4057,8 @@ const handleClearNick = useCallback(async () => {
               <Text style={{ color: LIVI.titan, fontSize: 48, fontWeight: '500' }}>{letter}</Text>
             </View>)
           )}
-        </View>
+          </View>
+        </Pressable>
         <Text
           style={[
             styles.subtitleNik,
@@ -4178,15 +4264,41 @@ const handleClearNick = useCallback(async () => {
               { backgroundColor: isDark ? LIVI.text : LIVI.textThemeWhite },
             ]}
           >
-            <View style={[styles.menuBtnInner, { backgroundColor: MENU_BTN_INNER_BG }]}>
-              <IconButton
-                icon="menu"
-                size={Platform.OS === "ios" ? 28 : 24}
-                iconColor={isDark ? LIVI.text : LIVI.textThemeWhite}
-                style={styles.menuBtnIcon}
-                onPress={() => setMenuOpen(true)}
+            <Pressable
+              style={({ pressed }) => [
+                styles.menuBtnInner,
+                { backgroundColor: MENU_BTN_INNER_BG, position: 'relative' },
+                Platform.OS === 'ios' && pressed && styles.menuBtnPressed,
+              ]}
+              onPress={() => requestAnimationFrame(() => setMenuOpen(true))}
+              android_ripple={{
+                color: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.12)',
+                borderless: false,
+              }}
+            >
+              <BlurView
+                intensity={isDark ? 15 : 20}
+                tint={isDark ? 'dark' : 'light'}
+                style={[StyleSheet.absoluteFillObject, { borderRadius: 13 }]}
               />
-            </View>
+              <View
+                style={[
+                  StyleSheet.absoluteFillObject,
+                  {
+                    borderRadius: 13,
+                    backgroundColor: isDark ? '#8A8F99' : '#3B4453',
+                    opacity: isDark ? 0.25 : 0.14,
+                  },
+                ]}
+              />
+              <View style={styles.menuBtnIconWrap}>
+                <Icon
+                  source="menu"
+                  size={Platform.OS === "ios" ? 28 : 24}
+                  color={isDark ? LIVI.text : LIVI.textThemeWhite}
+                />
+              </View>
+            </Pressable>
           </View>
           {(() => {
             // КРИТИЧНО: Проверяем наличие непрочитанных сообщений или пропущенных видеозвонков
@@ -4232,10 +4344,55 @@ const handleClearNick = useCallback(async () => {
         />
       </View>
 
+      {/* Модалка аватара: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom, тап вне — закрыть. Без вложенности touch/gesture (Nesting touch handlers with native animated driver). */}
+      {avatarModalVisible && (
+        <View style={[StyleSheet.absoluteFill, { zIndex: 1000 }]} pointerEvents="box-none">
+          {Platform.OS === 'ios' ? (
+            <>
+              <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.2)' }]} />
+            </>
+          ) : (
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,1.0)' }]} />
+          )}
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setAvatarModalVisible(false)} />
+          <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]} pointerEvents="box-none">
+            <PinchGestureHandler onGestureEvent={onAvatarModalPinchEvent} onHandlerStateChange={onAvatarModalPinchStateChange}>
+              <Animated.View
+                style={[
+                  {
+                    width: avatarModalSize,
+                    height: avatarModalSize,
+                    borderRadius: avatarModalSize / 2,
+                    overflow: 'hidden' as const,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transform: [{ scale: avatarModalScale }],
+                  },
+                ]}
+              >
+                {modalAvatarUri ? (
+                  <ExpoImage
+                    {...getAvatarImageProps(modalAvatarUri, `avatar_modal_${resolvedUserId}_${myAvatarVer}`)}
+                    style={{ width: avatarModalSize, height: avatarModalSize }}
+                  />
+                ) : (
+                  <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{displayAvatarLetter(savedNick)}</Text>
+                  </View>
+                )}
+              </Animated.View>
+            </PinchGestureHandler>
+          </View>
+        </View>
+      )}
+
       {menuOpen && (
-        <View style={styles.overlayMenu}>
-          <BlurView intensity={Platform.OS === 'ios' ? 80 : 60} tint="dark" style={StyleSheet.absoluteFill} />
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'ios' ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.6)' }]} />
+        <Animated.View style={[styles.overlayMenu, { opacity: menuOverlayOpacity }]} pointerEvents="box-none">
+          <View style={StyleSheet.absoluteFill} collapsable={false}>
+            <BlurView intensity={Platform.OS === 'ios' ? 80 : 60} tint="dark" style={StyleSheet.absoluteFill} />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'ios' ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.6)' }]} />
+          </View>
           <SafeAreaView 
             style={[styles.sheetFull]}
             edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
@@ -4245,7 +4402,7 @@ const handleClearNick = useCallback(async () => {
                 <TouchableOpacity
                   onPress={() => {
                     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
-                    setMenuOpen(false);
+                    closeMenu();
                   }}
                   activeOpacity={0.5}
                   style={{
@@ -4343,7 +4500,7 @@ const handleClearNick = useCallback(async () => {
               </View>
             </KeyboardAvoidingView>
           </SafeAreaView>
-        </View>
+        </Animated.View>
       )}
 
       {/* ───── Комната занята (caller info) ───── */}
@@ -4896,8 +5053,10 @@ const styles = StyleSheet.create({
   topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
   brand: { color: LIVI.text, fontSize: Platform.OS === "ios" ? 39 : 35, fontWeight: Platform.OS === "ios" ? '600' : '800', letterSpacing: 0.3 },
   menuBtn: { backgroundColor: LIVI.glass, borderRadius: 14 },
-  menuBtnOuter: { borderRadius: 14, padding: 1, alignSelf: 'flex-start' },
-  menuBtnInner: { borderRadius: 13, overflow: 'hidden' },
+  menuBtnOuter: { borderRadius: 14, padding: 1, alignSelf: 'flex-start', overflow: 'hidden' },
+  menuBtnInner: { borderRadius: 13, overflow: 'hidden', minWidth: 40, minHeight: 40, justifyContent: 'center', alignItems: 'center' },
+  menuBtnPressed: { opacity: 0.75 },
+  menuBtnIconWrap: { margin: 0, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' },
   menuBtnIcon: { margin: 0, backgroundColor: 'transparent' },
   // Симметричные отступы: левый край -> аватар = правый край -> иконка чата.
   // Горизонтальные отступы задаются contentContainerStyle у FlatList (paddingHorizontal: 16),
@@ -4989,7 +5148,8 @@ const styles = StyleSheet.create({
   },
 
   actionBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
-  actionBtnGap: { marginLeft: 8 },
+  friendActionBtnSize: { width: 40, height: 40, borderRadius: 12 },
+  actionBtnGap: { marginLeft: 12 },
 
   segmentBottomArc: { position: 'absolute', left: 18, right: 18, bottom: 0, height: 44, borderRadius: 114, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: LIVI.border },
 
