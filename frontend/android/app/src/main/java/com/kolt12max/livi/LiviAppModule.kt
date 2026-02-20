@@ -7,6 +7,10 @@ import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.os.VibrationAttributes
 import android.provider.Settings
 import android.util.Log
 import org.json.JSONObject
@@ -31,7 +35,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
   override fun getName(): String = NAME
 
-  /** Показать нативный экран исходящего сразу (без callId). callId придёт позже через notifyOutgoingCallId. */
+  /** Показать нативный экран исходящего сразу (без callId). callId придёт позже через notifyOutgoingCallId. Сохраняем toUserId/toNick, чтобы запустить звук из notifyOutgoingCallId даже если broadcast не успел дойти до Activity. */
   @ReactMethod
   fun launchOutgoingCallActivityWithoutCallId(toUserId: String, toNick: String?) {
     val ctx = reactApplicationContext
@@ -58,14 +62,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     ctx.startActivity(intent)
   }
 
-  /** Передать callId уже открытому экрану исходящего (после ответа сервера). */
+  /** Передать callId уже открытому экрану исходящего (после ответа сервера). Запускаем сервис (звук, таймаут) сразу отсюда, чтобы рингтон не зависел от того, успела ли Activity принять broadcast. */
   @ReactMethod
   fun notifyOutgoingCallId(callId: String) {
+    val ctx = reactApplicationContext
     val intent = Intent(OutgoingCallActivity.ACTION_OUTGOING_CALL_ID_READY).apply {
-      setPackage(reactApplicationContext.packageName)
+      setPackage(ctx.packageName)
       putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
     }
-    reactApplicationContext.sendBroadcast(intent)
+    ctx.sendBroadcast(intent)
+    val (toUserId, toNick) = LiviOngoingCallHelper.getOutgoingToUserAndNick(ctx) ?: return
+    LiviOutgoingCallService.start(ctx, callId, toUserId, toNick)
   }
 
   @ReactMethod
@@ -176,6 +183,52 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
     }
     reactApplicationContext.sendBroadcast(intent)
+  }
+
+  /** Вибрация звонка (Настройки → Вибрация звонка) для входящего, когда UI показывается внутри приложения. USAGE_RINGTONE на API 33+. */
+  @ReactMethod
+  fun startIncomingCallVibration() {
+    val ctx = reactApplicationContext
+    val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+    } else {
+      @Suppress("DEPRECATION")
+      ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+    } ?: return
+    if (!vibrator.hasVibrator()) return
+    try {
+      val pattern = longArrayOf(0, 500, 200, 500)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val effect = VibrationEffect.createWaveform(pattern, 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+          val attrs = VibrationAttributes.createForUsage(VibrationAttributes.USAGE_RINGTONE)
+          vibrator.vibrate(effect, attrs)
+        } else {
+          vibrator.vibrate(effect)
+        }
+      } else {
+        @Suppress("DEPRECATION")
+        vibrator.vibrate(pattern, 0)
+      }
+    } catch (e: Exception) {
+      Log.w(NAME, "startIncomingCallVibration failed", e)
+    }
+  }
+
+  @ReactMethod
+  fun stopIncomingCallVibration() {
+    try {
+      val ctx = reactApplicationContext
+      val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+      } else {
+        @Suppress("DEPRECATION")
+        ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+      }
+      vibrator?.cancel()
+    } catch (e: Exception) {
+      Log.w(NAME, "stopIncomingCallVibration failed", e)
+    }
   }
 
   /** При обработке livi://answer-call — закрыть IncomingCallActivity по callId (если открыта из уведомления). */

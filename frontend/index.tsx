@@ -7,22 +7,22 @@ import './utils/pushNotifications';
 import { Alert, AppRegistry, Platform } from 'react-native';
 import { registerRootComponent } from 'expo';
 import App from './App';
-import { setupCallKeep, displayIncomingCall, isEndedCallId } from './utils/callKeep';
+import { isEndedCallId } from './utils/callKeep';
 import * as Notifications from 'expo-notifications';
 
-// Headless-задача: пуш о звонке пришёл при убитом/фоновом приложении → нативный FCM запустил этот таск → показываем CallKeep
+// Headless-задача: на Android входящий звонок показывается только нативным FGS + IncomingCallActivity (full-screen intent).
+// CallKeep (displayIncomingCall) не вызываем — иначе сверху висит баннер ConnectionService поверх нативных экранов.
 AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (data: { type?: string; callId?: string; from?: string; fromNick?: string } | null) => {
   if (Platform.OS !== 'android') return;
   console.log('[headless] RNCallKeepBackgroundMessage received', data ? { type: data.type, callId: data?.callId, from: data?.from } : null);
   if (!data || data.type !== 'call' || !data.callId || !data.from) return;
   try {
     if (await isEndedCallId(data.callId)) {
-      console.log('[headless] skip displayIncomingCall (call already ended)', data.callId);
+      console.log('[headless] skip (call already ended)', data.callId);
       return;
     }
-    await setupCallKeep();
-    displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
-    console.log('[headless] displayIncomingCall done', data.callId);
+    // На Android не вызываем displayIncomingCall — экран входящего показывается нативным FGS (IncomingCallForegroundService)
+    // с full-screen intent → IncomingCallActivity. Вызов displayIncomingCall даёт второй UI (баннер сверху).
     try {
       await Notifications.dismissAllNotificationsAsync();
     } catch {}

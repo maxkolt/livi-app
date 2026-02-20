@@ -46,6 +46,9 @@ class MainApplication : Application(), ReactApplication {
       // If you opted-in for the New Architecture, we load the native entry point for this app.
       load()
     }
+    // Регистрируем каналы уведомлений при старте приложения — пакет попадает в системный кэш истории уведомлений (уменьшает NotifHistoryProto "package name not found in string cache").
+    LiviFirebaseMessagingService.ensureCallChannel(this)
+    LiviFirebaseMessagingService.ensureMissedCallChannel(this)
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
   }
 

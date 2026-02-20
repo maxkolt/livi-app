@@ -16,4 +16,4 @@ diff --git a/build/android/Package.js b/build/android/Package.js
 +  return baseId;
  }
  
- /**
+  /**

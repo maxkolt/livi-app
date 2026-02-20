@@ -8,6 +8,7 @@ import { API_BASE } from '../sockets/socket';
 
 const APP_SETTINGS_URL = `${API_BASE}/api/app-settings`;
 const LAST_UPDATE_BADGE_SHOWN_KEY = 'livi.lastUpdateBadgeShownAt';
+const LAST_KNOWN_ON_LATEST_VERSION_KEY = 'livi.lastKnownOnLatestVersion'; // после обновления: не показывать бейдж при ошибке сети/VPN
 const BADGE_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 часа
 
 /** Ссылка на страницу обновления в Google Play (internal test). */
@@ -41,6 +42,9 @@ export function getCurrentAppVersion(): string {
 let cachedLatest: string | null = null;
 let cachedAt = 0;
 const CACHE_MS = 2 * 60 * 1000; // 2 минуты (чаще проверяем при возврате в приложение)
+
+/** Последний залогированный результат (current, latest, available) — логируем только при смене. */
+let lastLogged: { current: string; latest: string; available: boolean } | null = null;
 
 /** Сбросить кэш версии (при возврате в приложение — запросить свежую версию с сервера). */
 export function clearUpdateCheckCache(): void {
@@ -86,15 +90,72 @@ export async function fetchLatestAppVersion(): Promise<string | null> {
   return null;
 }
 
-/** Есть ли доступное обновление (текущая версия меньше той, что на сервере). */
-export async function isUpdateAvailable(): Promise<boolean> {
-  const latest = await fetchLatestAppVersion();
-  const current = getCurrentAppVersion();
-  const available = !!(latest && isVersionLess(current, latest));
-  if (__DEV__) {
-    console.log('[UpdateCheck] current:', current, 'latest from server:', latest ?? '(null)', '→ update available:', available);
+/** Быстрая проверка без сети: ранее мы уже считали, что приложение на последней версии? Тогда не показывать обновление. */
+export async function isLikelyOnLatestVersion(): Promise<boolean> {
+  try {
+    const current = getCurrentAppVersion();
+    const lastKnown = await AsyncStorage.getItem(LAST_KNOWN_ON_LATEST_VERSION_KEY);
+    return lastKnown != null && lastKnown.trim() === current;
+  } catch {
+    return false;
   }
-  return available;
+}
+
+/** Есть ли доступное обновление (текущая версия меньше той, что на сервере). Не зависит от VPN: при ошибке сети считаем «на последней», если ранее уже определяли current >= latest. */
+export async function isUpdateAvailable(): Promise<boolean> {
+  const current = getCurrentAppVersion();
+  const latest = await fetchLatestAppVersion();
+
+  if (latest !== null) {
+    const available = isVersionLess(current, latest);
+    if (!available) {
+      try {
+        await AsyncStorage.setItem(LAST_KNOWN_ON_LATEST_VERSION_KEY, current);
+      } catch {
+        // ignore
+      }
+    } else {
+      try {
+        await AsyncStorage.removeItem(LAST_KNOWN_ON_LATEST_VERSION_KEY);
+      } catch {
+        // ignore
+      }
+    }
+    if (__DEV__) {
+      const prev = lastLogged;
+      const changed = !prev || prev.current !== current || prev.latest !== latest || prev.available !== available;
+      if (changed) {
+        lastLogged = { current, latest, available };
+        console.log('[UpdateCheck] current:', current, 'latest from server:', latest, '→ update available:', available);
+      }
+    }
+    return available;
+  }
+
+  // Ошибка сети/VPN: не показывать обновление, если ранее уже считали, что пользователь на последней версии
+  try {
+    const lastKnown = await AsyncStorage.getItem(LAST_KNOWN_ON_LATEST_VERSION_KEY);
+    if (lastKnown != null && lastKnown.trim() === current) {
+      if (__DEV__) {
+        const prev = lastLogged;
+        if (!prev || prev.current !== current || prev.latest !== '(null)' || prev.available !== false) {
+          lastLogged = { current, latest: '(null)', available: false };
+          console.log('[UpdateCheck] fetch failed, lastKnownOnLatest=', lastKnown, '→ no update');
+        }
+      }
+      return false;
+    }
+  } catch {
+    // ignore
+  }
+  if (__DEV__) {
+    const prev = lastLogged;
+    if (!prev || prev.current !== current || prev.latest !== '(null)' || prev.available !== false) {
+      lastLogged = { current, latest: '(null)', available: false };
+      console.log('[UpdateCheck] current:', current, 'latest from server: (null)', '→ no update (offline)');
+    }
+  }
+  return false;
 }
 
 /** Показывать ли бейдж «Скачайте обновление». В релизе — при каждом входе, если есть обновление; в __DEV__ — раз в сутки (или всегда для проверки UI). */

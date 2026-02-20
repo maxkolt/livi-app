@@ -2,7 +2,7 @@ diff --git a/android/src/main/java/expo/modules/devlauncher/modules/DevLauncherI
 index 1234567..abcdefg 100644
 --- a/android/src/main/java/expo/modules/devlauncher/modules/DevLauncherInternalModule.kt
 +++ b/android/src/main/java/expo/modules/devlauncher/modules/DevLauncherInternalModule.kt
-@@ -118,11 +118,16 @@ class DevLauncherInternalModule : Module(), DevLauncherKoinComponent {
+@@ -121,8 +121,13 @@
      }
  
      AsyncFunction("getPendingDeepLink") { promise: Promise ->
@@ -18,8 +18,7 @@ index 1234567..abcdefg 100644
          return@AsyncFunction
        }
  
-       promise.resolve(intentRegistry.intent?.action)
-@@ -224,9 +229,10 @@ class DevLauncherInternalModule : Module(), DevLauncherKoinComponent {
+@@ -228,10 +233,10 @@
    }
  
    private fun onNewPendingIntent(intent: Intent) {

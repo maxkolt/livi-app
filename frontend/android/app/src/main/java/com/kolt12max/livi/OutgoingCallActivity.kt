@@ -26,6 +26,7 @@ class OutgoingCallActivity : AppCompatActivity() {
     private var callIdReadyReceiver: BroadcastReceiver? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private var dotsRunnable: Runnable? = null
+    private var callIdEmptyTimeoutRunnable: Runnable? = null
     private var callId: String = ""
     private var toUserId: String = ""
     private var toNick: String = ""
@@ -60,6 +61,8 @@ class OutgoingCallActivity : AppCompatActivity() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     val id = intent?.getStringExtra(EXTRA_CALL_ID) ?: return
                     if (id.isNotEmpty()) {
+                        callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
+                        callIdEmptyTimeoutRunnable = null
                         this@OutgoingCallActivity.callId = id
                         LiviOngoingCallHelper.setOutgoingCall(this@OutgoingCallActivity, id, toUserId, toNick)
                         LiviOutgoingCallService.start(this@OutgoingCallActivity, id, toUserId, toNick)
@@ -74,6 +77,16 @@ class OutgoingCallActivity : AppCompatActivity() {
             } else {
                 registerReceiver(callIdReadyReceiver, filterReady)
             }
+            // Холодный старт: если callId так и не пришёл (нет реального исходящего вызова) — закрыть экран
+            callIdEmptyTimeoutRunnable = Runnable {
+                callIdEmptyTimeoutRunnable = null
+                if (this@OutgoingCallActivity.callId.isEmpty()) {
+                    Log.d(TAG, "No callId received within timeout, finishing (cold start without real call)")
+                    LiviOutgoingCallService.stop(this@OutgoingCallActivity)
+                    finish()
+                }
+            }
+            timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 5000L)
         }
 
         findViewById<ImageButton>(R.id.btn_cancel).setOnClickListener {
@@ -143,6 +156,8 @@ class OutgoingCallActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
+        callIdEmptyTimeoutRunnable = null
         LiviOngoingCallHelper.clearOngoingCall(applicationContext)
         LiviOutgoingCallService.stop(this)
         dotsRunnable?.let { timeoutHandler.removeCallbacks(it) }

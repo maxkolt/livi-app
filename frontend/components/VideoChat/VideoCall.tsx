@@ -17,6 +17,7 @@ import {
   Easing,
   InteractionManager,
   NativeModules,
+  AppState,
 } from 'react-native';
 import { useNavigation, useFocusEffect, usePreventRemove } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -593,9 +594,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     if ((global as any).__endCallCleanupRef) {
       (global as any).__endCallCleanupRef.current = null;
     }
-    if ((global as any).__pendingCallAcceptedRef) {
-      (global as any).__pendingCallAcceptedRef.current = null;
-    }
+    // НЕ очищаем __pendingCallAcceptedRef здесь: при ремаунте (двойная навигация) новая сессия должна прочитать payload и подключиться. Очищает только VideoCallSession после использования.
     currentCallIdRef.current = null;
   }, []);
 
@@ -642,6 +641,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
     }
   }, [route?.params?.resume, route?.params?.fromPiP, pip.localStream, pip.remoteStream, pip.localCamOn]);
+
+  // При возврате из фона во время видеозвонка — переподключить камеру, если система её закрыла
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active') return;
+      const session = sessionRef.current;
+      const hasActiveCall = !!(roomId || callId || partnerId) && !wasFriendCallEnded && !isInactiveState;
+      if (session && hasActiveCall && camOn && typeof (session as any).reconnectCameraOnResume === 'function') {
+        (session as any).reconnectCameraOnResume().catch(() => {});
+      }
+    });
+    return () => sub.remove();
+  }, [roomId, callId, partnerId, wasFriendCallEnded, isInactiveState, camOn]);
   
   // Инициализация session и восстановление состояния звонка
   useEffect(() => {
@@ -953,7 +965,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           friendId,
           existingCallId
         });
-        
+        if (route.params.roomId) {
+          setRoomId(route.params.roomId);
+        }
         setPartnerUserId(friendId);
         currentCallIdRef.current = existingCallId;
         setCallId(existingCallId);
@@ -1516,6 +1530,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setRemoteStream(null);
       setCamOn(false);
       setMicOn(false);
+      setRoomId(null);
+      setCallId(null);
+      setPartnerId(null);
+      setPartnerUserId(null);
+      currentCallIdRef.current = null;
       
       if (typeof session.cleanup === 'function') {
         session.cleanup();

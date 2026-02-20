@@ -122,6 +122,7 @@ import socket, {
 } from '../sockets/socket';
 import {
   isUpdateAvailable,
+  isLikelyOnLatestVersion,
   shouldShowUpdateBadge,
   markUpdateBadgeShown,
   clearUpdateCheckCache,
@@ -682,11 +683,21 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [menuOpen, closeMenu]);
 
   // Проверка доступности обновления (при старте и при возврате в приложение)
+  // Дебаунс при resume: не чаще раза в 60 сек, чтобы избежать мерцания при частых AppState active (два устройства, блокировка экрана)
+  const lastUpdateCheckAtRef = useRef(0);
+  const UPDATE_CHECK_RESUME_DEBOUNCE_MS = 60 * 1000;
   useEffect(() => {
     let cancelled = false;
     clearUpdateCheckCache(); // при каждом запуске — свежая проверка, чтобы после установки обновления индикатор и кнопка «Обновить» исчезли
     const check = async () => {
       try {
+        lastUpdateCheckAtRef.current = Date.now();
+        // Сразу скрыть бейдж/индикатор, если ранее уже определили, что на последней версии (не зависит от VPN)
+        const likelyOnLatest = await isLikelyOnLatestVersion();
+        if (!cancelled && likelyOnLatest) {
+          setUpdateAvailable(false);
+          setShowUpdateBadgeState(false);
+        }
         const available = await isUpdateAvailable();
         if (!cancelled) {
           setUpdateAvailable(!!available);
@@ -701,6 +712,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     check();
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
+        const now = Date.now();
+        if (now - lastUpdateCheckAtRef.current < UPDATE_CHECK_RESUME_DEBOUNCE_MS) return;
         clearUpdateCheckCache(); // при возврате в приложение — запросить свежую версию с сервера
         check();
       }
@@ -2468,25 +2481,23 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   /* ===== app resume ===== */
   const appStateRef = useRef(AppState.currentState);
+  const lastResumeSyncAtRef = useRef(0);
+  const RESUME_SYNC_DEBOUNCE_MS = 30 * 1000; // не чаще раза в 30 сек — убирает мерцание при частых active (два устройства, блокировка)
   useEffect(() => {
     const sub = AppState.addEventListener('change', async (state) => {
       const wasBg = /inactive|background/.test(appStateRef.current);
       appStateRef.current = state;
       try { setAppIsActive(state === 'active'); } catch {}
       if (wasBg && state === 'active') {
+        const now = Date.now();
+        if (now - lastResumeSyncAtRef.current < RESUME_SYNC_DEBOUNCE_MS) return;
+        lastResumeSyncAtRef.current = now;
         try {
           await waitSocketConnected();
-          
-          // Синхронизируем данные при возобновлении приложения
           const userExists = await syncUserData();
-          
           if (userExists) {
             await ensureIdentity();
-            const currentUserId = getCurrentUserId();
-            if (currentUserId) {
-              //
-            } else {
-            }
+            getCurrentUserId();
           }
           await loadFriends();
         } catch (e) { console.warn('resume error', e); }

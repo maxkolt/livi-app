@@ -109,6 +109,14 @@ class LiviOutgoingCallService : Service() {
 
     private fun startSound() {
         try {
+            mediaPlayer?.apply {
+                try {
+                    if (isPlaying) stop()
+                    release()
+                } catch (_: Exception) {}
+            }
+            mediaPlayer = null
+
             val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
             savedAudioMode = am.mode
             savedSpeakerphone = am.isSpeakerphoneOn

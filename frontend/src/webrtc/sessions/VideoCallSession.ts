@@ -565,6 +565,35 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   /**
+   * Вызвать при onResume (возврат из фона) во время активного видеозвонка:
+   * если система закрыла камеру (track ended), перезапрашиваем и подключаем её заново.
+   */
+  async reconnectCameraOnResume(): Promise<void> {
+    if (this.ended || !this.room || this.room.state !== 'connected' || !this.isCamOn) return;
+    const track = this.localVideoTrack;
+    if (!track?.mediaStreamTrack || track.mediaStreamTrack.readyState !== 'ended') return;
+    try {
+      logger.info('[VideoCallSession] Reconnecting camera on app resume (track was ended)');
+      await this.ensureLocalTracks(true);
+      if (this.localVideoTrack && this.room?.state === 'connected' && this.room.localParticipant) {
+        if (!this.isVideoTrackPublished(this.localVideoTrack)) {
+          await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
+          await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
+            const msg = e?.message || String(e || '');
+            if (!msg.includes('already') && !msg.includes('duplicate')) logger.warn('[VideoCallSession] Publish video on resume failed', e);
+          });
+        }
+        if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
+          await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
+          await this.room.localParticipant.publishTrack(this.localAudioTrack).catch(() => {});
+        }
+      }
+    } catch (e) {
+      logger.warn('[VideoCallSession] reconnectCameraOnResume failed', e);
+    }
+  }
+
+  /**
    * Unpublish other local tracks of same kind before publishing a new one.
    * Prevents LiveKit warnings about publishing a second track with the same source.
    */
@@ -1235,6 +1264,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         payloadUrl: data.livekitUrl,
         roomId: data.livekitRoomName,
       });
+      this.config.callbacks.onLoadingChange?.(false);
+      this.config.onLoadingChange?.(false);
       return;
     }
     
@@ -1370,8 +1401,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
         // НЕ прерываем обработку - возможно подключение уже установлено через другой запрос
         // Проверяем, не подключены ли уже к этой комнате
-        if (this.room && 
-            this.room.state === 'connected' && 
+        if (this.room &&
+            this.room.state === 'connected' &&
             this.currentRoomName === targetRoomName) {
           if (this.ended) return;
           logger.info('[VideoCallSession] ✅ Room connected via another request, continuing', {
@@ -1382,6 +1413,8 @@ export class VideoCallSession extends SimpleEventEmitter {
           this.emit('callAnswered');
           return;
         }
+        this.config.callbacks.onLoadingChange?.(false);
+        this.config.onLoadingChange?.(false);
         return;
       }
       
@@ -1508,8 +1541,8 @@ export class VideoCallSession extends SimpleEventEmitter {
               maxRetries,
             });
             // Проверяем, не подключены ли уже к этой комнате
-            if (this.room && 
-                this.room.state === 'connected' && 
+            if (this.room &&
+                this.room.state === 'connected' &&
                 this.currentRoomName === targetRoomName) {
               if (this.ended) return;
               logger.info('[VideoCallSession] ✅ Room connected via another request (fallback), continuing', {
@@ -1520,6 +1553,8 @@ export class VideoCallSession extends SimpleEventEmitter {
               this.emit('callAnswered');
               return;
             }
+            this.config.callbacks.onLoadingChange?.(false);
+            this.config.onLoadingChange?.(false);
             return;
           }
           
@@ -1538,7 +1573,12 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       } catch (e) {
         logger.error('[VideoCallSession] Error fetching LiveKit token', e);
+        this.config.callbacks.onLoadingChange?.(false);
+        this.config.onLoadingChange?.(false);
       }
+    } else {
+      this.config.callbacks.onLoadingChange?.(false);
+      this.config.onLoadingChange?.(false);
     }
   }
 
@@ -1581,6 +1621,11 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       return;
     }
+
+    // КРИТИЧНО: Сразу помечаем завершение, чтобы повторный вызов (socket call:ended + ParticipantDisconnected
+    // почти одновременно) не выполнял очистку и emit('callEnded') дважды — иначе у второго участника
+    // handleCallEnded в UI вызывается дважды и второй раз игнорируется (isInactiveStateRef уже true).
+    this.ended = true;
 
     // КРИТИЧНО: Сохраняем состояние ПЕРЕД очисткой для логирования
     const savedCallId = this.callId;
@@ -1628,9 +1673,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       previousPartnerId: savedPartnerId,
       previousPartnerUserId: savedPartnerUserId,
     });
-
-    // Mark session ended so repeated call:ended won't re-run cleanup.
-    this.ended = true;
   }
 
   private handleDisconnected(): void {
@@ -2574,7 +2616,12 @@ export class VideoCallSession extends SimpleEventEmitter {
           roomState: room.state,
         });
         
-        await room.connect(url, token, { autoSubscribe: true });
+        // Увеличиваем peerConnectionTimeout: при одновременном подключении обоих участников
+        // переговоры (negotiation) могут не уложиться в 15s → "negotiation timed out" и повторная попытка.
+        await room.connect(url, token, {
+          autoSubscribe: true,
+          peerConnectionTimeout: 30_000,
+        });
       
         // КРИТИЧНО: Проверяем состояние после подключения
         if (room.state !== 'connected') {
@@ -2686,7 +2733,7 @@ export class VideoCallSession extends SimpleEventEmitter {
                 });
                 this.handleTrackSubscribed(publication.track, publication, participant);
               } else {
-                logger.warn(`[VideoCallSession] ${context} - audio track still not loaded after subscription`, {
+                logger.debug(`[VideoCallSession] ${context} - audio track still not loaded after subscription`, {
                   trackSid: publication.trackSid,
                   isSubscribed: publication.isSubscribed,
                   hasTrack: !!publication.track,
@@ -2694,7 +2741,7 @@ export class VideoCallSession extends SimpleEventEmitter {
               }
             }, 100);
             
-            logger.warn(`[VideoCallSession] ${context} - audio track not loaded yet, waiting for TrackSubscribed event or delayed check`, {
+            logger.debug(`[VideoCallSession] ${context} - audio track not loaded yet, waiting for TrackSubscribed event or delayed check`, {
               trackSid: publication.trackSid,
               isSubscribed: publication.isSubscribed,
             });
@@ -2743,7 +2790,7 @@ export class VideoCallSession extends SimpleEventEmitter {
                 });
                 this.handleTrackSubscribed(publication.track, publication, participant);
               } else {
-                logger.warn(`[VideoCallSession] ${context} - video track still not loaded after subscription`, {
+                logger.debug(`[VideoCallSession] ${context} - video track still not loaded after subscription`, {
                   trackSid: publication.trackSid,
                   isSubscribed: publication.isSubscribed,
                   hasTrack: !!publication.track,
@@ -2751,7 +2798,7 @@ export class VideoCallSession extends SimpleEventEmitter {
               }
             }, 100);
             
-            logger.warn(`[VideoCallSession] ${context} - video track not loaded yet, waiting for TrackSubscribed event or delayed check`, {
+            logger.debug(`[VideoCallSession] ${context} - video track not loaded yet, waiting for TrackSubscribed event or delayed check`, {
               trackSid: publication.trackSid,
               isSubscribed: publication.isSubscribed,
             });
@@ -2882,6 +2929,11 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       }, 1000);
 
+      // Даём движку LiveKit время поднять транспорт перед публикацией (снижает "publication timed out" и "connection state mismatch").
+      if (!this.ended && this.room === room) {
+        await new Promise<void>(r => setTimeout(r, 350));
+      }
+
       // КРИТИЧНО: Проверяем состояние комнаты перед публикацией треков
       // LiveKit автоматически управляет WebRTC соединениями, но нужно убедиться что комната подключена
       if (room.state !== 'connected' || !room.localParticipant) {
@@ -2982,20 +3034,25 @@ export class VideoCallSession extends SimpleEventEmitter {
       } else {
         const isTransientPcError = /could not establish pc connection|pc connection|negotiation (disconnected|timed out)|transport error/i.test(errorMessage);
         const logFn = isTransientPcError ? logger.warn : logger.error;
-        logFn('[VideoCallSession] Error connecting to LiveKit', {
-          error: errorMessage,
-          errorCode: e?.code,
-          errorName: e?.name,
-          url,
-          urlHost: url ? new URL(url).hostname : 'unknown',
-          targetRoomName,
-          hasToken: !!token,
-          tokenLength: token?.length || 0,
-          tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
-          roomState: room?.state,
-          isInvalidApiKey,
-          stack: e?.stack,
-        });
+        // Не логировать полный стек, если к моменту catch звонок уже завершён (например, retry после end с другой стороны)
+        if (this.ended) {
+          logger.debug('[VideoCallSession] Connect failed after call ended', { error: errorMessage });
+        } else {
+          logFn('[VideoCallSession] Error connecting to LiveKit', {
+            error: errorMessage,
+            errorCode: e?.code,
+            errorName: e?.name,
+            url,
+            urlHost: url ? new URL(url).hostname : 'unknown',
+            targetRoomName,
+            hasToken: !!token,
+            tokenLength: token?.length || 0,
+            tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
+            roomState: room?.state,
+            isInvalidApiKey,
+            stack: e?.stack,
+          });
+        }
       }
       
       // Если ошибка связана с API ключом, логируем дополнительную информацию
@@ -3228,21 +3285,22 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   // livekit-client иногда оставляет активный ws/engine на мобилках даже после room.disconnect().
-  // Это приводит к WARN "ping timeout triggered" уже после завершения звонка.
-  // Делаем best-effort cleanup через внутренние поля (не публичный API) — строго в try/catch.
+  // Это приводит к WARN "ping timeout triggered" и "connection state mismatch" после завершения звонка.
+  // Закрываем в порядке: транспорт → сокет/ws → signalClient → engine, чтобы состояние было согласованным.
   private forceDisposeRoom(room: Room, context: 'disconnected' | 'timeout' | string): void {
     try {
       // Внешние listeners можно снять безопасно после начала/завершения disconnect.
       try { (room as any)?.removeAllListeners?.(); } catch {}
 
       const engine: any = (room as any)?.engine;
-      // Пытаемся закрыть engine/SignalClient максимально мягко/совместимо.
-      try { engine?.close?.(); } catch {}
+      const signalClient = engine?.signalClient;
+      // Порядок: сначала транспорт и сокет, затем signalClient, затем engine — чтобы не было "connection state mismatch".
+      try { signalClient?.transport?.close?.(); } catch {}
+      try { signalClient?.ws?.close?.(); } catch {}
+      try { signalClient?.socket?.close?.(); } catch {}
+      try { signalClient?.close?.(); } catch {}
       try { engine?.client?.close?.(); } catch {}
-      try { engine?.signalClient?.close?.(); } catch {}
-      try { engine?.signalClient?.ws?.close?.(); } catch {}
-      try { engine?.signalClient?.socket?.close?.(); } catch {}
-      try { engine?.signalClient?.transport?.close?.(); } catch {}
+      try { engine?.close?.(); } catch {}
 
       logger.debug('[VideoCallSession] forceDisposeRoom complete', {
         context,
@@ -3572,7 +3630,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
         if (participant === this.currentRemoteParticipant) {
           if (!this.isDisconnecting) {
-            this.handleDisconnected();
+            // КРИТИЧНО: Вызываем handleCallEnded, а не только handleDisconnected, чтобы UI у второго
+            // участника обновился (setWasFriendCallEnded, emit('callEnded')). Иначе завершение
+            // срабатывает только по call:ended по сокету, и при отключённом сокете второй не видит завершения.
+            logger.info('[VideoCallSession] Remote participant disconnected — treating as call ended', {
+              participantIdentity: participant.identity,
+            });
+            this.handleCallEnded();
           }
         }
       })

@@ -36,6 +36,16 @@ object LiviOngoingCallHelper {
             .apply()
     }
 
+    /** Для исходящего вызова вернуть (toUserId, toNick); иначе null. Нужно для запуска LiviOutgoingCallService из notifyOutgoingCallId. */
+    @JvmStatic
+    fun getOutgoingToUserAndNick(context: Context): Pair<String, String>? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getString(KEY_TYPE, null) != "outgoing") return null
+        val toUserId = prefs.getString(KEY_TO_USER_ID, null) ?: return null
+        val toNick = prefs.getString(KEY_TO_NICK, "") ?: ""
+        return Pair(toUserId, toNick)
+    }
+
     fun clearOngoingCall(context: Context) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
     }

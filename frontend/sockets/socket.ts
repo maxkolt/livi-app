@@ -442,7 +442,8 @@ socket.on("connect", async () => {
 socket.on("reconnect_attempt", () => { reconnecting = true; });
 socket.on("reconnect", () => { reconnecting = false; });
 socket.on("disconnect", (r) => {
-  const transient = ["transport close", "ping timeout"];
+  // Временные отвалы: по ним считаем, что сокет в состоянии переподключения (для логов и isReconnecting()).
+  const transient = ["transport close", "ping timeout", "transport error"];
   reconnecting = transient.includes(r) || r === undefined;
   // На следующем коннекте снова гарантируем наличие installId в handshake
   __handshakeHasInstallId = false;

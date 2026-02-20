@@ -46,21 +46,26 @@ class IncomingCallForegroundService : Service() {
         } else {
             LiviFirebaseMessagingService.buildIncomingCallNotification(this, callId, from, fromNick)
         }
+        // Android 14+ (API 34): тип PHONE_CALL — система не накладывает ограничение «no camera/microphone» при старте из фона (VoIP/входящий вызов).
+        // На старых версиях — SPECIAL_USE (только показ уведомления, камера/микрофон не используем в сервисе).
+        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+        } else {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        }
         ServiceCompat.startForeground(
             this,
             LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL,
             notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            fgsType
         )
 
-        if (!headsUpOnly) {
-            val activityIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(activityIntent)
-            Log.d(TAG, "IncomingCallForegroundService: full-screen; activity started")
-        } else {
+        // Не вызываем startActivity() отсюда: на Android 14+ (BAL) запуск Activity из сервиса блокируется.
+        // Уведомление уже с setFullScreenIntent(fullScreenPendingIntent, true) — систему запустит IncomingCallActivity сама.
+        if (headsUpOnly) {
             Log.d(TAG, "IncomingCallForegroundService: heads-up only (Accept/Decline on notification)")
+        } else {
+            Log.d(TAG, "IncomingCallForegroundService: notification with full-screen intent (system will launch activity)")
         }
 
         activityShownReceiver = object : BroadcastReceiver() {
@@ -106,16 +111,12 @@ class IncomingCallForegroundService : Service() {
             Log.d(TAG, "IncomingCallForegroundService: timeout 20s, closing native screen and stopping")
             val cid = currentCallId
             if (!cid.isNullOrEmpty()) {
-                val closeIntent = Intent(this@IncomingCallForegroundService, IncomingCallActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    putExtra(IncomingCallActivity.EXTRA_JUST_CLOSE, true)
-                    putExtra(IncomingCallActivity.EXTRA_CALL_ID, cid)
+                // Закрываем IncomingCallActivity через broadcast (startActivity из сервиса блокируется BAL на Android 14+).
+                val cancelIntent = Intent(LiviFirebaseMessagingService.ACTION_CALL_CANCELED).apply {
+                    setPackage(packageName)
+                    putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, cid)
                 }
-                try {
-                    startActivity(closeIntent)
-                } catch (e: Exception) {
-                    Log.w(TAG, "IncomingCallForegroundService: startActivity(close) failed", e)
-                }
+                sendBroadcast(cancelIntent)
             }
             cleanupAndStop()
         }

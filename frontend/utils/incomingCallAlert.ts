@@ -1,4 +1,4 @@
-import { Platform, Vibration } from 'react-native';
+import { NativeModules, Platform, Vibration } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
 import { logger } from './logger';
 
@@ -6,30 +6,27 @@ let started = false;
 let iosVibeTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Запускает звук + вибрацию для входящего звонка (когда UI уже виден).
- *
- * Важно:
- * - Это НЕ пуш и не "звонок как телефон" когда приложение убито.
- * - Работает для сценария "мы уже в приложении и показываем модалку".
+ * Запускает системную мелодию звонка и вибрацию звонка для входящего (когда UI уже виден).
+ * На Android: мелодия из Настройки → Мелодия звонка, вибрация из Настройки → Вибрация звонка (USAGE_RINGTONE).
+ * В приложении, вне приложения и на заблокированном экране — одинаковое поведение.
  */
 export function startIncomingCallAlert() {
   if (started) return;
   started = true;
 
   try {
-    // Рингтон системный. На Android не будет играть, если устройство в "silent" — это нормальное поведение платформы.
-    // seconds: android only, ограничиваем длительность как safeguard.
+    // Системная мелодия звонка (_DEFAULT_ = RingtoneManager.TYPE_RINGTONE). На Android — громкость «Звонок».
     InCallManager.startRingtone('_DEFAULT_', [0, 800, 800], 'default', 25);
   } catch (e) {
     logger.warn('[incomingCallAlert] startRingtone failed:', e);
   }
 
   try {
-    // Доп. вибрация, чтобы на Android была повторяющаяся, а на iOS — "пульс" пока висит входящий.
     if (Platform.OS === 'android') {
-      Vibration.vibrate([0, 700, 900], true);
+      // Вибрация звонка (как в настройках «Вибрация звонка»), не уведомления.
+      NativeModules.LiviAppModule?.startIncomingCallVibration?.();
     } else {
-      // iOS: repeat в RN работает ограниченно; делаем безопасный таймер в foreground.
+      // iOS: повторяющийся пульс пока висит входящий.
       iosVibeTimer = setInterval(() => {
         try {
           Vibration.vibrate(800);
@@ -45,9 +42,12 @@ export function stopIncomingCallAlert() {
   if (!started) return;
   started = false;
 
-  // Сначала обрываем вибрацию, чтобы не было задержки до следующего тика
   try {
-    Vibration.cancel();
+    if (Platform.OS === 'android') {
+      NativeModules.LiviAppModule?.stopIncomingCallVibration?.();
+    } else {
+      Vibration.cancel();
+    }
   } catch {}
 
   try {

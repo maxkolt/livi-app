@@ -251,7 +251,9 @@ export async function openIncomingCallScreen(peerUserId: string, callId: string)
   await navigateToVideoCallIncoming(peerUserId, callId);
 }
 
-/** Открыть приложение и принять звонок (для livi://answer-call из нативного IncomingCallActivity). Ждём сокет, чтобы call:accept дошёл до сервера и звонящий получил call:accepted и перешёл на видеозвонок. */
+/** Открыть приложение и принять звонок (для livi://answer-call из нативного IncomingCallActivity).
+ * Сначала навигация на VideoCall, затем session.acceptCall() отправит call:accept — так обработчик call:accepted
+ * уже зарегистрирован и соединение гарантированно установится (нет гонки с ранним call:accepted). */
 export async function openAnswerCallScreen(peerUserId: string, callId: string): Promise<void> {
   try { setIncomingCallScreenVisible(false); } catch {}
   try {
@@ -259,9 +261,8 @@ export async function openAnswerCallScreen(peerUserId: string, callId: string): 
   } catch {}
   try {
     await ensureSocketConnected(5000);
-    acceptCall(callId);
   } catch (e) {
-    logger.warn('[push] acceptCall from answer-call deep link failed', { callId, error: (e as Error)?.message });
+    logger.warn('[push] ensureSocketConnected failed on answer-call', { callId, error: (e as Error)?.message });
   }
   if (Platform.OS === 'android') {
     sendCallAnsweredBroadcast(callId);

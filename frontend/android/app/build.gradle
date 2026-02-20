@@ -215,6 +215,8 @@ dependencies {
 
     // Firebase Messaging: нужен для LiviFirebaseMessagingService (extends ExpoFirebaseMessagingService)
     implementation("com.google.firebase:firebase-messaging:24.0.1")
+    // Firebase Analytics: FCM логирует события (notification_received и т.д.) — без этой зависимости "Unable to log event: analytics library is missing"
+    implementation("com.google.firebase:firebase-analytics:22.0.2")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

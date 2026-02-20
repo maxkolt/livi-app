@@ -5,12 +5,16 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioManager
+import android.media.MediaPlayer
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.os.VibrationAttributes
 import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.TextView
@@ -32,6 +36,7 @@ class IncomingCallActivity : AppCompatActivity() {
     private var currentCallId: String = ""
     private var callCanceledReceiver: BroadcastReceiver? = null
     private var callAnsweredReceiver: BroadcastReceiver? = null
+    private var ringtonePlayer: MediaPlayer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,6 +76,7 @@ class IncomingCallActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         setContentView(R.layout.activity_incoming_call)
 
+        startCallRingtone()
         startRepeatingVibration()
         currentCallId = callIdFromIntent
         val callId = currentCallId
@@ -82,6 +88,7 @@ class IncomingCallActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.call_subtitle).text = getString(R.string.incoming_call_title)
 
         findViewById<ImageButton>(R.id.btn_accept).setOnClickListener {
+            stopCallRingtone()
             stopRepeatingVibration()
             val answerUri = "livi://answer-call?callId=${Uri.encode(callId)}&from=${Uri.encode(from)}&fromNick=${URLEncoder.encode(fromNick, StandardCharsets.UTF_8.toString())}"
             startMainWithDeepLink(answerUri)
@@ -89,6 +96,7 @@ class IncomingCallActivity : AppCompatActivity() {
         }
 
         findViewById<ImageButton>(R.id.btn_decline).setOnClickListener {
+            stopCallRingtone()
             stopRepeatingVibration()
             LiviAppModule.emitIncomingCallDeclinedByUser(callId)
             EndedCallIds.add(this, callId)
@@ -99,6 +107,7 @@ class IncomingCallActivity : AppCompatActivity() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val canceledCallId = intent?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
                 if (canceledCallId == currentCallId) {
+                    stopCallRingtone()
                     stopRepeatingVibration()
                     finish()
                 }
@@ -116,6 +125,7 @@ class IncomingCallActivity : AppCompatActivity() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val answeredCallId = intent?.getStringExtra(EXTRA_CALL_ID) ?: return
                 if (answeredCallId == currentCallId) {
+                    stopCallRingtone()
                     stopRepeatingVibration()
                     finish()
                 }
@@ -157,10 +167,12 @@ class IncomingCallActivity : AppCompatActivity() {
         callCanceledReceiver = null
         callAnsweredReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         callAnsweredReceiver = null
+        stopCallRingtone()
         stopRepeatingVibration()
         super.onDestroy()
     }
 
+    /** Вибрация звонка (Настройки → Вибрация звонка): USAGE_RINGTONE на API 33+, иначе обычный паттерн. */
     private fun startRepeatingVibration() {
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
@@ -170,13 +182,18 @@ class IncomingCallActivity : AppCompatActivity() {
         } ?: return
         if (!vibrator.hasVibrator()) return
         try {
+            val pattern = longArrayOf(0, 500, 200, 500) // пауза, вибрация, пауза, вибрация — повтор
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val pattern = longArrayOf(0, 500, 200, 500)
                 val effect = VibrationEffect.createWaveform(pattern, 0)
-                vibrator.vibrate(effect)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    val attrs = VibrationAttributes.createForUsage(VibrationAttributes.USAGE_RINGTONE)
+                    vibrator.vibrate(effect, attrs)
+                } else {
+                    vibrator.vibrate(effect)
+                }
             } else {
                 @Suppress("DEPRECATION")
-                vibrator.vibrate(longArrayOf(0, 500, 200, 500), 0)
+                vibrator.vibrate(pattern, 0)
             }
         } catch (e: Exception) {
             android.util.Log.w(TAG, "startRepeatingVibration failed", e)
@@ -252,8 +269,49 @@ class IncomingCallActivity : AppCompatActivity() {
                 EndedCallIds.add(this, cid)
                 (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
             }
+            stopCallRingtone()
             stopRepeatingVibration()
             finish()
+        }
+    }
+
+    /** Системная мелодия звонка (Настройки → Мелодия звонка), STREAM_RING, зациклена. */
+    private fun startCallRingtone() {
+        val uri: Uri? = try {
+            RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_RINGTONE)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "startCallRingtone: getActualDefaultRingtoneUri failed", e)
+            null
+        }
+        if (uri == null) return
+        try {
+            val player = MediaPlayer().apply {
+                setDataSource(applicationContext, uri)
+                setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                isLooping = true
+                prepare()
+                start()
+            }
+            ringtonePlayer = player
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "startCallRingtone: play failed", e)
+        }
+    }
+
+    private fun stopCallRingtone() {
+        try {
+            ringtonePlayer?.apply {
+                if (isPlaying) stop()
+                release()
+            }
+            ringtonePlayer = null
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "stopCallRingtone failed", e)
         }
     }
 

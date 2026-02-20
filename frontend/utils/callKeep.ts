@@ -88,8 +88,8 @@ export function clearOutgoingDeclineHandled(): void {
   outgoingDeclineHandledCallId = null;
 }
 
-/** Дебаунс: не вызывать нативный finish повторно в течение окна (сокет+пуш могут оба вызвать close). */
-const OUTGOING_CLOSE_DEBOUNCE_MS = 1200;
+/** Дебаунс: не вызывать нативный finish повторно в течение окна (сокет+пуш могут оба вызвать close; увеличенное окно реже даёт «пропуск» при двойных вызовах). */
+const OUTGOING_CLOSE_DEBOUNCE_MS = 2000;
 let lastOutgoingCloseAt = 0;
 
 /** Сбросить дебаунс при открытии нового исходящего (чтобы следующий decline мог закрыть). */

@@ -350,29 +350,31 @@ function AppContent() {
     bounce.stopAnimation(); wave1.stopAnimation(); wave2.stopAnimation();
   }, [bounce, wave1, wave2]);
   React.useEffect(() => {
-    (async () => {
-      try {
-        // 🔊 Конфиг аудио
-        await Audio.setAudioModeAsync({
-          playsInSilentModeIOS: true,
-          // Default app-wide mode: playback (not recording). Recording-enabled modes can route audio to the receiver on iOS.
-          allowsRecordingIOS: false,
-          // IMPORTANT: do not keep audio session alive in background to avoid battery drain.
-          staysActiveInBackground: false,
-          shouldDuckAndroid: false,
-          // IMPORTANT: do not force earpiece output. Let OS route (speaker / wired / BT) for consistent loud playback.
-          playThroughEarpieceAndroid: false,
-        });
-      } catch (e) {
-        logger.warn("Audio setAudioModeAsync failed:", e);
-      }
+    // Откладываем инициализацию до после первого фрейма — чтобы JS context был готов (expo-av JSI bindings, меньше contention).
+    const cancel = InteractionManager.runAfterInteractions(() => {
+      (async () => {
+        try {
+          // 🔊 Конфиг аудио (после runAfterInteractions — контекст готов, меньше шанс "JS context is not available")
+          await Audio.setAudioModeAsync({
+            playsInSilentModeIOS: true,
+            // Default app-wide mode: playback (not recording). Recording-enabled modes can route audio to the receiver on iOS.
+            allowsRecordingIOS: false,
+            // IMPORTANT: do not keep audio session alive in background to avoid battery drain.
+            staysActiveInBackground: false,
+            shouldDuckAndroid: false,
+            // IMPORTANT: do not force earpiece output. Let OS route (speaker / wired / BT) for consistent loud playback.
+            playThroughEarpieceAndroid: false,
+          });
+        } catch (e) {
+          logger.warn("Audio setAudioModeAsync failed:", e);
+        }
 
-      try {
-        // ✅ Инициализация CometChat (один раз на старте)
-        await ensureCometChatReady();
-      } catch (e) {
-        logger.error("CometChat init failed:", e);
-      }
+        try {
+          // ✅ Инициализация CometChat (один раз на старте)
+          await ensureCometChatReady();
+        } catch (e) {
+          logger.error("CometChat init failed:", e);
+        }
 
       // 🔔 Запрашиваем разрешение на уведомления сразу при старте (Android 13+ / iOS),
       // чтобы пользователь увидел системный диалог до любых фоновых токен-регистраций.
@@ -386,7 +388,9 @@ function AppContent() {
         await ensureInitialMediaPermissions();
       } catch {}
 
-    })();
+      })();
+    });
+    return () => cancel.cancel();
   }, []);
 
   // 🔔 Push notifications: register token once we have userId
@@ -1390,7 +1394,7 @@ function AppContent() {
           // Caller: we initiated, the other accepted → directInitiator: true, peerUserId = callee (who accepted).
           // Callee: we accepted → we're already on VideoCall (navigated on Accept tap); skip or rare edge case.
           const params = isCaller
-            ? { directCall: true, directInitiator: true, callId: (data as any)?.callId, peerUserId: fromUserId }
+            ? { directCall: true, directInitiator: true, callId: (data as any)?.callId, peerUserId: fromUserId, roomId: (data as any)?.livekitRoomName ?? (data as any)?.roomId }
             : { directCall: true, directInitiator: false, callId: (data as any)?.callId, isIncoming: true, peerUserId: fromUserId ?? undefined };
           logger.info('[App] 🚀 Navigating to VideoCall screen', {
             callId: data?.callId,

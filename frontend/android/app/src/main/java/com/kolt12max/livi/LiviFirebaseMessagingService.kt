@@ -10,11 +10,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.util.Log
-import android.widget.RemoteViews
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.RemoteMessage
@@ -68,20 +65,14 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             try {
                 (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancelAll()
             } catch (_: Exception) {}
-            // Всегда показываем нативный полноэкранный экран входящего: домашний экран, блокировка, приложение в фоне/закрыто
+            // На Android 14+ (BAL) запуск Activity из фона блокируется. Полагаемся только на full-screen intent
+            // уведомления: Foreground-сервис показывает уведомление с setFullScreenIntent → система сама запустит IncomingCallActivity.
             if (isDeviceLocked()) {
                 LiviAppModule.tryStartCallKeepHeadlessTask(callId, from, fromNick) { _ -> }
             }
-            val activityIntent = buildIncomingCallActivityIntent(this, callId, from, fromNick)
-            try {
-                activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(activityIntent)
-                Log.d(TAG, "FCM call push: activity launch (incoming call screen)")
-            } catch (e: Exception) {
-                Log.w(TAG, "FCM call push: startActivity failed", e)
-            }
             ensureCallChannel(this)
             startIncomingCallForegroundService(callId, from, fromNick, headsUpOnly = false)
+            Log.d(TAG, "FCM call push: foreground service started (full-screen intent via notification)")
             return
         }
         if (typeNorm == "call_canceled" && callId != null) {
@@ -420,9 +411,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
         }
 
-        /** Уведомление входящего звонка: в свёрнутом виде в шторке — компактная строка с кнопками (Отклонить/Принять),
-         * в развёрнутом — полный layout с текстом «Входящий видеозвонок». Тап по области (имя, время) → нативный экран.
-         * Тап по кнопкам → Принять/Отклонить. Full-screen intent для нативного экрана по возможности. */
+        /** Уведомление входящего звонка: только системный вид (без серой карточки).
+         * Full-screen intent открывает IncomingCallActivity; при открытии экрана уведомление снимается. */
         @JvmStatic
         fun buildIncomingCallNotification(context: Context, callId: String, from: String, fromNick: String): Notification {
             val fullScreenIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)
@@ -459,41 +449,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            val timeString = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-            val remoteViewsCompact = RemoteViews(context.packageName, R.layout.notification_incoming_call_compact).apply {
-                setTextViewText(R.id.notification_title, title)
-                setTextViewText(R.id.notification_text, subtitle)
-                setTextViewText(R.id.notification_time, timeString)
-                setOnClickPendingIntent(R.id.notification_content_area, fullScreenPendingIntent)
-                setOnClickPendingIntent(R.id.notification_btn_decline, declinePending)
-                setOnClickPendingIntent(R.id.notification_btn_accept, answerPending)
-            }
-            val remoteViewsBig = RemoteViews(context.packageName, R.layout.notification_incoming_call).apply {
-                setImageViewResource(R.id.notification_logo, smallIconRes)
-                setTextViewText(R.id.notification_title, title)
-                setTextViewText(R.id.notification_text, subtitle)
-                setTextViewText(R.id.notification_time, timeString)
-                setOnClickPendingIntent(R.id.notification_content_area, fullScreenPendingIntent)
-                setOnClickPendingIntent(R.id.notification_btn_decline, declinePending)
-                setOnClickPendingIntent(R.id.notification_btn_accept, answerPending)
-            }
-
-            val noOpIntent = Intent("com.kolt12max.livi.NOTIFICATION_EXPAND_NOOP").apply {
-                setPackage(context.packageName)
-            }
-            val noOpPendingIntent = PendingIntent.getBroadcast(
-                context,
-                REQUEST_NOOP,
-                noOpIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
             return NotificationCompat.Builder(context, CHANNEL_ID_CALLS)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(title)
                 .setContentText(subtitle)
-                .setCustomContentView(remoteViewsCompact)
-                .setCustomBigContentView(remoteViewsBig)
-                .setContentIntent(noOpPendingIntent)
+                .setContentIntent(fullScreenPendingIntent)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setFullScreenIntent(fullScreenPendingIntent, true)
                 .setAutoCancel(true)
@@ -510,9 +470,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         private const val REQUEST_ACCEPT = 2001
         private const val REQUEST_DECLINE = 2002
         private const val REQUEST_CONTENT = 2003
-        private const val REQUEST_NOOP = 2004
 
-        /** Heads-up уведомление с кнопками Принять/Отклонить; всплывает один раз и исчезает в шторку. */
+        /** Heads-up уведомление без серой карточки: системный вид, кнопки Принять/Отклонить. */
         @JvmStatic
         fun buildIncomingCallNotificationHeadsUpOnly(context: Context, callId: String, from: String, fromNick: String): Notification {
             val title = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_title)
@@ -553,22 +512,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            val timeString = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-            val remoteViews = RemoteViews(context.packageName, R.layout.notification_incoming_call).apply {
-                setImageViewResource(R.id.notification_logo, smallIconRes)
-                setTextViewText(R.id.notification_title, title)
-                setTextViewText(R.id.notification_text, subtitle)
-                setTextViewText(R.id.notification_time, timeString)
-                setOnClickPendingIntent(R.id.notification_btn_decline, declinePending)
-                setOnClickPendingIntent(R.id.notification_btn_accept, answerPending)
-            }
-
             return NotificationCompat.Builder(context, CHANNEL_ID_CALLS)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(title)
                 .setContentText(subtitle)
-                .setCustomContentView(remoteViews)
-                .setCustomBigContentView(remoteViews)
                 .setContentIntent(contentPending)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setAutoCancel(true)

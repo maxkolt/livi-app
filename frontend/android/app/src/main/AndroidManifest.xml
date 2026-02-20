@@ -16,6 +16,7 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
   <!-- CallKeep selfManaged: READ_CALL_LOG, READ_PHONE_NUMBERS (TelecomManager.getPhoneAccount на части устройств) -->
   <uses-permission android:name="android.permission.READ_CALL_LOG"/>
@@ -106,8 +107,8 @@
     <activity android:name=".OutgoingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:launchMode="singleInstance" android:finishOnTaskLaunch="false"/>
     <!-- Исходящий вызов в фоне: WAV в динамике, уведомление, таймаут 20 сек -->
     <service android:name=".LiviOutgoingCallService" android:exported="false" android:foregroundServiceType="mediaPlayback"/>
-    <!-- Входящий звонок: краткий foreground-сервис, чтобы экран входящего показывался поверх любых приложений и настроек (Android 10+) -->
-    <service android:name=".IncomingCallForegroundService" android:exported="false" android:foregroundServiceType="specialUse">
+    <!-- Входящий звонок: foreground-сервис типа phoneCall (Android 14+) — без ограничения камеры/микрофона при старте из фона; на старых версиях — specialUse -->
+    <service android:name=".IncomingCallForegroundService" android:exported="false" android:foregroundServiceType="phoneCall|specialUse">
       <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Display incoming video call screen over other apps"/>
     </service>
     <!-- «Отклонить» в уведомлении: HTTP decline без открытия приложения (нет Deep link received) -->
