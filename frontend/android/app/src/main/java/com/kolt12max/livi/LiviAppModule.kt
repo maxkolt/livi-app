@@ -4,9 +4,15 @@ import android.app.NotificationManager
 import android.content.Context
 import android.service.notification.StatusBarNotification
 import android.content.Intent
+import android.app.KeyguardManager
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -35,44 +41,107 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
   override fun getName(): String = NAME
 
-  /** Показать нативный экран исходящего сразу (без callId). callId придёт позже через notifyOutgoingCallId. Сохраняем toUserId/toNick, чтобы запустить звук из notifyOutgoingCallId даже если broadcast не успел дойти до Activity. */
+  /** Задержка (мс) перед запуском OutgoingCallActivity после broadcast закрытия: даём предыдущему экземпляру (singleInstance) успеть finish(); после завершения звонка UI успевает стабилизироваться. */
+  private val OUTGOING_LAUNCH_DELAY_MS = 250L
+
+  /** Показать нативный экран исходящего сразу (без callId). callId придёт позже через notifyOutgoingCallId. Сохраняем toUserId/toNick, чтобы запустить звук из notifyOutgoingCallId даже если broadcast не успел дойти до Activity. Перед запуском шлём broadcast закрытия предыдущего экрана, чтобы при повторном звонке (пока друг на неактивном экране) не поднимался старый singleInstance. */
   @ReactMethod
   fun launchOutgoingCallActivityWithoutCallId(toUserId: String, toNick: String?) {
+    Log.d(NAME, "launchOutgoingCallActivityWithoutCallId: toUserId=$toUserId toNick=${toNick?.take(20)} hasCurrentActivity=${currentActivity != null}")
     val ctx = reactApplicationContext
     LiviOngoingCallHelper.setOutgoingCall(ctx, "", toUserId, toNick ?: "")
     val intent = Intent(ctx, OutgoingCallActivity::class.java).apply {
-      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       putExtra(OutgoingCallActivity.EXTRA_CALL_ID, "")
       putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, toUserId)
       putExtra(OutgoingCallActivity.EXTRA_TO_NICK, toNick ?: "")
     }
-    ctx.startActivity(intent)
+    closeAnyOutgoingScreenThenLaunch(ctx, intent, retryIfNoActivity = true)
+  }
+
+  /** Закрыть любой видимый экран исходящего (broadcast), затем через OUTGOING_LAUNCH_DELAY_MS запустить новый — чтобы при повторном звонке не поднимался старый singleInstance. */
+  private fun closeAnyOutgoingScreenThenLaunch(ctx: Context, intent: Intent, retryIfNoActivity: Boolean) {
+    val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply { setPackage(ctx.packageName) }
+    ctx.sendBroadcast(closeIntent)
+    Log.d(NAME, "launchOutgoing: sent close broadcast, posting launch in ${OUTGOING_LAUNCH_DELAY_MS}ms")
+    Handler(Looper.getMainLooper()).postDelayed({
+      runOnUiThreadLaunchOutgoing(intent, ctx, retryIfNoActivity)
+    }, OUTGOING_LAUNCH_DELAY_MS)
+  }
+
+  /** Флаги для запуска OutgoingCallActivity из currentActivity: NEW_TASK чтобы экран гарантированно оказался в своей задаче и вышел на передний план (Samsung и др.). */
+  private val OUTGOING_FLAGS_FROM_ACTIVITY = (Intent.FLAG_ACTIVITY_NEW_TASK
+      or Intent.FLAG_ACTIVITY_SINGLE_TOP
+      or Intent.FLAG_ACTIVITY_CLEAR_TOP
+      or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+
+  /** Запуск OutgoingCallActivity на UI-потоке (currentActivity надёжнее на main thread). При retryIfNoActivity=true при null делаем одну повторную попытку через 150ms. */
+  private fun runOnUiThreadLaunchOutgoing(intent: Intent, ctx: Context, retryIfNoActivity: Boolean) {
+    Handler(Looper.getMainLooper()).post {
+      try {
+        val act = currentActivity
+        if (act != null) {
+          intent.addFlags(OUTGOING_FLAGS_FROM_ACTIVITY)
+          act.startActivity(intent)
+          Log.d(NAME, "launchOutgoingCall: startActivity from currentActivity (UI thread, NEW_TASK)")
+        } else {
+          if (retryIfNoActivity) {
+            Handler(Looper.getMainLooper()).postDelayed({
+              try {
+                val act2 = currentActivity
+                if (act2 != null) {
+                  intent.addFlags(OUTGOING_FLAGS_FROM_ACTIVITY)
+                  act2.startActivity(intent)
+                  Log.d(NAME, "launchOutgoingCall: startActivity from currentActivity (retry 150ms, NEW_TASK)")
+                } else {
+                  intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                  ctx.startActivity(intent)
+                  Log.d(NAME, "launchOutgoingCall: startActivity from app context after retry (no currentActivity)")
+                }
+              } catch (e: Exception) {
+                Log.e(NAME, "launchOutgoingCall: retry startActivity failed", e)
+              }
+            }, 150)
+          } else {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            ctx.startActivity(intent)
+            Log.d(NAME, "launchOutgoingCall: startActivity from app context (no currentActivity)")
+          }
+        }
+      } catch (e: Exception) {
+        Log.e(NAME, "launchOutgoingCall: startActivity failed", e)
+      }
+    }
   }
 
   @ReactMethod
   fun launchOutgoingCallActivity(callId: String, toUserId: String, toNick: String?) {
+    Log.d(NAME, "launchOutgoingCallActivity: callId=${callId.take(24)} toUserId=$toUserId hasCurrentActivity=${currentActivity != null}")
     val ctx = reactApplicationContext
     LiviOngoingCallHelper.setOutgoingCall(ctx, callId, toUserId, toNick ?: "")
     val intent = Intent(ctx, OutgoingCallActivity::class.java).apply {
-      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
       putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, toUserId)
       putExtra(OutgoingCallActivity.EXTRA_TO_NICK, toNick ?: "")
     }
-    ctx.startActivity(intent)
+    closeAnyOutgoingScreenThenLaunch(ctx, intent, retryIfNoActivity = true)
   }
 
   /** Передать callId уже открытому экрану исходящего (после ответа сервера). Запускаем сервис (звук, таймаут) сразу отсюда, чтобы рингтон не зависел от того, успела ли Activity принять broadcast. */
   @ReactMethod
   fun notifyOutgoingCallId(callId: String) {
+    Log.d(NAME, "notifyOutgoingCallId: callId=${callId.take(24)} sending broadcast and starting service")
     val ctx = reactApplicationContext
     val intent = Intent(OutgoingCallActivity.ACTION_OUTGOING_CALL_ID_READY).apply {
       setPackage(ctx.packageName)
       putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
     }
     ctx.sendBroadcast(intent)
-    val (toUserId, toNick) = LiviOngoingCallHelper.getOutgoingToUserAndNick(ctx) ?: return
+    val (toUserId, toNick) = LiviOngoingCallHelper.getOutgoingToUserAndNick(ctx) ?: run {
+      Log.w(NAME, "notifyOutgoingCallId: no outgoing toUserId/toNick in helper — service not started")
+      return
+    }
     LiviOutgoingCallService.start(ctx, callId, toUserId, toNick)
+    Log.d(NAME, "notifyOutgoingCallId: LiviOutgoingCallService.start done")
   }
 
   @ReactMethod
@@ -102,7 +171,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     LiviOutgoingCallService.stop(ctx)
     // 2) Принудительно закрыть OutgoingCallActivity (как FCM): если broadcast не дошёл, активность получит intent и finish()
     val closeActivityIntent = Intent(ctx, OutgoingCallActivity::class.java).apply {
-      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NO_HISTORY)
       putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
     }
     try {
@@ -141,6 +210,28 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun launchIncomingCallActivity(callId: String, from: String, fromNick: String?) {
     val ctx = reactApplicationContext
+    // ВАЖНО: если IncomingCallForegroundService уже запущен (пуш пришёл в фоне), его heads-up/уведомление
+    // может остаться висеть поверх IncomingCallActivity. Снимаем уведомление и просим сервис остановиться
+    // ещё ДО открытия Activity.
+    try {
+      (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+        ?.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+    } catch (_: Exception) {}
+    try {
+      val shown = Intent(IncomingCallForegroundService.ACTION_INCOMING_CALL_ACTIVITY_SHOWN).apply {
+        setPackage(ctx.packageName)
+        putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
+      }
+      ctx.sendBroadcast(shown)
+      // Fallback: повторяем — на некоторых устройствах/в гонках первый broadcast может уйти до регистрации receiver.
+      Handler(Looper.getMainLooper()).postDelayed({
+        try { ctx.sendBroadcast(shown) } catch (_: Exception) {}
+      }, 250)
+    } catch (_: Exception) {}
+    try {
+      ctx.stopService(Intent(ctx, IncomingCallForegroundService::class.java))
+    } catch (_: Exception) {}
+
     LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
     val intent = Intent(ctx, IncomingCallActivity::class.java).apply {
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
@@ -149,6 +240,57 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       putExtra(IncomingCallActivity.EXTRA_FROM_NICK, fromNick ?: "")
     }
     ctx.startActivity(intent)
+  }
+
+  /**
+   * Показ системного UI входящего:
+   * - Если телефон заблокирован или экран "спит" → full-screen intent через IncomingCallForegroundService (система откроет IncomingCallActivity).
+   * - Если телефон разблокирован (другое приложение/домашний экран) → heads-up уведомление с кнопками (как на скрине), без открытия IncomingCallActivity.
+   *
+   * Используется для socket-path, когда приложение не в фокусе (AppState != active).
+   */
+  @ReactMethod
+  fun showIncomingCallSystemUI(callId: String, from: String, fromNick: String?) {
+    if (callId.isBlank() || from.isBlank()) return
+    val ctx = reactApplicationContext
+    try {
+      LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
+    } catch (_: Exception) {}
+
+    val locked = try {
+      (ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
+    } catch (_: Exception) { false }
+    val interactive = try {
+      (ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive ?: true
+    } catch (_: Exception) { true }
+    val lockedOrSleeping = locked || !interactive
+
+    try {
+      LiviFirebaseMessagingService.ensureCallChannel(ctx)
+      val serviceIntent = Intent(ctx, IncomingCallForegroundService::class.java).apply {
+        putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
+        putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
+        putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick ?: "")
+        putExtra(IncomingCallForegroundService.EXTRA_HEADS_UP_ONLY, !lockedOrSleeping)
+        putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, false)
+      }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(serviceIntent) else ctx.startService(serviceIntent)
+      Log.d(NAME, "showIncomingCallSystemUI: started IncomingCallForegroundService headsUpOnly=${!lockedOrSleeping}")
+    } catch (e: Exception) {
+      Log.w(NAME, "showIncomingCallSystemUI: failed to start IncomingCallForegroundService", e)
+      // Fallback: если нужно full-screen и FGS не стартанул — пробуем открыть activity напрямую (user might miss call otherwise)
+      if (lockedOrSleeping) {
+        try {
+          val intent = Intent(ctx, IncomingCallActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            putExtra(IncomingCallActivity.EXTRA_CALL_ID, callId)
+            putExtra(IncomingCallActivity.EXTRA_FROM, from)
+            putExtra(IncomingCallActivity.EXTRA_FROM_NICK, fromNick ?: "")
+          }
+          ctx.startActivity(intent)
+        } catch (_: Exception) {}
+      }
+    }
   }
 
   /** Пометить callId как завершённый (отмена/таймаут). IncomingCallActivity не покажет экран для этого callId. Вызывать из JS при получении push call_ended, т.к. FCM call_canceled может не дойти. */
@@ -170,6 +312,36 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } catch (e: Exception) {
       promise.resolve(false)
     }
+  }
+
+  /** Прочитать и сбросить входящий звонок, переданный из FCM для показа через CallKeep (ConnectionService). JS вызовет displayIncomingCall и stopIncomingCallForegroundService. */
+  @ReactMethod
+  fun getAndClearPendingIncomingCallForCallKeep(promise: Promise) {
+    try {
+      val data = getAndClearPendingIncomingCallForCallKeep()
+      if (data == null) {
+        promise.resolve(null)
+        return
+      }
+      val map = Arguments.createMap().apply {
+        putString("callId", data.first)
+        putString("from", data.second)
+        putString("fromNick", data.third)
+      }
+      promise.resolve(map)
+    } catch (e: Exception) {
+      promise.resolve(null)
+    }
+  }
+
+  /** Остановить IncomingCallForegroundService после показа входящего через CallKeep (ConnectionService). */
+  @ReactMethod
+  fun stopIncomingCallForegroundService() {
+    try {
+      reactApplicationContext.stopService(Intent(reactApplicationContext, IncomingCallForegroundService::class.java))
+      (reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+        ?.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+    } catch (_: Exception) {}
   }
 
   /** Инициатор отменил вызов — пуш пришёл через Expo. То же, что FCM call_canceled: EndedCallIds, снять уведомление, broadcast чтобы IncomingCallActivity закрылась. */
@@ -199,7 +371,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     try {
       val pattern = longArrayOf(0, 500, 200, 500)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        val effect = VibrationEffect.createWaveform(pattern, 0)
+        val effect = VibrationEffect.createWaveform(pattern, -1)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
           val attrs = VibrationAttributes.createForUsage(VibrationAttributes.USAGE_RINGTONE)
           vibrator.vibrate(effect, attrs)
@@ -228,6 +400,21 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       vibrator?.cancel()
     } catch (e: Exception) {
       Log.w(NAME, "stopIncomingCallVibration failed", e)
+    }
+  }
+
+  /** Мелодия звонка (Настройки → Мелодия звонка) + вибрация звонка для ConnectionService/CallKeep. */
+  @ReactMethod
+  fun startIncomingCallRingtoneAndVibration() {
+    startIncomingCallRingtoneAndVibrationStatic(reactApplicationContext)
+  }
+
+  @ReactMethod
+  fun stopIncomingCallRingtoneAndVibration() {
+    try {
+      stopIncomingCallRingtoneAndVibrationStatic(reactApplicationContext)
+    } catch (e: Exception) {
+      Log.w(NAME, "stopIncomingCallRingtoneAndVibration failed", e)
     }
   }
 
@@ -406,7 +593,85 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
   companion object {
     const val NAME = "LiviAppModule"
+    /** Intent action: FCM входящий при разблокированном экране — показать через CallKeep (ConnectionService). MainActivity сохраняет extras в pending; JS вызовет displayIncomingCall. */
+    const val ACTION_INCOMING_CALL_CALLKEEP = "com.kolt12max.livi.INCOMING_CALL_CALLKEEP"
     const val PREFS_NAME = "LiviDeclinePrefs"
+    @Volatile
+    var ringtonePlayerForCallKeep: MediaPlayer? = null
+      internal set
+    /** Запуск мелодии звонка и вибрации звонка из нативного кода (FGS, без React).
+     * Вибрация только при заблокированном экране (как в Telegram: на разблокированном — только мелодия). */
+    @JvmStatic
+    internal fun startIncomingCallRingtoneAndVibrationStatic(ctx: Context) {
+      try {
+        stopIncomingCallRingtoneAndVibrationStatic(ctx)
+        val uri: Uri? = try {
+          RingtoneManager.getActualDefaultRingtoneUri(ctx, RingtoneManager.TYPE_RINGTONE)
+        } catch (_: Exception) { null }
+        if (uri != null) {
+          val player = MediaPlayer().apply {
+            setDataSource(ctx, uri)
+            setAudioAttributes(
+              AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            )
+            isLooping = true
+            prepare()
+            start()
+          }
+          ringtonePlayerForCallKeep = player
+        }
+        // Вибрация только при заблокированном экране; на разблокированном (heads-up вне приложения) — без вибрации, как в Telegram.
+        val screenLocked = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+          (ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isDeviceLocked == true
+        } else {
+          true
+        }
+        if (!screenLocked) return
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+        } else {
+          @Suppress("DEPRECATION")
+          ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+        if (vibrator != null && vibrator.hasVibrator()) {
+          val pattern = longArrayOf(0, 500, 200, 500)
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val effect = VibrationEffect.createWaveform(pattern, -1)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+              val attrs = VibrationAttributes.createForUsage(VibrationAttributes.USAGE_RINGTONE)
+              vibrator.vibrate(effect, attrs)
+            } else {
+              vibrator.vibrate(effect)
+            }
+          } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(pattern, 0)
+          }
+        }
+      } catch (e: Exception) {
+        Log.w(NAME, "startIncomingCallRingtoneAndVibrationStatic failed", e)
+      }
+    }
+
+    @JvmStatic
+    internal fun stopIncomingCallRingtoneAndVibrationStatic(ctx: Context) {
+      try {
+        ringtonePlayerForCallKeep?.apply { if (isPlaying) stop(); release() }
+        ringtonePlayerForCallKeep = null
+      } catch (_: Exception) {}
+      try {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+        } else {
+          @Suppress("DEPRECATION")
+          ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+        vibrator?.cancel()
+      } catch (_: Exception) {}
+    }
     const val PREFS_CALL = "LiviCallPrefs"
     private const val PREFS_PENDING_MISSED = "LiviPendingMissed"
     private const val KEY_PENDING_MISSED_IDS = "user_ids"
@@ -661,6 +926,29 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun getAndClearPendingCallAcceptedCallId(): String? {
       return pendingCallAcceptedCallId.also { pendingCallAcceptedCallId = null }
+    }
+
+    /** Входящий для CallKeep (FCM при разблокированном экране): сохранить в pending; JS вызовет getAndClearPendingIncomingCallForCallKeep → displayIncomingCall. */
+    @Volatile private var pendingCallKeepCallId: String? = null
+    @Volatile private var pendingCallKeepFrom: String? = null
+    @Volatile private var pendingCallKeepFromNick: String? = null
+
+    @JvmStatic
+    fun setPendingIncomingCallForCallKeep(callId: String, from: String, fromNick: String) {
+      pendingCallKeepCallId = callId
+      pendingCallKeepFrom = from
+      pendingCallKeepFromNick = fromNick ?: ""
+    }
+
+    @JvmStatic
+    fun getAndClearPendingIncomingCallForCallKeep(): Triple<String, String, String>? {
+      val c = pendingCallKeepCallId ?: return null
+      val f = pendingCallKeepFrom ?: return null
+      val n = pendingCallKeepFromNick ?: ""
+      pendingCallKeepCallId = null
+      pendingCallKeepFrom = null
+      pendingCallKeepFromNick = null
+      return Triple(c, f, n)
     }
 
     /** Вызвать из MainActivity.onResume при intent с EXTRA_PENDING_CALL_ACCEPTED_CALL_ID — React запросит call:accepted и перейдёт на VideoCall. */

@@ -33,8 +33,11 @@ class OutgoingCallActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val closeImmediately = intent.getBooleanExtra(EXTRA_CLOSE_IMMEDIATELY, false)
+        Log.d(TAG, "onCreate: closeImmediately=$closeImmediately callId=${intent.getStringExtra(EXTRA_CALL_ID) ?: ""} toUserId=${intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""}")
         // FCM call_declined может запустить активность с флагом «сразу закрыть» (приложение было в фоне/убито — broadcast не дошёл)
-        if (intent.getBooleanExtra(EXTRA_CLOSE_IMMEDIATELY, false)) {
+        if (closeImmediately) {
+            Log.d(TAG, "onCreate: finishing immediately (EXTRA_CLOSE_IMMEDIATELY)")
             LiviOutgoingCallService.stop(this)
             finish()
             return
@@ -49,6 +52,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         callId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
         toUserId = intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""
         toNick = intent.getStringExtra(EXTRA_TO_NICK) ?: ""
+        Log.d(TAG, "onCreate: activity created callId=$callId toUserId=$toUserId toNick=${toNick.take(20)}")
 
         findViewById<TextView>(R.id.callee_name).text = if (toNick.isNotEmpty()) toNick else getString(R.string.outgoing_call_title)
         val subtitleView = findViewById<TextView>(R.id.call_subtitle)
@@ -60,6 +64,7 @@ class OutgoingCallActivity : AppCompatActivity() {
             callIdReadyReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     val id = intent?.getStringExtra(EXTRA_CALL_ID) ?: return
+                    Log.d(TAG, "onReceive ACTION_OUTGOING_CALL_ID_READY: callId=${id.take(24)}")
                     if (id.isNotEmpty()) {
                         callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
                         callIdEmptyTimeoutRunnable = null
@@ -124,11 +129,70 @@ class OutgoingCallActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent.getBooleanExtra(EXTRA_CLOSE_IMMEDIATELY, false)) {
+        setIntent(intent)
+        val closeImmediately = intent.getBooleanExtra(EXTRA_CLOSE_IMMEDIATELY, false)
+        val newCallId = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
+        Log.d(TAG, "onNewIntent: closeImmediately=$closeImmediately newCallId=${newCallId.take(24)}")
+        if (closeImmediately) {
             Log.d(TAG, "onNewIntent: EXTRA_CLOSE_IMMEDIATELY -> finishing")
             LiviOutgoingCallService.stop(this)
             finish()
+            return
         }
+        // Повторное нажатие «Видеозвонок» после отмены/таймаута: обновляем экран под новый вызов
+        val newToUserId = intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""
+        val newToNick = intent.getStringExtra(EXTRA_TO_NICK) ?: ""
+        callId = newCallId
+        toUserId = newToUserId
+        toNick = newToNick
+        LiviOngoingCallHelper.setOutgoingCall(this, newCallId, newToUserId, newToNick)
+        LiviOutgoingCallService.stop(this)
+        findViewById<TextView>(R.id.callee_name).text = if (newToNick.isNotEmpty()) newToNick else getString(R.string.outgoing_call_title)
+        if (newCallId.isNotEmpty()) {
+            callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
+            callIdEmptyTimeoutRunnable = null
+            callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+            callIdReadyReceiver = null
+            LiviOutgoingCallService.start(this, newCallId, newToUserId, newToNick)
+        } else {
+            callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+            callIdReadyReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, rcvIntent: Intent?) {
+                    val id = rcvIntent?.getStringExtra(EXTRA_CALL_ID) ?: return
+                    if (id.isNotEmpty()) {
+                        callIdEmptyTimeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
+                        callIdEmptyTimeoutRunnable = null
+                        this@OutgoingCallActivity.callId = id
+                        LiviOngoingCallHelper.setOutgoingCall(this@OutgoingCallActivity, id, toUserId, toNick)
+                        LiviOutgoingCallService.start(this@OutgoingCallActivity, id, toUserId, toNick)
+                        callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+                        callIdReadyReceiver = null
+                    }
+                }
+            }
+            val filterReady = IntentFilter(ACTION_OUTGOING_CALL_ID_READY)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(callIdReadyReceiver, filterReady, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(callIdReadyReceiver, filterReady)
+            }
+            callIdEmptyTimeoutRunnable = Runnable {
+                callIdEmptyTimeoutRunnable = null
+                if (this@OutgoingCallActivity.callId.isEmpty()) {
+                    Log.d(TAG, "No callId received within timeout (onNewIntent), finishing")
+                    LiviOutgoingCallService.stop(this@OutgoingCallActivity)
+                    finish()
+                }
+            }
+            timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 5000L)
+        }
+    }
+
+    override fun finish() {
+        super.finish()
+        // Убираем системную анимацию закрытия, чтобы не было "мерцания/уезда" Home
+        // при возврате с нативного экрана исходящего вызова.
+        overridePendingTransition(0, 0)
     }
 
     /**
