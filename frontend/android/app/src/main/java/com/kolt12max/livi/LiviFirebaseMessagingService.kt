@@ -4,11 +4,15 @@ import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.ActivityManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.util.Log
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -57,26 +61,33 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         val typeNorm = type?.trim()?.lowercase() ?: ""
 
         if (typeNorm == "call" && callId != null && from != null) {
+            if (IncomingCallActivity.isInForeground) {
+                Log.d(TAG, "FCM call push: IncomingCallActivity already visible, skip duplicate notification")
+                return
+            }
             if (MainActivity.isInForeground) {
                 Log.d(TAG, "FCM call push: app in foreground, skip notification (in-app UI will handle)")
                 return
             }
-            // Чтобы бейдж иконки был 1, а не 2: снимаем все текущие уведомления; останется только одно — от foreground-сервиса входящего
+            // Чтобы бейдж иконки был 1, а не 2: снимаем все текущие уведомления
             try {
                 (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancelAll()
             } catch (_: Exception) {}
-            // На Android 14+ (BAL) запуск Activity из фона блокируется. Полагаемся только на full-screen intent
-            // уведомления: Foreground-сервис показывает уведомление с setFullScreenIntent → система сама запустит IncomingCallActivity.
-            if (isDeviceLocked()) {
-                LiviAppModule.tryStartCallKeepHeadlessTask(callId, from, fromNick) { _ -> }
-            }
             ensureCallChannel(this)
-            startIncomingCallForegroundService(callId, from, fromNick, headsUpOnly = false)
-            Log.d(TAG, "FCM call push: foreground service started (full-screen intent via notification)")
+            // Всегда full-screen intent: система сама откроет IncomingCallActivity (и при разблокировке, и при замке). Без headsUpOnly — иначе только баннер на 5 сек.
+            startIncomingCallForegroundService(
+                callId,
+                from,
+                fromNick,
+                headsUpOnly = false,
+                silentNotification = false
+            )
+            Log.d(TAG, "FCM call push: IncomingCallForegroundService with full-screen intent")
             return
         }
         if (typeNorm == "call_canceled" && callId != null) {
             EndedCallIds.add(this, callId)
+            LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
             val intent = Intent(ACTION_CALL_CANCELED).apply {
@@ -126,26 +137,30 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             sendBroadcast(closeOutgoing)
             LiviOutgoingCallService.stop(this)
             LiviAppModule.setPendingCallAcceptedCallId(callId)
-            // 2) Запуск OutgoingCallActivity с EXTRA_CLOSE_IMMEDIATELY — если broadcast не дошёл (приложение в фоне), активность откроется и сразу finish()
-            val closeActivityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
-                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
-            }
-            try {
-                startActivity(closeActivityIntent)
-            } catch (e: Exception) {
-                Log.w(TAG, "FCM call_accepted: startActivity OutgoingCallActivity(close) failed", e)
-            }
-            val mainIntent = Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra(MainActivity.EXTRA_PENDING_CALL_ACCEPTED_CALL_ID, callId)
-            }
-            try {
-                startActivity(mainIntent)
-                Log.d(TAG, "FCM call_accepted: closed outgoing, brought MainActivity to front callId=$callId")
-            } catch (e: Exception) {
-                Log.w(TAG, "FCM call_accepted: startActivity MainActivity failed", e)
+            // 2) startActivity(close) + MainActivity — только когда приложение в фоне. В foreground закрытие уже сделал bringMainActivityToFront по сокету; иначе отложенный FCM перебивает повторный вызов (onCreate получает close вместо new intent).
+            if (!isAppProcessForeground()) {
+                val closeActivityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
+                    putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+                }
+                try {
+                    startActivity(closeActivityIntent)
+                } catch (e: Exception) {
+                    Log.w(TAG, "FCM call_accepted: startActivity OutgoingCallActivity(close) failed", e)
+                }
+                val mainIntent = Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(MainActivity.EXTRA_PENDING_CALL_ACCEPTED_CALL_ID, callId)
+                }
+                try {
+                    startActivity(mainIntent)
+                    Log.d(TAG, "FCM call_accepted: closed outgoing, brought MainActivity to front callId=$callId")
+                } catch (e: Exception) {
+                    Log.w(TAG, "FCM call_accepted: startActivity MainActivity failed", e)
+                }
+            } else {
+                Log.d(TAG, "FCM call_accepted: app in foreground, broadcast only (socket path already closed) callId=$callId")
             }
             return
         }
@@ -156,13 +171,19 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
             sendBroadcast(closeIntent)
-            val activityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
-                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+            // В активном процессе (когда OutgoingCallActivity уже на экране) достаточно broadcast.
+            // Принудительный startActivity(close) в этом сценарии даёт двойное закрытие/мерцание.
+            if (!isAppProcessForeground()) {
+                val activityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
+                    putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+                }
+                try { startActivity(activityIntent) } catch (e: Exception) { Log.w(TAG, "FCM call_declined: startActivity failed", e) }
+                Log.d(TAG, "FCM call_declined: broadcast + fallback startActivity(close) callId=$callId")
+            } else {
+                Log.d(TAG, "FCM call_declined: broadcast only (foreground) callId=$callId")
             }
-            try { startActivity(activityIntent) } catch (e: Exception) { Log.w(TAG, "FCM call_declined: startActivity failed", e) }
-            Log.d(TAG, "FCM call_declined: broadcast + startActivity(close) callId=$callId")
             return
         }
         // Звонок завершён: снять уведомление входящего, закрыть экран исходящего. «Пропущенный вызов» только если разговор не был принят (таймаут/отмена), не после завершения с видеочата/PiP.
@@ -265,12 +286,19 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         nm.notify(notificationId, notification)
     }
 
-    private fun startIncomingCallForegroundService(callId: String, from: String, fromNick: String, headsUpOnly: Boolean = false) {
+    private fun startIncomingCallForegroundService(
+        callId: String,
+        from: String,
+        fromNick: String,
+        headsUpOnly: Boolean = false,
+        silentNotification: Boolean = false
+    ) {
         val serviceIntent = Intent(this, IncomingCallForegroundService::class.java).apply {
             putExtra(EXTRA_CALL_ID, callId)
             putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
             putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick)
             putExtra(IncomingCallForegroundService.EXTRA_HEADS_UP_ONLY, headsUpOnly)
+            putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, silentNotification)
         }
         if (!headsUpOnly) {
             val activityIntent = buildIncomingCallActivityIntent(this, callId, from, fromNick).apply {
@@ -283,8 +311,14 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     startService(serviceIntent)
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "startForegroundService failed, launching activity directly", e)
-                startActivity(activityIntent)
+                // В "тихом" режиме не открываем IncomingCallActivity напрямую (иначе получится popup).
+                // Для full-screen режима (locked) — fallback на прямой запуск activity оставляем.
+                if (!silentNotification) {
+                    Log.w(TAG, "startForegroundService failed, launching activity directly", e)
+                    startActivity(activityIntent)
+                } else {
+                    Log.w(TAG, "startForegroundService failed (silent mode), skipping direct activity launch", e)
+                }
             }
         } else {
             try {
@@ -302,7 +336,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
     companion object {
         private const val TAG = "LiviFCM"
         /** ID канала: HIGH чтобы full-screen intent срабатывал (нативный экран поверх домашнего). */
-        const val CHANNEL_ID_CALLS = "livi_incoming_call_v3"
+        const val CHANNEL_ID_CALLS = "livi_incoming_call_v4"
+        /** Канал входящего без звука/вибрации уведомления: звук и вибрация запускаются из кода (системная мелодия звонка). */
+        const val CHANNEL_ID_CALLS_VISUAL = "livi_incoming_call_visual_v1"
+        /** Тихий канал для входящего: без heads-up, только иконка/шторка (когда телефон разблокирован). */
+        const val CHANNEL_ID_CALLS_SILENT = "livi_incoming_call_silent_v1"
         const val NOTIFICATION_ID_INCOMING_CALL = 1001
         private const val CHANNEL_ID_MISSED_CALL = "missed_call"
         const val ACTION_CALL_CANCELED = "com.kolt12max.livi.CALL_CANCELED"
@@ -318,12 +356,44 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     context.getString(R.string.incoming_call_title),
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
-                    setSound(null, null)
-                    setVibrationPattern(longArrayOf(0, 500, 200, 500))
+                    val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                    val attrs = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                    setSound(ringtoneUri, attrs)
+                    enableVibration(true)
                     setLockscreenVisibility(Notification.VISIBILITY_PUBLIC)
                     setDescription(context.getString(R.string.incoming_call_title))
                 }
                 nm.createNotificationChannel(channel)
+
+                // Визуальный канал: HIGH для heads-up/full-screen, без звука и вибрации уведомления — мелодия и вибрация из кода (системный звонок).
+                val visualChannel = NotificationChannel(
+                    CHANNEL_ID_CALLS_VISUAL,
+                    context.getString(R.string.incoming_call_title),
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    setSound(null, null)
+                    enableVibration(false)
+                    setVibrationPattern(longArrayOf(0))
+                    setLockscreenVisibility(Notification.VISIBILITY_PUBLIC)
+                    setDescription(context.getString(R.string.incoming_call_title))
+                }
+                nm.createNotificationChannel(visualChannel)
+
+                // Тихий канал: без heads-up. Используем когда телефон разблокирован, чтобы не мешать поверх других приложений.
+                val silentChannel = NotificationChannel(
+                    CHANNEL_ID_CALLS_SILENT,
+                    context.getString(R.string.incoming_call_title),
+                    NotificationManager.IMPORTANCE_DEFAULT
+                ).apply {
+                    setSound(null, null)
+                    setVibrationPattern(longArrayOf(0))
+                    setLockscreenVisibility(Notification.VISIBILITY_PUBLIC)
+                    setDescription(context.getString(R.string.incoming_call_title))
+                }
+                nm.createNotificationChannel(silentChannel)
             }
         }
 
@@ -449,7 +519,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            return NotificationCompat.Builder(context, CHANNEL_ID_CALLS)
+            return NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(title)
                 .setContentText(subtitle)
@@ -461,7 +531,6 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setTimeoutAfter(20_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setVibrate(longArrayOf(0, 500, 200, 500))
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel, context.getString(R.string.incoming_call_decline), declinePending)
                 .addAction(android.R.drawable.ic_menu_call, context.getString(R.string.incoming_call_accept), answerPending)
                 .build()
@@ -479,12 +548,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
                 ?: android.R.drawable.ic_menu_call
 
-            val contentIntent = Intent(context, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            }
+            // Тап по уведомлению в шторке открывает нативный IncomingCallActivity (если звонок ещё активен).
+            val contentIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)
             val contentPending = PendingIntent.getActivity(
                 context,
-                REQUEST_CONTENT,
+                NOTIFICATION_ID_INCOMING_CALL,
                 contentIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -512,20 +580,99 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            return NotificationCompat.Builder(context, CHANNEL_ID_CALLS)
+            return NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(title)
                 .setContentText(subtitle)
                 .setContentIntent(contentPending)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setAutoCancel(true)
+                .setOngoing(false)
+                .setAutoCancel(false)
                 .setOnlyAlertOnce(true)
+                .setTimeoutAfter(20_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setVibrate(longArrayOf(0, 500, 200, 500))
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel, context.getString(R.string.incoming_call_decline), declinePending)
                 .addAction(android.R.drawable.ic_menu_call, context.getString(R.string.incoming_call_accept), answerPending)
                 .build()
+        }
+
+        /** Тихое уведомление входящего: без heads-up, только иконка в статус-баре и запись в шторке (кнопки Принять/Отклонить сохраняем). */
+        @JvmStatic
+        fun buildIncomingCallNotificationSilent(context: Context, callId: String, from: String, fromNick: String): Notification {
+            val title = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_title)
+            val subtitle = context.getString(R.string.incoming_call_title)
+            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
+                ?: android.R.drawable.ic_menu_call
+
+            // Тап по уведомлению в шторке открывает нативный IncomingCallActivity (если звонок ещё активен).
+            val contentIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)
+            val contentPending = PendingIntent.getActivity(
+                context,
+                NOTIFICATION_ID_INCOMING_CALL,
+                contentIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val declineIntent = Intent(DeclineCallReceiver.ACTION_DECLINE_CALL).apply {
+                setPackage(context.packageName)
+                putExtra(DeclineCallReceiver.EXTRA_CALL_ID, callId)
+            }
+            val declinePending = PendingIntent.getBroadcast(
+                context,
+                REQUEST_DECLINE,
+                declineIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val answerUri = "livi://answer-call?callId=${Uri.encode(callId)}&from=${Uri.encode(from)}&fromNick=${URLEncoder.encode(fromNick, StandardCharsets.UTF_8.name())}"
+            val answerIntent = Intent(Intent.ACTION_VIEW, Uri.parse(answerUri)).apply {
+                setClassName(context, "com.kolt12max.livi.MainActivity")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            }
+            val answerPending = PendingIntent.getActivity(
+                context,
+                REQUEST_ACCEPT,
+                answerIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            return NotificationCompat.Builder(context, CHANNEL_ID_CALLS_SILENT)
+                .setSmallIcon(smallIconRes)
+                .setContentTitle(title)
+                .setContentText(subtitle)
+                .setContentIntent(contentPending)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                // Не закрываем автоматически, но позволяем пользователю скрыть уведомление вручную.
+                .setOngoing(false)
+                .setAutoCancel(false)
+                .setOnlyAlertOnce(true)
+                .setTimeoutAfter(20_000)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, context.getString(R.string.incoming_call_decline), declinePending)
+                .addAction(android.R.drawable.ic_menu_call, context.getString(R.string.incoming_call_accept), answerPending)
+                .build()
+        }
+    }
+
+    private fun isScreenInteractive(): Boolean {
+        return try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            pm.isInteractive
+        } catch (_: Exception) {
+            true
+        }
+    }
+
+    private fun isAppProcessForeground(): Boolean {
+        return try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return false
+            val myPid = android.os.Process.myPid()
+            val proc = am.runningAppProcesses?.firstOrNull { it.pid == myPid }
+            proc?.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+        } catch (_: Exception) {
+            false
         }
     }
 }

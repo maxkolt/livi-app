@@ -68,8 +68,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }, OUTGOING_LAUNCH_DELAY_MS)
   }
 
-  /** Флаги для запуска OutgoingCallActivity из currentActivity: NEW_TASK чтобы экран гарантированно оказался в своей задаче и вышел на передний план (Samsung и др.). */
+  /** Флаги для запуска OutgoingCallActivity из currentActivity: NEW_TASK + CLEAR_TASK чтобы при повторном вызове не подхватить старый close intent (FCM/bringMainActivityToFront) — задача очищается и создаётся с нашим intent. */
   private val OUTGOING_FLAGS_FROM_ACTIVITY = (Intent.FLAG_ACTIVITY_NEW_TASK
+      or Intent.FLAG_ACTIVITY_CLEAR_TASK
       or Intent.FLAG_ACTIVITY_SINGLE_TOP
       or Intent.FLAG_ACTIVITY_CLEAR_TOP
       or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
@@ -93,7 +94,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
                   act2.startActivity(intent)
                   Log.d(NAME, "launchOutgoingCall: startActivity from currentActivity (retry 150ms, NEW_TASK)")
                 } else {
-                  intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                  intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                   ctx.startActivity(intent)
                   Log.d(NAME, "launchOutgoingCall: startActivity from app context after retry (no currentActivity)")
                 }
@@ -102,7 +103,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
               }
             }, 150)
           } else {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             ctx.startActivity(intent)
             Log.d(NAME, "launchOutgoingCall: startActivity from app context (no currentActivity)")
           }
