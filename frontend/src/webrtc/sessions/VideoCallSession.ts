@@ -90,6 +90,11 @@ export class VideoCallSession extends SimpleEventEmitter {
   private endCallInProgress = false;
   private ended = false;
 
+  // LiveKit reconnect handling: during reconnect we must NOT treat transient disconnects as "call ended".
+  private liveKitReconnecting = false;
+  private lastLiveKitReconnectingAt = 0;
+  private pendingRemoteDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
   /* ========= Mic level monitoring (VoiceEqualizer) ========= */
   private micBarsCount = 21;
   private isMicMonitoringActive = false;
@@ -1016,10 +1021,22 @@ export class VideoCallSession extends SimpleEventEmitter {
     };
     
     const disconnectedHandler = () => {
-      this.handleDisconnected();
+      // Временный обрыв сокета НЕ должен рвать LiveKit и сбрасывать remoteStream.
+      // Иначе UI показывает "ошибка/нет видео" и потом "соединяет" после reconnect.
+      logger.warn('[VideoCallSession] Socket disconnected (ignored; LiveKit call continues)', {
+        callId: this.callId,
+        roomId: this.roomId,
+        hasRoom: !!this.room,
+        roomState: this.room?.state,
+      });
     };
 
     const pipStateHandler = (data: { inPiP: boolean; roomId: string; from: string }) => {
+      // Не обновлять PiP-состояние после завершения звонка — иначе у партнёра мерцание (pip:state может прийти после call:ended).
+      if (this.ended || this.endCallInProgress) {
+        logger.debug('[VideoCallSession] pip:state проигнорировано — звонок уже завершён');
+        return;
+      }
       const currentRoomId = this.getRoomId();
       logger.info('[VideoCallSession] 📡 Socket event pip:state received', {
         inPiP: data.inPiP,
@@ -1680,6 +1697,13 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.resetRemoteState();
   }
 
+  private clearPendingRemoteDisconnectTimer(): void {
+    if (this.pendingRemoteDisconnectTimer) {
+      clearTimeout(this.pendingRemoteDisconnectTimer);
+      this.pendingRemoteDisconnectTimer = null;
+    }
+  }
+
   private async ensureLocalTracks(force = false): Promise<void> {
     if (this.localVideoTrack && this.localAudioTrack && !force) {
       this.emit('localStream', this.localStream);
@@ -1778,6 +1802,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.localAudioTrack = null;
     }
     if (this.localVideoTrack) {
+      // КРИТИЧНО: Сначала отключаем захват кадров, затем stop() — снижает CameraDeviceClient errorCode 4/5 на Android
+      try {
+        if (this.localVideoTrack.mediaStreamTrack) {
+          this.localVideoTrack.mediaStreamTrack.enabled = false;
+        }
+        this.localVideoTrack.mute().catch(() => {});
+      } catch {}
       try {
         this.localVideoTrack.stop();
       } catch {}
@@ -2284,6 +2315,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private resetRemoteState(): void {
+    this.clearPendingRemoteDisconnectTimer();
     this.clearRemoteCamOffTimeout();
     this.remoteStream = null;
     this.remoteAudioTrack = null;
@@ -3452,9 +3484,34 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private registerRoomEvents(room: Room): void {
     room
+      .on(RoomEvent.Reconnecting, () => {
+        this.liveKitReconnecting = true;
+        this.lastLiveKitReconnectingAt = Date.now();
+        // Do NOT reset streams/UI here. LiveKit will recover by itself.
+        logger.warn('[VideoCallSession] LiveKit room reconnecting (transient)', {
+          roomName: room.name,
+          roomState: room.state,
+          myUserId: this.config.myUserId,
+          partnerUserId: this.partnerUserId,
+        });
+        this.clearPendingRemoteDisconnectTimer();
+      })
+      .on(RoomEvent.Reconnected, () => {
+        this.liveKitReconnecting = false;
+        logger.info('[VideoCallSession] LiveKit room reconnected', {
+          roomName: room.name,
+          roomState: room.state,
+          myUserId: this.config.myUserId,
+          partnerUserId: this.partnerUserId,
+          participantsCount: room.remoteParticipants.size,
+        });
+        this.clearPendingRemoteDisconnectTimer();
+      })
       .on(RoomEvent.ParticipantConnected, (participant) => {
         // КРИТИЧНО: При подключении участника подписываемся на все его существующие треки
         if (!participant.isLocal) {
+          // If we were about to end the call due to a disconnect, cancel — remote is back.
+          this.clearPendingRemoteDisconnectTimer();
           logger.info('[VideoCallSession] ✅ Remote participant connected event received', {
             participantId: participant.identity,
             audioTracks: participant.audioTrackPublications.size,
@@ -3630,13 +3687,42 @@ export class VideoCallSession extends SimpleEventEmitter {
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
         if (participant === this.currentRemoteParticipant) {
           if (!this.isDisconnecting) {
-            // КРИТИЧНО: Вызываем handleCallEnded, а не только handleDisconnected, чтобы UI у второго
-            // участника обновился (setWasFriendCallEnded, emit('callEnded')). Иначе завершение
-            // срабатывает только по call:ended по сокету, и при отключённом сокете второй не видит завершения.
-            logger.info('[VideoCallSession] Remote participant disconnected — treating as call ended', {
-              participantIdentity: participant.identity,
-            });
-            this.handleCallEnded();
+            // LiveKit can emit ParticipantDisconnected transiently during reconnect/negotiation.
+            // We must NOT end the call immediately in that case, otherwise UI shows "error" and then "connects".
+            const isRoomReconnecting = this.liveKitReconnecting || room.state === 'reconnecting';
+            const recentlyReconnecting = Date.now() - this.lastLiveKitReconnectingAt < 10_000;
+            if (isRoomReconnecting || recentlyReconnecting) {
+              logger.warn('[VideoCallSession] Remote participant disconnected during reconnect (ignored)', {
+                participantIdentity: participant.identity,
+                roomState: room.state,
+                liveKitReconnecting: this.liveKitReconnecting,
+                recentlyReconnecting,
+              });
+              return;
+            }
+
+            // Soft-confirm disconnect: give LiveKit a moment to recover / re-add participant.
+            this.clearPendingRemoteDisconnectTimer();
+            this.pendingRemoteDisconnectTimer = setTimeout(() => {
+              this.pendingRemoteDisconnectTimer = null;
+              if (this.ended || this.isDisconnecting) return;
+              const stillReconnecting = this.liveKitReconnecting || room.state === 'reconnecting';
+              if (stillReconnecting) return;
+
+              const expected = this.partnerUserId ? String(this.partnerUserId) : null;
+              const hasExpected =
+                !!expected &&
+                Array.from(room.remoteParticipants.values()).some((p) => String(p.identity) === expected);
+              const anyRemote = room.remoteParticipants.size > 0;
+              if (hasExpected || anyRemote) return;
+
+              logger.info('[VideoCallSession] Remote participant disconnected (confirmed) — treating as call ended', {
+                participantIdentity: participant.identity,
+                expectedPartnerIdentity: expected,
+                roomState: room.state,
+              });
+              this.handleCallEnded();
+            }, 1500);
           }
         }
       })
@@ -3843,10 +3929,23 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     const tracksCount = this.remoteStream?.getTracks().length ?? 0;
     if (this.remoteStream && tracksCount === 0) {
-      this.remoteStream = null;
-      this.emit('remoteStream', null);
-      this.config.callbacks.onRemoteStreamChange?.(null);
-      this.config.onRemoteStreamChange?.(null);
+      // During LiveKit reconnect/renegotiation tracks can temporarily drop to 0.
+      // Do NOT reset remoteStream to null in that case — it causes UI to show "error/no video" flicker.
+      const isRoomReconnecting = this.liveKitReconnecting || this.room?.state === 'reconnecting';
+      const recentlyReconnecting = Date.now() - this.lastLiveKitReconnectingAt < 10_000;
+      if (!isRoomReconnecting && !recentlyReconnecting) {
+        this.remoteStream = null;
+        this.emit('remoteStream', null);
+        this.config.callbacks.onRemoteStreamChange?.(null);
+        this.config.onRemoteStreamChange?.(null);
+      } else {
+        logger.debug('[VideoCallSession] Suppressed remoteStream=null during reconnect', {
+          isRoomReconnecting,
+          recentlyReconnecting,
+          roomState: this.room?.state,
+          kind: publication.kind,
+        });
+      }
     }
 
     this.remoteViewKey = Date.now();

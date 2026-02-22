@@ -498,7 +498,44 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     friendsRef.current = friends;
   }, [friends]);
-  
+
+  // Параметры текущего звонка для системного PiP: при нажатии Home натив шлёт AboutToEnterSystemPiP,
+  // JS читает этот ref и показывает PiP + переходит на Home, чтобы в окне PiP было только видео собеседника и верхние кнопки.
+  useEffect(() => {
+    const g = (global as any);
+    g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
+    if (!(roomId || callId) || isInactiveState || !sessionRef.current) {
+      g.__currentCallPiPParamsRef.current = null;
+      return;
+    }
+    const partner = partnerUserId
+      ? friendsRef.current?.find((f: any) => String(f._id) === String(partnerUserId))
+      : null;
+    let avatarUrl: string | undefined;
+    if (partner?.avatarThumbB64?.trim()) {
+      const t = String(partner.avatarThumbB64).trim();
+      avatarUrl = t.startsWith('data:') ? t : `data:image/jpeg;base64,${t}`;
+    } else if (partner?.avatarB64?.trim()) {
+      const t = String(partner.avatarB64).trim();
+      avatarUrl = t.startsWith('data:') ? t : `data:image/jpeg;base64,${t}`;
+    } else if (partner?.avatar?.trim()) {
+      const base = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
+      const a = String(partner.avatar).trim();
+      avatarUrl = a.startsWith('http') ? a : `${base.replace(/\/+$/, '')}${a.startsWith('/') ? '' : '/'}${a}`;
+    }
+    g.__currentCallPiPParamsRef.current = {
+      callId: callId || '',
+      roomId: roomId || '',
+      partnerName: (partner as any)?.nick || '',
+      partnerAvatarUrl: avatarUrl,
+      localStream: localStream || null,
+      remoteStream: remoteStream || null,
+      localCamOn: camOn,
+      navParams: { ...route?.params, peerUserId: partnerUserId, partnerId } as any,
+    };
+    return () => { g.__currentCallPiPParamsRef.current = null; };
+  }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, route?.params]);
+
   // Отслеживание изменений параметров роута
   useEffect(() => {
     const currentParams = route?.params;
@@ -1215,6 +1252,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       clearSessionRefs();
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
 
+      // После завершения звонка — шаг назад на Home (чтобы Back не приводил к finish Activity и заглушке при повторном открытии)
+      const nav = navigation;
+      setTimeout(() => {
+        try {
+          if (nav?.canGoBack?.()) {
+            nav.goBack();
+          } else {
+            (nav as any)?.navigate?.('Home');
+          }
+        } catch (e) {
+          logger.warn('[VideoCall] navigate after call end failed', e);
+        }
+      }, 400);
+
       // КРИТИЧНО: Сбрасываем флаг через небольшую задержку, чтобы дать состоянию обновиться
       setTimeout(() => {
         isEndingCallRef.current = false;
@@ -1320,8 +1371,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         partnerId
       });
       
+      // КРИТИЧНО: Если звонок уже завершён (call:ended), только обновляем partnerInPiP и не восстанавливаем видео —
+      // иначе появляется мерцание (сначала "восстановление" видео, потом неактивный экран).
+      if (isInactiveStateRef.current || isEndingCallRef.current) {
+        partnerInPiPRef.current = inPiP;
+        setPartnerInPiP(inPiP);
+        logger.info('[VideoCall] partnerPiPStateChanged при завершённом звонке — только обновляем partnerInPiP, без восстановления видео');
+        return;
+      }
+      
       // КРИТИЧНО: Всегда обновляем состояние partnerInPiP при получении события
-      // Это гарантирует, что заглушка "Отошел" показывается/скрывается правильно
       const previousState = partnerInPiPRef.current;
       partnerInPiPRef.current = inPiP;
       setPartnerInPiP(inPiP);
@@ -1335,6 +1394,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       });
       
       // КРИТИЧНО: Когда партнер возвращается из PiP (inPiP: false), включаем видеотрек обратно
+      // Только если звонок ещё активен (проверка выше).
       if (previousState === true && inPiP === false) {
         logger.info('[VideoCall] 🔄 Партнер вернулся из PiP - включаем видеотрек обратно', {
           hasRemoteStream: !!remoteStream,
@@ -1354,7 +1414,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
         
         setRemoteCamOn(true);
-        // remoteViewKey управляется сессией (remoteViewKeyChanged). Здесь избегаем лишних принудительных remount.
       }
     };
 
@@ -1639,14 +1698,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const toggleCam = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
     if (session && typeof session.toggleCam === 'function') {
-      // Обновляем UI немедленно
       setCamOn((prev) => {
         const next = !prev;
-        // КРИТИЧНО: при OFF -> ON форсим перерендер локального RTCView,
-        // т.к. на Android он может "залипать" на заглушке/черном экране после PiP.
-        if (next) {
-          setLocalRenderKey((k: number) => k + 1);
-        }
+        if (next) setLocalRenderKey((k: number) => k + 1);
+        if (pip.visible) pip.updatePiPState({ localCamOn: next });
         return next;
       });
       session.toggleCam().catch((e: any) => {
@@ -1655,7 +1710,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     } else {
       logger.warn('[VideoCall] Session не найдена для toggleCam');
     }
-  }, []);
+  }, [pip]);
   
   const toggleRemoteAudio = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
@@ -1674,16 +1729,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   }, [remoteMuted, pip]);
   
   // КРИТИЧНО: Устанавливаем глобальные ссылки на функции управления для PiP
-  // Это нужно чтобы можно было управлять микрофоном и динамиком из PiP
+  // Это нужно чтобы можно было управлять микрофоном, динамиком и камерой из PiP
   useEffect(() => {
+    (global as any).__toggleMicRef = (global as any).__toggleMicRef || { current: null };
+    (global as any).__toggleRemoteAudioRef = (global as any).__toggleRemoteAudioRef || { current: null };
+    (global as any).__toggleCamRef = (global as any).__toggleCamRef || { current: null };
     (global as any).__toggleMicRef.current = toggleMic;
     (global as any).__toggleRemoteAudioRef.current = toggleRemoteAudio;
-    
+    (global as any).__toggleCamRef.current = toggleCam;
+
     return () => {
       (global as any).__toggleMicRef.current = null;
       (global as any).__toggleRemoteAudioRef.current = null;
+      (global as any).__toggleCamRef.current = null;
     };
-  }, [toggleMic, toggleRemoteAudio]);
+  }, [toggleMic, toggleRemoteAudio, toggleCam]);
   
   // Вычисляемые значения
   const hasActiveCall = !!partnerId || !!roomId || !!callId;
@@ -1692,11 +1752,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   // const micLevelForEqualizer = micOn && !isInactiveState ? micLevel : 0; // эквалайзер отключен
   const showControls = hasActiveCall && !isInactiveState;
   
-  // Проверка, является ли партнер другом
+  // Проверка, является ли партнер другом (по списку friends или по типу звонка)
+  const isDirectCall = !!route?.params?.directCall;
   const isPartnerFriend = useMemo(() => {
     if (!partnerUserId) return false;
+    if (isDirectCall) return true; // Прямой звонок = партнёр всегда друг (вызов из списка друзей / входящий от друга)
     return friends.some(f => String(f._id) === String(partnerUserId));
-  }, [partnerUserId, friends]);
+  }, [partnerUserId, friends, isDirectCall]);
   
   // Показывать ли бейдж "Друг"
   // КРИТИЧНО: Показываем бейдж если партнер - друг и звонок активен
@@ -1711,8 +1773,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Показываем бейдж если:
     // - Есть partnerUserId
     // - Звонок начат (started) ИЛИ есть активный звонок (для принимающего звонок)
-    // - Есть активный звонок (partnerId, roomId или callId)
     // - Звонок не завершен
+    // - Партнёр друг (по списку friends или directCall)
     const shouldShow = hasPartnerUserId && (hasStarted || hasActiveCall) && !isInactive && !callEnded && isPartnerFriend;
     
     if (shouldShow) {
