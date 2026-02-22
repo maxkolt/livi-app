@@ -39,6 +39,7 @@ import { Avatar, Divider, IconButton, List, Surface, Portal, Dialog, Button, Ico
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, getAvatarKey, forceImageRefresh } from '../utils/imageOptimization';
+import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import AvatarImage from '../components/AvatarImage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -701,11 +702,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const available = await isUpdateAvailable();
         if (!cancelled) {
           setUpdateAvailable(!!available);
-          if (available) {
-            setShowUpdateBadgeState(true); // при каждом входе показывать бейдж, если есть обновление
-          } else {
-            setShowUpdateBadgeState(false); // после обновления — сразу убрать бейдж и индикатор
-          }
+          // Показываем бейдж только через shouldShowUpdateBadge():
+          // - в релизе: при каждом входе (если updateAvailable)
+          // - в dev: раз в сутки
+          // Здесь же лишь гарантированно убираем бейдж, если обновления нет.
+          if (!available) setShowUpdateBadgeState(false); // после обновления — сразу убрать бейдж и индикатор
         }
       } catch {}
     };
@@ -790,6 +791,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [avatarUri, setAvatarUri] = useState<string>('');      // может быть file:// для локального превью
   const [myFullAvatarUri, setMyFullAvatarUri] = useState<string>(''); // полный аватар (data URI)
   const [avatarRefreshKey, setAvatarRefreshKey] = useState(0); // для принудительного обновления на Android
+  const [resolvedAvatarUri, resolvedAvatarReady] = useResolvedImageUri(avatarUri || ''); // на Android data: -> file: для Glide
   const [savedNick, setSavedNick] = useState<string>('');      // сохранённый ник
   
   // Отладочная версия setSavedNick с логированием
@@ -1222,17 +1224,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const callingVisibleRef = useRef(false);
   callingVisibleRef.current = calling.visible;
 
-  // При переподключении сокета закрываем модалку исходящего: отмена могла произойти вне приложения (фон/закрытие), call:cancel мы не получили
-  useEffect(() => {
-    const onConnect = () => {
-      if (callingVisibleRef.current) {
-        setCalling({ visible: false, friend: null, callId: null });
-        stopWaves();
-      }
-    };
-    socket.on('connect', onConnect);
-    return () => { socket.off('connect', onConnect); };
-  }, [stopWaves]);
+  // ВАЖНО: не закрываем исходящий UI на socket 'connect'.
+  // Иначе при старте звонка из вкладки «Друзья» (HomeScreen смонтирован) нативный исходящий экран
+  // может закрываться сразу же, если сокет в этот момент переподключается/доподключается.
+  // Закрытие исходящего уже покрыто событиями call:declined/cancel/timeout + локальным safeguard-таймаутом.
 
   // Ref текущего исходящего callId — fallback для App: при подключении сокета запросить call:accepted, если FCM не сработал (инициатор на нативном экране)
   useEffect(() => {
@@ -1246,6 +1241,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Закрытие модалки исходящего по событию извне (абонент отклонил на нативном экране/отменил/таймаут — событие приходит в App, эмитится emitCloseOutgoingCall)
   useEffect(() => {
     const unsub = onCloseOutgoingCall(() => {
+      // Дедуп: при отмене инициатором мы уже закрываем исходящий локально (handleCancelCall),
+      // а потом может прийти второе закрытие через App/push → лишнее setCalling даёт 2 мерцания.
+      if (!callingVisibleRef.current) return;
+      // Важно: ставим ref сразу, чтобы подавить гонки до следующего рендера.
+      callingVisibleRef.current = false;
       setCalling({ visible: false, friend: null, callId: null });
       stopWaves();
     });
@@ -1314,6 +1314,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [calling.visible]);
 
   const handleStartVideoCall = useCallback(async (friend: Friend) => {
+    const friendId = String(friend.id);
+    const friendName = friend.name ?? '';
+    logger.info('[outgoing] handleStartVideoCall started', { friendId, friendName });
     setSwipeActionsHiddenForCall(friend.id);
     openSwipeableRef.current?.close?.();
     clearOutgoingDeclineHandled();
@@ -1323,14 +1326,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Не отключать сокет при «background», пока на нативном экране исходящего — инициатор должен получить call:accepted
       setOutgoingCallScreenVisible(true);
       // Нативный экран исходящего — показываем сразу без задержки (до ответа сервера)
-      displayOutgoingCallImmediate(friend.id, friend.name ?? '');
+      logger.info('[outgoing] about to displayOutgoingCallImmediate', { friendId });
+      displayOutgoingCallImmediate(friend.id, friendName);
+      logger.info('[outgoing] displayOutgoingCallImmediate returned', { friendId });
 
+      logger.info('[outgoing] calling startCall', { friendId });
       const r: any = await startCall(friend.id);
+      logger.info('[outgoing] startCall result', { ok: r?.ok, callId: r?.callId, error: r?.error });
       if (!r?.ok) throw new Error(r?.error || 'call_failed');
       setCalling((c) => ({ ...c, callId: r.callId || null }));
 
       // Передаём callId уже открытому нативному экрану (запускает звук и таймаут 20с)
       if (r.callId) {
+        logger.info('[outgoing] notifying native with callId', { callId: r.callId });
         notifyOutgoingCallId(r.callId);
       }
 
@@ -1342,6 +1350,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         pendingCancelRef.current = false;
         try { setOutgoingCallScreenVisible(false); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
+        callingVisibleRef.current = false;
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
         return;
@@ -1353,7 +1362,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         logger.debug('Call accepted', { callId });
         if (callId) try { reportEndCallToCallKeep(callId); } catch {}
         try { setOutgoingCallScreenVisible(false); } catch {}
-        try { closeOutgoingCallActivity(); } catch {}
+        // Закрытие нативного экрана исходящего — только в App.tsx (onCallAccepted), чтобы не закрывать дважды
         // Приняли прямой звонок — сбрасываем бейдж пропущенных для этого друга
         // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) и УДАЛЯЕМ ключ вместо установки в 0
         try {
@@ -1375,6 +1384,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         } catch (e) {
           logger.warn('[HomeScreen] Error resetting missed calls for accepted call:', e);
         }
+        callingVisibleRef.current = false;
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
         // Навигация на VideoCall — единая точка входа в App.tsx (onCallAccepted)
@@ -1383,6 +1393,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (cleaned) return; cleaned = true;
         logger.info('[decline/инициатор] HomeScreen offDeclined: setCalling(false), stopWaves, showNotice');
         // Закрытие нативного окна исходящего — только в App.tsx (onCallDeclined), чтобы не было двойного мерцания
+        callingVisibleRef.current = false;
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
         showNotice(t('callDeclined', lang), 'error', 1800);
@@ -1392,12 +1403,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         try { setOutgoingCallScreenVisible(false); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
         // Таймаут: у инициатора счётчик не увеличиваем, просто закрываем UI
+        callingVisibleRef.current = false;
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
         showNotice(t('noAnswer', lang), 'error', 1800);
       });
       const offRoomFull = onCallRoomFull?.(() => {
         if (cleaned) return; cleaned = true;
+        callingVisibleRef.current = false;
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
         setRoomFull({ visible: true, name: friend.name || '' });
@@ -1407,6 +1420,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (cleaned) return; cleaned = true;
         try { setOutgoingCallScreenVisible(false); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
+        callingVisibleRef.current = false;
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
       });
@@ -1419,6 +1433,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           try { setOutgoingCallScreenVisible(false); } catch {}
           try { closeOutgoingCallActivity(); } catch {}
           if (callIdForTimeout) try { reportEndCallToCallKeep(callIdForTimeout); } catch {}
+          callingVisibleRef.current = false;
           setCalling({ visible: false, friend: null, callId: null });
           stopWaves();
           showNotice(t('noAnswer', lang), 'error', 1800);
@@ -1428,7 +1443,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Очистка будет при срабатывании одного из событий или таймаута
       return () => { offAccepted?.(); offDeclined?.(); offTimeout?.(); offRoomFull?.(); offCancel?.(); };
     } catch (e: any) {
+      logger.warn('[outgoing] handleStartVideoCall failed', { error: e?.message ?? String(e) });
       try { setOutgoingCallScreenVisible(false); } catch {}
+      callingVisibleRef.current = false;
       setCalling({ visible: false, friend: null, callId: null });
       stopWaves();
       showNotice(t('callStartFailed', lang), 'error', 2000);
@@ -1436,6 +1453,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [navigation, showNotice, startWaves, stopWaves, lang]);
 
   const handleCancelCall = useCallback(() => {
+    // Важно: ставим ref сразу, чтобы внешние события (socket/push/native) не закрывали второй раз до рендера.
+    callingVisibleRef.current = false;
     if (calling.callId) {
       try {
         reportEndCallToCallKeep(calling.callId);
@@ -2465,19 +2484,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
   }, [tab]);
 
-  // ===== inCall busy flag: слушаем старт/конец звонков и отмечаем друзей как занятых =====
-  useEffect(() => {
-    const markAllInRoom = (busy: boolean) => {
-      setFriends((prev) => prev.map((f: any) => (
-        busy ? { ...f, inCall: true } : { ...f, inCall: false }
-      )));
-    };
-    const onCallEnded = () => markAllInRoom(false);
-    const onCallStarted = () => markAllInRoom(true);
-    try { socket.on('call:ended', onCallEnded); } catch {}
-    try { socket.on('call:accepted', onCallStarted); } catch {}
-    return () => { try { socket.off('call:ended', onCallEnded); } catch {}; try { socket.off('call:accepted', onCallStarted); } catch {}; };
-  }, []);
+  // Бейдж «Занято» у участников видеозвонка: сервер при инициации (call:initiate) и при принятии (call:accept)
+  // рассылает presence:update({ userId, busy: true }) друзьям обоих участников; при завершении/отмене/отклонении
+  // — presence:update({ userId, busy: false }). Обновление isBusy приходит в onPresenceUpdate выше.
+  // Отдельно не вешаем inCall на всех друзей — только два участника звонка помечаются busy через сокет.
 
   /* ===== app resume ===== */
   const appStateRef = useRef(AppState.currentState);
@@ -4038,9 +4048,9 @@ const handleClearNick = useCallback(async () => {
         <Pressable onPress={() => { setModalAvatarUri(myFullAvatarUri || avatarUri || ''); setAvatarModalVisible(true); }} style={{ alignSelf: 'center' }}>
           <View style={[styles.centerAvatarWrap, { backgroundColor: MENU_CHROME_BG }]}>
             {isLocalPreview ? (
-            // Локальное превью (до загрузки)
+            // Локальное превью (до загрузки); на Android data: уже разрешён в file: через resolvedAvatarUri
             (<ExpoImage
-              source={{ uri: avatarUri }}
+              source={{ uri: resolvedAvatarUri || avatarUri }}
               style={styles.centerAvatarImg}
               cachePolicy="none"
             />)
@@ -4055,13 +4065,18 @@ const handleClearNick = useCallback(async () => {
               containerStyle={styles.centerAvatarImg}
               fallbackTextStyle={{ fontSize: 48, fontWeight: '800' }}
             />)
-          ) : hasDirectAvatarUri ? (
-            // Прямой URI (data:image или https) — показываем сразу, даже если avatarVer отсутствует
+          ) : hasDirectAvatarUri && resolvedAvatarReady ? (
+            // Прямой URI (data:image или https); на Android data: разрешён в file: — Glide не падает
             (<ExpoImage
-              source={{ uri: avatarUri }}
+              source={{ uri: resolvedAvatarUri }}
               style={styles.centerAvatarImg}
               cachePolicy={/^https?:\/\//i.test(avatarUri) ? 'memory-disk' : 'none'}
             />)
+          ) : hasDirectAvatarUri ? (
+            // Пока разрешаем data: -> file: на Android (плейсхолдер)
+            (<View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
+              <Text style={{ color: LIVI.titan, fontSize: 48, fontWeight: '500' }}>{letter}</Text>
+            </View>)
           ) : (
             // Плейсхолдер с буквой
             (<View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>

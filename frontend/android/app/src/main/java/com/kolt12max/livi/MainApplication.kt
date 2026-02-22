@@ -1,7 +1,12 @@
 package com.kolt12max.livi
 
 import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
+import android.os.Build
 
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
@@ -39,6 +44,14 @@ class MainApplication : Application(), ReactApplication {
   override val reactHost: ReactHost
     get() = ReactNativeHostWrapper.createReactHost(applicationContext, reactNativeHost)
 
+  private val endCallFromPiPReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      if (intent?.action == LiviAppModule.ACTION_END_CALL_FROM_PIP) {
+        LiviAppModule.emitEndCallFromPiP()
+      }
+    }
+  }
+
   override fun onCreate() {
     super.onCreate()
     SoLoader.init(this, OpenSourceMergedSoMapping)
@@ -49,6 +62,12 @@ class MainApplication : Application(), ReactApplication {
     // Регистрируем каналы уведомлений при старте приложения — пакет попадает в системный кэш истории уведомлений (уменьшает NotifHistoryProto "package name not found in string cache").
     LiviFirebaseMessagingService.ensureCallChannel(this)
     LiviFirebaseMessagingService.ensureMissedCallChannel(this)
+    val pipFilter = IntentFilter(LiviAppModule.ACTION_END_CALL_FROM_PIP)
+    if (Build.VERSION.SDK_INT >= 33) {
+      registerReceiver(endCallFromPiPReceiver, pipFilter, Context.RECEIVER_NOT_EXPORTED)
+    } else {
+      registerReceiver(endCallFromPiPReceiver, pipFilter)
+    }
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
   }
 

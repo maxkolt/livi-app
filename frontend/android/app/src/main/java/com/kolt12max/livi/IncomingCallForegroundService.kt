@@ -36,15 +36,17 @@ class IncomingCallForegroundService : Service() {
         val from = intent.getStringExtra(EXTRA_FROM) ?: return stopAndReturn()
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
         val headsUpOnly = intent.getBooleanExtra(EXTRA_HEADS_UP_ONLY, false)
+        val silentNotification = intent.getBooleanExtra(EXTRA_SILENT_NOTIFICATION, false)
 
         currentCallId = callId
         currentFrom = from
         currentFromNick = fromNick
         LiviFirebaseMessagingService.ensureCallChannel(this)
-        val notification = if (headsUpOnly) {
-            LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
-        } else {
-            LiviFirebaseMessagingService.buildIncomingCallNotification(this, callId, from, fromNick)
+        LiviAppModule.startIncomingCallRingtoneAndVibrationStatic(applicationContext)
+        val notification = when {
+            silentNotification -> LiviFirebaseMessagingService.buildIncomingCallNotificationSilent(this, callId, from, fromNick)
+            headsUpOnly -> LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
+            else -> LiviFirebaseMessagingService.buildIncomingCallNotification(this, callId, from, fromNick)
         }
         // Android 14+ (API 34): тип PHONE_CALL — система не накладывает ограничение «no camera/microphone» при старте из фона (VoIP/входящий вызов).
         // На старых версиях — SPECIAL_USE (только показ уведомления, камера/микрофон не используем в сервисе).
@@ -53,21 +55,10 @@ class IncomingCallForegroundService : Service() {
         } else {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         }
-        ServiceCompat.startForeground(
-            this,
-            LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL,
-            notification,
-            fgsType
-        )
 
-        // Не вызываем startActivity() отсюда: на Android 14+ (BAL) запуск Activity из сервиса блокируется.
-        // Уведомление уже с setFullScreenIntent(fullScreenPendingIntent, true) — систему запустит IncomingCallActivity сама.
-        if (headsUpOnly) {
-            Log.d(TAG, "IncomingCallForegroundService: heads-up only (Accept/Decline on notification)")
-        } else {
-            Log.d(TAG, "IncomingCallForegroundService: notification with full-screen intent (system will launch activity)")
-        }
-
+        // ВАЖНО: регистрируем receivers ДО startForeground().
+        // Иначе IncomingCallActivity может отправить ACTION_INCOMING_CALL_ACTIVITY_SHOWN слишком быстро,
+        // и сервис не успеет подписаться → уведомление/heads-up останется висеть поверх нативного экрана.
         activityShownReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, i: Intent?) {
                 val shownCallId = i?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
@@ -107,6 +98,21 @@ class IncomingCallForegroundService : Service() {
             registerReceiver(answeredReceiver, filterAnswered)
         }
 
+        ServiceCompat.startForeground(
+            this,
+            LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL,
+            notification,
+            fgsType
+        )
+
+        // Не вызываем startActivity() отсюда: на Android 14+ (BAL) запуск Activity из сервиса блокируется.
+        // Уведомление уже с setFullScreenIntent(fullScreenPendingIntent, true) — систему запустит IncomingCallActivity сама.
+        when {
+            silentNotification -> Log.d(TAG, "IncomingCallForegroundService: silent notification (no heads-up, show in shade)")
+            headsUpOnly -> Log.d(TAG, "IncomingCallForegroundService: heads-up only (Accept/Decline on notification)")
+            else -> Log.d(TAG, "IncomingCallForegroundService: notification with full-screen intent (system will launch activity)")
+        }
+
         timeoutRunnable = Runnable {
             Log.d(TAG, "IncomingCallForegroundService: timeout 20s, closing native screen and stopping")
             val cid = currentCallId
@@ -126,6 +132,7 @@ class IncomingCallForegroundService : Service() {
     }
 
     private fun cleanupAndStop() {
+        LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
         activityShownReceiver?.let {
@@ -152,6 +159,11 @@ class IncomingCallForegroundService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onDestroy() {
+        LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
+        super.onDestroy()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
@@ -164,5 +176,7 @@ class IncomingCallForegroundService : Service() {
         const val ACTION_INCOMING_CALL_ACTIVITY_SHOWN = "com.kolt12max.livi.INCOMING_CALL_ACTIVITY_SHOWN"
         /** Режим «только heads-up»: не запускать IncomingCallActivity, уведомление с кнопками Принять/Отклонить */
         const val EXTRA_HEADS_UP_ONLY = "heads_up_only"
+        /** Тихий режим: без heads-up (только иконка/шторка). */
+        const val EXTRA_SILENT_NOTIFICATION = "silent_notification"
     }
 }

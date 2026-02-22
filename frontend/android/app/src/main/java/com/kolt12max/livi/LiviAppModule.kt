@@ -437,6 +437,24 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /** Включить/выключить системный PiP при нажатии Home: true = при уходе в фон перейти в Picture-in-Picture (окно поверх лаунчера). Вызывать из JS при активном видеозвонке или при показе in-app PiP. */
+  @ReactMethod
+  fun setShouldEnterPiPOnLeaveHint(enabled: Boolean) {
+    LiviAppModule.setPiPOnLeaveHintEnabled(enabled)
+  }
+
+  /** Сохранить callId/roomId для завершения звонка из системного PiP (кнопка «Завершить» в окне PiP). Вызывать из JS при показе PiP. */
+  @ReactMethod
+  fun setPiPEndCallParams(callId: String, roomId: String) {
+    LiviAppModule.setPiPEndCallParamsStatic(callId, roomId)
+  }
+
+  /** Вернуть сохранённые callId/roomId для обработки события EndCallFromPiP в JS. */
+  @ReactMethod
+  fun getPiPEndCallParams(promise: Promise) {
+    LiviAppModule.getPiPEndCallParamsStatic(promise)
+  }
+
   @ReactMethod
   fun setInstallIdForDecline(installId: String?) {
     if (installId.isNullOrBlank()) return
@@ -600,6 +618,60 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @Volatile
     var ringtonePlayerForCallKeep: MediaPlayer? = null
       internal set
+    /** Включить системный PiP при нажатии Home во время видеозвонка (окно поверх лаунчера). JS выставляет true при активном звонке или при показе in-app PiP. */
+    @Volatile
+    @JvmField
+    var shouldEnterPiPOnLeaveHint = false
+    @JvmStatic
+    fun getShouldEnterPiPOnLeaveHint(): Boolean = shouldEnterPiPOnLeaveHint
+    @JvmStatic
+    internal fun setPiPOnLeaveHintEnabled(value: Boolean) {
+      shouldEnterPiPOnLeaveHint = value
+    }
+
+    /** Параметры для завершения звонка из системного PiP (кнопка в окне PiP). */
+    @Volatile var pipCallId: String? = null
+      private set
+    @Volatile var pipRoomId: String? = null
+      private set
+    const val ACTION_END_CALL_FROM_PIP = "com.kolt12max.livi.END_CALL_FROM_PIP"
+    @JvmStatic
+    fun setPiPEndCallParamsStatic(callId: String?, roomId: String?) {
+      pipCallId = callId
+      pipRoomId = roomId
+    }
+    @JvmStatic
+    fun getPiPEndCallParamsStatic(promise: Promise) {
+      val map = Arguments.createMap()
+      map.putString("callId", pipCallId)
+      map.putString("roomId", pipRoomId)
+      promise.resolve(map)
+    }
+    @JvmStatic
+    fun emitEndCallFromPiP() {
+      reactContextRef?.runOnUiQueueThread {
+        reactContextRef?.emitDeviceEvent("EndCallFromPiP", null)
+      }
+    }
+
+    /** Уведомить JS, что скоро включится системный PiP — чтобы переключить UI на «только PiP» (видео собеседника + верхние кнопки) до входа в PiP. */
+    @JvmStatic
+    fun emitAboutToEnterSystemPiP() {
+      reactContextRef?.runOnUiQueueThread {
+        reactContextRef?.emitDeviceEvent("AboutToEnterSystemPiP", null)
+      }
+    }
+
+    /** Уведомить JS о входе/выходе из системного PiP (только видео + системная кнопка X, без кастомных кнопок). */
+    @JvmStatic
+    fun emitSystemPiPModeChanged(isInPiP: Boolean) {
+      reactContextRef?.runOnUiQueueThread {
+        val params = Arguments.createMap()
+        params.putBoolean("isInPiP", isInPiP)
+        reactContextRef?.emitDeviceEvent("SystemPiPModeChanged", params)
+      }
+    }
+
     /** Запуск мелодии звонка и вибрации звонка из нативного кода (FGS, без React).
      * Вибрация только при заблокированном экране (как в Telegram: на разблокированном — только мелодия). */
     @JvmStatic

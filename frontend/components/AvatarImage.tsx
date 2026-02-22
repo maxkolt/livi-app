@@ -2,6 +2,7 @@
 import React, { memo, useEffect, useState } from 'react';
 import { View, Text, StyleProp, ViewStyle, TextStyle, ImageStyle } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
+import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { getAvatarUri } from '../utils/avatarCache';
 
@@ -74,11 +75,12 @@ const AvatarImage = memo<AvatarImageProps>(({
     };
   }, [userId, avatarVer, propsUri]);
 
+  const [resolvedUri, resolvedReady] = useResolvedImageUri(uri);
   const borderRadius = size / 2;
   const key = `avatar_${userId || 'none'}_v${avatarVer || 0}_${size}`;
 
-  // Показываем плейсхолдер если нет URI или идет загрузка
-  if (!uri || loading) {
+  // Показываем плейсхолдер если нет URI, идёт загрузка или на Android ещё не разрешён data: URI
+  if (!uri || loading || !resolvedReady) {
     return (
       <View
         style={[
@@ -115,7 +117,7 @@ const AvatarImage = memo<AvatarImageProps>(({
     <View style={[{ width: size, height: size, borderRadius }, containerStyle]}>
       <ExpoImage
         key={key}
-        {...getAvatarImageProps(uri, key)}
+        {...getAvatarImageProps(resolvedUri, key)}
         style={[
           {
             width: size,

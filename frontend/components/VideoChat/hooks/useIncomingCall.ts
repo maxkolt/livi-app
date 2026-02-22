@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Keyboard } from 'react-native';
+import { Keyboard, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onCallIncoming, onCallCanceled, acceptCall, declineCall } from '../../../sockets/socket';
 import socket from '../../../sockets/socket';
@@ -78,6 +78,9 @@ export const useIncomingCall = ({
 
   // Обработка входящих звонков через socket
   useEffect(() => {
+    // Android: входящий показываем нативным экраном (IncomingCallActivity) из App.tsx.
+    // Внутри экрана видеозвонка/пира не рисуем кастомный RN-оверлей.
+    if (Platform.OS === 'android') return;
     const offIncoming = onCallIncoming?.((d) => {
       // Не показывать входящий от того же собеседника, с которым уже идёт активный звонок (дубликат после отмены на нативном экране у звонящего)
       if (hasActiveCallWithPartner && partnerUserId && String(d?.from) === String(partnerUserId)) {
@@ -215,6 +218,9 @@ export const useIncomingCall = ({
   }, [session]);
 
   useEffect(() => {
+    // Android: входящий показываем нативным экраном (IncomingCallActivity) из App.tsx.
+    // Внутри экрана видеозвонка не включаем RN-оверлей даже если session сообщает incomingCall.
+    if (Platform.OS === 'android') return;
     const currentSession = sessionRef.current;
     if (!currentSession) return;
 

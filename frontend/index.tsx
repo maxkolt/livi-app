@@ -7,11 +7,10 @@ import './utils/pushNotifications';
 import { Alert, AppRegistry, Platform } from 'react-native';
 import { registerRootComponent } from 'expo';
 import App from './App';
-import { isEndedCallId } from './utils/callKeep';
+import { isEndedCallId, setupCallKeep, displayIncomingCall, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration } from './utils/callKeep';
 import * as Notifications from 'expo-notifications';
 
-// Headless-задача: на Android входящий звонок показывается только нативным FGS + IncomingCallActivity (full-screen intent).
-// CallKeep (displayIncomingCall) не вызываем — иначе сверху висит баннер ConnectionService поверх нативных экранов.
+// Headless: при входящем пуше показываем баннер через ConnectionService/CallKeep (как в Telegram) — он не исчезает через 5–7 сек.
 AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (data: { type?: string; callId?: string; from?: string; fromNick?: string } | null) => {
   if (Platform.OS !== 'android') return;
   console.log('[headless] RNCallKeepBackgroundMessage received', data ? { type: data.type, callId: data?.callId, from: data?.from } : null);
@@ -21,11 +20,15 @@ AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (dat
       console.log('[headless] skip (call already ended)', data.callId);
       return;
     }
-    // На Android не вызываем displayIncomingCall — экран входящего показывается нативным FGS (IncomingCallForegroundService)
-    // с full-screen intent → IncomingCallActivity. Вызов displayIncomingCall даёт второй UI (баннер сверху).
-    try {
-      await Notifications.dismissAllNotificationsAsync();
-    } catch {}
+    // Баннер ConnectionService (как в Telegram): висит до Принять/Отклонить/таймаут. Мелодия и вибрация — из настроек телефона (звонок).
+    await setupCallKeep();
+    displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
+    startIncomingCallRingtoneAndVibration();
+    // Даём системе время показать баннер CallKeep, затем снимаем уведомление FGS (иначе на части устройств баннер не успевает появиться)
+    setTimeout(() => {
+      try { stopIncomingCallForegroundService(); } catch {}
+    }, 1500);
+    console.log('[headless] displayIncomingCall + ringtone/vibration done', data.callId);
   } catch (e) {
     console.warn('[headless] RNCallKeepBackgroundMessage failed', e);
   }

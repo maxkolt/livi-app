@@ -513,6 +513,12 @@ export class RandomChatSession extends SimpleEventEmitter {
     logger.info('[RandomChatSession] Camera restarted and replaced track');
     if (oldVideoTrack && oldVideoTrack !== newVideoTrack) {
       try {
+        if (oldVideoTrack.mediaStreamTrack) {
+          oldVideoTrack.mediaStreamTrack.enabled = false;
+        }
+        oldVideoTrack.mute().catch(() => {});
+      } catch {}
+      try {
         oldVideoTrack.stop();
       } catch {}
     }
@@ -949,6 +955,13 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.localAudioTrack = null;
     }
     if (this.localVideoTrack) {
+      // Сначала отключаем захват кадров, затем stop() — снижает CameraDeviceClient errorCode 4/5 на Android
+      try {
+        if (this.localVideoTrack.mediaStreamTrack) {
+          this.localVideoTrack.mediaStreamTrack.enabled = false;
+        }
+        this.localVideoTrack.mute().catch(() => {});
+      } catch {}
       try {
         this.localVideoTrack.stop();
       } catch {}
@@ -1616,8 +1629,14 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
     const prevTrackId = this.localVideoTrack?.mediaStreamTrack?.id;
     
-    // Останавливаем старый трек, но не трогаем аудио
+    // Останавливаем старый трек (сначала отключаем захват — снижает errorCode 4/5 на Android)
     if (this.localVideoTrack) {
+      try {
+        if (this.localVideoTrack.mediaStreamTrack) {
+          this.localVideoTrack.mediaStreamTrack.enabled = false;
+        }
+        this.localVideoTrack.mute().catch(() => {});
+      } catch {}
       try {
         this.localVideoTrack.stop();
       } catch {}

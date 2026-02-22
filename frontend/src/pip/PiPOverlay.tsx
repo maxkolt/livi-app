@@ -1,4 +1,5 @@
 // src/pip/PiPOverlay.tsx
+// PiP в стиле WhatsApp/Telegram: видео собеседника, сверху слева X (завершить), справа камера (вкл/выкл). Тап по видео — вернуться в звонок.
 import React, { useMemo, useRef, useEffect } from 'react';
 import {
   Animated,
@@ -7,31 +8,30 @@ import {
   StyleSheet,
   View,
   Pressable,
-  Text,
   Image,
   Platform,
 } from 'react-native';
-// RTCView убран - в PiP не показываем видео, только звук и эквалайзер
-// import { RTCView } from '@livekit/react-native-webrtc';
+import { RTCView } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePiP } from './PiPContext';
+import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { logger } from '../../utils/logger';
-import { useLang } from '../../store/lang';
-import { t } from '../../utils/i18n';
 
 const UI = {
-  bg: 'rgba(25,32,46,0.95)',  // LiVi dark
+  bg: 'rgba(25,32,46,0.95)',
   fg: '#E7EEF7',
-  subtle: 'rgba(231,238,247,0.60)',
-  accentSoft: 'rgba(113,91,168,0.18)',
-  success: '#28d365',
   danger: '#FF4D4F',
   stroke: 'rgba(255,255,255,0.10)',
+  overlayBtn: 'rgba(0,0,0,0.35)',
 };
 
+const PIP_W = 150;
+const PIP_H = 260;
+const TOP_BAR_H = 44;
+const PAD = 12;
+
 export default function PiPOverlay() {
-  const lang = useLang((s) => s.lang);
   const {
     visible,
     callId,
@@ -39,25 +39,18 @@ export default function PiPOverlay() {
     partnerName,
     partnerAvatarUrl,
     remoteStream,
-    localStream,
-    isMuted,
-    isRemoteMuted,
     returnToCall,
-    toggleMic,
-    toggleRemoteAudio,
+    toggleCam,
     endCall,
     pipPos,
     updatePiPPosition,
+    localCamOn,
+    allowVideoRender,
+    inSystemPiPMode,
   } = usePiP();
 
   const insets = useSafeAreaInsets();
   const { width: W, height: H } = Dimensions.get('window');
-
-
-  // размеры вертикальной карточки
-  const PIP_W = 148;
-  const PIP_H = 232;
-  const PAD = 12;
 
   const MIN_X = PAD + insets.left;
   const MIN_Y = PAD + insets.top;
@@ -73,11 +66,8 @@ export default function PiPOverlay() {
     })
   ).current;
   const start = useRef({ x: 0, y: 0 });
-  const pulse = useRef(new Animated.Value(0)).current;
 
-  // ✨ ВАЖНО: не перехватываем тапы — начинаем pan только при явном сдвиге
   const DRAG_THRESHOLD = 6;
-
   const panResponder = useMemo(
     () =>
       PanResponder.create({
@@ -94,7 +84,6 @@ export default function PiPOverlay() {
           translate.setValue({ x: nx, y: ny });
         },
         onPanResponderRelease: (_e, g) => {
-          // «тап без движения» — считаем нажатием по карточке
           if (Math.abs(g.dx) < DRAG_THRESHOLD && Math.abs(g.dy) < DRAG_THRESHOLD) {
             returnToCall();
             return;
@@ -114,148 +103,129 @@ export default function PiPOverlay() {
     [MIN_X, MAX_X, MIN_Y, MAX_Y, translate, updatePiPPosition, returnToCall]
   );
 
-  // ограничение при смене ориентации
   useEffect(() => {
     const sub = Dimensions.addEventListener('change', ({ window }) => {
       const maxX = window.width - PIP_W - PAD - insets.right;
       const maxY = window.height - PIP_H - PAD - insets.bottom;
-      updatePiPPosition(
-        clamp(pipPos.x, MIN_X, maxX),
-        clamp(pipPos.y, MIN_Y, maxY)
-      );
+      updatePiPPosition(clamp(pipPos.x, MIN_X, maxX), clamp(pipPos.y, MIN_Y, maxY));
     });
     return () => sub?.remove?.();
   }, [pipPos.x, pipPos.y, insets.right, insets.bottom, MIN_X, MIN_Y, updatePiPPosition]);
 
-  // VAD отключен - анимация пульса не используется
+  const [resolvedPartnerAvatarUri, resolvedPartnerAvatarReady] = useResolvedImageUri(partnerAvatarUrl || '');
+  const hasValidAvatar =
+    partnerAvatarUrl &&
+    typeof partnerAvatarUrl === 'string' &&
+    partnerAvatarUrl.trim() !== '' &&
+    (partnerAvatarUrl.startsWith('http') || partnerAvatarUrl.startsWith('data:'));
+  const showAvatar = hasValidAvatar && resolvedPartnerAvatarReady && !!resolvedPartnerAvatarUri;
 
-  // Убрали избыточное логирование для уменьшения шума
-
-  // КРИТИЧНО: Логируем показ PiP для отладки (до проверки visible)
   useEffect(() => {
     if (visible) {
-      logger.info('[PiPOverlay] ✅ Показываем PiP оверлей', {
-        visible,
+      logger.info('[PiPOverlay] PiP visible', {
         callId,
         roomId,
-        partnerName,
         hasRemoteStream: !!remoteStream,
-        hasLocalStream: !!localStream
+        allowVideoRender,
       });
     }
-  }, [visible, callId, roomId, partnerName, remoteStream, localStream]);
-  
-  // ВАЖНО: Все хуки должны вызываться до раннего возврата
-  // Если visible === false, возвращаем null, но только после всех хуков
+  }, [visible, callId, roomId, remoteStream, allowVideoRender]);
+
   if (!visible) {
     return null;
   }
 
-  // Проверяем валидность URL аватара
-  const hasValidAvatar = partnerAvatarUrl && 
-    typeof partnerAvatarUrl === 'string' &&
-    partnerAvatarUrl.trim() !== '' && 
-    (partnerAvatarUrl.startsWith('http') || partnerAvatarUrl.startsWith('data:'));
+  const camOn = typeof localCamOn === 'boolean' ? localCamOn : true;
+  const streamURL = remoteStream?.toURL?.();
+  const canRenderVideo =
+    allowVideoRender &&
+    remoteStream &&
+    (Platform.OS !== 'ios' || (streamURL && streamURL.length > 0));
+
+  // Системный PiP (главный экран): только видео, завершение — системная кнопка X. In-app PiP: верхняя панель (X, камера) + видео как раньше.
+  const showTopBar = !inSystemPiPMode;
+  const videoObjectFit = inSystemPiPMode ? 'contain' : 'cover';
+  const videoAreaStyle = inSystemPiPMode ? styles.videoAreaSystemPiP : styles.videoArea;
 
   return (
     <Animated.View
       pointerEvents="box-none"
       style={[
         styles.overlay,
-        { width: PIP_W, height: PIP_H, transform: [{ translateX: translate.x }, { translateY: translate.y }] },
+        {
+          width: PIP_W,
+          height: PIP_H,
+          transform: [{ translateX: translate.x }, { translateY: translate.y }],
+        },
       ]}
       {...panResponder.panHandlers}
     >
-      {/* КРИТИЧНО: Убрали скрытый RTCView, так как он может конфликтовать с основным отображением видео
-          и потреблять ресурсы стрима. Если нужен для какой-то цели, можно вернуть, но лучше избегать
-          множественных RTCView для одного стрима */}
-
       <View style={styles.card}>
-        {/* header (нажатие по шапке = вернуться в звонок) */}
-        <Pressable style={styles.header} onPress={returnToCall} android_ripple={{ borderless: true, color: 'rgba(255,255,255,0.1)' }}>
-          <View style={styles.avatarWrap}>
-            {/* VAD отключен - пульсирующее кольцо не показывается */}
-            {hasValidAvatar ? (
-              <Image 
-                source={{ uri: partnerAvatarUrl! }} 
-                style={styles.avatarImg}
-                resizeMode="cover"
+        {showTopBar && (
+          <View style={styles.topBar}>
+            <Pressable
+              onPress={toggleCam}
+              style={styles.topBarBtn}
+              android_ripple={{ color: UI.overlayBtn, borderless: true }}
+            >
+              <MaterialIcons
+                name={camOn ? 'videocam' : 'videocam-off'}
+                size={22}
+                color={camOn ? UI.fg : UI.danger}
               />
-            ) : (
-              <View style={styles.avatarFallback}>
-                <MaterialIcons name="person" size={22} color={UI.fg} />
-              </View>
-            )}
+            </Pressable>
+            <Pressable
+              onPress={endCall}
+              style={styles.topBarBtn}
+              android_ripple={{ color: UI.overlayBtn, borderless: true }}
+            >
+              <MaterialIcons name="close" size={22} color={UI.fg} />
+            </Pressable>
           </View>
-          <View style={styles.statusRow}>
-            <View style={styles.dot} />
-            <Text style={styles.status}>{t('callActive', lang)}</Text>
-          </View>
-        </Pressable>
+        )}
 
-        {/* Nickname below avatar (instead of PiP equalizer) */}
         <Pressable
+          style={videoAreaStyle}
           onPress={returnToCall}
-          android_ripple={{ borderless: true, color: 'rgba(255,255,255,0.08)' }}
-          style={styles.nickWrap}
+          android_ripple={{ color: 'rgba(255,255,255,0.08)', borderless: true }}
         >
-          <Text numberOfLines={2} style={styles.nick}>
-            {partnerName || t('peer', lang)}
-          </Text>
+          {canRenderVideo && remoteStream ? (
+            <View style={StyleSheet.absoluteFill}>
+              {Platform.OS === 'android' ? (
+                <RTCView
+                  key={`pip-remote-${remoteStream.id}`}
+                  stream={remoteStream}
+                  streamURL={streamURL}
+                  style={styles.rtcView}
+                  objectFit={videoObjectFit}
+                  mirror={false}
+                />
+              ) : (
+                <RTCView
+                  key={`pip-remote-${remoteStream.id}`}
+                  streamURL={streamURL!}
+                  style={styles.rtcView}
+                  objectFit={videoObjectFit}
+                  mirror={false}
+                />
+              )}
+            </View>
+          ) : (
+            <View style={styles.placeholder}>
+              {showAvatar ? (
+                <Image
+                  source={{ uri: resolvedPartnerAvatarUri }}
+                  style={styles.avatarImg}
+                  resizeMode="cover"
+                />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <MaterialIcons name="person" size={40} color={UI.fg} />
+                </View>
+              )}
+            </View>
+          )}
         </Pressable>
-
-        {/* actions */}
-        <View style={styles.actions}>
-          {/* MUTE */}
-          <Pressable
-            onPress={toggleMic}
-            android_ripple={Platform.OS === 'android' ? { color: 'rgba(255,255,255,0.12)', radius: 20 } : undefined}
-            style={({ pressed }) => [
-              Platform.OS === 'android' ? styles.btnSq : styles.btn,
-              Platform.OS === 'android' ? styles.btnOutline : null,
-              Platform.OS === 'android' && isMuted ? styles.btnOutlineDanger : null,
-              Platform.OS === 'android' && pressed ? styles.btnPressed : null,
-              Platform.OS !== 'android' && isMuted ? styles.btnDanger : null,
-            ]}
-          >
-            <MaterialIcons
-              name={isMuted ? 'mic-off' : 'mic'}
-              size={18}
-              color={isMuted ? UI.danger : UI.fg}
-            />
-          </Pressable>
-
-          {/* SPEAKER */}
-          <Pressable
-            onPress={toggleRemoteAudio}
-            android_ripple={Platform.OS === 'android' ? { color: 'rgba(255,255,255,0.12)', radius: 20 } : undefined}
-            style={({ pressed }) => [
-              Platform.OS === 'android' ? styles.btnSq : styles.btn,
-              Platform.OS === 'android' ? styles.btnOutline : null,
-              Platform.OS === 'android' && pressed ? styles.btnPressed : null,
-              Platform.OS !== 'android' && isRemoteMuted ? styles.btnDanger : null,
-            ]}
-          >
-            <MaterialIcons
-              name={isRemoteMuted ? 'volume-off' : 'volume-up'}
-              size={18}
-              color={Platform.OS === 'android' ? UI.fg : (isRemoteMuted ? UI.danger : UI.fg)}
-            />
-          </Pressable>
-
-          {/* HANGUP */}
-          <Pressable
-            onPress={endCall}
-            android_ripple={Platform.OS === 'android' ? { color: 'rgba(0,0,0,0.18)', radius: 20 } : undefined}
-            style={({ pressed }) => [
-              Platform.OS === 'android' ? styles.btnSq : styles.btn,
-              Platform.OS === 'android' ? styles.btnSolidDanger : styles.end,
-              Platform.OS === 'android' && pressed ? styles.btnSolidDangerPressed : null,
-            ]}
-          >
-            <MaterialIcons name="call-end" size={16} color="#fff" />
-          </Pressable>
-        </View>
       </View>
     </Animated.View>
   );
@@ -263,97 +233,61 @@ export default function PiPOverlay() {
 
 const styles = StyleSheet.create({
   overlay: { position: 'absolute', zIndex: 9999, elevation: 9999 },
-  hidden: { width: 0, height: 0, opacity: 0, position: 'absolute' },
-
   card: {
     flex: 1,
-    borderRadius: 18,
+    borderRadius: 16,
     backgroundColor: UI.bg,
     borderWidth: 1,
     borderColor: UI.stroke,
-    padding: 12,
-    alignItems: 'stretch',
+    overflow: 'hidden',
+  },
+  topBar: {
+    flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+    height: TOP_BAR_H,
+    paddingHorizontal: 6,
   },
-
-  header: { alignItems: 'center' },
-  avatarWrap: { width: 54, height: 54, marginBottom: 8, alignItems: 'center', justifyContent: 'center' },
-  pulseRing: { position: 'absolute', width: 54, height: 54, borderRadius: 27, backgroundColor: UI.accentSoft },
-  avatarImg: { width: 46, height: 46, borderRadius: 23, borderWidth: 1, borderColor: UI.stroke },
-  avatarFallback: {
-    width: 46, height: 46, borderRadius: 23,
-    backgroundColor: 'rgba(113,91,168,0.22)', borderWidth: 1, borderColor: UI.stroke, alignItems: 'center', justifyContent: 'center',
-  },
-  nickWrap: {
+  topBarBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 6,
-    paddingVertical: 6,
-    marginTop: 6,
-    marginBottom: 2,
   },
-  nick: {
-    color: UI.fg,
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-    maxWidth: 124,
-    lineHeight: 16,
+  videoArea: {
+    flex: 1,
+    minHeight: PIP_H - TOP_BAR_H,
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
-  statusRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: UI.success, marginRight: 4 },
-  status: { color: UI.subtle, fontSize: 11 },
-
-  actions: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    marginTop: 10,
-    gap: Platform.OS === 'android' ? 8 : 0,
+  videoAreaSystemPiP: {
+    flex: 1,
+    minHeight: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
-  btn: {
-    flex: 1, height: 36, borderRadius: 10,
+  rtcView: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  placeholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarImg: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     borderWidth: 1,
     borderColor: UI.stroke,
-    backgroundColor: 'transparent',
-    alignItems: 'center', justifyContent: 'center', minWidth: 36, marginHorizontal: 3,
   },
-  btnDanger: { 
-    borderColor: 'rgba(255,77,79,0.45)', 
-    backgroundColor: 'rgba(255,77,79,0.08)' 
-  },
-  end: { 
-    backgroundColor: UI.danger, 
-    borderColor: UI.danger 
-  },
-  // Квадрат с округлениями (Android-PiP)
-  btnSq: {
-    width: 35,
-    height: 35,
-    borderRadius: 10,
+  avatarFallback: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(113,91,168,0.3)',
+    borderWidth: 1,
+    borderColor: UI.stroke,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-  },
-  // Контуры
-  btnOutline: {
-    borderColor: 'rgba(255,255,255,0.16)',
-  },
-  btnOutlineDanger: {
-    borderColor: UI.danger,
-  },
-  // Нажатие по контурным
-  btnPressed: {
-    backgroundColor: 'rgba(255,255,255,0.10)',
-  },
-  // Сплошная красная (отбой)
-  btnSolidDanger: {
-    backgroundColor: UI.danger,
-    borderColor: UI.danger,
-  },
-  btnSolidDangerPressed: {
-    backgroundColor: '#E64547',
-    borderColor: '#E64547',
   },
 });

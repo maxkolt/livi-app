@@ -32,7 +32,7 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, stopIncomingCallRingtoneAndVibration } from './utils/callKeep';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
@@ -123,6 +123,9 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 // Это нужно чтобы можно было переключать динамик даже когда экран звонка размонтирован (в PiP)
 (global as any).__toggleRemoteAudioRef = { current: null as (() => void) | null };
 
+// КРИТИЧНО: Глобальная ссылка на функцию переключения камеры из VideoCall (для PiP).
+(global as any).__toggleCamRef = { current: null as (() => void) | null };
+
 function AppContent() {
   const { theme, isDark } = useAppTheme();
   const pip = usePiP();
@@ -143,6 +146,24 @@ function AppContent() {
   React.useEffect(() => {
     const t = setTimeout(() => void setupCallKeep(), 3000);
     return () => clearTimeout(t);
+  }, []);
+
+  // FCM входящий при разблокированном экране: pending передан через MainActivity → показать через ConnectionService/CallKeep (баннер не исчезает)
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    (async () => {
+      const pending = await getAndClearPendingIncomingCallForCallKeep();
+      if (!pending?.callId || !pending?.from) return;
+      try {
+        await setupCallKeep();
+        displayIncomingCall(pending.callId, pending.from, pending.fromNick ?? '', true);
+        startIncomingCallRingtoneAndVibration();
+        stopIncomingCallForegroundService();
+        logger.info('[App] Pending CallKeep incoming shown', { callId: pending.callId });
+      } catch (e) {
+        logger.warn('[App] Pending CallKeep incoming failed', e);
+      }
+    })();
   }, []);
 
   // События от нативных экранов: инициатор нажал X на исходящем / получатель нажал X на входящем — очищаем состояние
@@ -170,10 +191,37 @@ function AppContent() {
         }
       });
     });
+    const sub4 = emitter.addListener('EndCallFromPiP', () => {
+      NativeModules.LiviAppModule?.getPiPEndCallParams?.()?.then?.((params: { callId?: string | null; roomId?: string | null }) => {
+        const fn = (global as any).__endCallFromNativeRef?.current;
+        if (typeof fn === 'function') fn(params?.callId ?? null, params?.roomId ?? null);
+      });
+    });
+    const sub5 = emitter.addListener('AboutToEnterSystemPiP', () => {
+      const params = (global as any).__currentCallPiPParamsRef?.current;
+      if (params && typeof (global as any).__pipShowPiPRef?.current === 'function') {
+        (global as any).__pipShowPiPRef.current({
+          callId: params.callId,
+          roomId: params.roomId,
+          partnerName: params.partnerName,
+          partnerAvatarUrl: params.partnerAvatarUrl,
+          localStream: params.localStream,
+          remoteStream: params.remoteStream,
+          localCamOn: params.localCamOn,
+          navParams: params.navParams,
+        });
+        const nav = (global as any).__navRef;
+        if (nav?.dispatch) nav.dispatch(CommonActions.navigate('Home'));
+        const session = (global as any).__webrtcSessionRef?.current;
+        if (session && typeof (session as any).enterPiP === 'function') (session as any).enterPiP();
+      }
+    });
     return () => {
       sub1.remove();
       sub2.remove();
       sub3.remove();
+      sub4.remove();
+      sub5.remove();
     };
   }, []);
 
@@ -183,6 +231,7 @@ function AppContent() {
     const t = setTimeout(() => {
       unsub = registerCallKeepEvents({
         onAnswer: async (callId) => {
+          stopIncomingCallRingtoneAndVibration();
           const info = getPendingCallInfo(callId);
           if (!info || !navRef.isReady()) return;
           incomingCallIdRef.current = null;
@@ -205,6 +254,7 @@ function AppContent() {
           );
         },
         onEnd: (callId) => {
+          stopIncomingCallRingtoneAndVibration();
           const routeName = navRef.getCurrentRoute()?.name;
           if (routeName === 'VideoCall') {
             const endFn = (global as any).__endCallFromNativeRef?.current;
@@ -227,6 +277,7 @@ function AppContent() {
           }
           incomingCallIdRef.current = null;
           reportEndCallToCallKeep(callId);
+          stopIncomingCallRingtoneAndVibration();
           try { setIncomingCallScreenVisible(false); } catch {}
           stopIncomingCallAlert();
           setIncoming(null);
@@ -543,6 +594,10 @@ function AppContent() {
         const from = params.get('from') || params.get('userId') || '';
         if (callId && from) {
           logger.info('[App] answer-call deep link: opening call', { callId, from });
+          // Android: снять heads-up уведомление/остановить IncomingCallForegroundService сразу после "Принять"
+          if (Platform.OS === 'android') {
+            try { sendCallAnsweredBroadcast(callId); } catch {}
+          }
           await openAnswerCallScreen(from, callId);
           return true;
         }
@@ -809,6 +864,13 @@ function AppContent() {
     const pipVisible = !!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current;
     const shouldKeepOn = isVideoSessionRoute(currentRoute) || !!incoming || pipVisible;
 
+    // Android: при нажатии Home во время звонка переводить в системный PiP (окно поверх лаунчера)
+    if (Platform.OS === 'android') {
+      try {
+        NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!shouldKeepOn);
+      } catch (_) {}
+    }
+
     let appStateSubscription: any = null;
     let keepAwakeInterval: ReturnType<typeof setInterval> | null = null;
     let androidKeepScreenOnInterval: ReturnType<typeof setInterval> | null = null;
@@ -930,6 +992,11 @@ function AppContent() {
     appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
     
     return () => {
+      if (Platform.OS === 'android') {
+        try {
+          NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+        } catch (_) {}
+      }
       // Останавливаем интервалы
       if (keepAwakeInterval) {
         clearInterval(keepAwakeInterval);
@@ -1023,30 +1090,34 @@ function AppContent() {
       return;
     }
 
-    // КРИТИЧНО: Показываем глобальную модалку если:
-    // 1) НЕ на экране видеозвонка/рандомчата, ИЛИ
-    // 2) Навигация не готова (безопаснее показать), ИЛИ
-    // 3) Мы на VideoCall/RandomChat, но видеосессия УЖЕ завершена (неактивное состояние) —
-    //    тогда модалка должна быть как у "неактивного видеочата": во весь экран.
-    const shouldShowGlobal =
-      !isOnVideoScreen ||
-      !currentRoute ||
-      (isOnVideoScreen && isInactiveVideoState);
+    // Android: мы отказались от кастомных модалок — входящий всегда открываем нативным экраном
+    // поверх любого экрана/вкладки/модалки в приложении (в т.ч. "неактивный" VideoCall после завершения).
+    logger.debug('Incoming call — showing native incoming UI', {
+      callId: d.callId,
+      from: d.from,
+      fromNick: d.fromNick,
+      currentRoute,
+      isOnVideoScreen,
+      isInactiveVideoState,
+    });
+    incomingCallIdRef.current = d.callId;
+    try { Keyboard.dismiss(); } catch {}
 
-    if (shouldShowGlobal) {
-      logger.debug('Incoming call — показываем нативный IncomingCallActivity', { callId: d.callId, from: d.from, fromNick: d.fromNick, currentRoute });
-      incomingCallIdRef.current = d.callId;
-      try { Keyboard.dismiss(); } catch {}
-      // Единый UI: нативный IncomingCallActivity (foreground — из сокета; background — из FCM full-screen)
-      if (Platform.OS === 'android') {
+    // Единый UI Android:
+    // - app active: открыть IncomingCallActivity
+    // - app background: показать системный UI (unlocked→notification, locked/sleep→full-screen→IncomingCallActivity)
+    if (Platform.OS === 'android') {
+      const appState = AppState.currentState;
+      if (appState && appState !== 'active') {
+        showIncomingCallSystemUI(d.callId, d.from, d.fromNick ?? '');
+      } else {
         launchIncomingCallActivityScreen(d.callId, d.from, d.fromNick ?? '');
-      } else if (isCallKeepAvailable()) {
-        displayIncomingCall(d.callId, d.from, d.fromNick ?? '', true);
       }
-      try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
-    } else {
-      logger.debug('Skipping global modal - on video/random screen, will show in peer block', { callId: d.callId, from: d.from, currentRoute });
+    } else if (isCallKeepAvailable()) {
+      // iOS: системный UI через CallKeep (нативный, без RN-модалки)
+      displayIncomingCall(d.callId, d.from, d.fromNick ?? '', true);
     }
+    try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
   }, [routeName]);
 
   // Сохраняем обработчик в ref для использования в fallback и для пуша
@@ -1154,10 +1225,15 @@ function AppContent() {
   // При получении call:ended (второй участник завершил с нативного экрана/уведомления) — закрываем модалки, reportEndCallToCallKeep, уведомления у обоих
   React.useEffect(() => {
     const onCallEnded = (data?: { callId?: string }) => {
+      // КРИТИЧНО: Сразу отключаем системный PiP у собеседника, чтобы при уходе с экрана не выскакивало окно PiP
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+      }
       if (data?.callId) {
         addEndedCallIdFromSocket(data.callId);
         try { reportEndCallToCallKeep(data.callId); } catch {}
       }
+      stopIncomingCallRingtoneAndVibration();
       stopIncomingCallAlert();
       setIncoming(null);
       stopAnim();
@@ -1306,6 +1382,7 @@ function AppContent() {
       if (id) markOutgoingDeclineHandled(id);
       incomingCallIdRef.current = null;
       if (d?.callId) try { reportEndCallToCallKeep(d.callId); } catch {}
+      stopIncomingCallRingtoneAndVibration();
       stopIncomingCallAlert();
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       logger.info('[decline/инициатор] App: закрываем нативное окно и сбрасываем visible');
@@ -1318,6 +1395,7 @@ function AppContent() {
       logger.debug('Call canceled received', { callId: d?.callId });
       incomingCallIdRef.current = null;
       if ((d as any)?.callId) try { reportEndCallToCallKeep((d as any).callId); } catch {}
+      stopIncomingCallRingtoneAndVibration();
       try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
       // КРИТИЧНО: Обновляем canceledCallsRef для защиты от гонки событий
@@ -1380,6 +1458,18 @@ function AppContent() {
         hasLivekitToken: !!(data as any)?.livekitToken,
         hasLivekitRoomName: !!(data as any)?.livekitRoomName,
       });
+
+      const fromUserId = (data as any)?.fromUserId ?? (data as any)?.from;
+      const myUserId = getCurrentUserId();
+      const isCaller = myUserId && fromUserId && myUserId !== fromUserId;
+      // Инициатор: закрывать нативный экран исходящего только если принят именно текущий звонок (не устаревший call:accepted при переподключении сокета)
+      if (isCaller && callId) {
+        const currentOutgoing = (global as any).__outgoingCallIdRef?.current;
+        if (currentOutgoing != null && String(currentOutgoing) !== String(callId)) {
+          logger.info('[App] ⏭️ call:accepted ignored (callId not current outgoing)', { callId, currentOutgoing });
+          return;
+        }
+      }
       
       try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
@@ -1388,9 +1478,6 @@ function AppContent() {
       try {
         const currentRoute = navRef.getCurrentRoute();
         if (navRef.isReady() && currentRoute?.name !== 'VideoCall') {
-          const fromUserId = (data as any)?.fromUserId ?? (data as any)?.from;
-          const myUserId = getCurrentUserId();
-          const isCaller = myUserId && fromUserId && myUserId !== fromUserId;
           // Caller: we initiated, the other accepted → directInitiator: true, peerUserId = callee (who accepted).
           // Callee: we accepted → we're already on VideoCall (navigated on Accept tap); skip or rare edge case.
           const params = isCaller
@@ -1422,11 +1509,12 @@ function AppContent() {
           doNavigate();
           try { setOutgoingCallScreenVisible(false); } catch {}
           try { emitCloseOutgoingCall(); } catch {}
-          try { closeOutgoingCallActivity(); } catch {}
-          // Сценарий «только сокет»: FCM call_accepted не пришёл — явно выводим MainActivity на передний план, чтобы инициатор увидел экран видеозвонка
           if (isCaller) {
+            // Инициатор: один вызов — bringMainActivityToFront закрывает OutgoingCallActivity и выводит MainActivity (избегаем двойного закрытия)
             logger.info('[App] 📱 bringMainActivityToFront (socket-only path, caller)');
             try { bringMainActivityToFront(); } catch {}
+          } else {
+            try { closeOutgoingCallActivity(); } catch {}
           }
         } else {
           logger.info('[App] ⏭️ Already on VideoCall screen, skipping navigation', { callId: data?.callId });
@@ -1644,6 +1732,10 @@ export default function App() {
 
   const endCallImpl = (callId: string | null, roomId: string | null) => {
     console.log('[App] 🔥 endCallImpl вызван', { callId, roomId });
+    // КРИТИЧНО: Сразу отключаем системный PiP при завершении из in-app PiP, чтобы звонок полностью завершился и у собеседника не выскакивал системный PiP
+    if (Platform.OS === 'android') {
+      try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+    }
     reportEndCallToCallKeep(callId);
     setCallKeepAvailable(true);
     clearCallRelatedNotificationsAndSyncBadge().catch(() => {});

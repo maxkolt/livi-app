@@ -165,6 +165,19 @@ export async function launchIncomingCallActivityScreen(
   }
 }
 
+/**
+ * Android: показать системный UI входящего, когда приложение НЕ в фокусе.
+ * Натив сам решит:
+ * - unlocked → heads-up уведомление (как на скрине)
+ * - locked/sleep → full-screen → IncomingCallActivity
+ */
+export function showIncomingCallSystemUI(callId: string, from: string, fromNick?: string): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.showIncomingCallSystemUI?.(callId, from, fromNick ?? '');
+  } catch {}
+}
+
 /** Уже завершён/отменён ли звонок? Чтобы не показывать входящий при запоздалом пуше «call». */
 export function isEndedCallId(callId: string): Promise<boolean> {
   if (Platform.OS !== 'android' || !callId?.trim()) return Promise.resolve(false);
@@ -181,6 +194,44 @@ export function addEndedCallId(callId: string): void {
   if (Platform.OS !== 'android' || !callId?.trim()) return;
   try {
     NativeModules.LiviAppModule?.addEndedCallId?.(callId.trim());
+  } catch {}
+}
+
+/** Прочитать и сбросить входящий, переданный из FCM для показа через CallKeep (ConnectionService). Вызывать при старте приложения; при наличии данных — displayIncomingCall и stopIncomingCallForegroundService. */
+export function getAndClearPendingIncomingCallForCallKeep(): Promise<{ callId: string; from: string; fromNick: string } | null> {
+  if (Platform.OS !== 'android') return Promise.resolve(null);
+  try {
+    const p = NativeModules.LiviAppModule?.getAndClearPendingIncomingCallForCallKeep?.();
+    return Promise.resolve(p).then((m) => {
+      if (!m || typeof m.callId !== 'string' || typeof m.from !== 'string') return null;
+      return { callId: m.callId, from: m.from, fromNick: typeof m.fromNick === 'string' ? m.fromNick : '' };
+    }).catch(() => null);
+  } catch {
+    return Promise.resolve(null);
+  }
+}
+
+/** Остановить IncomingCallForegroundService после показа входящего через CallKeep (ConnectionService). */
+export function stopIncomingCallForegroundService(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.stopIncomingCallForegroundService?.();
+  } catch {}
+}
+
+/** Запустить системную мелодию звонка и вибрацию звонка (Настройки телефона) для ConnectionService/CallKeep. */
+export function startIncomingCallRingtoneAndVibration(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.startIncomingCallRingtoneAndVibration?.();
+  } catch {}
+}
+
+/** Остановить мелодию и вибрацию входящего (после ответа/отклонения/отмены). */
+export function stopIncomingCallRingtoneAndVibration(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.stopIncomingCallRingtoneAndVibration?.();
   } catch {}
 }
 
@@ -241,17 +292,39 @@ export function setOutgoingCallTimeoutMs(ms: number): void {
  * Вызывать в момент нажатия кнопки видеозвонка. После получения callId вызвать notifyOutgoingCallId(callId).
  */
 export function displayOutgoingCallImmediate(toUserId: string, toNick?: string): void {
-  if (Platform.OS !== 'android') return;
-  if (!isSetup || !hasPhoneNumbersPermission) return;
+  logger.info('[outgoing] displayOutgoingCallImmediate called', {
+    toUserId,
+    toNick: toNick ?? '',
+    platform: Platform.OS,
+    isSetup,
+    hasPhoneNumbersPermission,
+  });
+  if (Platform.OS !== 'android') {
+    logger.info('[outgoing] skip: not Android');
+    return;
+  }
+  if (!isSetup || !hasPhoneNumbersPermission) {
+    logger.warn('[outgoing] skip: нативный экран не показывается — isSetup=false или нет разрешения', {
+      isSetup,
+      hasPhoneNumbersPermission,
+    });
+    return;
+  }
   resetOutgoingCloseDebounce();
   try {
     const LiviAppModule = NativeModules.LiviAppModule;
     if (LiviAppModule?.launchOutgoingCallActivityWithoutCallId) {
+      logger.info('[outgoing] calling native launchOutgoingCallActivityWithoutCallId', { to: toUserId });
       LiviAppModule.launchOutgoingCallActivityWithoutCallId(toUserId, toNick ?? toUserId);
       logger.info('[callKeep] displayOutgoingCallImmediate', { to: toUserId });
     } else if (LiviAppModule?.launchOutgoingCallActivity) {
+      logger.info('[outgoing] calling native launchOutgoingCallActivity (fallback, no callId)', { to: toUserId });
       LiviAppModule.launchOutgoingCallActivity('', toUserId, toNick ?? toUserId);
       logger.info('[callKeep] displayOutgoingCallImmediate (fallback)', { to: toUserId });
+    } else {
+      logger.warn('[outgoing] LiviAppModule: нет метода launchOutgoingCallActivity* — нативный экран не запущен', {
+        hasModule: !!LiviAppModule,
+      });
     }
   } catch (e) {
     logger.warn('[callKeep] displayOutgoingCallImmediate failed', e as Error);
@@ -260,6 +333,7 @@ export function displayOutgoingCallImmediate(toUserId: string, toNick?: string):
 
 /** Передать callId уже открытому нативному экрану исходящего (после ответа сервера). Запускает звук и таймаут 20с. */
 export function notifyOutgoingCallId(callId: string): void {
+  logger.info('[outgoing] notifyOutgoingCallId called', { callId, platform: Platform.OS });
   if (Platform.OS !== 'android') return;
   try {
     NativeModules.LiviAppModule?.notifyOutgoingCallId?.(callId);

@@ -247,23 +247,23 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     );
   }
 
-  // КРИТИЧНО: Если партнер в PiP, показываем заглушку "Отошел"
-  // Это гарантирует, что заглушка покажется в любом случае, даже если нет стрима или он еще загружается
-  // Заглушка должна показываться автоматически при уходе партнера в PiP и исчезать при возврате
-  if (partnerInPiP) {
-    logger.debug('[RemoteVideo] Show away placeholder (partnerInPiP=true)', {
+  // КРИТИЧНО: Если партнер в PiP и камера выключена — показываем заглушку "Отошел".
+  // Если партнер в PiP, но камера включена — видеопоток продолжает идти (показываем видео ниже).
+  if (partnerInPiP && !remoteCamOn) {
+    logger.debug('[RemoteVideo] Show away placeholder (partnerInPiP=true, camera off)', {
       partnerInPiP,
+      remoteCamOn,
       streamId: streamToUse?.id,
       hasStream: !!streamToUse,
-      remoteCamOn,
       started,
       loading,
       isInactiveState,
       wasFriendCallEnded
     });
-    logRenderState('partner-in-pip', {
+    logRenderState('partner-in-pip-away', {
       streamId: streamToUse?.id,
       partnerInPiP: true,
+      remoteCamOn: false,
       hasStream: !!streamToUse,
     });
     return (
@@ -379,8 +379,8 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   
   // КРИТИЧНО: Показываем видео если есть готовый трек, даже если remoteCamOn еще не обновлен
   // remoteCamOn может обновиться позже через onRemoteCamStateChange
-  // НО: НЕ показываем видео если партнер в PiP (это уже проверено выше, но для безопасности)
-  if (hasRenderableVideo && !partnerInPiP) {
+  // Показываем видео когда: партнер не в PiP ИЛИ партнер в PiP с включенной камерой (поток продолжает идти)
+  if (hasRenderableVideo && (!partnerInPiP || remoteCamOn)) {
     // We are able to render (or intentionally render during PiP recovery) -> reset stall + remember last good
     stallSinceRef.current = null;
     lastGoodStreamRef.current = streamToUse;
@@ -486,7 +486,8 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }
 
   // Стрим есть, но видеотрек не готов/замьючен — показываем лоадер (камера не "явно выключена")
-  if (streamToUse && hasVideoTrack && !partnerInPiP) {
+  // При партнере в PiP с включенной камерой тоже показываем лоадер, пока трек не станет готов
+  if (streamToUse && hasVideoTrack && (!partnerInPiP || remoteCamOn)) {
     const now = Date.now();
     const stallStart = stallSinceRef.current ?? now;
     stallSinceRef.current = stallStart;

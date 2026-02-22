@@ -11,6 +11,8 @@ import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -68,6 +70,11 @@ class IncomingCallActivity : AppCompatActivity() {
                 putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callIdFromIntent)
             }
             sendBroadcast(shown)
+            // Fallback: на некоторых устройствах broadcast может уйти до регистрации receiver в сервисе.
+            // Повторяем через небольшую задержку, чтобы гарантированно снять heads-up/FGS.
+            Handler(Looper.getMainLooper()).postDelayed({
+                try { sendBroadcast(shown) } catch (_: Exception) {}
+            }, 250)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
@@ -148,8 +155,14 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        isInForeground = true
         // Уведомление не показываем ни в шторке, ни в строке состояния
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isInForeground = false
     }
 
     /**
@@ -161,6 +174,7 @@ class IncomingCallActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        isInForeground = false
         LiviOngoingCallHelper.clearOngoingCall(applicationContext)
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         callCanceledReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
@@ -323,5 +337,8 @@ class IncomingCallActivity : AppCompatActivity() {
         /** FCM call_canceled запускает активность с этим флагом, чтобы закрыть экран без показа UI (приложение в фоне/убито). */
         const val EXTRA_JUST_CLOSE = "just_close"
         const val ACTION_CALL_ANSWERED = "com.kolt12max.livi.CALL_ANSWERED"
+        /** true пока нативный экран входящего на экране (защита от heads-up поверх него). */
+        @JvmField
+        var isInForeground: Boolean = false
     }
 }

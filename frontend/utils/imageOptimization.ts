@@ -70,11 +70,15 @@ export const clearImageCache = async () => {
 };
 
 /**
- * Предзагрузка аватаров пользователей для устранения мерцания
+ * Предзагрузка аватаров пользователей для устранения мерцания.
+ * На Android не передаём data: URI в prefetch (Glide падает с "Expected URL scheme 'http' or 'https' but was 'data'").
  */
 export const prefetchUserAvatars = async (avatarUrls: string[]) => {
   try {
-    const validUrls = avatarUrls.filter(url => url && typeof url === 'string');
+    let validUrls = avatarUrls.filter(url => url && typeof url === 'string');
+    if (Platform.OS === 'android') {
+      validUrls = validUrls.filter(url => !/^data:/i.test(url));
+    }
     if (validUrls.length > 0) {
       await ExpoImage.prefetch(validUrls);
     }

@@ -1,0 +1,11 @@
+diff --git a/android/src/main/java/com/swmansion/worklets/WorkletsMessageQueueThreadBase.java b/android/src/main/java/com/swmansion/worklets/WorkletsMessageQueueThreadBase.java
+--- a/android/src/main/java/com/swmansion/worklets/WorkletsMessageQueueThreadBase.java
++++ b/android/src/main/java/com/swmansion/worklets/WorkletsMessageQueueThreadBase.java
+@@ -56,7 +56,7 @@ public abstract class WorkletsMessageQueueThreadBase implements MessageQueueThre
+       mIsFinished.setAccessible(false);
+     } catch (NoSuchFieldException | IllegalAccessException e) {
+-      e.printStackTrace();
++      // RN 0.79+ may have renamed mIsFinished; avoid log spam
+     }
+   }
+ 

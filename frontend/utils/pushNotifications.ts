@@ -7,7 +7,7 @@ import { API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, a
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
-import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled } from './callKeep';
+import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration } from './callKeep';
 import { emitCloseOutgoingCall } from './globalEvents';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
@@ -166,6 +166,7 @@ Notifications.setNotificationHandler({
       const data = (n as any)?.request?.content?.data || {};
       logger.info('[push] call_canceled received (handler)', { callId: data?.callId });
       if (data?.callId) {
+        try { stopIncomingCallRingtoneAndVibration(); } catch {}
         try { setIncomingCallScreenVisible(false); } catch {}
         try { notifyCallCanceled(String(data.callId)); } catch {}
         try { addEndedCallId(String(data.callId)); } catch {}
@@ -331,6 +332,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
     if (type === 'call_canceled') {
       logger.info('[push] call_canceled received (handleNotificationResponse)', { callId: data?.callId });
       if (data?.callId) {
+        try { stopIncomingCallRingtoneAndVibration(); } catch {}
         try { setIncomingCallScreenVisible(false); } catch {}
         try { notifyCallCanceled(String(data.callId)); } catch {}
         try { addEndedCallId(String(data.callId)); } catch {}
@@ -673,6 +675,7 @@ export function addNotificationListeners() {
       }
       if (data?.type === 'call_canceled' && data?.callId) {
         logger.info('[push] call_canceled received (notificationReceived)', { callId: data.callId });
+        try { stopIncomingCallRingtoneAndVibration(); } catch {}
         try { setIncomingCallScreenVisible(false); } catch {}
         try { notifyCallCanceled(String(data.callId)); } catch {}
         try { addEndedCallId(String(data.callId)); } catch {}
