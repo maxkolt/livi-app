@@ -20,6 +20,11 @@ class DeclineCallReceiver : BroadcastReceiver() {
         EndedCallIds.add(context, callId)
         (context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)?.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         context.stopService(Intent(context, IncomingCallForegroundService::class.java))
+        val cancelIntent = Intent(LiviFirebaseMessagingService.ACTION_CALL_CANCELED).apply {
+            setPackage(context.packageName)
+            putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
+        }
+        context.sendBroadcast(cancelIntent)
         val prefs = context.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
         val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
         val serverUrl = prefs.getString(LiviAppModule.KEY_SERVER_URL, null)?.takeIf { it.isNotBlank() }

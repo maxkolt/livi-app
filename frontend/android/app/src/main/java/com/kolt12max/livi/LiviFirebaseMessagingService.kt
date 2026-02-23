@@ -20,6 +20,7 @@ import java.util.Locale
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.RemoteMessage
 import expo.modules.notifications.service.ExpoFirebaseMessagingService
+import io.wazo.callkeep.RNCallKeepBackgroundMessagingService
 import org.json.JSONObject
 
 /**
@@ -61,28 +62,50 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         val typeNorm = type?.trim()?.lowercase() ?: ""
 
         if (typeNorm == "call" && callId != null && from != null) {
+            val keyguardLocked = try {
+                (getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
+            } catch (_: Exception) { false }
+            val isInteractive = try {
+                (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive == true
+            } catch (_: Exception) { true }
+            Log.e(TAG, "[INCOMING_CALL] FCM call push: callId=$callId from=$from keyguardLocked=$keyguardLocked isInteractive=$isInteractive SDK=${Build.VERSION.SDK_INT} IncomingCallFg=${IncomingCallActivity.isInForeground} MainFg=${MainActivity.isInForeground}")
             if (IncomingCallActivity.isInForeground) {
-                Log.d(TAG, "FCM call push: IncomingCallActivity already visible, skip duplicate notification")
+                Log.w(TAG, "[INCOMING_CALL] Skip: IncomingCallActivity already visible")
                 return
             }
             if (MainActivity.isInForeground) {
-                Log.d(TAG, "FCM call push: app in foreground, skip notification (in-app UI will handle)")
+                Log.w(TAG, "[INCOMING_CALL] Skip: app in foreground (socket will handle)")
                 return
             }
-            // Чтобы бейдж иконки был 1, а не 2: снимаем все текущие уведомления
             try {
                 (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancelAll()
             } catch (_: Exception) {}
+            var callKeepStarted = false
+            try {
+                val headlessIntent = Intent(this, RNCallKeepBackgroundMessagingService::class.java).apply {
+                    putExtra("type", "call")
+                    putExtra("callId", callId)
+                    putExtra("from", from)
+                    putExtra("fromNick", fromNick)
+                }
+                startService(headlessIntent)
+                callKeepStarted = true
+                Log.e(TAG, "[INCOMING_CALL] RNCallKeepBackgroundMessagingService started (ConnectionService path)")
+            } catch (e: Exception) {
+                Log.e(TAG, "[INCOMING_CALL] CallKeep headless start FAILED", e)
+            }
+            // Всегда показываем уведомление с кнопками «Принять»/«Отклонить», когда приложение в фоне.
+            // Full-screen (экран поверх всего) — только при заблокированном или выключенном экране; иначе heads-up с кнопками.
             ensureCallChannel(this)
-            // Всегда full-screen intent: система сама откроет IncomingCallActivity (и при разблокировке, и при замке). Без headsUpOnly — иначе только баннер на 5 сек.
+            val useFullScreen = keyguardLocked || !isInteractive
             startIncomingCallForegroundService(
                 callId,
                 from,
                 fromNick,
-                headsUpOnly = false,
+                headsUpOnly = !useFullScreen,
                 silentNotification = false
             )
-            Log.d(TAG, "FCM call push: IncomingCallForegroundService with full-screen intent")
+            Log.e(TAG, "[INCOMING_CALL] IncomingCallForegroundService started keyguardLocked=$keyguardLocked isInteractive=$isInteractive useFullScreen=$useFullScreen (if FSI denied, check logcat for FSI_REQUESTED_BUT_DENIED or BAL_BLOCK)")
             return
         }
         if (typeNorm == "call_canceled" && callId != null) {
@@ -278,6 +301,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             .setContentIntent(contentPending)
             .setDeleteIntent(deletePending)
             .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
@@ -453,6 +477,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setContentIntent(contentPending)
                 .setDeleteIntent(deletePending)
                 .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build()

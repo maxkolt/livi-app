@@ -72,6 +72,7 @@ const LinearGradient: any = (() => {
 
 import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
+import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled } from '../utils/callKeep';
@@ -599,8 +600,12 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
 
 /* ================= component ================= */
 
+/** При возврате на Home (например из VideoCall по Back → PiP) экран монтируется заново и state сбрасывается — без этого флага снова показывался бы SplashLoader. Запоминаем, что контент уже показывали в этой сессии. */
+let homeScreenAlreadyBooted = false;
+
 export default function HomeScreen({ navigation, route }: Props & { route?: { params?: HomeRouteParams } }) {
   const insets = useSafeAreaInsets();
+  const pip = usePiP();
   const { preference, setPreference, theme, isDark } = useAppTheme();
   const [appIsActive, setAppIsActive] = useState(AppState.currentState === 'active');
 
@@ -683,6 +688,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => sub.remove();
   }, [menuOpen, closeMenu]);
 
+  // На Android: на главном экране при видимом in-app PiP кнопка «Назад» (2–3-е нажатие после ухода с видеозвонка) = переход в системный PiP вместо выхода из приложения.
+  // Дублирует логику в App.tsx (Back на корне + PiP видим → системный PiP) на случай, если этот обработчик вызывается раньше.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!pip.visible || (!pip.callId && !pip.roomId)) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      try {
+        NativeModules.LiviAppModule?.requestEnterPictureInPicture?.();
+      } catch (_) {}
+      return true; // перехватываем — уходим в системный PiP, не закрываем приложение
+    });
+    return () => sub.remove();
+  }, [pip.visible, pip.callId, pip.roomId]);
+
   // Проверка доступности обновления (при старте и при возврате в приложение)
   // Дебаунс при resume: не чаще раза в 60 сек, чтобы избежать мерцания при частых AppState active (два устройства, блокировка экрана)
   const lastUpdateCheckAtRef = useRef(0);
@@ -764,9 +783,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [savedToast, setSavedToast] = useState(false);
   const [wiping, setWiping] = useState(false);
 
-  // Синхронная загрузка профиля при инициализации
-  const [profileLoaded, setProfileLoaded] = useState(false);
-  const [dataLoaded, setDataLoaded] = useState(false);
+  // Синхронная загрузка профиля при инициализации. При повторном монтировании (возврат из звонка/PiP) не показываем сплэш — оба true, профиль подставится в отдельном effect.
+  const [profileLoaded, setProfileLoaded] = useState(homeScreenAlreadyBooted);
+  const [dataLoaded, setDataLoaded] = useState(homeScreenAlreadyBooted);
   // Автоскрытие бейджа «Скачайте обновление» через 5 сек — только когда заглушка уже скрыта (пользователь видит страницу приветствия).
   // Иначе при долгой заглушке (например VPN 20+ сек) бейдж успевает исчезнуть до перехода на приветствие.
   const splashVisible = !dataLoaded || (dataLoaded && !profileLoaded);
@@ -2301,6 +2320,22 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       loadProfileSync();
     }
   }, [loadProfileSync, profileKey, resolvedUserId, profileLoaded]); // Перезагружаем при изменении profileKey или currentUserId
+
+  // Запоминаем, что домашний экран уже показывал контент — при возврате из VideoCall/PiP не показывать SplashLoader
+  useEffect(() => {
+    if (dataLoaded && profileLoaded) {
+      homeScreenAlreadyBooted = true;
+    }
+  }, [dataLoaded, profileLoaded]);
+
+  // При возврате на Home (remount) с уже загруженным экраном — один раз подставляем профиль из хранилища (ник, аватар)
+  const didRestoreProfileRef = useRef(false);
+  useEffect(() => {
+    if (homeScreenAlreadyBooted && !didRestoreProfileRef.current) {
+      didRestoreProfileRef.current = true;
+      loadProfileSync();
+    }
+  }, [loadProfileSync]);
 
   /* ===== Автозагрузка локального аватара в Cloudinary/Server ===== */
   // Auto-upload отключен - теперь загружаем только при явном нажатии "Сохранить"

@@ -831,6 +831,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.callId;
   }
 
+  /** Звонок уже завершён (endCall вызван или получен call:ended). Используется в App, чтобы не показывать PiP с пустыми данными. */
+  isEnded(): boolean {
+    return this.ended || this.endCallInProgress;
+  }
+
   getPartnerUserId(): string | null {
     return this.partnerUserId;
   }

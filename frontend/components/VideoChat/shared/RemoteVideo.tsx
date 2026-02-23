@@ -21,6 +21,7 @@ interface RemoteVideoProps {
   onStreamReady?: (stream: MediaStream) => void;
   remoteStreamReceivedAt?: number | null; // Время получения remoteStream для предотвращения мерцания
   partnerInPiP?: boolean; // Партнер в режиме PiP
+  forceTextureView?: boolean; // Принудительно использовать TextureView (например, для системного PiP)
 }
 
 /**
@@ -42,13 +43,15 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   onStreamReady,
   remoteStreamReceivedAt,
   partnerInPiP = false,
+  forceTextureView = false,
 }) => {
   const L = (key: string) => t(key, lang);
   // На Android 8.1 и старше (API <= 27) SurfaceView overlay/z-order часто ломает отображение (особенно на OPPO/ColorOS).
   // Для таких устройств отключаем zOrderMediaOverlay, чтобы Surface корректно композировался в окне.
   const isLegacyAndroidSurface = Platform.OS === 'android' && Number(Platform.Version) <= 27;
   // На старых Android используем TextureView, чтобы RN-оверлеи (кнопки) гарантированно рисовались поверх видео.
-  const useTextureViewOnAndroid = Platform.OS === 'android' && isLegacyAndroidSurface;
+  // Также принудительно включаем TextureView для системного PiP, чтобы не оставались чёрные Surface-слои поверх лаунчера.
+  const useTextureViewOnAndroid = Platform.OS === 'android' && (isLegacyAndroidSurface || forceTextureView);
   const logRenderState = useCallback(
     (reason: string, extra?: Record<string, unknown>) => {
       // Noisy render-state logs should be DEBUG-level (hidden by default LOG_LEVEL=info).

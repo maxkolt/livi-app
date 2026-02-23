@@ -1,7 +1,10 @@
 package com.kolt12max.livi
 
 import android.app.NotificationManager
+import android.app.PictureInPictureParams
+import android.app.RemoteAction
 import android.content.Context
+import android.util.Rational
 import android.service.notification.StatusBarNotification
 import android.content.Intent
 import android.app.KeyguardManager
@@ -335,12 +338,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** Остановить IncomingCallForegroundService после показа входящего через CallKeep (ConnectionService). */
+  /** Остановить IncomingCallForegroundService и снять уведомление входящего вызова. */
   @ReactMethod
   fun stopIncomingCallForegroundService() {
     try {
-      reactApplicationContext.stopService(Intent(reactApplicationContext, IncomingCallForegroundService::class.java))
-      (reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+      val app = reactApplicationContext.applicationContext
+      app.stopService(Intent(app, IncomingCallForegroundService::class.java))
+      (app.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
         ?.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
     } catch (_: Exception) {}
   }
@@ -441,6 +445,43 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun setShouldEnterPiPOnLeaveHint(enabled: Boolean) {
     LiviAppModule.setPiPOnLeaveHintEnabled(enabled)
+  }
+
+  /** Запросить переход в системный PiP из JS (при уходе по кнопке «Назад» с экрана звонка — показываем in-app PiP и затем системное PiP-окно). */
+  @ReactMethod
+  fun requestEnterPictureInPicture() {
+    val activity = currentActivity ?: return
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    activity.runOnUiThread {
+      try {
+        val ratio = Rational(150, 260)
+        val params = PictureInPictureParams.Builder()
+          .setAspectRatio(ratio)
+          .setActions(emptyList<RemoteAction>())
+          .build()
+        if (activity.enterPictureInPictureMode(params)) {
+          Log.d("LiviAppModule", "Entered Picture-in-Picture mode (requested from JS)")
+        } else {
+          Log.w("LiviAppModule", "requestEnterPictureInPicture: enterPictureInPictureMode returned false")
+        }
+      } catch (e: Exception) {
+        Log.w("LiviAppModule", "requestEnterPictureInPicture failed", e)
+      }
+    }
+  }
+
+  /** Выйти из системного PiP при завершении звонка другим участником (чтобы не оставалось замороженное окно PiP поверх главного экрана). */
+  @ReactMethod
+  fun requestExitSystemPiP() {
+    val activity = currentActivity ?: return
+    activity.runOnUiThread {
+      try {
+        activity.recreate()
+        Log.d("LiviAppModule", "requestExitSystemPiP: activity.recreate() called to exit PiP")
+      } catch (e: Exception) {
+        Log.w("LiviAppModule", "requestExitSystemPiP failed", e)
+      }
+    }
   }
 
   /** Сохранить callId/roomId для завершения звонка из системного PiP (кнопка «Завершить» в окне PiP). Вызывать из JS при показе PiP. */
@@ -670,6 +711,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         params.putBoolean("isInPiP", isInPiP)
         reactContextRef?.emitDeviceEvent("SystemPiPModeChanged", params)
       }
+    }
+
+    /** Пользователь развернул PiP (стрелка или тап по окну) — активность на переднем плане. JS должен открыть экран видеозвонка. */
+    @JvmStatic
+    fun emitSystemPiPExpanded() {
+      reactContextRef?.emitDeviceEvent("SystemPiPExpanded", null)
     }
 
     /** Запуск мелодии звонка и вибрации звонка из нативного кода (FGS, без React).

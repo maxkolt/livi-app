@@ -1,6 +1,6 @@
 // src/pip/PiPOverlay.tsx
 // PiP в стиле WhatsApp/Telegram: видео собеседника, сверху слева X (завершить), справа камера (вкл/выкл). Тап по видео — вернуться в звонок.
-import React, { useMemo, useRef, useEffect } from 'react';
+import React, { useContext, useMemo, useRef, useEffect } from 'react';
 import {
   Animated,
   Dimensions,
@@ -10,13 +10,69 @@ import {
   Pressable,
   Image,
   Platform,
+  Text,
 } from 'react-native';
 import { RTCView } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { usePiP } from './PiPContext';
+import { PiPContext } from './PiPContext';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { logger } from '../../utils/logger';
+
+/** При ошибке рендера (например "forEach of null" при выходе в PiP) показываем минимальный оверлей. Fallback — только View/Text и inline-стили, без контекста/StyleSheet/Pressable/MaterialIcons, чтобы не спровоцировать повторный forEach. */
+class PiPErrorBoundary extends React.Component<
+  { children: React.ReactNode; onReturnRef: React.MutableRefObject<(() => void) | null> },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    try {
+      logger.warn('[PiPOverlay] Error boundary caught', { message: error?.message });
+    } catch (_) {}
+  }
+
+  _onFallbackTouch = () => {
+    this.setState({ hasError: false });
+    try {
+      const fn = this.props.onReturnRef?.current;
+      if (typeof fn === 'function') fn();
+    } catch (_) {}
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View
+          style={{
+            position: 'absolute',
+            left: 12,
+            top: 120,
+            width: 150,
+            height: 260,
+            zIndex: 9999,
+            elevation: 9999,
+            backgroundColor: 'rgba(25,32,46,0.95)',
+            borderRadius: 16,
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 12,
+          }}
+          onStartShouldSetResponder={() => true}
+          onResponderRelease={this._onFallbackTouch}
+        >
+          <Text style={{ color: '#E7EEF7', fontSize: 12, textAlign: 'center' }}>
+            Тап — вернуться в звонок
+          </Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const UI = {
   bg: 'rgba(25,32,46,0.95)',
@@ -31,41 +87,69 @@ const PIP_H = 260;
 const TOP_BAR_H = 44;
 const PAD = 12;
 
-export default function PiPOverlay() {
-  const {
-    visible,
-    callId,
-    roomId,
-    partnerName,
-    partnerAvatarUrl,
-    remoteStream,
-    returnToCall,
-    toggleCam,
-    endCall,
-    pipPos,
-    updatePiPPosition,
-    localCamOn,
-    allowVideoRender,
-    inSystemPiPMode,
-  } = usePiP();
+// Безопасное чтение контекста: при "forEach of null" внутри React/контекста не падаем.
+function usePiPContextSafe(): PiPContextValue | null {
+  try {
+    return useContext(PiPContext) ?? null;
+  } catch (_) {
+    return null;
+  }
+}
 
-  const insets = useSafeAreaInsets();
-  const { width: W, height: H } = Dimensions.get('window');
+type PiPContextValue = React.ContextType<typeof PiPContext>;
+
+export default function PiPOverlay() {
+  const ctx = usePiPContextSafe();
+  const visible = ctx?.visible ?? false;
+  const callId = ctx?.callId ?? null;
+  const roomId = ctx?.roomId ?? null;
+  const partnerName = ctx?.partnerName ?? '';
+  const partnerAvatarUrl = ctx?.partnerAvatarUrl;
+  const remoteStream = ctx?.remoteStream ?? null;
+  const returnToCall = ctx?.returnToCall ?? (() => {});
+  const toggleCam = ctx?.toggleCam ?? (() => {});
+  const endCall = ctx?.endCall ?? (() => {});
+  const pipPos = ctx?.pipPos ?? { x: PAD, y: 120 };
+  const updatePiPPosition = ctx?.updatePiPPosition ?? (() => {});
+  const localCamOn = ctx?.localCamOn;
+  const allowVideoRender = ctx?.allowVideoRender ?? false;
+  const inSystemPiPMode = ctx?.inSystemPiPMode ?? false;
+
+  // Не используем useSafeAreaInsets() здесь — при смене экрана/ремаунте он может давать "forEach of null" внутри провайдера.
+  const insets = { top: 0, right: 0, bottom: 0, left: 0 };
+  const dims = Dimensions.get('window');
+  const W = typeof dims?.width === 'number' && dims.width > 0 ? dims.width : 400;
+  const H = typeof dims?.height === 'number' && dims.height > 0 ? dims.height : 700;
+
+  const safePosX = typeof pipPos?.x === 'number' && !Number.isNaN(pipPos.x) ? pipPos.x : PAD;
+  const safePosY = typeof pipPos?.y === 'number' && !Number.isNaN(pipPos.y) ? pipPos.y : 120;
+
+  // Системный PiP: окно уже имеет размер PiP — занимаем весь экран (0,0, W, H), только видео собеседника.
+  const isSystemPiP = !!inSystemPiPMode;
+  const overlayWidth = isSystemPiP ? W : PIP_W;
+  const overlayHeight = isSystemPiP ? H : PIP_H;
 
   const MIN_X = PAD + insets.left;
   const MIN_Y = PAD + insets.top;
-  const MAX_X = W - PIP_W - PAD - insets.right;
-  const MAX_Y = H - PIP_H - PAD - insets.bottom;
+  const MAX_X = Math.max(MIN_X, W - PIP_W - PAD - insets.right);
+  const MAX_Y = Math.max(MIN_Y, H - PIP_H - PAD - insets.bottom);
 
   const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(v, b));
 
   const translate = useRef(
     new Animated.ValueXY({
-      x: clamp(pipPos.x, MIN_X, MAX_X),
-      y: clamp(pipPos.y, MIN_Y, MAX_Y),
+      x: clamp(safePosX, MIN_X, MAX_X),
+      y: clamp(safePosY, MIN_Y, MAX_Y),
     })
   ).current;
   const start = useRef({ x: 0, y: 0 });
+
+  // В системном PiP окно на весь экран — сбрасываем позицию в (0,0), но transform не убираем (избегаем forEach of null).
+  useEffect(() => {
+    if (inSystemPiPMode) {
+      translate.setValue({ x: 0, y: 0 });
+    }
+  }, [inSystemPiPMode, translate]);
 
   const DRAG_THRESHOLD = 6;
   const panResponder = useMemo(
@@ -73,17 +157,22 @@ export default function PiPOverlay() {
       PanResponder.create({
         onStartShouldSetPanResponder: () => false,
         onMoveShouldSetPanResponder: (_e, g) =>
-          Math.abs(g.dx) > DRAG_THRESHOLD || Math.abs(g.dy) > DRAG_THRESHOLD,
+          !isSystemPiP && (Math.abs(g.dx) > DRAG_THRESHOLD || Math.abs(g.dy) > DRAG_THRESHOLD),
         onPanResponderGrant: () => {
           // @ts-ignore
           start.current = { x: translate.x.__getValue(), y: translate.y.__getValue() };
         },
         onPanResponderMove: (_e, g) => {
+          if (isSystemPiP) return;
           const nx = clamp(start.current.x + g.dx, MIN_X, MAX_X);
           const ny = clamp(start.current.y + g.dy, MIN_Y, MAX_Y);
           translate.setValue({ x: nx, y: ny });
         },
         onPanResponderRelease: (_e, g) => {
+          if (isSystemPiP) {
+            returnToCall();
+            return;
+          }
           if (Math.abs(g.dx) < DRAG_THRESHOLD && Math.abs(g.dy) < DRAG_THRESHOLD) {
             returnToCall();
             return;
@@ -100,17 +189,17 @@ export default function PiPOverlay() {
           }).start(() => updatePiPPosition(snapX, ny));
         },
       }),
-    [MIN_X, MAX_X, MIN_Y, MAX_Y, translate, updatePiPPosition, returnToCall]
+    [MIN_X, MAX_X, MIN_Y, MAX_Y, translate, updatePiPPosition, returnToCall, isSystemPiP]
   );
 
   useEffect(() => {
-    const sub = Dimensions.addEventListener('change', ({ window }) => {
-      const maxX = window.width - PIP_W - PAD - insets.right;
-      const maxY = window.height - PIP_H - PAD - insets.bottom;
-      updatePiPPosition(clamp(pipPos.x, MIN_X, maxX), clamp(pipPos.y, MIN_Y, maxY));
+    const sub = Dimensions.addEventListener?.('change', ({ window }: { window: { width: number; height: number } }) => {
+      const maxX = Math.max(MIN_X, (window?.width ?? W) - PIP_W - PAD - insets.right);
+      const maxY = Math.max(MIN_Y, (window?.height ?? H) - PIP_H - PAD - insets.bottom);
+      updatePiPPosition(clamp(safePosX, MIN_X, maxX), clamp(safePosY, MIN_Y, maxY));
     });
     return () => sub?.remove?.();
-  }, [pipPos.x, pipPos.y, insets.right, insets.bottom, MIN_X, MIN_Y, updatePiPPosition]);
+  }, [safePosX, safePosY, insets.right, insets.bottom, MIN_X, MIN_Y, W, H, updatePiPPosition]);
 
   const [resolvedPartnerAvatarUri, resolvedPartnerAvatarReady] = useResolvedImageUri(partnerAvatarUrl || '');
   const hasValidAvatar =
@@ -131,6 +220,11 @@ export default function PiPOverlay() {
     }
   }, [visible, callId, roomId, remoteStream, allowVideoRender]);
 
+  const returnToCallRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    returnToCallRef.current = returnToCall;
+  }, [returnToCall]);
+
   if (!visible) {
     return null;
   }
@@ -142,25 +236,30 @@ export default function PiPOverlay() {
     remoteStream &&
     (Platform.OS !== 'ios' || (streamURL && streamURL.length > 0));
 
-  // Системный PiP (главный экран): только видео, завершение — системная кнопка X. In-app PiP: верхняя панель (X, камера) + видео как раньше.
+  // Системный PiP: только видео собеседника на всю ширину и высоту окна PiP. In-app PiP: верхняя панель + видео.
   const showTopBar = !inSystemPiPMode;
-  const videoObjectFit = inSystemPiPMode ? 'contain' : 'cover';
+  const videoObjectFit = inSystemPiPMode ? 'cover' : 'cover';
   const videoAreaStyle = inSystemPiPMode ? styles.videoAreaSystemPiP : styles.videoArea;
+  const cardStyle = isSystemPiP ? [styles.card, styles.cardSystemPiP] : styles.card;
 
   return (
+    <PiPErrorBoundary onReturnRef={returnToCallRef}>
     <Animated.View
       pointerEvents="box-none"
       style={[
         styles.overlay,
         {
-          width: PIP_W,
-          height: PIP_H,
+          width: overlayWidth,
+          height: overlayHeight,
+          left: isSystemPiP ? 0 : undefined,
+          top: isSystemPiP ? 0 : undefined,
+          // Не убираем transform при системном PiP — иначе Animated может вызвать __getChildren().forEach(null) и краш.
           transform: [{ translateX: translate.x }, { translateY: translate.y }],
         },
       ]}
       {...panResponder.panHandlers}
     >
-      <View style={styles.card}>
+      <View style={cardStyle}>
         {showTopBar && (
           <View style={styles.topBar}>
             <Pressable
@@ -199,6 +298,13 @@ export default function PiPOverlay() {
                   style={styles.rtcView}
                   objectFit={videoObjectFit}
                   mirror={false}
+                  // TextureView avoids black Surface overlays / flicker on some Android devices.
+                  {...({
+                    renderToHardwareTextureAndroid: true,
+                    zOrderMediaOverlay: false,
+                    // prop may be missing in types, but supported natively.
+                    useTextureView: true,
+                  } as any)}
                 />
               ) : (
                 <RTCView
@@ -228,6 +334,7 @@ export default function PiPOverlay() {
         </Pressable>
       </View>
     </Animated.View>
+    </PiPErrorBoundary>
   );
 }
 
@@ -263,7 +370,12 @@ const styles = StyleSheet.create({
   videoAreaSystemPiP: {
     flex: 1,
     minHeight: 0,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'transparent',
+  },
+  cardSystemPiP: {
+    borderRadius: 0,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
   },
   rtcView: {
     ...StyleSheet.absoluteFillObject,

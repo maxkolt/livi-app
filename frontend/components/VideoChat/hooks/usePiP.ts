@@ -1,5 +1,5 @@
 import { useCallback, useRef, useEffect } from 'react';
-import { BackHandler, PanResponder, Platform, Dimensions } from 'react-native';
+import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { usePiP as usePiPContext } from '../../../src/pip/PiPContext';
 import { logger } from '../../../utils/logger';
@@ -260,8 +260,8 @@ export const usePiP = ({
     }
   }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, camOn, micOn, remoteMuted, localStream, remoteStream, routeParams, session]);
 
-  // Обработка BackHandler для входа в PiP (только для Android)
-  // На iOS навигация назад обрабатывается через PanResponder (свайп слева направо)
+  // Обработка BackHandler для Android:
+  // при активном звонке сразу входим в системный PiP (без in-app оверлея).
   useEffect(() => {
     if (Platform.OS !== 'android') {
       return;
@@ -296,25 +296,23 @@ export const usePiP = ({
       const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
       const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current;
 
-      // ВАЖНО: pip.visible может быть "позади" сразу после showPiP (это видно в логах),
-      // поэтому используем ref-ы как источник истины, чтобы не ловить повторные срабатывания/дубль.
-      const pipVisibleNow = !!(pip.visible || pipRef.current?.visible || pipVisibleRef.current);
-
-      if (hasActiveCall && !pipVisibleNow) {
-        logger.info('[usePiP] BackHandler (Android): вход в PiP и возврат назад', {
+      if (hasActiveCall) {
+        // Единая логика: на Back сразу входим в системный PiP (без in-app оверлея).
+        logger.info('[usePiP] BackHandler (Android): вход в системный PiP', {
           actualRoomId,
           actualCallId,
           actualPartnerId
         });
-        // КРИТИЧНО: Не используем setTimeout — при загруженном JS-треде он может "уплывать" на секунды.
-        // Показываем PiP с deferVisible и сразу уходим назад без rAF — навигация в тот же тик,
-        // чтобы не было лишнего кадра/эффекта "перезапуска" приложения при первом переходе в PiP.
-        enterPiPMode({ deferVisible: true });
-        pipVisibleRef.current = true;
-        if (navigation.canGoBack && navigation.canGoBack()) {
-          navigation.goBack();
-        } else {
-          navigation.navigate('Home' as never);
+
+        // На всякий случай скрываем in-app PiP, если он был виден из старого сценария.
+        try { pip.hidePiP(); } catch (_) {}
+
+        if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
+          try { NativeModules.LiviAppModule.setPiPEndCallParams(actualCallId, actualRoomId); } catch (_) {}
+        }
+
+        if (NativeModules.LiviAppModule?.requestEnterPictureInPicture) {
+          try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
         }
         return true; // Предотвращаем стандартное поведение кнопки назад
       }
@@ -451,23 +449,43 @@ export const usePiP = ({
           // В onPanResponderRelease всегда показываем PiP, если он еще не показан
           // После завершения жеста (навигации) флаг сбрасывается, и PiP может показаться снова при следующем свайпе
           if (hasActiveCall) {
-            if (!pipShownDuringSwipeRef.current) {
-              logger.info('[usePiP] PanResponder: показываем PiP перед навигацией', {
-                actualRoomId,
-                actualCallId,
-                platform: Platform.OS,
-                useDeferVisible: true
+            if (Platform.OS === 'android') {
+              // Android: единая логика со системной кнопкой Back — сначала навигация назад, затем системный PiP.
+              requestAnimationFrame(() => {
+                if (navigation.canGoBack && navigation.canGoBack()) {
+                  navigation.goBack();
+                } else {
+                  navigation.navigate('Home' as never);
+                }
+                requestAnimationFrame(() => {
+                  try { pip.hidePiP(); } catch (_) {}
+                  if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
+                    try { NativeModules.LiviAppModule.setPiPEndCallParams(actualCallId, actualRoomId); } catch (_) {}
+                  }
+                  if (NativeModules.LiviAppModule?.requestEnterPictureInPicture) {
+                    try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
+                  }
+                });
               });
-              // deferVisible на обоих платформах — PiP станет visible после навигации, без лишнего кадра/эффекта перезапуска.
-              enterPiPMode({ deferVisible: true });
-              pipShownDuringSwipeRef.current = true;
-            }
-            if (navigation.canGoBack && navigation.canGoBack()) {
-              navigation.goBack();
             } else {
-              navigation.navigate('Home' as never);
+              // iOS: системный PiP для текущего сценария недоступен, сохраняем in-app PiP.
+              if (!pipShownDuringSwipeRef.current) {
+                logger.info('[usePiP] PanResponder: показываем PiP перед навигацией', {
+                  actualRoomId,
+                  actualCallId,
+                  platform: Platform.OS,
+                  useDeferVisible: true
+                });
+                enterPiPMode({ deferVisible: true });
+                pipShownDuringSwipeRef.current = true;
+              }
+              if (navigation.canGoBack && navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate('Home' as never);
+              }
+              pipShownDuringSwipeRef.current = false;
             }
-            pipShownDuringSwipeRef.current = false;
           } else {
             // Нет активного звонка - просто возвращаемся назад
             requestAnimationFrame(() => {
@@ -487,24 +505,46 @@ export const usePiP = ({
           pipShown: pipShownDuringSwipeRef.current,
           platform: Platform.OS
         });
-        if (Platform.OS === 'ios' && !isInactiveStateRef.current && !wasFriendCallEndedRef.current) {
+        if (!isInactiveStateRef.current && !wasFriendCallEndedRef.current) {
           const currentSession = session || (global as any).__webrtcSessionRef?.current;
           const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
           const actualCallId = callId || currentSession?.getCallId?.() || null;
           const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
           const hasActiveCall = !!(actualRoomId || actualCallId || actualPartnerId);
-          if (hasActiveCall && !pipShownDuringSwipeRef.current) {
-            enterPiPMode({ deferVisible: true });
-            pipShownDuringSwipeRef.current = true;
-          }
-          requestAnimationFrame(() => {
-            if (navigation.canGoBack && navigation.canGoBack()) {
-              navigation.goBack();
+          if (hasActiveCall) {
+            if (Platform.OS === 'android') {
+              requestAnimationFrame(() => {
+                if (navigation.canGoBack && navigation.canGoBack()) {
+                  navigation.goBack();
+                } else {
+                  navigation.navigate('Home' as never);
+                }
+                requestAnimationFrame(() => {
+                  try { pip.hidePiP(); } catch (_) {}
+                  if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
+                    try { NativeModules.LiviAppModule.setPiPEndCallParams(actualCallId, actualRoomId); } catch (_) {}
+                  }
+                  if (NativeModules.LiviAppModule?.requestEnterPictureInPicture) {
+                    try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
+                  }
+                  pipShownDuringSwipeRef.current = false;
+                });
+              });
             } else {
-              navigation.navigate('Home' as never);
+              if (!pipShownDuringSwipeRef.current) {
+                enterPiPMode({ deferVisible: true });
+                pipShownDuringSwipeRef.current = true;
+              }
+              requestAnimationFrame(() => {
+                if (navigation.canGoBack && navigation.canGoBack()) {
+                  navigation.goBack();
+                } else {
+                  navigation.navigate('Home' as never);
+                }
+                pipShownDuringSwipeRef.current = false;
+              });
             }
-            pipShownDuringSwipeRef.current = false;
-          });
+          }
         }
       },
     })

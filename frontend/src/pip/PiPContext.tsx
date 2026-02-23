@@ -69,6 +69,8 @@ type PiPState = {
 
   /** true = системный PiP (главный экран): только видео + системная кнопка X, без наших кнопок. false = in-app PiP: верхняя панель + видео. */
   inSystemPiPMode: boolean;
+  /** true = скоро войдём в системный PiP (VideoCall рисует компактный вид перед входом). */
+  pendingSystemPiP: boolean;
 
   // VAD API (отключен, пустые функции)
   startRemoteVAD: (pc: any, intervalMs?: number) => void;
@@ -78,7 +80,7 @@ type PiPState = {
   updatePiPState: (patch: Partial<PiPState>) => void;
 };
 
-const PiPContext = createContext<PiPState | null>(null);
+export const PiPContext = createContext<PiPState | null>(null);
 
 export const usePiP = () => {
   const ctx = useContext(PiPContext);
@@ -103,6 +105,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const [isMuted, setIsMuted] = useState(false);
   const [isRemoteMuted, setIsRemoteMuted] = useState(false);
   const [inSystemPiPMode, setInSystemPiPMode] = useState(false);
+  const [pendingSystemPiP, setPendingSystemPiP] = useState(false);
   // Эквалайзер отключен
 
   const localStreamRef = useRef<MediaStreamLike | null>(null);
@@ -117,6 +120,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   /** Рендер видео в PiP включаем с задержкой, чтобы не было двух RTCView одновременно. */
   const [allowVideoRender, setAllowVideoRender] = useState(false);
   const allowVideoRenderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Инкремент при установке стрима в showPiP — чтобы value контекста обновился и PiPOverlay получил remoteStream. */
+  const [remoteStreamVersion, setRemoteStreamVersion] = useState(0);
 
   // guard от двойной навигации
   const navigatingRef = useRef(false);
@@ -148,38 +153,80 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     return () => { try { off?.(); } catch {} };
   }, [visible, callId, roomId, sendPresenceBusyFromPiP]);
 
-  // Разрешаем рендер видео в PiP с задержкой, чтобы экран VideoCall успел размонтироваться (один потребитель стрима).
+  // Разрешаем рендер видео в PiP с небольшой задержкой, чтобы экран VideoCall успел "уйти" с экрана
+  // и не было двух RTCView одновременно на один remoteStream (Android может показать чёрный экран/мерцание).
+  // Важно: если allowVideoRender уже включён (например, при deferVisible), эффект не должен его выключать.
+  const PIP_VIDEO_DELAY_MS = 160;
+  const PIP_VIDEO_DELAY_SYSTEM_PIP_MS = 0;
+  const delayMs = pendingSystemPiP ? PIP_VIDEO_DELAY_SYSTEM_PIP_MS : PIP_VIDEO_DELAY_MS;
   useEffect(() => {
     if (!visible) {
-      setAllowVideoRender(false);
+      // Важно: showPiP() ставит __pipVisibleRef.current=true СИНХРОННО до setVisible(true),
+      // а сам visible при deferVisible включается позже (через rAF). В этот промежуток мы НЕ должны
+      // сбрасывать allowVideoRender=false — иначе in-app PiP всегда "мигнёт" плейсхолдером.
+      const preparing =
+        (global as any).__pipVisibleRef?.current === true;
+      if (!preparing) {
+        setAllowVideoRender(false);
+      }
       if (allowVideoRenderTimeoutRef.current) {
         clearTimeout(allowVideoRenderTimeoutRef.current);
         allowVideoRenderTimeoutRef.current = null;
       }
       return;
     }
-    setAllowVideoRender(false);
+    if (allowVideoRender) return;
+    if (allowVideoRenderTimeoutRef.current) {
+      clearTimeout(allowVideoRenderTimeoutRef.current);
+      allowVideoRenderTimeoutRef.current = null;
+    }
+    if (delayMs <= 0) {
+      if (typeof requestAnimationFrame !== 'undefined') {
+        requestAnimationFrame(() => setAllowVideoRender(true));
+      } else {
+        setAllowVideoRender(true);
+      }
+      return;
+    }
     allowVideoRenderTimeoutRef.current = setTimeout(() => {
       allowVideoRenderTimeoutRef.current = null;
       setAllowVideoRender(true);
-    }, 120);
+    }, delayMs);
     return () => {
       if (allowVideoRenderTimeoutRef.current) {
         clearTimeout(allowVideoRenderTimeoutRef.current);
         allowVideoRenderTimeoutRef.current = null;
       }
     };
-  }, [visible]);
+  }, [visible, remoteStreamVersion, delayMs, allowVideoRender, pendingSystemPiP]);
 
   // Системный PiP (Android): только видео + системная кнопка X. In-app PiP: верхняя панель + видео.
+  // КРИТИЧНО: Обновление state в том же тике, что и нативный переход в PiP, приводит к "forEach of null"
+  // (Animated/React при смене transform или перестроении дерева). Откладываем на следующий тик.
   useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
     const emitter = new NativeEventEmitter();
     const sub = emitter.addListener('SystemPiPModeChanged', (payload: { isInPiP?: boolean }) => {
-      setInSystemPiPMode(!!payload?.isInPiP);
+      const inPiP = !!payload?.isInPiP;
+      const run = () => {
+        setInSystemPiPMode(inPiP);
+        if (inPiP) {
+          setPendingSystemPiP(false);
+          const session = (global as any).__webrtcSessionRef?.current;
+          if (session && typeof (session as any).enterPiP === 'function') (session as any).enterPiP();
+        }
+      };
+      if (typeof requestAnimationFrame !== 'undefined') {
+        requestAnimationFrame(() => run());
+      } else {
+        setTimeout(run, 0);
+      }
     });
     return () => sub.remove();
   }, []);
+
+  // SystemPiPExpanded обрабатывается только в App.tsx через __pipReturnToCallRef.current().
+  // Подписка здесь не нужна — иначе событие обрабатывается дважды: второй вызов идёт с уже очищенным state (hidePiP) и ломает переход.
 
   // ====== VAD отключен ======
   // VAD полностью отключен для уменьшения нагрузки
@@ -242,7 +289,22 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       setPartnerAvatarUrl(undefined);
     }
     if (p.localStream !== undefined) localStreamRef.current = p.localStream ?? null;
-    if (p.remoteStream !== undefined) remoteStreamRef.current = p.remoteStream ?? null;
+    if (p.remoteStream !== undefined) {
+      remoteStreamRef.current = p.remoteStream ?? null;
+      setRemoteStreamVersion((v) => v + 1);
+    }
+    // При deferVisible (обычно Android Back → навигация назад) можно включать видео сразу:
+    // VideoCall уже уходит, поэтому риска "двух RTCView на один stream" практически нет,
+    // и PiP появляется сразу с видео собеседника (без мигания плейсхолдера).
+    if (Platform.OS === 'android' && p.deferVisible && p.remoteStream) {
+      try {
+        if (allowVideoRenderTimeoutRef.current) {
+          clearTimeout(allowVideoRenderTimeoutRef.current);
+          allowVideoRenderTimeoutRef.current = null;
+        }
+      } catch {}
+      setAllowVideoRender(true);
+    }
     // localCamOn — источник истины для восстановления после PiP.
     // Если явно не передали, пытаемся вычислить из localStream (best-effort).
     if (typeof p.localCamOn === 'boolean') {
@@ -264,6 +326,18 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (p.deferVisible) {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
+          // Android Back → сначала навигация назад, затем показываем PiP.
+          // ВАЖНО: включаем allowVideoRender В ТОТ ЖЕ КАДР, что и visible=true,
+          // чтобы PiP не "мигнул" аватаркой/плейсхолдером перед первым кадром видео.
+          if (Platform.OS === 'android' && remoteStreamRef.current) {
+            try {
+              if (allowVideoRenderTimeoutRef.current) {
+                clearTimeout(allowVideoRenderTimeoutRef.current);
+                allowVideoRenderTimeoutRef.current = null;
+              }
+            } catch {}
+            setAllowVideoRender(true);
+          }
           setVisible(true);
           console.log('[PiPContext] ✅ PiP состояние установлено (deferred), visible=true');
         });
@@ -283,6 +357,38 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     setVisible(false);
   }, []);
 
+  // AboutToEnterSystemPiP: единый сценарий системного PiP.
+  // При Home не показываем in-app PiP и не делаем reset на Home — входим напрямую в системный PiP,
+  // чтобы окно PiP содержало видео собеседника с текущего экрана VideoCall.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return () => {};
+    const emitter = new NativeEventEmitter();
+    const sub = emitter.addListener('AboutToEnterSystemPiP', () => {
+      const g = (global as any);
+      const session = g.__webrtcSessionRef?.current;
+      if (session && typeof (session as any).isEnded === 'function' && (session as any).isEnded()) return;
+
+      // До входа в системный PiP переводим VideoCall в компактный режим (только удалённое видео),
+      // чтобы избежать "чёрных блоков" от лишних SurfaceView/RTCView при захвате окна PiP.
+      setPendingSystemPiP(true);
+      // Fallback: если по какой-то причине в PiP не вошли, вернём UI обратно.
+      setTimeout(() => {
+        setPendingSystemPiP(false);
+      }, 1500);
+
+      let params = g.__currentCallPiPParamsRef?.current;
+      if (!params && session) {
+        const cid = typeof (session as any).getCallId === 'function' ? (session as any).getCallId() : null;
+        const rid = typeof (session as any).getRoomId === 'function' ? (session as any).getRoomId() : null;
+        if (cid || rid) params = { callId: cid || '', roomId: rid || '', partnerName: '', partnerAvatarUrl: undefined, localStream: null, remoteStream: null, localCamOn: true, navParams: undefined };
+      }
+      if (params?.callId && params?.roomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
+        try { NativeModules.LiviAppModule.setPiPEndCallParams(params.callId, params.roomId); } catch (_) {}
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   // Для системного PiP: натив шлёт AboutToEnterSystemPiP, App вызывает __pipShowPiPRef.current(params)
   useEffect(() => {
     const g = (global as any);
@@ -290,6 +396,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     g.__pipShowPiPRef.current = showPiP;
     return () => { g.__pipShowPiPRef.current = null; };
   }, [showPiP]);
+
+  // При call:ended (другой участник завершил) App вызывает __pipHidePiPRef.current(), чтобы у того, кто не был в PiP, не появлялся оверлей PiP и не было перехода «приветствие + PiP».
+  useEffect(() => {
+    const g = (global as any);
+    g.__pipHidePiPRef = g.__pipHidePiPRef || { current: null };
+    g.__pipHidePiPRef.current = hidePiP;
+    return () => { g.__pipHidePiPRef.current = null; };
+  }, [hidePiP]);
 
   const updatePiPPosition = useCallback((x: number, y: number) => setPipPos({ x, y }), []);
 
@@ -363,42 +477,59 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   }, []);
 
   const toggleRemoteAudio = useCallback(() => {
-    // ✅ Приоритет: дергаем WebRTC session напрямую (работает когда VideoCall экран размонтирован).
     try {
+      // ✅ Приоритет: дергаем WebRTC session напрямую (работает когда VideoCall экран размонтирован).
       const session = (global as any).__webrtcSessionRef?.current;
       if (session && typeof session.toggleRemoteAudio === 'function') {
         session.toggleRemoteAudio();
         setIsRemoteMuted((prev) => !prev);
         return;
       }
-    } catch {}
 
-    // Второй приоритет: если экран ещё жив и выставил глобальную функцию
-    try {
+      // Второй приоритет: если экран ещё жив и выставил глобальную функцию
       const toggleRemoteAudioFn = (global as any).__toggleRemoteAudioRef?.current;
       if (toggleRemoteAudioFn && typeof toggleRemoteAudioFn === 'function') {
         toggleRemoteAudioFn();
         setIsRemoteMuted((prev) => !prev);
         return;
       }
-    } catch {}
 
-    // Fallback: переключаем локально через MediaStream audio tracks
-    try {
-      const audioTracks = remoteStreamRef.current?.getAudioTracks?.() ?? [];
+      // Fallback: переключаем локально через MediaStream audio tracks
+      const raw = remoteStreamRef.current?.getAudioTracks?.();
+      const list: any[] = raw == null ? [] : Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
       setIsRemoteMuted((prev) => {
         const nextMuted = !prev;
-        audioTracks.forEach((t: any) => (t.enabled = !nextMuted));
+        try {
+          if (list && typeof list.forEach === 'function') {
+            list.forEach((t: any) => {
+              try { if (t && typeof t.enabled !== 'undefined') t.enabled = !nextMuted; } catch (_) {}
+            });
+          }
+        } catch (_) {}
         return nextMuted;
       });
-    } catch {
+    } catch (_) {
       setIsRemoteMuted((prev) => !prev);
     }
   }, [isRemoteMuted]);
 
   const returnToCall = useCallback(() => {
+    // Флаг для App: при выходе из PiP по SystemPiPModeChanged не завершать звонок (пользователь тапнул «вернуться», а не системную X).
+    try {
+      const r = (global as any).__pipReturnToCallJustPressedRef;
+      if (r && typeof r === 'object') r.current = true;
+    } catch (_) {}
     console.log('🔥🔥🔥 [PiPContext] returnToCall вызван', { callId, roomId, lastNavParams });
-    
+
+    // Сразу скрываем PiP, чтобы не показывать «приветствие с PiP» перед переходом на VideoCall
+    hidePiP();
+
+    // КРИТИЧНО: Сбрасываем флаги системного PiP до навигации, чтобы VideoCall при монтировании
+    // рендерил обычный двухкарточный layout (собеседник сверху, вы снизу), а не компактный вид
+    // «только удалённое видео на весь экран» — иначе после тапа по PiP экран выглядит «другое».
+    setInSystemPiPMode(false);
+    setPendingSystemPiP(false);
+
     // КРИТИЧНО: Сразу отправляем pip:state=false партнеру при возврате из PiP
     // Это гарантирует, что партнер получит уведомление даже если экран еще не получил фокус
     const session = (global as any).__webrtcSessionRef?.current;
@@ -430,6 +561,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // Это гарантирует правильную навигацию с параметрами resume и fromPiP
     const nav = (global as any).__navRef;
     if (!nav || !callId || !roomId) {
+      console.log('[PiPContext] returnToCall: missing nav/callId/roomId', { hasNav: !!nav, callId, roomId });
       // Fallback: используем onReturnToCall если navRef недоступен
       if (callId && roomId) {
         onReturnToCall?.(callId, roomId);
@@ -440,7 +572,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
     // КРИТИЧНО: Проверяем что навигация готова перед использованием
     if (!nav.isReady || !nav.isReady()) {
-      console.warn('[PiPContext] Navigation not ready, using onReturnToCall fallback');
+      console.warn('[PiPContext] returnToCall: Navigation not ready, using onReturnToCall fallback');
       if (callId && roomId) {
         onReturnToCall?.(callId, roomId);
         hidePiP();
@@ -488,6 +620,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       return;
     }
   }, [callId, roomId, lastNavParams, onReturnToCall, hidePiP]);
+
+  // Чтобы по кнопке «развернуть» в системном PiP возвращать на экран видеозвонка (App слушает SystemPiPExpanded и дергает этот ref).
+  useEffect(() => {
+    (global as any).__pipReturnToCallRef = { current: returnToCall };
+    return () => {
+      delete (global as any).__pipReturnToCallRef;
+    };
+  }, [returnToCall]);
 
   const endCall = useCallback(() => {
     console.log('🔥🔥🔥 [PiPContext] endCall вызван', { callId, roomId });
@@ -553,12 +693,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         if (Platform.OS === 'android') {
           try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
         }
+        // КРИТИЧНО: Сначала hidePiP() — синхронно сбрасывает __pipVisibleRef и убирает оверлей, чтобы не оставался чёрный экран/замороженное PiP поверх главного
+        hidePiP();
         // КРИТИЧНО: Когда приходит call:ended от сервера (другой участник завершил звонок),
         // нужно только очистить PiP и состояние, НЕ вызывать onEndCall
         // так как звонок уже завершен на сервере и session.endCall() уже был вызван другим участником
         // или будет вызван через handleExternalCallEnded в session.ts
         stopRemoteVAD();
-        setVisible(false);
         setCallId(null);
         setRoomId(null);
         localStreamRef.current = null;
@@ -568,6 +709,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         setPartnerAvatarUrl(undefined);
         setLastNavParams(undefined);
         setLocalCamOn(undefined);
+        // Закрыть системное PiP-окно на Android (чёрный прямоугольник + замороженное окно поверх главного экрана)
+        if (Platform.OS === 'android') {
+          try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+        }
       } else if (visible && (callId || roomId)) {
         // Логируем, но не обрабатываем, если это не наш звонок
         console.log('[PiPContext] Call ended event received but not for our call, ignoring:', {
@@ -586,7 +731,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     return () => {
       socket.off('call:ended', onCallEnded);
     };
-  }, [visible, callId, roomId, onEndCall, endCall]);
+  }, [visible, callId, roomId, onEndCall, endCall, hidePiP]);
 
   const updatePiPState = useCallback((patch: Partial<PiPState>) => {
     if (patch.callId !== undefined) setCallId(patch.callId);
@@ -644,19 +789,21 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     endCall,
     allowVideoRender,
     inSystemPiPMode,
+    pendingSystemPiP,
     startRemoteVAD,
     stopRemoteVAD,
     updatePiPState,
   }), [
     visible, callId, roomId, partnerName, partnerAvatarUrl,
-    isMuted, isRemoteMuted, localCamOn, pipPos, remoteLevel, allowVideoRender, inSystemPiPMode,
+    isMuted, isRemoteMuted, localCamOn, pipPos, remoteLevel, allowVideoRender, inSystemPiPMode, pendingSystemPiP, remoteStreamVersion,
     showPiP, hidePiP, updatePiPPosition, toggleMic, toggleRemoteAudio, toggleCam,
     returnToCall, endCall, startRemoteVAD, stopRemoteVAD, updatePiPState
   ]);
 
+  // Не передаём null как children — иначе при обновлении контекста React может вызвать Children.forEach(children) и получить "forEach of null".
   return (
     <PiPContext.Provider value={value}>
-      {children}
+      {children ?? <></>}
     </PiPContext.Provider>
   );
 }

@@ -46,6 +46,8 @@
         <action android:name="com.google.firebase.MESSAGING_EVENT"/>
       </intent-filter>
     </service>
+    <!-- CallKeep: headless-задача при FCM входящего — поднимает JS и показывает системный экран звонка (как Telegram) -->
+    <service android:name="io.wazo.callkeep.RNCallKeepBackgroundMessagingService" android:exported="false"/>
     <!-- CallKeep: ConnectionService для нативного экрана входящего звонка (Android) -->
     <service
       android:name="io.wazo.callkeep.VoiceConnectionService"

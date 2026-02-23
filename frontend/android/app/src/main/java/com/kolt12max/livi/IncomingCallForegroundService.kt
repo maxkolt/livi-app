@@ -1,5 +1,6 @@
 package com.kolt12max.livi
 
+import android.app.NotificationManager
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -105,12 +106,10 @@ class IncomingCallForegroundService : Service() {
             fgsType
         )
 
-        // Не вызываем startActivity() отсюда: на Android 14+ (BAL) запуск Activity из сервиса блокируется.
-        // Уведомление уже с setFullScreenIntent(fullScreenPendingIntent, true) — систему запустит IncomingCallActivity сама.
         when {
-            silentNotification -> Log.d(TAG, "IncomingCallForegroundService: silent notification (no heads-up, show in shade)")
-            headsUpOnly -> Log.d(TAG, "IncomingCallForegroundService: heads-up only (Accept/Decline on notification)")
-            else -> Log.d(TAG, "IncomingCallForegroundService: notification with full-screen intent (system will launch activity)")
+            silentNotification -> Log.e(TAG, "[INCOMING_FGS] Mode=silent (shade only)")
+            headsUpOnly -> Log.e(TAG, "[INCOMING_FGS] Mode=headsUpOnly (no full-screen)")
+            else -> Log.e(TAG, "[INCOMING_FGS] Mode=fullScreenIntent SDK=${Build.VERSION.SDK_INT} (if no UI on lock screen, search logcat for FSI_REQUESTED_BUT_DENIED or ActivityTaskManager BAL_BLOCK)")
         }
 
         timeoutRunnable = Runnable {
@@ -150,6 +149,7 @@ class IncomingCallForegroundService : Service() {
         currentCallId = null
         currentFrom = null
         currentFromNick = null
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

@@ -10,7 +10,7 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
@@ -197,31 +197,49 @@ function AppContent() {
         if (typeof fn === 'function') fn(params?.callId ?? null, params?.roomId ?? null);
       });
     });
-    const sub5 = emitter.addListener('AboutToEnterSystemPiP', () => {
-      const params = (global as any).__currentCallPiPParamsRef?.current;
-      if (params && typeof (global as any).__pipShowPiPRef?.current === 'function') {
-        (global as any).__pipShowPiPRef.current({
-          callId: params.callId,
-          roomId: params.roomId,
-          partnerName: params.partnerName,
-          partnerAvatarUrl: params.partnerAvatarUrl,
-          localStream: params.localStream,
-          remoteStream: params.remoteStream,
-          localCamOn: params.localCamOn,
-          navParams: params.navParams,
-        });
-        const nav = (global as any).__navRef;
-        if (nav?.dispatch) nav.dispatch(CommonActions.navigate('Home'));
-        const session = (global as any).__webrtcSessionRef?.current;
-        if (session && typeof (session as any).enterPiP === 'function') (session as any).enterPiP();
+    const sub5 = emitter.addListener('SystemPiPModeChanged', (payload: { isInPiP?: boolean }) => {
+      if (payload?.isInPiP === false) {
+        const ref = (global as any).__pipReturnToCallJustPressedRef as { current?: boolean } | undefined;
+        if (ref?.current) {
+          ref.current = false;
+        }
+        // Различие «развернуть» / «закрыть X» делается на нативе: приходит SystemPiPExpanded или EndCallFromPiP
       }
     });
+    // Кнопка «развернуть» (стрелки) в системном PiP: возвращаем на экран видеозвонка с 2 блоками и кнопкой «Завершить».
+    const sub7 = emitter.addListener('SystemPiPExpanded', () => {
+      console.log('[App] SystemPiPExpanded received');
+      const fn = (global as any).__pipReturnToCallRef?.current;
+      if (typeof fn === 'function') {
+        console.log('[App] Calling __pipReturnToCallRef.current()');
+        fn();
+        return;
+      }
+      // Fallback: если ref не установлен (тайминг), берём callId/roomId из глобального ref и навигируем сами
+      const params = (global as any).__currentCallPiPParamsRef?.current;
+      const nav = (global as any).__navRef;
+      console.log('[App] SystemPiPExpanded fallback', { hasParams: !!params, callId: params?.callId, roomId: params?.roomId, navReady: nav?.isReady?.() });
+      if (params?.callId && params?.roomId && nav?.isReady?.()) {
+        nav.dispatch(
+          CommonActions.reset({
+            index: 1,
+            routes: [
+              { name: 'Home' as const },
+              { name: 'VideoCall' as const, params: { resume: true, fromPiP: true, callId: params.callId, roomId: params.roomId, directCall: true } },
+            ],
+          })
+        );
+        console.log('[App] SystemPiPExpanded fallback: dispatched reset to VideoCall');
+      }
+    });
+    // AboutToEnterSystemPiP обрабатывается в PiPContext (как в WhatsApp/Telegram: компактный вид + requestEnterPictureInPicture, без смены экрана).
     return () => {
       sub1.remove();
       sub2.remove();
       sub3.remove();
       sub4.remove();
       sub5.remove();
+      sub7.remove();
     };
   }, []);
 
@@ -232,6 +250,7 @@ function AppContent() {
       unsub = registerCallKeepEvents({
         onAnswer: async (callId) => {
           stopIncomingCallRingtoneAndVibration();
+          try { stopIncomingCallForegroundService(); } catch {}
           const info = getPendingCallInfo(callId);
           if (!info || !navRef.isReady()) return;
           incomingCallIdRef.current = null;
@@ -255,6 +274,7 @@ function AppContent() {
         },
         onEnd: (callId) => {
           stopIncomingCallRingtoneAndVibration();
+          try { stopIncomingCallForegroundService(); } catch {}
           const routeName = navRef.getCurrentRoute()?.name;
           if (routeName === 'VideoCall') {
             const endFn = (global as any).__endCallFromNativeRef?.current;
@@ -594,8 +614,9 @@ function AppContent() {
         const from = params.get('from') || params.get('userId') || '';
         if (callId && from) {
           logger.info('[App] answer-call deep link: opening call', { callId, from });
-          // Android: снять heads-up уведомление/остановить IncomingCallForegroundService сразу после "Принять"
+          // Android: снять уведомление входящего и остановить FGS сразу после "Принять"
           if (Platform.OS === 'android') {
+            try { stopIncomingCallForegroundService(); } catch {}
             try { sendCallAnsweredBroadcast(callId); } catch {}
           }
           await openAnswerCallScreen(from, callId);
@@ -1229,6 +1250,11 @@ function AppContent() {
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
+      // КРИТИЧНО: Скрываем PiP у того, кто не был в PiP — иначе после перехода на Home может мелькнуть оверлей PiP или «страница приветствия + PiP»
+      try {
+        const hidePiP = (global as any).__pipHidePiPRef?.current;
+        if (typeof hidePiP === 'function') hidePiP();
+      } catch (_) {}
       if (data?.callId) {
         addEndedCallIdFromSocket(data.callId);
         try { reportEndCallToCallKeep(data.callId); } catch {}
@@ -1240,6 +1266,10 @@ function AppContent() {
       try { emitCloseOutgoingCall(); } catch {}
       try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
+      // КРИТИЧНО: У участника, который не нажимал «завершить», уйти с экрана VideoCall на Home, чтобы не оставался чёрный экран или PiP поверх главного
+      if (navRef.isReady() && navRef.getCurrentRoute()?.name === 'VideoCall') {
+        navRef.dispatch(CommonActions.navigate('Home'));
+      }
     };
     socket.on('call:ended', onCallEnded);
     return () => { socket.off('call:ended', onCallEnded); };
@@ -1610,6 +1640,7 @@ function AppContent() {
     }
   }, [incoming]);
 
+  // Как в WhatsApp/Telegram: в системном PiP остаёмся на экране VideoCall (компактный вид), навигатор не размонтируем — возврат из PiP без перехода.
   return (
     <>
       <StatusBar 
@@ -1618,6 +1649,7 @@ function AppContent() {
         backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
       />
       <PaperProvider theme={theme}>
+        <>
         <NavigationContainer
           ref={navRef}
           theme={{
@@ -1709,7 +1741,7 @@ function AppContent() {
 
           {/* Глобальный PiP оверлей - виден на всех страницах когда pip.visible === true */}
           <PiPOverlay />
-
+          </>
       </PaperProvider>
     </>
   );
@@ -1767,14 +1799,74 @@ export default function App() {
 
   const endCallImplRef = React.useRef<(cid: string | null, rid: string | null) => void>(endCallImpl);
   endCallImplRef.current = endCallImpl;
+  const pipReturnToCallJustPressedRef = React.useRef(false);
   React.useEffect(() => {
     (global as any).__endCallFromNativeRef = endCallImplRef;
-    return () => { delete (global as any).__endCallFromNativeRef; };
+    (global as any).__pipReturnToCallJustPressedRef = pipReturnToCallJustPressedRef;
+    return () => {
+      delete (global as any).__endCallFromNativeRef;
+      delete (global as any).__pipReturnToCallJustPressedRef;
+    };
   }, []);
+
+  // Android: при 2–3 нажатиях «Назад» пользователь выходит из приложения на главный экран телефона.
+  // Если на корне стека (Back закрыл бы приложение) и при этом либо видим in-app PiP, либо идёт активный звонок (ушли по Back без PiP) — входим в системный PiP вместо выхода.
+  // Если PiP ещё не показывали (ушли по Back без оверлея) — сначала показываем PiP с видео, затем через задержку входим в системный PiP.
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return () => {};
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      const pipVisible = (global as any).__pipVisibleRef?.current === true;
+      const session = (global as any).__webrtcSessionRef?.current;
+      const hasActiveCall = session && typeof session.getRoomId === 'function' && session.getRoomId();
+      if (!pipVisible && !hasActiveCall) return false;
+      if (!navRef.isReady()) return false;
+      if (navRef.canGoBack()) return false; // не на корне — пусть экран/навигация обработает Back
+      try {
+        if (!pipVisible && hasActiveCall) {
+          // Сначала показываем in-app PiP с видео, чтобы в системном PiP было видео собеседника
+          const params = (global as any).__currentCallPiPParamsRef?.current;
+          const showPiP = (global as any).__pipShowPiPRef?.current;
+          const callId = params?.callId ?? (typeof session.getCallId === 'function' ? session.getCallId() : null);
+          const roomId = params?.roomId ?? (typeof session.getRoomId === 'function' ? session.getRoomId() : null);
+          const remoteStream = params?.remoteStream ?? (typeof session.getRemoteStream === 'function' ? session.getRemoteStream() : null);
+          if (typeof showPiP === 'function' && callId && roomId) {
+            showPiP({
+              callId,
+              roomId,
+              partnerName: params?.partnerName,
+              partnerAvatarUrl: params?.partnerAvatarUrl,
+              localStream: params?.localStream ?? null,
+              remoteStream: remoteStream ?? null,
+              localCamOn: params?.localCamOn,
+              navParams: params?.navParams,
+              deferVisible: false,
+            });
+            if (NativeModules.LiviAppModule?.setPiPEndCallParams) {
+              NativeModules.LiviAppModule.setPiPEndCallParams(callId, roomId);
+            }
+            if (session && typeof session.enterPiP === 'function') session.enterPiP();
+            setTimeout(() => {
+              try { NativeModules.LiviAppModule?.requestEnterPictureInPicture?.(); } catch (_) {}
+            }, 350);
+          } else {
+            NativeModules.LiviAppModule?.requestEnterPictureInPicture?.();
+          }
+        } else {
+          NativeModules.LiviAppModule?.requestEnterPictureInPicture?.();
+        }
+      } catch (_) {}
+      return true; // перехватываем — уходим в системный PiP, не закрываем приложение
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Дефолтные insets, чтобы SafeAreaProvider никогда не рендерил null (иначе при уходе в PiP/фон
+  // insets могут стать null и React при реконсиляции даёт "Cannot read property 'forEach' of null").
+  const defaultSafeAreaInsets = { top: 0, left: 0, right: 0, bottom: 0 };
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
+      <SafeAreaProvider initialSafeAreaInsets={defaultSafeAreaInsets}>
         <ThemeProvider>
           <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
             <AppContent />

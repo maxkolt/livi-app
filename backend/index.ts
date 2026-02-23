@@ -654,6 +654,56 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
   }
 }
 
+/**
+ * Рассылает busy для обоих участников звонка всем друзьям обоих.
+ * Чтобы у общего друга (напр. зритель списка) оба участника отображались «Занято».
+ */
+async function emitPresenceUpdateCallToFriends(
+  io: Server,
+  userIdA: string,
+  userIdB: string,
+  busy: boolean
+) {
+  if (!userIdA || !userIdB) {
+    if (userIdA) await emitPresenceUpdateToFriends(io, userIdA, busy);
+    if (userIdB) await emitPresenceUpdateToFriends(io, userIdB, busy);
+    return;
+  }
+  try {
+    if (!isMongoReady()) {
+      io.to(`u:${userIdA}`).emit('presence:update', { userId: userIdA, busy });
+      io.to(`u:${userIdB}`).emit('presence:update', { userId: userIdB, busy });
+      return;
+    }
+    const [userA, userB] = await Promise.all([
+      User.findById(userIdA).select('friends').lean(),
+      User.findById(userIdB).select('friends').lean(),
+    ]);
+    const friendsA = (userA as any)?.friends && Array.isArray((userA as any).friends)
+      ? (userA as any).friends.map((f: any) => String(f))
+      : [];
+    const friendsB = (userB as any)?.friends && Array.isArray((userB as any).friends)
+      ? (userB as any).friends.map((f: any) => String(f))
+      : [];
+    const allFriendIds = [...new Set([...friendsA, ...friendsB])];
+    for (const friendId of allFriendIds) {
+      try {
+        io.to(`u:${friendId}`).emit('presence:update', { userId: userIdA, busy });
+        io.to(`u:${friendId}`).emit('presence:update', { userId: userIdB, busy });
+      } catch {}
+    }
+    io.to(`u:${userIdA}`).emit('presence:update', { userId: userIdA, busy });
+    io.to(`u:${userIdA}`).emit('presence:update', { userId: userIdB, busy });
+    io.to(`u:${userIdB}`).emit('presence:update', { userId: userIdA, busy });
+    io.to(`u:${userIdB}`).emit('presence:update', { userId: userIdB, busy });
+  } catch (e) {
+    try {
+      await emitPresenceUpdateToFriends(io, userIdA, busy);
+      await emitPresenceUpdateToFriends(io, userIdB, busy);
+    } catch {}
+  }
+}
+
 /* ========= Matching (ГЛОБАЛЬНО) ========= */
 // Используем распределенное хранилище через queueStore
 const partnerOf = async (id: string) => await queueStore.getPartner(id);
@@ -789,13 +839,12 @@ app.post('/api/calls/decline', async (req, res) => {
     if (aSock) {
       (aSock as any).data = (aSock as any).data || {};
       (aSock as any).data.busy = false;
-      await emitPresenceUpdateToFriends(io, link.a, false);
     }
     if (bSock) {
       (bSock as any).data = (bSock as any).data || {};
       (bSock as any).data.busy = false;
-      await emitPresenceUpdateToFriends(io, link.b, false);
     }
+    await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
     try { io.to(`u:${link.a}`).emit('call:declined', { callId, from: link.b }); } catch {}
     logger.info('[api/calls/decline] sending call_declined push to caller', { callId, caller: link.a, callee: link.b });
     try { await sendCallDeclinedToCaller(link.a, callId); } catch (e: any) { logger.warn('[api/calls/decline] sendCallDeclinedToCaller failed', { error: e?.message }); }
@@ -832,13 +881,12 @@ app.post('/api/calls/cancel', async (req, res) => {
     if (aSock) {
       (aSock as any).data = (aSock as any).data || {};
       (aSock as any).data.busy = false;
-      await emitPresenceUpdateToFriends(io, link.a, false);
     }
     if (bSock) {
       (bSock as any).data = (bSock as any).data || {};
       (bSock as any).data.busy = false;
-      await emitPresenceUpdateToFriends(io, link.b, false);
     }
+    await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
     logger.info('[api/calls/cancel] sending call_canceled push to callee', { callId, caller: link.a, callee: link.b });
@@ -1579,9 +1627,8 @@ io.on('connection', async (sock: AuthedSocket) => {
         (peerSocket as any).data.partnerSid = sock.id;
       }
       
-      // Рассылаем presence:update (только друзьям)
-      await emitPresenceUpdateToFriends(io, me, true);
-      if (peerSocket) await emitPresenceUpdateToFriends(io, peerId, true);
+      // Рассылаем presence:update обоим участникам для всех друзей обоих (чтобы у общего друга оба были «Занято»)
+      await emitPresenceUpdateCallToFriends(io, me, peerId, true);
       logger.debug('Call initiated', { from: me, to: peerId, callId, roomId });
       
       // КРИТИЧНО: Отправляем инициатору roomId для немедленного использования
@@ -1603,15 +1650,13 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (aSock) {
           (aSock as any).data = (aSock as any).data || {};
           (aSock as any).data.busy = false;
-          await emitPresenceUpdateToFriends(io, link.a, false);
         }
-        
         if (bSock) {
           (bSock as any).data = (bSock as any).data || {};
           (bSock as any).data.busy = false;
-          await emitPresenceUpdateToFriends(io, link.b, false);
         }
-        
+        await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
+
         // уведомляем инициатора о таймауте (from = caller, чтобы клиент не считал пропущенным у инициатора)
         try {
           io.to(`u:${link.a}`).emit('call:timeout', { callId, from: link.a });
@@ -1793,14 +1838,9 @@ io.on('connection', async (sock: AuthedSocket) => {
       (bSock as any).data.partnerSid = aSock?.id ?? null;
       (bSock as any).data.inCall = true;
       
-      // Рассылаем presence:update (только друзьям)
-      if (link.a) {
-        await emitPresenceUpdateToFriends(io, link.a, true);
-      }
-      if (link.b) {
-        await emitPresenceUpdateToFriends(io, link.b, true);
-      }
-      
+      // Рассылаем presence:update обоим участникам для всех друзей обоих (чтобы у общего друга оба были «Занято»)
+      await emitPresenceUpdateCallToFriends(io, link.a, link.b, true);
+
       // Создаем LiveKit токены для обоих участников
       let livekitTokenA: string | null = null;
       let livekitTokenB: string | null = null;
@@ -1972,15 +2012,13 @@ io.on('connection', async (sock: AuthedSocket) => {
     if (aSock) {
       (aSock as any).data = (aSock as any).data || {};
       (aSock as any).data.busy = false;
-      await emitPresenceUpdateToFriends(io, link.a, false);
     }
-    
     if (bSock) {
       (bSock as any).data = (bSock as any).data || {};
       (bSock as any).data.busy = false;
-      await emitPresenceUpdateToFriends(io, link.b, false);
     }
-    
+    await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
+
     try { io.to(`u:${link.a}`).emit('call:declined', { callId: id, from: link.b }); } catch {}
     logger.info('[call:decline] sending call_declined push to caller', { callId: id, caller: link.a, callee: link.b });
     try { await sendCallDeclinedToCaller(link.a, id); } catch (e: any) { logger.warn('[call:decline] sendCallDeclinedToCaller failed', { error: e?.message }); }
@@ -2001,15 +2039,13 @@ io.on('connection', async (sock: AuthedSocket) => {
     if (aSock) {
       (aSock as any).data = (aSock as any).data || {};
       (aSock as any).data.busy = false;
-      await emitPresenceUpdateToFriends(io, link.a, false);
     }
-    
     if (bSock) {
       (bSock as any).data = (bSock as any).data || {};
       (bSock as any).data.busy = false;
-      await emitPresenceUpdateToFriends(io, link.b, false);
     }
-    
+    await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
+
     // уведомим получателя и инициатора одинаковым событием call:cancel,
     // чтобы оба клиента синхронно закрыли UI входящего/исходящего звонка
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId: id, from: link.a }); } catch {}

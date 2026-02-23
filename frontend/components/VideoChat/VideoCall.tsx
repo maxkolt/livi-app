@@ -423,7 +423,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
   // Хук для PiP
   // Сохраняем ссылку на enterPiPMode для использования в beforeRemove
-  const enterPiPModeRef = useRef<(() => void) | null>(null);
+  const enterPiPModeRef = useRef<((opts?: { deferVisible?: boolean }) => void) | null>(null);
   
   const { enterPiPMode, panResponder } = usePiPHook({
     roomId,
@@ -501,12 +501,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
   // Параметры текущего звонка для системного PiP: при нажатии Home натив шлёт AboutToEnterSystemPiP,
   // JS читает этот ref и показывает PiP + переходит на Home, чтобы в окне PiP было только видео собеседника и верхние кнопки.
+  // КРИТИЧНО: Включаем системный PiP при активном звонке, чтобы при нажатии Home появилось окно PiP.
   useEffect(() => {
     const g = (global as any);
     g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
     if (!(roomId || callId) || isInactiveState || !sessionRef.current) {
       g.__currentCallPiPParamsRef.current = null;
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+      }
       return;
+    }
+    if (Platform.OS === 'android') {
+      try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
     }
     const partner = partnerUserId
       ? friendsRef.current?.find((f: any) => String(f._id) === String(partnerUserId))
@@ -533,7 +540,23 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       localCamOn: camOn,
       navParams: { ...route?.params, peerUserId: partnerUserId, partnerId } as any,
     };
-    return () => { g.__currentCallPiPParamsRef.current = null; };
+    return () => {
+      // При уходе по «Назад» (in-app PiP) или по «Домой» (системный PiP) не сбрасываем params и hint.
+      const leavingByBack = g.__leavingVideoCallByBackRef?.current === true;
+      const leavingByHome = g.__leavingVideoCallByHomeRef?.current === true;
+      if (leavingByBack) {
+        g.__leavingVideoCallByBackRef.current = false;
+        return;
+      }
+      if (leavingByHome) {
+        g.__leavingVideoCallByHomeRef.current = false;
+        return;
+      }
+      g.__currentCallPiPParamsRef.current = null;
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+      }
+    };
   }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, route?.params]);
 
   // Отслеживание изменений параметров роута
@@ -1817,27 +1840,22 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   usePreventRemove(
     shouldPreventRemove,
     (e) => {
-      // Android: перехватываем уход со страницы (и hardware back, и swipe-back).
-      // Требование: сначала делаем "назад", и уже на предыдущем экране показываем PiP.
+      // Android: при уходе со страницы звонка (Back / gesture-back) остаёмся ВНУТРИ приложения:
+      // сначала делаем шаг назад в навигации, затем показываем in-app PiP (оверлей), чтобы можно было ходить по экранам и общаться.
       if (Platform.OS === 'android' && enterPiPModeRef.current) {
         requestAnimationFrame(() => {
           const action = (e as any)?.data?.action;
           if (action) {
             (navigation as any).dispatch(action);
-          }
-          // Если action нет, всё равно пытаемся уйти назад
-          if (!action) {
-            if (navigation.canGoBack && navigation.canGoBack()) {
-              navigation.goBack();
-            } else {
-              navigation.navigate('Home' as never);
-            }
+          } else if (navigation.canGoBack && navigation.canGoBack()) {
+            navigation.goBack();
+          } else {
+            navigation.navigate('Home' as never);
           }
 
-          // После запуска навигации показываем PiP (не до!), чтобы визуально он появился уже "на предыдущей".
-          // Используем rAF (вместо setTimeout), чтобы не ловить задержки на загруженном JS.
           requestAnimationFrame(() => {
-            enterPiPModeRef.current?.();
+            // deferVisible: даём навигации завершить переход, чтобы не было двух RTCView на один stream и "мигания".
+            enterPiPModeRef.current?.({ deferVisible: true });
           });
         });
       }
@@ -2189,6 +2207,35 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   );
   
   
+  // Как в WhatsApp/Telegram: в системном PiP рисуем только видео собеседника на весь экран (тот же экран, что и при возврате).
+  const systemPiPCompact = Platform.OS === 'android' && (pip.pendingSystemPiP || pip.inSystemPiPMode);
+  if (systemPiPCompact) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: '#000' }]} edges={[]}>
+        <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]}>
+          <View style={[styles.card, { flex: 1, width: '100%', minHeight: 0 }]}>
+            <RemoteVideo
+              remoteStream={currentRemoteStream}
+              remoteCamOn={remoteCamOn}
+              remoteMuted={remoteMuted}
+              isInactiveState={isInactiveState}
+              wasFriendCallEnded={wasFriendCallEnded}
+              started={started}
+              loading={loading}
+              remoteViewKey={remoteViewKey}
+              showFriendBadge={false}
+              lang={lang}
+              session={sessionRef.current}
+              remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
+              partnerInPiP={partnerInPiP}
+              forceTextureView={true}
+            />
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView 
       style={[styles.container, { backgroundColor: isDark ? '#151F33' : (theme.colors.background as string) }]}

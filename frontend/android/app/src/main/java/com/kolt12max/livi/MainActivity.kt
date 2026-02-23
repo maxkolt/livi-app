@@ -1,11 +1,9 @@
 package com.kolt12max.livi
 
-import android.app.PendingIntent
 import android.app.PictureInPictureParams
 import android.app.RemoteAction
 import android.content.Intent
 import android.content.res.Configuration
-import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -21,6 +19,10 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
+
+  private val pipHandler = Handler(Looper.getMainLooper())
+  private var exitedPipPending = false
+  private var exitPipTimeoutRunnable: Runnable? = null
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
@@ -45,6 +47,14 @@ class MainActivity : ReactActivity() {
   override fun onResume() {
     super.onResume()
     isInForeground = true
+    // Выход из системного PiP по кнопке «развернуть»: onResume приходит когда активность снова на переднем плане.
+    if (exitedPipPending) {
+      exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
+      exitPipTimeoutRunnable = null
+      exitedPipPending = false
+      android.util.Log.i("MainActivity", "PiP exit: onResume first -> emitting SystemPiPExpanded")
+      LiviAppModule.emitSystemPiPExpanded()
+    }
     restoreNavigationBarVisibility()
     // Тап по уведомлению «Пропущенный вызов» — снять уведомления из шторки и открыть вкладку Друзья (здесь срабатывает и при холодном старте — activity уже готова)
     if (intent?.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false) == true) {
@@ -97,37 +107,37 @@ class MainActivity : ReactActivity() {
   }
 
   /**
-   * При нажатии кнопки Home во время видеозвонка — переводим активность в системный PiP,
-   * чтобы окно звонка было видно поверх лаунчера и других приложений (как в WhatsApp/Telegram).
-   * Сначала уведомляем JS (AboutToEnterSystemPiP), чтобы переключить экран на «только PiP» (видео собеседника + верхние кнопки),
-   * затем с задержкой входим в PiP — тогда в окне будет только компактный PiP, а не весь экран видеозвонка.
-   * Кнопка «Завершить» в окне PiP шлёт broadcast END_CALL_FROM_PIP → JS завершает звонок.
+   * При Home во время звонка уведомляем JS, затем входим в системный PiP.
+   * JS пытается войти в PiP после обновления UI; ниже оставляем нативный fallback, если JS не успел.
    */
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && LiviAppModule.getShouldEnterPiPOnLeaveHint()) {
       try {
         LiviAppModule.emitAboutToEnterSystemPiP()
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        val handler = Handler(Looper.getMainLooper())
+        val tryEnterPiP = Runnable {
           try {
+            if (isInPictureInPictureMode) return@Runnable
+            if (!LiviAppModule.getShouldEnterPiPOnLeaveHint()) return@Runnable
             val ratio = Rational(150, 260)
-            val builder = PictureInPictureParams.Builder().setAspectRatio(ratio)
-            val pipIntent = Intent(LiviAppModule.ACTION_END_CALL_FROM_PIP).setPackage(packageName)
-            val pending = PendingIntent.getBroadcast(
-              this, 0, pipIntent,
-              PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val icon = Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel)
-            val endAction = RemoteAction(icon, getString(R.string.pip_action_end_call), getString(R.string.pip_action_end_call), pending)
-            builder.setActions(listOf(endAction))
-            val params = builder.build()
+            val params = PictureInPictureParams.Builder()
+              .setAspectRatio(ratio)
+              .setActions(emptyList<RemoteAction>())
+              .build()
             if (enterPictureInPictureMode(params)) {
-              android.util.Log.d("MainActivity", "Entered Picture-in-Picture mode")
+              android.util.Log.d("MainActivity", "Entered Picture-in-Picture mode (leaveHint)")
+            } else {
+              android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode returned false")
             }
-          } catch (e: Exception) {
-            android.util.Log.w("MainActivity", "enterPictureInPictureMode failed", e)
+          } catch (e2: Exception) {
+            android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode failed", e2)
           }
-        }, 280)
+        }
+        // Быстрая попытка — чтобы PiP появлялся быстрее после Home.
+        handler.postDelayed(tryEnterPiP, 60)
+        // Надёжный fallback, если быстрая попытка не успела/не сработала.
+        handler.postDelayed(tryEnterPiP, 160)
       } catch (e: Exception) {
         android.util.Log.w("MainActivity", "emitAboutToEnterSystemPiP failed", e)
       }
@@ -138,6 +148,21 @@ class MainActivity : ReactActivity() {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       LiviAppModule.emitSystemPiPModeChanged(isInPictureInPictureMode)
+      if (!isInPictureInPictureMode) {
+        // Различие «развернуть» (стрелки) и «закрыть» (X): при развороте приходит onResume, при закрытии — нет.
+        // Ставим флаг и таймаут: если до таймаута придёт onResume — шлём SystemPiPExpanded, иначе EndCallFromPiP.
+        exitedPipPending = true
+        exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
+        exitPipTimeoutRunnable = Runnable {
+          if (exitedPipPending) {
+            exitedPipPending = false
+            exitPipTimeoutRunnable = null
+            android.util.Log.i("MainActivity", "PiP exit: no onResume in time -> emitting EndCallFromPiP")
+            LiviAppModule.emitEndCallFromPiP()
+          }
+        }
+        pipHandler.postDelayed(exitPipTimeoutRunnable!!, 1200)
+      }
     }
   }
 
