@@ -884,36 +884,21 @@ export class VideoCallSession extends SimpleEventEmitter {
     logger.info('[VideoCallSession] enterPiP вызван');
     this.setInPiP(true);
     
-    // Отправляем pip:state событие партнеру
+    // Отправляем pip:state партнеру только если звонок ещё активен (гонка: call ended и PiP могут совпасть).
     const currentRoomId = this.getRoomId();
-    logger.info('[VideoCallSession] enterPiP - проверка roomId', { 
-      currentRoomId,
-      hasRoomId: !!currentRoomId,
-      socketId: socket.id
-    });
-    
-    if (currentRoomId) {
-      try {
-        const payload = {
-          inPiP: true,
-          from: socket.id,
-          roomId: currentRoomId,
-        };
-        socket.emit('pip:state', payload);
-        logger.info('[VideoCallSession] ✅ Отправлено pip:state=true партнеру', { 
-          roomId: currentRoomId,
-          payload,
-          socketId: socket.id
-        });
-      } catch (e) {
-        logger.warn('[VideoCallSession] Ошибка отправки pip:state:', e);
-      }
-    } else {
-      logger.error('[VideoCallSession] ❌ НЕ удалось отправить pip:state - нет roomId', {
-        currentRoomId,
-        callId: this.getCallId(),
-        partnerUserId: this.getPartnerUserId()
+    if (this.ended || this.endCallInProgress || !currentRoomId) {
+      logger.debug('[VideoCallSession] pip:state не отправляем — звонок завершён или нет roomId', {
+        ended: this.ended,
+        hasRoomId: !!currentRoomId,
       });
+      return;
+    }
+    try {
+      const payload = { inPiP: true, from: socket.id, roomId: currentRoomId };
+      socket.emit('pip:state', payload);
+      logger.info('[VideoCallSession] ✅ Отправлено pip:state=true партнеру', { roomId: currentRoomId });
+    } catch (e) {
+      logger.warn('[VideoCallSession] Ошибка отправки pip:state:', e);
     }
   }
 
@@ -921,36 +906,30 @@ export class VideoCallSession extends SimpleEventEmitter {
     logger.info('[VideoCallSession] exitPiP вызван');
     this.setInPiP(false);
     
-    // Отправляем pip:state событие партнеру
     const currentRoomId = this.getRoomId();
-    if (currentRoomId) {
+    if (this.ended || this.endCallInProgress || !currentRoomId) {
+      logger.debug('[VideoCallSession] pip:state не отправляем при exitPiP — звонок завершён или нет roomId');
+      return;
+    }
+    try {
+      socket.emit('pip:state', { inPiP: false, from: socket.id, roomId: currentRoomId });
+      logger.info('[VideoCallSession] ✅ Отправлено pip:state=false партнеру', { roomId: currentRoomId });
+      // КРИТИЧНО: При возврате из PiP сообщаем партнеру ТЕКУЩЕЕ состояние нашей камеры
       try {
-        socket.emit('pip:state', {
-          inPiP: false,
+        socket.emit('cam-toggle', {
+          enabled: !!this.isCamOn,
           from: socket.id,
           roomId: currentRoomId,
         });
-        logger.info('[VideoCallSession] ✅ Отправлено pip:state=false партнеру', { roomId: currentRoomId });
-        
-        // КРИТИЧНО: При возврате из PiP сообщаем партнеру ТЕКУЩЕЕ состояние нашей камеры,
-        // а не форсим enabled=true. Иначе, если пользователь выключил камеру до/во время PiP,
-        // у партнера UI начинает думать что камера включена и показывает "черный экран".
-        try {
-          socket.emit('cam-toggle', {
-            enabled: !!this.isCamOn,
-            from: socket.id,
-            roomId: currentRoomId,
-          });
-          logger.info('[VideoCallSession] ✅ Отправлено cam-toggle(enabled) партнеру при возврате из PiP', {
-            roomId: currentRoomId,
-            enabled: !!this.isCamOn,
-          });
-        } catch (e) {
-          logger.warn('[VideoCallSession] Ошибка отправки cam-toggle при возврате из PiP:', e);
-        }
+        logger.info('[VideoCallSession] ✅ Отправлено cam-toggle(enabled) партнеру при возврате из PiP', {
+          roomId: currentRoomId,
+          enabled: !!this.isCamOn,
+        });
       } catch (e) {
-        logger.warn('[VideoCallSession] Ошибка отправки pip:state:', e);
+        logger.warn('[VideoCallSession] Ошибка отправки cam-toggle при возврате из PiP:', e);
       }
+    } catch (e) {
+      logger.warn('[VideoCallSession] Ошибка отправки pip:state:', e);
     }
   }
 
@@ -1655,6 +1634,15 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private handleCallEnded(): void {
+    // КРИТИЧНО: Сразу закрываем системный PiP при любом call:ended (до любых return). Иначе при раннем return PiP у собеседника не закрывается.
+    if (Platform.OS === 'android') {
+      try { (NativeModules as any)?.LiviAppModule?.requestExitSystemPiP?.(); } catch {}
+    }
+    // Закрываем in-app PiP у собеседника (когда звонок завершил тот, кто в системном PiP — сокет у него мог быть отключён, call:ended не пришёл; мы сюда попали по ParticipantDisconnected).
+    try {
+      const hidePiP = (global as any).__pipHidePiPRef?.current;
+      if (typeof hidePiP === 'function') hidePiP();
+    } catch {}
     // Idempotency: server may deliver call:ended multiple times (e.g., room + direct).
     // Also, call:ended can arrive after local cleanup already cleared ids.
     // In those cases, ignore to avoid duplicate cleanup and "null callId" log noise.
@@ -1685,11 +1673,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
 
     // КРИТИЧНО: Сразу помечаем завершение, чтобы повторный вызов (socket call:ended + ParticipantDisconnected
-    // почти одновременно) не выполнял очистку и emit('callEnded') дважды — иначе у второго участника
-    // handleCallEnded в UI вызывается дважды и второй раз игнорируется (isInactiveStateRef уже true).
+    // почти одновременно) не выполнял очистку и emit('callEnded') дважды.
     this.ended = true;
-    // КРИТИЧНО: При получении call:ended тоже выключаем PiP hint как можно раньше.
     if (Platform.OS === 'android') {
+      try { (NativeModules as any)?.LiviAppModule?.setEndingCallInProgress?.(true); } catch {}
       try { (NativeModules as any)?.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
     }
 
@@ -3871,7 +3858,16 @@ export class VideoCallSession extends SimpleEventEmitter {
               return;
             }
 
-            // Soft-confirm disconnect: give LiveKit a moment to recover / re-add participant.
+            // Сразу закрываем системный и in-app PiP при уходе партнёра (без задержки 1.5s — UX).
+            if (Platform.OS === 'android') {
+              try { (NativeModules as any)?.LiviAppModule?.requestExitSystemPiP?.(); } catch {}
+            }
+            try {
+              const hidePiP = (global as any).__pipHidePiPRef?.current;
+              if (typeof hidePiP === 'function') hidePiP();
+            } catch {}
+
+            // Подтверждаем disconnect через короткую задержку (избегаем ложного срабатывания при reconnect).
             this.clearPendingRemoteDisconnectTimer();
             this.pendingRemoteDisconnectTimer = setTimeout(() => {
               this.pendingRemoteDisconnectTimer = null;
@@ -3892,7 +3888,7 @@ export class VideoCallSession extends SimpleEventEmitter {
                 roomState: room.state,
               });
               this.handleCallEnded();
-            }, 1500);
+            }, 500);
           }
         }
       })
@@ -3904,8 +3900,16 @@ export class VideoCallSession extends SimpleEventEmitter {
           isDisconnecting: this.isDisconnecting,
           hasDisconnectPromise: !!this.disconnectPromise
         });
+        // Если отключение не мы инициировали (собеседник вышел / сеть) — закрываем системный PiP и завершаем звонок.
+        // Устройство в PiP часто не получает call:ended из-за отключённого сокета.
+        if (!this.disconnectPromise && !this.ended) {
+          this.clearPendingRemoteDisconnectTimer();
+          if (Platform.OS === 'android') {
+            try { (NativeModules as any)?.LiviAppModule?.requestExitSystemPiP?.(); } catch {}
+          }
+          this.handleCallEnded();
+        }
         // Флаги будут сброшены в disconnectRoom через промис, если он активен
-        // Если disconnectRoom не был вызван (например, неожиданное отключение), сбрасываем флаги
         if (!this.disconnectPromise) {
           this.disconnectReason = 'unknown';
           this.isDisconnecting = false;

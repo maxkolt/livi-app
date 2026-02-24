@@ -108,10 +108,11 @@ class MainActivity : ReactActivity() {
 
   /**
    * При Home во время звонка уведомляем JS, затем входим в системный PiP.
-   * JS пытается войти в PiP после обновления UI; ниже оставляем нативный fallback, если JS не успел.
+   * На части устройств (например Samsung A35) активность уходит в фон быстрее — пробуем сразу и с несколькими задержками.
    */
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
+    if (LiviAppModule.getEndingCallInProgress()) return
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && LiviAppModule.getShouldEnterPiPOnLeaveHint()) {
       try {
         LiviAppModule.emitAboutToEnterSystemPiP()
@@ -120,7 +121,7 @@ class MainActivity : ReactActivity() {
           try {
             if (isInPictureInPictureMode) return@Runnable
             if (!LiviAppModule.getShouldEnterPiPOnLeaveHint()) return@Runnable
-            val ratio = Rational(150, 260)
+            val ratio = Rational(9, 16)
             val params = PictureInPictureParams.Builder()
               .setAspectRatio(ratio)
               .setActions(emptyList<RemoteAction>())
@@ -134,10 +135,12 @@ class MainActivity : ReactActivity() {
             android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode failed", e2)
           }
         }
-        // Быстрая попытка — чтобы PiP появлялся быстрее после Home.
-        handler.postDelayed(tryEnterPiP, 60)
-        // Надёжный fallback, если быстрая попытка не успела/не сработала.
-        handler.postDelayed(tryEnterPiP, 160)
+        tryEnterPiP.run()
+        handler.postDelayed(tryEnterPiP, 30)
+        handler.postDelayed(tryEnterPiP, 80)
+        handler.postDelayed(tryEnterPiP, 200)
+        handler.postDelayed(tryEnterPiP, 450)
+        handler.postDelayed(tryEnterPiP, 800)
       } catch (e: Exception) {
         android.util.Log.w("MainActivity", "emitAboutToEnterSystemPiP failed", e)
       }
@@ -147,6 +150,9 @@ class MainActivity : ReactActivity() {
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      if (isInPictureInPictureMode) {
+        window.setBackgroundDrawableResource(android.R.color.transparent)
+      }
       LiviAppModule.emitSystemPiPModeChanged(isInPictureInPictureMode)
       if (!isInPictureInPictureMode) {
         // Различие «развернуть» (стрелки) и «закрыть» (X): при развороте приходит onResume, при закрытии — нет.

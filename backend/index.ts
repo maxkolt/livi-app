@@ -1117,7 +1117,9 @@ io.on('connection', async (sock: AuthedSocket) => {
       // КРИТИЧНО: Если комната не найдена, все равно отправляем call:ended всем сокетам
       // которые могут быть в звонке (через activeCallBySocket или socket.data.roomId)
       const socketsToNotify = new Set<string>();
-      
+      // КРИТИЧНО: Отправитель call:end всегда в списке — иначе у него остаётся busy и нельзя сразу перезвонить (initiator_busy).
+      socketsToNotify.add(sock.id);
+
       // Добавляем всех участников комнаты
       if (room) {
         for (const sid of room) {

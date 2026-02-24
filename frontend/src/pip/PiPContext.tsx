@@ -667,75 +667,45 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     setLocalCamOn(undefined);
   }, [callId, roomId, onEndCall, stopRemoteVAD]);
 
-  // Обработчик завершения звонка для пользователя в PiP
+  // Обработчик завершения звонка для пользователя в PiP (в т.ч. когда собеседник завершил из системного PiP)
   useEffect(() => {
     const onCallEnded = (data?: any) => {
-      // КРИТИЧНО: Проверяем что это НАШ звонок (строгое совпадение callId или roomId)
-      // НЕ закрываем PiP при любом call:ended - только если это наш звонок
-      const receivedIds = new Set<string>();
-      if (typeof data?.callId === 'string' && data.callId) receivedIds.add(data.callId);
-      if (typeof data?.roomId === 'string' && data.roomId) receivedIds.add(data.roomId);
-      if (typeof data?.resolvedRoomId === 'string' && data.resolvedRoomId) receivedIds.add(data.resolvedRoomId);
+      // КРИТИЧНО: Если PiP виден и есть контекст звонка — всегда закрываем in-app PiP при call:ended.
+      // У пользователя один активный звонок; строгое совпадение id не требуем (гонки/разный формат payload).
+      const shouldClosePiP = visible && (callId || roomId);
+      if (!shouldClosePiP) return;
 
-      // Backward/forward compatibility:
-      // - older backend versions could send callId=roomId (room id only)
-      // - newer backend sends callId as the real callId (timestamp) and roomId as room_...
-      const callMatches =
-        visible &&
-        ((callId && receivedIds.has(callId)) ||
-          (roomId && receivedIds.has(roomId)));
-
-      if (callMatches) {
-        console.log('[PiPContext] Call ended event received, closing PiP:', { 
-          data, 
-          currentCallId: callId, 
-          currentRoomId: roomId,
-          receivedCallId: data?.callId,
-          receivedRoomId: data?.roomId
-        });
-        // КРИТИЧНО: Отключаем системный PiP у собеседника, чтобы не выскакивало окно PiP при уходе с экрана
-        if (Platform.OS === 'android') {
-          try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
-        }
-        // КРИТИЧНО: Сначала hidePiP() — синхронно сбрасывает __pipVisibleRef и убирает оверлей, чтобы не оставался чёрный экран/замороженное PiP поверх главного
-        hidePiP();
-        // КРИТИЧНО: Когда приходит call:ended от сервера (другой участник завершил звонок),
-        // нужно только очистить PiP и состояние, НЕ вызывать onEndCall
-        // так как звонок уже завершен на сервере и session.endCall() уже был вызван другим участником
-        // или будет вызван через handleExternalCallEnded в session.ts
-        stopRemoteVAD();
-        setCallId(null);
-        setRoomId(null);
-        localStreamRef.current = null;
-        remoteStreamRef.current = null;
-        setIsMuted(false);
-        setIsRemoteMuted(false);
-        setPartnerAvatarUrl(undefined);
-        setLastNavParams(undefined);
-        setLocalCamOn(undefined);
-        // Закрыть системное PiP-окно на Android (чёрный прямоугольник + замороженное окно поверх главного экрана)
-        if (Platform.OS === 'android') {
-          try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
-        }
-      } else if (visible && (callId || roomId)) {
-        // Логируем, но не обрабатываем, если это не наш звонок
-        console.log('[PiPContext] Call ended event received but not for our call, ignoring:', {
-          data,
-          currentCallId: callId,
-          currentRoomId: roomId,
-          receivedCallId: data?.callId,
-          receivedRoomId: data?.roomId
-        });
+      console.log('[PiPContext] Call ended event received, closing PiP:', {
+        data,
+        currentCallId: callId,
+        currentRoomId: roomId,
+        receivedCallId: data?.callId,
+        receivedRoomId: data?.roomId,
+      });
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
+      hidePiP();
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+      }
+      stopRemoteVAD();
+      setCallId(null);
+      setRoomId(null);
+      localStreamRef.current = null;
+      remoteStreamRef.current = null;
+      setIsMuted(false);
+      setIsRemoteMuted(false);
+      setPartnerAvatarUrl(undefined);
+      setLastNavParams(undefined);
+      setLocalCamOn(undefined);
     };
 
-    // Подписываемся на событие call:ended
     socket.on('call:ended', onCallEnded);
-
     return () => {
       socket.off('call:ended', onCallEnded);
     };
-  }, [visible, callId, roomId, onEndCall, endCall, hidePiP]);
+  }, [visible, callId, roomId, onEndCall, endCall, hidePiP, inSystemPiPMode]);
 
   const updatePiPState = useCallback((patch: Partial<PiPState>) => {
     if (patch.callId !== undefined) setCallId(patch.callId);

@@ -441,10 +441,28 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** Включить/выключить системный PiP при нажатии Home: true = при уходе в фон перейти в Picture-in-Picture (окно поверх лаунчера). Вызывать из JS при активном видеозвонке или при показе in-app PiP. */
+  /** Включить/выключить системный PiP при нажатии Home: true = при уходе в фон перейти в Picture-in-Picture (окно поверх лаунчера). Вызывать из JS при активном видеозвонке или при показе in-app PiP. На Android 12+ дополнительно включается авто-вход в PiP для совместимости со всеми устройствами. */
   @ReactMethod
   fun setShouldEnterPiPOnLeaveHint(enabled: Boolean) {
     LiviAppModule.setPiPOnLeaveHintEnabled(enabled)
+    if (Build.VERSION.SDK_INT >= 31) {
+      val activity = currentActivity ?: return
+      activity.runOnUiThread {
+        try {
+          val method = activity.javaClass.getMethod("setAutoEnterPictureInPictureEnabled", Boolean::class.javaPrimitiveType)
+          method.invoke(activity, enabled)
+          Log.d("LiviAppModule", "setAutoEnterPictureInPictureEnabled($enabled)")
+        } catch (e: Exception) {
+          Log.w("LiviAppModule", "setAutoEnterPictureInPictureEnabled failed", e)
+        }
+      }
+    }
+  }
+
+  /** Флаг «идёт завершение звонка»: при true не входить в системный PiP в onUserLeaveHint (чтобы не выкидывать на главный экран при принятии с блокировки). */
+  @ReactMethod
+  fun setEndingCallInProgress(inProgress: Boolean) {
+    LiviAppModule.setEndingCallInProgressStatic(inProgress)
   }
 
   /** Запросить переход в системный PiP из JS (при уходе по кнопке «Назад» с экрана звонка — показываем in-app PiP и затем системное PiP-окно). */
@@ -454,7 +472,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     activity.runOnUiThread {
       try {
-        val ratio = Rational(150, 260)
+        val ratio = Rational(9, 16)
         val params = PictureInPictureParams.Builder()
           .setAspectRatio(ratio)
           .setActions(emptyList<RemoteAction>())
@@ -470,17 +488,26 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** Выйти из системного PiP при завершении звонка другим участником (чтобы не оставалось замороженное окно PiP поверх главного экрана). */
+  /** Выйти из системного PiP без открытия приложения: только закрыть окно PiP. Вызывать при call:ended у собеседника. Если уже на main thread — finish() сразу, иначе через runOnUiThread. */
   @ReactMethod
   fun requestExitSystemPiP() {
     val activity = currentActivity ?: return
-    activity.runOnUiThread {
+    val run: Runnable = Runnable {
       try {
-        activity.recreate()
-        Log.d("LiviAppModule", "requestExitSystemPiP: activity.recreate() called to exit PiP")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity.isInPictureInPictureMode) {
+          activity.finish()
+          Log.d("LiviAppModule", "requestExitSystemPiP: activity.finish() called (was in PiP)")
+        } else {
+          Log.d("LiviAppModule", "requestExitSystemPiP: not in PiP, skipping finish()")
+        }
       } catch (e: Exception) {
         Log.w("LiviAppModule", "requestExitSystemPiP failed", e)
       }
+    }
+    if (Looper.myLooper() == Looper.getMainLooper()) {
+      run.run()
+    } else {
+      activity.runOnUiThread(run)
     }
   }
 
@@ -668,6 +695,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     internal fun setPiPOnLeaveHintEnabled(value: Boolean) {
       shouldEnterPiPOnLeaveHint = value
+    }
+
+    /** Пока true — не входить в системный PiP в onUserLeaveHint (JS ставит при завершении звонка, сбрасывает после). */
+    @Volatile
+    @JvmField
+    var endingCallInProgress = false
+    @JvmStatic
+    fun getEndingCallInProgress(): Boolean = endingCallInProgress
+    @JvmStatic
+    internal fun setEndingCallInProgressStatic(value: Boolean) {
+      endingCallInProgress = value
     }
 
     /** Параметры для завершения звонка из системного PiP (кнопка в окне PiP). */
