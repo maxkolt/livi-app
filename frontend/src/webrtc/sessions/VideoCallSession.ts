@@ -1,7 +1,7 @@
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { Buffer } from 'buffer';
 import AudioRecord from 'react-native-audio-record';
-import { InteractionManager, Platform } from 'react-native';
+import { InteractionManager, Platform, NativeModules } from 'react-native';
 import * as Device from 'expo-device';
 import {
   Room,
@@ -64,6 +64,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private remoteAudioMuted = false;
   private remoteCamEnabled = false;
   private remoteCamOffTimeout: ReturnType<typeof setTimeout> | null = null;
+  /** SID последнего отписанного удалённого видео-трека (переворот камеры). Нужен, т.к. TrackSubscribed приходит после TrackUnsubscribed и remoteVideoTrack уже null. */
+  private lastUnsubscribedRemoteVideoTrackSid: string | null = null;
   private socketOffs: Array<() => void> = [];
   private socketHandlers: {
     callAccepted?: (data: CallAcceptedPayload) => void;
@@ -94,6 +96,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private liveKitReconnecting = false;
   private lastLiveKitReconnectingAt = 0;
   private pendingRemoteDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private cameraSwitchInProgress = false;
 
   /* ========= Mic level monitoring (VoiceEqualizer) ========= */
   private micBarsCount = 21;
@@ -354,6 +357,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Сразу помечаем звонок завершённым, чтобы асинхронный код (handleCallAccepted, connectToLiveKit)
     // видел ended и не выполнял пост-подключение / setLocalDescription после disconnect
     this.ended = true;
+    // КРИТИЧНО: При завершении звонка выключаем системный PiP hint максимально рано,
+    // чтобы на некоторых устройствах не происходил автовход в PiP (onUserLeaveHint) во время очистки.
+    if (Platform.OS === 'android') {
+      try { (NativeModules as any)?.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
+    }
 
     // Сбрасываем блокировку комнаты сразу, чтобы следующий звонок не видел старую сессию
     const roomLock = (global as any).__connectingToRoomRef as { roomName: string | null; session: VideoCallSession | null } | undefined;
@@ -468,8 +476,8 @@ export class VideoCallSession extends SimpleEventEmitter {
 
       if (needsRecovery) {
         logger.info('[VideoCallSession] Recovering video track for camera enable');
-        // Пересоздаём видео трек
-        await this.ensureLocalTracks(true);
+        // Пересоздаём ТОЛЬКО видео трек (аудио не трогаем для стабильности)
+        await this.recreateLocalVideoTrack('toggleCam:recovery');
       }
 
       // После восстановления трека - включаем и публикуем
@@ -501,11 +509,9 @@ export class VideoCallSession extends SimpleEventEmitter {
               logger.info('[VideoCallSession] Video track published after camera enable');
             }
 
-            // КРИТИЧНО: ensureLocalTracks(true) пересоздаёт И аудио-трек тоже.
-            // Если микрофон был включён, но новый аудио-трек не опубликован — собеседник перестаёт слышать звук
-            // после OFF->ON камеры. Поэтому (best-effort) убеждаемся, что аудио трек тоже опубликован.
+            // КРИТИЧНО: после восстановления/перепубликации камеры некоторые девайсы "теряют" микрофон публикацию
+            // (гонка внутри LiveKit/engine). Поэтому (best-effort) убеждаемся, что аудио трек тоже опубликован.
             if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
-              // Same for microphone when ensureLocalTracks(true) recreated audio.
               await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
               await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
                 const errorMsg = e?.message || String(e || '');
@@ -579,7 +585,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (!track?.mediaStreamTrack || track.mediaStreamTrack.readyState !== 'ended') return;
     try {
       logger.info('[VideoCallSession] Reconnecting camera on app resume (track was ended)');
-      await this.ensureLocalTracks(true);
+      await this.recreateLocalVideoTrack('reconnectCameraOnResume');
       if (this.localVideoTrack && this.room?.state === 'connected' && this.room.localParticipant) {
         if (!this.isVideoTrackPublished(this.localVideoTrack)) {
           await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
@@ -638,20 +644,54 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   async flipCam(): Promise<void> {
-    this.camSide = this.camSide === 'front' ? 'back' : 'front';
-    await this.restartLocalCamera();
+    if (this.cameraSwitchInProgress) {
+      logger.debug('[VideoCallSession] flipCam skipped: switch already in progress');
+      return;
+    }
+    if (!this.isCamOn) {
+      logger.debug('[VideoCallSession] flipCam skipped: camera is off');
+      return;
+    }
+    this.cameraSwitchInProgress = true;
+    const prevSide = this.camSide;
+    const nextSide: CamSide = this.camSide === 'front' ? 'back' : 'front';
+    this.camSide = nextSide;
+    try {
+      // В видеозвонках всегда пересоздаём видео-трек с нужной камерой (restartLocalCamera).
+      // Так переворот работает стабильно на всех устройствах; applyConstraints на треке
+      // от livekit-client часто не переключает камеру на нативной стороне.
+      await this.restartLocalCamera();
+      logger.info('[VideoCallSession] flipCam done via restartLocalCamera', {
+        prevSide,
+        nextSide,
+        roomState: this.room?.state,
+      });
+    } catch (e) {
+      this.camSide = prevSide;
+      logger.warn('[VideoCallSession] flipCam failed, reverted camSide', {
+        prevSide,
+        nextSide,
+        error: (e as any)?.message || String(e || ''),
+      });
+    } finally {
+      this.cameraSwitchInProgress = false;
+    }
   }
 
   async restartLocalCamera(): Promise<void> {
-    await this.ensureLocalTracks(true);
+    try {
+      await this.recreateLocalVideoTrack('restartLocalCamera');
+    } catch (e) {
+      logger.warn('[VideoCallSession] Failed to recreate local video track for restartLocalCamera', {
+        error: (e as any)?.message || String(e || ''),
+      });
+      throw e;
+    }
     // КРИТИЧНО: Проверяем состояние комнаты перед публикацией
     if (this.room && this.room.state === 'connected' && this.room.localParticipant && this.localVideoTrack) {
       try {
         // КРИТИЧНО:
-        // ensureLocalTracks(true) пересоздаёт И видео, И аудио трек.
-        // Если старые публикации остаются в LiveKit, можно получить:
-        // 1) warning "publishing a second track with the same source: camera"
-        // 2) тишину у собеседника (новый audio track не опубликован)
+        // Пересоздаём ТОЛЬКО видео трек (аудио не трогаем), чтобы избежать one-way audio.
 
         // 1) Видео: удаляем старые camera-публикации и публикуем новый трек (best-effort).
         if (!this.isVideoTrackPublished(this.localVideoTrack)) {
@@ -1648,6 +1688,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     // почти одновременно) не выполнял очистку и emit('callEnded') дважды — иначе у второго участника
     // handleCallEnded в UI вызывается дважды и второй раз игнорируется (isInactiveStateRef уже true).
     this.ended = true;
+    // КРИТИЧНО: При получении call:ended тоже выключаем PiP hint как можно раньше.
+    if (Platform.OS === 'android') {
+      try { (NativeModules as any)?.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
+    }
 
     // КРИТИЧНО: Сохраняем состояние ПЕРЕД очисткой для логирования
     const savedCallId = this.callId;
@@ -1796,6 +1840,121 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     // КРИТИЧНО: Эквалайзер должен работать в видеозвонке так же, как в RandomChat.
     // Эквалайзер отключен: мониторинг микрофона не запускаем
+  }
+
+  private stopLocalVideoTrackWithoutStateReset(): void {
+    if (!this.localVideoTrack) return;
+    // КРИТИЧНО: Сначала отключаем захват кадров, затем stop() — снижает CameraDeviceClient errorCode 4/5 на Android
+    try {
+      if (this.localVideoTrack.mediaStreamTrack) {
+        this.localVideoTrack.mediaStreamTrack.enabled = false;
+      }
+      this.localVideoTrack.mute().catch(() => {});
+    } catch {}
+    try { this.localVideoTrack.stop(); } catch {}
+    this.localVideoTrack = null;
+  }
+
+  private async recreateLocalVideoTrack(context: string): Promise<void> {
+    // IMPORTANT: Do not touch localAudioTrack here. Recreating audio during camera recovery
+    // is a common root cause of one-way / unstable audio on Android.
+    const savedCamState = this.isCamOn;
+
+    const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+    const preferred = getPreferredVideoCaptureOptions(facingMode);
+    logger.info('[VideoCallSession] Recreating local video track', { context, preferred: preferred.meta, camSide: this.camSide });
+
+    const oldVideoTrack = this.localVideoTrack;
+    const oldVideoMedia = oldVideoTrack?.mediaStreamTrack;
+
+    // Best-effort: unpublish the old camera track before stopping it.
+    // This helps some Android devices release Camera2 resources faster and reduces "too many open camera devices".
+    try {
+      if (this.room && this.room.state === 'connected' && this.room.localParticipant && oldVideoTrack) {
+        try {
+          await this.room.localParticipant.unpublishTrack(oldVideoTrack, false);
+        } catch {}
+      }
+    } catch {}
+
+    this.stopLocalVideoTrackWithoutStateReset();
+
+    // Android Camera2: allow device to fully release camera before reopening.
+    if (Platform.OS === 'android') {
+      await new Promise((r) => setTimeout(r, 220));
+    }
+
+    const tryCreate = async (opts: any) => createLocalTracks(opts);
+    let tracks: LocalTrack[] = [];
+    try {
+      // Preferred path: create video only (no audio churn).
+      tracks = await tryCreate({ audio: false, video: preferred.primary });
+    } catch (e1) {
+      try {
+        tracks = await tryCreate({ audio: false, video: preferred.fallback || preferred.primary });
+      } catch (e2) {
+        // Some livekit-client builds are picky about `audio: false`. Fallback to creating audio+video,
+        // then immediately stop the extra audio track to avoid grabbing the microphone twice.
+        logger.warn('[VideoCallSession] Video-only createLocalTracks failed; falling back to audio+video create', {
+          context,
+          preferred: preferred.meta,
+          e1: (e1 as any)?.message || String(e1),
+          e2: (e2 as any)?.message || String(e2),
+        });
+        try {
+          tracks = await tryCreate({ audio: true, video: preferred.primary });
+        } catch (e3) {
+          tracks = await tryCreate({ audio: true, video: preferred.fallback || preferred.primary });
+        }
+      }
+    }
+
+    const newVideo = tracks.find((t) => t.kind === Track.Kind.Video) as LocalVideoTrack | undefined;
+    if (!newVideo) {
+      throw new Error('createLocalTracks(...) did not return a video track');
+    }
+    this.localVideoTrack = newVideo;
+
+    // If fallback created an audio track, stop it unless we don't have our own audio yet.
+    try {
+      const createdAudio = tracks.find((t) => t.kind === Track.Kind.Audio) as LocalAudioTrack | undefined;
+      if (createdAudio) {
+        if (!this.localAudioTrack) {
+          this.localAudioTrack = createdAudio;
+          try {
+            this.isMicOn ? this.localAudioTrack.unmute() : this.localAudioTrack.mute();
+          } catch {}
+        } else {
+          try { createdAudio.stop(); } catch {}
+        }
+      }
+    } catch {}
+
+    // Apply saved camera state immediately.
+    try {
+      if (this.localVideoTrack?.mediaStreamTrack) {
+        this.localVideoTrack.mediaStreamTrack.enabled = savedCamState;
+        if (savedCamState) await this.localVideoTrack.unmute().catch(() => {});
+        else await this.localVideoTrack.mute().catch(() => {});
+      }
+    } catch {}
+
+    // Создаём новый MediaStream с новым видео-треком и тем же аудио-треком.
+    // Важно: новая ссылка и новый stream.id, чтобы UI (VideoCall) увидел изменение
+    // (prevStream.id !== stream.id) и обновил localRenderKey — иначе превью не перерисуется при перевороте камеры.
+    const stream = new MediaStream();
+    try {
+      const mt = this.localVideoTrack.mediaStreamTrack;
+      if (mt) stream.addTrack(mt as any);
+    } catch {}
+    try {
+      const at = this.localAudioTrack?.mediaStreamTrack;
+      if (at) stream.addTrack(at as any);
+    } catch {}
+    this.localStream = stream;
+    this.emit('localStream', stream);
+    this.config.callbacks.onLocalStreamChange?.(stream);
+    this.config.onLocalStreamChange?.(stream);
   }
 
   private stopLocalTracksWithoutStateReset(): void {
@@ -2325,6 +2484,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.remoteStream = null;
     this.remoteAudioTrack = null;
     this.remoteVideoTrack = null;
+    this.lastUnsubscribedRemoteVideoTrackSid = null;
     this.currentRemoteParticipant = null;
     this.remoteCamEnabled = false;
     if (this.partnerInPiP) {
@@ -3459,12 +3619,16 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       } catch {}
 
-      await this.ensureLocalTracks(true);
+      await this.recreateLocalVideoTrack(`watchdog:${context}`);
       if (this.room && this.room.state === 'connected' && this.room.localParticipant) {
-        if (this.localVideoTrack && this.isCamOn) {
+        if (this.localVideoTrack && this.isCamOn && !this.isVideoTrackPublished(this.localVideoTrack)) {
+          await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
           await this.room.localParticipant.publishTrack(this.localVideoTrack).catch(() => {});
         }
-        if (this.localAudioTrack && this.isMicOn) {
+        // КРИТИЧНО: аудио перепубликовываем только если оно ещё не опубликовано.
+        // Иначе повторный publish может сломать звук у собеседника (дубликат/замена трека).
+        if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
+          await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
           await this.room.localParticipant.publishTrack(this.localAudioTrack).catch(() => {});
         }
       }
@@ -3511,6 +3675,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           participantsCount: room.remoteParticipants.size,
         });
         this.clearPendingRemoteDisconnectTimer();
+        void this.recoverLocalTracksAfterReconnect(room, 'RoomEvent.Reconnected');
       })
       .on(RoomEvent.ParticipantConnected, (participant) => {
         // КРИТИЧНО: При подключении участника подписываемся на все его существующие треки
@@ -3748,6 +3913,54 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
   }
 
+  private async recoverLocalTracksAfterReconnect(room: Room, context: string): Promise<void> {
+    try {
+      // Give LiveKit engine a moment to settle after reconnect.
+      await new Promise((r) => setTimeout(r, 250));
+      if (this.ended || this.isDisconnecting) return;
+      if (this.room !== room) return;
+      if (!room.localParticipant || room.state !== 'connected') return;
+
+      // Ensure local tracks exist (non-forced; avoids camera/audio churn).
+      if (!this.localAudioTrack || !this.localVideoTrack) {
+        await this.ensureLocalTracks(false);
+      }
+
+      // If camera track was ended by OS, recreate video only.
+      const vState = this.localVideoTrack?.mediaStreamTrack?.readyState;
+      if (this.isCamOn && vState === 'ended') {
+        logger.warn('[VideoCallSession] Local video track ended after reconnect; recreating video track', { context });
+        await this.recreateLocalVideoTrack('reconnect');
+      }
+
+      // Re-apply mic enabled state (some devices flip enabled=false transiently).
+      try {
+        const mt = this.localAudioTrack?.mediaStreamTrack as any;
+        if (mt && typeof mt.enabled === 'boolean') mt.enabled = this.isMicOn;
+      } catch {}
+      try {
+        if (this.localAudioTrack) {
+          this.isMicOn ? this.localAudioTrack.unmute() : this.localAudioTrack.mute();
+        }
+      } catch {}
+
+      // Re-publish tracks if needed (best-effort).
+      if (this.localVideoTrack && this.isCamOn && !this.isVideoTrackPublished(this.localVideoTrack)) {
+        await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
+        await room.localParticipant.publishTrack(this.localVideoTrack).catch(() => {});
+      }
+      if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
+        await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
+        await room.localParticipant.publishTrack(this.localAudioTrack).catch(() => {});
+      }
+    } catch (e) {
+      logger.debug('[VideoCallSession] recoverLocalTracksAfterReconnect failed (ignored)', {
+        context,
+        error: (e as any)?.message || String(e || ''),
+      });
+    }
+  }
+
   private handleTrackSubscribed(
     track: RemoteTrack,
     publication: RemoteTrackPublication,
@@ -3766,7 +3979,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     const isVideoTrack = publication.kind === Track.Kind.Video;
     const oldVideoTrackSid = this.remoteVideoTrack?.sid;
     const mediaTrack = track.mediaStreamTrack;
-    const wasVideoTrackChanged = isVideoTrack && oldVideoTrackSid && oldVideoTrackSid !== track.sid;
+    // Учёт lastUnsubscribedRemoteVideoTrackSid: при перевороте камеры сначала приходит TrackUnsubscribed (remoteVideoTrack обнуляется),
+    // потом TrackSubscribed — без сохранённого SID wasVideoTrackChanged был бы false и у собеседника не создавался бы новый MediaStream.
+    const previousVideoSid = oldVideoTrackSid ?? this.lastUnsubscribedRemoteVideoTrackSid;
+    const wasVideoTrackChanged = isVideoTrack && !!previousVideoSid && previousVideoSid !== track.sid;
     
     // Не пересоздаем stream, чтобы не было мерцаний — создаем один раз и переиспользуем
     if (!this.remoteStream) {
@@ -3781,33 +3997,50 @@ export class VideoCallSession extends SimpleEventEmitter {
     const activeRemoteStream = this.remoteStream;
     const trackAlreadyInStream = mediaTrack && activeRemoteStream.getTracks().includes(mediaTrack as any);
     
-    // КРИТИЧНО: Если видео трек изменился (SID отличается), удаляем старый из потока перед добавлением нового
-    // Это предотвращает ситуацию, когда в remoteStream остаётся завершённый трек, а новый уже есть
-    if (
-      isVideoTrack &&
-      wasVideoTrackChanged &&
-      this.remoteVideoTrack?.mediaStreamTrack &&
-      activeRemoteStream.getTracks().includes(this.remoteVideoTrack.mediaStreamTrack as any)
-    ) {
+    // КРИТИЧНО: Если видео трек изменился (переворот камеры у партнёра), создаём новый MediaStream.
+    // Иначе у собеседника тот же stream.id и UI не вызывает setRemoteStream → превью не обновляется.
+    if (isVideoTrack && wasVideoTrackChanged) {
+      const newStream = new MediaStream();
       try {
-        activeRemoteStream.removeTrack(this.remoteVideoTrack.mediaStreamTrack as any);
-        logger.info('[VideoCallSession] Removed previous remote video track from stream', {
-          oldTrackId: oldVideoTrackSid,
+        if (mediaTrack) newStream.addTrack(mediaTrack as any);
+        const audioTrack = this.remoteAudioTrack?.mediaStreamTrack;
+        if (audioTrack) newStream.addTrack(audioTrack as any);
+        this.remoteStream = newStream;
+        logger.info('[VideoCallSession] New remote MediaStream for replaced video track (camera flip)', {
+          oldTrackId: previousVideoSid,
           newTrackId: track.sid,
+          streamId: newStream.id,
         });
       } catch (e) {
-        logger.warn('[VideoCallSession] Error removing previous video track', e);
+        logger.warn('[VideoCallSession] Error creating new remote stream for video track replace', e);
       }
-    }
-    
-    if (mediaTrack && !trackAlreadyInStream) {
-      activeRemoteStream.addTrack(mediaTrack as any);
-      logger.debug('[VideoCallSession] Added track to remote stream', {
-        kind: publication.kind,
-        streamId: activeRemoteStream.id,
-        tracksCount: activeRemoteStream.getTracks().length,
-        trackId: track.sid,
-      });
+    } else {
+      // Обычный путь: переиспользуем существующий stream
+      if (
+        isVideoTrack &&
+        wasVideoTrackChanged &&
+        this.remoteVideoTrack?.mediaStreamTrack &&
+        activeRemoteStream.getTracks().includes(this.remoteVideoTrack.mediaStreamTrack as any)
+      ) {
+        try {
+          activeRemoteStream.removeTrack(this.remoteVideoTrack.mediaStreamTrack as any);
+          logger.info('[VideoCallSession] Removed previous remote video track from stream', {
+            oldTrackId: oldVideoTrackSid,
+            newTrackId: track.sid,
+          });
+        } catch (e) {
+          logger.warn('[VideoCallSession] Error removing previous video track', e);
+        }
+      }
+      if (mediaTrack && !trackAlreadyInStream) {
+        activeRemoteStream.addTrack(mediaTrack as any);
+        logger.debug('[VideoCallSession] Added track to remote stream', {
+          kind: publication.kind,
+          streamId: activeRemoteStream.id,
+          tracksCount: activeRemoteStream.getTracks().length,
+          trackId: track.sid,
+        });
+      }
     }
     
     if (publication.kind === Track.Kind.Audio) {
@@ -3830,6 +4063,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     } else if (publication.kind === Track.Kind.Video) {
       const wasMutedStateChanged = this.remoteVideoTrack && (this.remoteVideoTrack.isMuted !== track.isMuted);
       this.remoteVideoTrack = track;
+      this.lastUnsubscribedRemoteVideoTrackSid = null;
       // A new video track arriving usually means "camera is on".
       // But during re-subscribe it can briefly be muted; avoid flashing "away" by debouncing OFF.
       if (!track.isMuted) {
@@ -3923,6 +4157,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.remoteAudioTrack = null;
     }
     if (publication.kind === Track.Kind.Video && this.remoteVideoTrack) {
+      this.lastUnsubscribedRemoteVideoTrackSid = this.remoteVideoTrack.sid;
       const mediaTrack = this.remoteVideoTrack.mediaStreamTrack;
       if (mediaTrack && this.remoteStream) {
         this.remoteStream.removeTrack(mediaTrack as any);

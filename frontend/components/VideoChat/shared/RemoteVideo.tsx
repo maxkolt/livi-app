@@ -75,6 +75,12 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     prevPartnerInPiPRef.current = partnerInPiP;
   }, [partnerInPiP]);
 
+  // При смене remote stream (например переворот камеры) старый stream уже без видео-трека.
+  // Не показывать его как "last good frame" — иначе RTCView даёт чёрный экран.
+  useEffect(() => {
+    lastGoodStreamRef.current = null;
+  }, [streamToUse?.id]);
+
   const renderLastGoodFrame = useCallback(
     (reason: string, extra?: Record<string, unknown>) => {
       const s = lastGoodStreamRef.current;
@@ -168,6 +174,11 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     return stream;
   }, [remoteStream]);
 
+  // Синхронно сбрасываем "последний кадр" при смене stream (переворот камеры), чтобы не рендерить старый stream без трека (чёрный экран).
+  if (streamToUse?.id && lastGoodStreamRef.current && lastGoodStreamRef.current.id !== streamToUse.id) {
+    lastGoodStreamRef.current = null;
+  }
+
 
   // Сообщаем о готовности стрима
   useEffect(() => {
@@ -186,7 +197,49 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   const streamToUseVideoTrackId = streamToUse
     ? ((streamToUse as any)?.getVideoTracks?.()?.[0]?.id ?? null)
     : null;
-  
+
+  // После переворота камеры приходит новый stream. В RN readyState может не быть 'live' — ре-рендер по таймауту.
+  // Сбрасываем tick только при смене stream (не при первом появлении), чтобы не держать лоадер дольше нужного.
+  const [trackLiveTick, setTrackLiveTick] = useState(0);
+  const prevStreamIdForTickRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!streamToUse) return;
+    const videoTrack = (streamToUse as any)?.getVideoTracks?.()?.[0] || null;
+    if (!videoTrack) return;
+
+    const streamId = streamToUse.id;
+    const isNewStream = prevStreamIdForTickRef.current != null && prevStreamIdForTickRef.current !== streamId;
+    prevStreamIdForTickRef.current = streamId;
+    if (isNewStream) setTrackLiveTick(0);
+
+    const TRACK_READY_DELAY_MS = 150;
+    const TRACK_LIVE_POLL_MS = 80;
+    const TRACK_LIVE_POLL_MAX_MS = 3500;
+    const startedAt = Date.now();
+
+    const timeoutId = setTimeout(() => setTrackLiveTick((k) => k + 1), TRACK_READY_DELAY_MS);
+
+    if (videoTrack.readyState === 'live') {
+      return () => clearTimeout(timeoutId);
+    }
+
+    const t = setInterval(() => {
+      if (Date.now() - startedAt > TRACK_LIVE_POLL_MAX_MS) {
+        clearInterval(t);
+        return;
+      }
+      const vt = (streamToUse as any)?.getVideoTracks?.()?.[0];
+      if (vt && vt.readyState === 'live') {
+        clearInterval(t);
+        setTrackLiveTick((k) => k + 1);
+      }
+    }, TRACK_LIVE_POLL_MS);
+    return () => {
+      clearTimeout(timeoutId);
+      clearInterval(t);
+    };
+  }, [streamToUse?.id, streamToUseVideoTrackId]);
+
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     if (!streamToUse) return;
@@ -360,7 +413,12 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   const videoTrackReady = !!videoTrack && videoTrack.readyState === 'live';
   const videoTrackEnabled = !!videoTrack && (videoTrack.enabled ?? true);
   const videoTrackMuted = !!videoTrack && (videoTrack.muted ?? false);
-  const hasRenderableVideo = !!videoTrack && videoTrackReady && videoTrackEnabled && !videoTrackMuted;
+  // После переворота камеры в RN readyState может не быть 'live'. Если уже был ре-рендер по trackLiveTick — считаем видео готовым.
+  const hasRenderableVideo =
+    !!videoTrack &&
+    videoTrackEnabled &&
+    !videoTrackMuted &&
+    (videoTrackReady || trackLiveTick > 0);
 
   // Detect an actual PiP transition (true -> false). Do NOT treat normal call connect
   // (partnerInPiP=false by default) as "returning from PiP" — it causes black flicker.

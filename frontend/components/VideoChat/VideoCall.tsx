@@ -19,7 +19,7 @@ import {
   NativeModules,
   AppState,
 } from 'react-native';
-import { useNavigation, useFocusEffect, usePreventRemove } from '@react-navigation/native';
+import { CommonActions, useNavigation, useFocusEffect, usePreventRemove } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -1242,6 +1242,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         pipRef.current.hidePiP();
         sessionRef.current?.exitPiP?.();
       }
+      // КРИТИЧНО: Сразу отключаем системный PiP hint, чтобы на некоторых устройствах не происходил
+      // автоматический вход в системный PiP при переходах/смене активити.
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+      }
       
       // КРИТИЧНО: Останавливаем локальный стрим (камера и микрофон)
       // На Android нужно более агрессивно останавливать треки
@@ -1275,19 +1280,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       clearSessionRefs();
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
 
-      // После завершения звонка — шаг назад на Home (чтобы Back не приводил к finish Activity и заглушке при повторном открытии)
-      const nav = navigation;
-      setTimeout(() => {
-        try {
-          if (nav?.canGoBack?.()) {
-            nav.goBack();
-          } else {
-            (nav as any)?.navigate?.('Home');
-          }
-        } catch (e) {
-          logger.warn('[VideoCall] navigate after call end failed', e);
-        }
-      }, 400);
+      // Требование UX: после завершения звонка не показываем неактивный экран — вычищаем стек и уходим на Home.
+      try {
+        (navigation as any)?.dispatch?.(
+          CommonActions.reset({
+            index: 0,
+            routes: [{ name: 'Home' as any }],
+          })
+        );
+      } catch (e) {
+        logger.warn('[VideoCall] reset to Home after call end failed', e);
+      }
 
       // КРИТИЧНО: Сбрасываем флаг через небольшую задержку, чтобы дать состоянию обновиться
       setTimeout(() => {
@@ -1573,6 +1576,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         pipRef.current.hidePiP();
         session.exitPiP?.();
       }
+      // КРИТИЧНО: Сразу отключаем системный PiP hint, чтобы у второго участника не возникал
+      // автовход в PiP при любых переходах после call:end.
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+      }
       
       // КРИТИЧНО: Сначала принудительно останавливаем локальный стрим через session
       // Это гарантирует, что камера остановится даже если localStream в состоянии устарел
@@ -1657,12 +1665,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
       }, 100);
       
-      // КРИТИЧНО: НЕ делаем навигацию - остаемся на экране с задизейбленной кнопкой
-      // Экран останется с isInactiveState=true, что покажет задизейбленную кнопку
-      logger.info('[VideoCall] ✅ Звонок завершен - экран остается открытым, кнопка "Завершить" неактивна', {
-        isInactiveState: true,
-        canAcceptIncoming: true
-      });
+      // Требование UX: после завершения звонка не показываем неактивный экран — сразу уходим на Home.
+      try {
+        (navigation as any)?.dispatch?.(
+          CommonActions.reset({
+            index: 0,
+            routes: [{ name: 'Home' as any }],
+          })
+        );
+      } catch (e) {
+        logger.warn('[VideoCall] reset to Home after endCall failed', e);
+      }
     } catch (e) {
       logger.error('[VideoCall] Error ending call:', e);
     }
@@ -2364,7 +2377,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             camOn={camOn}
             onToggleMic={toggleMic}
             onToggleCam={toggleCam}
-            onFlipCamera={() => sessionRef.current?.flipCam()}
+            onFlipCamera={() => {
+              const session = sessionRef.current ?? (global as any).__webrtcSessionRef?.current;
+              session?.flipCam?.();
+            }}
             localStream={localStream}
             visible={showControls}
             opacity={buttonsOpacity}

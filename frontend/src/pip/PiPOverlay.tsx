@@ -114,6 +114,7 @@ export default function PiPOverlay() {
   const localCamOn = ctx?.localCamOn;
   const allowVideoRender = ctx?.allowVideoRender ?? false;
   const inSystemPiPMode = ctx?.inSystemPiPMode ?? false;
+  const pendingSystemPiP = ctx?.pendingSystemPiP ?? false;
 
   // Не используем useSafeAreaInsets() здесь — при смене экрана/ремаунте он может давать "forEach of null" внутри провайдера.
   const insets = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -125,7 +126,9 @@ export default function PiPOverlay() {
   const safePosY = typeof pipPos?.y === 'number' && !Number.isNaN(pipPos.y) ? pipPos.y : 120;
 
   // Системный PiP: окно уже имеет размер PiP — занимаем весь экран (0,0, W, H), только видео собеседника.
-  const isSystemPiP = !!inSystemPiPMode;
+  // ВАЖНО: pendingSystemPiP нужен, чтобы заранее подготовить UI ДО enterPictureInPictureMode()
+  // (иначе Android может "сфотографировать" HomeScreen + маленький in-app PiP).
+  const isSystemPiP = !!inSystemPiPMode || !!pendingSystemPiP;
   const overlayWidth = isSystemPiP ? W : PIP_W;
   const overlayHeight = isSystemPiP ? H : PIP_H;
 
@@ -144,12 +147,16 @@ export default function PiPOverlay() {
   ).current;
   const start = useRef({ x: 0, y: 0 });
 
-  // В системном PiP окно на весь экран — сбрасываем позицию в (0,0), но transform не убираем (избегаем forEach of null).
+  // В системном PiP (и в режиме подготовки pendingSystemPiP) окно на весь экран — сбрасываем позицию в (0,0),
+  // но transform не убираем (избегаем forEach of null).
   useEffect(() => {
-    if (inSystemPiPMode) {
+    if (isSystemPiP) {
       translate.setValue({ x: 0, y: 0 });
+      return;
     }
-  }, [inSystemPiPMode, translate]);
+    // При выходе из system/pending — вернуть оверлей в сохранённую позицию.
+    translate.setValue({ x: clamp(safePosX, MIN_X, MAX_X), y: clamp(safePosY, MIN_Y, MAX_Y) });
+  }, [isSystemPiP, translate, safePosX, safePosY, MIN_X, MAX_X, MIN_Y, MAX_Y]);
 
   const DRAG_THRESHOLD = 6;
   const panResponder = useMemo(
@@ -237,9 +244,9 @@ export default function PiPOverlay() {
     (Platform.OS !== 'ios' || (streamURL && streamURL.length > 0));
 
   // Системный PiP: только видео собеседника на всю ширину и высоту окна PiP. In-app PiP: верхняя панель + видео.
-  const showTopBar = !inSystemPiPMode;
-  const videoObjectFit = inSystemPiPMode ? 'cover' : 'cover';
-  const videoAreaStyle = inSystemPiPMode ? styles.videoAreaSystemPiP : styles.videoArea;
+  const showTopBar = !isSystemPiP;
+  const videoObjectFit = isSystemPiP ? 'cover' : 'cover';
+  const videoAreaStyle = isSystemPiP ? styles.videoAreaSystemPiP : styles.videoArea;
   const cardStyle = isSystemPiP ? [styles.card, styles.cardSystemPiP] : styles.card;
 
   return (
@@ -370,12 +377,13 @@ const styles = StyleSheet.create({
   videoAreaSystemPiP: {
     flex: 1,
     minHeight: 0,
-    backgroundColor: 'transparent',
+    backgroundColor: '#000',
   },
   cardSystemPiP: {
     borderRadius: 0,
     borderWidth: 0,
-    backgroundColor: 'transparent',
+    // В системном PiP должны перекрыть HomeScreen, чтобы в окне PiP не было UI приветствия.
+    backgroundColor: '#000',
   },
   rtcView: {
     ...StyleSheet.absoluteFillObject,

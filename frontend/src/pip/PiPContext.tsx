@@ -210,6 +210,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const inPiP = !!payload?.isInPiP;
       const run = () => {
         setInSystemPiPMode(inPiP);
+        try {
+          (global as any).__pipInSystemModeRef = (global as any).__pipInSystemModeRef || { current: false };
+          (global as any).__pipInSystemModeRef.current = inPiP;
+        } catch (_) {}
         if (inPiP) {
           setPendingSystemPiP(false);
           const session = (global as any).__webrtcSessionRef?.current;
@@ -743,6 +747,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.isRemoteMuted !== undefined) setIsRemoteMuted(patch.isRemoteMuted);
     if (patch.pipPos) setPipPos(patch.pipPos);
     if (patch.localCamOn !== undefined) setLocalCamOn(patch.localCamOn);
+    if (patch.allowVideoRender !== undefined) setAllowVideoRender(!!patch.allowVideoRender);
+    if (patch.inSystemPiPMode !== undefined) setInSystemPiPMode(!!patch.inSystemPiPMode);
+    if (patch.pendingSystemPiP !== undefined) setPendingSystemPiP(!!patch.pendingSystemPiP);
     // потоки через ref:
     if (patch.localStream !== undefined) localStreamRef.current = patch.localStream;
     if (patch.remoteStream !== undefined) remoteStreamRef.current = patch.remoteStream;

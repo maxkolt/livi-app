@@ -312,7 +312,19 @@ export const usePiP = ({
         }
 
         if (NativeModules.LiviAppModule?.requestEnterPictureInPicture) {
-          try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
+          // Подготовить UI под системный PiP (полноэкранное remote-видео) до входа.
+          try { pip.updatePiPState?.({ pendingSystemPiP: true, allowVideoRender: true }); } catch (_) {}
+          setTimeout(() => {
+            try { pip.updatePiPState?.({ pendingSystemPiP: false }); } catch (_) {}
+          }, 1500);
+          const raf = (typeof requestAnimationFrame !== 'undefined')
+            ? requestAnimationFrame
+            : ((fn: any) => setTimeout(fn, 0));
+          raf(() => {
+            raf(() => {
+              try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
+            });
+          });
         }
         return true; // Предотвращаем стандартное поведение кнопки назад
       }

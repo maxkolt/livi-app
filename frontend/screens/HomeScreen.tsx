@@ -695,12 +695,25 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (!pip.visible || (!pip.callId && !pip.roomId)) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       try {
-        NativeModules.LiviAppModule?.requestEnterPictureInPicture?.();
+        // ВАЖНО: заранее подготовить UI для системного PiP (полноэкранное remote-видео),
+        // иначе Android может захватить HomeScreen + маленький in-app PiP.
+        try { pip.updatePiPState?.({ pendingSystemPiP: true, allowVideoRender: true }); } catch (_) {}
+        setTimeout(() => {
+          try { pip.updatePiPState?.({ pendingSystemPiP: false }); } catch (_) {}
+        }, 1500);
+        const raf = (typeof requestAnimationFrame !== 'undefined')
+          ? requestAnimationFrame
+          : ((fn: any) => setTimeout(fn, 0));
+        raf(() => {
+          raf(() => {
+            try { NativeModules.LiviAppModule?.requestEnterPictureInPicture?.(); } catch (_) {}
+          });
+        });
       } catch (_) {}
       return true; // перехватываем — уходим в системный PiP, не закрываем приложение
     });
     return () => sub.remove();
-  }, [pip.visible, pip.callId, pip.roomId]);
+  }, [pip.visible, pip.callId, pip.roomId, pip.updatePiPState]);
 
   // Проверка доступности обновления (при старте и при возврате в приложение)
   // Дебаунс при resume: не чаще раза в 60 сек, чтобы избежать мерцания при частых AppState active (два устройства, блокировка экрана)

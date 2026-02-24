@@ -885,10 +885,30 @@ function AppContent() {
     const pipVisible = !!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current;
     const shouldKeepOn = isVideoSessionRoute(currentRoute) || !!incoming || pipVisible;
 
-    // Android: при нажатии Home во время звонка переводить в системный PiP (окно поверх лаунчера)
+    // Android: системный PiP разрешаем ТОЛЬКО при реально активном звонке/входящем/видимом PiP,
+    // а не просто потому что текущий экран = VideoCall (иначе при call:ended может произойти автозаход в PiP).
     if (Platform.OS === 'android') {
       try {
-        NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!shouldKeepOn);
+        // Глобальный guard: после завершения звонка запрещаем системный PiP на короткое время,
+        // чтобы исключить гонку (cleanup/reset → onUserLeaveHint → PiP + лаунчер).
+        const disableUntil = (global as any).__disableSystemPiPUntilRef?.current;
+        if (typeof disableUntil === 'number' && disableUntil > Date.now()) {
+          NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+        } else {
+        const g = (global as any);
+        const session = g.__webrtcSessionRef?.current;
+        const sessionNotEnded =
+          !!session && (typeof session.isEnded === 'function' ? !session.isEnded() : true);
+        const params = g.__currentCallPiPParamsRef?.current;
+        const hasAnyIds =
+          !!params?.callId ||
+          !!params?.roomId ||
+          (!!session && typeof session.getRoomId === 'function' && !!session.getRoomId()) ||
+          (!!session && typeof session.getCallId === 'function' && !!session.getCallId());
+        const hasActiveCallForPiP = sessionNotEnded && hasAnyIds;
+        const allowSystemPiP = pipVisible || !!incoming || hasActiveCallForPiP;
+        NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!allowSystemPiP);
+        }
       } catch (_) {}
     }
 
@@ -1246,6 +1266,11 @@ function AppContent() {
   // При получении call:ended (второй участник завершил с нативного экрана/уведомления) — закрываем модалки, reportEndCallToCallKeep, уведомления у обоих
   React.useEffect(() => {
     const onCallEnded = (data?: { callId?: string }) => {
+      // Жёстко запрещаем системный PiP на короткое время после завершения звонка (анти-гонка).
+      try {
+        (global as any).__disableSystemPiPUntilRef = (global as any).__disableSystemPiPUntilRef || { current: 0 };
+        (global as any).__disableSystemPiPUntilRef.current = Date.now() + 4000;
+      } catch (_) {}
       // КРИТИЧНО: Сразу отключаем системный PiP у собеседника, чтобы при уходе с экрана не выскакивало окно PiP
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
@@ -1266,9 +1291,21 @@ function AppContent() {
       try { emitCloseOutgoingCall(); } catch {}
       try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
-      // КРИТИЧНО: У участника, который не нажимал «завершить», уйти с экрана VideoCall на Home, чтобы не оставался чёрный экран или PiP поверх главного
-      if (navRef.isReady() && navRef.getCurrentRoute()?.name === 'VideoCall') {
-        navRef.dispatch(CommonActions.navigate('Home'));
+      // Если реально в системном PiP — выходим (иначе не трогаем, чтобы не было лишних recreate()).
+      if (Platform.OS === 'android') {
+        try {
+          const inSystem = (global as any).__pipInSystemModeRef?.current === true;
+          if (inSystem) NativeModules.LiviAppModule?.requestExitSystemPiP?.();
+        } catch (_) {}
+      }
+      // Требование UX: при завершении звонка всегда возвращаем на Home и вычищаем стек.
+      if (navRef.isReady()) {
+        navRef.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [{ name: 'Home' as any }],
+          })
+        );
       }
     };
     socket.on('call:ended', onCallEnded);
@@ -1278,8 +1315,18 @@ function AppContent() {
   // Тап по уведомлению «звонок завершён» (другой положил трубку) — уйти с экрана видеозвонка и снять уведомления
   React.useEffect(() => {
     (global as any).__onCallEndedFromPush = () => {
-      if (navRef.isReady() && navRef.getCurrentRoute()?.name === 'VideoCall') {
-        navRef.dispatch(CommonActions.navigate('Home'));
+      // Жёстко запрещаем системный PiP на короткое время после завершения звонка (анти-гонка).
+      try {
+        (global as any).__disableSystemPiPUntilRef = (global as any).__disableSystemPiPUntilRef || { current: 0 };
+        (global as any).__disableSystemPiPUntilRef.current = Date.now() + 4000;
+      } catch (_) {}
+      if (navRef.isReady()) {
+        navRef.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [{ name: 'Home' as any }],
+          })
+        );
       }
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
     };
@@ -1764,9 +1811,26 @@ export default function App() {
 
   const endCallImpl = (callId: string | null, roomId: string | null) => {
     console.log('[App] 🔥 endCallImpl вызван', { callId, roomId });
+    // Жёстко запрещаем системный PiP на короткое время после завершения звонка (анти-гонка).
+    try {
+      (global as any).__disableSystemPiPUntilRef = (global as any).__disableSystemPiPUntilRef || { current: 0 };
+      (global as any).__disableSystemPiPUntilRef.current = Date.now() + 4000;
+    } catch (_) {}
     // КРИТИЧНО: Сразу отключаем системный PiP при завершении из in-app PiP, чтобы звонок полностью завершился и у собеседника не выскакивал системный PiP
     if (Platform.OS === 'android') {
       try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+    }
+    // КРИТИЧНО: Скрыть in-app PiP, чтобы не было «Home + PiP» и чёрных оверлеев.
+    try {
+      const hidePiP = (global as any).__pipHidePiPRef?.current;
+      if (typeof hidePiP === 'function') hidePiP();
+    } catch (_) {}
+    // На всякий случай просим выйти из системного PiP (если он активен/завис).
+    if (Platform.OS === 'android') {
+      try {
+        const inSystem = (global as any).__pipInSystemModeRef?.current === true;
+        if (inSystem) NativeModules.LiviAppModule?.requestExitSystemPiP?.();
+      } catch (_) {}
     }
     reportEndCallToCallKeep(callId);
     setCallKeepAvailable(true);
@@ -1795,6 +1859,15 @@ export default function App() {
     } catch (e) {
       console.warn('[App] Error calling endCall cleanup:', e);
     }
+    // Требование UX: после завершения звонка не оставляем неактивный VideoCall в стеке.
+    if (navRef.isReady()) {
+      navRef.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [{ name: 'Home' as any }],
+        })
+      );
+    }
   };
 
   const endCallImplRef = React.useRef<(cid: string | null, rid: string | null) => void>(endCallImpl);
@@ -1822,6 +1895,28 @@ export default function App() {
       if (!navRef.isReady()) return false;
       if (navRef.canGoBack()) return false; // не на корне — пусть экран/навигация обработает Back
       try {
+        const prepSystemPiPUI = () => {
+          try {
+            const upd = (global as any).__pipUpdateStateRef?.current;
+            if (typeof upd === 'function') upd({ pendingSystemPiP: true, allowVideoRender: true });
+            setTimeout(() => {
+              try {
+                const upd2 = (global as any).__pipUpdateStateRef?.current;
+                if (typeof upd2 === 'function') upd2({ pendingSystemPiP: false });
+              } catch (_) {}
+            }, 1500);
+          } catch (_) {}
+        };
+        const requestSystemPiP = () => {
+          const raf = (typeof requestAnimationFrame !== 'undefined')
+            ? requestAnimationFrame
+            : ((fn: any) => setTimeout(fn, 0));
+          raf(() => {
+            raf(() => {
+              try { NativeModules.LiviAppModule?.requestEnterPictureInPicture?.(); } catch (_) {}
+            });
+          });
+        };
         if (!pipVisible && hasActiveCall) {
           // Сначала показываем in-app PiP с видео, чтобы в системном PiP было видео собеседника
           const params = (global as any).__currentCallPiPParamsRef?.current;
@@ -1846,13 +1941,16 @@ export default function App() {
             }
             if (session && typeof session.enterPiP === 'function') session.enterPiP();
             setTimeout(() => {
-              try { NativeModules.LiviAppModule?.requestEnterPictureInPicture?.(); } catch (_) {}
+              prepSystemPiPUI();
+              requestSystemPiP();
             }, 350);
           } else {
-            NativeModules.LiviAppModule?.requestEnterPictureInPicture?.();
+            prepSystemPiPUI();
+            requestSystemPiP();
           }
         } else {
-          NativeModules.LiviAppModule?.requestEnterPictureInPicture?.();
+          prepSystemPiPUI();
+          requestSystemPiP();
         }
       } catch (_) {}
       return true; // перехватываем — уходим в системный PiP, не закрываем приложение
