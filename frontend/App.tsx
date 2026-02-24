@@ -10,7 +10,7 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler, Alert } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
@@ -32,7 +32,7 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, stopIncomingCallRingtoneAndVibration } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, stopIncomingCallRingtoneAndVibration, canUseFullScreenIntent, openAppNotificationSettings } from './utils/callKeep';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
@@ -1346,6 +1346,32 @@ function AppContent() {
       });
     }, 500);
     return () => clearTimeout(t);
+  }, []);
+
+  // Android: если полноэкранные уведомления отключены — один раз напомнить включить (чтобы входящие видеозвонки показывались на заблокированном экране)
+  const FULL_SCREEN_PROMPT_KEY = 'full_screen_intent_prompt_last_shown';
+  const FULL_SCREEN_PROMPT_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 дней
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const timer = setTimeout(async () => {
+      try {
+        const canUse = await canUseFullScreenIntent();
+        if (canUse) return;
+        const raw = await AsyncStorage.getItem(FULL_SCREEN_PROMPT_KEY);
+        const last = raw ? parseInt(raw, 10) : 0;
+        if (Date.now() - last < FULL_SCREEN_PROMPT_INTERVAL_MS) return;
+        await AsyncStorage.setItem(FULL_SCREEN_PROMPT_KEY, String(Date.now()));
+        Alert.alert(
+          t('incomingCallTitle', lang),
+          'Чтобы входящие видеозвонки всегда показывались на заблокированном экране, включите полноэкранные уведомления для LiVi в настройках.',
+          [
+            { text: 'Позже', style: 'cancel' },
+            { text: 'Настройки', onPress: () => openAppNotificationSettings() },
+          ]
+        );
+      } catch (_) {}
+    }, 3000);
+    return () => clearTimeout(timer);
   }, []);
 
   // КРИТИЧНО: Перерегистрация обработчика при возврате из спящего режима (AppState change)

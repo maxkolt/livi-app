@@ -12,6 +12,8 @@ import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import java.net.URLEncoder
@@ -73,26 +75,39 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 Log.w(TAG, "[INCOMING_CALL] Skip: IncomingCallActivity already visible")
                 return
             }
-            if (MainActivity.isInForeground) {
-                Log.w(TAG, "[INCOMING_CALL] Skip: app in foreground (socket will handle)")
+            // При заблокированном/выключенном экране всегда показываем нативный экран — сокет может быть отключён.
+            val screenLockedOrOff = keyguardLocked || !isInteractive
+            if (MainActivity.isInForeground && !screenLockedOrOff) {
+                Log.w(TAG, "[INCOMING_CALL] Skip: app in foreground and screen unlocked (socket will handle)")
                 return
             }
+            // Wake lock: даём процессу время запустить FGS и показать full-screen intent (особенно при убитом приложении).
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            val wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "livi:incoming_call")?.apply {
+                try { acquire(10 * 60 * 1000L) } catch (_: Exception) {}
+            }
+            Handler(Looper.getMainLooper()).postDelayed({
+                try { wakeLock?.release() } catch (_: Exception) {}
+            }, 8000L)
             try {
                 (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancelAll()
             } catch (_: Exception) {}
-            var callKeepStarted = false
-            try {
-                val headlessIntent = Intent(this, RNCallKeepBackgroundMessagingService::class.java).apply {
-                    putExtra("type", "call")
-                    putExtra("callId", callId)
-                    putExtra("from", from)
-                    putExtra("fromNick", fromNick)
+            // HeadlessJsTask разрешён только когда приложение в фоне; при foreground (даже с заблокированным экраном) вызов приведёт к IllegalStateException.
+            if (!MainActivity.isInForeground) {
+                try {
+                    val headlessIntent = Intent(this, RNCallKeepBackgroundMessagingService::class.java).apply {
+                        putExtra("type", "call")
+                        putExtra("callId", callId)
+                        putExtra("from", from)
+                        putExtra("fromNick", fromNick)
+                    }
+                    startService(headlessIntent)
+                    Log.e(TAG, "[INCOMING_CALL] RNCallKeepBackgroundMessagingService started (ConnectionService path)")
+                } catch (e: Exception) {
+                    Log.e(TAG, "[INCOMING_CALL] CallKeep headless start FAILED", e)
                 }
-                startService(headlessIntent)
-                callKeepStarted = true
-                Log.e(TAG, "[INCOMING_CALL] RNCallKeepBackgroundMessagingService started (ConnectionService path)")
-            } catch (e: Exception) {
-                Log.e(TAG, "[INCOMING_CALL] CallKeep headless start FAILED", e)
+            } else {
+                Log.d(TAG, "[INCOMING_CALL] Skip RNCallKeepBackgroundMessagingService (app in foreground; native IncomingCallForegroundService will show UI)")
             }
             // Всегда показываем уведомление с кнопками «Принять»/«Отклонить», когда приложение в фоне.
             // Full-screen (экран поверх всего) — только при заблокированном или выключенном экране; иначе heads-up с кнопками.
