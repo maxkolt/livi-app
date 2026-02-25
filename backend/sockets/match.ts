@@ -381,17 +381,17 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         // ЧАТРУЛЕТКА: Отправляем peer:left партнеру (он нажал "Далее", значит партнер должен начать новый поиск)
         other.emit('peer:left');
         // КРИТИЧНО: Автоматически возвращаем партнера в очередь для нового поиска
-        // Это гарантирует, что он сразу начнет искать нового собеседника
         await markBusy(io, other, true);
+        // Одинаковая задержка для обоих (250ms), чтобы tryMatch не сматчил одного с третьим пока второй ещё не в очереди
+        const reEnqueueDelayMs = 250;
         setTimeout(async () => {
-          // Еще раз проверяем и очищаем перед добавлением в очередь
           other.data.partnerSid = undefined;
           other.data.inCall = false;
           await unlockPair(other.id);
           await pushToQueue(other.id);
           logger.debug('Partner re-added to queue after next', { socketId: other.id });
           runTryMatch(other);
-        }, 100); // Небольшая задержка для синхронизации
+        }, reEnqueueDelayMs);
       }
     }
 
@@ -406,18 +406,17 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     // 3. Устанавливаем busy (пользователь продолжает поиск)
     await markBusy(io, socket, true);
 
-    // 4. Через небольшую задержку добавляем в очередь и запускаем поиск
+    // 4. Та же задержка 250ms — оба в очереди одновременно, меньше гонок при tryMatch
+    const reEnqueueDelayMs = 250;
     setTimeout(async () => {
-      // КРИТИЧНО: Еще раз проверяем и очищаем перед добавлением в очередь
       socket.data.partnerSid = undefined;
       socket.data.inCall = false;
       await unlockPair(socket.id);
       socket.data.isNexting = false;
-      
       await pushToQueue(socket.id);
       logger.debug('Socket re-added to queue', { socketId: socket.id });
       runTryMatch(socket);
-    }, 400);
+    }, reEnqueueDelayMs);
   });
 
   // === STOP ================================================================

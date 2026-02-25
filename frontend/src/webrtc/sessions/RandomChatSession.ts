@@ -87,6 +87,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   private lastAudioDuration = 0;
   private isMicMonitoringActive = false;
   private flipCamInProgress = false;
+  /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и stop повторно */
+  private cleaned = false;
 
   constructor(config: WebRTCSessionConfig) {
     super();
@@ -524,33 +526,37 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
   }
 
-  handleRandomDisconnected(_: 'server' | 'local'): void {
-    // КРИТИЧНО: Защита от множественных вызовов
+  /** Единая точка обработки «партнёр ушёл» (peer:left или disconnected). Защита от двойного вызова. */
+  private handlePartnerGone(reason: 'peer_left' | 'disconnected'): void {
     if (this.isDisconnecting || this.disconnectHandled) {
-      logger.debug('[RandomChatSession] handleRandomDisconnected already in progress, skipping');
+      logger.debug('[RandomChatSession] handlePartnerGone already in progress, skipping', { reason });
       return;
     }
     this.disconnectHandled = true;
-    
-    // Асинхронно отключаем комнату и затем запускаем поиск
+
+    try {
+      this.emit('searching');
+      this.config.callbacks.onLoadingChange?.(true);
+      this.config.onLoadingChange?.(true);
+    } catch {}
+
     void (async () => {
       try {
         await this.disconnectRoom('server');
         this.resetRemoteState();
-        
-        // КРИТИЧНО: Добавляем задержку перед autoNext, чтобы комната успела полностью отключиться
-        // и избежать конфликтов с новыми подключениями
-        if (this.started) {
+        if (!this.started) {
+          this.stopLocalTracks();
+        } else if (reason === 'disconnected') {
+          // peer_left: бэкенд уже вернул в очередь, autoNext не нужен. disconnected: запускаем поиск снова.
           setTimeout(() => {
             if (this.started && !this.isDisconnecting) {
               this.autoNext('disconnected');
             }
           }, 150);
-        } else {
-          this.stopLocalTracks();
         }
+      } catch (e) {
+        logger.warn('[RandomChatSession] handlePartnerGone error', { reason, error: e });
       } finally {
-        // Сбрасываем флаги через небольшую задержку
         setTimeout(() => {
           this.disconnectHandled = false;
         }, 1000);
@@ -558,7 +564,13 @@ export class RandomChatSession extends SimpleEventEmitter {
     })();
   }
 
+  handleRandomDisconnected(_: 'server' | 'local'): void {
+    this.handlePartnerGone('disconnected');
+  }
+
   cleanup(): void {
+    if (this.cleaned) return;
+    this.cleaned = true;
     this.stopRandomChat();
     this.socketOffs.forEach((off) => off());
     this.socketOffs = [];
@@ -625,9 +637,9 @@ export class RandomChatSession extends SimpleEventEmitter {
         logger.error('[RandomChatSession] Failed to handle match_found', e);
       });
     };
-    const peerStoppedHandler = () => this.handleRandomDisconnected('server');
-    const peerLeftHandler = () => this.handlePeerLeft();
-    const disconnectedHandler = () => this.handleRandomDisconnected('server');
+    const peerStoppedHandler = () => this.handlePartnerGone('disconnected');
+    const peerLeftHandler = () => this.handlePartnerGone('peer_left');
+    const disconnectedHandler = () => this.handlePartnerGone('disconnected');
     // RandomChat UX: "Отошел" must be driven ONLY by explicit user action (camera toggle button).
     // We use a dedicated socket relay (cam-toggle) instead of LiveKit TrackMuted/Unmuted to avoid false positives
     // during re-subscribes, network churn, or when a participant is leaving.
@@ -789,37 +801,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   }
 
   private handlePeerLeft(): void {
-    // peer:left приходит при "next" партнёра; backend сам возвращает нас в очередь.
-    // Здесь только чистим LiveKit и UI, без повторного socket.emit('start'), чтобы избежать дублей.
-    // КРИТИЧНО: Защита от множественных вызовов
-    if (this.isDisconnecting || this.disconnectHandled) {
-      logger.debug('[RandomChatSession] handlePeerLeft: already disconnecting, skipping');
-      return;
-    }
-    this.disconnectHandled = true;
-
-    // UX: partner pressed "Next" -> we should go to searching immediately and NEVER flash "Отошел".
-    // The "Отошел" UI is driven by remote cam mute/unmute, and LiveKit can emit TrackMuted while a participant is leaving.
-    // If we wait (even 300ms), the UI can briefly show the away placeholder before the searching state kicks in.
-    try {
-      this.emit('searching');
-      this.config.callbacks.onLoadingChange?.(true);
-      this.config.onLoadingChange?.(true);
-    } catch {}
-    
-    void (async () => {
-      try {
-        await this.disconnectRoom('server');
-        this.resetRemoteState();
-      } catch (e) {
-        logger.error('[RandomChatSession] Error in handlePeerLeft', e);
-      } finally {
-        // Сбрасываем флаг через небольшую задержку
-        setTimeout(() => {
-          this.disconnectHandled = false;
-        }, 1000);
-      }
-    })();
+    // peer:left приходит при "next" партнёра; backend сам возвращает нас в очередь — autoNext не вызываем.
+    this.handlePartnerGone('peer_left');
   }
 
   private async ensureLocalTracks(force = false): Promise<void> {

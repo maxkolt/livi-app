@@ -34,6 +34,7 @@ import { createToken, getLiveKitUrl } from './routes/livekit';
 import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallDeclinedToCaller, sendCallAcceptedToCaller } from './utils/push';
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
+import { onSocketDisconnectWebRTC } from './sockets/webrtc';
 
 // Закрываем Redis соединение при завершении приложения
 process.on('SIGTERM', async () => {
@@ -1884,6 +1885,35 @@ io.on('connection', async (sock: AuthedSocket) => {
         console.error('[call:accept] ❌ Failed to create LiveKit tokens:', e);
         logger.error('Failed to create LiveKit tokens for call:accept', { error: (e as any)?.message || String(e) });
       }
+
+      // КРИТИЧНО: Отправляем call:accepted только если оба токена созданы. Иначе клиенты получат пустой токен и не подключатся к LiveKit.
+      if (!livekitTokenA || !livekitTokenB) {
+        logger.warn('[call:accept] Not sending call:accepted — token creation failed', { callId: id });
+        try { callIdToRoomId.delete(id); } catch {}
+        try { activeRoomByUserId.delete(link.a); } catch {}
+        if (aSock) {
+          try { aSock.leave(roomId); } catch {}
+          try { activeCallBySocket.delete(aSock.id); } catch {}
+          (aSock as any).data.busy = false;
+          (aSock as any).data.roomId = undefined;
+          (aSock as any).data.partnerSid = undefined;
+          (aSock as any).data.inCall = false;
+          aSock.emit('call:error', { callId: id, reason: 'token_failed' });
+          await emitPresenceUpdateToFriends(io, link.a, false);
+        }
+        if (bSock) {
+          try { bSock.leave(roomId); } catch {}
+          try { activeCallBySocket.delete(bSock.id); } catch {}
+          (bSock as any).data.busy = false;
+          (bSock as any).data.roomId = undefined;
+          (bSock as any).data.partnerSid = undefined;
+          (bSock as any).data.inCall = false;
+          bSock.emit('call:error', { callId: id, reason: 'token_failed' });
+          await emitPresenceUpdateToFriends(io, link.b, false);
+        }
+        cleanupCall(id);
+        return;
+      }
       
       // Отправляем call:accepted с LiveKit credentials
       if (aSock) {
@@ -2100,10 +2130,14 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
   });
 
-  /* ---- disconnect ---- */
+  /* ---- disconnect (единый обработчик: сначала webrtc cleanup, затем unpair/очередь) ---- */
   sock.on('disconnect', async (reason: any) => {
     const userId = (sock as any)?.data?.userId;
-    try {} catch {}
+    try {
+      await onSocketDisconnectWebRTC(io, sock);
+    } catch (e: any) {
+      logger.warn('onSocketDisconnectWebRTC failed', { socketId: sock.id, error: e?.message });
+    }
     const p = await unpair(sock.id);
     if (p) {
       io.to(p).emit('disconnected');

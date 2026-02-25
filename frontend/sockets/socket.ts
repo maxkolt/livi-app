@@ -1584,6 +1584,8 @@ export function setCurrentUserId(userId: string) {
   __notifyCurrentUserId();
   // При смене userId — сбрасываем кэш существования, чтобы не залипать на старом false
   try { userExistsCache.delete(String(userId)); } catch {}
+  // При смене пользователя — сбрасываем кэш сообщений (иначе новый пользователь может увидеть чужие чаты)
+  try { clearAllMessageCache(); } catch {}
   // Сохраняем в AsyncStorage без переподключения
   AsyncStorage.setItem("userId", userId).catch(e => console.warn('Failed to save userId to storage:', e));
 }
@@ -1595,6 +1597,7 @@ export function clearCurrentUserId() {
   // При сбросе identity — сбрасываем кэши проверок, чтобы новые попытки были "чистыми"
   try { userExistsCache.clear(); } catch {}
   try { pendingChecks.clear(); } catch {}
+  try { clearAllMessageCache(); } catch {}
   AsyncStorage.removeItem("userId").catch(e => console.warn('Failed to remove userId from storage:', e));
   console.log('[clearCurrentUserId] Cleared currentUserId');
 }
