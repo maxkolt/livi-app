@@ -14,7 +14,7 @@ import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, S
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall } from "./sockets/socket";
 import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
@@ -1659,6 +1659,7 @@ function AppContent() {
           const doNavigate = () => {
             try {
               if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
+                setActiveVideoCall(true);
                 navRef.dispatch(
                   CommonActions.reset({
                     index: 1,

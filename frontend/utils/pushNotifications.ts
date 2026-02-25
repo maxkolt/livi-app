@@ -3,7 +3,7 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { CommonActions } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, acceptCall, declineCall, ensureSocketConnected } from '../sockets/socket';
+import { API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, acceptCall, declineCall, ensureSocketConnected } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
@@ -224,6 +224,7 @@ async function waitForNavReady(ms = 9000) {
 async function navigateToVideoCallIncoming(peerUserId: string, callId: string) {
   const nav = await waitForNavReady();
   if (!nav) return;
+  setActiveVideoCall(true);
   nav.dispatch(
     CommonActions.reset({
       index: 1,

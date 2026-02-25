@@ -525,6 +525,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     } catch (_) {}
     console.log('🔥🔥🔥 [PiPContext] returnToCall вызван', { callId, roomId, lastNavParams });
 
+    // Если звонок уже завершён (партнёр положил трубку), не переходим на экран звонка — только скрываем PiP
+    const session = (global as any).__webrtcSessionRef?.current;
+    if (session && typeof session.isEnded === 'function' && session.isEnded()) {
+      console.log('[PiPContext] returnToCall: call already ended, closing PiP only');
+      hidePiP();
+      return;
+    }
+
     // Сразу скрываем PiP, чтобы не показывать «приветствие с PiP» перед переходом на VideoCall
     hidePiP();
 
@@ -536,18 +544,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
     // КРИТИЧНО: Сразу отправляем pip:state=false партнеру при возврате из PiP
     // Это гарантирует, что партнер получит уведомление даже если экран еще не получил фокус
-    const session = (global as any).__webrtcSessionRef?.current;
-    if (session && session.exitPiP && typeof session.exitPiP === 'function') {
-      session.exitPiP();
+    const sessionForPipeState = (global as any).__webrtcSessionRef?.current;
+    const roomIdForPipeState = roomId || (global as any).__currentCallPiPParamsRef?.current?.roomId;
+    if (sessionForPipeState && sessionForPipeState.exitPiP && typeof sessionForPipeState.exitPiP === 'function') {
+      sessionForPipeState.exitPiP();
       console.log('[PiPContext] ✅ Вызван session.exitPiP() при returnToCall');
-    } else if (roomId) {
+    } else if (roomIdForPipeState) {
       // Fallback: отправляем напрямую если метод недоступен
       try {
         const socket = require('../sockets/socket').default;
         socket.emit('pip:state', {
           inPiP: false,
           from: socket.id,
-          roomId: roomId,
+          roomId: roomIdForPipeState,
         });
         console.log('[PiPContext] ✅ Отправлено pip:state=false напрямую при returnToCall');
       } catch (e) {
@@ -564,11 +573,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // КРИТИЧНО: Используем навигацию напрямую через глобальную ссылку (как в эталонном файле)
     // Это гарантирует правильную навигацию с параметрами resume и fromPiP
     const nav = (global as any).__navRef;
-    if (!nav || !callId || !roomId) {
-      console.log('[PiPContext] returnToCall: missing nav/callId/roomId', { hasNav: !!nav, callId, roomId });
-      // Fallback: используем onReturnToCall если navRef недоступен
-      if (callId && roomId) {
-        onReturnToCall?.(callId, roomId);
+    // Fallback: если callId/roomId не в контексте (например, вошли в системный PiP без showPiP), берём из VideoCall ref
+    const paramsRef = (global as any).__currentCallPiPParamsRef?.current;
+    const effectiveCallId = callId || paramsRef?.callId || null;
+    const effectiveRoomId = roomId || paramsRef?.roomId || null;
+    const effectiveNavParams = lastNavParams ?? paramsRef?.navParams;
+
+    if (!nav || !effectiveCallId || !effectiveRoomId) {
+      console.log('[PiPContext] returnToCall: missing nav/callId/roomId', { hasNav: !!nav, callId: effectiveCallId, roomId: effectiveRoomId });
+      if (effectiveCallId && effectiveRoomId) {
+        onReturnToCall?.(effectiveCallId, effectiveRoomId);
         hidePiP();
       }
       return;
@@ -577,8 +591,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // КРИТИЧНО: Проверяем что навигация готова перед использованием
     if (!nav.isReady || !nav.isReady()) {
       console.warn('[PiPContext] returnToCall: Navigation not ready, using onReturnToCall fallback');
-      if (callId && roomId) {
-        onReturnToCall?.(callId, roomId);
+      if (effectiveCallId && effectiveRoomId) {
+        onReturnToCall?.(effectiveCallId, effectiveRoomId);
         hidePiP();
       }
       return;
@@ -589,13 +603,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // КРИТИЧНО: Используем параметры из lastNavParams для правильного восстановления звонка
     // Это гарантирует, что все параметры (peerUserId, partnerId и т.д.) будут восстановлены
     const params = {
-      ...lastNavParams,
+      ...effectiveNavParams,
       resume: true,
       fromPiP: true,
       directCall: true,
       directInitiator: undefined,
-      callId: callId,
-      roomId: roomId,
+      callId: effectiveCallId,
+      roomId: effectiveRoomId,
     };
 
     // КРИТИЧНО: Используем CommonActions.reset для навигации (как в эталонном файле)
@@ -617,8 +631,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       console.error('[PiPContext] Navigation error:', e);
       navigatingRef.current = false;
       // Fallback на onReturnToCall при ошибке
-      if (callId && roomId) {
-        onReturnToCall?.(callId, roomId);
+      if (effectiveCallId && effectiveRoomId) {
+        onReturnToCall?.(effectiveCallId, effectiveRoomId);
       }
       hidePiP();
       return;
@@ -720,6 +734,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.allowVideoRender !== undefined) setAllowVideoRender(!!patch.allowVideoRender);
     if (patch.inSystemPiPMode !== undefined) setInSystemPiPMode(!!patch.inSystemPiPMode);
     if (patch.pendingSystemPiP !== undefined) setPendingSystemPiP(!!patch.pendingSystemPiP);
+    if (patch.lastNavParams !== undefined) setLastNavParams(patch.lastNavParams);
     // потоки через ref:
     if (patch.localStream !== undefined) localStreamRef.current = patch.localStream;
     if (patch.remoteStream !== undefined) {

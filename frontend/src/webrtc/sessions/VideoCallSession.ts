@@ -71,6 +71,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     callAccepted?: (data: CallAcceptedPayload) => void;
     callIncoming?: (data: CallIncomingPayload) => void;
     callEnded?: () => void;
+    callError?: (data: { callId?: string; reason?: string }) => void;
     callDeclined?: (data: { callId?: string; from?: string }) => void;
     disconnected?: () => void;
     pipState?: (data: { inPiP: boolean; roomId: string; from: string }) => void;
@@ -91,6 +92,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastProcessedCallAccepted: { callId: string | null; roomName: string | null; timestamp: number } | null = null; // Защита от повторной обработки
   private endCallInProgress = false;
   private ended = false;
+  /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и endCall повторно */
+  private cleaned = false;
 
   // LiveKit reconnect handling: during reconnect we must NOT treat transient disconnects as "call ended".
   private liveKitReconnecting = false;
@@ -824,6 +827,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   cleanup(): void {
+    if (this.cleaned) return;
+    this.cleaned = true;
     this.endCall();
     this.socketOffs.forEach((off) => off());
     this.socketOffs = [];
@@ -980,6 +985,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       socket.off('call:ended', this.socketHandlers.callEnded);
       socket.off('call:cancel', this.socketHandlers.callEnded);
     }
+    if (this.socketHandlers.callError) {
+      socket.off('call:error', this.socketHandlers.callError);
+    }
     if (this.socketHandlers.callDeclined) {
       socket.off('call:declined', this.socketHandlers.callDeclined);
     }
@@ -1029,6 +1037,16 @@ export class VideoCallSession extends SimpleEventEmitter {
         currentCallId: this.callId,
         currentRoomId: this.roomId,
         willHandle: true
+      });
+      this.handleCallEnded();
+    };
+
+    // call:error = сервер не смог создать токены (например LiveKit недоступен); завершаем звонок как при call:ended
+    const callErrorHandler = (data?: { callId?: string; reason?: string }) => {
+      logger.warn('[VideoCallSession] 📡 Socket event call:error received', {
+        callId: data?.callId,
+        reason: data?.reason,
+        currentCallId: this.callId,
       });
       this.handleCallEnded();
     };
@@ -1152,6 +1170,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.socketHandlers.callAccepted = callAcceptedHandler;
     this.socketHandlers.callIncoming = callIncomingHandler;
     this.socketHandlers.callEnded = callEndedHandler;
+    this.socketHandlers.callError = callErrorHandler;
     this.socketHandlers.callDeclined = callDeclinedHandler;
     this.socketHandlers.disconnected = disconnectedHandler;
     this.socketHandlers.pipState = pipStateHandler;
@@ -1160,6 +1179,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     socket.on('call:accepted', callAcceptedHandler);
     socket.on('call:incoming', callIncomingHandler);
     socket.on('call:ended', callEndedHandler);
+    socket.on('call:error', callErrorHandler);
     socket.on('call:declined', callDeclinedHandler);
     socket.on('disconnected', disconnectedHandler);
     socket.on('call:cancel', callEndedHandler);
@@ -1174,6 +1194,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       () => socket.off('call:accepted', callAcceptedHandler),
       () => socket.off('call:incoming', callIncomingHandler),
       () => socket.off('call:ended', callEndedHandler),
+      () => socket.off('call:error', callErrorHandler),
       () => socket.off('call:declined', callDeclinedHandler),
       () => socket.off('disconnected', disconnectedHandler),
       () => socket.off('call:cancel', callEndedHandler),
@@ -1474,7 +1495,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.emit('callAnswered');
       return;
       } finally {
-        setActiveVideoCall(false);
+        // НЕ сбрасываем setActiveVideoCall(false) здесь — звонок активен, сокет не должен отключаться в фоне.
+        // setActiveVideoCall(false) вызывается только при disconnectRoom/endCall.
         if ((global as any).__connectingToRoomRef?.session === this) {
           (global as any).__connectingToRoomRef.roomName = null;
           (global as any).__connectingToRoomRef.session = null;
@@ -3451,6 +3473,9 @@ export class VideoCallSession extends SimpleEventEmitter {
         try {
           await roomToDisconnect.disconnect();
           logger.debug('[VideoCallSession] Room disconnect() called, waiting for Disconnected event');
+          // Короткая задержка перед forceDisposeRoom: даём движку LiveKit обновить состояние (closed/transports),
+          // чтобы снизить WARN "connection state mismatch" при быстром закрытии.
+          await new Promise((r) => setTimeout(r, 50));
           this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:after_await');
         } catch (e: any) {
           const errorMessage = e?.message || String(e || '');

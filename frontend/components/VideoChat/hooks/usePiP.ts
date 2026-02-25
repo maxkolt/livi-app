@@ -138,10 +138,11 @@ export const usePiP = ({
       // НЕ отключаем локальный видеотрек при входе в in-app PiP: иначе собеседник перестаёт
       // получать кадры и видео у него зависает. Поток должен продолжать идти (камера была включена).
       
-      // Показываем PiP
-      const partner = partnerUserId 
+      // Показываем PiP: партнёр из friends по partnerUserId; имя — fallback из routeParams (на случай если friends ещё не загружен)
+      const partner = partnerUserId
         ? friends.find(f => String(f._id) === String(partnerUserId))
         : null;
+      const partnerNameFromParams = (routeParams as any)?.partnerNick ?? (routeParams as any)?.partnerName ?? '';
 
       // КРИТИЧНО: Используем avatarThumbB64 (data URI) для аватара в PiP
       // Это соответствует тому, как аватары используются в других частях приложения
@@ -199,7 +200,7 @@ export const usePiP = ({
       pip.showPiP({
         callId: finalCallId,
         roomId: finalRoomId,
-        partnerName: partner?.nick || '',
+        partnerName: (partner?.nick && partner.nick.trim()) ? partner.nick.trim() : (partnerNameFromParams && String(partnerNameFromParams).trim()) ? String(partnerNameFromParams).trim() : '',
         partnerAvatarUrl: avatarUrl,
         muteLocal: !micOn,
         muteRemote: remoteMuted,
@@ -304,8 +305,24 @@ export const usePiP = ({
           actualPartnerId
         });
 
-        // На всякий случай скрываем in-app PiP, если он был виден из старого сценария.
-        try { pip.hidePiP(); } catch (_) {}
+        // КРИТИЧНО: Сохраняем callId/roomId/navParams в PiPContext до входа в системный PiP,
+        // чтобы при развороте (тап по окну) returnToCall мог корректно вернуть на экран звонка.
+        try {
+          const updateState = (global as any).__pipUpdateStateRef?.current;
+          if (typeof updateState === 'function') {
+            updateState({
+              callId: actualCallId || '',
+              roomId: actualRoomId || '',
+              lastNavParams: routeParams,
+            });
+          }
+        } catch (_) {}
+
+        // Не вызываем hidePiP() перед системным PiP — иначе лишний ре-рендер и риск показать лоадер вместо видео.
+        // In-app PiP скрываем только если он был виден (редкий сценарий).
+        if (pip.visible) {
+          try { pip.hidePiP(); } catch (_) {}
+        }
 
         if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
           try { NativeModules.LiviAppModule.setPiPEndCallParams(actualCallId, actualRoomId); } catch (_) {}
@@ -317,14 +334,12 @@ export const usePiP = ({
           setTimeout(() => {
             try { pip.updatePiPState?.({ pendingSystemPiP: false }); } catch (_) {}
           }, 1500);
-          const raf = (typeof requestAnimationFrame !== 'undefined')
-            ? requestAnimationFrame
-            : ((fn: any) => setTimeout(fn, 0));
-          raf(() => {
-            raf(() => {
-              try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
-            });
-          });
+          // Задержка перед входом в PiP: даём время отрисовать компактный вид с remote-видео,
+          // иначе Android может захватить кадр с лоадером.
+          const ENTER_SYSTEM_PIP_DELAY_MS = 200;
+          setTimeout(() => {
+            try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
+          }, ENTER_SYSTEM_PIP_DELAY_MS);
         }
         return true; // Предотвращаем стандартное поведение кнопки назад
       }
@@ -462,6 +477,17 @@ export const usePiP = ({
           // После завершения жеста (навигации) флаг сбрасывается, и PiP может показаться снова при следующем свайпе
           if (hasActiveCall) {
             if (Platform.OS === 'android') {
+              // КРИТИЧНО: Сохраняем callId/roomId/navParams в PiPContext до входа в системный PiP для returnToCall при развороте.
+              try {
+                const updateState = (global as any).__pipUpdateStateRef?.current;
+                if (typeof updateState === 'function') {
+                  updateState({
+                    callId: actualCallId || '',
+                    roomId: actualRoomId || '',
+                    lastNavParams: routeParams,
+                  });
+                }
+              } catch (_) {}
               // Android: сначала системный PiP (пока ещё на VideoCall), потом навигация — иначе переход на Home до PiP и окно не показывается.
               requestAnimationFrame(() => {
                 try { pip.hidePiP(); } catch (_) {}
@@ -525,6 +551,16 @@ export const usePiP = ({
           const hasActiveCall = !!(actualRoomId || actualCallId || actualPartnerId);
           if (hasActiveCall) {
             if (Platform.OS === 'android') {
+              try {
+                const updateState = (global as any).__pipUpdateStateRef?.current;
+                if (typeof updateState === 'function') {
+                  updateState({
+                    callId: actualCallId || '',
+                    roomId: actualRoomId || '',
+                    lastNavParams: routeParams,
+                  });
+                }
+              } catch (_) {}
               requestAnimationFrame(() => {
                 try { pip.hidePiP(); } catch (_) {}
                 if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {

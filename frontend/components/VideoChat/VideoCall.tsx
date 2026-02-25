@@ -36,7 +36,7 @@ import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { usePiP } from '../../src/pip/PiPContext';
-import socket, { fetchFriends, getCurrentUserId } from '../../sockets/socket';
+import socket, { fetchFriends, getCurrentUserId, setActiveVideoCall } from '../../sockets/socket';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/keepAwake';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
@@ -478,6 +478,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const fromPiPProcessedRef = useRef(false);
   const isInactiveStateRef = useRef(false);
   const isEndingCallRef = useRef(false); // КРИТИЧНО: Флаг для предотвращения повторных вызовов handleCallEnded
+  const [isEndingCall, setIsEndingCall] = useState(false); // Синхронно с ref: скрываем бейдж/активный звонок при завершении, чтобы не мигало
   const callEndedTransitionDoneRef = useRef(false); // Один переход в UI «завершён» — защита от многократных setState при disconnect + call:ended
   // КРИТИЧНО: изменения sessionRef.current сами по себе НЕ триггерят ререндер.
   // В dev это может маскироваться (StrictMode), но в release приводит к тому, что эффекты
@@ -563,6 +564,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
     };
   }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, route?.params]);
+
+  // КРИТИЧНО: Выставляем «активный видеозвонок» при показе экрана VideoCall (а не только после connectToLiveKit),
+  // чтобы сокет не отключался при уходе в фон до создания комнаты (например, ответ на звонок с блокировки).
+  useEffect(() => {
+    const p = route?.params;
+    const hasCallIntent = !!(p?.callId || p?.roomId || p?.peerUserId || p?.directCall);
+    if (hasCallIntent) setActiveVideoCall(true);
+  }, [route?.params]);
 
   // Отслеживание изменений параметров роута
   useEffect(() => {
@@ -724,6 +733,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   // Инициализация session и восстановление состояния звонка
   useEffect(() => {
+    // КРИТИЧНО: После завершения звонка не создаём новую сессию — пользователь ещё на экране VideoCall до перехода на Home.
+    if (isInactiveState && wasFriendCallEnded) {
+      logger.info('[VideoCall] Звонок уже завершён, пропускаем создание сессии');
+      return;
+    }
     callEndedTransitionDoneRef.current = false; // новый звонок — разрешаем один переход в «завершён»
     // КРИТИЧНО: При возврате из PiP используем существующую сессию из глобальной ссылки
     // Это гарантирует, что видеопоток восстановится у обоих участников
@@ -1204,7 +1218,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
     // КРИТИЧНО: Убрали зависимости roomId, callId, partnerId чтобы не пересоздавать сессию
     // Сессия создается один раз при монтировании компонента
-  }, [route?.params?.directCall, route?.params?.resume, pip.visible, clearSessionRefs]);
+  }, [route?.params?.directCall, route?.params?.resume, pip.visible, clearSessionRefs, isInactiveState, wasFriendCallEnded]);
   
   // КРИТИЧНО: Отдельный useEffect для установки обработчиков событий
   // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
@@ -1214,7 +1228,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       logger.debug('[VideoCall] No session for event handlers setup');
       return;
     }
-    
+
     logger.info('[VideoCall] Setting up event handlers for existing session', {
       hasSession: !!session,
       sessionType: session.constructor.name
@@ -1229,10 +1243,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         logger.info('[VideoCall] handleCallEnded вызван, переход уже применён - игнорируем');
         return;
       }
-      if (isInactiveStateRef.current || isEndingCallRef.current) {
-        logger.info('[VideoCall] handleCallEnded вызван, refs уже установлены (ожидаем applyEndedState) - продолжаем для reportEndCall/cleanup');
+      // Двойная обработка: локальный endCall уже эмитит callEnded; затем приходит call:ended по сокету и сессия снова эмитит.
+      // Один переход в «завершён» — не повторяем навигацию/setState при втором вызове.
+      if (isEndingCallRef.current) {
+        logger.info('[VideoCall] handleCallEnded вызван повторно (локально + socket) - пропускаем');
+        return;
       }
       isEndingCallRef.current = true;
+      setIsEndingCall(true); // Сразу скрываем бейдж «активный звонок», чтобы не мигало до setIsInactiveState
 
       // Нативно блокируем вход в системный PiP при завершении (иначе пользователь улетает на главный экран с PiP).
       if (Platform.OS === 'android') {
@@ -1347,6 +1365,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         remoteStreamRef.current = null;
         remoteStreamReceivedAtRef.current = null;
         setRemoteStream(null);
+        setIsEndingCall(false);
         clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
         setTimeout(() => {
           isEndingCallRef.current = false;
@@ -1691,6 +1710,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       // КРИТИЧНО: СНАЧАЛА устанавливаем флаги СИНХРОННО, чтобы предотвратить повторные вызовы handleCallEnded
       // Это особенно важно на iOS, где события могут обрабатываться быстрее
       isEndingCallRef.current = true;
+      setIsEndingCall(true);
       isInactiveStateRef.current = true;
       setIsInactiveState(true);
       setWasFriendCallEnded(true);
@@ -1724,6 +1744,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       // КРИТИЧНО: Сбрасываем флаги через задержку (в т.ч. нативный endingCallInProgress, чтобы PiP не открылся при позднем onUserLeaveHint).
       setTimeout(() => {
         isEndingCallRef.current = false;
+        setIsEndingCall(false);
         if (Platform.OS === 'android') {
           try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(false); } catch (_) {}
         }
@@ -1789,9 +1810,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       __endCallCleanupRef: !!(global as any).__endCallCleanupRef?.current
     });
     
-    // Очищаем ссылки при размонтировании или если сессия удалена
+    // При размонтировании: если уходим не в PiP — завершаем звонок (сервер и партнёр получат call:end)
     return () => {
-      // Очищаем только если сессия действительно удалена
+      const pipVisible = (global as any).__pipVisibleRef?.current === true;
+      if (!pipVisible) {
+        const cleanupFn = (global as any).__endCallCleanupRef?.current;
+        if (typeof cleanupFn === 'function') {
+          try {
+            cleanupFn();
+            logger.info('[VideoCall] Вызвана cleanup при размонтировании (не в PiP)');
+          } catch (e) {
+            logger.warn('[VideoCall] Ошибка при cleanup при размонтировании', e);
+          }
+        }
+      }
       if (!sessionRef.current) {
         (global as any).__webrtcSessionRef.current = null;
         (global as any).__endCallCleanupRef.current = null;
@@ -1885,7 +1917,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const isInactive = !!isInactiveState;
     const callEnded = !!wasFriendCallEnded;
     const hasActiveCall = !!partnerId || !!roomId || !!callId;
-    
+    // При завершении звонка не показываем бейдж сразу, чтобы не мигало (hasActiveCall/roomId сбрасываются асинхронно)
+    if (isEndingCall) return false;
+
     // Показываем бейдж если:
     // - Есть partnerUserId
     // - Звонок начат (started) ИЛИ есть активный звонок (для принимающего звонок)
@@ -1908,7 +1942,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }
     
     return shouldShow;
-  }, [partnerUserId, friends, started, isInactiveState, wasFriendCallEnded, partnerId, roomId, callId, isPartnerFriend]);
+  }, [partnerUserId, friends, started, isInactiveState, wasFriendCallEnded, partnerId, roomId, callId, isPartnerFriend, isEndingCall]);
   
   // КРИТИЧНО: На iOS отключаем usePreventRemove - он мешает нормальному свайпу
   // PanResponder полностью обрабатывает свайп: показывает PiP и делает навигацию
@@ -2539,11 +2573,13 @@ const styles = StyleSheet.create({
     fontSize: 22,
   },
   bottomRow: {
-    width: '100%',
+    // Как в RandomChat: отступы от краёв экрана до кнопки — iOS 3% слева/справа + 16px, Android 2px
+    width: Platform.OS === 'android' ? '100%' : '94%',
     flexDirection: 'row',
     gap: Platform.OS === "android" ? 14 : 16,
     marginTop: Platform.OS === "android" ? 5 : 10,
     marginBottom: Platform.OS === "android" ? 4 : 32,
+    paddingHorizontal: Platform.OS === "android" ? 2 : 16,
   },
   bigBtn: {
     flex: 1,

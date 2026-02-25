@@ -79,7 +79,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // Не показывать его как "last good frame" — иначе RTCView даёт чёрный экран.
   useEffect(() => {
     lastGoodStreamRef.current = null;
-  }, [streamToUse?.id]);
+  }, [remoteStream?.id]);
 
   const renderLastGoodFrame = useCallback(
     (reason: string, extra?: Record<string, unknown>) => {
@@ -441,7 +441,11 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // КРИТИЧНО: Показываем видео если есть готовый трек, даже если remoteCamOn еще не обновлен
   // remoteCamOn может обновиться позже через onRemoteCamStateChange
   // Показываем видео когда: партнер не в PiP ИЛИ партнер в PiP с включенной камерой (поток продолжает идти)
-  if (hasRenderableVideo && (!partnerInPiP || remoteCamOn)) {
+  // В системном PiP (forceTextureView): показываем RTCView даже если трек ещё не "live", чтобы не крутить лоадер.
+  const canRenderVideo =
+    (hasRenderableVideo || (forceTextureView && !!streamToUse && hasVideoTrack)) &&
+    (!partnerInPiP || remoteCamOn);
+  if (canRenderVideo) {
     // We are able to render (or intentionally render during PiP recovery) -> reset stall + remember last good
     stallSinceRef.current = null;
     lastGoodStreamRef.current = streamToUse;
