@@ -1296,19 +1296,24 @@ function AppContent() {
       const pipVisible = g.__pipVisibleRef?.current === true;
       const hidePiP = g.__pipHidePiPRef?.current;
 
-      if (inSystem) {
-        if (typeof hidePiP === 'function') hidePiP();
-        return;
-      }
-      if (pipVisible) {
-        if (typeof hidePiP === 'function') hidePiP();
-        return;
-      }
       if (typeof hidePiP === 'function') hidePiP();
-      // Один переход на Home, идемпотентно (без мерцания от множественных reset).
+      // Кто в системном PiP — только закрываем PiP, не переходим на Home. Кто на полноэкранном VideoCall или с in-app PiP — всегда переходим на Home (собеседник должен оказаться на приветствии независимо от того, кто завершил).
+      if (inSystem) return;
+
       const goHome = () => {
         if (!navRef.isReady()) return;
-        if (navRef.getCurrentRoute()?.name === 'Home') return;
+        const route = navRef.getCurrentRoute();
+        if (route?.name === 'Home') return;
+        // Если пользователь на странице видеозвонка — остаёмся на ней, не переходим на Home.
+        if (route?.name === 'VideoCall') return;
+        const state = navRef.getState();
+        const routes = state?.routes ?? [];
+        const idx = state?.index ?? 0;
+        // Если сейчас VideoCall и под ним Home — делаем goBack(), чтобы не перемонтировать Home (иначе мерцает аватар).
+        if (route?.name === 'VideoCall' && idx > 0 && routes[idx - 1]?.name === 'Home') {
+          navRef.dispatch(CommonActions.goBack());
+          return;
+        }
         navRef.dispatch(
           CommonActions.reset({
             index: 0,
@@ -1363,12 +1368,26 @@ function AppContent() {
       } else {
         if (typeof hidePiP === 'function') hidePiP();
         if (navRef.isReady()) {
-          navRef.dispatch(
-            CommonActions.reset({
-              index: 0,
-              routes: [{ name: 'Home' as any }],
-            })
-          );
+          const route = navRef.getCurrentRoute();
+          if (route?.name === 'Home') {
+            // уже на Home
+          } else if (route?.name === 'VideoCall') {
+            // Пользователь на странице видеозвонка — остаёмся на ней, не переходим на Home.
+          } else {
+            const state = navRef.getState();
+            const routes = state?.routes ?? [];
+            const idx = state?.index ?? 0;
+            if (idx > 0 && routes[idx - 1]?.name === 'Home') {
+              navRef.dispatch(CommonActions.goBack());
+            } else {
+              navRef.dispatch(
+                CommonActions.reset({
+                  index: 0,
+                  routes: [{ name: 'Home' as any }],
+                })
+              );
+            }
+          }
         }
       }
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
@@ -1957,13 +1976,17 @@ export default function App() {
       return;
     }
     if (typeof hidePiP === 'function') hidePiP();
+    // Если пользователь на странице видеозвонка — не переходим на Home, остаёмся на ней.
     if (navRef.isReady()) {
-      navRef.dispatch(
-        CommonActions.reset({
-          index: 0,
-          routes: [{ name: 'Home' as any }],
-        })
-      );
+      const route = navRef.getCurrentRoute();
+      if (route?.name !== 'VideoCall') {
+        navRef.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [{ name: 'Home' as any }],
+          })
+        );
+      }
     }
   };
 

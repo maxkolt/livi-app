@@ -6,6 +6,7 @@ import socket from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { startIncomingCallAlert, stopIncomingCallAlert } from '../../../utils/incomingCallAlert';
 import { syncAppBadgeFromMissedCount } from '../../../utils/pushNotifications';
+import { emitMissedClear } from '../../../utils/globalEvents';
 
 interface UseIncomingCallProps {
   myUserId?: string;
@@ -279,16 +280,17 @@ export const useIncomingCall = ({
       logger.warn('[useIncomingCall] Failed to send presence update:', e);
     }
 
-    // Сбрасываем счётчик пропущенных
+    // Сбрасываем счётчик пропущенных (AsyncStorage + состояние HomeScreen через emitMissedClear)
     try {
       const key = 'missed_calls_by_user_v1';
       const raw = await AsyncStorage.getItem(key);
       const map = raw ? JSON.parse(raw) : {};
       const uid = String(fromUserId || '');
       if (uid) {
-        map[uid] = 0;
+        delete map[uid];
         await AsyncStorage.setItem(key, JSON.stringify(map));
         syncAppBadgeFromMissedCount().catch(() => {});
+        emitMissedClear(uid);
       }
     } catch {}
 

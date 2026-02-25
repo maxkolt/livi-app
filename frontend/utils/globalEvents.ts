@@ -4,6 +4,7 @@
 type Listener<T> = (payload: T) => void;
 
 const missedListeners = new Set<Listener<{ userId: string }>>();
+const missedClearListeners = new Set<Listener<{ userId: string }>>();
 const closeIncomingListeners = new Set<Listener<{}>>();
 const closeIncomingRequestListeners = new Set<Listener<{}>>();
 const closeOutgoingCallListeners = new Set<Listener<{}>>();
@@ -18,6 +19,22 @@ export function onMissedIncrement(cb: Listener<{ userId: string }>): () => void 
 export function emitMissedIncrement(userId: string) {
   for (const l of missedListeners) {
     try { l({ userId }); } catch {}
+  }
+}
+
+/** Сбросить счётчик пропущенных для userId (при принятии вызова получателем или входе в чат/видеозвонок). */
+export function onMissedClear(cb: Listener<{ userId: string }>): () => void {
+  missedClearListeners.add(cb);
+  return () => {
+    missedClearListeners.delete(cb);
+  };
+}
+
+export function emitMissedClear(userId: string) {
+  if (!userId) return;
+  const uid = String(userId);
+  for (const l of missedClearListeners) {
+    try { l({ userId: uid }); } catch {}
   }
 }
 

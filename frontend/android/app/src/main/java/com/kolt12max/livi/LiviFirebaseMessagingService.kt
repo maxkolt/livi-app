@@ -43,8 +43,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         var callId = callIdRaw
         var from = data["from"] ?: data["fromUserId"]
         var fromNick = data["fromNick"] ?: ""
+        var bodyEndedFromActive: String? = null
 
-        // Expo присылает пуши с keys=[projectId, experienceId, scopeKey, body] — type/callId внутри body
+        // Expo присылает пуши с keys=[projectId, experienceId, scopeKey, body] — type/callId/endedFromActive внутри body
         if (data["body"] != null) {
             try {
                 val body = JSONObject(data["body"]!!)
@@ -56,6 +57,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     if (from == null) from = body.optString("from", "").takeIf { it.isNotEmpty() } ?: body.optString("fromUserId", "").takeIf { it.isNotEmpty() }
                     if (fromNick.isEmpty()) fromNick = body.optString("fromNick", "")
                 }
+                val fromBody = body.optString("endedFromActive", "").takeIf { it.isNotEmpty() }
+                    ?: if (body.optBoolean("endedFromActive", false)) "true" else null
+                bodyEndedFromActive = fromBody
             } catch (e: Exception) {
                 Log.w(TAG, "FCM parse body failed", e)
             }
@@ -209,7 +213,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(EXTRA_CALL_ID, callId)
             }
             sendBroadcast(cancelIntent)
-            val endedFromActive = "true" == data["endedFromActive"]
+            val endedFromActiveRaw = data["endedFromActive"] ?: bodyEndedFromActive ?: ""
+            val endedFromActive = "true" == endedFromActiveRaw
             if (!endedFromActive) {
                 if (!LiviAppModule.wasMissedShownForCallId(this, callId)) {
                     LiviAppModule.markMissedShownForCallId(this, callId)

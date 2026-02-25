@@ -722,7 +722,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.pendingSystemPiP !== undefined) setPendingSystemPiP(!!patch.pendingSystemPiP);
     // потоки через ref:
     if (patch.localStream !== undefined) localStreamRef.current = patch.localStream;
-    if (patch.remoteStream !== undefined) remoteStreamRef.current = patch.remoteStream;
+    if (patch.remoteStream !== undefined) {
+      remoteStreamRef.current = patch.remoteStream;
+      setRemoteStreamVersion((v) => v + 1);
+    }
   }, []);
 
   // КРИТИЧНО: Делаем updatePiPState доступным глобально, чтобы WebRTC session могла обновлять PiP,

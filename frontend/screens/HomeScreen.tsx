@@ -74,7 +74,7 @@ import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onMissedIncrement, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall } from '../utils/globalEvents';
+import { onMissedIncrement, onMissedClear, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled } from '../utils/callKeep';
 import { setMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
@@ -3049,6 +3049,27 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           .then(() => syncAppBadgeFromMissedCount())
           .catch(() => {});
         logger.debug('[HomeScreen] Missed call incremented', { userId: userIdStr, count: next[userIdStr] });
+        return next;
+      });
+    });
+    return () => off?.();
+  }, []);
+
+  // Сброс счётчика пропущенных при принятии вызова получателем или входе в видеозвонок/чат с другом
+  useEffect(() => {
+    const off = onMissedClear(({ userId }) => {
+      const userIdStr = String(userId);
+      if (!userIdStr) return;
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(userIdStr); } catch (_) {}
+      }
+      setMissedByUser((prev) => {
+        if (prev[userIdStr] === undefined) return prev;
+        const next = { ...prev };
+        delete next[userIdStr];
+        AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(() => {});
+        syncAppBadgeFromMissedCount().catch(() => {});
+        logger.debug('[HomeScreen] Missed calls cleared for user (emitMissedClear)', { userId: userIdStr });
         return next;
       });
     });

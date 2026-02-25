@@ -462,20 +462,20 @@ export const usePiP = ({
           // После завершения жеста (навигации) флаг сбрасывается, и PiP может показаться снова при следующем свайпе
           if (hasActiveCall) {
             if (Platform.OS === 'android') {
-              // Android: единая логика со системной кнопкой Back — сначала навигация назад, затем системный PiP.
+              // Android: сначала системный PiP (пока ещё на VideoCall), потом навигация — иначе переход на Home до PiP и окно не показывается.
               requestAnimationFrame(() => {
-                if (navigation.canGoBack && navigation.canGoBack()) {
-                  navigation.goBack();
-                } else {
-                  navigation.navigate('Home' as never);
+                try { pip.hidePiP(); } catch (_) {}
+                if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
+                  try { NativeModules.LiviAppModule.setPiPEndCallParams(actualCallId, actualRoomId); } catch (_) {}
+                }
+                if (NativeModules.LiviAppModule?.requestEnterPictureInPicture) {
+                  try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
                 }
                 requestAnimationFrame(() => {
-                  try { pip.hidePiP(); } catch (_) {}
-                  if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
-                    try { NativeModules.LiviAppModule.setPiPEndCallParams(actualCallId, actualRoomId); } catch (_) {}
-                  }
-                  if (NativeModules.LiviAppModule?.requestEnterPictureInPicture) {
-                    try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
+                  if (navigation.canGoBack && navigation.canGoBack()) {
+                    navigation.goBack();
+                  } else {
+                    navigation.navigate('Home' as never);
                   }
                 });
               });
@@ -526,20 +526,20 @@ export const usePiP = ({
           if (hasActiveCall) {
             if (Platform.OS === 'android') {
               requestAnimationFrame(() => {
-                if (navigation.canGoBack && navigation.canGoBack()) {
-                  navigation.goBack();
-                } else {
-                  navigation.navigate('Home' as never);
+                try { pip.hidePiP(); } catch (_) {}
+                if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
+                  try { NativeModules.LiviAppModule.setPiPEndCallParams(actualCallId, actualRoomId); } catch (_) {}
                 }
+                if (NativeModules.LiviAppModule?.requestEnterPictureInPicture) {
+                  try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
+                }
+                pipShownDuringSwipeRef.current = false;
                 requestAnimationFrame(() => {
-                  try { pip.hidePiP(); } catch (_) {}
-                  if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
-                    try { NativeModules.LiviAppModule.setPiPEndCallParams(actualCallId, actualRoomId); } catch (_) {}
+                  if (navigation.canGoBack && navigation.canGoBack()) {
+                    navigation.goBack();
+                  } else {
+                    navigation.navigate('Home' as never);
                   }
-                  if (NativeModules.LiviAppModule?.requestEnterPictureInPicture) {
-                    try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
-                  }
-                  pipShownDuringSwipeRef.current = false;
                 });
               });
             } else {

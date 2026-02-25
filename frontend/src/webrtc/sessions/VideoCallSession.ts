@@ -1656,6 +1656,15 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
 
+    // Зомби-сессия (уже очищена cleanupFunction): не эмитить callEnded — иначе второй handleCallEnded в UI и мерцание при переходе на Home.
+    if (!this.callId && !this.roomId) {
+      logger.debug('[VideoCallSession] Ignoring call:ended (no callId/roomId, zombie session)', {
+        hasRoom: !!this.room,
+        roomState: this.room?.state,
+      });
+      return;
+    }
+
     // Safety: sometimes the UI/session may clear identifiers early (race with cleanup / reconnect),
     // but LiveKit room/tracks may still be active. In that case we MUST still teardown on call:ended.
     // Only ignore if we are clearly not in a call anymore.
@@ -2481,6 +2490,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.emit('remoteStream', null);
     this.config.callbacks.onRemoteStreamChange?.(null);
     this.config.onRemoteStreamChange?.(null);
+    try {
+      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: null });
+    } catch (_) {}
     this.config.callbacks.onRemoteCamStateChange?.(false);
     this.config.onRemoteCamStateChange?.(false);
     this.remoteAudioMuted = false;
@@ -3438,11 +3451,13 @@ export class VideoCallSession extends SimpleEventEmitter {
         try {
           await roomToDisconnect.disconnect();
           logger.debug('[VideoCallSession] Room disconnect() called, waiting for Disconnected event');
+          this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:after_await');
         } catch (e: any) {
           const errorMessage = e?.message || String(e || '');
           if (!errorMessage.includes('before connected') && !errorMessage.includes('already disconnected')) {
             logger.warn('[VideoCallSession] Error disconnecting room', e);
           }
+          this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:after_catch');
         }
       })();
     });
@@ -4126,7 +4141,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.emit('remoteStream', this.remoteStream);
     this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
     this.config.onRemoteStreamChange?.(this.remoteStream);
-    
+    // КРИТИЧНО: Обновляем PiP (в т.ч. системный) при смене удалённого стрима — иначе при включении камеры партнёром из app PiP видео не восстановится у пользователя в системном PiP
+    try {
+      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: this.remoteStream });
+    } catch (_) {}
+
     // КРИТИЧНО: Устанавливаем loading=false только когда приходит remoteStream с треками
     // Это предотвращает черный экран при принятии звонка
     if (this.remoteStream && (this.remoteVideoTrack || this.remoteAudioTrack)) {
@@ -4182,6 +4202,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.emit('remoteStream', null);
         this.config.callbacks.onRemoteStreamChange?.(null);
         this.config.onRemoteStreamChange?.(null);
+        try {
+          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+          if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: null });
+        } catch (_) {}
       } else {
         logger.debug('[VideoCallSession] Suppressed remoteStream=null during reconnect', {
           isRoomReconnecting,
