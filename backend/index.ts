@@ -1225,30 +1225,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         socketIds: Array.from(socketsToNotify)
       });
       
-      // КРИТИЧНО: Отправляем call:ended ВСЕМ участникам двумя способами для максимальной надежности:
-      // 1. Через комнату (io.to(id).emit) - если комната существует
-      // 2. Напрямую каждому сокету - гарантирует доставку даже если комната не найдена
-      
-      // Способ 1: Отправка через комнату (если комната существует)
-      if (room && room.size > 0) {
-        // ВАЖНО: roomId всегда является идентификатором комнаты (`room_...`),
-        // а callId (если был передан клиентом) — это отдельный идентификатор звонка (timestamp).
-        // Раньше мы отправляли callId=id, из-за чего часть клиентов, которые сравнивают только callId,
-        // не распознавали завершение и звонок "закрывался" только у одного.
-        io.to(id).emit('call:ended', {
-          callId: callId || undefined,
-          roomId: id,
-          reason: 'ended',
-          scope: 'room',
-          resolvedRoomId: id,
-        });
-        logger.info('📤 [call:end] ✅ Отправлено call:ended через комнату', {
-          roomId: id,
-          participantCount: room.size
-        });
-      }
-      
-      // Способ 2: Отправка напрямую каждому сокету (гарантирует доставку)
+      // Отправляем call:ended каждому участнику один раз (напрямую сокету), чтобы клиент не получал дубли и не мерцал при переходе на Home.
       const notifiedSockets: string[] = [];
       for (const sid of socketsToNotify) {
         const socket = io.sockets.sockets.get(sid);
@@ -1261,7 +1238,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             resolvedRoomId: id,
           });
           notifiedSockets.push(sid);
-          logger.info('📤 [call:end] ✅ Отправлено call:ended напрямую сокету', {
+          logger.info('📤 [call:end] ✅ Отправлено call:ended сокету', {
             socketId: sid,
             userId: (socket as any)?.data?.userId,
             roomId: id,

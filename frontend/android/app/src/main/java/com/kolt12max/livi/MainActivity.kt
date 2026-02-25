@@ -27,6 +27,11 @@ class MainActivity : ReactActivity() {
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
+    // FCM call_accepted при уже запущенной MainActivity — сохранить callId для JS (onResume вызовет emitPendingCallAcceptedEvent).
+    val pendingCallId = intent.getStringExtra(EXTRA_PENDING_CALL_ACCEPTED_CALL_ID)
+    if (!pendingCallId.isNullOrBlank()) {
+      LiviAppModule.setPendingCallAcceptedCallId(pendingCallId)
+    }
     // FCM входящий при разблокированном экране — показать через CallKeep (ConnectionService)
     if (intent.action == LiviAppModule.ACTION_INCOMING_CALL_CALLKEEP) {
       val callId = intent.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID)

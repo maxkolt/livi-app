@@ -1238,21 +1238,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         const doReset = () => {
           try {
             const rootNav = (global as any).__navRef;
-            if (rootNav?.isReady?.()) {
-              rootNav.dispatch(resetAction);
-              logger.info('[VideoCall] handleCallEnded: reset to Home dispatched via __navRef');
-            }
-            const nav = navigation as any;
-            if (nav?.dispatch) nav.dispatch(resetAction);
-            else if (nav?.navigate) nav.navigate('Home');
+            if (!rootNav?.isReady?.()) return;
+            if (rootNav.getCurrentRoute()?.name === 'Home') return;
+            rootNav.dispatch(resetAction);
+            logger.info('[VideoCall] handleCallEnded: reset to Home dispatched via __navRef');
           } catch (e) {
             logger.warn('[VideoCall] reset to Home at start of handleCallEnded failed', e);
           }
         };
         requestAnimationFrame(() => doReset());
-        setTimeout(doReset, 50);
-        setTimeout(doReset, 150);
-        setTimeout(doReset, 300);
       }
 
       const idToReport = callId ?? currentCallIdRef.current ?? null;

@@ -1305,8 +1305,10 @@ function AppContent() {
         return;
       }
       if (typeof hidePiP === 'function') hidePiP();
+      // Один переход на Home, идемпотентно (без мерцания от множественных reset).
       const goHome = () => {
         if (!navRef.isReady()) return;
+        if (navRef.getCurrentRoute()?.name === 'Home') return;
         navRef.dispatch(
           CommonActions.reset({
             index: 0,
@@ -1315,8 +1317,6 @@ function AppContent() {
         );
       };
       goHome();
-      setTimeout(goHome, 100);
-      setTimeout(goHome, 300);
     };
     socket.on('call:ended', onCallEnded);
     return () => { socket.off('call:ended', onCallEnded); };
@@ -1376,10 +1376,12 @@ function AppContent() {
     return () => { delete (global as any).__onCallEndedFromPush; };
   }, []);
 
-  // При старте приложения (в т.ч. по FCM call_accepted) — запросить call:accepted, если нативный модуль сохранил callId
+  // При старте приложения (в т.ч. по FCM call_accepted) — запросить call:accepted, если нативный модуль сохранил callId. Несколько попыток: после холодного старта или экрана dev client App может смонтироваться с задержкой.
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
-    const t = setTimeout(() => {
+    const delays = [100, 500, 1500];
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const tryPending = () => {
       const LiviAppModule = NativeModules.LiviAppModule;
       LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
         if (callId) {
@@ -1387,8 +1389,9 @@ function AppContent() {
           try { requestCallAccepted(callId); } catch {}
         }
       });
-    }, 500);
-    return () => clearTimeout(t);
+    };
+    delays.forEach((ms) => timers.push(setTimeout(tryPending, ms)));
+    return () => timers.forEach((t) => clearTimeout(t));
   }, []);
 
   // Android: если полноэкранные уведомления отключены — один раз напомнить включить (чтобы входящие видеозвонки показывались на заблокированном экране)

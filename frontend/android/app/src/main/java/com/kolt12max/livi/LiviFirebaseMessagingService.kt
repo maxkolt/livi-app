@@ -160,25 +160,15 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             sendBroadcast(closeOutgoing)
             LiviOutgoingCallService.stop(this)
             LiviAppModule.setPendingCallAcceptedCallId(callId)
-            // 2) startActivity(close) + MainActivity — только когда приложение в фоне. В foreground закрытие уже сделал bringMainActivityToFront по сокету; иначе отложенный FCM перебивает повторный вызов (onCreate получает close вместо new intent).
+            // 2) Только MainActivity на передний план (без startActivity(OutgoingCallActivity close) — иначе два startActivity сбрасывают стек и в dev показывается экран «Development servers» вместо VideoCall).
             if (!isAppProcessForeground()) {
-                val closeActivityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
-                    putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
-                }
-                try {
-                    startActivity(closeActivityIntent)
-                } catch (e: Exception) {
-                    Log.w(TAG, "FCM call_accepted: startActivity OutgoingCallActivity(close) failed", e)
-                }
                 val mainIntent = Intent(this, MainActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     putExtra(MainActivity.EXTRA_PENDING_CALL_ACCEPTED_CALL_ID, callId)
                 }
                 try {
                     startActivity(mainIntent)
-                    Log.d(TAG, "FCM call_accepted: closed outgoing, brought MainActivity to front callId=$callId")
+                    Log.d(TAG, "FCM call_accepted: brought MainActivity to front callId=$callId")
                 } catch (e: Exception) {
                     Log.w(TAG, "FCM call_accepted: startActivity MainActivity failed", e)
                 }
