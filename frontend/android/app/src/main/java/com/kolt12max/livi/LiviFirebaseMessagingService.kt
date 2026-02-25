@@ -92,35 +92,20 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             try {
                 (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancelAll()
             } catch (_: Exception) {}
-            // HeadlessJsTask разрешён только когда приложение в фоне; при foreground (даже с заблокированным экраном) вызов приведёт к IllegalStateException.
-            if (!MainActivity.isInForeground) {
-                try {
-                    val headlessIntent = Intent(this, RNCallKeepBackgroundMessagingService::class.java).apply {
-                        putExtra("type", "call")
-                        putExtra("callId", callId)
-                        putExtra("from", from)
-                        putExtra("fromNick", fromNick)
-                    }
-                    startService(headlessIntent)
-                    Log.e(TAG, "[INCOMING_CALL] RNCallKeepBackgroundMessagingService started (ConnectionService path)")
-                } catch (e: Exception) {
-                    Log.e(TAG, "[INCOMING_CALL] CallKeep headless start FAILED", e)
-                }
-            } else {
-                Log.d(TAG, "[INCOMING_CALL] Skip RNCallKeepBackgroundMessagingService (app in foreground; native IncomingCallForegroundService will show UI)")
-            }
-            // Всегда показываем уведомление с кнопками «Принять»/«Отклонить», когда приложение в фоне.
-            // Full-screen (экран поверх всего) — только при заблокированном или выключенном экране; иначе heads-up с кнопками.
+            // Не запускаем headless для входящего: показ и рингтон идут через IncomingCallForegroundService (full-screen + ringtone сразу).
+            // Headless давал задержку ~5 сек и дублирование UI; один путь — FCM → FGS → full-screen intent + LiviAppModule.startIncomingCallRingtoneAndVibrationStatic.
+            Log.d(TAG, "[INCOMING_CALL] Using FGS-only path (no headless) for immediate full-screen + ringtone")
+            // Всегда показываем входящий полноэкранно с рингтоном/вибрацией: один путь без задержки headless (~5 сек).
+            // Full-screen intent + рингтон в FGS — сразу; не переключаемся на headsUpOnly при разблокированном экране.
             ensureCallChannel(this)
-            val useFullScreen = keyguardLocked || !isInteractive
             startIncomingCallForegroundService(
                 callId,
                 from,
                 fromNick,
-                headsUpOnly = !useFullScreen,
+                headsUpOnly = false,
                 silentNotification = false
             )
-            Log.e(TAG, "[INCOMING_CALL] IncomingCallForegroundService started keyguardLocked=$keyguardLocked isInteractive=$isInteractive useFullScreen=$useFullScreen (if FSI denied, check logcat for FSI_REQUESTED_BUT_DENIED or BAL_BLOCK)")
+            Log.e(TAG, "[INCOMING_CALL] IncomingCallForegroundService started (full-screen + ringtone) keyguardLocked=$keyguardLocked isInteractive=$isInteractive (if FSI denied, check logcat for FSI_REQUESTED_BUT_DENIED or BAL_BLOCK)")
             return
         }
         if (typeNorm == "call_canceled" && callId != null) {

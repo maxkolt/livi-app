@@ -1174,6 +1174,21 @@ io.on('connection', async (sock: AuthedSocket) => {
         totalSockets: socketsToNotify.size,
         socketIds: Array.from(socketsToNotify)
       });
+
+      // КРИТИЧНО: Снимаем busy по userId участников комнаты (room_uid1_uid2), чтобы второй участник
+      // (например в системном PiP с отключённым сокетом) мог сразу перезвонить без initiator_busy.
+      const participantUserIds = new Set<string>();
+      const roomMatch = id.match(/^room_([a-f\d]{24})_([a-f\d]{24})$/i);
+      if (roomMatch) {
+        participantUserIds.add(roomMatch[1]);
+        participantUserIds.add(roomMatch[2]);
+      }
+      for (const [socketId, socket] of io.sockets.sockets.entries()) {
+        const uid = (socket as any)?.data?.userId;
+        if (uid && participantUserIds.has(String(uid))) {
+          socketsToNotify.add(socketId);
+        }
+      }
       
       // Снимаем busy со всех участников и очищаем состояние
       for (const sid of socketsToNotify) {
