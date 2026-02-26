@@ -1785,6 +1785,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   // КРИТИЧНО: Обновляем глобальные ссылки при изменении сессии или функции очистки
   // Это гарантирует, что ссылки всегда актуальны
   // Основные ссылки устанавливаются при создании сессии выше, здесь только обновляем
+  // Важно: без cleanup в return — иначе при смене onAbortCall (после установки roomId/callId/localStream)
+  // эффект перезапускается и cleanup завершал бы звонок. Завершение при размонтировании — в отдельном эффекте ниже.
   useEffect(() => {
     const session = sessionRef.current;
     
@@ -1809,8 +1811,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       __webrtcSessionRef: !!(global as any).__webrtcSessionRef?.current,
       __endCallCleanupRef: !!(global as any).__endCallCleanupRef?.current
     });
-    
-    // При размонтировании: если уходим не в PiP — завершаем звонок (сервер и партнёр получат call:end)
+  }, [onAbortCall]);
+
+  // КРИТИЧНО: Завершение звонка только при реальном размонтировании экрана (не при смене onAbortCall).
+  // Эффект с [] — cleanup выполняется один раз при unmount.
+  useEffect(() => {
     return () => {
       const pipVisible = (global as any).__pipVisibleRef?.current === true;
       if (!pipVisible) {
@@ -1830,7 +1835,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         logger.info('[VideoCall] Глобальные ссылки очищены (сессия удалена)');
       }
     };
-  }, [onAbortCall]);
+  }, []);
   
   const toggleMic = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
@@ -1970,6 +1975,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       // Android: при уходе со страницы звонка (Back / gesture-back) остаёмся ВНУТРИ приложения:
       // сначала делаем шаг назад в навигации, затем показываем in-app PiP (оверлей), чтобы можно было ходить по экранам и общаться.
       if (Platform.OS === 'android' && enterPiPModeRef.current) {
+        // КРИТИЧНО: Ставим флаг PiP синхронно ДО навигации, иначе при unmount VideoCall
+        // cleanup увидит pipVisible=false и завершит звонок у обоих. showPiP() вызывается в следующем rAF после dispatch.
+        try {
+          (global as any).__pipVisibleRef = (global as any).__pipVisibleRef || { current: false };
+          (global as any).__pipVisibleRef.current = true;
+        } catch (_) {}
         requestAnimationFrame(() => {
           const action = (e as any)?.data?.action;
           if (action) {

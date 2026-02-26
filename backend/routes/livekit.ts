@@ -44,6 +44,21 @@ if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
 
 export const getLiveKitUrl = () => LIVEKIT_URL;
 
+/** Комнаты вида room_<uid1>_<uid2> (24 hex) — только эти два участника могут получить токен. */
+const ROOM_PARTICIPANTS_REGEX = /^room_([a-f\d]{24})_([a-f\d]{24})$/i;
+
+/**
+ * Проверяет, что userId — разрешённый участник комнаты.
+ * Для room_<id1>_<id2> только id1 и id2 могут получить токен (защита от присоединения третьего).
+ * Для остальных форматов имён — разрешаем (обратная совместимость).
+ */
+export function isAllowedParticipant(roomName: string, userId: string): boolean {
+  const match = roomName.match(ROOM_PARTICIPANTS_REGEX);
+  if (!match) return true;
+  const [, id1, id2] = match;
+  return userId === id1 || userId === id2;
+}
+
 export async function createToken({ identity, roomName }: { identity: string; roomName: string }): Promise<string> {
   const apiKey = LIVEKIT_API_KEY;
   const apiSecret = LIVEKIT_API_SECRET;
@@ -76,6 +91,14 @@ router.post('/livekit/token', async (req, res) => {
 
     if (!userId || !roomName) {
       return res.status(400).json({ ok: false, error: 'missing_userId_or_roomName' });
+    }
+
+    if (!isAllowedParticipant(roomName, String(userId))) {
+      logger.warn('[LiveKit] Token rejected: user is not a participant of the room', {
+        userId: String(userId).slice(0, 8) + '…',
+        roomName: roomName.slice(0, 20) + '…',
+      });
+      return res.status(403).json({ ok: false, error: 'not_participant' });
     }
 
     const token = await createToken({ identity: userId, roomName });

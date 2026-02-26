@@ -1574,18 +1574,19 @@ function AppContent() {
       // Мгновенно закрываем UI
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
       // Никакой навигации — остаёмся на текущем экране
-      // Инкремент пропущенного только у получателя (callee), не у инициатора
+      // Инкремент пропущенного только у получателя (callee): у того, кому звонили, при отмене звонящим
       try {
-        const uid = await AsyncStorage.getItem('last_incoming_from');
         const callerId = String((d as any)?.from || '');
-        if (uid && callerId && uid === callerId) {
-          lastMissedIncrementTimeByUserRef.current[uid] = Date.now();
+        const myUserId = getCurrentUserId?.() ?? '';
+        const isCallee = callerId && myUserId && callerId !== myUserId;
+        if (callerId && isCallee) {
+          lastMissedIncrementTimeByUserRef.current[callerId] = Date.now();
           const key = 'missed_calls_by_user_v1';
           const raw = await AsyncStorage.getItem(key);
           const map = raw ? JSON.parse(raw) : {};
-          map[uid] = (map[uid] || 0) + 1;
+          map[callerId] = (map[callerId] || 0) + 1;
           await AsyncStorage.setItem(key, JSON.stringify(map));
-          try { emitMissedIncrement(uid); } catch {}
+          try { emitMissedIncrement(callerId); } catch {}
           await clearMissedBadgeCleared();
           await syncAppBadgeFromMissedCount();
           try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}

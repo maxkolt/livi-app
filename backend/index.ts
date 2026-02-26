@@ -30,7 +30,7 @@ import User from './models/User';
 import Install from './models/Install';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
-import { createToken, getLiveKitUrl } from './routes/livekit';
+import { createToken, getLiveKitUrl, isAllowedParticipant } from './routes/livekit';
 import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallDeclinedToCaller, sendCallAcceptedToCaller } from './utils/push';
 import * as queueStore from './utils/queueStore';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
@@ -1743,6 +1743,15 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (!me || !roomName) {
         logger.warn('[livekit:token] Missing parameters', { hasUserId: !!me, hasRoomName: !!roomName, socketId: sock.id });
         return ack?.({ ok: false, error: 'missing_user_or_roomName' });
+      }
+
+      if (!isAllowedParticipant(roomName, String(me))) {
+        logger.warn('[livekit:token] Rejected: user is not a participant', {
+          userId: String(me).slice(0, 8) + '…',
+          roomName: roomName.slice(0, 20) + '…',
+          socketId: sock.id,
+        });
+        return ack?.({ ok: false, error: 'not_participant' });
       }
       
       console.log('[livekit:token] 📤 Creating token request', { 
