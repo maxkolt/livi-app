@@ -217,6 +217,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         try {
           (global as any).__pipInSystemModeRef = (global as any).__pipInSystemModeRef || { current: false };
           (global as any).__pipInSystemModeRef.current = inPiP;
+          console.log('[PiPContext] SystemPiPModeChanged: __pipInSystemModeRef.current =', inPiP);
         } catch (_) {}
         if (inPiP) {
           setPendingSystemPiP(false);
@@ -379,6 +380,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const emitter = new NativeEventEmitter();
     const sub = emitter.addListener('AboutToEnterSystemPiP', () => {
       const g = (global as any);
+      // Не входить в PiP без нажатия пользователя: при завершении звонка (переход на Home) onUserLeaveHint может сработать раньше нативного флага.
+      if (g.__endingCallInProgressRef?.current === true) return;
       const session = g.__webrtcSessionRef?.current;
       if (session && typeof (session as any).isEnded === 'function' && (session as any).isEnded()) return;
 

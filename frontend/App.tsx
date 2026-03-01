@@ -249,9 +249,20 @@ function AppContent() {
       });
     });
     const sub4 = emitter.addListener('EndCallFromPiP', () => {
+      console.log('[App] [PiP] 📵 EndCallFromPiP получен от натива (нажата кнопка «Завершить» в системном PiP)');
+      try {
+        (global as any).__endingFromPiPButtonRef = (global as any).__endingFromPiPButtonRef || { current: false };
+        (global as any).__endingFromPiPButtonRef.current = true;
+      } catch (_) {}
       NativeModules.LiviAppModule?.getPiPEndCallParams?.()?.then?.((params: { callId?: string | null; roomId?: string | null }) => {
+        console.log('[App] [PiP] getPiPEndCallParams результат', { callId: params?.callId ?? null, roomId: params?.roomId ?? null });
         const fn = (global as any).__endCallFromNativeRef?.current;
-        if (typeof fn === 'function') fn(params?.callId ?? null, params?.roomId ?? null);
+        if (typeof fn === 'function') {
+          console.log('[App] [PiP] вызываем endCallImpl(callId, roomId)');
+          fn(params?.callId ?? null, params?.roomId ?? null);
+        } else {
+          console.warn('[App] [PiP] __endCallFromNativeRef.current не функция, endCallImpl не вызван');
+        }
       });
     });
     const sub5 = emitter.addListener('SystemPiPModeChanged', (payload: { isInPiP?: boolean }) => {
@@ -1366,6 +1377,8 @@ function AppContent() {
   // При получении call:ended (второй участник завершил) — закрываем модалки, PiP по контексту: только reset на Home если были на полноэкранном видеозвонке.
   React.useEffect(() => {
     const onCallEnded = (data?: { callId?: string }) => {
+      const g = global as any;
+      console.log('[App] [call:ended] 📩 onCallEnded вызван', { callId: data?.callId, inSystem: g.__pipInSystemModeRef?.current, __callEndedFromPiPNoOpen: g.__callEndedFromPiPNoOpenRef?.current });
       // Сразу закрываем системный PiP у собеседника (до любых очисток), иначе окно успевает показать лоадер.
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
@@ -1390,49 +1403,46 @@ function AppContent() {
       try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
 
-      const g = global as any;
       const inSystem = g.__pipInSystemModeRef?.current === true;
       const pipVisible = g.__pipVisibleRef?.current === true;
       const hidePiP = g.__pipHidePiPRef?.current;
+      const noOpenFlag = g.__callEndedFromPiPNoOpenRef?.current === true;
 
       if (typeof hidePiP === 'function') hidePiP();
-      // Кто в системном PiP при call:ended — закрываем PiP и сбрасываем на Home, чтобы после закрытия PiP не показывать неактивный видеозвонок. Кто на полноэкранном VideoCall или in-app PiP — тоже переходим на Home.
+      // Кто в системном PiP при call:ended — только закрываем PiP, приложение не открываем.
       if (inSystem) {
-        const goHome = () => {
-          if (!navRef.isReady()) return;
-          const route = navRef.getCurrentRoute();
-          const routeName = String((route as any)?.name ?? '');
-          if (routeName === 'Home') return;
-          if (routeName === 'VideoCall') {
-            navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
-          } else {
-            const state = navRef.getState();
-            const routes = state?.routes ?? [];
-            const idx = state?.index ?? 0;
-            if (idx > 0 && (routes[idx - 1] as any)?.name === 'Home') {
-              navRef.dispatch(CommonActions.goBack());
-            } else {
-              navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
-            }
-          }
-        };
-        goHome();
+        console.log('[App] [call:ended] inSystem=true → ставим __callEndedFromPiPNoOpenRef, return (НЕ вызываем goHome)');
+        try {
+          g.__callEndedFromPiPNoOpenRef = g.__callEndedFromPiPNoOpenRef || { current: false };
+          g.__callEndedFromPiPNoOpenRef.current = true;
+          setTimeout(() => {
+            try { (global as any).__callEndedFromPiPNoOpenRef.current = false; } catch (_) {}
+          }, 6000);
+        } catch (_) {}
+        return;
+      }
+      // Звонок завершили из PiP (флаг выставлен в endCallImpl): call:ended мог прийти после закрытия PiP (inSystem уже false). Не открываем приложение.
+      if (noOpenFlag) {
+        console.log('[App] [call:ended] __callEndedFromPiPNoOpenRef=true → return (НЕ вызываем goHome, приложение не открываем)');
         return;
       }
 
+      // Сразу показываем страницу приветствия (у обоих участников без мерцания).
+      console.log('[App] [call:ended] вызываем goHome() → переход на HomeScreen (причина: inSystem=false, noOpenFlag=false)');
       const goHome = () => {
         if (!navRef.isReady()) return;
         const route = navRef.getCurrentRoute();
         const routeName = String((route as any)?.name ?? '');
         if (routeName === 'Home') return;
-        // Если пользователь на странице видеозвонка — остаёмся на ней, не переходим на Home.
-        if (routeName === 'VideoCall') return;
         const state = navRef.getState();
         const routes = state?.routes ?? [];
         const idx = state?.index ?? 0;
-        // Если сейчас VideoCall и под ним Home — делаем goBack(), чтобы не перемонтировать Home (иначе мерцает аватар).
-        if (routeName === 'VideoCall' && idx > 0 && (routes[idx - 1] as any)?.name === 'Home') {
-          navRef.dispatch(CommonActions.goBack());
+        if (routeName === 'VideoCall') {
+          if (idx > 0 && (routes[idx - 1] as any)?.name === 'Home') {
+            navRef.dispatch(CommonActions.goBack());
+          } else {
+            navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
+          }
           return;
         }
         navRef.dispatch(
@@ -2101,10 +2111,29 @@ export default function App() {
   };
 
   const endCallImpl = (callId: string | null, roomId: string | null) => {
-    console.log('[App] 🔥 endCallImpl вызван', { callId, roomId });
     const g = global as any;
+    const fromPiPButton = g.__endingFromPiPButtonRef?.current === true;
+    if (fromPiPButton) {
+      try { g.__endingFromPiPButtonRef.current = false; } catch (_) {}
+    }
     const inSystem = g.__pipInSystemModeRef?.current === true;
     const pipVisible = g.__pipVisibleRef?.current === true;
+    const endingFromSystemPiP = inSystem || fromPiPButton;
+    console.log('[App] 🔥 endCallImpl вызван', { callId, roomId, inSystem, pipVisible, fromPiPButton, endingFromSystemPiP, __callEndedFromPiPNoOpen: g.__callEndedFromPiPNoOpenRef?.current });
+
+    // Сразу выставляем флаги «завершили из PiP», чтобы handleCallEnded (вызовется из session.endCall) и onCallEnded (call:ended) не открывали приложение.
+    // SystemPiPModeChanged(true) может прийти позже, поэтому inSystem часто false при нажатии X в PiP.
+    if (endingFromSystemPiP) {
+      try {
+        g.__lastEndCallSourceRef = g.__lastEndCallSourceRef || { current: null };
+        g.__lastEndCallSourceRef.current = 'pip_close';
+        g.__callEndedFromPiPNoOpenRef = g.__callEndedFromPiPNoOpenRef || { current: false };
+        g.__callEndedFromPiPNoOpenRef.current = true;
+        setTimeout(() => {
+          try { (global as any).__callEndedFromPiPNoOpenRef.current = false; } catch (_) {}
+        }, 6000);
+      } catch (_) {}
+    }
 
     try {
       g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
@@ -2143,8 +2172,10 @@ export default function App() {
     try {
       const cleanupFn = g.__endCallCleanupRef?.current;
       if (cleanupFn && typeof cleanupFn === 'function') {
-        g.__lastEndCallSourceRef = g.__lastEndCallSourceRef || { current: null };
-        g.__lastEndCallSourceRef.current = 'pip_close';
+        if (!endingFromSystemPiP) {
+          g.__lastEndCallSourceRef = g.__lastEndCallSourceRef || { current: null };
+          g.__lastEndCallSourceRef.current = 'pip_close';
+        }
         console.log('[App] Вызываем cleanupFunction из __endCallCleanupRef');
         cleanupFn();
       } else if (!hasPiPIds) {
@@ -2164,23 +2195,15 @@ export default function App() {
       console.warn('[App] Error calling endCall cleanup:', e);
     }
 
-    // При завершении из системного PiP (X): сначала переходим на Home, даём навигации примениться, затем закрываем PiP — чтобы не открывалось приложение на неактивной странице видеозвонка.
+    // При завершении из системного PiP (X): только закрываем PiP, приложение не открываем.
+    // endingFromSystemPiP = inSystem || fromPiPButton: fromPiPButton true, когда вызов из EndCallFromPiP (SystemPiPModeChanged(true) может прийти позже).
     const hidePiP = g.__pipHidePiPRef?.current;
-    if (inSystem) {
-      if (navRef.isReady()) {
-        const route = navRef.getCurrentRoute();
-        if (route?.name !== 'Home') {
-          navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
-        }
-      }
+    if (endingFromSystemPiP) {
+      console.log('[App] [PiP] endCallImpl: endingFromSystemPiP=true (inSystem=', inSystem, ', fromPiPButton=', fromPiPButton, ') → hidePiP(), requestExitSystemPiP(), return (НЕ открываем приложение)');
       if (typeof hidePiP === 'function') hidePiP();
-      // Закрываем системный PiP с задержкой, чтобы reset на Home успел отрисоваться и при выходе из PiP пользователь не видел неактивный видеозвонок.
-      const closeSystemPiP = () => {
-        if (Platform.OS === 'android') {
-          try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
-        }
-      };
-      setTimeout(closeSystemPiP, 200);
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+      }
       return;
     }
     // In-app PiP (кнопка X): звонок уже завершён для обоих выше (session.endCall/call:end); только скрываем PiP, навигации нет.
@@ -2192,7 +2215,9 @@ export default function App() {
     // Если пользователь на странице видеозвонка — не переходим на Home, остаёмся на ней.
     if (navRef.isReady()) {
       const route = navRef.getCurrentRoute();
-      if (route?.name !== 'VideoCall') {
+      const routeName = route?.name ?? '';
+      if (routeName !== 'VideoCall') {
+        console.log('[App] [PiP] endCallImpl: навигация на Home (не в PiP: inSystem=false, pipVisible=false, текущий экран=', routeName, ')');
         navRef.dispatch(
           CommonActions.reset({
             index: 0,
@@ -2226,6 +2251,8 @@ export default function App() {
       const hasActiveCall = session && typeof session.getRoomId === 'function' && session.getRoomId();
       if (!pipVisible && !hasActiveCall) return false;
       if (!navRef.isReady()) return false;
+      // Завершение звонка по кнопке «Завершить»: не переходить в PiP по Back (как и по Home).
+      if ((global as any).__endingCallInProgressRef?.current === true) return false;
       const currentRoute = navRef.getCurrentRoute?.()?.name;
       // На экране VideoCall при нажатии Back — сразу переход в системный PiP (как при нажатии Домой).
       if (currentRoute === 'VideoCall' && hasActiveCall) {

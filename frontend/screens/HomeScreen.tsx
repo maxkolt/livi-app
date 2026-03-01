@@ -639,13 +639,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     tabRef.current = tab;
   }, [tab]);
 
-  // Плавное появление оверлея меню — без мерцания при переходе
+  // Плавное появление оверлея меню — короткая анимация для быстрого отклика
   useEffect(() => {
     if (!menuOpen) return;
     menuOverlayOpacity.setValue(0);
     Animated.timing(menuOverlayOpacity, {
       toValue: 1,
-      duration: 200,
+      duration: 100,
       useNativeDriver: true,
     }).start();
   }, [menuOpen, menuOverlayOpacity]);
@@ -4341,7 +4341,7 @@ const handleClearNick = useCallback(async () => {
                 { backgroundColor: MENU_BTN_INNER_BG, position: 'relative' },
                 Platform.OS === 'ios' && pressed && styles.menuBtnPressed,
               ]}
-              onPress={() => requestAnimationFrame(() => setMenuOpen(true))}
+              onPress={() => setMenuOpen(true)}
               android_ripple={{
                 color: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.12)',
                 borderless: false,

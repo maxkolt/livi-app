@@ -638,15 +638,22 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** Выйти из системного PiP без открытия приложения: только закрыть окно PiP. Вызывать при call:ended у собеседника. Если уже на main thread — finish() сразу, иначе через runOnUiThread. */
+  /** Выйти из системного PiP без открытия приложения: только закрыть окно PiP. Сначала уводим задачу в фон (moveTaskToBack), затем finish() — чтобы приложение не открывалось на экране приветствия. */
   @ReactMethod
   fun requestExitSystemPiP() {
     val activity = currentActivity ?: return
     val run: Runnable = Runnable {
       try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity.isInPictureInPictureMode) {
-          activity.finish()
-          Log.d("LiviAppModule", "requestExitSystemPiP: activity.finish() called (was in PiP)")
+          activity.moveTaskToBack(true)
+          Handler(Looper.getMainLooper()).postDelayed({
+            try {
+              activity.finish()
+              Log.d("LiviAppModule", "requestExitSystemPiP: moved to back, then finish() (was in PiP)")
+            } catch (e2: Exception) {
+              Log.w("LiviAppModule", "requestExitSystemPiP finish failed", e2)
+            }
+          }, 80)
         } else {
           Log.d("LiviAppModule", "requestExitSystemPiP: not in PiP, skipping finish()")
         }

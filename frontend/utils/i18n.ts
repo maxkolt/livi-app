@@ -75,7 +75,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     callStartFailed: 'Не удалось инициировать вызов',
     timeoutExceeded: 'Превышено время ожидания',
     userDeletedDataCleared: 'Пользователь удален, данные очищены',
-    callEnded: 'Звонок завершён',
+    callEnded: 'Вызов завершен',
     linkCopied: 'Ссылка скопирована',
     copyFailed: 'Не удалось скопировать',
     shareFailed: 'Не удалось поделиться',

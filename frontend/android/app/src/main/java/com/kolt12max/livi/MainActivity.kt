@@ -170,6 +170,7 @@ class MainActivity : ReactActivity() {
         val tryEnterPiP = Runnable {
           try {
             if (isInPictureInPictureMode) return@Runnable
+            if (LiviAppModule.getEndingCallInProgress()) return@Runnable
             if (!LiviAppModule.getShouldEnterPiPOnLeaveHint()) return@Runnable
             // Базовый размер системного PiP (как в исходном варианте).
             val ratio = Rational(9, 16)
