@@ -391,6 +391,11 @@ function AppContent() {
   // Убрали постоянные логи для уменьшения шума
   const [routeName, setRouteName] = React.useState<string | undefined>(undefined);
   const lastLoggedRouteRef = React.useRef<string | undefined>(undefined);
+  // Grace period после перехода на VideoCall/RandomChat: не разрешаем системный PiP по onUserLeaveHint
+  // первые 3 с, чтобы избежать ложного сворачивания при закрытии IncomingCallActivity.
+  const VIDEO_SESSION_PIP_GRACE_MS = 3000;
+  const videoSessionRouteEnteredAtRef = React.useRef<number>(0);
+  const videoSessionRouteLastRef = React.useRef<string | undefined>(undefined);
 
 
   // ==== incoming call (global, когда не на экране видеозвонка) ====
@@ -995,6 +1000,18 @@ function AppContent() {
     const pipVisible = !!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current;
     const shouldKeepOn = isVideoSessionRoute(currentRoute) || !!incoming || pipVisible;
 
+    // Отслеживание перехода на экран видеозвонка/рандомчата для grace period
+    const onVideoSessionRoute = isVideoSessionRoute(currentRoute);
+    const lastRoute = videoSessionRouteLastRef.current;
+    if (onVideoSessionRoute) {
+      if (!isVideoSessionRoute(lastRoute)) {
+        videoSessionRouteEnteredAtRef.current = Date.now();
+      }
+      videoSessionRouteLastRef.current = currentRoute;
+    } else {
+      videoSessionRouteLastRef.current = currentRoute;
+    }
+
     // Android: системный PiP разрешаем ТОЛЬКО при реально активном звонке/входящем/видимом PiP,
     // а не просто потому что текущий экран = VideoCall (иначе при call:ended может произойти автозаход в PiP).
     if (Platform.OS === 'android') {
@@ -1017,7 +1034,13 @@ function AppContent() {
           (!!session && typeof session.getCallId === 'function' && !!session.getCallId());
         const hasActiveCallForPiP = sessionNotEnded && hasAnyIds;
         const onVideoCallWithActiveSession = isVideoSessionRoute(currentRoute) && sessionNotEnded;
-        const allowSystemPiP = pipVisible || !!incoming || hasActiveCallForPiP || onVideoCallWithActiveSession;
+        // Grace period: первые VIDEO_SESSION_PIP_GRACE_MS мс после перехода на VideoCall/RandomChat
+        // не разрешаем системный PiP по onUserLeaveHint (ложный hint при закрытии IncomingCallActivity).
+        const onVideoCallRecently = onVideoSessionRoute && (Date.now() - videoSessionRouteEnteredAtRef.current) < VIDEO_SESSION_PIP_GRACE_MS;
+        const allowSystemPiP =
+          pipVisible ||
+          !!incoming ||
+          ((hasActiveCallForPiP || onVideoCallWithActiveSession) && !onVideoCallRecently);
         NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!allowSystemPiP);
         }
       } catch (_) {}
@@ -1434,21 +1457,15 @@ function AppContent() {
         const route = navRef.getCurrentRoute();
         const routeName = String((route as any)?.name ?? '');
         if (routeName === 'Home') return;
-        const state = navRef.getState();
-        const routes = state?.routes ?? [];
-        const idx = state?.index ?? 0;
+        const homeParams = { callEnded: true };
         if (routeName === 'VideoCall') {
-          if (idx > 0 && (routes[idx - 1] as any)?.name === 'Home') {
-            navRef.dispatch(CommonActions.goBack());
-          } else {
-            navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
-          }
+          navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: homeParams }] }));
           return;
         }
         navRef.dispatch(
           CommonActions.reset({
             index: 0,
-            routes: [{ name: 'Home' as any }],
+            routes: [{ name: 'Home' as any, params: homeParams }],
           })
         );
       };

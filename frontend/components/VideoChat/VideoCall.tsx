@@ -209,8 +209,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   // Эквалайзер отключен
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [wasFriendCallEnded, setWasFriendCallEnded] = useState(false);
-  const [showCallEndedBadge, setShowCallEndedBadge] = useState(false);
-  const callEndedBadgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [partnerInPiP, setPartnerInPiP] = useState(false);
   const partnerInPiPRef = useRef(false);
   useEffect(() => { partnerInPiPRef.current = partnerInPiP; }, [partnerInPiP]);
@@ -233,29 +231,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       (global as any).__isInactiveStateRef = { current: false };
     };
   }, [isInactiveState]);
-
-  // Бейдж «Вызов завершен» между блоками ВЫ и Собеседник — показывается 3 сек после перехода в неактивное состояние
-  useEffect(() => {
-    if (!isInactiveState || !wasFriendCallEnded) {
-      setShowCallEndedBadge(false);
-      if (callEndedBadgeTimerRef.current) {
-        clearTimeout(callEndedBadgeTimerRef.current);
-        callEndedBadgeTimerRef.current = null;
-      }
-      return;
-    }
-    setShowCallEndedBadge(true);
-    callEndedBadgeTimerRef.current = setTimeout(() => {
-      setShowCallEndedBadge(false);
-      callEndedBadgeTimerRef.current = null;
-    }, 5000);
-    return () => {
-      if (callEndedBadgeTimerRef.current) {
-        clearTimeout(callEndedBadgeTimerRef.current);
-        callEndedBadgeTimerRef.current = null;
-      }
-    };
-  }, [isInactiveState, wasFriendCallEnded]);
 
   // Ref текущего собеседника и активного звонка — чтобы App не показывал «входящий» от того же пользователя (дубликат после отмены на нативном экране)
   const hasActiveCallWithPartnerRef = !!(roomId || callId || partnerId) && !isInactiveState;
@@ -1345,14 +1320,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           const route = rootNav.getCurrentRoute();
           if (route?.name === 'Home') return;
           if (route?.name === 'VideoCall') {
-            const state = rootNav.getState();
-            const routes = state?.routes ?? [];
-            const idx = state?.index ?? 0;
-            if (idx > 0 && (routes[idx - 1] as any)?.name === 'Home') {
-              rootNav.dispatch(CommonActions.goBack());
-            } else {
-              rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
-            }
+            rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
           }
         } catch (e) {
           logger.warn('[VideoCall] reset to Home at start of handleCallEnded failed', e);
@@ -1740,10 +1708,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         if (rootNav?.isReady?.()) {
           const route = rootNav.getCurrentRoute();
           if (route?.name !== 'Home') {
-            rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
+            rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
           }
         } else {
-          (navigation as any)?.dispatch?.(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
+          (navigation as any)?.dispatch?.(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
         }
         // Держим приложение на переднем плане на странице приветствия (не закрывать и не уходить в фон).
         if (Platform.OS === 'android') {
@@ -1910,7 +1878,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (!rootNav?.isReady?.()) return;
       const route = rootNav.getCurrentRoute();
       if (route?.name !== 'VideoCall') return;
-      rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
+      rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
     }, [isInactiveState, wasFriendCallEnded])
   );
 
@@ -2690,15 +2658,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             opacity={buttonsOpacity}
           />
         </View>
-
-        {/* Бейдж «Вызов завершен» — по центру линии между блоками */}
-        {showCallEndedBadge && isInactiveState && wasFriendCallEnded && (
-          <View style={styles.callEndedBadgeOverlay} pointerEvents="none">
-            <View style={styles.callEndedBadge}>
-              <Text style={[styles.callEndedBadgeText, { color: 'rgba(237,234,234,0.5)' }]}>{t('callEnded', lang)}</Text>
-            </View>
-          </View>
-        )}
         </View>
 
         {/* Кнопка снизу: Завершить */}
@@ -2754,29 +2713,6 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     position: 'relative',
-  },
-  callEndedBadgeOverlay: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
-    elevation: 10,
-  },
-  callEndedBadge: {
-    backgroundColor: 'rgba(203, 30, 18, 0.22)',
-    borderWidth: 0.5,
-    borderColor: 'rgba(234, 23, 23, 0.4)',
-    paddingHorizontal: 18,
-    paddingVertical: 6,
-    borderRadius: 999,
-  },
-  callEndedBadgeText: {
-    fontSize: 13,
-    fontWeight: '500',
   },
   card: {
     ...CARD_BASE,

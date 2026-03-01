@@ -337,19 +337,19 @@ const useLiviNotice = () => {
     });
   }, [hide, opacity]);
 
+  const isCallNotice = notice?.kind === 'error' || notice?.kind === 'success';
   const view = notice ? (
     <Animated.View
       style={[
         styles.notice,
         {
           opacity,
-          borderColor: notice.kind === 'error' ? LIVI.red : notice.kind === 'success' ? LIVI.green : LIVI.accent,
-          backgroundColor:
-            notice.kind === 'error'
-              ? (isDark ? 'rgba(255,90,103,0.16)' : 'rgba(255,90,103,0.30)')
-              : notice.kind === 'success'
-              ? (isDark ? 'rgba(42,135,81,0.16)' : 'rgba(42,135,81,0.30)')
-              : (isDark ? 'rgba(113,91,168,0.15)' : 'rgba(113,91,168,0.28)'),
+          ...(isCallNotice
+            ? { backgroundColor: 'rgba(255, 90, 103, 0.2)', borderColor: 'rgba(200, 50, 65, 0.85)' }
+            : {
+                borderColor: LIVI.accent,
+                backgroundColor: isDark ? 'rgba(113,91,168,0.15)' : 'rgba(113,91,168,0.28)',
+              }),
         },
       ]}
     >
@@ -4154,7 +4154,7 @@ const handleClearNick = useCallback(async () => {
     const openFriendsMenu = (route as any)?.params?.openFriendsMenu;
     const openFriendsTab = (route as any)?.params?.openFriendsTab;
     if (ended) {
-      showNotice(t('callEnded', lang), 'success', 3000);
+      showNotice(t('callEnded', lang), 'success', 5000);
     }
     if (openFriendsMenu) {
       setMenuOpen(true);
@@ -5304,19 +5304,20 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     alignItems: 'center',
     width: '100%',
+    marginBottom: 24,
   },
-  // notice (бейдж «Друг удалён» и др.): по центру между подзаголовком и кнопкой
+  // notice (бейдж «Вызов завершён» и др.): по центру между подзаголовком и кнопкой
   notice: {
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    width: '80%',
+    width: '68%',
     alignSelf: 'center',
   },
-  noticeText: { color: LIVI.text2, fontSize: 14, fontWeight: '500', textAlign: 'center' },
+  noticeText: { color: LIVI.text2, fontSize: 13, fontWeight: '500', textAlign: 'center' },
 
   confirmCard: {
     width: '92%', backgroundColor: 'rgba(13,14,16,0.94)', borderRadius: 12,
