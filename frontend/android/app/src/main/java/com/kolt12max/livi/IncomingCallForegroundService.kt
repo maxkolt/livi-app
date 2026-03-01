@@ -109,7 +109,18 @@ class IncomingCallForegroundService : Service() {
         when {
             silentNotification -> Log.e(TAG, "[INCOMING_FGS] Mode=silent (shade only)")
             headsUpOnly -> Log.e(TAG, "[INCOMING_FGS] Mode=headsUpOnly (no full-screen)")
-            else -> Log.e(TAG, "[INCOMING_FGS] Mode=fullScreenIntent SDK=${Build.VERSION.SDK_INT} (if no UI on lock screen, search logcat for FSI_REQUESTED_BUT_DENIED or ActivityTaskManager BAL_BLOCK)")
+            else -> {
+                Log.e(TAG, "[INCOMING_FGS] Mode=fullScreenIntent SDK=${Build.VERSION.SDK_INT}")
+                // На части устройств (Samsung Android 14) система отклоняет FSI (FSI_REQUESTED_BUT_DENIED), и нативный экран не показывается.
+                // FGS с типом PHONE_CALL имеет право запускать активность (BAL exemption). Запускаем IncomingCallActivity вручную —
+                // тогда экран входящего покажется на блокировке даже при отключённом FSI.
+                try {
+                    val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick)
+                    startActivity(launchIntent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "[INCOMING_FGS] startActivity(IncomingCallActivity) failed", e)
+                }
+            }
         }
 
         timeoutRunnable = Runnable {

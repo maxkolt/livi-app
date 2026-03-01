@@ -1,5 +1,5 @@
 import { useCallback, useRef, useEffect } from 'react';
-import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
+import { BackHandler, PanResponder, Platform, Dimensions } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { usePiP as usePiPContext } from '../../../src/pip/PiPContext';
 import { logger } from '../../../utils/logger';
@@ -262,7 +262,9 @@ export const usePiP = ({
   }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, camOn, micOn, remoteMuted, localStream, remoteStream, routeParams, session]);
 
   // Обработка BackHandler для Android:
-  // при активном звонке сразу входим в системный PiP (без in-app оверлея).
+  // при уходе со страницы внутри приложения показываем in-app PiP.
+  // Системный PiP должен включаться только при РЕАЛЬНОМ выходе из приложения (Home/Recents/Back на корне),
+  // это обрабатывается нативным onUserLeaveHint() и глобальными обработчиками корневого Back.
   useEffect(() => {
     if (Platform.OS !== 'android') {
       return;
@@ -298,50 +300,8 @@ export const usePiP = ({
       const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current;
 
       if (hasActiveCall) {
-        // Единая логика: на Back сразу входим в системный PiP (без in-app оверлея).
-        logger.info('[usePiP] BackHandler (Android): вход в системный PiP', {
-          actualRoomId,
-          actualCallId,
-          actualPartnerId
-        });
-
-        // КРИТИЧНО: Сохраняем callId/roomId/navParams в PiPContext до входа в системный PiP,
-        // чтобы при развороте (тап по окну) returnToCall мог корректно вернуть на экран звонка.
-        try {
-          const updateState = (global as any).__pipUpdateStateRef?.current;
-          if (typeof updateState === 'function') {
-            updateState({
-              callId: actualCallId || '',
-              roomId: actualRoomId || '',
-              lastNavParams: routeParams,
-            });
-          }
-        } catch (_) {}
-
-        // Не вызываем hidePiP() перед системным PiP — иначе лишний ре-рендер и риск показать лоадер вместо видео.
-        // In-app PiP скрываем только если он был виден (редкий сценарий).
-        if (pip.visible) {
-          try { pip.hidePiP(); } catch (_) {}
-        }
-
-        if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
-          try { NativeModules.LiviAppModule.setPiPEndCallParams(actualCallId, actualRoomId); } catch (_) {}
-        }
-
-        if (NativeModules.LiviAppModule?.requestEnterPictureInPicture) {
-          // Подготовить UI под системный PiP (полноэкранное remote-видео) до входа.
-          try { pip.updatePiPState?.({ pendingSystemPiP: true, allowVideoRender: true }); } catch (_) {}
-          setTimeout(() => {
-            try { pip.updatePiPState?.({ pendingSystemPiP: false }); } catch (_) {}
-          }, 1500);
-          // Задержка перед входом в PiP: даём время отрисовать компактный вид с remote-видео,
-          // иначе Android может захватить кадр с лоадером.
-          const ENTER_SYSTEM_PIP_DELAY_MS = 200;
-          setTimeout(() => {
-            try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
-          }, ENTER_SYSTEM_PIP_DELAY_MS);
-        }
-        return true; // Предотвращаем стандартное поведение кнопки назад
+        // Android: Back обрабатывает usePreventRemove в VideoCall — сразу системный PiP. In-app PiP отключён.
+        return false;
       }
 
       return false; // Разрешаем закрытие если нет активного звонка
@@ -477,33 +437,13 @@ export const usePiP = ({
           // После завершения жеста (навигации) флаг сбрасывается, и PiP может показаться снова при следующем свайпе
           if (hasActiveCall) {
             if (Platform.OS === 'android') {
-              // КРИТИЧНО: Сохраняем callId/roomId/navParams в PiPContext до входа в системный PiP для returnToCall при развороте.
-              try {
-                const updateState = (global as any).__pipUpdateStateRef?.current;
-                if (typeof updateState === 'function') {
-                  updateState({
-                    callId: actualCallId || '',
-                    roomId: actualRoomId || '',
-                    lastNavParams: routeParams,
-                  });
-                }
-              } catch (_) {}
-              // Android: сначала системный PiP (пока ещё на VideoCall), потом навигация — иначе переход на Home до PiP и окно не показывается.
+              // Android: in-app PiP отключён. Свайп — просто шаг назад (системный PiP только по Back/Home).
               requestAnimationFrame(() => {
-                try { pip.hidePiP(); } catch (_) {}
-                if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
-                  try { NativeModules.LiviAppModule.setPiPEndCallParams(actualCallId, actualRoomId); } catch (_) {}
+                if (navigation.canGoBack && navigation.canGoBack()) {
+                  navigation.goBack();
+                } else {
+                  navigation.navigate('Home' as never);
                 }
-                if (NativeModules.LiviAppModule?.requestEnterPictureInPicture) {
-                  try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
-                }
-                requestAnimationFrame(() => {
-                  if (navigation.canGoBack && navigation.canGoBack()) {
-                    navigation.goBack();
-                  } else {
-                    navigation.navigate('Home' as never);
-                  }
-                });
               });
             } else {
               // iOS: системный PiP для текущего сценария недоступен, сохраняем in-app PiP.
@@ -551,31 +491,15 @@ export const usePiP = ({
           const hasActiveCall = !!(actualRoomId || actualCallId || actualPartnerId);
           if (hasActiveCall) {
             if (Platform.OS === 'android') {
-              try {
-                const updateState = (global as any).__pipUpdateStateRef?.current;
-                if (typeof updateState === 'function') {
-                  updateState({
-                    callId: actualCallId || '',
-                    roomId: actualRoomId || '',
-                    lastNavParams: routeParams,
-                  });
-                }
-              } catch (_) {}
               requestAnimationFrame(() => {
-                try { pip.hidePiP(); } catch (_) {}
-                if (actualCallId && actualRoomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
-                  try { NativeModules.LiviAppModule.setPiPEndCallParams(actualCallId, actualRoomId); } catch (_) {}
+                if (navigation.canGoBack && navigation.canGoBack()) {
+                  navigation.goBack();
+                } else {
+                  navigation.navigate('Home' as never);
                 }
-                if (NativeModules.LiviAppModule?.requestEnterPictureInPicture) {
-                  try { NativeModules.LiviAppModule.requestEnterPictureInPicture(); } catch (_) {}
-                }
-                pipShownDuringSwipeRef.current = false;
                 requestAnimationFrame(() => {
-                  if (navigation.canGoBack && navigation.canGoBack()) {
-                    navigation.goBack();
-                  } else {
-                    navigation.navigate('Home' as never);
-                  }
+                  enterPiPMode({ deferVisible: true });
+                  pipShownDuringSwipeRef.current = false;
                 });
               });
             } else {

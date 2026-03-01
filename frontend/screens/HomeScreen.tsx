@@ -688,32 +688,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => sub.remove();
   }, [menuOpen, closeMenu]);
 
-  // На Android: на главном экране при видимом in-app PiP кнопка «Назад» (2–3-е нажатие после ухода с видеозвонка) = переход в системный PiP вместо выхода из приложения.
-  // Дублирует логику в App.tsx (Back на корне + PiP видим → системный PiP) на случай, если этот обработчик вызывается раньше.
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    if (!pip.visible || (!pip.callId && !pip.roomId)) return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      try {
-        // ВАЖНО: заранее подготовить UI для системного PiP (полноэкранное remote-видео),
-        // иначе Android может захватить HomeScreen + маленький in-app PiP.
-        try { pip.updatePiPState?.({ pendingSystemPiP: true, allowVideoRender: true }); } catch (_) {}
-        setTimeout(() => {
-          try { pip.updatePiPState?.({ pendingSystemPiP: false }); } catch (_) {}
-        }, 1500);
-        const raf = (typeof requestAnimationFrame !== 'undefined')
-          ? requestAnimationFrame
-          : ((fn: any) => setTimeout(fn, 0));
-        raf(() => {
-          raf(() => {
-            try { NativeModules.LiviAppModule?.requestEnterPictureInPicture?.(); } catch (_) {}
-          });
-        });
-      } catch (_) {}
-      return true; // перехватываем — уходим в системный PiP, не закрываем приложение
-    });
-    return () => sub.remove();
-  }, [pip.visible, pip.callId, pip.roomId, pip.updatePiPState]);
+  // На Android обработка выхода на корне (Back → системный PiP) централизована в App.tsx,
+  // чтобы избежать конфликтов порядка BackHandler'ов (и неожиданного системного PiP на VideoCall).
 
   // Проверка доступности обновления (при старте и при возврате в приложение)
   // Дебаунс при resume: не чаще раза в 60 сек, чтобы избежать мерцания при частых AppState active (два устройства, блокировка экрана)

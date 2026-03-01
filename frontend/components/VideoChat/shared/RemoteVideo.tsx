@@ -178,6 +178,11 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   if (streamToUse?.id && lastGoodStreamRef.current && lastGoodStreamRef.current.id !== streamToUse.id) {
     lastGoodStreamRef.current = null;
   }
+  // Когда партнер выключил камеру (cam-toggle) — не показывать застывший последний кадр, сбрасываем last good frame.
+  if (started && !wasFriendCallEnded && !isInactiveState && !remoteCamOn) {
+    lastGoodStreamRef.current = null;
+    lastGoodAtRef.current = 0;
+  }
 
 
   // Сообщаем о готовности стрима
@@ -335,6 +340,22 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     );
   }
 
+  // Звонок активен, партнер выключил камеру кнопкой в блоке «Вы» — у собеседника в блоке «Собеседник» показываем заглушку «Отошел».
+  if (started && !isInactiveState && !wasFriendCallEnded && !remoteCamOn) {
+    logRenderState('remote-cam-off-active-call', { remoteCamOn, started, streamId: streamToUse?.id });
+    return (
+      <View style={styles.videoContainer}>
+        <AwayPlaceholder />
+        {showFriendBadge && (
+          <View style={styles.friendBadge}>
+            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+
   // Нет стрима — показываем лоадер при загрузке или если звонок активен (started)
   // КРИТИЧНО: При активном звонке (started=true) показываем ActivityIndicator вместо черного экрана
   // Это предотвращает черный экран при принятии звонка, когда remoteStream еще не установлен
@@ -446,6 +467,23 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     (hasRenderableVideo || (forceTextureView && !!streamToUse && hasVideoTrack)) &&
     (!partnerInPiP || remoteCamOn);
   if (canRenderVideo) {
+    // Партнер выключил камеру (трек disabled) — RTCView покажет застывший кадр; показываем заглушку
+    if (hasVideoTrack && !videoTrackEnabled && started && !wasFriendCallEnded && !isInactiveState) {
+      stallSinceRef.current = null;
+      lastGoodStreamRef.current = null;
+      lastGoodAtRef.current = 0;
+      return (
+        <View style={styles.videoContainer}>
+          <AwayPlaceholder />
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
     // We are able to render (or intentionally render during PiP recovery) -> reset stall + remember last good
     stallSinceRef.current = null;
     lastGoodStreamRef.current = streamToUse;
@@ -553,6 +591,23 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // Стрим есть, но видеотрек не готов/замьючен — показываем лоадер (камера не "явно выключена")
   // При партнере в PiP с включенной камерой тоже показываем лоадер, пока трек не станет готов
   if (streamToUse && hasVideoTrack && (!partnerInPiP || remoteCamOn)) {
+    // Трек есть, но отключён (партнер выключил камеру) — не показывать застывший кадр, показать "Отошел"
+    if (!videoTrackEnabled && started && !wasFriendCallEnded && !isInactiveState) {
+      lastGoodStreamRef.current = null;
+      lastGoodAtRef.current = 0;
+      stallSinceRef.current = null;
+      return (
+        <View style={styles.videoContainer}>
+          <AwayPlaceholder />
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
     const now = Date.now();
     const stallStart = stallSinceRef.current ?? now;
     stallSinceRef.current = stallStart;
@@ -621,6 +676,23 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // Fallback (стрим есть, но видео не появилось)
   // КРИТИЧНО: Показываем бейдж друга даже когда нет стрима (для инициатора звонка)
   {
+    // Видеотрек отключён (партнер выключил камеру) — не показывать последний кадр
+    if (streamToUse && hasVideoTrack && !videoTrackEnabled && started && !wasFriendCallEnded && !isInactiveState) {
+      lastGoodStreamRef.current = null;
+      lastGoodAtRef.current = 0;
+      stallSinceRef.current = null;
+      return (
+        <View style={styles.videoContainer}>
+          <AwayPlaceholder />
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
     const now = Date.now();
     const stallStart = stallSinceRef.current ?? now;
     stallSinceRef.current = stallStart;

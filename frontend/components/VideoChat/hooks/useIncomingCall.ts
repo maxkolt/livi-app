@@ -208,7 +208,9 @@ export const useIncomingCall = ({
     };
 
     socket.on('call:declined', handleDeclined);
-    return () => socket.off('call:declined', handleDeclined);
+    return () => {
+      socket.off('call:declined', handleDeclined);
+    };
   }, [routeParams?.directCall, friendCallAccepted, currentCallIdRef]);
 
   // Обработка события incomingCall из session

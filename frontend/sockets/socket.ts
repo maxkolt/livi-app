@@ -44,7 +44,7 @@ export const globalMessageStorage = {
 };
 // Dev-only: avoid log spam for typing events
 const __devTypingLogState = new Map<string, boolean>();
-import { Platform } from "react-native";
+import { NativeModules, Platform } from "react-native";
 import { AppState, type AppStateStatus } from "react-native";
 import { getInstallId } from "../utils/installId";
 
@@ -218,6 +218,11 @@ async function boot() {
   
   bootInProgress = true;
   logger.debug('Starting boot process...');
+
+  // Снимаем уведомление «Видеозвонок от...», если оно осталось от прошлого запуска (сервис не закрылся).
+  if (Platform.OS === 'android') {
+    try { NativeModules.LiviAppModule?.stopActiveCallForegroundService?.(); } catch (_) {}
+  }
   
   try {
     const saved = await AsyncStorage.getItem("userId");
@@ -362,6 +367,10 @@ export function setIncomingCallScreenVisible(visible: boolean): void {
 
 export function setActiveVideoCall(active: boolean, _partnerDisplayName?: string | null): void {
   __activeVideoCall = active;
+  // При завершении звонка снимаем уведомление «Видеозвонок от...», если оно осталось от прошлого запуска.
+  if (!active && Platform.OS === 'android') {
+    try { NativeModules.LiviAppModule?.stopActiveCallForegroundService?.(); } catch (_) {}
+  }
   // Сокет не отключаем при уходе в фон — только за счёт проверки __activeVideoCall/inSystemPiP в AppState (без уведомлений).
   if (!active && (__lastAppState !== 'active' && __lastAppState !== 'inactive')) {
     __realtimePaused = true;

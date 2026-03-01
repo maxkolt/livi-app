@@ -125,7 +125,6 @@ Notifications.setNotificationHandler({
               title,
               body,
               data: { type: 'missed_call', from: fromUserId, fromNick },
-              ...(Platform.OS === 'android' ? { channelId: 'missed_call' } : {}),
             },
             trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
           });

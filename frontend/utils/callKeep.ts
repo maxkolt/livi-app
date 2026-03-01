@@ -279,6 +279,24 @@ export function canUseFullScreenIntent(): Promise<boolean> {
   }
 }
 
+/** Проверить, разрешено ли приложению «отображение поверх других окон» (Всегда сверху). */
+export function canDrawOverlays(): Promise<boolean> {
+  if (Platform.OS !== 'android') return Promise.resolve(true);
+  try {
+    return NativeModules.LiviAppModule?.canDrawOverlays?.() ?? Promise.resolve(true);
+  } catch {
+    return Promise.resolve(true);
+  }
+}
+
+/** Открыть настройки «Отображение поверх других окон» / «Всегда сверху» для приложения. */
+export function openOverlayPermissionSettings(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.openOverlayPermissionSettings?.();
+  } catch {}
+}
+
 /** Передать нативу таймаут исходящего вызова (единый источник с OUTGOING_CALL_TIMEOUT_MS). Вызывать при старте приложения. */
 export function setOutgoingCallTimeoutMs(ms: number): void {
   if (Platform.OS !== 'android') return;
