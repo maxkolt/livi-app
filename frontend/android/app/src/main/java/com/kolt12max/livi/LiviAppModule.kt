@@ -9,6 +9,7 @@ import android.util.Rational
 import android.service.notification.StatusBarNotification
 import android.content.Intent
 import android.app.KeyguardManager
+import android.graphics.Rect
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.RingtoneManager
@@ -44,6 +45,65 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   override fun getName(): String = NAME
+
+  private fun buildSystemPiPSourceRect(activity: android.app.Activity): Rect? {
+    return try {
+      val root = activity.window?.decorView ?: return null
+      val w = root.width
+      val h = root.height
+      if (w <= 0 || h <= 0) return null
+      val ratioW = 9f
+      val ratioH = 16f
+      val targetW: Int
+      val targetH: Int
+      if (w.toFloat() / h.toFloat() > ratioW / ratioH) {
+        targetH = h
+        targetW = (h * (ratioW / ratioH)).toInt()
+      } else {
+        targetW = w
+        targetH = (w * (ratioH / ratioW)).toInt()
+      }
+      val left = (w - targetW) / 2
+      val top = (h - targetH) / 2
+      Rect(left, top, left + targetW, top + targetH)
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  /** Размеры decorView для синхронизации PiP overlay с нативным sourceRect (избегаем чёрных полос в системном PiP). */
+  @ReactMethod
+  fun getDecorViewSize(promise: Promise) {
+    try {
+      val activity = currentActivity ?: run {
+        promise.reject("NO_ACTIVITY", "No current activity")
+        return
+      }
+      activity.runOnUiThread {
+        try {
+          val root = activity.window?.decorView ?: run {
+            promise.reject("NO_DECOR", "No decor view")
+            return@runOnUiThread
+          }
+          val w = root.width
+          val h = root.height
+          Log.d(NAME, "getDecorViewSize: decorView w=$w h=$h")
+          if (w <= 0 || h <= 0) {
+            promise.reject("INVALID_SIZE", "Decor size is $w x $h")
+            return@runOnUiThread
+          }
+          val map = Arguments.createMap()
+          map.putInt("width", w)
+          map.putInt("height", h)
+          promise.resolve(map)
+        } catch (e: Exception) {
+          promise.reject("GET_DECOR_SIZE", e.message ?: "getDecorViewSize failed")
+        }
+      }
+    } catch (e: Exception) {
+      promise.reject("GET_DECOR_SIZE", e.message ?: "getDecorViewSize failed")
+    }
+  }
 
   /** Задержка (мс) перед запуском OutgoingCallActivity после broadcast закрытия: даём предыдущему экземпляру (singleInstance) успеть finish(); после завершения звонка UI успевает стабилизироваться. */
   private val OUTGOING_LAUNCH_DELAY_MS = 250L
@@ -367,6 +427,26 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } catch (_: Exception) {}
   }
 
+  /** Запустить foreground-сервис во время активного видеозвонка — сокет не засыпает в фоне/PiP. partnerNick — никнейм для уведомления «Видеозвонок от {nick}» или пусто для «от кого-то». */
+  @ReactMethod
+  fun startActiveCallForegroundService(partnerNick: String?) {
+    try {
+      ActiveCallForegroundService.start(reactApplicationContext, partnerNick?.takeIf { it.isNotBlank() })
+    } catch (e: Exception) {
+      android.util.Log.w(NAME, "startActiveCallForegroundService failed", e)
+    }
+  }
+
+  /** Остановить foreground-сервис активного видеозвонка. Вызывается из JS при setActiveVideoCall(false). */
+  @ReactMethod
+  fun stopActiveCallForegroundService() {
+    try {
+      ActiveCallForegroundService.stop(reactApplicationContext)
+    } catch (e: Exception) {
+      android.util.Log.w(NAME, "stopActiveCallForegroundService failed", e)
+    }
+  }
+
   /** Инициатор отменил вызов — пуш пришёл через Expo. То же, что FCM call_canceled: EndedCallIds, снять уведомление, broadcast чтобы IncomingCallActivity закрылась. */
   @ReactMethod
   fun notifyCallCanceled(callId: String) {
@@ -459,22 +539,48 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /** Уход в фон по Back + вход в системный PiP с натива (таймер не зависит от JS, PiP показывается сразу). */
+  @ReactMethod
+  fun moveTaskToBackAndEnterPiP(nonRoot: Boolean) {
+    val activity = currentActivity ?: return
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    activity.runOnUiThread {
+      activity.moveTaskToBack(nonRoot)
+      val handler = Handler(Looper.getMainLooper())
+      val tryEnterPiP = Runnable {
+        try {
+          if (activity.isInPictureInPictureMode) return@Runnable
+          val ratio = Rational(9, 16)
+          val builder = PictureInPictureParams.Builder()
+            .setAspectRatio(ratio)
+            .setActions(emptyList<RemoteAction>())
+          val sourceRect = buildSystemPiPSourceRect(activity)
+          if (sourceRect != null) builder.setSourceRectHint(sourceRect)
+          val params = builder.build()
+          if (activity.enterPictureInPictureMode(params)) {
+            Log.d(NAME, "moveTaskToBackAndEnterPiP: entered PiP")
+          }
+        } catch (e2: Exception) {
+          Log.w(NAME, "moveTaskToBackAndEnterPiP attempt failed", e2)
+        }
+      }
+      handler.postDelayed(tryEnterPiP, 150)
+      handler.postDelayed(tryEnterPiP, 350)
+      handler.postDelayed(tryEnterPiP, 550)
+      handler.postDelayed(tryEnterPiP, 850)
+      handler.postDelayed(tryEnterPiP, 1200)
+    }
+  }
+
   /** Включить/выключить системный PiP при нажатии Home: true = при уходе в фон перейти в Picture-in-Picture (окно поверх лаунчера). Вызывать из JS при активном видеозвонке или при показе in-app PiP. На Android 12+ дополнительно включается авто-вход в PiP для совместимости со всеми устройствами. */
   @ReactMethod
   fun setShouldEnterPiPOnLeaveHint(enabled: Boolean) {
     LiviAppModule.setPiPOnLeaveHintEnabled(enabled)
-    if (Build.VERSION.SDK_INT >= 31) {
-      val activity = currentActivity ?: return
-      activity.runOnUiThread {
-        try {
-          val method = activity.javaClass.getMethod("setAutoEnterPictureInPictureEnabled", Boolean::class.javaPrimitiveType)
-          method.invoke(activity, enabled)
-          Log.d("LiviAppModule", "setAutoEnterPictureInPictureEnabled($enabled)")
-        } catch (e: Exception) {
-          Log.w("LiviAppModule", "setAutoEnterPictureInPictureEnabled failed", e)
-        }
-      }
-    }
+    // ВАЖНО: сознательно НЕ включаем Activity#setAutoEnterPictureInPictureEnabled на Android 12+.
+    // Причина: авто-вход в PiP может срабатывать в неожиданные моменты (особенно на Samsung/OneUI)
+    // во время переходов/закрытия нативных экранов, что выглядит как "само выбросило из приложения".
+    // Мы хотим вход в системный PiP только по явным действиям пользователя (выход из приложения),
+    // поэтому полагаемся на onUserLeaveHint() в MainActivity и/или явный requestEnterPictureInPicture() в обработчиках Back на корне.
   }
 
   /** Флаг «идёт завершение звонка»: при true не входить в системный PiP в onUserLeaveHint (чтобы не выкидывать на главный экран при принятии с блокировки). */
@@ -490,16 +596,42 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     activity.runOnUiThread {
       try {
+        // Как в onUserLeaveHint(Home): сначала сигнализируем JS подготовить fullscreen PiP UI,
+        // затем пробуем несколько раз с короткими задержками, чтобы Android захватил уже
+        // подготовленный кадр (без случайного зума при сценарии Back).
+        emitAboutToEnterSystemPiP()
         val ratio = Rational(9, 16)
-        val params = PictureInPictureParams.Builder()
+        val builder = PictureInPictureParams.Builder()
           .setAspectRatio(ratio)
           .setActions(emptyList<RemoteAction>())
-          .build()
-        if (activity.enterPictureInPictureMode(params)) {
-          Log.d("LiviAppModule", "Entered Picture-in-Picture mode (requested from JS)")
+        val sourceRect = buildSystemPiPSourceRect(activity)
+        if (sourceRect != null) {
+          builder.setSourceRectHint(sourceRect)
+          Log.d(NAME, "requestEnterPictureInPicture sourceRect left=${sourceRect.left} top=${sourceRect.top} right=${sourceRect.right} bottom=${sourceRect.bottom} w=${sourceRect.width()} h=${sourceRect.height()}")
         } else {
-          Log.w("LiviAppModule", "requestEnterPictureInPicture: enterPictureInPictureMode returned false")
+          Log.w(NAME, "requestEnterPictureInPicture buildSystemPiPSourceRect returned null")
         }
+        val params = builder.build()
+        val handler = Handler(Looper.getMainLooper())
+        val tryEnterPiP = Runnable {
+          try {
+            if (activity.isInPictureInPictureMode) return@Runnable
+            if (activity.enterPictureInPictureMode(params)) {
+              Log.d("LiviAppModule", "Entered Picture-in-Picture mode (requested from JS)")
+            } else {
+              Log.w("LiviAppModule", "requestEnterPictureInPicture: enterPictureInPictureMode returned false")
+            }
+          } catch (e2: Exception) {
+            Log.w("LiviAppModule", "requestEnterPictureInPicture attempt failed", e2)
+          }
+        }
+        // ВАЖНО: первая попытка с задержкой, чтобы JS успел отрисовать оверлей 9:16 с видео
+        // и RTCView успел отдать первый кадр (избегаем чёрных полос и кропа в системном PiP).
+        handler.postDelayed(tryEnterPiP, 450)
+        handler.postDelayed(tryEnterPiP, 650)
+        handler.postDelayed(tryEnterPiP, 900)
+        handler.postDelayed(tryEnterPiP, 1200)
+        handler.postDelayed(tryEnterPiP, 1600)
       } catch (e: Exception) {
         Log.w("LiviAppModule", "requestEnterPictureInPicture failed", e)
       }
@@ -579,6 +711,30 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } else {
       promise.resolve(true)
     }
+  }
+
+  /** Проверить, разрешено ли приложению «отображение поверх других окон» (Всегда сверху). Нужно для входящих на блокировке и PiP. */
+  @ReactMethod
+  fun canDrawOverlays(promise: Promise) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      promise.resolve(Settings.canDrawOverlays(reactApplicationContext))
+    } else {
+      promise.resolve(true)
+    }
+  }
+
+  /** Открыть экран настроек «Отображение поверх других окон» / «Всегда сверху» для приложения. Пользователь включает переключатель вручную. */
+  @ReactMethod
+  fun openOverlayPermissionSettings() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+    val ctx = reactApplicationContext
+    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+      data = android.net.Uri.parse("package:${ctx.packageName}")
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    try {
+      ctx.startActivity(intent)
+    } catch (_: Exception) {}
   }
 
   /** Открыть настройки уведомлений приложения (Android 8+). Включите «Полноэкранные уведомления» или «Показ как всплывающее окно» для входящих звонков. */

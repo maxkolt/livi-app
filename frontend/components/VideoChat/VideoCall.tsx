@@ -19,7 +19,7 @@ import {
   NativeModules,
   AppState,
 } from 'react-native';
-import { CommonActions, useNavigation, useFocusEffect, usePreventRemove } from '@react-navigation/native';
+import { CommonActions, useNavigation, useFocusEffect, usePreventRemove, useIsFocused } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -264,7 +264,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       const videoTrackEnabled = !!videoTrack && (videoTrack.enabled ?? true);
       const hasRenderableVideo = hasVideoTrack && videoTrackReady && videoTrackEnabled;
       
-      // Если есть готовый видеотрек, устанавливаем remoteCamOn в true
+      // Синхронизируем remoteCamOn с реальным состоянием трека (включён/выключен)
       if (hasRenderableVideo) {
         logger.info('[VideoCall] Устанавливаем remoteCamOn=true - есть готовый видеотрек', {
           streamId: remoteStream.id,
@@ -273,9 +273,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           videoTrackEnabled
         });
         setRemoteCamOn(true);
+      } else if (hasVideoTrack && !videoTrackEnabled) {
+        // Трек есть, но отключён (партнёр выключил камеру)
+        setRemoteCamOn(false);
       } else {
-        // Если видеотрека нет или он не готов, оставляем remoteCamOn в true по умолчанию
-        // (пока не получим явное состояние от сервера)
+        // Нет видеотрека или ещё не готов — по умолчанию считаем камеру включённой до явного cam-toggle
         setRemoteCamOn(true);
       }
     }
@@ -496,20 +498,40 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const lastRouteParamsRef = useRef<any>(null);
   const callOriginRef = useRef<{ name: string; params?: any } | null>(null);
   const friendsRef = useRef(friends);
+  const isFocused = useIsFocused();
+  const [appState, setAppState] = useState(AppState.currentState);
   
   // Обновляем friendsRef при изменении friends
   useEffect(() => {
     friendsRef.current = friends;
   }, [friends]);
 
-  // Параметры текущего звонка для системного PiP: при нажатии Home натив шлёт AboutToEnterSystemPiP,
-  // JS читает этот ref и показывает PiP + переходит на Home, чтобы в окне PiP было только видео собеседника и верхние кнопки.
-  // КРИТИЧНО: Включаем системный PiP при активном звонке, чтобы при нажатии Home появилось окно PiP.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => setAppState(next));
+    return () => sub.remove();
+  }, []);
+
+  // __currentCallPiPParamsRef — callId/roomId/navParams для системного PiP и для returnToCall. Читается в PiPContext
+  // при AboutToEnterSystemPiP и в App при SystemPiPExpanded fallback. Не обнуляем при !canEnableSystemPiP, только
+  // при реальном завершении сессии (cleanup эффекта), иначе при возврате из PiP returnToCall получит null.
   useEffect(() => {
     const g = (global as any);
     g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
-    if (!(roomId || callId) || isInactiveState || !sessionRef.current) {
-      g.__currentCallPiPParamsRef.current = null;
+    // ВАЖНО: Включаем системный PiP только когда звонок уже "стабилен" (есть roomId),
+    // экран VideoCall в фокусе и приложение активно. Иначе на части устройств возможен
+    // ложный onUserLeaveHint во время переходов (accept/закрытие нативных экранов),
+    // и пользователя "выбрасывает" на рабочий стол с системным PiP.
+    const canEnableSystemPiP =
+      Platform.OS === 'android' &&
+      appState === 'active' &&
+      isFocused &&
+      !!roomId &&
+      !isInactiveState &&
+      !!sessionRef.current;
+
+    // Не очищаем ref при !canEnableSystemPiP — иначе при возврате из системного PiP returnToCall получит null.
+    // Очищаем только в cleanup эффекта, когда сессия реально завершена (stillActive === false).
+    if (!canEnableSystemPiP) {
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
@@ -563,7 +585,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
     };
-  }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, route?.params]);
+  }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, route?.params, isFocused, appState]);
 
   // КРИТИЧНО: Выставляем «активный видеозвонок» при показе экрана VideoCall (а не только после connectToLiveKit),
   // чтобы сокет не отключался при уходе в фон до создания комнаты (например, ответ на звонок с блокировки).
@@ -934,11 +956,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         },
         onRemoteCamStateChange: (enabled) => {
           if (isInactiveStateRef.current || isEndingCallRef.current) return;
-          if (enabled === false && (roomId || callId)) {
-            isEndingCallRef.current = true;
-            isInactiveStateRef.current = true;
-            return;
-          }
+          // Партнёр выключил/включил камеру — обновляем только remoteCamOn, звонок не завершаем
           logger.info('[VideoCall] onRemoteCamStateChange вызван', {
             enabled,
             previousRemoteCamOn: remoteCamOn,
@@ -980,6 +998,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       },
       getPipLocalStream: () => pip.localStream,
       getPipRemoteStream: () => pip.remoteStream,
+      getPartnerDisplayName: () => {
+        const uid = partnerUserId;
+        if (!uid) return 'кто-то';
+        const partner = friendsRef.current?.find((f: any) => String(f._id) === String(uid));
+        const nick = (partner as any)?.nick?.trim();
+        return nick || 'кто-то';
+      },
       onSwitchToConnectingSession: (connectingSession: unknown) => {
         const s = connectingSession as any;
         if (!s || sessionRef.current === s) return;
@@ -1156,11 +1181,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const cleanupFunction = () => {
       logger.info('[VideoCall] 🔥 cleanupFunction вызвана из глобальной ссылки (PiP/фон)');
       
-      // КРИТИЧНО: Защита от повторных вызовов - если уже в неактивном состоянии или звонок завершается, игнорируем
-      if (isInactiveStateRef.current || isEndingCallRef.current) {
+      // КРИТИЧНО: Защита от повторных вызовов - если звонок уже завершён/в процессе завершения, игнорируем.
+      // Это важно для сценария: пришёл call:ended → handleCallEnded сделал cleanup → затем компонент размонтировался и unmount-cleanup попытался вызвать cleanupFunction ещё раз.
+      if (isInactiveStateRef.current || isEndingCallRef.current || callEndedTransitionDoneRef.current) {
         logger.info('[VideoCall] cleanupFunction вызвана, но уже в неактивном состоянии или звонок завершается - игнорируем повторный вызов', {
           isInactiveStateRef: isInactiveStateRef.current,
-          isEndingCallRef: isEndingCallRef.current
+          isEndingCallRef: isEndingCallRef.current,
+          callEndedTransitionDoneRef: callEndedTransitionDoneRef.current,
         });
         return;
       }
@@ -1250,7 +1277,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         return;
       }
       isEndingCallRef.current = true;
-      setIsEndingCall(true); // Сразу скрываем бейдж «активный звонок», чтобы не мигало до setIsInactiveState
+      isInactiveStateRef.current = true;
+      // Один переход в неактивное состояние — синхронно, без setTimeout, чтобы не было двойного мерцания
+      // (сессия уже могла вызвать setIsInactiveState/setWasFriendCallEnded; повтор в setTimeout давал второй рендер)
+      setIsEndingCall(true);
+      setIsInactiveState(true);
+      setWasFriendCallEnded(true);
 
       // Нативно блокируем вход в системный PiP при завершении (иначе пользователь улетает на главный экран с PiP).
       if (Platform.OS === 'android') {
@@ -1258,34 +1290,35 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
 
-      // Кто в системном PiP — только закрываем PiP, без перехода на Home. Кто на полноэкранном VideoCall — остаёмся на экране.
+      // Кто в системном PiP при завершении (собеседник нажал «Завершить») — сбрасываем на Home, чтобы после закрытия PiP пользователь видел главный экран, а не неактивный видеозвонок. Кто на полноэкранном VideoCall — остаёмся на экране (показываем неактивное состояние).
+      // При завершении из PiP (кнопка X) навигацию делаем в endCallImpl — здесь не дублируем, иначе двойной переход и мерцание.
+      const endSource = (global as any).__lastEndCallSourceRef?.current;
       const inSystemPiP = pipRef.current.inSystemPiPMode === true;
       const onVideoCallScreen = (global as any).__navRef?.getCurrentRoute?.()?.name === 'VideoCall';
       const cleanupDelay = inSystemPiP ? 0 : (onVideoCallScreen ? 0 : 350);
-      if (!inSystemPiP) {
-        const doReset = () => {
-          try {
-            const rootNav = (global as any).__navRef;
-            if (!rootNav?.isReady?.()) return;
-            const route = rootNav.getCurrentRoute();
-            if (route?.name === 'Home') return;
-            // Если пользователь на странице видеозвонка — остаёмся на ней, не переходим на Home.
-            if (route?.name === 'VideoCall') return;
-            const state = rootNav.getState();
-            const routes = state?.routes ?? [];
-            const idx = state?.index ?? 0;
-            // Если под текущим экраном Home — goBack(), чтобы не перемонтировать Home (иначе мерцает аватар).
-            if (route?.name === 'VideoCall' && idx > 0 && routes[idx - 1]?.name === 'Home') {
-              rootNav.dispatch(CommonActions.goBack());
-              logger.info('[VideoCall] handleCallEnded: goBack to Home via __navRef');
-            } else {
-              rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
-              logger.info('[VideoCall] handleCallEnded: reset to Home dispatched via __navRef');
-            }
-          } catch (e) {
-            logger.warn('[VideoCall] reset to Home at start of handleCallEnded failed', e);
+      const doReset = () => {
+        try {
+          const rootNav = (global as any).__navRef;
+          if (!rootNav?.isReady?.()) return;
+          const route = rootNav.getCurrentRoute();
+          if (route?.name === 'Home') return;
+          // В системном PiP при call:ended — всегда уходим на Home (после закрытия PiP не показывать неактивный видеозвонок).
+          if (route?.name === 'VideoCall' && !inSystemPiP) return;
+          const state = rootNav.getState();
+          const routes = state?.routes ?? [];
+          const idx = state?.index ?? 0;
+          if (route?.name === 'VideoCall' && idx > 0 && (routes[idx - 1] as any)?.name === 'Home') {
+            rootNav.dispatch(CommonActions.goBack());
+            logger.info('[VideoCall] handleCallEnded: goBack to Home via __navRef', { inSystemPiP });
+          } else {
+            rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
+            logger.info('[VideoCall] handleCallEnded: reset to Home dispatched via __navRef', { inSystemPiP });
           }
-        };
+        } catch (e) {
+          logger.warn('[VideoCall] reset to Home at start of handleCallEnded failed', e);
+        }
+      };
+      if (endSource !== 'pip_close') {
         requestAnimationFrame(() => doReset());
       }
 
@@ -1318,11 +1351,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         partnerUserId,
         timestamp: Date.now()
       });
-      
-      // КРИТИЧНО: Устанавливаем ref СИНХРОННО, чтобы предотвратить повторные вызовы
-      isInactiveStateRef.current = true;
 
-      // Очистку и setState выполняем с задержкой: при переходе на Home даём навигации время; на экране VideoCall — без задержки (один переход без мерцания).
+      // Очистку и остальной setState выполняем с задержкой: при переходе на Home даём навигации время; на экране VideoCall — без задержки (один переход без мерцания).
       setTimeout(() => {
         if (callEndedTransitionDoneRef.current) return;
         callEndedTransitionDoneRef.current = true;
@@ -1347,8 +1377,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         if (inSystemNow && Platform.OS === 'android') {
           try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
         }
-        setIsInactiveState(true);
-        setWasFriendCallEnded(true);
+        // isInactiveState / wasFriendCallEnded уже установлены синхронно выше — не дублируем, чтобы не было второго мерцания
         setPartnerInPiP(false);
         setFriendCallAccepted(false);
         setPartnerUserId(null);
@@ -1677,11 +1706,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       const idToReport = callId ?? currentCallIdRef.current ?? (session as any)?.callId ?? null;
       reportEndCallToCallKeep(idToReport);
 
+      const endCallSource = (global as any).__lastEndCallSourceRef?.current ?? 'end_button';
       logger.info('[VideoCall] Ending call (stop camera/mic)', {
         roomId,
         callId,
         partnerId,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        endCallSource,
       });
 
       // Закрываем PiP если открыт
@@ -1813,12 +1844,30 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     });
   }, [onAbortCall]);
 
+  // Пока экран VideoCall в фокусе — подавляем in-app PiP оверлей (чтобы он не мелькал поверх полноэкранного звонка).
+  // ВАЖНО: используем focus/blur, а не mount/unmount — иначе на некоторых устройствах экран может остаться смонтированным
+  // в стеке при переходе на Home, и тогда PiP оверлей никогда не появится.
+  useFocusEffect(
+    useCallback(() => {
+      pipRef.current?.updatePiPState({ suppressOverlayForReturn: true });
+      return () => {
+        pipRef.current?.updatePiPState({ suppressOverlayForReturn: false });
+      };
+    }, [])
+  );
+
   // КРИТИЧНО: Завершение звонка только при реальном размонтировании экрана (не при смене onAbortCall).
   // Эффект с [] — cleanup выполняется один раз при unmount.
   useEffect(() => {
     return () => {
       const pipVisible = (global as any).__pipVisibleRef?.current === true;
-      if (!pipVisible) {
+      // Если звонок уже корректно завершили через handleCallEnded/onAbortCall — не дёргаем cleanup повторно.
+      // Иначе для "второго участника" (который не нажимал end) получается двойное завершение.
+      const alreadyEndedOrEnding =
+        isInactiveStateRef.current ||
+        isEndingCallRef.current ||
+        callEndedTransitionDoneRef.current;
+      if (!pipVisible && !alreadyEndedOrEnding) {
         const cleanupFn = (global as any).__endCallCleanupRef?.current;
         if (typeof cleanupFn === 'function') {
           try {
@@ -1828,6 +1877,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             logger.warn('[VideoCall] Ошибка при cleanup при размонтировании', e);
           }
         }
+      } else if (!pipVisible && alreadyEndedOrEnding) {
+        logger.info('[VideoCall] cleanup при размонтировании пропущен (уже завершено/завершается)', {
+          isInactiveStateRef: isInactiveStateRef.current,
+          isEndingCallRef: isEndingCallRef.current,
+          callEndedTransitionDoneRef: callEndedTransitionDoneRef.current,
+        });
       }
       if (!sessionRef.current) {
         (global as any).__webrtcSessionRef.current = null;
@@ -1968,34 +2023,84 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
     return hasActiveCall && !pipVisibleNow;
   })();
-  
+
+  // Один Back → сразу системный PiP с видео собеседника. Оверлей с remote показываем до входа в PiP, чтобы в кадр попал собеседник.
+  const backPiPInProgressRef = useRef(false);
   usePreventRemove(
     shouldPreventRemove,
     (e) => {
-      // Android: при уходе со страницы звонка (Back / gesture-back) остаёмся ВНУТРИ приложения:
-      // сначала делаем шаг назад в навигации, затем показываем in-app PiP (оверлей), чтобы можно было ходить по экранам и общаться.
-      if (Platform.OS === 'android' && enterPiPModeRef.current) {
-        // КРИТИЧНО: Ставим флаг PiP синхронно ДО навигации, иначе при unmount VideoCall
-        // cleanup увидит pipVisible=false и завершит звонок у обоих. showPiP() вызывается в следующем rAF после dispatch.
-        try {
-          (global as any).__pipVisibleRef = (global as any).__pipVisibleRef || { current: false };
-          (global as any).__pipVisibleRef.current = true;
-        } catch (_) {}
-        requestAnimationFrame(() => {
-          const action = (e as any)?.data?.action;
-          if (action) {
-            (navigation as any).dispatch(action);
-          } else if (navigation.canGoBack && navigation.canGoBack()) {
-            navigation.goBack();
-          } else {
-            navigation.navigate('Home' as never);
-          }
+      if (Platform.OS !== 'android') return;
+      const g = (global as any);
+      // Сразу после возврата из системного PiP (SystemPiPExpanded) не уходим снова в PiP по Back —
+      // иначе на части устройств во время перехода срабатывает Back/beforeRemove и приложение уходит в фон.
+      const disableUntil = g.__disableSystemPiPUntilRef?.current;
+      if (typeof disableUntil === 'number' && Date.now() < disableUntil) return;
 
-          requestAnimationFrame(() => {
-            // deferVisible: даём навигации завершить переход, чтобы не было двух RTCView на один stream и "мигания".
-            enterPiPModeRef.current?.({ deferVisible: true });
+      const gGuard = g.__backPiPInProgressRef;
+      if (gGuard?.current || backPiPInProgressRef.current) return;
+      backPiPInProgressRef.current = true;
+      if (!gGuard) g.__backPiPInProgressRef = { current: true };
+      else gGuard.current = true;
+      const t = setTimeout(() => {
+        backPiPInProgressRef.current = false;
+        if ((global as any).__backPiPInProgressRef) (global as any).__backPiPInProgressRef.current = false;
+      }, 2500);
+
+      const params = g.__currentCallPiPParamsRef?.current;
+      const showPiP = g.__pipShowPiPRef?.current;
+      const upd = g.__pipUpdateStateRef?.current;
+      const session = sessionRef.current || g.__webrtcSessionRef?.current;
+      const callId = params?.callId ?? (typeof session?.getCallId === 'function' ? session.getCallId() : null);
+      const roomId = params?.roomId ?? (typeof session?.getRoomId === 'function' ? session.getRoomId() : null);
+
+      try {
+        if (callId && roomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
+          NativeModules.LiviAppModule.setPiPEndCallParams(callId, roomId);
+        }
+        if (session && typeof session.enterPiP === 'function') session.enterPiP();
+        if (NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint) {
+          NativeModules.LiviAppModule.setShouldEnterPiPOnLeaveHint(true);
+        }
+        // Показываем PiP с remote, затем оверлей 9:16 с видео собеседника — в кадр системного PiP попадёт он
+        if (typeof showPiP === 'function' && callId && roomId) {
+          showPiP({
+            callId,
+            roomId,
+            partnerName: params?.partnerName,
+            partnerAvatarUrl: params?.partnerAvatarUrl,
+            localStream: params?.localStream ?? (typeof session?.getLocalStream === 'function' ? session.getLocalStream() : null),
+            remoteStream: params?.remoteStream ?? (typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null),
+            localCamOn: params?.localCamOn,
+            navParams: params?.navParams,
+            deferVisible: false,
           });
-        });
+        }
+        const doEnterPiP = () => {
+          try {
+            if (NativeModules.LiviAppModule?.moveTaskToBackAndEnterPiP) {
+              NativeModules.LiviAppModule.moveTaskToBackAndEnterPiP(true);
+            } else if (NativeModules.LiviAppModule?.moveTaskToBack) {
+              NativeModules.LiviAppModule.moveTaskToBack(true);
+            }
+          } finally {
+            if (typeof upd === 'function') {
+              setTimeout(() => upd({ pendingSystemPiP: false, decorSizeForPiP: null }), 2000);
+            }
+          }
+        };
+        if (typeof upd === 'function') {
+          const apply = (size: { width: number; height: number } | null) => {
+            upd({ pendingSystemPiP: true, allowVideoRender: true, ...(size ? { decorSizeForPiP: size } : {}) });
+            setTimeout(doEnterPiP, 480);
+          };
+          NativeModules.LiviAppModule?.getDecorViewSize?.()?.then(apply)?.catch(() => apply(null));
+          if (!NativeModules.LiviAppModule?.getDecorViewSize) apply(null);
+        } else {
+          setTimeout(doEnterPiP, 480);
+        }
+      } catch (_) {
+        backPiPInProgressRef.current = false;
+        clearTimeout(t);
       }
     }
   );
@@ -2346,7 +2451,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   
   // Как в WhatsApp/Telegram: в системном PiP рисуем только видео собеседника; фон прозрачный, чтобы в окне PiP не было чёрных областей.
-  const systemPiPCompact = Platform.OS === 'android' && (pip.pendingSystemPiP || pip.inSystemPiPMode);
+  // При возврате из PiP (fromPiP) всегда показываем полноэкранный вид: 2 блока + кнопка «Завершить».
+  const systemPiPCompact =
+    Platform.OS === 'android' &&
+    (pip.pendingSystemPiP || pip.inSystemPiPMode) &&
+    !route?.params?.fromPiP;
   if (systemPiPCompact) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: 'transparent' }]} edges={[]}>
@@ -2527,7 +2636,18 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                 opacity: isInactiveState ? 0.5 : 1.0
               }
             ]}
-            onPress={isInactiveState ? undefined : onAbortCall}
+            onPress={
+              isInactiveState
+                ? undefined
+                : () => {
+                    try {
+                      const g = (global as any);
+                      g.__lastEndCallSourceRef = g.__lastEndCallSourceRef || { current: null };
+                      g.__lastEndCallSourceRef.current = 'end_button';
+                    } catch (_) {}
+                    onAbortCall();
+                  }
+            }
             disabled={isInactiveState}
           >
             <Text style={styles.bigBtnText}>{t('endCall', lang)}</Text>

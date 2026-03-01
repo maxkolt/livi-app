@@ -469,6 +469,22 @@ export class VideoCallSession extends SimpleEventEmitter {
       roomState: this.room?.state,
     });
 
+    // Сразу сообщаем партнёру о новом состоянии камеры, чтобы заглушка «Отошел» показывалась без задержки
+    // (не ждём завершения mute/unmute и обновления стрима)
+    const currentRoomId = this.getRoomId();
+    if (!this.ended && !this.endCallInProgress && currentRoomId) {
+      try {
+        socket.emit('cam-toggle', {
+          enabled: !!this.isCamOn,
+          from: socket.id,
+          roomId: currentRoomId,
+        });
+        logger.info('[VideoCallSession] ✅ Отправлено cam-toggle партнеру (сразу при нажатии)', { roomId: currentRoomId, enabled: this.isCamOn });
+      } catch (e) {
+        logger.warn('[VideoCallSession] Ошибка отправки cam-toggle:', e);
+      }
+    }
+
     if (this.isCamOn) {
       // ВКЛЮЧАЕМ камеру
       // Проверяем нужно ли восстановить трек
@@ -576,6 +592,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     this.config.callbacks.onCamStateChange?.(this.isCamOn);
     this.config.onCamStateChange?.(this.isCamOn);
+    // cam-toggle уже отправлен в начале toggleCam() для мгновенного отображения «Отошел» у партнёра
   }
 
   /**
@@ -2820,7 +2837,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         },
       });
       this.room = room;
-      setActiveVideoCall(true);
+      const partnerDisplayName = this.config.getPartnerDisplayName?.() ?? null;
+      setActiveVideoCall(true, partnerDisplayName || undefined);
       this.registerRoomEvents(room);
 
       try {
@@ -4206,7 +4224,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.remoteAudioTrack = null;
     }
     if (publication.kind === Track.Kind.Video && this.remoteVideoTrack) {
-      this.lastUnsubscribedRemoteVideoTrackSid = this.remoteVideoTrack.sid;
+      this.lastUnsubscribedRemoteVideoTrackSid = this.remoteVideoTrack.sid ?? null;
       const mediaTrack = this.remoteVideoTrack.mediaStreamTrack;
       if (mediaTrack && this.remoteStream) {
         this.remoteStream.removeTrack(mediaTrack as any);

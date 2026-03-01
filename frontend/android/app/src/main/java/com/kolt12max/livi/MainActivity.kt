@@ -2,8 +2,12 @@ package com.kolt12max.livi
 
 import android.app.PictureInPictureParams
 import android.app.RemoteAction
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -20,9 +24,43 @@ import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
 
+  // Выход из системного PiP: «развернуть» (стрелки) даёт onResume, «закрыть X» — нет. Ставим таймер (pipExitDecideMs):
+  // если за это время придёт onResume — шлём SystemPiPExpanded (JS открывает экран звонка), иначе EndCallFromPiP.
+  // expandedEmittedForPipExit нужен, чтобы таймер не слал EndCallFromPiP, если мы уже отправили expand.
   private val pipHandler = Handler(Looper.getMainLooper())
   private var exitedPipPending = false
   private var exitPipTimeoutRunnable: Runnable? = null
+  private var wasInPip = false
+  private var expandedEmittedForPipExit = false
+  private val pipExitDecideMs = 2500L
+
+  /** Закрыть системный PiP при пуше call_ended (endedFromActive): собеседник в PiP не получает call:ended по сокету — пуш доходит, закрываем окно сразу. */
+  private var closePipCallEndedReceiver: BroadcastReceiver? = null
+
+  private fun buildSystemPiPSourceRect(): Rect? {
+    return try {
+      val root = window?.decorView ?: return null
+      val w = root.width
+      val h = root.height
+      if (w <= 0 || h <= 0) return null
+      val ratioW = 9f
+      val ratioH = 16f
+      val targetW: Int
+      val targetH: Int
+      if (w.toFloat() / h.toFloat() > ratioW / ratioH) {
+        targetH = h
+        targetW = (h * (ratioW / ratioH)).toInt()
+      } else {
+        targetW = w
+        targetH = (w * (ratioH / ratioW)).toInt()
+      }
+      val left = (w - targetW) / 2
+      val top = (h - targetH) / 2
+      Rect(left, top, left + targetW, top + targetH)
+    } catch (_: Exception) {
+      null
+    }
+  }
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
@@ -53,11 +91,18 @@ class MainActivity : ReactActivity() {
     super.onResume()
     isInForeground = true
     // Выход из системного PiP по кнопке «развернуть»: onResume приходит когда активность снова на переднем плане.
-    if (exitedPipPending) {
+    // На части устройств onResume приходит до onPictureInPictureModeChanged(false), поэтому проверяем и exitedPipPending, и wasInPip.
+    // Сначала отключаем вход в PiP по onUserLeaveHint — иначе на части устройств во время перехода
+    // срабатывает onUserLeaveHint до запуска JS, приложение снова уходит в PiP вместо открытия экрана звонка.
+    val leavingPip = exitedPipPending || (wasInPip && !isInPictureInPictureMode)
+    if (leavingPip) {
       exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
       exitPipTimeoutRunnable = null
       exitedPipPending = false
-      android.util.Log.i("MainActivity", "PiP exit: onResume first -> emitting SystemPiPExpanded")
+      wasInPip = false
+      expandedEmittedForPipExit = true
+      LiviAppModule.setPiPOnLeaveHintEnabled(false)
+      android.util.Log.i("MainActivity", "PiP exit: onResume -> emitting SystemPiPExpanded")
       LiviAppModule.emitSystemPiPExpanded()
     }
     restoreNavigationBarVisibility()
@@ -126,11 +171,16 @@ class MainActivity : ReactActivity() {
           try {
             if (isInPictureInPictureMode) return@Runnable
             if (!LiviAppModule.getShouldEnterPiPOnLeaveHint()) return@Runnable
+            // Базовый размер системного PiP (как в исходном варианте).
             val ratio = Rational(9, 16)
-            val params = PictureInPictureParams.Builder()
+            val builder = PictureInPictureParams.Builder()
               .setAspectRatio(ratio)
               .setActions(emptyList<RemoteAction>())
-              .build()
+            val sourceRect = buildSystemPiPSourceRect()
+            if (sourceRect != null) {
+              builder.setSourceRectHint(sourceRect)
+            }
+            val params = builder.build()
             if (enterPictureInPictureMode(params)) {
               android.util.Log.d("MainActivity", "Entered Picture-in-Picture mode (leaveHint)")
             } else {
@@ -141,11 +191,13 @@ class MainActivity : ReactActivity() {
           }
         }
         tryEnterPiP.run()
+        handler.postDelayed(tryEnterPiP, 0) // ещё одна попытка после обработки текущего сообщения (на части устройств синхронный run слишком рано)
         handler.postDelayed(tryEnterPiP, 30)
         handler.postDelayed(tryEnterPiP, 80)
         handler.postDelayed(tryEnterPiP, 200)
         handler.postDelayed(tryEnterPiP, 450)
         handler.postDelayed(tryEnterPiP, 800)
+        handler.postDelayed(tryEnterPiP, 1200) // на части устройств (Samsung) переход в фон занимает больше времени
       } catch (e: Exception) {
         android.util.Log.w("MainActivity", "emitAboutToEnterSystemPiP failed", e)
       }
@@ -157,22 +209,33 @@ class MainActivity : ReactActivity() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       if (isInPictureInPictureMode) {
         window.setBackgroundDrawableResource(android.R.color.transparent)
+        // Вход в PiP: отменяем таймер «выход из PiP», иначе на части устройств через таймаут срабатывает EndCallFromPiP.
+        exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
+        exitPipTimeoutRunnable = null
+        exitedPipPending = false
+        expandedEmittedForPipExit = false
+        wasInPip = true
       }
       LiviAppModule.emitSystemPiPModeChanged(isInPictureInPictureMode)
       if (!isInPictureInPictureMode) {
+        // Сразу отключаем вход в PiP по onUserLeaveHint — на части устройств onUserLeaveHint
+        // приходит во время перехода PiP→fullscreen до onResume; иначе приложение снова уходит в PiP.
+        LiviAppModule.setPiPOnLeaveHintEnabled(false)
         // Различие «развернуть» (стрелки) и «закрыть» (X): при развороте приходит onResume, при закрытии — нет.
         // Ставим флаг и таймаут: если до таймаута придёт onResume — шлём SystemPiPExpanded, иначе EndCallFromPiP.
+        // expandedEmittedForPipExit предотвращает EndCallFromPiP, если мы уже отправили expand (на части устройств onResume приходит после onPictureInPictureModeChanged).
         exitedPipPending = true
         exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
         exitPipTimeoutRunnable = Runnable {
-          if (exitedPipPending) {
+          if (exitedPipPending && !expandedEmittedForPipExit) {
             exitedPipPending = false
+            wasInPip = false
             exitPipTimeoutRunnable = null
             android.util.Log.i("MainActivity", "PiP exit: no onResume in time -> emitting EndCallFromPiP")
             LiviAppModule.emitEndCallFromPiP()
           }
         }
-        pipHandler.postDelayed(exitPipTimeoutRunnable!!, 1200)
+        pipHandler.postDelayed(exitPipTimeoutRunnable!!, pipExitDecideMs)
       }
     }
   }
@@ -202,6 +265,32 @@ class MainActivity : ReactActivity() {
     if (isLaunchedFromLauncher(intent) && LiviOngoingCallHelper.launchOngoingCallActivityIfNeeded(this)) {
       finish()
     }
+    // Пуш call_ended (endedFromActive): закрыть PiP сразу у собеседника, т.к. сокет в фоне часто отключён.
+    closePipCallEndedReceiver = object : BroadcastReceiver() {
+      override fun onReceive(context: Context?, intent: Intent?) {
+        if (intent?.action != LiviFirebaseMessagingService.ACTION_CLOSE_PIP_CALL_ENDED) return
+        (context as? MainActivity)?.runOnUiThread {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && (context as MainActivity).isInPictureInPictureMode) {
+            (context as MainActivity).finish()
+            android.util.Log.d("MainActivity", "Close PiP from call_ended push (endedFromActive)")
+          }
+        }
+      }
+    }
+    val closePipFilter = IntentFilter(LiviFirebaseMessagingService.ACTION_CLOSE_PIP_CALL_ENDED)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      registerReceiver(closePipCallEndedReceiver, closePipFilter, Context.RECEIVER_NOT_EXPORTED)
+    } else {
+      registerReceiver(closePipCallEndedReceiver, closePipFilter)
+    }
+  }
+
+  override fun onDestroy() {
+    closePipCallEndedReceiver?.let {
+      try { unregisterReceiver(it) } catch (_: Exception) {}
+      closePipCallEndedReceiver = null
+    }
+    super.onDestroy()
   }
 
   /** Запуск из лаунчера (тап по иконке), не по deep link (livi://...). */

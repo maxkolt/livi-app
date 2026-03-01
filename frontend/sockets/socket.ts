@@ -360,8 +360,9 @@ export function setIncomingCallScreenVisible(visible: boolean): void {
   }
 }
 
-export function setActiveVideoCall(active: boolean): void {
+export function setActiveVideoCall(active: boolean, _partnerDisplayName?: string | null): void {
   __activeVideoCall = active;
+  // Сокет не отключаем при уходе в фон — только за счёт проверки __activeVideoCall/inSystemPiP в AppState (без уведомлений).
   if (!active && (__lastAppState !== 'active' && __lastAppState !== 'inactive')) {
     __realtimePaused = true;
     try { (socket as any).io.opts.reconnection = false; } catch {}
@@ -379,8 +380,10 @@ try {
       __lastAppState = nextState;
 
       if (wasForeground && !isForeground) {
-        // На нативном экране исходящего/входящего или во время видеозвонка не отключать сокет
-        if (__outgoingCallScreenVisible || __incomingCallScreenVisible || __activeVideoCall) return;
+        // На нативном экране исходящего/входящего или во время видеозвонка не отключать сокет.
+        // В системном PiP сокет тоже не отключаем — иначе собеседник не получит call:ended.
+        const inSystemPiP = typeof (global as any).__pipInSystemModeRef?.current === 'boolean' && (global as any).__pipInSystemModeRef?.current === true;
+        if (__outgoingCallScreenVisible || __incomingCallScreenVisible || __activeVideoCall || inSystemPiP) return;
         // App -> background => offline
         __realtimePaused = true;
         try {

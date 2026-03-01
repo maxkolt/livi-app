@@ -10,7 +10,7 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Defau
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
-import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler, Alert } from "react-native";
+import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler, Modal } from "react-native";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
@@ -32,7 +32,7 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, stopIncomingCallRingtoneAndVibration, canUseFullScreenIntent, openAppNotificationSettings } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, canUseFullScreenIntent, openAppNotificationSettings } from './utils/callKeep';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
@@ -126,6 +126,59 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 // КРИТИЧНО: Глобальная ссылка на функцию переключения камеры из VideoCall (для PiP).
 (global as any).__toggleCamRef = { current: null as (() => void) | null };
 
+const overlayPermissionModalStyles = StyleSheet.create({
+  overlayPermissionBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  overlayPermissionCard: {
+    backgroundColor: '#1a1a2e',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 340,
+  },
+  overlayPermissionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#fff',
+    marginBottom: 12,
+  },
+  overlayPermissionText: {
+    fontSize: 15,
+    color: 'rgba(255,255,255,0.85)',
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  overlayPermissionButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'flex-end',
+  },
+  overlayPermissionButtonSecondary: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+  },
+  overlayPermissionButtonSecondaryText: {
+    fontSize: 16,
+    color: 'rgba(255,255,255,0.7)',
+  },
+  overlayPermissionButtonPrimary: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    backgroundColor: '#4a7cff',
+    borderRadius: 10,
+  },
+  overlayPermissionButtonPrimaryText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
+  },
+});
+
 function AppContent() {
   const { theme, isDark } = useAppTheme();
   const pip = usePiP();
@@ -134,6 +187,10 @@ function AppContent() {
   const insets = useSafeAreaInsets();
   /** Пока true — не скрываем оверлей. После обработки initial URL (в т.ч. answer-call) ставим true, чтобы не мелькала Home у принимающего. */
   const [initialUrlProcessed, setInitialUrlProcessed] = React.useState(false);
+  /** Android: модалка «Разрешить отображение поверх других окон» при первом заходе (как камера/микрофон). */
+  const [overlayPermissionModalVisible, setOverlayPermissionModalVisible] = React.useState(false);
+  /** Android 14+: модалка «Включить полноэкранные уведомления» — без этого входящий на блокировке не показывается (FSI_REQUESTED_BUT_DENIED). */
+  const [fullScreenIntentModalVisible, setFullScreenIntentModalVisible] = React.useState(false);
 
   React.useEffect(() => {
     void hydrateLang();
@@ -206,9 +263,17 @@ function AppContent() {
         // Различие «развернуть» / «закрыть X» делается на нативе: приходит SystemPiPExpanded или EndCallFromPiP
       }
     });
-    // Кнопка «развернуть» (стрелки) в системном PiP: возвращаем на экран видеозвонка с 2 блоками и кнопкой «Завершить».
+    // Кнопка «развернуть» (стрелки) в системном PiP: натив различает «развернуть» и «закрыть X» (onResume vs таймер).
+    // Мы вызываем __pipReturnToCallRef.current() → навигация на VideoCall. __disableSystemPiPUntilRef + 6 с
+    // запрещает вход в PiP по onUserLeaveHint, иначе на части устройств при переходе приложение снова уходит в PiP.
     const sub7 = emitter.addListener('SystemPiPExpanded', () => {
       console.log('[App] SystemPiPExpanded received');
+      try {
+        const g = (global as any);
+        g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+        g.__disableSystemPiPUntilRef.current = Date.now() + 6000;
+        NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+      } catch (_) {}
       const fn = (global as any).__pipReturnToCallRef?.current;
       if (typeof fn === 'function') {
         console.log('[App] Calling __pipReturnToCallRef.current()');
@@ -458,6 +523,40 @@ function AppContent() {
       try {
         await ensureInitialMediaPermissions();
       } catch {}
+
+      // 📱 Android: разрешение «Отображение поверх других окон» (Всегда сверху) — запрос при первом заходе, как камера/микрофон.
+      if (Platform.OS === 'android') {
+        try {
+          const can = await canDrawOverlays();
+          if (!can) {
+            const raw = await AsyncStorage.getItem('overlay_permission_prompt_last_shown');
+            const last = raw ? parseInt(raw, 10) : 0;
+            const interval = 7 * 24 * 60 * 60 * 1000;
+            if (Date.now() - last >= interval) {
+              await AsyncStorage.setItem('overlay_permission_prompt_last_shown', String(Date.now()));
+              setOverlayPermissionModalVisible(true);
+            }
+          }
+        } catch (_) {}
+        // Android 14+: полноэкранные уведомления (FSI). Без них на блокировке показывается только шторка. На части устройств (Samsung) API возвращает false даже при включённых настройках — даём «Больше не показывать».
+        try {
+          const dontShowAgain = await AsyncStorage.getItem('full_screen_intent_dont_show_again');
+          if (dontShowAgain === 'true') {
+            // Пользователь уже включил настройки или не хочет видеть подсказку.
+          } else {
+            const canFSI = await canUseFullScreenIntent();
+            if (!canFSI) {
+              const raw = await AsyncStorage.getItem('full_screen_intent_prompt_last_shown');
+              const last = raw ? parseInt(raw, 10) : 0;
+              const interval = 7 * 24 * 60 * 60 * 1000;
+              if (Date.now() - last >= interval) {
+                await AsyncStorage.setItem('full_screen_intent_prompt_last_shown', String(Date.now()));
+                setFullScreenIntentModalVisible(true);
+              }
+            }
+          }
+        } catch (_) {}
+      }
 
       })();
     });
@@ -1297,20 +1396,42 @@ function AppContent() {
       const hidePiP = g.__pipHidePiPRef?.current;
 
       if (typeof hidePiP === 'function') hidePiP();
-      // Кто в системном PiP — только закрываем PiP, не переходим на Home. Кто на полноэкранном VideoCall или с in-app PiP — всегда переходим на Home (собеседник должен оказаться на приветствии независимо от того, кто завершил).
-      if (inSystem) return;
+      // Кто в системном PiP при call:ended — закрываем PiP и сбрасываем на Home, чтобы после закрытия PiP не показывать неактивный видеозвонок. Кто на полноэкранном VideoCall или in-app PiP — тоже переходим на Home.
+      if (inSystem) {
+        const goHome = () => {
+          if (!navRef.isReady()) return;
+          const route = navRef.getCurrentRoute();
+          const routeName = String((route as any)?.name ?? '');
+          if (routeName === 'Home') return;
+          if (routeName === 'VideoCall') {
+            navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
+          } else {
+            const state = navRef.getState();
+            const routes = state?.routes ?? [];
+            const idx = state?.index ?? 0;
+            if (idx > 0 && (routes[idx - 1] as any)?.name === 'Home') {
+              navRef.dispatch(CommonActions.goBack());
+            } else {
+              navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
+            }
+          }
+        };
+        goHome();
+        return;
+      }
 
       const goHome = () => {
         if (!navRef.isReady()) return;
         const route = navRef.getCurrentRoute();
-        if (route?.name === 'Home') return;
+        const routeName = String((route as any)?.name ?? '');
+        if (routeName === 'Home') return;
         // Если пользователь на странице видеозвонка — остаёмся на ней, не переходим на Home.
-        if (route?.name === 'VideoCall') return;
+        if (routeName === 'VideoCall') return;
         const state = navRef.getState();
         const routes = state?.routes ?? [];
         const idx = state?.index ?? 0;
         // Если сейчас VideoCall и под ним Home — делаем goBack(), чтобы не перемонтировать Home (иначе мерцает аватар).
-        if (route?.name === 'VideoCall' && idx > 0 && routes[idx - 1]?.name === 'Home') {
+        if (routeName === 'VideoCall' && idx > 0 && (routes[idx - 1] as any)?.name === 'Home') {
           navRef.dispatch(CommonActions.goBack());
           return;
         }
@@ -1327,7 +1448,7 @@ function AppContent() {
     return () => { socket.off('call:ended', onCallEnded); };
   }, [stopAnim]);
 
-  // Fallback: когда сокет переподключается (устройство в PiP могло не получить call:ended). Если мы в системном PiP и комната уже отключена — закрываем PiP.
+  // Fallback: когда сокет переподключается (устройство в PiP могло не получить call:ended). Если мы в системном PiP и комната уже отключена — закрываем PiP и синхронизируем состояние.
   React.useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
     const onReconnect = () => {
@@ -1338,6 +1459,10 @@ function AppContent() {
       const sessionEnded = typeof session?.ended === 'boolean' && session.ended;
       if (roomDisconnected || sessionEnded || !session) {
         try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+        try {
+          const hidePiP = g.__pipHidePiPRef?.current;
+          if (typeof hidePiP === 'function') hidePiP();
+        } catch (_) {}
       }
     };
     socket.on('connect', onReconnect);
@@ -1372,7 +1497,11 @@ function AppContent() {
           if (route?.name === 'Home') {
             // уже на Home
           } else if (route?.name === 'VideoCall') {
-            // Пользователь на странице видеозвонка — остаёмся на ней, не переходим на Home.
+            // Открытие по пушу «звонок завершён»: сбрасываем на Home только если это не тот, кто завершил из PiP (иначе он оказывается на странице приветствия).
+            const endedFromPiP = (global as any).__lastEndCallSourceRef?.current === 'pip_close';
+            if (!endedFromPiP) {
+              navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
+            }
           } else {
             const state = navRef.getState();
             const routes = state?.routes ?? [];
@@ -1413,31 +1542,6 @@ function AppContent() {
     return () => timers.forEach((t) => clearTimeout(t));
   }, []);
 
-  // Android: если полноэкранные уведомления отключены — один раз напомнить включить (чтобы входящие видеозвонки показывались на заблокированном экране)
-  const FULL_SCREEN_PROMPT_KEY = 'full_screen_intent_prompt_last_shown';
-  const FULL_SCREEN_PROMPT_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 дней
-  React.useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    const timer = setTimeout(async () => {
-      try {
-        const canUse = await canUseFullScreenIntent();
-        if (canUse) return;
-        const raw = await AsyncStorage.getItem(FULL_SCREEN_PROMPT_KEY);
-        const last = raw ? parseInt(raw, 10) : 0;
-        if (Date.now() - last < FULL_SCREEN_PROMPT_INTERVAL_MS) return;
-        await AsyncStorage.setItem(FULL_SCREEN_PROMPT_KEY, String(Date.now()));
-        Alert.alert(
-          t('incomingCallTitle', lang),
-          'Чтобы входящие видеозвонки всегда показывались на заблокированном экране, включите полноэкранные уведомления для LiVi в настройках.',
-          [
-            { text: 'Позже', style: 'cancel' },
-            { text: 'Настройки', onPress: () => openAppNotificationSettings() },
-          ]
-        );
-      } catch (_) {}
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, []);
 
   // КРИТИЧНО: Перерегистрация обработчика при возврате из спящего режима (AppState change)
   React.useEffect(() => {
@@ -1505,6 +1609,19 @@ function AppContent() {
             }
           });
         }
+        // Если приложение открыли (или вернулись в него), а текущий экран — неактивный видеозвонок — сбрасываем на Home только если это не тот, кто завершил звонок из PiP (иначе он оказывается на странице приветствия при открытии по пушу, когда у собеседника закрывается PiP).
+        try {
+          if (navRef.isReady()) {
+            const route = navRef.getCurrentRoute();
+            const isInactiveCall = (global as any).__isInactiveStateRef?.current === true;
+            const sessionEnded = (global as any).__webrtcSessionRef?.current?.ended === true;
+            const endedFromPiP = (global as any).__lastEndCallSourceRef?.current === 'pip_close';
+            if ((route?.name === 'VideoCall') && (isInactiveCall || sessionEnded) && !endedFromPiP) {
+              navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
+            }
+          }
+        } catch (_) {}
+
         // Приложение вернулось из спящего режима - перерегистрируем обработчик
         logger.debug('App returned from sleep - re-registering call:incoming handler');
         setTimeout(() => {
@@ -1879,8 +1996,89 @@ function AppContent() {
             />
           )}
 
-          {/* Глобальный PiP оверлей - виден на всех страницах когда pip.visible === true */}
-          <PiPOverlay />
+          {/* In-app PiP не показывается на экране видеозвонка (VideoCall/RandomChat) — только на Home и др. */}
+          <PiPOverlay currentRouteName={routeName} />
+
+          {/* Android: запрос разрешения «Отображение поверх других окон» при первом заходе (без Alert) */}
+          {Platform.OS === 'android' && (
+            <Modal
+              visible={overlayPermissionModalVisible}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setOverlayPermissionModalVisible(false)}
+            >
+              <TouchableOpacity
+                activeOpacity={1}
+                style={overlayPermissionModalStyles.overlayPermissionBackdrop}
+                onPress={() => setOverlayPermissionModalVisible(false)}
+              >
+                <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={overlayPermissionModalStyles.overlayPermissionCard}>
+                  <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>{t('incomingCallTitle', lang)}</Text>
+                  <Text style={overlayPermissionModalStyles.overlayPermissionText}>
+                    Чтобы входящие видеозвонки показывались на заблокированном экране и работал режим «картинка в картинке», разрешите LiVi отображаться поверх других приложений.
+                  </Text>
+                  <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
+                    <TouchableOpacity style={overlayPermissionModalStyles.overlayPermissionButtonSecondary} onPress={() => setOverlayPermissionModalVisible(false)}>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>Позже</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={overlayPermissionModalStyles.overlayPermissionButtonPrimary}
+                      onPress={() => {
+                        openOverlayPermissionSettings();
+                        setOverlayPermissionModalVisible(false);
+                      }}
+                    >
+                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>Открыть настройки</Text>
+                    </TouchableOpacity>
+                  </View>
+                </TouchableOpacity>
+              </TouchableOpacity>
+            </Modal>
+          )}
+          {fullScreenIntentModalVisible && (
+            <Modal
+              visible={fullScreenIntentModalVisible}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setFullScreenIntentModalVisible(false)}
+            >
+              <TouchableOpacity
+                activeOpacity={1}
+                style={overlayPermissionModalStyles.overlayPermissionBackdrop}
+                onPress={() => setFullScreenIntentModalVisible(false)}
+              >
+                <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={overlayPermissionModalStyles.overlayPermissionCard}>
+                  <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>{t('incomingCallTitle', lang)}</Text>
+                  <Text style={overlayPermissionModalStyles.overlayPermissionText}>
+                    Чтобы входящие звонки показывались на заблокированном экране, включите для LiVi «Полноэкранные уведомления» или «Показ поверх других окон» в настройках уведомлений.
+                  </Text>
+                  <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
+                    <TouchableOpacity style={overlayPermissionModalStyles.overlayPermissionButtonSecondary} onPress={() => setFullScreenIntentModalVisible(false)}>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>Позже</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={overlayPermissionModalStyles.overlayPermissionButtonPrimary}
+                      onPress={() => {
+                        openAppNotificationSettings();
+                        setFullScreenIntentModalVisible(false);
+                      }}
+                    >
+                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>Открыть настройки</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <TouchableOpacity
+                    style={{ marginTop: 12, paddingVertical: 4 }}
+                    onPress={async () => {
+                      try { await AsyncStorage.setItem('full_screen_intent_dont_show_again', 'true'); } catch (_) {}
+                      setFullScreenIntentModalVisible(false);
+                    }}
+                  >
+                    <Text style={[overlayPermissionModalStyles.overlayPermissionButtonSecondaryText, { fontSize: 13 }]}>Больше не показывать</Text>
+                  </TouchableOpacity>
+                </TouchableOpacity>
+              </TouchableOpacity>
+            </Modal>
+          )}
           </>
       </PaperProvider>
     </>
@@ -1921,7 +2119,7 @@ export default function App() {
     try { emitCloseOutgoingCall(); } catch {}
     try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
 
-    // КРИТИЧНО: При завершении из PiP (кнопка X) всегда гарантируем отправку call:end на сервер,
+    // КРИТИЧНО: Завершение видеозвонка из PiP (кнопка X) завершает звонок у обоих: отправка call:end на сервер,
     // иначе у собеседника звонок продолжается. Сначала завершаем звонок на сервере, потом локальный cleanup.
     const hasPiPIds = (callId && roomId) || pipVisible || inSystem;
     if (hasPiPIds && (callId || roomId)) {
@@ -1945,6 +2143,8 @@ export default function App() {
     try {
       const cleanupFn = g.__endCallCleanupRef?.current;
       if (cleanupFn && typeof cleanupFn === 'function') {
+        g.__lastEndCallSourceRef = g.__lastEndCallSourceRef || { current: null };
+        g.__lastEndCallSourceRef.current = 'pip_close';
         console.log('[App] Вызываем cleanupFunction из __endCallCleanupRef');
         cleanupFn();
       } else if (!hasPiPIds) {
@@ -1964,15 +2164,26 @@ export default function App() {
       console.warn('[App] Error calling endCall cleanup:', e);
     }
 
-    // При завершении из PiP только закрываем PiP; приложение не открываем (системный PiP = приложение в фоне).
+    // При завершении из системного PiP (X): сначала переходим на Home, даём навигации примениться, затем закрываем PiP — чтобы не открывалось приложение на неактивной странице видеозвонка.
     const hidePiP = g.__pipHidePiPRef?.current;
     if (inSystem) {
-      if (Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+      if (navRef.isReady()) {
+        const route = navRef.getCurrentRoute();
+        if (route?.name !== 'Home') {
+          navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
+        }
       }
       if (typeof hidePiP === 'function') hidePiP();
+      // Закрываем системный PiP с задержкой, чтобы reset на Home успел отрисоваться и при выходе из PiP пользователь не видел неактивный видеозвонок.
+      const closeSystemPiP = () => {
+        if (Platform.OS === 'android') {
+          try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+        }
+      };
+      setTimeout(closeSystemPiP, 200);
       return;
     }
+    // In-app PiP (кнопка X): звонок уже завершён для обоих выше (session.endCall/call:end); только скрываем PiP, навигации нет.
     if (pipVisible) {
       if (typeof hidePiP === 'function') hidePiP();
       return;
@@ -2015,6 +2226,38 @@ export default function App() {
       const hasActiveCall = session && typeof session.getRoomId === 'function' && session.getRoomId();
       if (!pipVisible && !hasActiveCall) return false;
       if (!navRef.isReady()) return false;
+      const currentRoute = navRef.getCurrentRoute?.()?.name;
+      // На экране VideoCall при нажатии Back — сразу переход в системный PiP (как при нажатии Домой).
+      if (currentRoute === 'VideoCall' && hasActiveCall) {
+        try {
+          const params = (global as any).__currentCallPiPParamsRef?.current;
+          const callId = params?.callId ?? (typeof session?.getCallId === 'function' ? session.getCallId() : null);
+          const roomId = params?.roomId ?? (typeof session?.getRoomId === 'function' ? session.getRoomId() : null);
+          if (callId != null && roomId != null && NativeModules.LiviAppModule?.setPiPEndCallParams) {
+            NativeModules.LiviAppModule.setPiPEndCallParams(callId, roomId);
+          }
+          const prepSystemPiPUI = () => {
+            try {
+              const upd = (global as any).__pipUpdateStateRef?.current;
+              if (typeof upd === 'function') upd({ pendingSystemPiP: true, allowVideoRender: true });
+              setTimeout(() => {
+                try {
+                  const upd2 = (global as any).__pipUpdateStateRef?.current;
+                  if (typeof upd2 === 'function') upd2({ pendingSystemPiP: false });
+                } catch (_) {}
+              }, 1500);
+            } catch (_) {}
+          };
+          prepSystemPiPUI();
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              try { NativeModules.LiviAppModule?.requestEnterPictureInPicture?.(); } catch (_) {}
+            });
+          });
+        } catch (_) {}
+        return true;
+      }
+
       if (navRef.canGoBack()) return false; // не на корне — пусть экран/навигация обработает Back
       try {
         const prepSystemPiPUI = () => {

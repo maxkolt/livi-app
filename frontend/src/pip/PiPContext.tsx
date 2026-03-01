@@ -24,13 +24,8 @@ type PiPState = {
   // Состояние камеры на момент входа в PiP (нужно для точного восстановления при возврате)
   localCamOn?: boolean;
 
-  // позиция PiP
+  // позиция in-app PiP (маленькое окно)
   pipPos: { x: number; y: number };
-
-  // VAD (отключен, всегда 0)
-  remoteLevel: number;
-
-  // Эквалайзер отключен
 
   // для возврата
   lastNavParams?: any;
@@ -57,10 +52,6 @@ type PiPState = {
   hidePiP: () => void;
   updatePiPPosition: (x: number, y: number) => void;
 
-  toggleMic: () => void;
-  toggleRemoteAudio: () => void;
-  toggleCam: () => void;
-
   returnToCall: () => void;
   endCall: () => void;
 
@@ -71,10 +62,10 @@ type PiPState = {
   inSystemPiPMode: boolean;
   /** true = скоро войдём в системный PiP (VideoCall рисует компактный вид перед входом). */
   pendingSystemPiP: boolean;
-
-  // VAD API (отключен, пустые функции)
-  startRemoteVAD: (pc: any, intervalMs?: number) => void;
-  stopRemoteVAD: () => void;
+  /** При возврате из системного PiP скрываем оверлей на 1 кадр, чтобы он не мелькнул поверх экрана видеозвонка. */
+  suppressOverlayForReturn: boolean;
+  /** Размеры decorView с натива для совпадения overlay 9:16 с sourceRect (без чёрных полос в системном PiP). */
+  decorSizeForPiP: { width: number; height: number } | null;
 
   // служебное
   updatePiPState: (patch: Partial<PiPState>) => void;
@@ -111,7 +102,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const localStreamRef = useRef<MediaStreamLike | null>(null);
   const remoteStreamRef = useRef<MediaStreamLike | null>(null);
   const [localCamOn, setLocalCamOn] = useState<boolean | undefined>(undefined);
-
   const [pipPos, setPipPos] = useState({ x: 12, y: 120 });
 
   // для возврата
@@ -120,11 +110,18 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   /** Рендер видео в PiP включаем с задержкой, чтобы не было двух RTCView одновременно. */
   const [allowVideoRender, setAllowVideoRender] = useState(false);
   const allowVideoRenderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** При возврате из системного PiP — скрыть in-app оверлей, чтобы не мелькал поверх экрана видеозвонка. */
+  const [suppressOverlayForReturn, setSuppressOverlayForReturn] = useState(false);
   /** Инкремент при установке стрима в showPiP — чтобы value контекста обновился и PiPOverlay получил remoteStream. */
   const [remoteStreamVersion, setRemoteStreamVersion] = useState(0);
+  /** Размеры decorView для системного PiP layout (синхрон с buildSystemPiPSourceRect на нативе). */
+  const [decorSizeForPiP, setDecorSizeForPiP] = useState<{ width: number; height: number } | null>(null);
 
   // guard от двойной навигации
   const navigatingRef = useRef(false);
+
+  // suppressOverlayForReturn сбрасывается только при размонтировании экрана VideoCall (см. VideoCall.tsx),
+  // чтобы in-app PiP не показывался поверх полноэкранного видеозвонка после возврата из системного PiP.
 
   /**
    * КРИТИЧНО (фикс): когда VideoCall экран размонтирован (мы ушли в меню/друзья, а звонок продолжает жить в PiP),
@@ -152,6 +149,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const off = onConnected(() => sendPresenceBusyFromPiP());
     return () => { try { off?.(); } catch {} };
   }, [visible, callId, roomId, sendPresenceBusyFromPiP]);
+
+
 
   // Разрешаем рендер видео в PiP с небольшой задержкой, чтобы экран VideoCall успел "уйти" с экрана
   // и не было двух RTCView одновременно на один remoteStream (Android может показать чёрный экран/мерцание).
@@ -210,6 +209,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const inPiP = !!payload?.isInPiP;
       const run = () => {
         setInSystemPiPMode(inPiP);
+        if (!inPiP) {
+          setDecorSizeForPiP(null);
+          // Выход из системного PiP: сразу подавляем оверлей, чтобы он не мелькнул маленьким окном поверх экрана видеозвонка.
+          setSuppressOverlayForReturn(true);
+        }
         try {
           (global as any).__pipInSystemModeRef = (global as any).__pipInSystemModeRef || { current: false };
           (global as any).__pipInSystemModeRef.current = inPiP;
@@ -231,19 +235,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   // SystemPiPExpanded обрабатывается только в App.tsx через __pipReturnToCallRef.current().
   // Подписка здесь не нужна — иначе событие обрабатывается дважды: второй вызов идёт с уже очищенным state (hidePiP) и ломает переход.
-
-  // ====== VAD отключен ======
-  // VAD полностью отключен для уменьшения нагрузки
-  const remoteLevel = 0; // Всегда 0, визуализация отключена
-
-  const stopRemoteVAD = useCallback(() => {
-    // Пустая функция, VAD отключен
-  }, []);
-
-  const startRemoteVAD = useCallback((pc: any, intervalMs?: number) => {
-    // Пустая функция, VAD отключен
-  }, []);
-
 
   // ====== API управления ======
   const showPiP = useCallback((p: {
@@ -278,6 +269,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     
     setCallId(p.callId);
     setRoomId(p.roomId);
+    // Если показываем PiP — это нормальный режим, оверлей не должен быть подавлен.
+    // suppressOverlayForReturn нужен только для краткого окна возврата из системного PiP.
+    setSuppressOverlayForReturn(false);
     if (Platform.OS === 'android' && p.callId && p.roomId) {
       try {
         const Livi = NativeModules.LiviAppModule;
@@ -324,7 +318,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     }
     if (typeof p.muteLocal === 'boolean') setIsMuted(!!p.muteLocal);
     if (typeof p.muteRemote === 'boolean') setIsRemoteMuted(!!p.muteRemote);
-    setLastNavParams(p.navParams); // сохраняем navParams для возврата
+    // Не затираем navParams undefined-ом: это ломает returnToCall (нечем восстановить экран звонка).
+    setLastNavParams((prev: any) => (p.navParams !== undefined ? p.navParams : prev));
 
     // By default show immediately. On Android BackHandler, defer visibility so navigation can happen first.
     if (p.deferVisible) {
@@ -361,6 +356,21 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     setVisible(false);
   }, []);
 
+  // __pipLastContextRef — последний валидный callId/roomId/lastNavParams. Нужен, когда returnToCall вызывается
+  // из App по SystemPiPExpanded: на части устройств state (callId, roomId) в этот момент ещё null (системный PiP
+  // мог включиться без вызова showPiP). returnToCall использует effectiveCallId = callId || paramsRef?.callId || lastCtx?.callId.
+  useEffect(() => {
+    try {
+      const g = (global as any);
+      g.__pipLastContextRef = g.__pipLastContextRef || { current: null };
+      g.__pipLastContextRef.current = {
+        callId,
+        roomId,
+        navParams: lastNavParams,
+      };
+    } catch {}
+  }, [callId, roomId, lastNavParams]);
+
   // AboutToEnterSystemPiP: единый сценарий системного PiP.
   // При Home не показываем in-app PiP и не делаем reset на Home — входим напрямую в системный PiP,
   // чтобы окно PiP содержало видео собеседника с текущего экрана VideoCall.
@@ -374,10 +384,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
       // До входа в системный PiP переводим VideoCall в компактный режим (только удалённое видео),
       // чтобы избежать "чёрных блоков" от лишних SurfaceView/RTCView при захвате окна PiP.
-      setPendingSystemPiP(true);
-      // Fallback: если по какой-то причине в PiP не вошли, вернём UI обратно.
+      const apply = (decorSize: { width: number; height: number } | null) => {
+        console.log('[PiPContext] AboutToEnterSystemPiP apply', { decorSize });
+        setPendingSystemPiP(true);
+        if (decorSize) setDecorSizeForPiP(decorSize);
+      };
+      NativeModules.LiviAppModule?.getDecorViewSize?.()?.then?.(apply)?.catch?.(() => apply(null));
+      if (!NativeModules.LiviAppModule?.getDecorViewSize) apply(null);
       setTimeout(() => {
         setPendingSystemPiP(false);
+        setDecorSizeForPiP(null);
       }, 1500);
 
       let params = g.__currentCallPiPParamsRef?.current;
@@ -386,8 +402,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         const rid = typeof (session as any).getRoomId === 'function' ? (session as any).getRoomId() : null;
         if (cid || rid) params = { callId: cid || '', roomId: rid || '', partnerName: '', partnerAvatarUrl: undefined, localStream: null, remoteStream: null, localCamOn: true, navParams: undefined };
       }
-      if (params?.callId && params?.roomId && NativeModules.LiviAppModule?.setPiPEndCallParams) {
-        try { NativeModules.LiviAppModule.setPiPEndCallParams(params.callId, params.roomId); } catch (_) {}
+      if (params?.callId && params?.roomId) {
+        if (NativeModules.LiviAppModule?.setPiPEndCallParams) {
+          try { NativeModules.LiviAppModule.setPiPEndCallParams(params.callId, params.roomId); } catch (_) {}
+        }
+        // Чтобы returnToCall не получал null: синхронно кладём callId/roomId в контекст при входе в системный PiP.
+        const updateFn = g.__pipUpdateStateRef?.current;
+        if (typeof updateFn === 'function') updateFn({ callId: params.callId, roomId: params.roomId, lastNavParams: params.navParams });
       }
     });
     return () => sub.remove();
@@ -409,115 +430,17 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     return () => { g.__pipHidePiPRef.current = null; };
   }, [hidePiP]);
 
-  const updatePiPPosition = useCallback((x: number, y: number) => setPipPos({ x, y }), []);
-
-  const toggleMic = useCallback(() => {
-    // ✅ Приоритет: дергаем WebRTC session напрямую (работает даже когда экран звонка размонтирован).
-    // Это важно для PiP: пользователь уже ушёл с VideoCall экрана, но звонок и аудио продолжаются.
-    try {
-      const session = (global as any).__webrtcSessionRef?.current;
-      if (session && typeof session.toggleMic === 'function') {
-        session.toggleMic();
-        // UI в PiP обновляем локально (не полагаемся на callbacks из размонтированного экрана)
-        setIsMuted((prev) => !prev);
-        return;
-      }
-    } catch {}
-
-    // Второй приоритет: если экран ещё жив и выставил глобальную функцию
-    try {
-      const toggleMicFn = (global as any).__toggleMicRef?.current;
-      if (toggleMicFn && typeof toggleMicFn === 'function') {
-        toggleMicFn();
-        setIsMuted((prev) => !prev);
-        return;
-      }
-    } catch {}
-
-    // Fallback: переключаем локально через mediaStreamTrack
-    try {
-      const audioTrack = localStreamRef.current?.getAudioTracks?.()?.[0];
-      if (audioTrack) {
-        const next = !audioTrack.enabled;
-        audioTrack.enabled = next;
-        setIsMuted(!next);
-      } else {
-        setIsMuted((prev) => !prev);
-      }
-    } catch {
-      setIsMuted((prev) => !prev);
-    }
-  }, []);
-
-  const toggleCam = useCallback(() => {
-    try {
-      const session = (global as any).__webrtcSessionRef?.current;
-      if (session && typeof session.toggleCam === 'function') {
-        session.toggleCam();
-        setLocalCamOn((prev) => (typeof prev === 'boolean' ? !prev : false));
-        return;
-      }
-    } catch {}
-    try {
-      const toggleCamFn = (global as any).__toggleCamRef?.current;
-      if (toggleCamFn && typeof toggleCamFn === 'function') {
-        toggleCamFn();
-        setLocalCamOn((prev) => (typeof prev === 'boolean' ? !prev : false));
-        return;
-      }
-    } catch {}
-    try {
-      const videoTrack = localStreamRef.current?.getVideoTracks?.()?.[0];
-      if (videoTrack) {
-        const next = !videoTrack.enabled;
-        videoTrack.enabled = next;
-        setLocalCamOn(next);
-      } else {
-        setLocalCamOn((prev) => (typeof prev === 'boolean' ? !prev : false));
-      }
-    } catch {
-      setLocalCamOn((prev) => (typeof prev === 'boolean' ? !prev : false));
-    }
-  }, []);
-
-  const toggleRemoteAudio = useCallback(() => {
-    try {
-      // ✅ Приоритет: дергаем WebRTC session напрямую (работает когда VideoCall экран размонтирован).
-      const session = (global as any).__webrtcSessionRef?.current;
-      if (session && typeof session.toggleRemoteAudio === 'function') {
-        session.toggleRemoteAudio();
-        setIsRemoteMuted((prev) => !prev);
-        return;
-      }
-
-      // Второй приоритет: если экран ещё жив и выставил глобальную функцию
-      const toggleRemoteAudioFn = (global as any).__toggleRemoteAudioRef?.current;
-      if (toggleRemoteAudioFn && typeof toggleRemoteAudioFn === 'function') {
-        toggleRemoteAudioFn();
-        setIsRemoteMuted((prev) => !prev);
-        return;
-      }
-
-      // Fallback: переключаем локально через MediaStream audio tracks
-      const raw = remoteStreamRef.current?.getAudioTracks?.();
-      const list: any[] = raw == null ? [] : Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
-      setIsRemoteMuted((prev) => {
-        const nextMuted = !prev;
-        try {
-          if (list && typeof list.forEach === 'function') {
-            list.forEach((t: any) => {
-              try { if (t && typeof t.enabled !== 'undefined') t.enabled = !nextMuted; } catch (_) {}
-            });
-          }
-        } catch (_) {}
-        return nextMuted;
-      });
-    } catch (_) {
-      setIsRemoteMuted((prev) => !prev);
-    }
-  }, [isRemoteMuted]);
-
+  // returnToCall вызывается из App.tsx по событию SystemPiPExpanded (кнопка «развернуть» в системном PiP).
+  // Параметры для навигации берутся из state (callId, roomId, lastNavParams), при null — из __currentCallPiPParamsRef
+  // и __pipLastContextRef (см. комментарий выше), чтобы возврат работал даже при гонках.
   const returnToCall = useCallback(() => {
+    // Сразу подавляем оверлей (чтобы не мелькнул поверх экрана видеозвонка при навигации).
+    // ВАЖНО: не оставляем его включённым навсегда — иначе in-app PiP может не показаться на Home на некоторых девайсах.
+    setSuppressOverlayForReturn(true);
+    const clearSuppressLater = () => {
+      // Даем навигации/перерисовке 1-2 кадра и отпускаем подавление.
+      setTimeout(() => setSuppressOverlayForReturn(false), 800);
+    };
     // Флаг для App: при выходе из PiP по SystemPiPModeChanged не завершать звонок (пользователь тапнул «вернуться», а не системную X).
     try {
       const r = (global as any).__pipReturnToCallJustPressedRef;
@@ -530,11 +453,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (session && typeof session.isEnded === 'function' && session.isEnded()) {
       console.log('[PiPContext] returnToCall: call already ended, closing PiP only');
       hidePiP();
+      clearSuppressLater();
       return;
     }
-
-    // Сразу скрываем PiP, чтобы не показывать «приветствие с PiP» перед переходом на VideoCall
-    hidePiP();
 
     // КРИТИЧНО: Сбрасываем флаги системного PiP до навигации, чтобы VideoCall при монтировании
     // рендерил обычный двухкарточный layout (собеседник сверху, вы снизу), а не компактный вид
@@ -544,15 +465,30 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
     // КРИТИЧНО: Сразу отправляем pip:state=false партнеру при возврате из PiP
     // Это гарантирует, что партнер получит уведомление даже если экран еще не получил фокус
-    const sessionForPipeState = (global as any).__webrtcSessionRef?.current;
-    const roomIdForPipeState = roomId || (global as any).__currentCallPiPParamsRef?.current?.roomId;
+    const g = (global as any);
+    const sessionForPipeState = g.__webrtcSessionRef?.current;
+    const paramsRef = g.__currentCallPiPParamsRef?.current;
+    const lastCtx = g.__pipLastContextRef?.current;
+    const sessionCallId =
+      sessionForPipeState && typeof (sessionForPipeState as any).getCallId === 'function'
+        ? (sessionForPipeState as any).getCallId()
+        : null;
+    const sessionRoomId =
+      sessionForPipeState && typeof (sessionForPipeState as any).getRoomId === 'function'
+        ? (sessionForPipeState as any).getRoomId()
+        : null;
+
+    const effectiveCallId = callId || paramsRef?.callId || lastCtx?.callId || sessionCallId || null;
+    const effectiveRoomId = roomId || paramsRef?.roomId || lastCtx?.roomId || sessionRoomId || null;
+    const effectiveNavParams = lastNavParams ?? paramsRef?.navParams ?? lastCtx?.navParams;
+
+    const roomIdForPipeState = effectiveRoomId;
     if (sessionForPipeState && sessionForPipeState.exitPiP && typeof sessionForPipeState.exitPiP === 'function') {
       sessionForPipeState.exitPiP();
       console.log('[PiPContext] ✅ Вызван session.exitPiP() при returnToCall');
     } else if (roomIdForPipeState) {
       // Fallback: отправляем напрямую если метод недоступен
       try {
-        const socket = require('../sockets/socket').default;
         socket.emit('pip:state', {
           inPiP: false,
           from: socket.id,
@@ -567,76 +503,87 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // Guard от двойной навигации
     if (navigatingRef.current) {
       console.log('[PiPContext] returnToCall blocked - already navigating');
+      clearSuppressLater();
       return;
     }
 
     // КРИТИЧНО: Используем навигацию напрямую через глобальную ссылку (как в эталонном файле)
     // Это гарантирует правильную навигацию с параметрами resume и fromPiP
-    const nav = (global as any).__navRef;
-    // Fallback: если callId/roomId не в контексте (например, вошли в системный PiP без showPiP), берём из VideoCall ref
-    const paramsRef = (global as any).__currentCallPiPParamsRef?.current;
-    const effectiveCallId = callId || paramsRef?.callId || null;
-    const effectiveRoomId = roomId || paramsRef?.roomId || null;
-    const effectiveNavParams = lastNavParams ?? paramsRef?.navParams;
+    const nav = g.__navRef;
 
-    if (!nav || !effectiveCallId || !effectiveRoomId) {
-      console.log('[PiPContext] returnToCall: missing nav/callId/roomId', { hasNav: !!nav, callId: effectiveCallId, roomId: effectiveRoomId });
-      if (effectiveCallId && effectiveRoomId) {
-        onReturnToCall?.(effectiveCallId, effectiveRoomId);
-        hidePiP();
+    const doNavigate = (cid: string, rid: string, navParams?: any) => {
+      // Сразу скрываем PiP, чтобы не показывать «приветствие с PiP» перед переходом на VideoCall
+      // Скрываем in-app PiP ДО навигации, иначе при открытии экрана VideoCall pip.visible
+      // ещё true один кадр — и на экране видеозвонка показывается оверлей PiP поверх всего.
+      hidePiP();
+
+      if (!nav || !nav.isReady || !nav.isReady()) {
+        console.warn('[PiPContext] returnToCall: Navigation not ready, using onReturnToCall fallback');
+        onReturnToCall?.(cid, rid);
+        clearSuppressLater();
+        return;
       }
-      return;
-    }
 
-    // КРИТИЧНО: Проверяем что навигация готова перед использованием
-    if (!nav.isReady || !nav.isReady()) {
-      console.warn('[PiPContext] returnToCall: Navigation not ready, using onReturnToCall fallback');
-      if (effectiveCallId && effectiveRoomId) {
-        onReturnToCall?.(effectiveCallId, effectiveRoomId);
-        hidePiP();
+      navigatingRef.current = true;
+      const params = {
+        ...(navParams ?? {}),
+        resume: true,
+        fromPiP: true,
+        directCall: true,
+        directInitiator: undefined,
+        callId: cid,
+        roomId: rid,
+      };
+      try {
+        nav.dispatch(
+          CommonActions.reset({
+            index: 1,
+            routes: [{ name: 'Home' as any }, { name: 'VideoCall' as any, params }],
+          })
+        );
+        console.log('[PiPContext] ✅ Navigated to VideoCall with resume params', { params });
+      } catch (e) {
+        console.error('[PiPContext] Navigation error:', e);
+        onReturnToCall?.(cid, rid);
+      } finally {
+        navigatingRef.current = false;
+        clearSuppressLater();
       }
-      return;
-    }
-
-    navigatingRef.current = true;
-
-    // КРИТИЧНО: Используем параметры из lastNavParams для правильного восстановления звонка
-    // Это гарантирует, что все параметры (peerUserId, partnerId и т.д.) будут восстановлены
-    const params = {
-      ...effectiveNavParams,
-      resume: true,
-      fromPiP: true,
-      directCall: true,
-      directInitiator: undefined,
-      callId: effectiveCallId,
-      roomId: effectiveRoomId,
     };
 
-    // КРИТИЧНО: Используем CommonActions.reset для навигации (как в эталонном файле)
-    // стек: [Home, VideoCall], активен VideoCall
-    try {
-      nav.dispatch(
-        CommonActions.reset({
-          index: 1,
-          routes: [{ name: 'Home' as any }, { name: 'VideoCall' as any, params }],
-        })
-      );
-      console.log('[PiPContext] ✅ Navigated to VideoCall with resume params', { params });
-      
-      // КРИТИЧНО: Скрываем PiP сразу после навигации, чтобы он не оставался видимым на странице видеозвонка
-      // Навигация уже произошла синхронно через nav.dispatch(), поэтому можно скрывать PiP сразу
-      hidePiP();
-      navigatingRef.current = false;
-    } catch (e) {
-      console.error('[PiPContext] Navigation error:', e);
-      navigatingRef.current = false;
-      // Fallback на onReturnToCall при ошибке
-      if (effectiveCallId && effectiveRoomId) {
-        onReturnToCall?.(effectiveCallId, effectiveRoomId);
-      }
-      hidePiP();
+    if (nav && effectiveCallId && effectiveRoomId) {
+      doNavigate(String(effectiveCallId), String(effectiveRoomId), effectiveNavParams);
       return;
     }
+
+    // Последний шанс (Android): берём параметры из нативного хранилища PiP (setPiPEndCallParams).
+    if (Platform.OS === 'android') {
+      try {
+        const Livi = NativeModules.LiviAppModule;
+        if (Livi?.getPiPEndCallParams) {
+          Livi.getPiPEndCallParams()
+            .then((p: { callId?: string | null; roomId?: string | null } | null) => {
+              const cid = p?.callId ? String(p.callId) : '';
+              const rid = p?.roomId ? String(p.roomId) : '';
+              if (!cid || !rid) {
+                console.log('[PiPContext] returnToCall: native params missing', { cid, rid });
+                clearSuppressLater();
+                return;
+              }
+              doNavigate(cid, rid, effectiveNavParams);
+            })
+            .catch(() => clearSuppressLater());
+          return;
+        }
+      } catch (_) {}
+    }
+
+    console.log('[PiPContext] returnToCall: missing nav/callId/roomId', {
+      hasNav: !!nav,
+      callId: effectiveCallId,
+      roomId: effectiveRoomId,
+    });
+    clearSuppressLater();
   }, [callId, roomId, lastNavParams, onReturnToCall, hidePiP]);
 
   // Чтобы по кнопке «развернуть» в системном PiP возвращать на экран видеозвонка (App слушает SystemPiPExpanded и дергает этот ref).
@@ -657,18 +604,22 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (onEndCall) {
       onEndCall(callId, roomId);
     } else {
-      // Fallback: если onEndCall не установлен, вызываем session.endCall() напрямую
+      // Fallback: если onEndCall не установлен, вызываем session.endCall(callId, roomId) напрямую (завершение у обоих)
       const session = (global as any).__webrtcSessionRef?.current;
       if (session && typeof session.endCall === 'function') {
-        console.log('🔥 [PiPContext] Вызываем session.endCall() напрямую (onEndCall не установлен)');
-        session.endCall();
-      } else {
-        console.warn('[PiPContext] Session not available and onEndCall not set');
+        console.log('🔥 [PiPContext] Вызываем session.endCall(callId, roomId) напрямую (onEndCall не установлен)');
+        session.endCall(callId ?? undefined, roomId ?? undefined);
+      } else if (callId || roomId) {
+        try {
+          socket.emit('call:end', { callId: callId ?? undefined, roomId: roomId ?? undefined });
+          console.log('[PiPContext] Отправлен call:end на сервер (fallback)');
+        } catch (e) {
+          console.warn('[PiPContext] Session not available and onEndCall not set', e);
+        }
       }
     }
     
     // Затем очищаем состояние PiP
-    stopRemoteVAD();
     setVisible(false);
     setCallId(null);
     setRoomId(null);
@@ -679,14 +630,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     setPartnerAvatarUrl(undefined);
     setLastNavParams(undefined);
     setLocalCamOn(undefined);
-  }, [callId, roomId, onEndCall, stopRemoteVAD]);
+  }, [callId, roomId, onEndCall]);
 
-  // Обработчик завершения звонка для пользователя в PiP (в т.ч. когда собеседник завершил из системного PiP)
+  // Обработчик завершения звонка для пользователя в PiP (в т.ч. когда собеседник завершил из системного PiP).
+  // Задержка закрытия у того, кто не нажимал «Завершить»: в системном PiP сокет часто отключён (app in background),
+  // поэтому call:ended приходит только после реконнекта; PiP также закрывается по LiveKit (ParticipantDisconnected / Room Disconnected) и при socket reconnect в App.
   useEffect(() => {
     const onCallEnded = (data?: any) => {
-      // КРИТИЧНО: Если PiP виден и есть контекст звонка — всегда закрываем in-app PiP при call:ended.
-      // У пользователя один активный звонок; строгое совпадение id не требуем (гонки/разный формат payload).
-      const shouldClosePiP = visible && (callId || roomId);
+      // Закрываем PiP при call:ended и когда in-app PiP виден, и когда в системном PiP (inSystemPiPMode), чтобы у второго пользователя PiP закрывался сразу.
+      const shouldClosePiP = (visible || inSystemPiPMode) && (callId || roomId);
       if (!shouldClosePiP) return;
 
       console.log('[PiPContext] Call ended event received, closing PiP:', {
@@ -695,15 +647,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         currentRoomId: roomId,
         receivedCallId: data?.callId,
         receivedRoomId: data?.roomId,
+        inSystemPiPMode,
       });
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
-      hidePiP();
+      // Сначала закрываем системный PiP, чтобы окно исчезло быстрее у того, кто получил call:ended.
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
       }
-      stopRemoteVAD();
+      hidePiP();
       setCallId(null);
       setRoomId(null);
       localStreamRef.current = null;
@@ -722,6 +675,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   }, [visible, callId, roomId, onEndCall, endCall, hidePiP, inSystemPiPMode]);
 
   const updatePiPState = useCallback((patch: Partial<PiPState>) => {
+    if (patch.pendingSystemPiP !== undefined || patch.decorSizeForPiP !== undefined) {
+      console.log('[PiPContext] updatePiPState pip', {
+        pendingSystemPiP: patch.pendingSystemPiP,
+        decorSizeForPiP: patch.decorSizeForPiP ?? null,
+      });
+    }
     if (patch.callId !== undefined) setCallId(patch.callId);
     if (patch.roomId !== undefined) setRoomId(patch.roomId);
     if (patch.partnerName !== undefined) setPartnerName(patch.partnerName);
@@ -729,11 +688,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.visible !== undefined) setVisible(patch.visible);
     if (patch.isMuted !== undefined) setIsMuted(patch.isMuted);
     if (patch.isRemoteMuted !== undefined) setIsRemoteMuted(patch.isRemoteMuted);
-    if (patch.pipPos) setPipPos(patch.pipPos);
     if (patch.localCamOn !== undefined) setLocalCamOn(patch.localCamOn);
+    if (patch.pipPos) setPipPos(patch.pipPos);
     if (patch.allowVideoRender !== undefined) setAllowVideoRender(!!patch.allowVideoRender);
     if (patch.inSystemPiPMode !== undefined) setInSystemPiPMode(!!patch.inSystemPiPMode);
     if (patch.pendingSystemPiP !== undefined) setPendingSystemPiP(!!patch.pendingSystemPiP);
+    if (patch.decorSizeForPiP !== undefined) setDecorSizeForPiP(patch.decorSizeForPiP ?? null);
     if (patch.lastNavParams !== undefined) setLastNavParams(patch.lastNavParams);
     // потоки через ref:
     if (patch.localStream !== undefined) localStreamRef.current = patch.localStream;
@@ -756,8 +716,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     };
   }, [updatePiPState, visible]);
 
+  const updatePiPPosition = useCallback((x: number, y: number) => setPipPos({ x, y }), []);
+
   const value = useMemo<PiPState>(() => ({
-    // state
     visible,
     callId,
     roomId,
@@ -769,30 +730,23 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     remoteStream: remoteStreamRef.current,
     localCamOn,
     pipPos,
-    remoteLevel,
-    // Эквалайзер отключен
     lastNavParams,
 
-    // actions
     showPiP,
     hidePiP,
     updatePiPPosition,
-    toggleMic,
-    toggleRemoteAudio,
-    toggleCam,
     returnToCall,
     endCall,
     allowVideoRender,
     inSystemPiPMode,
     pendingSystemPiP,
-    startRemoteVAD,
-    stopRemoteVAD,
+    suppressOverlayForReturn,
+    decorSizeForPiP,
     updatePiPState,
   }), [
     visible, callId, roomId, partnerName, partnerAvatarUrl,
-    isMuted, isRemoteMuted, localCamOn, pipPos, remoteLevel, allowVideoRender, inSystemPiPMode, pendingSystemPiP, remoteStreamVersion,
-    showPiP, hidePiP, updatePiPPosition, toggleMic, toggleRemoteAudio, toggleCam,
-    returnToCall, endCall, startRemoteVAD, stopRemoteVAD, updatePiPState
+    isMuted, isRemoteMuted, localCamOn, pipPos, allowVideoRender, inSystemPiPMode, pendingSystemPiP, suppressOverlayForReturn, decorSizeForPiP, remoteStreamVersion,
+    showPiP, hidePiP, updatePiPPosition, returnToCall, endCall, updatePiPState
   ]);
 
   // Не передаём null как children — иначе при обновлении контекста React может вызвать Children.forEach(children) и получить "forEach of null".

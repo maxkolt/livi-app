@@ -113,6 +113,8 @@
     <service android:name=".IncomingCallForegroundService" android:exported="false" android:foregroundServiceType="phoneCall|specialUse">
       <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Display incoming video call screen over other apps"/>
     </service>
+    <!-- Активный видеозвонок: держим процесс в foreground, чтобы сокет не засыпал в фоне/PiP -->
+    <service android:name=".ActiveCallForegroundService" android:exported="false" android:foregroundServiceType="phoneCall"/>
     <!-- «Отклонить» в уведомлении: HTTP decline без открытия приложения (нет Deep link received) -->
     <receiver android:name=".DeclineCallReceiver" android:exported="false">
       <intent-filter>

@@ -16,6 +16,11 @@
   <string name="outgoing_call_notification_title">LiVi — видеозвонок</string>
   <!-- System PiP action: end call from floating window -->
   <string name="pip_action_end_call">Завершить</string>
+  <!-- Active video call (foreground service so socket stays alive in background/PiP) -->
+  <string name="active_call_notification_channel">Видеозвонок</string>
+  <string name="active_call_notification_title">Видеозвонок</string>
+  <string name="active_call_notification_title_from">Видеозвонок от %s</string>
+  <string name="active_call_notification_title_someone">Видеозвонок от кого-то</string>
   <!-- Missed call notification -->
   <string name="missed_call_title">Пропущенный вызов</string>
   <string name="missed_call_from">От %s</string>

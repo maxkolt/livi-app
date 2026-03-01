@@ -61,7 +61,9 @@ export interface WebRTCSessionConfig {
   getIncomingFriendCall?: () => any;
   getWasFriendCallEnded?: () => boolean;
   getFriends?: () => any[];
-  
+  /** Имя партнёра для уведомления «Видеозвонок от {nick}». Если нет — показываем «от кого-то». */
+  getPartnerDisplayName?: () => string | null;
+
   // PiP support
   getPipLocalStream?: () => MediaStream | null;
   getPipRemoteStream?: () => MediaStream | null;
