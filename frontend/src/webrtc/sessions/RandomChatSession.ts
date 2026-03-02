@@ -18,12 +18,21 @@ import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, CamSide } from '../types';
-import socket from '../../../sockets/socket';
+import socket, { getCurrentUserId } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
+
+function parsePublicFlag(value: string | undefined, fallback: boolean): boolean {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (!v) return fallback;
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+const LIVEKIT_ADAPTIVE_STREAM_ENABLED = parsePublicFlag(process.env.EXPO_PUBLIC_LIVEKIT_ADAPTIVE_STREAM, false);
+const LIVEKIT_DYNACAST_ENABLED = parsePublicFlag(process.env.EXPO_PUBLIC_LIVEKIT_DYNACAST, true);
 
 type MatchPayload = {
   id: string;
@@ -87,12 +96,74 @@ export class RandomChatSession extends SimpleEventEmitter {
   private lastAudioDuration = 0;
   private isMicMonitoringActive = false;
   private flipCamInProgress = false;
+  private readonly sessionId = `rcs_${Math.random().toString(36).slice(2, 10)}`;
+  private readonly deviceModel = String(Device.modelName || Device.modelId || 'unknown');
+  private connectingInProgress = false;
+  private connectingRoomName: string | null = null;
+  private connectingStartedAt = 0;
+  private readonly connectLockTimeoutMs = 15_000;
+  private lastStuckRecoveryAt = 0;
+  private readonly stuckRecoveryCooldownMs = 4_000;
+  private roomConnectedAt = 0;
+  private remoteMediaFirstSeenAt = 0;
+  private readonly nextAfterRemoteMediaCooldownMs = 800;
+  private readonly nextMinStableCallAfterRemoteMediaMs = 1300;
+  private readonly nextWithoutRemoteMediaGraceMs = 2500;
+  private reconnectCycleId = 0;
   /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и stop повторно */
   private cleaned = false;
+
+  private resolveMyUserId(): string | null {
+    const configured = String(this.config.myUserId ?? '').trim();
+    if (configured) return configured;
+    const fallback = String(getCurrentUserId?.() ?? '').trim();
+    if (!fallback) return null;
+    this.config.myUserId = fallback;
+    return fallback;
+  }
+
+  private traceContext() {
+    return {
+      sessionId: this.sessionId,
+      myUserId: this.resolveMyUserId(),
+      deviceModel: this.deviceModel,
+      reconnectCycleId: this.reconnectCycleId,
+      started: this.started,
+      isDisconnecting: this.isDisconnecting,
+      disconnectReason: this.disconnectReason,
+      roomState: this.room?.state ?? 'none',
+      currentRoomName: this.currentRoomName,
+      pendingConnectRequestId: this.pendingConnectRequestId,
+      connectRequestId: this.connectRequestId,
+    };
+  }
+
+  private startReconnectCycle(trigger: string, details: Record<string, unknown> = {}): void {
+    this.reconnectCycleId += 1;
+    logger.info('[RandomChatSession][ReconnectTrace] cycle_start', {
+      trigger,
+      ...this.traceContext(),
+      ...details,
+    });
+  }
+
+  private logReconnectTrace(event: string, details: Record<string, unknown> = {}): void {
+    logger.info('[RandomChatSession][ReconnectTrace]', {
+      event,
+      ...this.traceContext(),
+      ...details,
+    });
+  }
 
   constructor(config: WebRTCSessionConfig) {
     super();
     this.config = config;
+    const myUserId = this.resolveMyUserId();
+    logger.info('[RandomChatSession] Session created', {
+      sessionId: this.sessionId,
+      myUserId,
+      deviceModel: this.deviceModel,
+    });
     this.setupSocketHandlers();
   }
 
@@ -117,7 +188,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.config.callbacks.onLoadingChange?.(false);
     this.config.onLoadingChange?.(false);
     this.matchRoomId = null;
-    void this.disconnectRoom('user');
+    void this.disconnectRoom('user', 'stopRandomChat');
     this.stopLocalTracks();
     this.resetRemoteState();
     this.config.callbacks.onPartnerIdChange?.(null);
@@ -163,6 +234,73 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
 
+    // Anti-ghost guard:
+    // Only allow "next" from a stable active call state, otherwise we can trigger
+    // user disconnect churn while room/partner context is not fully formed.
+    const hasConnectedRoom = !!this.room && this.room.state === 'connected' && !!this.currentRoomName;
+    const hasPartnerContext = !!this.currentRemoteParticipant || !!this.matchRoomId;
+    if (!hasConnectedRoom || !hasPartnerContext) {
+      logger.info('[RandomChatSession] next: skipped due to unstable active state', {
+        hasConnectedRoom,
+        hasPartnerContext,
+        roomState: this.room?.state || 'none',
+        currentRoomName: this.currentRoomName,
+        currentRemoteParticipant: this.currentRemoteParticipant?.identity || null,
+        matchRoomId: this.matchRoomId,
+      });
+      this.logReconnectTrace('next_guard_unstable_state', {
+        hasConnectedRoom,
+        hasPartnerContext,
+      });
+      return;
+    }
+
+    // Stabilization guard for rapid reconnect churn:
+    // allow "next" only after we have seen first remote media and a short stable window,
+    // with a grace fallback to avoid locking users when remote media never arrives.
+    if (hasConnectedRoom) {
+      const sinceConnectedMs = this.roomConnectedAt > 0 ? now - this.roomConnectedAt : 0;
+      if (this.remoteMediaFirstSeenAt > 0) {
+        const sinceFirstRemoteMediaMs = now - this.remoteMediaFirstSeenAt;
+        if (sinceFirstRemoteMediaMs < this.nextAfterRemoteMediaCooldownMs) {
+          logger.info('[RandomChatSession] next: waiting stable window after first remote media', {
+            sinceFirstRemoteMediaMs,
+            cooldownMs: this.nextAfterRemoteMediaCooldownMs,
+            sinceConnectedMs,
+          });
+          this.logReconnectTrace('next_guard_remote_media_cooldown', {
+            sinceFirstRemoteMediaMs,
+            cooldownMs: this.nextAfterRemoteMediaCooldownMs,
+            sinceConnectedMs,
+          });
+          return;
+        }
+        if (sinceFirstRemoteMediaMs < this.nextMinStableCallAfterRemoteMediaMs) {
+          logger.info('[RandomChatSession] next: waiting minimum stable call duration', {
+            sinceFirstRemoteMediaMs,
+            minStableMs: this.nextMinStableCallAfterRemoteMediaMs,
+            sinceConnectedMs,
+          });
+          this.logReconnectTrace('next_guard_min_stable_call', {
+            sinceFirstRemoteMediaMs,
+            minStableMs: this.nextMinStableCallAfterRemoteMediaMs,
+            sinceConnectedMs,
+          });
+          return;
+        }
+      } else if (sinceConnectedMs < this.nextWithoutRemoteMediaGraceMs) {
+        logger.info('[RandomChatSession] next: waiting first remote media (grace)', {
+          sinceConnectedMs,
+          graceMs: this.nextWithoutRemoteMediaGraceMs,
+        });
+        this.logReconnectTrace('next_guard_wait_first_remote_media', {
+          sinceConnectedMs,
+          graceMs: this.nextWithoutRemoteMediaGraceMs,
+        });
+        return;
+      }
+    }
+
     // 4. Устанавливаем флаг выполнения
     this.nextInProgress = true;
     
@@ -195,7 +333,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       // Это гарантирует, что все ресурсы LiveKit очищены перед новым подключением
       // КРИТИЧНО: Обернуто в дополнительный try-catch для предотвращения крашей на Android
       try {
-        await this.disconnectRoom('user');
+        await this.disconnectRoom('user', 'next');
       } catch (e: any) {
         // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей
         const errorMsg = e?.message || String(e || '');
@@ -309,7 +447,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
   }
 
-  autoNext(_reason?: string): void {
+  autoNext(reason?: string): void {
     // КРИТИЧНО: Не запускаем поиск если идет отключение
     // КРИТИЧНО: Проверяем состояние комнаты - если она disconnected или null, можно запускать поиск
     // Это важно для fallback после next(), когда комната уже отключена, но еще не null
@@ -317,6 +455,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       logger.debug('[RandomChatSession] autoNext: skipping (disconnecting)', {
         isDisconnecting: this.isDisconnecting
       });
+      this.logReconnectTrace('auto_next_skipped_disconnecting', { reason: reason || 'unspecified' });
       return;
     }
     
@@ -326,20 +465,30 @@ export class RandomChatSession extends SimpleEventEmitter {
       logger.debug('[RandomChatSession] autoNext: skipping (room is active)', {
         roomState: this.room.state
       });
+      this.logReconnectTrace('auto_next_skipped_room_active', {
+        reason: reason || 'unspecified',
+        roomState: this.room.state,
+      });
       return;
     }
     
     const now = Date.now();
     if (now - this.lastAutoSearchAt < 200) return;
     this.lastAutoSearchAt = now;
+    this.startReconnectCycle(`autoNext:${reason || 'unspecified'}`);
     try {
       socket.emit('start');
       this.emit('searching');
       this.config.callbacks.onLoadingChange?.(true);
       this.config.onLoadingChange?.(true);
-      logger.debug('[RandomChatSession] autoNext: emitted start', { reason: _reason });
+      logger.debug('[RandomChatSession] autoNext: emitted start', { reason });
+      this.logReconnectTrace('auto_next_emitted_start', { reason: reason || 'unspecified' });
     } catch (e) {
       logger.error('[RandomChatSession] autoNext error', e);
+      this.logReconnectTrace('auto_next_emit_error', {
+        reason: reason || 'unspecified',
+        error: (e as any)?.message || String(e),
+      });
     }
   }
 
@@ -390,10 +539,15 @@ export class RandomChatSession extends SimpleEventEmitter {
         // IMPORTANT:
         // To make camera ON/OFF instant for the remote side, we keep the publication and use LiveKit setCameraEnabled().
         // Unpublishing forces re-subscribe and can take seconds on mobile networks.
-        await this.room.localParticipant.setCameraEnabled(this.isCamOn);
-        // If camera is ON, ensure the current track is published (best-effort, no unpublish).
+        // Order matters:
+        // 1) when turning camera ON, ensure our custom local track is published first
+        //    to avoid LiveKit creating/publishing an extra camera source implicitly.
+        // 2) then apply enabled state.
         if (this.isCamOn) {
           await this.ensureVideoTrackPublished();
+          await this.room.localParticipant.setCameraEnabled(true);
+        } else {
+          await this.room.localParticipant.setCameraEnabled(false);
         }
         // RandomChat UX: explicitly signal camera state to the partner.
         // This is the ONLY thing that should drive the "Отошел" placeholder in random chat.
@@ -430,7 +584,7 @@ export class RandomChatSession extends SimpleEventEmitter {
 
     // КРИТИЧНО (Android): после OFF->ON камера иногда "залипает" (трек не ended, но кадры не идут),
     // и setCameraEnabled(true) не всегда возвращает изображение. Запускаем watchdog после включения.
-    if (this.isCamOn) {
+    if (this.isCamOn && this.shouldRunLocalVideoWatchdog()) {
       this.forceLocalVideoWatchdog(6500);
       this.localVideoHealthAttempts = 0;
       this.scheduleLocalVideoHealthCheck('toggleCam:on');
@@ -530,9 +684,12 @@ export class RandomChatSession extends SimpleEventEmitter {
   private handlePartnerGone(reason: 'peer_left' | 'disconnected'): void {
     if (this.isDisconnecting || this.disconnectHandled) {
       logger.debug('[RandomChatSession] handlePartnerGone already in progress, skipping', { reason });
+      this.logReconnectTrace('partner_gone_skipped_already_handling', { reason });
       return;
     }
+    this.startReconnectCycle(`partner_gone:${reason}`);
     this.disconnectHandled = true;
+    this.logReconnectTrace('partner_gone_begin', { reason });
 
     try {
       this.emit('searching');
@@ -542,7 +699,8 @@ export class RandomChatSession extends SimpleEventEmitter {
 
     void (async () => {
       try {
-        await this.disconnectRoom('server');
+        await this.disconnectRoom('server', `handlePartnerGone:${reason}`);
+        this.logReconnectTrace('partner_gone_disconnected_room', { reason });
         this.resetRemoteState();
         if (!this.started) {
           this.stopLocalTracks();
@@ -550,12 +708,17 @@ export class RandomChatSession extends SimpleEventEmitter {
           // peer_left: бэкенд уже вернул в очередь, autoNext не нужен. disconnected: запускаем поиск снова.
           setTimeout(() => {
             if (this.started && !this.isDisconnecting) {
+              this.logReconnectTrace('partner_gone_schedule_auto_next', { reason });
               this.autoNext('disconnected');
             }
           }, 150);
         }
       } catch (e) {
         logger.warn('[RandomChatSession] handlePartnerGone error', { reason, error: e });
+        this.logReconnectTrace('partner_gone_error', {
+          reason,
+          error: (e as any)?.message || String(e),
+        });
       } finally {
         setTimeout(() => {
           this.disconnectHandled = false;
@@ -601,7 +764,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   }
 
   leaveRoom(_roomId?: string): void {
-    void this.disconnectRoom('user');
+    void this.disconnectRoom('user', 'leaveRoom');
   }
 
   async resumeFromPiP(): Promise<void> {
@@ -633,13 +796,27 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   private setupSocketHandlers(): void {
     const matchHandler = (data: MatchPayload) => {
+      this.logReconnectTrace('socket_match_found_event', {
+        roomId: data?.roomId ?? null,
+        livekitRoomName: data?.livekitRoomName ?? null,
+        partnerId: data?.id ?? null,
+      });
       this.handleMatchFound(data).catch((e) => {
         logger.error('[RandomChatSession] Failed to handle match_found', e);
       });
     };
-    const peerStoppedHandler = () => this.handlePartnerGone('disconnected');
-    const peerLeftHandler = () => this.handlePartnerGone('peer_left');
-    const disconnectedHandler = () => this.handlePartnerGone('disconnected');
+    const peerStoppedHandler = () => {
+      this.logReconnectTrace('socket_peer_stopped_event');
+      this.handlePartnerGone('disconnected');
+    };
+    const peerLeftHandler = () => {
+      this.logReconnectTrace('socket_peer_left_event');
+      this.handlePartnerGone('peer_left');
+    };
+    const disconnectedHandler = () => {
+      this.logReconnectTrace('socket_disconnected_event');
+      this.handlePartnerGone('disconnected');
+    };
     // RandomChat UX: "Отошел" must be driven ONLY by explicit user action (camera toggle button).
     // We use a dedicated socket relay (cam-toggle) instead of LiveKit TrackMuted/Unmuted to avoid false positives
     // during re-subscribes, network churn, or when a participant is leaving.
@@ -698,6 +875,22 @@ export class RandomChatSession extends SimpleEventEmitter {
     const partnerId = data.id;
     const roomId = data.roomId ?? null;
     const userId = data.userId ?? null;
+    this.logReconnectTrace('handle_match_found_begin', {
+      partnerId,
+      roomId,
+      userId,
+      livekitRoomName: data.livekitRoomName ?? null,
+      livekitUrl: data.livekitUrl ?? null,
+    });
+
+    if (!this.started) {
+      this.logReconnectTrace('match_found_ignored_stopped', {
+        partnerId,
+        roomId,
+        livekitRoomName: data.livekitRoomName ?? null,
+      });
+      return;
+    }
     // Save socket-level match room id (used for cam-toggle relay).
     this.matchRoomId = roomId;
 
@@ -719,7 +912,10 @@ export class RandomChatSession extends SimpleEventEmitter {
       logger.debug('[RandomChatSession] Connection already in progress for this room, ignoring duplicate', { 
         partnerId, 
         roomName: data.livekitRoomName,
-        pendingRequestId: this.pendingConnectRequestId
+        pendingRequestId: this.pendingConnectRequestId,
+        sessionId: this.sessionId,
+        myUserId: this.resolveMyUserId(),
+        deviceModel: this.deviceModel,
       });
       return;
     }
@@ -776,19 +972,41 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.pendingConnectRequestId = connectRequestId;
     
     try {
+      this.logReconnectTrace('handle_match_found_connect_start', {
+        connectRequestId,
+        targetRoomName: data.livekitRoomName ?? null,
+      });
       const connected = await this.connectToLiveKit(
         resolvedLivekitUrl,
         data.livekitToken,
         connectRequestId,
-        data.livekitRoomName
+        data.livekitRoomName,
+        'handleMatchFound'
       );
       if (!connected) {
         logger.debug('[RandomChatSession] Match handling aborted (stale request)', {
           connectRequestId,
           partnerId,
         });
+        this.logReconnectTrace('handle_match_found_connect_not_connected', {
+          connectRequestId,
+          partnerId,
+        });
         return;
       }
+      if (!this.started) {
+        this.logReconnectTrace('handle_match_found_connect_ignored_stopped', {
+          connectRequestId,
+          partnerId,
+          targetRoomName: data.livekitRoomName ?? null,
+        });
+        return;
+      }
+      this.logReconnectTrace('handle_match_found_connect_success', {
+        connectRequestId,
+        partnerId,
+        targetRoomName: data.livekitRoomName ?? null,
+      });
       this.config.callbacks.onLoadingChange?.(false);
       this.config.onLoadingChange?.(false);
       this.config.setIsInactiveState?.(false);
@@ -1553,6 +1771,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.config.callbacks.onRemoteStreamChange?.(null);
     this.config.onRemoteStreamChange?.(null);
     this.remoteAudioMuted = false;
+    this.remoteMediaFirstSeenAt = 0;
+    this.roomConnectedAt = 0;
     this.emit('remoteState', { muted: false });
     this.remoteViewKey = Date.now();
     this.emit('remoteViewKeyChanged', this.remoteViewKey);
@@ -1587,6 +1807,20 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   private async recoverLocalVideoTrack(reason: 'ended' | 'toggleCam' | 'stuck'): Promise<void> {
     if (this.recoveringVideo) return;
+    const now = Date.now();
+    if (reason === 'stuck' && now - this.lastStuckRecoveryAt < this.stuckRecoveryCooldownMs) {
+      logger.debug('[RandomChatSession] Skip stuck recovery due to cooldown', {
+        sessionId: this.sessionId,
+        myUserId: this.resolveMyUserId(),
+        deviceModel: this.deviceModel,
+        sinceMs: now - this.lastStuckRecoveryAt,
+        cooldownMs: this.stuckRecoveryCooldownMs,
+      });
+      return;
+    }
+    if (reason === 'stuck') {
+      this.lastStuckRecoveryAt = now;
+    }
     this.recoveringVideo = true;
     try {
       const oldVideoTrack = this.localVideoTrack;
@@ -2014,6 +2248,19 @@ export class RandomChatSession extends SimpleEventEmitter {
         return;
       }
 
+      if (this.camToggleInProgress || this.flipCamInProgress) {
+        logger.debug('[RandomChatSession] Skip stuck recovery while cam operation in progress', {
+          sessionId: this.sessionId,
+          myUserId: this.resolveMyUserId(),
+          deviceModel: this.deviceModel,
+          camToggleInProgress: this.camToggleInProgress,
+          flipCamInProgress: this.flipCamInProgress,
+          context,
+        });
+        this.scheduleLocalVideoHealthCheck(`${context}:cam-op-in-progress`);
+        return;
+      }
+
       await this.recoverLocalVideoTrack('stuck');
     } catch (e) {
       logger.debug('[RandomChatSession] Local video health check failed (ignored)', e);
@@ -2364,7 +2611,13 @@ export class RandomChatSession extends SimpleEventEmitter {
     // Не стопаем трек здесь, чтобы не ломать быстрый ре-паблиш
   }
 
-  private async connectToLiveKit(url: string, token: string, connectRequestId: number, targetRoomName?: string): Promise<boolean> {
+  private async connectToLiveKit(
+    url: string,
+    token: string,
+    connectRequestId: number,
+    targetRoomName?: string,
+    connectSource = 'unknown'
+  ): Promise<boolean> {
     // КРИТИЧНО: Проверяем, что это актуальный запрос на подключение
     // Если connectRequestId изменился, значит был новый вызов next() и этот запрос устарел
     if (this.connectRequestId !== connectRequestId) {
@@ -2373,9 +2626,99 @@ export class RandomChatSession extends SimpleEventEmitter {
         currentRequestId: this.connectRequestId,
         targetRoomName
       });
+      this.logReconnectTrace('connect_stale_request', {
+        connectSource,
+        connectRequestId,
+        currentRequestId: this.connectRequestId,
+        targetRoomName: targetRoomName || null,
+      });
+      return false;
+    }
+    if (!this.started) {
+      this.logReconnectTrace('connect_aborted_not_started_pre', {
+        connectSource,
+        connectRequestId,
+        targetRoomName: targetRoomName || null,
+      });
       return false;
     }
 
+    const normalizedRoomName = targetRoomName || null;
+    this.logReconnectTrace('connect_attempt_start', {
+      connectSource,
+      connectRequestId,
+      targetRoomName: normalizedRoomName,
+    });
+
+    // КРИТИЧНО: Если уже идет подключение к этой же комнате в этом же экземпляре, не запускаем второе.
+    // Ждем завершения текущего подключения (с таймаутом), затем проверяем конечное состояние.
+    if (
+      normalizedRoomName &&
+      this.connectingInProgress &&
+      this.connectingRoomName === normalizedRoomName
+    ) {
+      const ageMs = Date.now() - this.connectingStartedAt;
+      const remainingMs = Math.max(0, this.connectLockTimeoutMs - ageMs);
+      if (remainingMs > 0) {
+        logger.info('[RandomChatSession] Connect lock hit, waiting current connect', {
+          sessionId: this.sessionId,
+          myUserId: this.resolveMyUserId(),
+          deviceModel: this.deviceModel,
+          roomName: normalizedRoomName,
+          connectRequestId,
+          ageMs,
+          remainingMs,
+        });
+        const startedWaitAt = Date.now();
+        while (Date.now() - startedWaitAt < remainingMs) {
+          if (!this.connectingInProgress || this.connectingRoomName !== normalizedRoomName) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        if (
+          this.room &&
+          this.room.state === 'connected' &&
+          this.currentRoomName === normalizedRoomName
+        ) {
+          logger.info('[RandomChatSession] Reusing room after waiting connect lock', {
+            sessionId: this.sessionId,
+            myUserId: this.resolveMyUserId(),
+            deviceModel: this.deviceModel,
+            roomName: normalizedRoomName,
+          });
+          return true;
+        }
+        logger.debug('[RandomChatSession] Connect lock wait finished without reusable room', {
+          sessionId: this.sessionId,
+          myUserId: this.resolveMyUserId(),
+          deviceModel: this.deviceModel,
+          roomName: normalizedRoomName,
+        });
+        return false;
+      }
+
+      // lock застрял — сбрасываем и пробуем подключение заново
+      logger.warn('[RandomChatSession] Connect lock timeout, force reset lock', {
+        sessionId: this.sessionId,
+        myUserId: this.resolveMyUserId(),
+        deviceModel: this.deviceModel,
+        roomName: normalizedRoomName,
+        ageMs,
+        timeoutMs: this.connectLockTimeoutMs,
+      });
+      this.connectingInProgress = false;
+      this.connectingRoomName = null;
+      this.connectingStartedAt = 0;
+    }
+
+    if (normalizedRoomName) {
+      this.connectingInProgress = true;
+      this.connectingRoomName = normalizedRoomName;
+      this.connectingStartedAt = Date.now();
+    }
+
+    try {
     // КРИТИЧНО: Проверяем, можно ли переиспользовать существующую комнату
     // Если комната уже подключена к той же комнате LiveKit, не переподключаемся
     if (this.room && 
@@ -2411,7 +2754,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         (!this.currentRoomName || !targetRoomName || this.currentRoomName !== targetRoomName)) {
       // КРИТИЧНО: Не ждем полного отключения - просто отключаем асинхронно
       // Это ускоряет подключение к новому собеседнику
-      void this.disconnectRoom('user');
+      void this.disconnectRoom('user', 'connectToLiveKit:room_switch');
     }
     
     // КРИТИЧНО: Если комната все еще существует, принудительно очищаем состояние
@@ -2575,10 +2918,17 @@ export class RandomChatSession extends SimpleEventEmitter {
     const simulcast = !!isHighCapture;
     const videoSimulcastLayers = simulcast ? [VideoPresets.h180] : undefined;
 
+    logger.info('[RandomChatSession] LiveKit feature flags', {
+      adaptiveStream: LIVEKIT_ADAPTIVE_STREAM_ENABLED,
+      dynacast: LIVEKIT_DYNACAST_ENABLED,
+      sessionId: this.sessionId,
+      myUserId: this.resolveMyUserId(),
+      deviceModel: this.deviceModel,
+    });
+
     const room = new Room({
-      // Отключаем dynacast/adaptiveStream, чтобы LiveKit не мьютил треки и не слал quality updates для "unknown track"
-      adaptiveStream: false,
-      dynacast: false,
+      adaptiveStream: LIVEKIT_ADAPTIVE_STREAM_ENABLED,
+      dynacast: LIVEKIT_DYNACAST_ENABLED,
       // КРИТИЧНО для UX RandomChat:
       // при next()/disconnect LiveKit по умолчанию может останавливать локальные camera/mic треки,
       // из-за чего они становятся readyState='ended' -> пересоздание localStream -> мерцания в блоке "Вы".
@@ -2604,6 +2954,11 @@ export class RandomChatSession extends SimpleEventEmitter {
         tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
         targetRoomName,
         roomState: room.state,
+        sessionId: this.sessionId,
+        myUserId: this.resolveMyUserId(),
+        deviceModel: this.deviceModel,
+        connectSource,
+        reconnectCycleId: this.reconnectCycleId,
       });
       
       await room.connect(url, token, { autoSubscribe: true });
@@ -2623,11 +2978,36 @@ export class RandomChatSession extends SimpleEventEmitter {
         }
         return false;
       }
+      if (!this.started) {
+        this.logReconnectTrace('connect_aborted_not_started_post', {
+          connectSource,
+          connectRequestId,
+          targetRoomName: targetRoomName || null,
+        });
+        await this.safeDisconnect(room);
+        if (this.room === room) {
+          this.room = null;
+          this.currentRoomName = null;
+        }
+        return false;
+      }
       
       logger.info('[RandomChatSession] Successfully connected to LiveKit', {
         roomName: room.name,
         state: room.state,
         targetRoomName,
+        sessionId: this.sessionId,
+        myUserId: this.resolveMyUserId(),
+        deviceModel: this.deviceModel,
+        connectSource,
+        reconnectCycleId: this.reconnectCycleId,
+      });
+      this.roomConnectedAt = Date.now();
+      this.remoteMediaFirstSeenAt = 0;
+      this.logReconnectTrace('connect_success', {
+        connectSource,
+        connectRequestId,
+        roomName: room.name,
       });
       
       // Сохраняем имя подключенной комнаты для проверки переиспользования
@@ -2665,6 +3045,14 @@ export class RandomChatSession extends SimpleEventEmitter {
         roomState: room?.state,
         isInvalidApiKey,
         stack: e?.stack,
+        connectSource,
+        reconnectCycleId: this.reconnectCycleId,
+      });
+      this.logReconnectTrace('connect_error', {
+        connectSource,
+        connectRequestId,
+        targetRoomName: targetRoomName || null,
+        error: errorMessage,
       });
       
       // Если ошибка связана с API ключом, логируем дополнительную информацию
@@ -2700,6 +3088,19 @@ export class RandomChatSession extends SimpleEventEmitter {
 
     if (this.connectRequestId !== connectRequestId || this.room !== room) {
       await this.safeDisconnect(room);
+      return false;
+    }
+    if (!this.started) {
+      await this.safeDisconnect(room);
+      if (this.room === room) {
+        this.room = null;
+        this.currentRoomName = null;
+      }
+      this.logReconnectTrace('connect_aborted_not_started_final', {
+        connectSource,
+        connectRequestId,
+        targetRoomName: targetRoomName || null,
+      });
       return false;
     }
 
@@ -2804,9 +3205,17 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.config.setIsInactiveState?.(false);
     
     return true;
+    } finally {
+      if (!normalizedRoomName || this.connectingRoomName === normalizedRoomName) {
+        this.connectingInProgress = false;
+        this.connectingRoomName = null;
+        this.connectingStartedAt = 0;
+      }
+    }
   }
 
-  private async disconnectRoom(reason: 'user' | 'server' = 'user'): Promise<void> {
+  private async disconnectRoom(reason: 'user' | 'server' = 'user', source = 'unknown'): Promise<void> {
+    this.logReconnectTrace('disconnect_requested', { reason, source });
     // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
     // Если уже идет отключение, возвращаем существующий промис
     if (this.isDisconnecting && this.disconnectPromise) {
@@ -2817,6 +3226,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     const room = this.room;
     if (!room) {
       logger.debug('[RandomChatSession] disconnectRoom: no room to disconnect');
+      this.logReconnectTrace('disconnect_no_room', { reason, source });
       // КРИТИЧНО: Сбрасываем флаги, если комнаты нет
       this.isDisconnecting = false;
       this.disconnectPromise = null;
@@ -2829,6 +3239,11 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (roomState === 'disconnected') {
       logger.debug('[RandomChatSession] disconnectRoom: room already disconnected', { 
         state: roomState 
+      });
+      this.logReconnectTrace('disconnect_already_disconnected', {
+        reason,
+        source,
+        roomState,
       });
       this.room = null;
       this.currentRoomName = null; // Очищаем имя комнаты
@@ -2886,6 +3301,11 @@ export class RandomChatSession extends SimpleEventEmitter {
         logger.debug('[RandomChatSession] Room fully disconnected, cleanup complete', { 
           reason: this.disconnectReason 
         });
+        this.logReconnectTrace('disconnect_completed', {
+          reason,
+          source,
+          finalReason: this.disconnectReason,
+        });
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
@@ -2913,6 +3333,11 @@ export class RandomChatSession extends SimpleEventEmitter {
       timeoutId = setTimeout(() => {
         logger.warn('[RandomChatSession] Disconnect timeout, forcing cleanup', { 
           roomState: roomToDisconnect.state 
+        });
+        this.logReconnectTrace('disconnect_timeout', {
+          reason,
+          source,
+          roomState: roomToDisconnect.state,
         });
         if (resolved) return;
         resolved = true;
@@ -3323,6 +3748,13 @@ export class RandomChatSession extends SimpleEventEmitter {
     });
     
     this.currentRemoteParticipant = participant;
+    if (this.remoteMediaFirstSeenAt === 0) {
+      this.remoteMediaFirstSeenAt = Date.now();
+      this.logReconnectTrace('remote_media_first_seen', {
+        kind: publication.kind,
+        participantId: participant.identity,
+      });
+    }
     
     const isVideoTrack = publication.kind === Track.Kind.Video;
     const oldVideoTrackSid = this.remoteVideoTrack?.sid;

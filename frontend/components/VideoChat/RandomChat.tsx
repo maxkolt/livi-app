@@ -37,7 +37,7 @@ import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
-import { fetchFriends, requestFriend, respondFriend, onFriendRequest, onFriendAdded, onFriendAccepted, onFriendDeclined, updateProfile, onCallIncoming, onCallCanceled, acceptCall, declineCall } from '../../sockets/socket';
+import { fetchFriends, requestFriend, respondFriend, onFriendRequest, onFriendAdded, onFriendAccepted, onFriendDeclined, updateProfile, onCallIncoming, onCallCanceled, acceptCall, declineCall, getCurrentUserId } from '../../sockets/socket';
 import socket from '../../sockets/socket';
 import { syncMyStreamProfile } from '../../chat/cometchat';
 import { loadProfileFromStorage } from '../../utils/profileStorage';
@@ -171,7 +171,12 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // Входящий звонок (когда пользователь в неактивном состоянии)
   const [incomingCall, setIncomingCall] = useState<{ callId: string; from: string; fromNick?: string } | null>(null);
-  const myUserId = route?.params?.myUserId;
+  const myUserId = useMemo(() => {
+    const routeUserId = String(route?.params?.myUserId ?? '').trim();
+    if (routeUserId) return routeUserId;
+    const socketUserId = String(getCurrentUserId?.() ?? '').trim();
+    return socketUserId || undefined;
+  }, [route?.params?.myUserId]);
   
   // Анимации для входящего звонка (как в App.tsx)
   const incomingCallBounce = useRef(new Animated.Value(0)).current;
@@ -388,7 +393,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   // Инициализация session
   useEffect(() => {
     const config: WebRTCSessionConfig = {
-      myUserId: route?.params?.myUserId,
+      myUserId,
       isSimulator: Platform.OS === 'ios' && !(Device as any)?.isDevice,
       callbacks: {
         onLocalStreamChange: (stream) => {
@@ -677,7 +682,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         sessionRef.current = null;
       }
     };
-  }, [route?.params?.myUserId]);
+  }, [myUserId]);
 
   // Network overlay heuristic:
   // If we had remote video before, remote cam is ON, but video is not renderable for a long time,

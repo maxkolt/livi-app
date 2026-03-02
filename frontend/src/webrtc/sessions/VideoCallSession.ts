@@ -30,6 +30,18 @@ const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined)
 // Slightly longer to cover renegotiation bursts during camera flip/restart on Android.
 const REMOTE_CAM_OFF_GRACE_MS = 1400;
 
+function parsePublicFlag(value: string | undefined, fallback: boolean): boolean {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (!v) return fallback;
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+// Safe defaults for 1:1 mobile calls:
+// - dynacast ON gives bandwidth/CPU savings with low behavior risk.
+// - adaptiveStream OFF by default; can be enabled via env after soak testing.
+const LIVEKIT_ADAPTIVE_STREAM_ENABLED = parsePublicFlag(process.env.EXPO_PUBLIC_LIVEKIT_ADAPTIVE_STREAM, false);
+const LIVEKIT_DYNACAST_ENABLED = parsePublicFlag(process.env.EXPO_PUBLIC_LIVEKIT_DYNACAST, true);
+
 type CallAcceptedPayload = {
   callId?: string;
   from?: string;
@@ -3004,10 +3016,14 @@ export class VideoCallSession extends SimpleEventEmitter {
       const simulcast = !!isHighCapture;
       const videoSimulcastLayers = simulcast ? [VideoPresets.h180] : undefined;
 
+      logger.info('[VideoCallSession] LiveKit feature flags', {
+        adaptiveStream: LIVEKIT_ADAPTIVE_STREAM_ENABLED,
+        dynacast: LIVEKIT_DYNACAST_ENABLED,
+      });
+
       const room = new Room({
-        // Отключаем dynacast/adaptiveStream, чтобы LiveKit не мьютил треки и не слал quality updates для "unknown track"
-        adaptiveStream: false,
-        dynacast: false,
+        adaptiveStream: LIVEKIT_ADAPTIVE_STREAM_ENABLED,
+        dynacast: LIVEKIT_DYNACAST_ENABLED,
         ...(rtcConfig ? { rtcConfig } : {}),
         publishDefaults: {
           // Allow higher ceiling on high-capture devices; WebRTC congestion control will still scale down.
@@ -4285,6 +4301,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     }
     
+    let shouldRemountRemoteView = false;
+
     if (publication.kind === Track.Kind.Audio) {
       this.remoteAudioTrack = track;
       // КРИТИЧНО: гарантируем слышимость аудио (иногда track приходит disabled/muted после reconnect)
@@ -4303,7 +4321,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       } catch {}
     } else if (publication.kind === Track.Kind.Video) {
-      const wasMutedStateChanged = this.remoteVideoTrack && (this.remoteVideoTrack.isMuted !== track.isMuted);
+      const prevVideoTrack = this.remoteVideoTrack;
+      const wasMutedStateChanged = !!prevVideoTrack && (prevVideoTrack.isMuted !== track.isMuted);
       this.remoteVideoTrack = track;
       this.lastUnsubscribedRemoteVideoTrackSid = null;
       // A new video track arriving usually means "camera is on".
@@ -4316,13 +4335,13 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.scheduleRemoteCamOff('TrackSubscribedMuted');
       }
       
-      // КРИТИЧНО: Если состояние muted изменилось, обновляем remoteViewKey
-      if (wasMutedStateChanged) {
+      const isFirstVideoTrack = !oldVideoTrackSid;
+      if (isFirstVideoTrack || wasVideoTrackChanged || wasMutedStateChanged) {
         logger.debug('[VideoCallSession] Video track muted state changed', {
-          wasMuted: this.remoteVideoTrack?.isMuted,
+          wasMuted: prevVideoTrack?.isMuted,
           isMuted: track.isMuted,
         });
-        this.remoteViewKey = Date.now();
+        shouldRemountRemoteView = true;
       }
       
       if (!track.isMuted) {
@@ -4331,13 +4350,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     }
     
-    // КРИТИЧНО: Всегда эмитим remoteStream даже если трек уже был добавлен
-    // Это гарантирует обновление UI при изменении треков
-    // КРИТИЧНО: Обновляем remoteViewKey при каждом изменении треков для принудительного обновления RTCView
-    // Для видео трека обновляем ключ более агрессивно, особенно если трек изменился
-    if (isVideoTrack) {
-      // Для видео трека всегда обновляем ключ, чтобы гарантировать обновление RTCView
-      // Это особенно важно при первом получении видео трека или при смене трека
+    // Всегда эмитим remoteStream для обновления UI/аудио, но remount RTCView делаем только при необходимости.
+    if (isVideoTrack && shouldRemountRemoteView) {
       this.remoteViewKey = Date.now();
       logger.debug('[VideoCallSession] Updated remoteViewKey for video track', {
         remoteViewKey: this.remoteViewKey,
@@ -4347,11 +4361,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         trackReady: track.mediaStreamTrack?.readyState,
         trackMuted: track.isMuted,
       });
-    } else if (publication.kind === Track.Kind.Audio) {
-      // КРИТИЧНО: Для аудио трека тоже обновляем ключ, даже если видео уже есть.
-      // Иначе remoteStream остается тем же объектом (мы его переиспользуем), React может не перерендерить,
-      // и эффекты (audio routing / включение audio tracks) не сработают → "не слышно звук".
-      this.remoteViewKey = Date.now();
     }
     
     // КРИТИЧНО: Эмитим события в правильном порядке - сначала remoteViewKeyChanged, потом remoteStream
