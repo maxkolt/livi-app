@@ -1,5 +1,5 @@
 // screens/ChatScreen.tsx
-import React, { useEffect, useState, useRef } from "react";
+import React, { useCallback, useEffect, useState, useRef } from "react";
 import {
   BackHandler,
   View,
@@ -29,7 +29,7 @@ import {
 } from "react-native";
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
-import { PanGestureHandler, State, GestureHandlerRootView } from "react-native-gesture-handler";
+import { PanGestureHandler, PinchGestureHandler, State, GestureHandlerRootView } from "react-native-gesture-handler";
 import { onCloseIncoming, emitCloseIncoming } from '../utils/globalEvents';
 import socket from '../sockets/socket';
 import { Ionicons } from "@expo/vector-icons";
@@ -40,6 +40,8 @@ import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { Audio } from 'expo-av';
 import { getFull, putFull, putThumb } from '../utils/avatarCache';
+import { BlurView } from 'expo-blur';
+import { getAvatarImageProps } from '../utils/imageOptimization';
  
 import { API_BASE, getMyProfile } from '../sockets/socket';
 import { logger } from '../utils/logger';
@@ -885,6 +887,58 @@ export default function ChatScreen({ route, navigation }: Props) {
       cancelled = true;
     };
   }, [peerId, peerAvatarVerState]);
+
+  /* Модалка аватара собеседника в шапке чата: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom */
+  const [avatarModalVisible, setAvatarModalVisible] = useState(false);
+  const [modalAvatarUri, setModalAvatarUri] = useState<string>('');
+  const avatarModalPinchScale = useRef(new Animated.Value(1)).current;
+  const avatarModalBaseScale = useRef(new Animated.Value(1)).current;
+  const avatarModalLastScale = useRef(1);
+
+  useEffect(() => {
+    if (!avatarModalVisible) return;
+    setModalAvatarUri(fullAvatarUri || '');
+    if (peerId && peerAvatarVerState > 0) {
+      getFull(peerId, peerAvatarVerState).then((fullUri) => {
+        if (fullUri) setModalAvatarUri(fullUri);
+      }).catch(() => {});
+    }
+    avatarModalPinchScale.setValue(1);
+    avatarModalBaseScale.setValue(1);
+    avatarModalLastScale.current = 1;
+  }, [avatarModalVisible, fullAvatarUri, peerId, peerAvatarVerState, avatarModalPinchScale, avatarModalBaseScale]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!avatarModalVisible) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setAvatarModalVisible(false);
+      return true;
+    });
+    return () => sub.remove();
+  }, [avatarModalVisible]);
+
+  const avatarModalSize = (() => {
+    const { width: sw, height: sh } = Dimensions.get('window');
+    const base = Platform.OS === 'ios' ? 136 : 120;
+    return Math.min(base * 3, Math.floor(0.9 * Math.min(sw, sh)));
+  })();
+  const avatarModalScale = Animated.multiply(avatarModalBaseScale, avatarModalPinchScale);
+  const clampAvatarModal = (v: number, min: number, max: number) => Math.max(min, Math.min(v, max));
+  const onAvatarModalPinchEvent = Animated.event([{ nativeEvent: { scale: avatarModalPinchScale } }], { useNativeDriver: false });
+  const onAvatarModalPinchStateChange = useCallback((e: any) => {
+    if (e.nativeEvent.oldState === State.ACTIVE) {
+      const next = clampAvatarModal(avatarModalLastScale.current * e.nativeEvent.scale, 1, 6);
+      avatarModalLastScale.current = next;
+      avatarModalBaseScale.setValue(next);
+      avatarModalPinchScale.setValue(1);
+    }
+  }, [avatarModalBaseScale, avatarModalPinchScale]);
+
+  const openAvatarModal = useCallback(() => {
+    setModalAvatarUri(fullAvatarUri || '');
+    setAvatarModalVisible(true);
+  }, [fullAvatarUri]);
 
   // Функция для открытия медиа в полноэкранном режиме
   const openMediaViewer = React.useCallback((type: 'image', uri: string, name?: string) => {
@@ -2657,24 +2711,26 @@ export default function ChatScreen({ route, navigation }: Props) {
           </TouchableOpacity>
         </View>
       ) : (
-        <AvatarImage
-          userId={peerId}
-          avatarVer={peerAvatarVerState}
-          uri={fullAvatarUri || undefined}
-          size={36}
-          fallbackText={headerInitial}
-          fallbackTextStyle={{ color: LIVI.titan }}
-          // If no avatar: match back button background + 1px outline
-          containerStyle={
-            fullAvatarUri
-              ? undefined
-              : {
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.06)',
-                  borderWidth: 1,
-                  borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
-                }
-          }
-        />
+        <TouchableOpacity onPress={openAvatarModal} activeOpacity={0.8}>
+          <AvatarImage
+            userId={peerId}
+            avatarVer={peerAvatarVerState}
+            uri={fullAvatarUri || undefined}
+            size={36}
+            fallbackText={headerInitial}
+            fallbackTextStyle={{ color: LIVI.titan }}
+            // If no avatar: match back button background + 1px outline
+            containerStyle={
+              fullAvatarUri
+                ? undefined
+                : {
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.06)',
+                    borderWidth: 1,
+                    borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
+                  }
+            }
+          />
+        </TouchableOpacity>
       )}
     </View>
   ), [
@@ -2696,6 +2752,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     peerAvatarVerState,
     fullAvatarUri,
     headerInitial,
+    openAvatarModal,
     selectionMode,
     selectedCount,
     exitSelectionMode,
@@ -4197,7 +4254,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       <View
         style={{ flex: 1, backgroundColor: LIVI.surface }}
         // Prevent touch-through during modal close animations (can trigger header back -> Home -> Chat flicker)
-        pointerEvents={mediaViewerVisible || composeViewerVisible ? 'none' : 'auto'}
+        pointerEvents={mediaViewerVisible || composeViewerVisible || avatarModalVisible ? 'none' : 'auto'}
         onLayout={(e) => {
           const h = e.nativeEvent.layout.height;
           setRootLayoutH(h);
@@ -4723,6 +4780,49 @@ export default function ChatScreen({ route, navigation }: Props) {
           </View>)
         )}
       </View>
+      {/* Модалка аватара собеседника: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom */}
+      {avatarModalVisible && (
+        <View style={[StyleSheet.absoluteFill, { zIndex: 1000 }]} pointerEvents="box-none">
+          {Platform.OS === 'ios' ? (
+            <>
+              <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.2)' }]} />
+            </>
+          ) : (
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,1.0)' }]} />
+          )}
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setAvatarModalVisible(false)} />
+          <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]} pointerEvents="box-none">
+            <PinchGestureHandler onGestureEvent={onAvatarModalPinchEvent} onHandlerStateChange={onAvatarModalPinchStateChange}>
+              <Animated.View
+                style={[
+                  {
+                    width: avatarModalSize,
+                    height: avatarModalSize,
+                    borderRadius: avatarModalSize / 2,
+                    overflow: 'hidden' as const,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transform: [{ scale: avatarModalScale }],
+                  },
+                ]}
+              >
+                {modalAvatarUri ? (
+                  <ExpoImage
+                    {...getAvatarImageProps(modalAvatarUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
+                    style={{ width: avatarModalSize, height: avatarModalSize }}
+                  />
+                ) : (
+                  <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</Text>
+                  </View>
+                )}
+              </Animated.View>
+            </PinchGestureHandler>
+          </View>
+        </View>
+      )}
+
       {/* Полноэкранный просмотр медиа */}
       <MediaViewer
         visible={mediaViewerVisible}
