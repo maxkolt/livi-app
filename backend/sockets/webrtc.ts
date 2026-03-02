@@ -292,8 +292,12 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
 }
 
 /**
- * Очистка при отключении сокета: busy, presence, уведомление комнат "disconnected".
+ * Очистка при отключении сокета: уведомление комнат "disconnected".
  * Вызывается из единого обработчика disconnect в index.ts, чтобы не дублировать логику.
+ *
+ * КРИТИЧНО: Не сбрасываем busy и не рассылаем presence:update(busy: false) при дисконнекте.
+ * Иначе при обрыве связи друзья видят пользователя как "не занят" и могут позвонить в активную комнату.
+ * busy снимается только при завершении звонка (call:end в index.ts).
  */
 export async function onSocketDisconnectWebRTC(io: Server, socket: AuthedSocket): Promise<void> {
   logger.debug('Socket disconnected (webrtc cleanup)', { socketId: socket.id });
@@ -301,22 +305,10 @@ export async function onSocketDisconnectWebRTC(io: Server, socket: AuthedSocket)
     socket.data.isNexting = false;
     return;
   }
-  const disconnectedUserId = socket.data?.userId;
-  if (socket.data) socket.data.busy = false;
-  if (disconnectedUserId) await emitPresenceUpdateToFriends(io, disconnectedUserId, false);
   for (const roomId of socket.rooms) {
     if (!roomId.startsWith("room_")) continue;
     const room = io.sockets.adapter.rooms.get(roomId);
     if (!room || room.size === 0) continue;
-    for (const peerId of room) {
-      const peerSocket = io.sockets.sockets.get(peerId) as AuthedSocket;
-      if (peerSocket) {
-        peerSocket.data = peerSocket.data || {};
-        peerSocket.data.busy = false;
-        const peerUserId = peerSocket.data?.userId;
-        if (peerUserId) await emitPresenceUpdateToFriends(io, peerUserId, false);
-      }
-    }
     io.to(roomId).emit("disconnected");
     logger.debug('Sent disconnected to room', { roomId });
   }

@@ -699,6 +699,42 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   async restartLocalCamera(): Promise<void> {
+    // Та же логика, что и в Random Chat: replaceTrack в месте публикации уменьшает renegotiation
+    // и предотвращает пропадание видео собеседника при перевороте камеры.
+    if (this.room && this.room.state === 'connected' && this.room.localParticipant && this.localVideoTrack) {
+      const oldVideoTrack = this.localVideoTrack;
+      try {
+        const newVideoTrack = await this.createFreshLocalVideoTrack('restartLocalCamera');
+        this.swapLocalVideoTrack(newVideoTrack);
+        await this.replacePublishedVideoTrack(newVideoTrack, oldVideoTrack);
+        if (oldVideoTrack && oldVideoTrack !== newVideoTrack) {
+          try {
+            if (oldVideoTrack.mediaStreamTrack) {
+              oldVideoTrack.mediaStreamTrack.enabled = false;
+            }
+            oldVideoTrack.mute().catch(() => {});
+          } catch {}
+          try {
+            oldVideoTrack.stop();
+          } catch {}
+        }
+        logger.info('[VideoCallSession] Camera restarted via replaceTrack path');
+      } catch (e) {
+        logger.warn('[VideoCallSession] replaceTrack path failed, falling back to recreateLocalVideoTrack', {
+          error: (e as any)?.message || String(e || ''),
+        });
+        await this.restartLocalCameraRecreatePath();
+      }
+      return;
+    }
+
+    await this.restartLocalCameraRecreatePath();
+  }
+
+  /**
+   * Original path: unpublish + stop + create + publish. Used when room is not connected or replace path fails.
+   */
+  private async restartLocalCameraRecreatePath(): Promise<void> {
     try {
       await this.recreateLocalVideoTrack('restartLocalCamera');
     } catch (e) {
@@ -707,13 +743,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       throw e;
     }
-    // КРИТИЧНО: Проверяем состояние комнаты перед публикацией
     if (this.room && this.room.state === 'connected' && this.room.localParticipant && this.localVideoTrack) {
       try {
-        // КРИТИЧНО:
-        // Пересоздаём ТОЛЬКО видео трек (аудио не трогаем), чтобы избежать one-way audio.
-
-        // 1) Видео: удаляем старые camera-публикации и публикуем новый трек (best-effort).
         if (!this.isVideoTrackPublished(this.localVideoTrack)) {
           await this.unpublishOtherLocalTracks('video', this.localVideoTrack);
           await this.room.localParticipant.publishTrack(this.localVideoTrack).catch((e) => {
@@ -734,8 +765,6 @@ export class VideoCallSession extends SimpleEventEmitter {
             trackId: this.localVideoTrack.sid || this.localVideoTrack.mediaStreamTrack?.id,
           });
         }
-
-        // 2) Аудио: если микрофон включен, убеждаемся что текущий audio track тоже опубликован.
         if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
           await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
           await this.room.localParticipant.publishTrack(this.localAudioTrack).catch((e) => {
@@ -752,8 +781,7 @@ export class VideoCallSession extends SimpleEventEmitter {
             throw e;
           });
         }
-
-        logger.info('[VideoCallSession] Camera restarted and republished');
+        logger.info('[VideoCallSession] Camera restarted and republished (recreate path)');
       } catch (e) {
         logger.warn('[VideoCallSession] Failed to republish camera after restart', e);
       }
@@ -1890,6 +1918,135 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.localVideoTrack = null;
   }
 
+  /**
+   * Creates a new local video track with current camSide without changing room state.
+   * Used by restartLocalCamera (flip) to support replaceTrack flow (same as Random Chat).
+   */
+  private async createFreshLocalVideoTrack(context: string): Promise<LocalVideoTrack> {
+    const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+    const preferred = getPreferredVideoCaptureOptions(facingMode);
+    logger.info('[VideoCallSession] Creating fresh local video track', { context, preferred: preferred.meta, camSide: this.camSide });
+
+    const tryCreate = async (opts: any) => createLocalTracks(opts);
+    let tracks: LocalTrack[] = [];
+    try {
+      tracks = await tryCreate({ audio: false, video: preferred.primary });
+    } catch (e1) {
+      try {
+        tracks = await tryCreate({ audio: false, video: preferred.fallback || preferred.primary });
+      } catch (e2) {
+        logger.warn('[VideoCallSession] Video-only createLocalTracks failed; falling back to audio+video create', {
+          context,
+          preferred: preferred.meta,
+          e1: (e1 as any)?.message || String(e1),
+          e2: (e2 as any)?.message || String(e2),
+        });
+        try {
+          tracks = await tryCreate({ audio: true, video: preferred.primary });
+        } catch (e3) {
+          tracks = await tryCreate({ audio: true, video: preferred.fallback || preferred.primary });
+        }
+      }
+    }
+
+    const newVideo = tracks.find((t) => t.kind === Track.Kind.Video) as LocalVideoTrack | undefined;
+    if (!newVideo) {
+      throw new Error('createLocalTracks(...) did not return a video track');
+    }
+
+    const createdAudio = tracks.find((t) => t.kind === Track.Kind.Audio) as LocalAudioTrack | undefined;
+    if (createdAudio) {
+      try {
+        createdAudio.stop();
+      } catch {}
+    }
+
+    try {
+      if (newVideo.mediaStreamTrack) {
+        newVideo.mediaStreamTrack.enabled = this.isCamOn;
+        if (this.isCamOn) await newVideo.unmute().catch(() => {});
+        else await newVideo.mute().catch(() => {});
+      }
+    } catch {}
+
+    return newVideo;
+  }
+
+  /**
+   * Updates local state with new video track and emits new localStream (new stream id for UI refresh).
+   * Does not stop the old track; caller must stop it after replacePublishedVideoTrack.
+   */
+  private swapLocalVideoTrack(newVideoTrack: LocalVideoTrack): void {
+    const prevTrackId = this.localVideoTrack?.mediaStreamTrack?.id;
+    this.localVideoTrack = newVideoTrack;
+
+    const stream = new MediaStream();
+    try {
+      const mt = this.localVideoTrack.mediaStreamTrack;
+      if (mt) stream.addTrack(mt as any);
+    } catch {}
+    try {
+      const at = this.localAudioTrack?.mediaStreamTrack;
+      if (at) stream.addTrack(at as any);
+    } catch {}
+    this.localStream = stream;
+    this.emit('localStream', stream);
+    this.config.callbacks.onLocalStreamChange?.(stream);
+    this.config.onLocalStreamChange?.(stream);
+
+    logger.info('[VideoCallSession] Local video track swapped', {
+      prevTrackId,
+      newTrackId: newVideoTrack?.mediaStreamTrack?.id,
+    });
+  }
+
+  /**
+   * Replaces the published video track in place when replaceTrack is available (same as Random Chat).
+   * Reduces renegotiation and avoids remote video disappearing on the other side during flip.
+   */
+  private async replacePublishedVideoTrack(
+    newVideoTrack: LocalVideoTrack,
+    oldVideoTrack: LocalVideoTrack | null,
+  ): Promise<void> {
+    if (!this.room || this.room.state !== 'connected' || !this.room.localParticipant) return;
+    const publication = this.getLocalVideoPublication();
+    try {
+      if (publication?.replaceTrack) {
+        await (publication as any).replaceTrack(newVideoTrack, true);
+        logger.info('[VideoCallSession] Replaced published video track (replaceTrack)', {
+          oldTrackId: oldVideoTrack?.sid || oldVideoTrack?.mediaStreamTrack?.id,
+          newTrackId: newVideoTrack?.sid || newVideoTrack?.mediaStreamTrack?.id,
+        });
+      } else {
+        await this.unpublishOtherLocalTracks('video', newVideoTrack);
+        await this.room.localParticipant.publishTrack(newVideoTrack).catch((e) => {
+          const errorMsg = e?.message || String(e || '');
+          if (
+            errorMsg.includes('already') ||
+            errorMsg.includes('duplicate') ||
+            errorMsg.includes('closed') ||
+            errorMsg.includes('disconnected')
+          ) {
+            logger.debug('[VideoCallSession] Ignoring publish error (already/closed)', { error: errorMsg });
+            return;
+          }
+          throw e;
+        });
+        logger.info('[VideoCallSession] Replaced published video track (unpublish+publish fallback)', {
+          oldTrackId: oldVideoTrack?.sid || oldVideoTrack?.mediaStreamTrack?.id,
+          newTrackId: newVideoTrack?.sid || newVideoTrack?.mediaStreamTrack?.id,
+        });
+      }
+      if (this.localAudioTrack && this.isMicOn && !this.isAudioTrackPublished(this.localAudioTrack)) {
+        await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
+        await this.room.localParticipant.publishTrack(this.localAudioTrack).catch(() => {});
+      }
+    } catch (e) {
+      logger.warn('[VideoCallSession] Failed to replace/publish video track', e);
+      throw e;
+    }
+  }
+
   private async recreateLocalVideoTrack(context: string): Promise<void> {
     // IMPORTANT: Do not touch localAudioTrack here. Recreating audio during camera recovery
     // is a common root cause of one-way / unstable audio on Android.
@@ -2511,6 +2668,29 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     
     return false;
+  }
+
+  /**
+   * Returns the current local video publication (first camera track) for replaceTrack flow.
+   * Same logic as RandomChatSession.getLocalVideoPublication.
+   */
+  private getLocalVideoPublication(): { replaceTrack?: (track: LocalVideoTrack, stopProcessor?: boolean) => Promise<void>; track?: LocalVideoTrack } | null {
+    if (!this.room || !this.room.localParticipant) return null;
+    const publications = this.room.localParticipant.videoTrackPublications;
+    if (!publications) return null;
+    try {
+      if (typeof (publications as any).values === 'function') {
+        for (const pub of (publications as any).values()) {
+          return pub || null;
+        }
+      } else if (Array.isArray(publications)) {
+        return (publications as any)[0] || null;
+      } else if (typeof publications === 'object') {
+        const vals = Object.values(publications as any);
+        return (vals?.[0] as any) || null;
+      }
+    } catch {}
+    return null;
   }
 
   private resetRemoteState(): void {
@@ -3958,14 +4138,14 @@ export class VideoCallSession extends SimpleEventEmitter {
           isDisconnecting: this.isDisconnecting,
           hasDisconnectPromise: !!this.disconnectPromise
         });
-        // Если отключение не мы инициировали (собеседник вышел / сеть) — закрываем системный PiP и завершаем звонок.
-        // Устройство в PiP часто не получает call:ended из-за отключённого сокета.
+        // Если отключение не мы инициировали (обрыв связи / сеть) — только закрываем системный PiP.
+        // НЕ вызываем handleCallEnded(): иначе у пользователя сбросится busy и друзья увидят его как свободного,
+        // хотя звонок ещё не завершён. Завершение — только по call:ended с сервера или по нажатию «Завершить».
         if (!this.disconnectPromise && !this.ended) {
           this.clearPendingRemoteDisconnectTimer();
           if (Platform.OS === 'android') {
             try { (NativeModules as any)?.LiviAppModule?.requestExitSystemPiP?.(); } catch {}
           }
-          this.handleCallEnded();
         }
         // Флаги будут сброшены в disconnectRoom через промис, если он активен
         if (!this.disconnectPromise) {

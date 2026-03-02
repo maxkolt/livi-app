@@ -1117,12 +1117,19 @@ function AppContent() {
           });
           logger.debug('Keep-awake deactivated (app background)');
         }
-        // Для Android деактивируем setKeepScreenOn
+        // Для Android деактивируем setKeepScreenOn и InCallManager только если НЕ в PiP.
+        // В системном PiP звук звонка должен оставаться громким — InCallManager.stop() сбрасывает аудио-сессию и делает звук тихим.
         if (Platform.OS === 'android') {
           try {
-            (InCallManager as any).setKeepScreenOn?.(false);
-            InCallManager.stop();
-            logger.debug('[App] setKeepScreenOn(false) deactivated for Android');
+            const g = (global as any);
+            const inPiP = g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
+            if (!inPiP) {
+              (InCallManager as any).setKeepScreenOn?.(false);
+              InCallManager.stop();
+              logger.debug('[App] setKeepScreenOn(false) deactivated for Android');
+            } else {
+              logger.debug('[App] Skip InCallManager.stop() in background — PiP active, keep call audio');
+            }
           } catch (e) {
             logger.warn('[App] Failed to setKeepScreenOn(false) on Android:', e);
           }

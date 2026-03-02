@@ -36,7 +36,7 @@ import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { usePiP } from '../../src/pip/PiPContext';
-import socket, { fetchFriends, getCurrentUserId, setActiveVideoCall } from '../../sockets/socket';
+import socket, { fetchFriends, getCurrentUserId, setActiveVideoCall, onConnected } from '../../sockets/socket';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/keepAwake';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
@@ -689,6 +689,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         logger.warn('[VideoCall] Error sending presence:update online:', e);
       }
     }
+  }, [roomId, callId, partnerId, isInactiveState]);
+  
+  // При реконнекте сокета сервер может сбросить busy — переотправляем busy, если мы всё ещё в звонке
+  useEffect(() => {
+    const off = onConnected(() => {
+      const hasActiveCall = (!!roomId || !!callId || !!partnerId) && !isInactiveState;
+      if (hasActiveCall) {
+        try {
+          socket.emit('presence:update', { status: 'busy', roomId: roomId || callId || undefined });
+        } catch (e) {
+          logger.warn('[VideoCall] Error re-sending presence:update busy on connect', e);
+        }
+      }
+    });
+    return () => { try { off?.(); } catch {} };
   }, [roomId, callId, partnerId, isInactiveState]);
   
   // Используем функции из хука входящих звонков

@@ -2169,9 +2169,10 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
     unbindUser(sock);
     emitPresence(io);
-    // Удаляем из очереди random и снимаем занятость
+    // Удаляем из очереди random
     await removeFromWaitingQueue(sock.id);
-    await setRandomBusy(String(userId || ''), false);
+    // НЕ вызываем setRandomBusy(userId, false): busy снимается только при завершении звонка (call:end),
+    // иначе при обрыве связи друзья увидят пользователя как «не занят» и смогут позвонить в активную комнату.
     
     // Очищаем дружеские комнаты при дисконнекте
     if (userId) {
