@@ -33,6 +33,7 @@ import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl, isAllowedParticipant } from './routes/livekit';
 import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallDeclinedToCaller, sendCallAcceptedToCaller } from './utils/push';
 import * as queueStore from './utils/queueStore';
+import * as capacityMetrics from './utils/capacityMetrics';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 import { onSocketDisconnectWebRTC } from './sockets/webrtc';
 
@@ -247,6 +248,36 @@ app.use((req, _res, next) => {
 /* ========= Базовые маршруты ========= */
 app.get('/', (_req, res) => res.send('🚀 Сервер работает!'));
 app.get('/health', (_req, res) => res.json({ ok: true, mongo: mongoose.connection.readyState }));
+
+// Capacity Stage A: только при CAPACITY_METRICS_ENABLED=1 (staging). В проде — 404.
+app.get('/metrics', (_req, res) => {
+  if (!capacityMetrics.isCapacityMetricsEnabled()) return res.status(404).end();
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.send(capacityMetrics.getPrometheusText());
+});
+
+app.get('/api/capacity/stats', (_req, res) => {
+  if (!capacityMetrics.isCapacityMetricsEnabled()) return res.status(404).end();
+  res.json(capacityMetrics.getStats());
+});
+
+app.post('/api/capacity/client-metrics', express.json(), (req, res) => {
+  if (!capacityMetrics.isCapacityMetricsEnabled()) return res.status(404).end();
+  try {
+    const body = req.body || {};
+    capacityMetrics.recordClientMetrics({
+      joinTimeMs: typeof body.joinTimeMs === 'number' ? body.joinTimeMs : undefined,
+      rttMs: typeof body.rttMs === 'number' ? body.rttMs : undefined,
+      packetLoss: typeof body.packetLoss === 'number' ? body.packetLoss : undefined,
+      reconnect: !!body.reconnect,
+      joinSuccess: !!body.joinSuccess,
+      joinFailure: !!body.joinFailure,
+    });
+    res.json({ ok: true });
+  } catch {
+    res.status(400).json({ ok: false });
+  }
+});
 
 /* ========= Static files ========= */
 app.use('/uploads', express.static(path.join(PUBLIC_DIR, 'uploads')));

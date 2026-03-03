@@ -58,6 +58,12 @@ const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EX
 
 export const API_BASE = (Platform.OS === 'android' ? ANDROID_URL : IOS_URL).replace(/\/+$/, '');
 
+// Лог при загрузке модуля: для проверки staging (API и LiveKit в настройках)
+if (__DEV__ || (API_BASE && API_BASE.includes('staging'))) {
+  const lk = (process.env.EXPO_PUBLIC_LIVEKIT_URL || '').trim();
+  console.log('[socket] API_BASE=', API_BASE, 'EXPO_PUBLIC_LIVEKIT_URL=', lk || '—');
+}
+
 /* ========= helpers ========= */
 const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(s);
 
@@ -422,7 +428,7 @@ try {
 /* ========= logging ========= */
 socket.on("connect", async () => {
   reconnecting = false;
-  console.log(`[socket] connected ${socket.id}`);
+  console.log(`[socket] connected ${socket.id} (API: ${API_BASE})`);
   // If we connected with installId in auth, handshake is considered valid.
   try {
     // @ts-ignore

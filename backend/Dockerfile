@@ -2,8 +2,8 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Системные зависимости
-RUN apk add --no-cache bash
+# Системные зависимости (curl для healthcheck)
+RUN apk add --no-cache bash curl
 
 # Зависимости
 COPY package*.json ./

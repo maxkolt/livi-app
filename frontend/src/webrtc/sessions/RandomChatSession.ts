@@ -18,8 +18,9 @@ import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, CamSide } from '../types';
-import socket, { getCurrentUserId } from '../../../sockets/socket';
+import socket, { API_BASE, getCurrentUserId } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
+import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 
@@ -953,7 +954,8 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.config.onRoomIdChange?.(roomId);
     }
 
-    const resolvedLivekitUrl = (data.livekitUrl || LIVEKIT_URL || '').trim();
+    // Staging: prefer env EXPO_PUBLIC_LIVEKIT_URL so staging build always uses livekit.staging
+    const resolvedLivekitUrl = (LIVEKIT_URL || data.livekitUrl || '').trim();
     if (!resolvedLivekitUrl) {
       logger.error('[RandomChatSession] LiveKit URL is not configured', {
         envVar: 'EXPO_PUBLIC_LIVEKIT_URL',
@@ -2960,7 +2962,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         connectSource,
         reconnectCycleId: this.reconnectCycleId,
       });
-      
+      const connectStartTime = Date.now();
       await room.connect(url, token, { autoSubscribe: true });
       
       // КРИТИЧНО: Проверяем состояние после подключения
@@ -3004,12 +3006,17 @@ export class RandomChatSession extends SimpleEventEmitter {
       });
       this.roomConnectedAt = Date.now();
       this.remoteMediaFirstSeenAt = 0;
+      const joinTimeMs = this.roomConnectedAt - connectStartTime;
       this.logReconnectTrace('connect_success', {
         connectSource,
         connectRequestId,
         roomName: room.name,
       });
-      
+      sendClientMetrics(API_BASE, {
+        joinTimeMs,
+        joinSuccess: true,
+        reconnect: this.reconnectCycleId > 0,
+      }).catch(() => {});
       // Сохраняем имя подключенной комнаты для проверки переиспользования
       this.currentRoomName = room.name || targetRoomName || null;
       logger.debug('[RandomChatSession] Room connected, saved room name', {
@@ -3048,6 +3055,10 @@ export class RandomChatSession extends SimpleEventEmitter {
         connectSource,
         reconnectCycleId: this.reconnectCycleId,
       });
+      sendClientMetrics(API_BASE, {
+        joinFailure: true,
+        reconnect: this.reconnectCycleId > 0,
+      }).catch(() => {});
       this.logReconnectTrace('connect_error', {
         connectSource,
         connectRequestId,

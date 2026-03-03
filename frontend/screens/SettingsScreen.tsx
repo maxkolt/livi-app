@@ -22,6 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
 const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
 const API_BASE = (Platform.OS === 'android' ? ANDROID_URL : DEFAULT_URL).replace(/\/+$/, '');
+const LIVEKIT_URL_DISPLAY = (process.env.EXPO_PUBLIC_LIVEKIT_URL || '').trim() || '—';
 
 const isHttp = (u?: string) => !!u && /^https?:\/\//i.test(String(u || ''));
 const isLocalUri = (u?: string) =>
@@ -567,6 +568,11 @@ export default function SettingsScreen() {
           </Text>
         </TouchableOpacity>
       )}
+      {/* Staging/debug: показать API и LiveKit URL для проверки сборки */}
+      <View style={{ marginHorizontal: 20, marginBottom: 24, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
+        <Text style={{ color: '#8A8F99', fontSize: 11, marginBottom: 4 }}>API: {API_BASE || '—'}</Text>
+        <Text style={{ color: '#8A8F99', fontSize: 11 }}>LiveKit: {LIVEKIT_URL_DISPLAY}</Text>
+      </View>
     </SafeAreaView>
   );
 }

@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { AccessToken } from 'livekit-server-sdk';
 import { logger } from '../utils/logger';
+import { recordTokenSuccess, recordTokenFailure } from '../utils/capacityMetrics';
 
 const router = Router();
 
@@ -77,6 +78,7 @@ export async function createToken({ identity, roomName }: { identity: string; ro
     at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
 
     const token = await at.toJwt();
+    recordTokenSuccess();
     logger.debug('[LiveKit] Token created successfully', { identity, roomName, tokenLength: token.length });
     return token;
   } catch (e: any) {
@@ -105,6 +107,7 @@ router.post('/livekit/token', async (req, res) => {
 
     res.json({ ok: true, token, url: LIVEKIT_URL });
   } catch (e: any) {
+    recordTokenFailure();
     logger.error('LiveKit token creation failed:', e);
     res.status(500).json({ ok: false, error: e?.message || 'server_error' });
   }

@@ -1,0 +1,36 @@
+# Пример правил алертов для Capacity Stage A.
+# Импортируйте в Prometheus/Grafana или используйте как референс порогов.
+# Backend метрики: GET /metrics (livi_*).
+
+groups:
+  - name: livi-capacity-stage-a
+    rules:
+      # CPU SFU > 70% (настройте job/labels под ваш экспорт LiveKit)
+      - alert: SFUHighCPU
+        expr: process_cpu_seconds_total > 0.7
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SFU CPU > 70%"
+          description: "SFU node {{ $labels.instance }} CPU sustained > 70%."
+
+      # P95 packet loss из бэкенда (клиентские отчёты)
+      - alert: HighPacketLoss
+        expr: livi_packet_loss_p95 > 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 packet loss > 3%"
+          description: "App-reported P95 packet loss is {{ $value }}%."
+
+      # Join failures > 0.5% (livi_* из GET /metrics)
+      - alert: HighJoinFailureRate
+        expr: |
+          (livi_join_failures_total / (livi_join_success_total + livi_join_failures_total + 1)) * 100 > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Join failure rate > 0.5%"

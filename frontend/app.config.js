@@ -16,7 +16,8 @@ const expo = { ...(appJson.expo || {}) };
 
 if (isDevVariant) {
   expo.name = expo.name ? `${expo.name} Dev` : "LiVi Dev";
-  expo.slug = expo.slug ? `${expo.slug}-dev` : "livi-video-chat-dev";
+  // Не меняем slug — EAS проект привязан к slug из app.json; иначе "slug does not match".
+  // Отличие dev-сборки: name "LiVi Dev", package com.kolt12max.livi.dev.
 
   expo.android = { ...(expo.android || {}) };
   expo.android.package = "com.kolt12max.livi.dev";

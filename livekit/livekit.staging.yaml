@@ -1,0 +1,7 @@
+# LiveKit staging (3 ноды за nginx). Ключи — из livekit/.env.staging (LIVEKIT_KEYS).
+port: 7880
+rtc:
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: false
+# Ключи задаются через env LIVEKIT_KEYS (формат "api_key: api_secret") — см. .env.staging.example

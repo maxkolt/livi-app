@@ -11,6 +11,8 @@
     "start:usb:second": "node ./scripts/adb-reverse-second-device.js 8081 && EXPO_PACKAGER_HOSTNAME=127.0.0.1 REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 expo start --dev-client --host localhost --port 8081",
     "start:tunnel": "expo start --dev-client --tunnel --port 8081",
     "start:tunnel:clean": "expo start --dev-client --tunnel --port 8081 -c",
+    "start:staging": "node ./scripts/run-with-env.js .env.development npx expo start --dev-client",
+    "start:usb:staging": "node ./scripts/adb-reverse-usb.js 8081 && EXPO_PACKAGER_HOSTNAME=127.0.0.1 REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 node ./scripts/run-with-env.js .env.development npx expo start --dev-client --host localhost --port 8081",
     "start": "expo start",
     "android": "expo run:android",
     "android:install": "adb install -r android/app/build/outputs/apk/debug/app-debug.apk",

@@ -18,8 +18,9 @@ import {
 } from 'livekit-client';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, CamSide } from '../types';
-import socket, { setActiveVideoCall } from '../../../sockets/socket';
+import socket, { API_BASE, setActiveVideoCall } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
+import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 
@@ -314,7 +315,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       
       if (tokenData.ok && tokenData.token) {
-        const resolvedLivekitUrl = ((tokenData.url as string | undefined) || envLivekitUrl || LIVEKIT_URL || '').trim();
+        // Staging: prefer env so staging build always uses livekit.staging
+        const resolvedLivekitUrl = ((envLivekitUrl || LIVEKIT_URL || (tokenData.url as string | undefined)) || '').trim();
         if (!resolvedLivekitUrl) {
           logger.error('[VideoCallSession] LiveKit URL is not configured (token received but no URL)', {
             envVar: 'EXPO_PUBLIC_LIVEKIT_URL',
@@ -1375,7 +1377,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Компонент должен получать partnerUserId из handleCallAccepted через onPartnerIdChange
     // Но partnerId и partnerUserId - разные вещи, поэтому нужно убедиться, что компонент получает partnerUserId
 
-    const resolvedLivekitUrl = ((data.livekitUrl as string | undefined) || LIVEKIT_URL || '').trim();
+    // Staging: prefer env EXPO_PUBLIC_LIVEKIT_URL
+    const resolvedLivekitUrl = (LIVEKIT_URL || (data.livekitUrl as string | undefined) || '').trim();
     if (!resolvedLivekitUrl) {
       logger.error('[VideoCallSession] LiveKit URL is not configured', {
         envVar: 'EXPO_PUBLIC_LIVEKIT_URL',
@@ -1597,7 +1600,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
         const tokenData = await response.json();
         if (tokenData.ok && tokenData.token) {
-          const resolvedUrl = ((tokenData.url as string | undefined) || LIVEKIT_URL || '').trim();
+          const resolvedUrl = (LIVEKIT_URL || (tokenData.url as string | undefined) || '').trim();
           // КРИТИЧНО: Используем retry механизм для надежного подключения
           let connected = false;
           const maxRetries = 3;
@@ -3048,7 +3051,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           targetRoomName,
           roomState: room.state,
         });
-        
+        const connectStartTime = Date.now();
         // Увеличиваем peerConnectionTimeout: при одновременном подключении обоих участников
         // переговоры (negotiation) могут не уложиться в 15s → "negotiation timed out" и повторная попытка.
         await room.connect(url, token, {
@@ -3113,6 +3116,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         partnerUserId: this.partnerUserId,
         expectedPartnerIdentity: this.partnerUserId,
       });
+      const joinTimeMs = Date.now() - connectStartTime;
+      sendClientMetrics(API_BASE, { joinTimeMs, joinSuccess: true }).catch(() => {});
 
       // Аудио-роутинг управляется на уровне UI (useAudioRouting) — без агрессивных "пинков" из сессии.
       
@@ -3454,6 +3459,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.scheduleLocalVideoHealthCheck('connectToLiveKit:post-publish');
       return true;
     } catch (e: any) {
+      sendClientMetrics(API_BASE, { joinFailure: true }).catch(() => {});
       const errorMessage = e?.message || String(e);
       const isInvalidApiKey = errorMessage.includes('invalid API key') || 
                                errorMessage.includes('401') ||

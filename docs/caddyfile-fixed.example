@@ -1,0 +1,34 @@
+# The Caddyfile is an easy way to configure your Caddy web server.
+#
+# Unless the file starts with a global options block, the first
+# uncommented line is always the address of your site.
+#
+# To use your own domain name (with automatic HTTPS), first make
+# sure your domain's A/AAAA DNS records are properly pointed to
+# this machine's public IP, then replace ":80" below with your
+# domain name.
+
+api.liviapp.com {
+        reverse_proxy 127.0.0.1:3000
+}
+
+livekit.liviapp.com {
+  reverse_proxy 127.0.0.1:7880
+}
+
+api.staging.liviapp.com {
+        reverse_proxy 127.0.0.1:3000
+}
+
+livekit.staging.liviapp.com {
+        reverse_proxy 127.0.0.1:7880
+}
+
+# Доступ по IP-адресу (без SSL)
+:80 {
+        reverse_proxy 127.0.0.1:3000 {
+                header_up X-Real-IP {remote_host}
+        }
+}
+# Refer to the Caddy docs for more information:
+# https://caddyserver.com/docs/caddyfile

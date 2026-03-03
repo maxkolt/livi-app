@@ -9,8 +9,8 @@ if (file("google-services.json").exists()) {
     apply plugin: "com.google.gms.google-services"
 } else {
     println("[livi] google-services.json not found in android/app - skipping google-services plugin")
-    // For release builds we fail fast, otherwise you might ship a build without FCM wired up.
-    if (_isReleaseTaskRequested) {
+    // For release builds we fail fast, unless BUILD_SKIP_GOOGLE_SERVICES_CHECK=1 (e.g. EAS staging profile).
+    if (_isReleaseTaskRequested && System.getenv("BUILD_SKIP_GOOGLE_SERVICES_CHECK") != "1") {
         throw new RuntimeException(
             "[livi] google-services.json is required for release builds. Place it at frontend/android/app/google-services.json"
         )

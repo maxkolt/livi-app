@@ -13,6 +13,9 @@ backend/node_modules/
 .env.development
 frontend/.env
 backend/.env
+backend/.env.staging
+livekit/.env.staging
+backend/turn/turnserver.conf
 
 # Nested clone (duplicate repo, not needed for release)
 /livi-app/
@@ -45,6 +48,7 @@ Thumbs.db
 *~
 
 # Android
+frontend/*.apk
 frontend/android/.gradle/
 frontend/android/app/build/
 frontend/android/build/

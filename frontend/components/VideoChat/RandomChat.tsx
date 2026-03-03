@@ -631,9 +631,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     
     session.on('searching', () => {
       setLoading(true);
+      loadingRef.current = true;
       setIsInactiveState(false);
       setNetworkOverlayVisible(false);
       hasEverRemoteVideoRef.current = false;
+      // КРИТИЧНО: при уходе партнёра (peer:left) не показывать его камеру — очищаем lastGood stream
+      lastGoodRemoteStreamRef.current = null;
+      lastGoodRemoteStreamAtRef.current = 0;
+      setRemoteViewKey((k) => k + 1);
       // КРИТИЧНО: во время поиска партнёра UI не должен показывать кнопку "Добавить в друзья"
       // и не должен держать stale partnerUserId от предыдущего собеседника.
       setPartnerUserId(null);

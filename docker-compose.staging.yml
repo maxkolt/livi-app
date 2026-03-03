@@ -1,0 +1,115 @@
+# Staging контур для Capacity Stage A (500 concurrent). DoD: 3 SFU, TURN pool, managed Redis.
+# Задайте переменные в backend/.env.staging (MONGO_URI, LIVEKIT_*, TURN_*, REDIS_URL).
+# Для формального DoD: REDIS_URL в .env.staging должен указывать на managed Redis с failover;
+# при локальном запуске можно REDIS_URL=redis://redis:6379 (контейнер redis ниже).
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: livi-backend-staging
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3000"
+    env_file:
+      - ./backend/.env.staging
+    # REDIS_URL задаётся в backend/.env.staging (managed Redis для DoD или redis://redis:6379 для локального compose).
+    volumes:
+      - ./backend/public/uploads:/app/public/uploads
+    networks:
+      - livi-staging
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ——— 3 SFU (LiveKit) для DoD ———
+  livekit1:
+    image: livekit/livekit-server:latest
+    container_name: livi-livekit1-staging
+    restart: unless-stopped
+    env_file:
+      - ./livekit/.env.staging
+    volumes:
+      - ./livekit/livekit.staging.yaml:/etc/livekit.yaml:ro
+    networks:
+      - livi-staging
+    command: --config /etc/livekit.yaml
+
+  livekit2:
+    image: livekit/livekit-server:latest
+    container_name: livi-livekit2-staging
+    restart: unless-stopped
+    env_file:
+      - ./livekit/.env.staging
+    volumes:
+      - ./livekit/livekit.staging.yaml:/etc/livekit.yaml:ro
+    networks:
+      - livi-staging
+    command: --config /etc/livekit.yaml
+
+  livekit3:
+    image: livekit/livekit-server:latest
+    container_name: livi-livekit3-staging
+    restart: unless-stopped
+    env_file:
+      - ./livekit/.env.staging
+    volumes:
+      - ./livekit/livekit.staging.yaml:/etc/livekit.yaml:ro
+    networks:
+      - livi-staging
+    command: --config /etc/livekit.yaml
+
+  # Балансировщик перед 3 нодами LiveKit (DoD: один URL для клиентов).
+  nginx-livekit:
+    image: nginx:alpine
+    container_name: livi-nginx-livekit-staging
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7880:7880"
+    volumes:
+      - ./docs/capacity/nginx-livekit-3node.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - livi-staging
+    depends_on:
+      - livekit1
+      - livekit2
+      - livekit3
+
+  # Redis: для локального прогона. Для DoD используйте managed Redis и REDIS_URL в .env.staging.
+  redis:
+    image: redis:7-alpine
+    container_name: livi-redis-staging
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-staging-data:/data
+    networks:
+      - livi-staging
+    command: redis-server --appendonly yes
+
+  # TURN (coturn). Локально только 3478; relay-порты не публикуем (на Mac часто зависают).
+  coturn:
+    image: coturn/coturn:latest
+    container_name: livi-coturn-staging
+    restart: unless-stopped
+    command: ["-n", "-v", "-f", "/etc/coturn/turnserver.conf"]
+    volumes:
+      - ./backend/turn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+    networks:
+      - livi-staging
+
+networks:
+  livi-staging:
+    driver: bridge
+
+volumes:
+  redis-staging-data:
