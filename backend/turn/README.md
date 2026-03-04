@@ -28,7 +28,22 @@
 - В ответе должен быть `ok: true` и `iceServers` со строками `turn:...` и **с `username`/`credential`**
 - В логах клиента исчезнет предупреждение `⚠️ NO TURN SERVER - NAT traversal may fail!`
 
+### Второй TURN (дополнительный VPS)
+
+Для лучшей работы можно подключить **второй** TURN на отдельном VPS. Клиенты автоматически получат оба сервера в `iceServers` и смогут использовать тот, что быстрее/доступнее.
+
+1) На **новом VPS** установите и настройте coturn (см. `turnserver.conf.example` и `turnserver.conf.second.example`).
+2) В **backend** задайте переменные:
+   - `TURN_HOST_2` — домен или IP второго TURN (например `turn2.example.com` или IP VPS)
+   - `TURN_SECRET_2` — **тот же** shared secret, что в конфиге coturn на втором VPS
+   - `TURN_PORT_2=3478` (по умолчанию)
+   - `TURN_ENABLE_TCP_2=1`, `TURN_ENABLE_TCP_443_2=0` (по необходимости)
+
+Проверка: `GET /api/turn-credentials` должен вернуть в `iceServers` записи и для первого, и для второго TURN.
+
 ### Файлы в этой папке
 - `turnserver.conf.example` — пример конфига coturn под shared-secret
+- `turnserver.conf.second.example` — пример для второго TURN на отдельном VPS
 - `docker-compose.turn.example.yml` — пример docker-compose для coturn
+- `setup-second-vps.sh` — скрипт установки coturn на VPS (запуск на сервере)
 

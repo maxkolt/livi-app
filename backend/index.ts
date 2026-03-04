@@ -86,6 +86,13 @@ const TURN_HOST = (process.env.TURN_HOST || '').trim();
 const TURN_PORT = Number(process.env.TURN_PORT || 3478);
 const STUN_HOST = (process.env.STUN_HOST || TURN_HOST).trim();
 
+// Второй TURN (дополнительный VPS для лучшей доступности и распределения нагрузки)
+const TURN_HOST_2 = (process.env.TURN_HOST_2 || '').trim();
+const TURN_SECRET_2 = (process.env.TURN_SECRET_2 || '').trim();
+const TURN_PORT_2 = Number(process.env.TURN_PORT_2 || 3478);
+const TURN_ENABLE_TCP_2 = String(process.env.TURN_ENABLE_TCP_2 || '1') === '1';
+const TURN_ENABLE_TCP_443_2 = String(process.env.TURN_ENABLE_TCP_443_2 || process.env.TURN_TCP_443_2 || '0') === '1';
+
 // Проверка что TURN_HOST задан (критично для продакшена)
 if (!TURN_HOST) {
   logger.warn('[TURN] ⚠️ TURN_HOST not configured! TURN credentials will not work.');
@@ -109,6 +116,14 @@ if (!TURN_SECRET) {
     turnEnableTcp443: TURN_ENABLE_TCP_443,
     turnTtlSeconds: TURN_TTL_SECONDS,
   });
+}
+if (TURN_HOST_2 && TURN_SECRET_2) {
+  logger.info('[TURN] ✅ Second TURN (TURN_2) configured', {
+    turnHost2: TURN_HOST_2.includes('.') ? TURN_HOST_2.split('.').slice(-2).join('.') : 'set',
+    turnPort2: TURN_PORT_2,
+  });
+} else if (TURN_HOST_2 || TURN_SECRET_2) {
+  logger.warn('[TURN] ⚠️ TURN_2 incomplete: set both TURN_HOST_2 and TURN_SECRET_2 to enable second TURN.');
 }
 
 /* ========= Helpers ========= */
@@ -473,6 +488,21 @@ app.get('/api/turn-credentials', async (_req, res) => {
       // TURN TCP/443 для обхода firewall (приоритет #3)
       if (TURN_ENABLE_TCP_443) {
         iceServers.push({ urls: turnTcp443, username, credential: hmac });
+      }
+    }
+
+    // Второй TURN (дополнительный VPS) — те же креды по времени, свой секрет для HMAC
+    if (TURN_HOST_2 && TURN_SECRET_2) {
+      const hmac2 = crypto
+        .createHmac('sha1', TURN_SECRET_2)
+        .update(username)
+        .digest('base64');
+      iceServers.push({ urls: `turn:${TURN_HOST_2}:${TURN_PORT_2}`, username, credential: hmac2 });
+      if (TURN_ENABLE_TCP_2) {
+        iceServers.push({ urls: `turn:${TURN_HOST_2}:${TURN_PORT_2}?transport=tcp`, username, credential: hmac2 });
+        if (TURN_ENABLE_TCP_443_2) {
+          iceServers.push({ urls: `turn:${TURN_HOST_2}:443?transport=tcp`, username, credential: hmac2 });
+        }
       }
     }
     

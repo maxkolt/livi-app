@@ -1,0 +1,31 @@
+#
+# coturn для ВТОРОГО TURN-сервера (дополнительный VPS)
+# Скопируйте на новый VPS, переименуйте в turnserver.conf и подставьте свои значения.
+#
+
+# Слушаем на всех интерфейсах
+listening-ip=0.0.0.0
+
+# Основной порт
+listening-port=3478
+
+# Диапазон UDP портов для relay (обязательно открыть на фаерволе VPS)
+min-port=49152
+max-port=65535
+
+# Укажите внешний IP вашего VPS (замените на реальный)
+# external-ip=ВАШ_PUBLIC_IP
+
+# Shared secret — тот же секрет, что зададите в backend как TURN_SECRET_2
+use-auth-secret
+static-auth-secret=<ВАШ_СЕКРЕТ_ДЛЯ_ВТОРОГО_TURN>
+
+# Realm — домен или имя второго TURN (например turn2.вашдомен.com или IP)
+realm=<ДОМЕН_ИЛИ_IP_ВТОРОГО_VPS>
+
+# Логи
+verbose
+fingerprint
+
+no-multicast-peers
+no-loopback-peers
