@@ -2,6 +2,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { PropsWithChildren } from 'react';
 import { AppState, NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import InCallManager from 'react-native-incall-manager';
 import { CommonActions } from '@react-navigation/native';
 import socket, { onConnected } from '../../sockets/socket';
 
@@ -223,6 +224,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setPendingSystemPiP(false);
           const session = (global as any).__webrtcSessionRef?.current;
           if (session && typeof (session as any).enterPiP === 'function') (session as any).enterPiP();
+          // КРИТИЧНО: При входе в системный PiP на Android система часто переключает звук на earpiece.
+          // Явно переприменяем громкий динамик, чтобы собеседника было слышно нормально.
+          if (Platform.OS === 'android') {
+            try {
+              InCallManager.start({ media: 'video', ringback: '' });
+              try { (InCallManager as any).requestAudioFocus?.(); } catch {}
+              InCallManager.setSpeakerphoneOn(true);
+            } catch (_) {}
+          }
         }
       };
       if (typeof requestAnimationFrame !== 'undefined') {
