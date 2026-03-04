@@ -125,13 +125,14 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
   };
 
   const stopSpeaker = () => {
-    // КРИТИЧНО: Если мы в PiP, НЕ останавливаем аудио-сессию.
+    // КРИТИЧНО: Если мы в PiP (in-app или системный), НЕ останавливаем аудио-сессию.
     // При уходе в PiP экран звонка размонтируется, и cleanup этого хука иначе вызовет InCallManager.stop(),
-    // что приводит к "тишине" в PiP.
+    // что приводит к "тишине" в PiP. Учитываем оба режима — иначе при системном PiP без in-app один не слышит другого.
     try {
       const pipVisible = !!(global as any).__pipVisibleRef?.current;
-      if (pipVisible) {
-        logger.debug('[useAudioRouting] Skip stopSpeaker because PiP is visible');
+      const inSystemPiP = (global as any).__pipInSystemModeRef?.current === true;
+      if (pipVisible || inSystemPiP) {
+        logger.debug('[useAudioRouting] Skip stopSpeaker because PiP is active', { pipVisible, inSystemPiP });
         return;
       }
     } catch {}

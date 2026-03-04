@@ -395,6 +395,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const session = g.__webrtcSessionRef?.current;
       if (session && typeof (session as any).isEnded === 'function' && (session as any).isEnded()) return;
 
+      // Сразу помечаем «входим в системный PiP», чтобы AppState 'background' и stopSpeaker() не вызывали InCallManager.stop() (гонка событий).
+      try {
+        g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
+        g.__pipInSystemModeRef.current = true;
+      } catch (_) {}
+
       // До входа в системный PiP переводим VideoCall в компактный режим (только удалённое видео),
       // чтобы избежать "чёрных блоков" от лишних SurfaceView/RTCView при захвате окна PiP.
       const apply = (decorSize: { width: number; height: number } | null) => {

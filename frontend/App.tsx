@@ -2157,6 +2157,14 @@ export default function App() {
           try { (global as any).__callEndedFromPiPNoOpenRef.current = false; } catch (_) {}
         }, 6000);
       } catch (_) {}
+      // При завершении из системного PiP cleanupFunction не выполнит InCallManager.stop() (guard по isInactiveStateRef).
+      // Останавливаем аудио сразу, чтобы звук и PiP закрылись одновременно.
+      try {
+        (InCallManager as any).setForceSpeakerphoneOn?.('auto');
+        InCallManager.setSpeakerphoneOn(false);
+        InCallManager.stop();
+        (InCallManager as any).abandonAudioFocus?.();
+      } catch (_) {}
     }
 
     try {
