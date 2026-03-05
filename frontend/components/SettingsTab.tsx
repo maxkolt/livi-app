@@ -107,6 +107,19 @@ const SettingsAvatar = memo(({
   
   if (!displayUri) {} else {}
   
+  // На Android не передаём data: в ExpoImage (Glide падает). Используем AvatarImage — он разрешает data: -> file:
+  if (Platform.OS === 'android' && displayUri && /^data:/i.test(displayUri)) {
+    return (
+      <AvatarImage
+        userId={myUserId}
+        avatarVer={myAvatarVer || 0}
+        uri={displayUri}
+        size={64}
+        containerStyle={styles.avatarImg}
+      />
+    );
+  }
+  
   // Стабильный ключ для Android: если локальный file://, используем сам путь
   const isLocal = hasLocalAvatar;
   // ВАЖНО: НЕ добавляем query-параметры к file:// (ломает путь на Android).

@@ -8,6 +8,7 @@ const missedClearListeners = new Set<Listener<{ userId: string }>>();
 const closeIncomingListeners = new Set<Listener<{}>>();
 const closeIncomingRequestListeners = new Set<Listener<{}>>();
 const closeOutgoingCallListeners = new Set<Listener<{}>>();
+const callCancelledOnHomeListeners = new Set<Listener<{}>>();
 
 export function onMissedIncrement(cb: Listener<{ userId: string }>): () => void {
   missedListeners.add(cb);
@@ -75,4 +76,16 @@ export function emitCloseOutgoingCall() {
   }
 }
 
+/** Вызов отменён инициатором, при этом пользователь уже на Home (страница приветствия). Бейдж показываем через подписку в HomeScreen, без setParams — без лишних ре-рендеров. */
+export function onCallCancelledOnHome(cb: () => void): () => void {
+  const h = () => cb();
+  callCancelledOnHomeListeners.add(h as any);
+  return () => { callCancelledOnHomeListeners.delete(h as any); };
+}
+
+export function emitCallCancelledOnHome() {
+  for (const l of callCancelledOnHomeListeners) {
+    try { (l as any)({}); } catch {}
+  }
+}
 

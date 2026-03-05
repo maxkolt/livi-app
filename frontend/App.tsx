@@ -15,7 +15,7 @@ import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
 import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall } from "./sockets/socket";
-import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
+import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
@@ -117,6 +117,9 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 
 // КРИТИЧНО: VideoCall выставляет true при doReset() → навигация на Home. App при call:ended не вызывает goHome() повторно (убирает двойное закрытие).
 (global as any).__homeResetByVideoCallRef = { current: false };
+
+// КРИТИЧНО: Один переход на Home при отмене звонка (call:cancel). Ключ по from (инициатор): несколько call:cancel с разными callId от одного звонящего = одно действие за окно времени.
+(global as any).__callCancelNavDoneRef = { from: '' as string, at: 0 };
 
 // КРИТИЧНО: Глобальная ссылка на функцию переключения микрофона из VideoCall
 // Это нужно чтобы можно было запустить startMicMeter даже когда экран звонка размонтирован (в PiP)
@@ -1747,7 +1750,9 @@ function AppContent() {
       // call:declined = тот, кому звонили, отклонил — пропущенным не считаем, счётчик не увеличиваем
     });
     const offCancel = onCallCanceled?.(async (d) => {
-      logger.debug('Call canceled received', { callId: d?.callId });
+      const callerId = String((d as any)?.from || '');
+      const myUserId = getCurrentUserId?.() ?? '';
+      const isCallee = callerId && myUserId && callerId !== myUserId;
       incomingCallIdRef.current = null;
       const callIdStr = (d as any)?.callId ? String((d as any).callId) : '';
       if (callIdStr) {
@@ -1762,27 +1767,76 @@ function AppContent() {
         const id = String((d as any)?.callId || '');
         if (id) canceledCallsRef.current.set(id, Date.now());
       } catch {}
-      // Мгновенно закрываем UI
-      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
-      // Переход на Home с бейджем «Вызов отменен» (как при завершённом звонке). Не дублируем, если VideoCall уже сделал reset (у callee при отмене инициатором).
       const g = global as any;
       const homeResetByVideoCall = g.__homeResetByVideoCallRef?.current === true;
-      if (homeResetByVideoCall) {
-        try { g.__homeResetByVideoCallRef.current = false; } catch (_) {}
-      } else if (navRef.isReady()) {
-        const routeName = String(navRef.getCurrentRoute()?.name ?? '');
-        if (routeName !== 'Home') {
-          navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
-        } else {
-          navRef.dispatch(CommonActions.setParams({ callCancelled: true }));
+      const doneRef = g.__callCancelNavDoneRef;
+      const now = Date.now();
+      const CALL_CANCEL_NAV_DEBOUNCE_MS = 4000;
+      let alreadyDidNav = doneRef && callerId && doneRef.from === callerId && (now - (doneRef.at || 0)) < CALL_CANCEL_NAV_DEBOUNCE_MS;
+      if (!alreadyDidNav && callerId && doneRef) {
+        try { doneRef.from = callerId; doneRef.at = now; } catch (_) {}
+        alreadyDidNav = false;
+      }
+      const routeName = String(navRef.getCurrentRoute()?.name ?? '');
+      const willDispatch = !homeResetByVideoCall && !alreadyDidNav && navRef.isReady();
+      // Callee уже на Home: страница приветствия не должна ре-рендериться — не вызываем setIncoming и эмиты с подписчиками-setState
+      const calleeAlreadyOnHome = isCallee && routeName === 'Home';
+      const runCloseUI = () => {
+        setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
+      };
+
+      if (calleeAlreadyOnHome) {
+        // Ноль ре-рендеров в момент закрытия нативного экрана: ничего не делаем, что дергает HomeScreen (setIncoming, эмиты с setState, бейдж, пропущенный — всё откладываем)
+        // Пропуск setAppIsActive при AppState 'active': при возврате с нативного экрана HomeScreen не должен вызывать setAppIsActive → ре-рендер
+        try {
+          const skipRef = (g.__skipAppStateActiveSetAppIsActiveRef = g.__skipAppStateActiveSetAppIsActiveRef || { current: false });
+          skipRef.current = true;
+        } catch (_) {}
+        try {
+          const pipVisible = !!(pip as any)?.visible || !!(g?.__pipVisibleRef?.current);
+          if (!isVideoSessionRoute(routeName) && !pipVisible && Platform.OS === 'android') {
+            try { (InCallManager as any).setKeepScreenOn?.(false); } catch (_) {}
+            InCallManager.stop();
+          }
+        } catch (_) {}
+        // Бейдж (showNotice) и пропущенный (emitMissedIncrement → setMissedByUser) вызывают ре-рендер HomeScreen — откладываем на 400ms, чтобы первый кадр после закрытия нативного экрана прошёл без дёргания
+        const CALLEE_ON_HOME_DEFER_MS = 400;
+        setTimeout(async () => {
+          try {
+            const skipRef = (g as any).__skipAppStateActiveSetAppIsActiveRef;
+            if (skipRef) skipRef.current = false;
+          } catch (_) {}
+          try { emitCallCancelledOnHome(); } catch (_) {}
+          try {
+            if (callerId) {
+              lastMissedIncrementTimeByUserRef.current[callerId] = Date.now();
+              const key = 'missed_calls_by_user_v1';
+              const raw = await AsyncStorage.getItem(key);
+              const map = raw ? JSON.parse(raw) : {};
+              map[callerId] = (map[callerId] || 0) + 1;
+              await AsyncStorage.setItem(key, JSON.stringify(map));
+              try { emitMissedIncrement(callerId); } catch {}
+              await clearMissedBadgeCleared();
+              await syncAppBadgeFromMissedCount();
+              try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
+            }
+          } catch (_) {}
+        }, CALLEE_ON_HOME_DEFER_MS);
+      } else {
+        runCloseUI();
+        if (homeResetByVideoCall) {
+          try { g.__homeResetByVideoCallRef.current = false; } catch (_) {}
+        } else if (!alreadyDidNav && navRef.isReady()) {
+          if (routeName !== 'Home') {
+            navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
+          } else {
+            navRef.dispatch(CommonActions.setParams({ callCancelled: true }));
+          }
         }
       }
-      // Инкремент пропущенного только у получателя (callee): у того, кому звонили, при отмене звонящим
+      // Инкремент пропущенного только у получателя (callee); для callee на Home делаем в setTimeout выше
       try {
-        const callerId = String((d as any)?.from || '');
-        const myUserId = getCurrentUserId?.() ?? '';
-        const isCallee = callerId && myUserId && callerId !== myUserId;
-        if (callerId && isCallee) {
+        if (callerId && isCallee && !calleeAlreadyOnHome) {
           lastMissedIncrementTimeByUserRef.current[callerId] = Date.now();
           const key = 'missed_calls_by_user_v1';
           const raw = await AsyncStorage.getItem(key);
@@ -2015,12 +2069,14 @@ function AppContent() {
             try {
               if (navRef.isReady()) {
                 const currentRoute = navRef.getCurrentRoute()?.name;
-                // Avoid log spam: only log when the route actually changes.
                 if (currentRoute && currentRoute !== lastLoggedRouteRef.current) {
                   console.log('[App] Navigation ready, current route:', currentRoute);
                   lastLoggedRouteRef.current = currentRoute;
                 }
-                setRouteName(currentRoute);
+                // После отмены входящего на Home не дергаем setRouteName — иначе ре-рендер App и двойная отрисовка Home
+                if ((global as any).__skipAppStateActiveSetAppIsActiveRef?.current !== true) {
+                  setRouteName(currentRoute);
+                }
               }
             } catch (e) {
               console.warn('[App] Error in onReady callback:', e);
@@ -2030,12 +2086,14 @@ function AppContent() {
             try {
               if (navRef.isReady()) {
                 const currentRoute = navRef.getCurrentRoute()?.name;
-                // Avoid log spam: NavigationContainer can emit many state changes even on the same route.
                 if (currentRoute && currentRoute !== lastLoggedRouteRef.current) {
                   console.log('[App] Navigation state changed, current route:', currentRoute);
                   lastLoggedRouteRef.current = currentRoute;
                 }
-                setRouteName(currentRoute);
+                // После отмены входящего на Home не дергаем setRouteName — иначе ре-рендер App и двойная отрисовка Home
+                if ((global as any).__skipAppStateActiveSetAppIsActiveRef?.current !== true) {
+                  setRouteName(currentRoute);
+                }
               }
             } catch (e) {
               console.warn('[App] Error in onStateChange callback:', e);

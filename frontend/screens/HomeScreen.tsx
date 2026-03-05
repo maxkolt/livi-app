@@ -74,7 +74,7 @@ import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onMissedIncrement, onMissedClear, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall } from '../utils/globalEvents';
+import { onMissedIncrement, onMissedClear, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled } from '../utils/callKeep';
 import { setMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
@@ -780,6 +780,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Синхронная загрузка профиля при инициализации. При повторном монтировании (возврат из звонка/PiP) не показываем сплэш — оба true, профиль подставится в отдельном effect.
   const [profileLoaded, setProfileLoaded] = useState(homeScreenAlreadyBooted);
   const [dataLoaded, setDataLoaded] = useState(homeScreenAlreadyBooted);
+  // Сплеш поверх уже отрисованного Home: при уходе сплеша видна страница приветствия с актуальными данными
+  const [splashDismissed, setSplashDismissed] = useState(homeScreenAlreadyBooted);
   // Автоскрытие бейджа «Скачайте обновление» через 5 сек — только когда заглушка уже скрыта (пользователь видит страницу приветствия).
   // Иначе при долгой заглушке (например VPN 20+ сек) бейдж успевает исчезнуть до перехода на приветствие.
   const splashVisible = !dataLoaded || (dataLoaded && !profileLoaded);
@@ -805,6 +807,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [myFullAvatarUri, setMyFullAvatarUri] = useState<string>(''); // полный аватар (data URI)
   const [avatarRefreshKey, setAvatarRefreshKey] = useState(0); // для принудительного обновления на Android
   const [resolvedAvatarUri, resolvedAvatarReady] = useResolvedImageUri(avatarUri || ''); // на Android data: -> file: для Glide
+  const [, myFullAvatarResolvedReady] = useResolvedImageUri(myFullAvatarUri || ''); // кешированный аватар (data:) -> file: для Glide на Android
   const [savedNick, setSavedNick] = useState<string>('');      // сохранённый ник
   
   // Отладочная версия setSavedNick с логированием
@@ -876,6 +879,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     avatarModalLastScale.current = 1;
     avatarModalScaleNumber.current = 1;
   }, [avatarModalVisible, myFullAvatarUri, avatarUri, myAvatarVer, resolvedUserId, avatarModalPinchScale, avatarModalBaseScale]);
+
+  // На Android в модалке data: URI нужно показывать через разрешённый file: (иначе Glide/ExpoImage не покажут)
+  const [modalAvatarResolvedUri] = useResolvedImageUri(avatarModalVisible ? modalAvatarUri : '');
+  const modalAvatarDisplayUri = (Platform.OS === 'android' && /^data:/i.test(modalAvatarUri)) ? modalAvatarResolvedUri : modalAvatarUri;
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -2533,7 +2540,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const sub = AppState.addEventListener('change', async (state) => {
       const wasBg = /inactive|background/.test(appStateRef.current);
       appStateRef.current = state;
-      try { setAppIsActive(state === 'active'); } catch {}
+      // После отмены входящего на Home (callee) пропускаем setAppIsActive, чтобы не было ре-рендера/мерцания страницы приветствия
+      const skipSetAppIsActive = (global as any).__skipAppStateActiveSetAppIsActiveRef?.current === true;
+      if (!skipSetAppIsActive) {
+        try { setAppIsActive(state === 'active'); } catch {}
+      } else {
+        try { (global as any).__skipAppStateActiveSetAppIsActiveRef.current = false; } catch (_) {}
+      }
       if (wasBg && state === 'active') {
         const now = Date.now();
         if (now - lastResumeSyncAtRef.current < RESUME_SYNC_DEBOUNCE_MS) return;
@@ -2561,6 +2574,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   useEffect(() => {
     const unsub = navigation?.addListener?.('focus', async () => {
       try {
+        // После отмены входящего на Home не дергаем setState при focus — убираем двойной показ страницы
+        if ((global as any).__skipAppStateActiveSetAppIsActiveRef?.current === true) {
+          return;
+        }
         if (tabRef.current === 'friends') {
           await setMissedBadgeCleared();
         }
@@ -4217,6 +4234,14 @@ const handleClearNick = useCallback(async () => {
     }
   }, [route, navigation, showNotice]);
 
+  // Отмена входящего, когда пользователь уже на Home: бейдж «Вызов отменён» на 3 сек через событие, без setParams — без лишних ре-рендеров
+  useEffect(() => {
+    const off = onCallCancelledOnHome(() => {
+      showNotice(t('callCancelled', lang), 'success', 3000);
+    });
+    return off;
+  }, [showNotice, lang]);
+
   // Обработка «занято» от друга
   useEffect(() => {
     const onBusy = ({ from }: { from: string }) => {
@@ -4248,12 +4273,22 @@ const handleClearNick = useCallback(async () => {
   const currentNick = savedNick || nick || '';
   const currentAvatar = avatarUri || savedAvatarUrl || '';
   const hasRealData = (currentNick && currentNick.trim()) || (currentAvatar && currentAvatar.trim());
-  // КРИТИЧНО: Показываем SplashLoader только если данные еще загружаются
-  // Если данные загружены (dataLoaded = true) И профиль загружен (profileLoaded = true),
-  // то показываем домашнюю страницу (даже если нет данных - показываем экран создания профиля)
-  const shouldShowSplash = !dataLoaded || (dataLoaded && !profileLoaded);
-  
-  if (shouldShowSplash) {
+  // На Android не скрываем сплеш пока аватар (data:) не разрешён в file: — убираем мерцание и ошибку Glide
+  const hasCachedAvatarForSplash = !!(resolvedUserId && myAvatarVer > 0);
+  const hasDirectAvatarUriForSplash = !!(avatarUri && (/^data:image\//i.test(avatarUri) || /^https?:\/\//i.test(avatarUri)));
+  const avatarReadyForHome = Platform.OS !== 'android'
+    ? true
+    : (!hasCachedAvatarForSplash && !hasDirectAvatarUriForSplash)
+      ? true
+      : hasCachedAvatarForSplash
+        ? myFullAvatarResolvedReady
+        : resolvedAvatarReady;
+  // Фаза «только сплеш»: данные ещё грузятся — показываем только SplashLoader
+  const onlySplashPhase = !dataLoaded || (dataLoaded && !profileLoaded);
+  // Сплеш поверх Home: когда данные готовы, рисуем Home под сплешем и только сплеш потом исчезает
+  const showSplashOverlay = onlySplashPhase || !splashDismissed;
+
+  if (onlySplashPhase) {
     return (
       <View style={{ flex: 1, backgroundColor: '#0D0E10' }}>
         <StatusBar barStyle="light-content" />
@@ -4261,19 +4296,19 @@ const handleClearNick = useCallback(async () => {
           dataLoaded={dataLoaded} 
           hasNick={!!(currentNick && currentNick.trim())}
           hasAvatar={!!(currentAvatar && currentAvatar.trim())}
+          hasAvatarReady={avatarReadyForHome}
           onComplete={() => {
-            // Устанавливаем profileLoaded после завершения анимации SplashLoader
-            // Это нужно для плавного перехода к экрану создания профиля
-            if (dataLoaded) {
-              setProfileLoaded(true);
-            }
+            if (dataLoaded) setProfileLoaded(true);
+            setSplashDismissed(true);
           }} 
         />
       </View>
     );
   }
 
+  // Данные готовы: рисуем Home (уже с актуальной инфой), сверху — сплеш-оверлей, который только исчезает
   return (
+    <View style={{ flex: 1 }}>
     <SafeAreaView
         style={[
           styles.container,
@@ -4467,10 +4502,16 @@ const handleClearNick = useCallback(async () => {
                 ]}
               >
                 {modalAvatarUri ? (
-                  <ExpoImage
-                    {...getAvatarImageProps(modalAvatarUri, `avatar_modal_${resolvedUserId}_${myAvatarVer}`)}
-                    style={{ width: avatarModalSize, height: avatarModalSize }}
-                  />
+                  modalAvatarDisplayUri ? (
+                    <ExpoImage
+                      {...getAvatarImageProps(modalAvatarDisplayUri, `avatar_modal_${resolvedUserId}_${myAvatarVer}`)}
+                      style={{ width: avatarModalSize, height: avatarModalSize }}
+                    />
+                  ) : (
+                  <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{displayAvatarLetter(savedNick)}</Text>
+                  </View>
+                  )
                 ) : (
                   <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
                     <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{displayAvatarLetter(savedNick)}</Text>
@@ -5101,6 +5142,19 @@ const handleClearNick = useCallback(async () => {
         )}
       </Portal>
     </SafeAreaView>
+    {showSplashOverlay && (
+      <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
+        <SplashLoader
+          dataLoaded={true}
+          hasNick={!!(currentNick && currentNick.trim())}
+          hasAvatar={!!(currentAvatar && currentAvatar.trim())}
+          hasAvatarReady={avatarReadyForHome}
+          overlayMode
+          onComplete={() => setSplashDismissed(true)}
+        />
+      </View>
+    )}
+    </View>
   );
 
   /* Кнопка «Ещё»: индикатор обновления — картинка img-update.png (красный круг со стрелкой) */

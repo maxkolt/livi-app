@@ -28,10 +28,13 @@ export const getOptimizedImageProps = (uri: string, key: string, size?: number) 
 
 /**
  * Специальные настройки для аватаров на Android
- * Максимально оптимизированы против мерцания
+ * Максимально оптимизированы против мерцания.
+ * На Android не передаём data: в source (Glide падает) — вызывающий код должен использовать useResolvedImageUri или AvatarImage.
  */
-export const getAvatarImageProps = (uri: string, key: string) => ({
-  source: { uri },
+export const getAvatarImageProps = (uri: string, key: string) => {
+  const safeUri = (Platform.OS === 'android' && typeof uri === 'string' && /^data:/i.test(uri)) ? '' : uri;
+  return ({
+  source: { uri: safeUri },
   contentFit: 'cover' as const,
   cachePolicy: 'memory-disk' as const,
   transition: 0, // Полностью убираем transition для аватаров
@@ -45,6 +48,7 @@ export const getAvatarImageProps = (uri: string, key: string) => ({
     tintColor: undefined,
   }),
 });
+};
 
 /**
  * Предзагрузка изображений для устранения мерцания

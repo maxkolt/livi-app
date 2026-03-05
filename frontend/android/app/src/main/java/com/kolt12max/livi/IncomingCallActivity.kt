@@ -289,6 +289,14 @@ class IncomingCallActivity : AppCompatActivity() {
         }
     }
 
+    override fun finish() {
+        super.finish()
+        // Как и у OutgoingCallActivity, убираем системную анимацию закрытия.
+        // Иначе при возврате к уже открытому Home Android рисует "доезд" окна
+        // отдельной singleInstance-activity, что выглядит как двойной показ экрана.
+        overridePendingTransition(0, 0)
+    }
+
     /** Системная мелодия звонка (Настройки → Мелодия звонка), STREAM_RING, зациклена. */
     private fun startCallRingtone() {
         val uri: Uri? = try {

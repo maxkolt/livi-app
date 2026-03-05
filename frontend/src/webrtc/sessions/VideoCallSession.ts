@@ -1091,16 +1091,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     };
     
     const callEndedHandler = (data?: { callId?: string; roomId?: string; reason?: string; scope?: string }) => {
-      logger.info('[VideoCallSession] 📡 Socket event call:ended received', {
-        callId: data?.callId,
-        roomId: data?.roomId,
-        reason: data?.reason,
-        scope: data?.scope,
-        currentCallId: this.callId,
-        currentRoomId: this.roomId,
-        willHandle: true
-      });
       this.handleCallEnded();
+    };
+
+    const onCallEnded = (data?: { callId?: string; roomId?: string; reason?: string; scope?: string }) => {
+      callEndedHandler(data);
+    };
+
+    const onCallCancel = (data?: { callId?: string; from?: string }) => {
+      callEndedHandler(data);
     };
 
     // call:error = сервер не смог создать токены (например LiveKit недоступен); завершаем звонок как при call:ended
@@ -1232,6 +1231,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.socketHandlers.callAccepted = callAcceptedHandler;
     this.socketHandlers.callIncoming = callIncomingHandler;
     this.socketHandlers.callEnded = callEndedHandler;
+    (this.socketHandlers as any).onCallEnded = onCallEnded;
+    (this.socketHandlers as any).onCallCancel = onCallCancel;
     this.socketHandlers.callError = callErrorHandler;
     this.socketHandlers.callDeclined = callDeclinedHandler;
     this.socketHandlers.disconnected = disconnectedHandler;
@@ -1240,11 +1241,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     socket.on('call:accepted', callAcceptedHandler);
     socket.on('call:incoming', callIncomingHandler);
-    socket.on('call:ended', callEndedHandler);
+    socket.on('call:ended', onCallEnded);
     socket.on('call:error', callErrorHandler);
     socket.on('call:declined', callDeclinedHandler);
     socket.on('disconnected', disconnectedHandler);
-    socket.on('call:cancel', callEndedHandler);
+    socket.on('call:cancel', onCallCancel);
     socket.on('pip:state', pipStateHandler);
     socket.on('cam-toggle', camToggleHandler);
     
@@ -1255,11 +1256,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.socketOffs = [
       () => socket.off('call:accepted', callAcceptedHandler),
       () => socket.off('call:incoming', callIncomingHandler),
-      () => socket.off('call:ended', callEndedHandler),
+      () => socket.off('call:ended', onCallEnded),
       () => socket.off('call:error', callErrorHandler),
       () => socket.off('call:declined', callDeclinedHandler),
       () => socket.off('disconnected', disconnectedHandler),
-      () => socket.off('call:cancel', callEndedHandler),
+      () => socket.off('call:cancel', onCallCancel),
       () => socket.off('pip:state', pipStateHandler),
       () => socket.off('cam-toggle', camToggleHandler),
     ];
@@ -1732,21 +1733,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Also, call:ended can arrive after local cleanup already cleared ids.
     // In those cases, ignore to avoid duplicate cleanup and "null callId" log noise.
     if (this.ended || this.endCallInProgress) {
-      logger.debug('[VideoCallSession] Ignoring duplicate call:ended', {
-        ended: this.ended,
-        endCallInProgress: this.endCallInProgress,
-        callId: this.callId,
-        roomId: this.roomId,
-      });
       return;
     }
 
     // Зомби-сессия (уже очищена cleanupFunction): не эмитить callEnded — иначе второй handleCallEnded в UI и мерцание при переходе на Home.
     if (!this.callId && !this.roomId) {
-      logger.debug('[VideoCallSession] Ignoring call:ended (no callId/roomId, zombie session)', {
-        hasRoom: !!this.room,
-        roomState: this.room?.state,
-      });
       return;
     }
 
@@ -1757,12 +1748,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     const hasLiveKitRoom = !!this.room && this.room.state !== 'disconnected';
     const hasAnyTracks = !!this.localStream || !!this.remoteStream || !!this.localAudioTrack || !!this.localVideoTrack;
     if (!hasAnyIdentifiers && !hasLiveKitRoom && !hasAnyTracks) {
-      logger.debug('[VideoCallSession] Ignoring call:ended (no active call state)', {
-        callId: this.callId,
-        roomId: this.roomId,
-        hasLiveKitRoom,
-        hasAnyTracks,
-      });
       return;
     }
 
@@ -1779,13 +1764,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     const savedRoomId = this.roomId;
     const savedPartnerId = this.partnerId;
     const savedPartnerUserId = this.partnerUserId;
-    
-    logger.info('[VideoCallSession] 📡 handleCallEnded вызван - получено call:ended от сервера', {
-      callId: savedCallId,
-      roomId: savedRoomId,
-      partnerId: savedPartnerId,
-      partnerUserId: savedPartnerUserId,
-    });
     
     // КРИТИЧНО: При получении call:ended от сервера (другой участник завершил звонок)
     // нужно завершить звонок локально, но НЕ отправлять call:end на сервер повторно
@@ -1814,12 +1792,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Это событие должно быть отправлено даже если состояние уже очищено
     // Компоненты должны обработать завершение звонка независимо от состояния сессии
     this.emit('callEnded');
-    logger.info('[VideoCallSession] ✅ Звонок завершен после получения call:ended от сервера', {
-      previousCallId: savedCallId,
-      previousRoomId: savedRoomId,
-      previousPartnerId: savedPartnerId,
-      previousPartnerUserId: savedPartnerUserId,
-    });
   }
 
   private handleDisconnected(): void {

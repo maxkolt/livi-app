@@ -80,6 +80,8 @@ const AvatarImage = memo<AvatarImageProps>(({
   const key = `avatar_${userId || 'none'}_v${avatarVer || 0}_${size}`;
 
   // Показываем плейсхолдер если нет URI, идёт загрузка или на Android ещё не разрешён data: URI
+  // Букву/— показываем только когда загрузка завершена и аватара нет (убирает мерцание при холодном старте)
+  const showFallbackLetter = fallbackText && !loading && !uri;
   if (!uri || loading || !resolvedReady) {
     return (
       <View
@@ -95,7 +97,7 @@ const AvatarImage = memo<AvatarImageProps>(({
           containerStyle,
         ]}
       >
-        {fallbackText && (
+        {showFallbackLetter ? (
           <Text
             style={[
               {
@@ -108,7 +110,7 @@ const AvatarImage = memo<AvatarImageProps>(({
           >
             {fallbackText}
           </Text>
-        )}
+        ) : null}
       </View>
     );
   }

@@ -20,11 +20,15 @@ interface SplashLoaderProps {
   // Опциональные проверки реальных данных
   hasNick?: boolean;
   hasAvatar?: boolean;
+  /** На Android: true когда аватар разрешён (data: -> file:) или аватара нет. Не скрываем сплеш пока false — избегаем мерцания и ошибки Glide. */
+  hasAvatarReady?: boolean;
+  /** Режим оверлея: Home уже отрисован под сплешем, ждать минимум не нужно — только плавно скрыть сплеш. */
+  overlayMode?: boolean;
 }
 
-export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvatar }: SplashLoaderProps) {
+export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvatar, hasAvatarReady, overlayMode }: SplashLoaderProps) {
   const [showSplash, setShowSplash] = useState(true);
-  const [minTimeElapsed, setMinTimeElapsed] = useState(false);
+  const [minTimeElapsed, setMinTimeElapsed] = useState(!!overlayMode);
   const { theme } = useAppTheme();
 
   // Анимации для логотипа
@@ -38,27 +42,28 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
   const shadowOpacity = useRef(new Animated.Value(0.3)).current;
   
 
-  // Минимальное время показа - 5 секунд
+  // Минимальное время показа: в overlayMode не ждём, иначе 5 секунд
   useEffect(() => {
+    if (overlayMode) return;
     const timer = setTimeout(() => {
       setMinTimeElapsed(true);
     }, 5000);
     return () => clearTimeout(timer);
-  }, []);
+  }, [overlayMode]);
 
-  // Скрываем заглушку когда прошло минимум времени И данные загружены
-  // Если переданы hasNick/hasAvatar - проверяем что данные реально есть
+  // Скрываем заглушку когда прошло минимум времени И данные загружены И (на Android) аватар готов к показу
   useEffect(() => {
     // Если переданы проверки данных, используем их - хотя бы одно должно быть true
-    const dataReady = (hasNick !== undefined || hasAvatar !== undefined)
+    let dataReady = (hasNick !== undefined || hasAvatar !== undefined)
       ? ((hasNick === true) || (hasAvatar === true)) // хотя бы одно должно быть true
       : true; // если проверки не переданы, используем старую логику
+    if (hasAvatarReady !== undefined) dataReady = dataReady && hasAvatarReady;
     
     if (minTimeElapsed && dataLoaded && dataReady) {
-      // Плавное исчезновение
+      // Плавное исчезновение (чуть дольше — мягче переход к странице приветствия)
       Animated.timing(logoOpacity, {
         toValue: 0,
-        duration: 500,
+        duration: 620,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }).start(() => {
@@ -66,7 +71,7 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
         onComplete?.();
       });
     }
-  }, [minTimeElapsed, dataLoaded, hasNick, hasAvatar]);
+  }, [minTimeElapsed, dataLoaded, hasNick, hasAvatar, hasAvatarReady, overlayMode]);
 
   // Анимация 3D парения логотипа
   useEffect(() => {

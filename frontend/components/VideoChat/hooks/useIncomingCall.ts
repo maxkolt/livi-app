@@ -129,7 +129,7 @@ export const useIncomingCall = ({
 
   // Обработка отмены звонка (инкремент пропущенного делается централизованно в App.tsx — здесь только закрываем UI)
   useEffect(() => {
-    const offCancel = onCallCanceled?.(async (_d) => {
+    const offCancel = onCallCanceled?.(async (d: any) => {
       const isFriendCall = !!routeParams?.directCall || friendCallAccepted || !!currentCallIdRef.current;
       if (!isFriendCall) return;
 

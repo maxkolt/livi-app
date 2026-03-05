@@ -42,7 +42,8 @@ import { Audio } from 'expo-av';
 import { getFull, putFull, putThumb } from '../utils/avatarCache';
 import { BlurView } from 'expo-blur';
 import { getAvatarImageProps } from '../utils/imageOptimization';
- 
+import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
+
 import { API_BASE, getMyProfile } from '../sockets/socket';
 import { logger } from '../utils/logger';
 import { toAvatarThumb } from '../utils/uploadAvatar';
@@ -907,6 +908,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     avatarModalBaseScale.setValue(1);
     avatarModalLastScale.current = 1;
   }, [avatarModalVisible, fullAvatarUri, peerId, peerAvatarVerState, avatarModalPinchScale, avatarModalBaseScale]);
+
+  // На Android в модалке data: URI показываем через разрешённый file: (Glide иначе не показывает)
+  const [modalAvatarResolvedUri] = useResolvedImageUri(avatarModalVisible ? modalAvatarUri : '');
+  const modalAvatarDisplayUri = (Platform.OS === 'android' && /^data:/i.test(modalAvatarUri)) ? modalAvatarResolvedUri : modalAvatarUri;
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -3511,11 +3516,15 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
   // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
-  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed }: any) => {
+  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri }: any) => {
     const bubbleRef = React.useRef<View>(null);
     const [imageLoadError, setImageLoadError] = React.useState(false);
     const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
     const [isDownloading, setIsDownloading] = React.useState(false);
+    const imageUriForItem = item.type === 'image' ? (resolveMediaUri(item.uri) || '') : '';
+    const [messageImageResolvedUri] = useResolvedImageUri(
+      Platform.OS === 'android' && imageUriForItem && /^data:/i.test(imageUriForItem) ? imageUriForItem : ''
+    );
     const fireLongPressWithLayout = React.useCallback(() => {
       const measure = () => {
         bubbleRef.current?.measureInWindow((x, y, w, h) => {
@@ -3609,6 +3618,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               </View>
             );
           }
+          const displayImageUri = (Platform.OS === 'android' && /^data:/i.test(imageUri)) ? messageImageResolvedUri : imageUri;
           
           logger.debug('[ChatScreen] MessageItem: rendering image', { 
             messageId: item.id, 
@@ -3697,7 +3707,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </View>
               )}
               <ExpoImage
-                source={{ uri: localImageUri || imageUri }}
+                source={{ uri: localImageUri || displayImageUri }}
                 style={{
                   width: '100%',
                   height: '100%',
@@ -4239,8 +4249,9 @@ export default function ChatScreen({ route, navigation }: Props) {
       selectionMode={selectionMode}
       isSelected={selectedMessageIds.has(String(item.id))}
       onToggleSelect={toggleSelectMessage}
+      resolveMediaUri={resolveMediaUri}
     />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, handleReactionPress, selectionMode, selectedMessageIds, toggleSelectMessage]);
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, handleReactionPress, selectionMode, selectedMessageIds, toggleSelectMessage, resolveMediaUri]);
 
   return (
     <SafeAreaView 
@@ -4808,10 +4819,16 @@ export default function ChatScreen({ route, navigation }: Props) {
                 ]}
               >
                 {modalAvatarUri ? (
-                  <ExpoImage
-                    {...getAvatarImageProps(modalAvatarUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
-                    style={{ width: avatarModalSize, height: avatarModalSize }}
-                  />
+                  modalAvatarDisplayUri ? (
+                    <ExpoImage
+                      {...getAvatarImageProps(modalAvatarDisplayUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
+                      style={{ width: avatarModalSize, height: avatarModalSize }}
+                    />
+                  ) : (
+                    <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</Text>
+                    </View>
+                  )
                 ) : (
                   <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
                     <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</Text>

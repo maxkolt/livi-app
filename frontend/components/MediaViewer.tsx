@@ -26,6 +26,7 @@ import { API_BASE } from '../sockets/socket';
 import { useLang } from '../store/lang';
 import { t } from '../utils/i18n';
 import PhotoEditor from '@baronha/react-native-photo-editor';
+import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -67,6 +68,13 @@ export default function MediaViewer({
     if (uri.startsWith('/uploads/')) return `${API_BASE}${uri}`;
     return uri;
   }, [uri]);
+
+  const uriToDisplay = currentUri || resolvedUri;
+  const [androidFileUri] = useResolvedImageUri(
+    Platform.OS === 'android' && uriToDisplay && /^data:/i.test(uriToDisplay) ? uriToDisplay : ''
+  );
+  const imageSourceUri =
+    Platform.OS === 'android' && uriToDisplay && /^data:/i.test(uriToDisplay) ? androidFileUri : uriToDisplay;
 
   React.useEffect(() => {
     setCurrentUri(resolvedUri);
@@ -525,7 +533,7 @@ export default function MediaViewer({
                     }}
                   >
                     <ExpoImage
-                      source={{ uri: currentUri || resolvedUri }}
+                      source={{ uri: imageSourceUri }}
                       style={styles.image}
                       contentFit="contain"
                       cachePolicy="memory-disk"

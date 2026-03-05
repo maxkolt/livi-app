@@ -1336,14 +1336,18 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       const noOpenFlag = (global as any).__callEndedFromPiPNoOpenRef?.current === true;
       const endedFromPiP = endSource === 'pip_close' || noOpenFlag;
       const onVideoCallScreen = (global as any).__navRef?.getCurrentRoute?.()?.name === 'VideoCall';
-      logger.info('[VideoCall] [PiP] handleCallEnded', { endSource, inSystemPiP, noOpenFlag, endedFromPiP, onVideoCallScreen, doResetWillRun: !inSystemPiP && !endedFromPiP });
+      const doResetWillRun = !inSystemPiP && !endedFromPiP;
       const cleanupDelay = inSystemPiP ? 0 : (onVideoCallScreen ? 0 : 350);
       const doReset = () => {
         try {
           const rootNav = (global as any).__navRef;
-          if (!rootNav?.isReady?.()) return;
+          if (!rootNav?.isReady?.()) {
+            return;
+          }
           const route = rootNav.getCurrentRoute();
-          if (route?.name === 'Home') return;
+          if (route?.name === 'Home') {
+            return;
+          }
           if (route?.name === 'VideoCall') {
             rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
           }
@@ -1353,10 +1357,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       };
       if (!inSystemPiP && !endedFromPiP) {
         try { (global as any).__homeResetByVideoCallRef.current = true; } catch (_) {}
-        logger.info('[VideoCall] [PiP] handleCallEnded: вызываем doReset() → навигация на Home (inSystemPiP=false, не из PiP)');
         doReset();
-      } else {
-        logger.info('[VideoCall] [PiP] handleCallEnded: doReset НЕ вызываем', { inSystemPiP, endedFromPiP, reason: inSystemPiP ? 'inSystemPiP' : 'endedFromPiP' });
       }
 
       // После навигации — обновляем state (остальное закрытие уже в фоне).
