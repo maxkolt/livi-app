@@ -115,6 +115,9 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 // Это нужно чтобы можно было остановить стримы даже когда экран звонка размонтирован (в PiP)
 (global as any).__webrtcSessionRef = { current: null as any };
 
+// КРИТИЧНО: VideoCall выставляет true при doReset() → навигация на Home. App при call:ended не вызывает goHome() повторно (убирает двойное закрытие).
+(global as any).__homeResetByVideoCallRef = { current: false };
+
 // КРИТИЧНО: Глобальная ссылка на функцию переключения микрофона из VideoCall
 // Это нужно чтобы можно было запустить startMicMeter даже когда экран звонка размонтирован (в PiP)
 (global as any).__toggleMicRef = { current: null as (() => void) | null };
@@ -244,7 +247,7 @@ function AppContent() {
         if (rn !== 'Home') {
           navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
         } else {
-          navRef.dispatch(CommonActions.navigate({ name: 'Home' as any, params: { callCancelled: true } }));
+          navRef.dispatch(CommonActions.setParams({ callCancelled: true }));
         }
       }
     });
@@ -380,7 +383,7 @@ function AppContent() {
                 if (rn !== 'Home') {
                   navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
                 } else {
-                  navRef.dispatch(CommonActions.navigate({ name: 'Home' as any, params: { callCancelled: true } }));
+                  navRef.dispatch(CommonActions.setParams({ callCancelled: true }));
                 }
               }
             } else {
@@ -1135,18 +1138,26 @@ function AppContent() {
           });
           logger.debug('Keep-awake deactivated (app background)');
         }
-        // Для Android деактивируем setKeepScreenOn и InCallManager только если НЕ в PiP.
+        // Для Android деактивируем setKeepScreenOn и InCallManager только если НЕ в PiP и НЕ активный видеозвонок.
         // В системном PiP звук звонка должен оставаться громким — InCallManager.stop() сбрасывает аудио-сессию и делает звук тихим.
+        // Страховка: не вызывать stop(), если есть активная сессия (ref'ы PiP могли не успеть проставиться в release).
         if (Platform.OS === 'android') {
           try {
             const g = (global as any);
             const inPiP = g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
-            if (!inPiP) {
+            const session = g.__webrtcSessionRef?.current;
+            const activeVideoCallNotEnded = !!session && (typeof session.isEnded !== 'function' ? true : !session.isEnded());
+            if (!inPiP && !activeVideoCallNotEnded) {
               (InCallManager as any).setKeepScreenOn?.(false);
               InCallManager.stop();
-              logger.debug('[App] setKeepScreenOn(false) deactivated for Android');
+              logger.info('[App] AppState background: InCallManager.stop() called (no PiP, no active call)');
             } else {
-              logger.debug('[App] Skip InCallManager.stop() in background — PiP active, keep call audio');
+              logger.info('[App] AppState background: Skip InCallManager.stop() — keep call audio', {
+                inPiP,
+                activeVideoCallNotEnded,
+                pipVisibleRef: g.__pipVisibleRef?.current,
+                pipInSystemModeRef: g.__pipInSystemModeRef?.current,
+              });
             }
           } catch (e) {
             logger.warn('[App] Failed to setKeepScreenOn(false) on Android:', e);
@@ -1476,6 +1487,13 @@ function AppContent() {
       }
 
       // Сразу показываем страницу приветствия (у обоих участников без мерцания).
+      // Не вызываем goHome() если VideoCall уже сделал reset на Home (убирает двойное закрытие).
+      const homeResetByVideoCall = g.__homeResetByVideoCallRef?.current === true;
+      if (homeResetByVideoCall) {
+        console.log('[App] [call:ended] goHome() не вызываем — переход на Home уже выполнен из VideoCall');
+        try { g.__homeResetByVideoCallRef.current = false; } catch (_) {}
+        return;
+      }
       console.log('[App] [call:ended] вызываем goHome() → переход на HomeScreen (причина: inSystem=false, noOpenFlag=false)');
       const goHome = () => {
         if (!navRef.isReady()) return;
@@ -1746,13 +1764,17 @@ function AppContent() {
       } catch {}
       // Мгновенно закрываем UI
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
-      // Переход на Home с бейджем «Вызов отменен» (как при завершённом звонке)
-      if (navRef.isReady()) {
+      // Переход на Home с бейджем «Вызов отменен» (как при завершённом звонке). Не дублируем, если VideoCall уже сделал reset (у callee при отмене инициатором).
+      const g = global as any;
+      const homeResetByVideoCall = g.__homeResetByVideoCallRef?.current === true;
+      if (homeResetByVideoCall) {
+        try { g.__homeResetByVideoCallRef.current = false; } catch (_) {}
+      } else if (navRef.isReady()) {
         const routeName = String(navRef.getCurrentRoute()?.name ?? '');
         if (routeName !== 'Home') {
           navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
         } else {
-          navRef.dispatch(CommonActions.navigate({ name: 'Home' as any, params: { callCancelled: true } }));
+          navRef.dispatch(CommonActions.setParams({ callCancelled: true }));
         }
       }
       // Инкремент пропущенного только у получателя (callee): у того, кому звонили, при отмене звонящим
@@ -1894,7 +1916,7 @@ function AppContent() {
         if (routeName !== 'Home') {
           navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
         } else {
-          navRef.dispatch(CommonActions.navigate({ name: 'Home' as any, params: { callCancelled: true } }));
+          navRef.dispatch(CommonActions.setParams({ callCancelled: true }));
         }
       }
       try {
@@ -2328,6 +2350,14 @@ export default function App() {
       // На экране VideoCall при нажатии Back — сразу переход в системный PiP (как при нажатии Домой).
       if (currentRoute === 'VideoCall' && hasActiveCall) {
         try {
+          // КРИТИЧНО: Выставляем ref'ы PiP синхронно до вызова нативного PiP, чтобы к моменту
+          // AppState 'background' проверка inPiP в handleAppStateChange уже была true и InCallManager.stop() не вызвался (release vs dev гонка).
+          const g = (global as any);
+          g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+          g.__pipVisibleRef.current = true;
+          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
+          g.__pipInSystemModeRef.current = true;
+
           const params = (global as any).__currentCallPiPParamsRef?.current;
           const callId = params?.callId ?? (typeof session?.getCallId === 'function' ? session.getCallId() : null);
           const roomId = params?.roomId ?? (typeof session?.getRoomId === 'function' ? session.getRoomId() : null);

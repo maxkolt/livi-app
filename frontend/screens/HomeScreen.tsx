@@ -813,6 +813,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, []);
   const [savedAvatarUrl, setSavedAvatarUrl] = useState<string>(''); // ТОЛЬКО https или ''
   const [myAvatarVer, setMyAvatarVer] = useState<number>(0);   // версия моего аватара
+  const [avatarVerChecked, setAvatarVerChecked] = useState(false); // true после первой проверки кэша (убирает мелькание буквы при переходе на Home после звонка)
   const [profileKey, setProfileKey] = useState(0);
 
   // Make currentUserId reactive for this screen (module state changes don't trigger re-render).
@@ -825,11 +826,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, []);
 
   // Restore cached avatar version ASAP so avatar can render offline / on slow mobile networks.
+  // После первой проверки ставим avatarVerChecked=true, чтобы не показывать букву до загрузки (мелькание при переходе на Home после звонка).
   useEffect(() => {
     let cancelled = false;
+    const uid = String(resolvedUserId || '').trim();
+    if (!uid) {
+      setAvatarVerChecked(true);
+      return;
+    }
     (async () => {
-      const uid = String(resolvedUserId || '').trim();
-      if (!uid) return;
       try {
         const raw = await AsyncStorage.getItem(`avatarVer_${uid}`);
         const v = raw ? Number(raw) || 0 : 0;
@@ -837,6 +842,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           setMyAvatarVer((prev) => (prev && prev > v ? prev : v));
         }
       } catch {}
+      if (!cancelled) setAvatarVerChecked(true);
     })();
     return () => { cancelled = true; };
   }, [resolvedUserId]);
@@ -4125,14 +4131,21 @@ const handleClearNick = useCallback(async () => {
             />)
           ) : hasDirectAvatarUri ? (
             // Пока разрешаем data: -> file: на Android (плейсхолдер)
+            avatarVerChecked ? (
+              <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
+                <Text style={{ color: LIVI.titan, fontSize: 48, fontWeight: '500' }}>{letter}</Text>
+              </View>
+            ) : (
+              <View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]} />
+            )
+          ) : avatarVerChecked ? (
+            // Плейсхолдер с буквой (после первой проверки кэша)
             (<View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
               <Text style={{ color: LIVI.titan, fontSize: 48, fontWeight: '500' }}>{letter}</Text>
             </View>)
           ) : (
-            // Плейсхолдер с буквой
-            (<View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]}>
-              <Text style={{ color: LIVI.titan, fontSize: 48, fontWeight: '500' }}>{letter}</Text>
-            </View>)
+            // До первой проверки кэша — нейтральный круг (убирает мелькание буквы при переходе на Home после звонка)
+            (<View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]} />)
           )}
           </View>
         </Pressable>

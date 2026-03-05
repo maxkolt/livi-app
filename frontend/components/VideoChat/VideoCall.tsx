@@ -1352,6 +1352,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
       };
       if (!inSystemPiP && !endedFromPiP) {
+        try { (global as any).__homeResetByVideoCallRef.current = true; } catch (_) {}
         logger.info('[VideoCall] [PiP] handleCallEnded: вызываем doReset() → навигация на Home (inSystemPiP=false, не из PiP)');
         doReset();
       } else {
