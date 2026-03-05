@@ -132,7 +132,7 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
       const pipVisible = !!(global as any).__pipVisibleRef?.current;
       const inSystemPiP = (global as any).__pipInSystemModeRef?.current === true;
       if (pipVisible || inSystemPiP) {
-        logger.debug('[useAudioRouting] Skip stopSpeaker because PiP is active', { pipVisible, inSystemPiP });
+        logger.info('[useAudioRouting] Skip stopSpeaker (keep call audio) — PiP active', { pipVisible, inSystemPiP });
         return;
       }
     } catch {}
