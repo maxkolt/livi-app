@@ -224,14 +224,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setPendingSystemPiP(false);
           const session = (global as any).__webrtcSessionRef?.current;
           if (session && typeof (session as any).enterPiP === 'function') (session as any).enterPiP();
-          // КРИТИЧНО: При входе в системный PiP на Android система часто переключает звук на earpiece.
-          // Явно переприменяем громкий динамик, чтобы собеседника было слышно нормально.
-          if (Platform.OS === 'android') {
+          // КРИТИЧНО: В PiP система часто переключает звук с громкого динамика на разговорный (earpiece) — становится тихо.
+          // Принудительно держим громкий динамик: переприменяем сразу и с задержками (на части устройств переключение с задержкой).
+          const reapplyPiPAudio = () => {
             try {
               InCallManager.start({ media: 'video', ringback: '' });
-              try { (InCallManager as any).requestAudioFocus?.(); } catch {}
+              try { (InCallManager as any).requestAudioFocus?.(); } catch (_) {}
+              try { (InCallManager as any).setForceSpeakerphoneOn?.(true); } catch (_) {}
               InCallManager.setSpeakerphoneOn(true);
             } catch (_) {}
+          };
+          if (Platform.OS === 'android') {
+            reapplyPiPAudio();
+            [300, 900, 1500, 2500].forEach((ms) => setTimeout(reapplyPiPAudio, ms));
           }
         }
       };
@@ -390,16 +395,24 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const emitter = new NativeEventEmitter();
     const sub = emitter.addListener('AboutToEnterSystemPiP', () => {
       const g = (global as any);
-      // Не входить в PiP без нажатия пользователя: при завершении звонка (переход на Home) onUserLeaveHint может сработать раньше нативного флага.
-      if (g.__endingCallInProgressRef?.current === true) return;
-      const session = g.__webrtcSessionRef?.current;
-      if (session && typeof (session as any).isEnded === 'function' && (session as any).isEnded()) return;
-
-      // Сразу помечаем «входим в системный PiP», чтобы AppState 'background' и stopSpeaker() не вызывали InCallManager.stop() (гонка событий).
+      // КРИТИЧНО (релиз): Сразу помечаем PiP ДО любых проверок, чтобы stopSpeaker() в cleanup useAudioRouting
+      // не успел вызвать InCallManager.stop() до обработки события (в релизе порядок событий может отличаться).
       try {
         g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
         g.__pipInSystemModeRef.current = true;
+        g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+        g.__pipVisibleRef.current = true;
       } catch (_) {}
+      // Не входить в PiP без нажатия пользователя: при завершении звонка (переход на Home) onUserLeaveHint может сработать раньше нативного флага.
+      if (g.__endingCallInProgressRef?.current === true) {
+        try { g.__pipInSystemModeRef.current = false; g.__pipVisibleRef.current = false; } catch (_) {}
+        return;
+      }
+      const session = g.__webrtcSessionRef?.current;
+      if (session && typeof (session as any).isEnded === 'function' && (session as any).isEnded()) {
+        try { g.__pipInSystemModeRef.current = false; g.__pipVisibleRef.current = false; } catch (_) {}
+        return;
+      }
 
       // До входа в системный PiP переводим VideoCall в компактный режим (только удалённое видео),
       // чтобы избежать "чёрных блоков" от лишних SurfaceView/RTCView при захвате окна PiP.

@@ -113,6 +113,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastLiveKitReconnectingAt = 0;
   private pendingRemoteDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private cameraSwitchInProgress = false;
+  /** Set when camera flip ends; used to ignore late TrackUnsubscribed for ~2s and avoid black remote view. */
+  private lastCameraFlipEndedAt = 0;
 
   /* ========= Mic level monitoring (VoiceEqualizer) ========= */
   private micBarsCount = 21;
@@ -709,6 +711,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
     } finally {
       this.cameraSwitchInProgress = false;
+      this.lastCameraFlipEndedAt = Date.now();
     }
   }
 
@@ -4431,11 +4434,13 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     const tracksCount = this.remoteStream?.getTracks().length ?? 0;
     if (this.remoteStream && tracksCount === 0) {
-      // During LiveKit reconnect/renegotiation tracks can temporarily drop to 0.
-      // Do NOT reset remoteStream to null in that case — it causes UI to show "error/no video" flicker.
+      // During LiveKit reconnect/renegotiation or local camera flip, tracks can temporarily drop to 0.
+      // Do NOT reset remoteStream to null — it causes UI to show black + loader in "Собеседник" block (especially in release).
       const isRoomReconnecting = this.liveKitReconnecting || this.room?.state === 'reconnecting';
       const recentlyReconnecting = Date.now() - this.lastLiveKitReconnectingAt < 10_000;
-      if (!isRoomReconnecting && !recentlyReconnecting) {
+      const duringLocalCameraFlip = this.cameraSwitchInProgress;
+      const recentlyAfterCameraFlip = Date.now() - this.lastCameraFlipEndedAt < 2_000;
+      if (!isRoomReconnecting && !recentlyReconnecting && !duringLocalCameraFlip && !recentlyAfterCameraFlip) {
         this.remoteStream = null;
         this.emit('remoteStream', null);
         this.config.callbacks.onRemoteStreamChange?.(null);
@@ -4445,9 +4450,11 @@ export class VideoCallSession extends SimpleEventEmitter {
           if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: null });
         } catch (_) {}
       } else {
-        logger.debug('[VideoCallSession] Suppressed remoteStream=null during reconnect', {
+        logger.debug('[VideoCallSession] Suppressed remoteStream=null during reconnect or camera flip', {
           isRoomReconnecting,
           recentlyReconnecting,
+          duringLocalCameraFlip,
+          recentlyAfterCameraFlip,
           roomState: this.room?.state,
           kind: publication.kind,
         });

@@ -1305,6 +1305,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         logger.info('[VideoCall] handleCallEnded вызван, переход уже применён - игнорируем');
         return;
       }
+      // Уже на Home (onAbortCall или предыдущий handleCallEnded уже перешли) — не повторяем doReset/bringMainActivityToFront.
+      const rootNav = (global as any).__navRef;
+      if (rootNav?.isReady?.()) {
+        const route = rootNav.getCurrentRoute();
+        if (route?.name === 'Home') {
+          logger.info('[VideoCall] handleCallEnded: уже на Home - игнорируем (без повторного doReset)');
+          callEndedTransitionDoneRef.current = true;
+          return;
+        }
+      }
       // Двойная обработка: локальный endCall уже эмитит callEnded; затем приходит call:ended по сокету и сессия снова эмитит.
       // Один переход в «завершён» — не повторяем навигацию/setState при втором вызове.
       if (isEndingCallRef.current) {

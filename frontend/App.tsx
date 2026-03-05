@@ -32,7 +32,7 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, canUseFullScreenIntent, openAppNotificationSettings } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, canUseFullScreenIntent, openAppNotificationSettings, notifyCallCanceled } from './utils/callKeep';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
@@ -238,6 +238,15 @@ function AppContent() {
       try { setIncomingCallScreenVisible(false); } catch {}
       try { stopIncomingCallAlert(); } catch {}
       try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+      // Бейдж «Вызов отменен» на главном экране (тот, кому звонили, отклонил в приложении)
+      if (navRef.isReady()) {
+        const rn = String(navRef.getCurrentRoute()?.name ?? '');
+        if (rn !== 'Home') {
+          navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
+        } else {
+          navRef.dispatch(CommonActions.navigate({ name: 'Home' as any, params: { callCancelled: true } }));
+        }
+      }
     });
     const sub3 = emitter.addListener('LiviPendingCallAccepted', () => {
       const LiviAppModule = NativeModules.LiviAppModule;
@@ -365,6 +374,15 @@ function AppContent() {
               stopIncomingCallAlert();
               setIncoming(null);
               try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
+              // Бейдж «Вызов отменен» на главном экране (тот, кому звонили, отклонил)
+              if (navRef.isReady()) {
+                const rn = String(navRef.getCurrentRoute()?.name ?? '');
+                if (rn !== 'Home') {
+                  navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
+                } else {
+                  navRef.dispatch(CommonActions.navigate({ name: 'Home' as any, params: { callCancelled: true } }));
+                }
+              }
             } else {
               // Звонящий отменил с нативного экрана — отменяем исходящий и сразу закрываем модалку
               try { cancelCall(callId); } catch {}
@@ -1713,7 +1731,11 @@ function AppContent() {
     const offCancel = onCallCanceled?.(async (d) => {
       logger.debug('Call canceled received', { callId: d?.callId });
       incomingCallIdRef.current = null;
-      if ((d as any)?.callId) try { reportEndCallToCallKeep((d as any).callId); } catch {}
+      const callIdStr = (d as any)?.callId ? String((d as any).callId) : '';
+      if (callIdStr) {
+        try { reportEndCallToCallKeep(callIdStr); } catch {}
+        try { notifyCallCanceled(callIdStr); } catch {}
+      }
       stopIncomingCallRingtoneAndVibration();
       try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
@@ -1724,7 +1746,15 @@ function AppContent() {
       } catch {}
       // Мгновенно закрываем UI
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
-      // Никакой навигации — остаёмся на текущем экране
+      // Переход на Home с бейджем «Вызов отменен» (как при завершённом звонке)
+      if (navRef.isReady()) {
+        const routeName = String(navRef.getCurrentRoute()?.name ?? '');
+        if (routeName !== 'Home') {
+          navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
+        } else {
+          navRef.dispatch(CommonActions.navigate({ name: 'Home' as any, params: { callCancelled: true } }));
+        }
+      }
       // Инкремент пропущенного только у получателя (callee): у того, кому звонили, при отмене звонящим
       try {
         const callerId = String((d as any)?.from || '');
@@ -1858,6 +1888,15 @@ function AppContent() {
       stopIncomingCallAlert();
       // Мгновенно закрываем UI
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
+      // Переход на Home с бейджем «Вызов отменен»
+      if (navRef.isReady()) {
+        const routeName = String(navRef.getCurrentRoute()?.name ?? '');
+        if (routeName !== 'Home') {
+          navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
+        } else {
+          navRef.dispatch(CommonActions.navigate({ name: 'Home' as any, params: { callCancelled: true } }));
+        }
+      }
       try {
         const id = String((d as any)?.callId || '');
         if (id) {

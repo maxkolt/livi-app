@@ -139,6 +139,7 @@ import {
 
 type HomeRouteParams = {
   callEnded?: boolean;
+  callCancelled?: boolean;
   inviteCode?: string;
   showInviteModal?: boolean;
   openFriendsMenu?: boolean;
@@ -640,8 +641,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [tab]);
 
   // Плавное появление оверлея меню — короткая анимация для быстрого отклика
+  // КРИТИЧНО: при закрытии сбрасываем opacity в 0, чтобы при следующем открытии анимация была с 0
   useEffect(() => {
-    if (!menuOpen) return;
+    if (!menuOpen) {
+      menuOverlayOpacity.setValue(0);
+      return;
+    }
     menuOverlayOpacity.setValue(0);
     Animated.timing(menuOverlayOpacity, {
       toValue: 1,
@@ -1410,11 +1415,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (cleaned) return; cleaned = true;
         try { setOutgoingCallScreenVisible(false); } catch {}
         try { closeOutgoingCallActivity(); } catch {}
-        // Таймаут: у инициатора счётчик не увеличиваем, просто закрываем UI
+        // Таймаут: у инициатора счётчик не увеличиваем; бейдж «Вызов отменен» покажет App при переходе на Home с callCancelled
         callingVisibleRef.current = false;
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
-        showNotice(t('noAnswer', lang), 'error', 1800);
       });
       const offRoomFull = onCallRoomFull?.(() => {
         if (cleaned) return; cleaned = true;
@@ -1431,6 +1435,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         callingVisibleRef.current = false;
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
+        // Бейдж «Вызов отменен» покажет App при переходе на Home с callCancelled
       });
 
       // Таймаут на клиенте (единый с нативом OUTGOING_CALL_TIMEOUT_MS) как safeguard
@@ -1478,7 +1483,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
     setCalling({ visible: false, friend: null, callId: null });
     stopWaves();
-  }, [calling.callId, stopWaves]);
+    showNotice(t('callCancelled', lang), 'success', 3000);
+  }, [calling.callId, stopWaves, showNotice, lang]);
 
   /* friends fetch */
   const loadFriendsRef = useRef<Promise<void> | null>(null);
@@ -4147,14 +4153,18 @@ const handleClearNick = useCallback(async () => {
     );
   };
 
-  // Показ уведомления «Звонок завершён», авто-открытие меню друзей, переход на вкладку «Друзья» (тап по «Пропущенный вызов»).
+  // Показ уведомления «Звонок завершён» / «Вызов отменен», авто-открытие меню друзей, переход на вкладку «Друзья» (тап по «Пропущенный вызов»).
   // При переходе по тапу «Пропущенный вызов» (openFriendsTab) — снимаем уведомления из шторки и бейдж.
   useEffect(() => {
     const ended = (route as any)?.params?.callEnded;
+    const cancelled = (route as any)?.params?.callCancelled;
     const openFriendsMenu = (route as any)?.params?.openFriendsMenu;
     const openFriendsTab = (route as any)?.params?.openFriendsTab;
     if (ended) {
-      showNotice(t('callEnded', lang), 'success', 5000);
+      showNotice(t('callEnded', lang), 'success', 3000);
+    }
+    if (cancelled) {
+      showNotice(t('callCancelled', lang), 'success', 3000);
     }
     if (openFriendsMenu) {
       setMenuOpen(true);
@@ -4182,10 +4192,11 @@ const handleClearNick = useCallback(async () => {
         } catch {}
       }).catch(() => {});
     }
-    if (ended || openFriendsMenu || openFriendsTab) {
+    if (ended || cancelled || openFriendsMenu || openFriendsTab) {
       try {
         navigation.setParams?.({
           callEnded: undefined,
+          callCancelled: undefined,
           openFriendsMenu: undefined,
           openFriendsTab: undefined,
         });
@@ -4458,8 +4469,11 @@ const handleClearNick = useCallback(async () => {
         </View>
       )}
 
-      {menuOpen && (
-        <Animated.View style={[styles.overlayMenu, { opacity: menuOverlayOpacity }]} pointerEvents="box-none">
+      {/* Оверлей меню всегда в дереве (opacity 0 когда закрыт), чтобы в релизе не было задержки ~2 сек при первом открытии из-за тяжёлого маунта BlurView/контента. */}
+      <Animated.View
+        style={[styles.overlayMenu, { opacity: menuOverlayOpacity }]}
+        pointerEvents={menuOpen ? 'box-none' : 'none'}
+      >
           <View style={StyleSheet.absoluteFill} collapsable={false}>
             <BlurView intensity={Platform.OS === 'ios' ? 80 : 60} tint="dark" style={StyleSheet.absoluteFill} />
             <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'ios' ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.6)' }]} />
@@ -4572,7 +4586,6 @@ const handleClearNick = useCallback(async () => {
             </KeyboardAvoidingView>
           </SafeAreaView>
         </Animated.View>
-      )}
 
       {/* ───── Комната занята (caller info) ───── */}
       {roomFull.visible && (
