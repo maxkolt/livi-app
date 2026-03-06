@@ -15,7 +15,7 @@ import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
 import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall } from "./sockets/socket";
-import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
+import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
@@ -353,15 +353,15 @@ function AppContent() {
             acceptCall(callId);
           } catch {}
           reportAnswerIncomingCall(callId);
-          navRef.dispatch(
-            CommonActions.reset({
-              index: 1,
-              routes: [
-                { name: 'Home' as any },
-                { name: 'VideoCall' as any, params: { peerUserId: info.from, directCall: true, directInitiator: false, callId, isIncoming: true } },
-              ],
-            })
-          );
+          try { emitCloseHomeModals(); } catch {}
+          // Push VideoCall поверх текущего экрана (не reset), чтобы после завершения звонка goBack() вернул на тот же экран (Chat, Friends и т.д.).
+          navRef.navigate('VideoCall' as any, {
+            peerUserId: info.from,
+            directCall: true,
+            directInitiator: false,
+            callId,
+            isIncoming: true,
+          });
         },
         onEnd: (callId) => {
           stopIncomingCallRingtoneAndVibration();
@@ -1073,6 +1073,7 @@ function AppContent() {
     let appStateSubscription: any = null;
     let keepAwakeInterval: ReturnType<typeof setInterval> | null = null;
     let androidKeepScreenOnInterval: ReturnType<typeof setInterval> | null = null;
+    let pipKeepScreenOnInterval: ReturnType<typeof setInterval> | null = null;
     
     const activateKeepAwake = () => {
       if (activateKeepAwakeAsync) {
@@ -1105,6 +1106,11 @@ function AppContent() {
     const handleAppStateChange = (nextAppState: string) => {
       if (!shouldKeepOn) return;
       if (nextAppState === 'active' || nextAppState === 'inactive') {
+        // Останавливаем интервал «экран не гаснет в PiP», когда вернулись из фона
+        if (pipKeepScreenOnInterval) {
+          clearInterval(pipKeepScreenOnInterval);
+          pipKeepScreenOnInterval = null;
+        }
         // КРИТИЧНО: Приложение активно или неактивно (но видно) - ВСЕГДА активируем keep-awake
         // 'inactive' на iOS означает, что приложение видно, но не полностью активно
         // (например, показывается Control Center или уведомление)
@@ -1126,30 +1132,50 @@ function AppContent() {
           }
         }
       } else if (nextAppState === 'background') {
-        // Приложение ушло в фон - деактивируем для экономии батареи
-        if (keepAwakeInterval) {
-          clearInterval(keepAwakeInterval);
-          keepAwakeInterval = null;
-        }
-        if (androidKeepScreenOnInterval) {
-          clearInterval(androidKeepScreenOnInterval);
-          androidKeepScreenOnInterval = null;
-        }
-        if (deactivateKeepAwakeAsync) {
-          deactivateKeepAwakeAsync().catch((e) => {
-            logger.warn('Failed to deactivate keep-awake:', e);
-          });
-          logger.debug('Keep-awake deactivated (app background)');
+        // Проверяем: в системном PiP с активным звонком — экран не гасим до завершения звонка
+        const g = (global as any);
+        const inPiP = g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
+        const session = g.__webrtcSessionRef?.current;
+        const activeVideoCallNotEnded = !!session && (typeof session.isEnded !== 'function' ? true : !session.isEnded());
+        const keepScreenOnInPiP = inPiP && activeVideoCallNotEnded;
+
+        if (!keepScreenOnInPiP) {
+          // Обычный фон — деактивируем для экономии батареи
+          if (keepAwakeInterval) {
+            clearInterval(keepAwakeInterval);
+            keepAwakeInterval = null;
+          }
+          if (androidKeepScreenOnInterval) {
+            clearInterval(androidKeepScreenOnInterval);
+            androidKeepScreenOnInterval = null;
+          }
+          if (pipKeepScreenOnInterval) {
+            clearInterval(pipKeepScreenOnInterval);
+            pipKeepScreenOnInterval = null;
+          }
+          if (deactivateKeepAwakeAsync) {
+            deactivateKeepAwakeAsync().catch((e) => {
+              logger.warn('Failed to deactivate keep-awake:', e);
+            });
+            logger.debug('Keep-awake deactivated (app background)');
+          }
+        } else {
+          // В PiP с активным звонком — keep-awake не выключаем, экран не гасим
+          if (!pipKeepScreenOnInterval) {
+            pipKeepScreenOnInterval = setInterval(() => {
+              activateKeepAwake();
+              if (Platform.OS === 'android') {
+                activateAndroidKeepScreenOn();
+              }
+            }, 3000);
+          }
+          logger.debug('[App] Background in PiP: keep-awake left on until call ends');
         }
         // Для Android деактивируем setKeepScreenOn и InCallManager только если НЕ в PiP и НЕ активный видеозвонок.
         // В системном PiP звук звонка должен оставаться громким — InCallManager.stop() сбрасывает аудио-сессию и делает звук тихим.
         // Страховка: не вызывать stop(), если есть активная сессия (ref'ы PiP могли не успеть проставиться в release).
         if (Platform.OS === 'android') {
           try {
-            const g = (global as any);
-            const inPiP = g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
-            const session = g.__webrtcSessionRef?.current;
-            const activeVideoCallNotEnded = !!session && (typeof session.isEnded !== 'function' ? true : !session.isEnded());
             if (!inPiP && !activeVideoCallNotEnded) {
               (InCallManager as any).setKeepScreenOn?.(false);
               InCallManager.stop();
@@ -1219,6 +1245,10 @@ function AppContent() {
       if (androidKeepScreenOnInterval) {
         clearInterval(androidKeepScreenOnInterval);
         androidKeepScreenOnInterval = null;
+      }
+      if (pipKeepScreenOnInterval) {
+        clearInterval(pipKeepScreenOnInterval);
+        pipKeepScreenOnInterval = null;
       }
       // Деактивируем при unmount
       if (deactivateKeepAwakeAsync) {
@@ -1441,6 +1471,8 @@ function AppContent() {
     const onCallEnded = (data?: { callId?: string }) => {
       const g = global as any;
       console.log('[App] [call:ended] 📩 onCallEnded вызван', { callId: data?.callId, inSystem: g.__pipInSystemModeRef?.current, __callEndedFromPiPNoOpen: g.__callEndedFromPiPNoOpenRef?.current });
+      // Очищаем сохранённый call:accepted, чтобы следующий звонок не подхватил старый payload (логи: «Found pending call:accepted» со старым callId).
+      if (g.__pendingCallAcceptedRef) g.__pendingCallAcceptedRef.current = null;
       // Сразу закрываем системный PiP у собеседника (до любых очисток), иначе окно успевает показать лоадер.
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
@@ -1489,33 +1521,32 @@ function AppContent() {
         return;
       }
 
-      // Сразу показываем страницу приветствия (у обоих участников без мерцания).
-      // Не вызываем goHome() если VideoCall уже сделал reset на Home (убирает двойное закрытие).
+      // Закрываем экран видеозвонка (goBack — пользователь остаётся на том же экране, что и до звонка). Не вызываем, если VideoCall уже закрыл экран.
       const homeResetByVideoCall = g.__homeResetByVideoCallRef?.current === true;
       if (homeResetByVideoCall) {
-        console.log('[App] [call:ended] goHome() не вызываем — переход на Home уже выполнен из VideoCall');
+        console.log('[App] [call:ended] навигацию не делаем — экран звонка уже закрыт из VideoCall');
         try { g.__homeResetByVideoCallRef.current = false; } catch (_) {}
         return;
       }
-      console.log('[App] [call:ended] вызываем goHome() → переход на HomeScreen (причина: inSystem=false, noOpenFlag=false)');
-      const goHome = () => {
+      const closeVideoCallScreen = () => {
         if (!navRef.isReady()) return;
         const route = navRef.getCurrentRoute();
         const routeName = String((route as any)?.name ?? '');
         if (routeName === 'Home') return;
-        const homeParams = { callEnded: true };
+        // Только если сейчас на VideoCall — закрываем экран (goBack или reset). Иначе пользователь уже на другом экране — не трогаем.
         if (routeName === 'VideoCall') {
-          navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: homeParams }] }));
+          const state = navRef.getState();
+          const routes = state?.routes ?? [];
+          if (routes.length > 1) {
+            navRef.dispatch(CommonActions.goBack());
+            try { emitCallEndedOnHome(); } catch (_) {}
+          } else {
+            navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
+          }
           return;
         }
-        navRef.dispatch(
-          CommonActions.reset({
-            index: 0,
-            routes: [{ name: 'Home' as any, params: homeParams }],
-          })
-        );
       };
-      goHome();
+      closeVideoCallScreen();
     };
     socket.on('call:ended', onCallEnded);
     return () => { socket.off('call:ended', onCallEnded); };
@@ -1918,15 +1949,10 @@ function AppContent() {
             try {
               if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
                 setActiveVideoCall(true);
-                navRef.dispatch(
-                  CommonActions.reset({
-                    index: 1,
-                    routes: [
-                      { name: 'Home' as any },
-                      { name: 'VideoCall' as any, params },
-                    ],
-                  })
-                );
+                // Закрываем модалки «Поддержать LiVi» и «Пригласи друга», чтобы экран видеозвонка был поверх
+                try { emitCloseHomeModals(); } catch {}
+                // Push VideoCall поверх текущего экрана (не reset), чтобы после завершения звонка goBack() вернул на тот же экран (Chat, Friends и т.д.).
+                navRef.navigate('VideoCall' as any, params);
               }
             } catch (err) {
               logger.error('[App] ❌ Error navigating to VideoCall', { error: err, callId: data?.callId });
