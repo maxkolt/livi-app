@@ -29,6 +29,8 @@ export interface WebRTCSessionCallbacks {
 
 export interface WebRTCSessionConfig {
   myUserId?: string;
+  /** При создании сессии для входящего звонка — не использовать pending call:accepted, если его callId не совпадает (защита от старого payload). */
+  initialCallId?: string | null;
   callbacks: WebRTCSessionCallbacks;
   // True on iOS simulator (used to disable native audio/PCM features that are unstable in Simulator)
   isSimulator?: boolean;
@@ -72,6 +74,9 @@ export interface WebRTCSessionConfig {
 
   /** Вызывается, когда эта сессия пропустила подключение (другая сессия уже подключается к комнате). Компонент должен переключиться на переданную сессию. */
   onSwitchToConnectingSession?: (session: unknown) => void;
+
+  /** Вызывается в самом начале handleCallEnded (до disconnectRoom), чтобы UI успел выставить refs и не реагировал на колбэки при отключении — без ререндеров при закрытии экрана. */
+  onCallEnding?: () => void;
   
   // Callbacks shortcuts (для удобства доступа)
   onLocalStreamChange?: (stream: MediaStream | null) => void;

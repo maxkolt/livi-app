@@ -162,7 +162,17 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Проверяем, есть ли сохраненное событие call:accepted, которое пришло до создания сессии
     // Это решает проблему, когда call:accepted приходит до того, как VideoCallSession создан
     const pendingCallAccepted = (global as any).__pendingCallAcceptedRef?.current;
-    if (pendingCallAccepted) {
+    const initialCallId = (config as { initialCallId?: string | null }).initialCallId;
+    const pendingCallId = pendingCallAccepted ? String(pendingCallAccepted?.callId ?? '') : '';
+    const usePending = pendingCallAccepted && (!initialCallId || pendingCallId === String(initialCallId));
+    if (pendingCallAccepted && !usePending) {
+      logger.info('[VideoCallSession] 🔄 Ignoring stale pending call:accepted (callId mismatch)', {
+        pendingCallId,
+        initialCallId: initialCallId ?? undefined,
+        myUserId: config.myUserId,
+      });
+      (global as any).__pendingCallAcceptedRef.current = null;
+    } else if (usePending) {
       logger.info('[VideoCallSession] 🔄 Found pending call:accepted event, will process after first frame', {
         callId: pendingCallAccepted.callId,
         roomId: pendingCallAccepted.roomId,
@@ -1758,6 +1768,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       try { (NativeModules as any)?.LiviAppModule?.setEndingCallInProgress?.(true); } catch {}
       try { (NativeModules as any)?.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
     }
+    // КРИТИЧНО: Сразу уведомляем UI (выставить refs), чтобы колбэки при disconnectRoom (onRemoteCamStateChange и т.д.) не вызывали setState — без ререндеров при закрытии экрана.
+    try { this.config.onCallEnding?.(); } catch (_) {}
 
     // КРИТИЧНО: Сохраняем состояние ПЕРЕД очисткой для логирования
     const savedCallId = this.callId;
@@ -3664,6 +3676,21 @@ export class VideoCallSession extends SimpleEventEmitter {
             disconnectedHandler();
           }
           return;
+        }
+        // Отписываем локальные треки без ожидания: чтобы SDK при disconnect() не обновлял mute
+        // у уже отписанных треков. Не ждём завершения unpublish, иначе ренегоциация успевает
+        // дойти до setLocalDescription(answer) и даёт "Called in wrong state: stable".
+        const lp = roomToDisconnect.localParticipant as any;
+        if (lp) {
+          const unpublishAll = (pubs: Map<string, any> | undefined) => {
+            if (!pubs || typeof pubs.values !== 'function') return;
+            for (const pub of pubs.values()) {
+              const track = pub?.track;
+              if (track) (lp.unpublishTrack(track, true) as Promise<void>).catch(() => {});
+            }
+          };
+          unpublishAll(lp.videoTrackPublications);
+          unpublishAll(lp.audioTrackPublications);
         }
         try {
           await roomToDisconnect.disconnect();

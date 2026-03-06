@@ -8,7 +8,7 @@ import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
 import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration } from './callKeep';
-import { emitCloseOutgoingCall } from './globalEvents';
+import { emitCloseOutgoingCall, emitCloseHomeModals } from './globalEvents';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 /** Флаг: пользователь заходил во вкладку «Друзья» и «увидел» пропущенные — бейдж и уведомления в шторке скрываем, счётчики в приложении не трогаем. */
@@ -224,24 +224,15 @@ async function navigateToVideoCallIncoming(peerUserId: string, callId: string) {
   const nav = await waitForNavReady();
   if (!nav) return;
   setActiveVideoCall(true);
-  nav.dispatch(
-    CommonActions.reset({
-      index: 1,
-      routes: [
-        { name: 'Home' as any },
-        {
-          name: 'VideoCall' as any,
-          params: {
-            peerUserId,
-            directCall: true,
-            directInitiator: false,
-            callId,
-            isIncoming: true,
-          },
-        },
-      ],
-    })
-  );
+  try { emitCloseHomeModals(); } catch {}
+  // Push VideoCall поверх текущего экрана (не reset), чтобы после завершения звонка goBack() вернул на тот же экран (Chat, Friends и т.д.).
+  nav.navigate('VideoCall' as any, {
+    peerUserId,
+    directCall: true,
+    directInitiator: false,
+    callId,
+    isIncoming: true,
+  });
 }
 
 /** Открыть экран входящего звонка (для deep link livi://incoming-call и full-screen intent). */

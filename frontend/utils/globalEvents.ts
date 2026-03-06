@@ -9,6 +9,8 @@ const closeIncomingListeners = new Set<Listener<{}>>();
 const closeIncomingRequestListeners = new Set<Listener<{}>>();
 const closeOutgoingCallListeners = new Set<Listener<{}>>();
 const callCancelledOnHomeListeners = new Set<Listener<{}>>();
+const callEndedOnHomeListeners = new Set<Listener<{}>>();
+const closeHomeModalsListeners = new Set<Listener<{}>>();
 
 export function onMissedIncrement(cb: Listener<{ userId: string }>): () => void {
   missedListeners.add(cb);
@@ -85,6 +87,32 @@ export function onCallCancelledOnHome(cb: () => void): () => void {
 
 export function emitCallCancelledOnHome() {
   for (const l of callCancelledOnHomeListeners) {
+    try { (l as any)({}); } catch {}
+  }
+}
+
+/** Звонок завершён (не отмена). Показываем тост «Звонок завершён» на Home при фокусе, без setParams — без лишних ре-рендеров (при закрытии экрана звонка через goBack). */
+export function onCallEndedOnHome(cb: () => void): () => void {
+  const h = () => cb();
+  callEndedOnHomeListeners.add(h as any);
+  return () => { callEndedOnHomeListeners.delete(h as any); };
+}
+
+export function emitCallEndedOnHome() {
+  for (const l of callEndedOnHomeListeners) {
+    try { (l as any)({}); } catch {}
+  }
+}
+
+/** Закрыть модалки «Поддержать LiVi» и «Пригласи друга» на Home (чтобы экран видеозвонка был поверх при принятии вызова). */
+export function onCloseHomeModals(cb: () => void): () => void {
+  const h = () => cb();
+  closeHomeModalsListeners.add(h as any);
+  return () => { closeHomeModalsListeners.delete(h as any); };
+}
+
+export function emitCloseHomeModals() {
+  for (const l of closeHomeModalsListeners) {
     try { (l as any)({}); } catch {}
   }
 }

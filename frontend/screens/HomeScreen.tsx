@@ -74,7 +74,7 @@ import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onMissedIncrement, onMissedClear, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome } from '../utils/globalEvents';
+import { onMissedIncrement, onMissedClear, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled } from '../utils/callKeep';
 import { setMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
@@ -1277,6 +1277,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     });
     return unsub;
   }, [stopWaves]);
+
+  // Закрытие модалок «Поддержать LiVi» и «Пригласи друга» при переходе на видеозвонок (чтобы экран VideoCall был поверх)
+  useEffect(() => {
+    const unsub = onCloseHomeModals(() => {
+      setDonateVisible(false);
+      setShareVisible(false);
+    });
+    return unsub;
+  }, []);
 
   // Сброс скрытия правых действий свайпа, когда исходящий вызов закрыт (убирает мелькание кнопки «Удалить»)
   useEffect(() => {
@@ -4238,6 +4247,14 @@ const handleClearNick = useCallback(async () => {
   useEffect(() => {
     const off = onCallCancelledOnHome(() => {
       showNotice(t('callCancelled', lang), 'success', 3000);
+    });
+    return off;
+  }, [showNotice, lang]);
+
+  // Завершение звонка (закрытие экрана через goBack): тост «Звонок завершён» при фокусе на Home, без setParams — без лишних ре-рендеров
+  useEffect(() => {
+    const off = onCallEndedOnHome(() => {
+      showNotice(t('callEnded', lang), 'success', 3000);
     });
     return off;
   }, [showNotice, lang]);
