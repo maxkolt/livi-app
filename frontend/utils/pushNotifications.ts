@@ -90,6 +90,11 @@ AppState.addEventListener('change', (next) => {
   appStateRef = next;
 });
 
+/** Текущий peerId чата, если пользователь сейчас в экране переписки. Устанавливается ChatScreen при фокусе, сбрасывается при уходе. */
+export function setCurrentChatPeerId(peerId: string | null): void {
+  (global as any).__currentChatPeerId = peerId ?? null;
+}
+
 // КРИТИЧНО: Захватываем «последний ответ на уведомление» сразу при загрузке модуля,
 // чтобы не потерять его к моменту вызова addNotificationListeners (когда приложение открыто из пуша о звонке).
 const lastNotificationResponsePromise = Notifications.getLastNotificationResponseAsync();
@@ -133,7 +138,6 @@ Notifications.setNotificationHandler({
         }
       }
       return {
-        shouldShowAlert: false,
         shouldShowBanner: false,
         shouldShowList: false,
         shouldPlaySound: false,
@@ -146,7 +150,7 @@ Notifications.setNotificationHandler({
       logger.info('[decline/инициатор] push setNotificationHandler call_declined', { callId: id, alreadyHandled: id ? isOutgoingDeclineHandled(id) : false });
       if (id && isOutgoingDeclineHandled(id)) {
         logger.info('[decline/инициатор] push setNotificationHandler — уже обработан, выходим');
-        return { shouldShowAlert: false, shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
+        return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
       }
       if (id) markOutgoingDeclineHandled(id);
       try { closeOutgoingCallActivity(); } catch {}
@@ -154,7 +158,6 @@ Notifications.setNotificationHandler({
       try { emitCloseOutgoingCall(); } catch {}
       logger.info('[decline/инициатор] push setNotificationHandler: закрыли и emitCloseOutgoingCall');
       return {
-        shouldShowAlert: false,
         shouldShowBanner: false,
         shouldShowList: false,
         shouldPlaySound: false,
@@ -172,7 +175,6 @@ Notifications.setNotificationHandler({
         logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled');
       }
       return {
-        shouldShowAlert: false,
         shouldShowBanner: false,
         shouldShowList: false,
         shouldPlaySound: false,
@@ -184,7 +186,6 @@ Notifications.setNotificationHandler({
       // Expo-уведомление не показываем, иначе будет два уведомления об одном звонке.
       if (Platform.OS === 'android') {
         return {
-          shouldShowAlert: false,
           shouldShowBanner: false,
           shouldShowList: false,
           shouldPlaySound: false,
@@ -193,15 +194,27 @@ Notifications.setNotificationHandler({
       }
       const showCallNotification = appStateRef !== 'active';
       return {
-        shouldShowAlert: showCallNotification,
         shouldShowBanner: showCallNotification,
         shouldShowList: showCallNotification,
         shouldPlaySound: showCallNotification,
         shouldSetBadge: false,
       };
     }
+    // Не показывать уведомление о сообщении, если пользователь уже в чате с этим собеседником
+    if (type === 'message') {
+      const data = (n as any)?.request?.content?.data || {};
+      const fromId = String(data?.from || data?.fromUserId || '').trim();
+      const currentPeer = (global as any).__currentChatPeerId;
+      if (fromId && currentPeer && fromId === currentPeer) {
+        return {
+          shouldShowBanner: false,
+          shouldShowList: false,
+          shouldPlaySound: false,
+          shouldSetBadge: false,
+        };
+      }
+    }
     return {
-      shouldShowAlert: true,
       shouldShowBanner: true,
       shouldShowList: true,
       shouldPlaySound: true,

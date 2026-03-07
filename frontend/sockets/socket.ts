@@ -2172,6 +2172,38 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
   }
 }
 
+/** Редактировать текстовое сообщение (только своё). */
+export async function editMessage(messageId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const viaSocket = async () => emitAck<{ ok: boolean; error?: string }>('message:edit', { messageId, text });
+    const viaHttp = async () => {
+      const installId = await getInstallId().catch(() => '');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (installId) headers['x-install-id'] = String(installId);
+      if (currentUserId) headers['x-user-id'] = String(currentUserId);
+      const res = await fetch(`${API_BASE}/api/messages/edit`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ messageId, text }),
+      });
+      if (!res.ok) return { ok: false, error: `http_${res.status}` };
+      const data = await res.json().catch(() => null);
+      return data?.ok ? { ok: true } : { ok: false, error: data?.error || 'unknown' };
+    };
+    const r: any = await viaSocket();
+    if (r?.ok === true) return { ok: true };
+    return await viaHttp();
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'network_error' };
+  }
+}
+
+export function onMessageEdited(cb: (data: { messageId: string; text: string }) => void): () => void {
+  const h = (data: any) => cb(data);
+  socket.on('message:edited', h);
+  return () => { socket.off('message:edited', h); };
+}
+
 // Загрузка всех сообщений для чата (с кэшированием)
 export async function getChatMessages(peerId: string, userId?: string): Promise<any[]> {
   try {

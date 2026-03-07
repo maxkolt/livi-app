@@ -224,6 +224,49 @@ router.post('/messages/mark_read', async (req, res) => {
 });
 
 /**
+ * POST /api/messages/edit
+ * Body: { messageId, text }
+ * Только текстовые сообщения, только отправитель может редактировать.
+ */
+router.post('/messages/edit', async (req, res) => {
+  try {
+    const me = String((req as any)?.userId || '').trim();
+    if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
+
+    const messageId = String(req.body?.messageId || '').trim();
+    const text = typeof req.body?.text === 'string' ? String(req.body.text).trim() : '';
+    if (!messageId || text === '') return res.status(400).json({ ok: false, error: 'bad_request' });
+
+    const friendship = await FriendshipMessages.findOne({
+      $and: [
+        { $or: [{ user1: me }, { user2: me }] },
+        { $or: [{ 'textMessages.id': messageId }] },
+      ],
+    });
+
+    if (!friendship) return res.json({ ok: false, error: 'not_found' });
+
+    const updated = await (friendship as any).updateMessage(messageId, me, text);
+    if (!updated) return res.json({ ok: false, error: 'not_found_or_forbidden' });
+
+    try {
+      const io = (req as any).io as any | undefined;
+      if (io) {
+        const u1 = String((friendship as any).user1?.toString?.() || (friendship as any).user1 || '');
+        const u2 = String((friendship as any).user2?.toString?.() || (friendship as any).user2 || '');
+        const payload = { messageId, text };
+        if (u1) io.to(`u:${u1}`).emit('message:edited', payload);
+        if (u2) io.to(`u:${u2}`).emit('message:edited', payload);
+      }
+    } catch {}
+
+    return res.json({ ok: true, messageId, text });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
+
+/**
  * POST /api/messages/delete
  * Body: { messageId }
  */

@@ -715,5 +715,50 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
+
+  /** ===== Редактирование текстового сообщения (только отправитель) ===== */
+  sock.on('message:edit', async (payload: { messageId: string; text: string }, ack?: Function) => {
+    try {
+      const me = meId();
+      const messageId = String(payload?.messageId || '').trim();
+      const text = typeof payload?.text === 'string' ? String(payload.text).trim() : '';
+      if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
+      if (!messageId || text === '') return ack?.({ ok: false, error: 'bad_request' });
+
+      const candidates: IFriendshipMessages[] = [];
+      for (const [, f] of friendshipCache.entries()) {
+        const hasMe = (f.user1?.toString?.() === me) || (f.user2?.toString?.() === me);
+        if (hasMe) candidates.push(f);
+      }
+      let foundFriendship: IFriendshipMessages | null = null;
+      for (const f of candidates) {
+        const msg = (f as any).findMessageById(messageId);
+        if (msg && msg.type === 'text') { foundFriendship = f; break; }
+      }
+      if (!foundFriendship) {
+        const list = await FriendshipMessages.find({ $or: [{ user1: me }, { user2: me }] });
+        for (const f of list) {
+          const msg = (f as any).findMessageById(messageId);
+          if (msg && msg.type === 'text') { foundFriendship = f; break; }
+        }
+      }
+      if (!foundFriendship) return ack?.({ ok: false, error: 'not_found' });
+
+      const updated = await (foundFriendship as any).updateMessage(messageId, me, text);
+      if (!updated) return ack?.({ ok: false, error: 'not_found_or_forbidden' });
+
+      const u1 = foundFriendship.user1.toString();
+      const u2 = foundFriendship.user2.toString();
+      const payloadOut = { messageId, text };
+      for (const s of io.sockets.sockets.values()) {
+        const uid = (s as any).data?.userId;
+        if (uid && (uid === u1 || uid === u2)) s.emit('message:edited', payloadOut);
+      }
+      return ack?.({ ok: true, messageId, text });
+    } catch (e: any) {
+      console.error('[message:edit] error:', e?.message || e);
+      return ack?.({ ok: false, error: 'server_error' });
+    }
+  });
 }
 

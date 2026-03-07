@@ -171,4 +171,18 @@ FriendshipMessagesSchema.methods.removeMessage = function(messageId: string) {
   return false;
 };
 
+// Метод для редактирования текстового сообщения (только текст, только отправитель)
+FriendshipMessagesSchema.methods.updateMessage = function(messageId: string, fromUserId: string, newText: string) {
+  const message = this.findMessageById(messageId);
+  if (!message || message.type !== 'text') return false;
+  const fromStr = message.from?.toString?.() || String(message.from);
+  if (fromStr !== fromUserId) return false;
+  const array = this.getMessagesArray('text');
+  const index = array.findIndex((msg: IMessageItem) => msg.id === messageId);
+  if (index === -1) return false;
+  array[index].text = newText;
+  this.lastActivity = new Date();
+  return this.save();
+};
+
 export default mongoose.model<IFriendshipMessages>('FriendshipMessages', FriendshipMessagesSchema);

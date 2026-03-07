@@ -70,7 +70,9 @@ import {
   clearChatMessages,
   onChatCleared,
   deleteMessage,
+  editMessage,
   onMessageDeleted,
+  onMessageEdited,
   globalMessageStorage,
   fetchMessages,
   fetchFriends,
@@ -79,7 +81,8 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t } from "../utils/i18n";
-import { clearNotificationIndicators } from "../utils/pushNotifications";
+import { clearNotificationIndicators, setCurrentChatPeerId } from "../utils/pushNotifications";
+import { useFocusEffect } from "@react-navigation/native";
 
 type RouteParams = {
   peerId: string;
@@ -376,6 +379,14 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [peerOnline, setPeerOnline] = useState<boolean>(!!route?.params?.peerOnline);
   const [fullAvatarUri, setFullAvatarUri] = useState<string>(peerAvatarThumbB64Param); // Используем миниатюру как начальное значение
 
+  // Не показывать системное уведомление о сообщении от текущего собеседника, пока пользователь в этом чате
+  useFocusEffect(
+    useCallback(() => {
+      if (peerId) setCurrentChatPeerId(peerId);
+      return () => setCurrentChatPeerId(null);
+    }, [peerId])
+  );
+
   const [conversation, setConversation] =
     useState<CometChat.Conversation | null>(null);
   const [loading, setLoading] = useState(true);
@@ -423,6 +434,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   // Для панели реакций: id сообщения, по которому дважды нажали (показать полосу эмодзи)
   const [reactionBarForMessageId, setReactionBarForMessageId] = useState<string | null>(null);
+  /** ID сообщения, которое пользователь редактирует (текст в поле ввода). */
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [forwardToast, setForwardToast] = useState<{ visible: boolean; ok: boolean; text: string }>({
     visible: false,
     ok: true,
@@ -1207,6 +1220,18 @@ export default function ChatScreen({ route, navigation }: Props) {
       } catch {}
     });
 
+    const unsubscribeMessageEdited = onMessageEdited((data) => {
+      const mid = String((data as any)?.messageId || '').trim();
+      const text = typeof (data as any)?.text === 'string' ? String((data as any).text) : '';
+      if (!mid) return;
+      setMessages((prev) => {
+        const updated = prev.map((msg) =>
+          String(msg?.id || '') === mid ? { ...msg, text } : msg
+        );
+        void saveMessages(updated);
+        return updated;
+      });
+    });
 
     return () => {
       unsubscribeReceived();
@@ -1214,6 +1239,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       unsubscribeReaction();
       unsubscribeChatCleared();
       unsubscribeMessageDeleted();
+      unsubscribeMessageEdited();
       unsubscribeDelivered();
     };
   }, [currentUserId, peerId]);
@@ -2774,11 +2800,16 @@ export default function ChatScreen({ route, navigation }: Props) {
         messageActionsLayoutRef.current = null;
       }
 
-      const actionIds = ['copy', 'forward', 'select', 'delete', 'cancel'] as const;
+      const isOwn = m?.from === currentUserId || m?.sender === 'me';
+      const isText = String(m?.type || '') === 'text';
+      const showEdit = isOwn && isText;
+
+      const actionIds = ['copy', 'forward', 'select', ...(showEdit ? (['edit'] as const) : []), 'delete', 'cancel'] as const;
       const options = [
         t('chatActionCopy', lang),
         t('chatActionForward', lang),
         t('chatActionSelect', lang),
+        ...(showEdit ? [t('chatActionEdit', lang)] : []),
         t('delete', lang),
         t('cancelAction', lang),
       ];
@@ -2797,6 +2828,11 @@ export default function ChatScreen({ route, navigation }: Props) {
           (buttonIndex) => {
             const action = actionIds[buttonIndex] || 'cancel';
             if (action === 'cancel') return;
+            if (action === 'edit') {
+              setMessageText(String(m?.text ?? ''));
+              setEditingMessageId(m?.id ?? null);
+              return;
+            }
             if (action === 'delete') return confirmDeleteSelectedMessage(m);
             if (action === 'copy') return void copySelectedMessage(m);
             if (action === 'forward') return void openForwardPicker();
@@ -2809,7 +2845,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       // Android: передаём layout при открытии и откладываем показ на следующий кадр
       showMessageActionsSheet(layout ?? null);
     },
-    [confirmDeleteSelectedMessage, copySelectedMessage, openForwardPicker, showMessageActionsSheet, lang]
+    [currentUserId, confirmDeleteSelectedMessage, copySelectedMessage, openForwardPicker, showMessageActionsSheet, lang]
   );
 
   // Функция для получения анимации сообщения (стабильная ссылка, чтобы не ломать мемоизацию)
@@ -2883,8 +2919,28 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const sendMessage = async () => {
     if (!messageText.trim() || !currentUserId) return;
-    
-    
+
+    // Редактирование существующего сообщения
+    if (editingMessageId) {
+      const newText = messageText.trim();
+      setMessageText('');
+      setEditingMessageId(null);
+      const result = await editMessage(editingMessageId, newText);
+      if (result.ok) {
+        setMessages((prev) => {
+          const updated = prev.map((m) =>
+            m.id === editingMessageId ? { ...m, text: newText } : m
+          );
+          saveMessages(updated);
+          return updated;
+        });
+      } else {
+        setMessageText(newText);
+        setEditingMessageId(editingMessageId);
+      }
+      return;
+    }
+
     const messageToSend = messageText.trim();
     setMessageText(""); // Очищаем поле сразу
     // Если отправили сообщение — прекращаем "typing"
@@ -4124,64 +4180,68 @@ export default function ChatScreen({ route, navigation }: Props) {
             );
           })()}
           
-          {/* Нижняя строка: время + статус в стиле Telegram */}
-          <View style={{ 
-            flexDirection: 'row', 
-            alignItems: 'center', 
-            justifyContent: 'flex-end',
-            marginTop: item.type !== 'text' ? 4 : 1,
-          }}>
-            <Text style={{ 
-              color: LIVI.text, 
-              fontSize: 12,
-              marginRight: isMyMessage ? 4 : 0,
-              opacity: 0.8,
-              fontWeight: '500',
-            }}>
-              {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </Text>
-            {renderStatusIcons()}
-          </View>
-          </TouchableOpacity>
-
-          {/* Реакции: по нажатию снимается (toggle), у обоих — будто пузырь лопается */}
+          {/* Нижняя строка: реакции слева, время + статус справа (всё внутри облака) */}
           {(() => {
             const reactions = Array.isArray(item.reactions) ? item.reactions : [];
-            if (reactions.length === 0) return null;
+            const hasReactions = reactions.length > 0;
             const byEmoji: Record<string, number> = {};
-            reactions.forEach((r: { emoji: string }) => {
-              byEmoji[r.emoji] = (byEmoji[r.emoji] || 0) + 1;
-            });
-            const list = Object.entries(byEmoji).map(([emoji, count]) => ({ emoji, count }));
+            if (hasReactions) {
+              reactions.forEach((r: { emoji: string }) => {
+                byEmoji[r.emoji] = (byEmoji[r.emoji] || 0) + 1;
+              });
+            }
+            const list = hasReactions ? Object.entries(byEmoji).map(([emoji, count]) => ({ emoji, count })) : [];
             return (
-              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: -6, flexWrap: 'wrap' }}>
-                {list.map(({ emoji, count }, idx) => (
-                  <Pressable
-                    key={emoji}
-                    onPress={() => onReactionPress?.(item.id, emoji)}
-                    style={({ pressed }) => [
-                      {
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        backgroundColor: isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN,
-                        borderRadius: 12,
-                        paddingHorizontal: 8,
-                        paddingVertical: 4,
-                        opacity: pressed ? 0.85 : 1,
-                        transform: [{ scale: pressed ? 0.92 : 1 }],
-                      },
-                      idx > 0 ? { marginLeft: 4 } : {},
-                    ]}
-                  >
-                    <Text style={{ fontSize: 14 }}>{emoji}</Text>
-                    {count > 1 && (
-                      <Text style={{ fontSize: 11, color: LIVI.text, marginLeft: 2, opacity: 0.9 }}>{count}</Text>
-                    )}
-                  </Pressable>
-                ))}
+              <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: hasReactions ? 'flex-end' : 'flex-end',
+                marginTop: item.type !== 'text' ? 4 : 1,
+              }}>
+                {hasReactions ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 0, marginRight: 10 }}>
+                    {list.map(({ emoji, count }, idx) => (
+                      <Pressable
+                        key={emoji}
+                        onPress={() => onReactionPress?.(item.id, emoji)}
+                        style={({ pressed }) => [
+                          {
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            backgroundColor: 'transparent',
+                            borderRadius: 12,
+                            paddingHorizontal: 8,
+                            paddingVertical: 4,
+                            opacity: pressed ? 0.85 : 1,
+                            transform: [{ scale: pressed ? 0.92 : 1 }],
+                          },
+                          idx > 0 ? { marginLeft: 4 } : {},
+                        ]}
+                      >
+                        <Text style={{ fontSize: 14 }}>{emoji}</Text>
+                        {count > 1 && (
+                          <Text style={{ fontSize: 11, color: LIVI.text, marginLeft: 2, opacity: 0.9 }}>{count}</Text>
+                        )}
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+                <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 0 }}>
+                  <Text style={{
+                    color: LIVI.text,
+                    fontSize: 12,
+                    marginRight: isMyMessage ? 4 : 0,
+                    opacity: 0.8,
+                    fontWeight: '500',
+                  }}>
+                    {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </Text>
+                  {renderStatusIcons()}
+                </View>
               </View>
             );
           })()}
+          </TouchableOpacity>
         </View>
 
         {selectionMode && isMyMessage && (
@@ -5163,6 +5223,29 @@ export default function ChatScreen({ route, navigation }: Props) {
                           <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '600' }}>{t('chatActionSelect', lang)}</Text>
                           <Ionicons name="checkbox-outline" size={20} color={LIVI.titan} />
                         </Pressable>
+                        {(selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me') && String(selectedMessage?.type || '') === 'text' && (
+                          <>
+                            <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
+                            <Pressable
+                              onPress={() => {
+                                hideMessageActions();
+                                setMessageText(String(selectedMessage?.text ?? ''));
+                                setEditingMessageId(selectedMessage?.id ?? null);
+                              }}
+                              style={({ pressed }) => ({
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                paddingVertical: 12,
+                                paddingHorizontal: 14,
+                                backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
+                              })}
+                            >
+                              <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '600' }}>{t('chatActionEdit', lang)}</Text>
+                              <Ionicons name="pencil-outline" size={20} color={LIVI.titan} />
+                            </Pressable>
+                          </>
+                        )}
                         <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
                       </>
                     )}
