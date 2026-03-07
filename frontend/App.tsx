@@ -2131,7 +2131,10 @@ function AppContent() {
             contentStyle: { backgroundColor: 'transparent' },
             animation: 'fade',
             animationDuration: 450,
-          }}>
+            // Не размонтировать неактивные экраны — при закрытии VideoCall Home остаётся смонтированным, state (аватар и т.д.) сохраняется, нет мерцания буквы.
+            // Типы native-stack не включают detachInactiveScreens, но опция поддерживается в рантайме.
+            detachInactiveScreens: false,
+          } as React.ComponentProps<typeof Stack.Navigator>['screenOptions']}>
               <Stack.Screen name="Home" component={HomeScreen} />
               <Stack.Screen
                 name="RandomChat"

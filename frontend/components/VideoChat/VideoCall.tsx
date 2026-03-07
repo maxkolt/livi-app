@@ -1079,7 +1079,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     
     const session = new VideoCallSession(config);
     sessionRef.current = session;
-    setSessionTick((t) => t + 1);
+    // Не вызываем setSessionTick здесь: эффект установки обработчиков запускается в том же цикле и уже видит sessionRef.current.
+    // Вызов setSessionTick(1) вызывал лишний ререндер и переустановку обработчиков (мерцание). Tick увеличивается только при смене сессии (PiP, onSessionConnecting).
     // Помечаем, что эта сессия создана этим инстансом VideoCall (callbacks актуальны).
     // Для "чужих" (восстановленных из global ref) будем подписываться на события stream.
     try { createdSessionsRef.current.add(session as any); } catch {}
