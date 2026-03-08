@@ -726,28 +726,57 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   async restartLocalCamera(): Promise<void> {
-    // Та же логика, что и в Random Chat: replaceTrack в месте публикации уменьшает renegotiation
-    // и предотвращает пропадание видео собеседника при перевороте камеры.
+    // Preferred path for this LiveKit SDK: restart the already published LocalVideoTrack in place.
+    // This keeps the same publication and avoids remote unpublish/publish churn during camera flip.
     if (this.room && this.room.state === 'connected' && this.room.localParticipant && this.localVideoTrack) {
-      const oldVideoTrack = this.localVideoTrack;
       try {
-        const newVideoTrack = await this.createFreshLocalVideoTrack('restartLocalCamera');
-        this.swapLocalVideoTrack(newVideoTrack);
-        await this.replacePublishedVideoTrack(newVideoTrack, oldVideoTrack);
-        if (oldVideoTrack && oldVideoTrack !== newVideoTrack) {
-          try {
-            if (oldVideoTrack.mediaStreamTrack) {
-              oldVideoTrack.mediaStreamTrack.enabled = false;
-            }
-            oldVideoTrack.mute().catch(() => {});
-          } catch {}
-          try {
-            oldVideoTrack.stop();
-          } catch {}
+        const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+        const preferred = getPreferredVideoCaptureOptions(facingMode);
+        logger.info('[VideoCallSession] Restarting existing local video track', {
+          camSide: this.camSide,
+          preferred: preferred.meta,
+        });
+
+        try {
+          await this.localVideoTrack.restartTrack(preferred.primary as any);
+        } catch (e1) {
+          if (!preferred.fallback) throw e1;
+          logger.warn('[VideoCallSession] restartTrack with preferred preset failed; retrying with fallback', {
+            error: (e1 as any)?.message || String(e1 || ''),
+            preferred: preferred.meta,
+          });
+          await this.localVideoTrack.restartTrack(preferred.fallback as any);
         }
-        logger.info('[VideoCallSession] Camera restarted via replaceTrack path');
+
+        try {
+          if (this.localVideoTrack.mediaStreamTrack) {
+            this.localVideoTrack.mediaStreamTrack.enabled = this.isCamOn;
+            if (this.isCamOn) await this.localVideoTrack.unmute().catch(() => {});
+            else await this.localVideoTrack.mute().catch(() => {});
+          }
+        } catch {}
+
+        const stream = new MediaStream();
+        try {
+          const mt = this.localVideoTrack.mediaStreamTrack;
+          if (mt) stream.addTrack(mt as any);
+        } catch {}
+        try {
+          const at = this.localAudioTrack?.mediaStreamTrack;
+          if (at) stream.addTrack(at as any);
+        } catch {}
+        this.localStream = stream;
+        this.emit('localStream', stream);
+        this.config.callbacks.onLocalStreamChange?.(stream);
+        this.config.onLocalStreamChange?.(stream);
+
+        logger.info('[VideoCallSession] Camera restarted in place via LocalVideoTrack.restartTrack', {
+          trackId: this.localVideoTrack?.sid || this.localVideoTrack?.mediaStreamTrack?.id,
+          streamId: stream.id,
+          camSide: this.camSide,
+        });
       } catch (e) {
-        logger.warn('[VideoCallSession] replaceTrack path failed, falling back to recreateLocalVideoTrack', {
+        logger.warn('[VideoCallSession] restartTrack path failed, falling back to recreateLocalVideoTrack', {
           error: (e as any)?.message || String(e || ''),
         });
         await this.restartLocalCameraRecreatePath();
@@ -934,6 +963,11 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   getRemoteStream(): MediaStream | null {
     return this.remoteStream;
+  }
+
+  shouldSuppressRemoteTransientUi(windowMs = 2500): boolean {
+    if (this.cameraSwitchInProgress) return true;
+    return Date.now() - this.lastCameraFlipEndedAt < windowMs;
   }
 
   getPartnerId(): string | null {

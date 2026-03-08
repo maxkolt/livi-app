@@ -2664,7 +2664,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             onToggleCam={toggleCam}
             onFlipCamera={() => {
               const session = sessionRef.current ?? (global as any).__webrtcSessionRef?.current;
-              session?.flipCam?.();
+              if (!session?.flipCam) return;
+              Promise.resolve(session.flipCam()).catch((e: any) => {
+                logger.warn('[VideoCall] flipCam error:', e);
+              });
             }}
             localStream={localStream}
             visible={showControls}

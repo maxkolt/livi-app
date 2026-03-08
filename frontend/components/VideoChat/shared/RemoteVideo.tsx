@@ -128,6 +128,25 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     ]
   );
 
+  const renderHeldRemoteFrame = useCallback(
+    (reason: string, extra?: Record<string, unknown>) => {
+      const held = renderLastGoodFrame(reason, extra);
+      if (!held) return null;
+      return (
+        <View style={styles.videoContainer}>
+          {held}
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
+    },
+    [L, renderLastGoodFrame, showFriendBadge]
+  );
+
   // КРИТИЧНО: Логируем значение partnerInPiP при каждом рендере для отладки
   useEffect(() => {
     logger.debug('[RemoteVideo] partnerInPiP prop changed', { 
@@ -174,12 +193,16 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     return stream;
   }, [remoteStream]);
 
+  const shouldSuppressTransientRemoteUi =
+    Platform.OS === 'android' &&
+    !!(session && typeof session.shouldSuppressRemoteTransientUi === 'function' && session.shouldSuppressRemoteTransientUi());
+
   // Синхронно сбрасываем "последний кадр" при смене stream (переворот камеры), чтобы не рендерить старый stream без трека (чёрный экран).
   if (streamToUse?.id && lastGoodStreamRef.current && lastGoodStreamRef.current.id !== streamToUse.id) {
     lastGoodStreamRef.current = null;
   }
   // Когда партнер выключил камеру (cam-toggle) — не показывать застывший последний кадр, сбрасываем last good frame.
-  if (started && !wasFriendCallEnded && !isInactiveState && !remoteCamOn) {
+  if (started && !wasFriendCallEnded && !isInactiveState && !remoteCamOn && !shouldSuppressTransientRemoteUi) {
     lastGoodStreamRef.current = null;
     lastGoodAtRef.current = 0;
   }
@@ -342,6 +365,13 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // Звонок активен, партнер выключил камеру кнопкой в блоке «Вы» — у собеседника в блоке «Собеседник» показываем заглушку «Отошел».
   if (started && !isInactiveState && !wasFriendCallEnded && !remoteCamOn) {
+    if (shouldSuppressTransientRemoteUi) {
+      const held = renderHeldRemoteFrame('suppress-remote-cam-off-during-local-flip', {
+        streamId: streamToUse?.id,
+        remoteCamOn,
+      });
+      if (held) return held;
+    }
     logRenderState('remote-cam-off-active-call', { remoteCamOn, started, streamId: streamToUse?.id });
     return (
       <View style={styles.videoContainer}>
@@ -362,6 +392,13 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // КРИТИЧНО: Показываем бейдж друга даже когда нет стрима (для инициатора звонка)
   if (!streamToUse) {
     if (loading || started) {
+      if (shouldSuppressTransientRemoteUi) {
+        const held = renderHeldRemoteFrame('suppress-no-stream-during-local-flip', {
+          loading,
+          started,
+        });
+        if (held) return held;
+      }
       const now = Date.now();
       const stallStart = stallSinceRef.current ?? now;
       stallSinceRef.current = stallStart;
@@ -567,6 +604,16 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // а не лоадер, даже если стрим только что получен. Это означает, что пользователь явно выключил камеру.
   // НО: НЕ показываем заглушку если партнер в PiP (это уже обработано выше)
   if (!remoteCamOn && !hasRenderableVideo && !partnerInPiP) {
+    if (shouldSuppressTransientRemoteUi) {
+      const held = renderHeldRemoteFrame('suppress-no-renderable-video-during-local-flip', {
+        streamId: streamToUse.id,
+        hasVideoTrack,
+        videoTrackReady,
+        videoTrackEnabled,
+        videoTrackMuted,
+      });
+      if (held) return held;
+    }
     logRenderState('remote-cam-off', {
       streamId: streamToUse.id,
       hasVideoTrack,
@@ -593,6 +640,13 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   if (streamToUse && hasVideoTrack && (!partnerInPiP || remoteCamOn)) {
     // Трек есть, но отключён (партнер выключил камеру) — не показывать застывший кадр, показать "Отошел"
     if (!videoTrackEnabled && started && !wasFriendCallEnded && !isInactiveState) {
+      if (shouldSuppressTransientRemoteUi) {
+        const held = renderHeldRemoteFrame('suppress-disabled-track-during-local-flip', {
+          streamId: streamToUse.id,
+          videoTrackEnabled,
+        });
+        if (held) return held;
+      }
       lastGoodStreamRef.current = null;
       lastGoodAtRef.current = 0;
       stallSinceRef.current = null;
@@ -633,6 +687,16 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       );
     }
 
+    if (shouldSuppressTransientRemoteUi) {
+      const heldContainer = renderHeldRemoteFrame('suppress-non-renderable-track-during-local-flip', {
+        stallMs,
+        videoTrackReady,
+        videoTrackEnabled,
+        videoTrackMuted,
+      });
+      if (heldContainer) return heldContainer;
+    }
+
     // While camera is expected ON, treat muted/disabled as transient during flips/restarts.
     // Show loader/last frame instead of "Отошел" to avoid flicker.
     logRenderState('video-track-not-renderable', {
@@ -659,6 +723,12 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // Нет видеотрека (например, только аудио) — показываем заглушку, если камера "выключена" по состоянию
   if (!remoteCamOn) {
+    if (shouldSuppressTransientRemoteUi) {
+      const held = renderHeldRemoteFrame('suppress-fallback-remote-cam-off-during-local-flip', {
+        streamId: streamToUse?.id,
+      });
+      if (held) return held;
+    }
     stallSinceRef.current = null;
     return (
       <View style={styles.videoContainer}>
@@ -678,6 +748,13 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   {
     // Видеотрек отключён (партнер выключил камеру) — не показывать последний кадр
     if (streamToUse && hasVideoTrack && !videoTrackEnabled && started && !wasFriendCallEnded && !isInactiveState) {
+      if (shouldSuppressTransientRemoteUi) {
+        const held = renderHeldRemoteFrame('suppress-fallback-disabled-track-during-local-flip', {
+          streamId: streamToUse.id,
+          videoTrackEnabled,
+        });
+        if (held) return held;
+      }
       lastGoodStreamRef.current = null;
       lastGoodAtRef.current = 0;
       stallSinceRef.current = null;
@@ -697,6 +774,12 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     const stallStart = stallSinceRef.current ?? now;
     stallSinceRef.current = stallStart;
     const stallMs = now - stallStart;
+
+    if (shouldSuppressTransientRemoteUi) {
+      const heldContainer = renderHeldRemoteFrame('suppress-final-fallback-during-local-flip', { stallMs });
+      if (heldContainer) return heldContainer;
+    }
+
     const held = renderLastGoodFrame('fallback-hold-last-frame', { stallMs });
     if (stallMs > REMOTE_VIDEO_STALL_HOLD_MS && held) {
       return (
