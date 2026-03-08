@@ -202,7 +202,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
 
-    const delayMs = reason === 'peer_left' ? 1800 : 150;
+    const delayMs = reason === 'peer_left' ? 800 : 150;
     this.partnerGoneFallbackTimer = setTimeout(() => {
       this.partnerGoneFallbackTimer = null;
 
@@ -467,7 +467,7 @@ export class RandomChatSession extends SimpleEventEmitter {
           }
         }, 120);
         
-        // КРИТИЧНО: Fallback - если через 1.5 секунды нет match_found, вызываем start()
+        // КРИТИЧНО: Fallback - если через 700ms нет match_found, вызываем start()
         // Это гарантирует подключение к новому собеседнику даже если backend не вернул в очередь
         // Backend обычно возвращает в очередь быстро, но если что-то пошло не так, fallback поможет
         // КРИТИЧНО: Проверяем только started и room, isDisconnecting может быть true если disconnect еще не завершился
@@ -475,15 +475,15 @@ export class RandomChatSession extends SimpleEventEmitter {
           // КРИТИЧНО: room может остаться не-null, но уже быть в состоянии disconnected.
           // В этом случае тоже нужно дернуть autoNext, иначе UI залипает в "поиске".
           if (this.started && (!this.room || this.room.state === 'disconnected')) {
-            // Дополнительная проверка - если все еще disconnecting через 1.5 секунды, значит что-то пошло не так
+            // Дополнительная проверка - если все еще disconnecting через 700ms, значит что-то пошло не так
             if (this.isDisconnecting) {
-              logger.warn('[RandomChatSession] Still disconnecting after 1.5s, forcing reset');
+              logger.warn('[RandomChatSession] Still disconnecting after 700ms, forcing reset');
               this.isDisconnecting = false;
             }
             logger.debug('[RandomChatSession] Fallback: no match_found after next(), calling start()');
             this.autoNext('next_fallback');
           }
-        }, 1500);
+        }, 700);
       }
     } catch (e: any) {
       // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей на Android
