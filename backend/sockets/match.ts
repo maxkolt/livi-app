@@ -186,19 +186,17 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
     // Проверяем бан перед проверкой размера очереди
     const isBanned = await bannedTogether(socket.id, other.id);
     
-    // КРИТИЧНО: Если в очереди только 2 пользователя, разрешаем матч даже если они в бане
-    // Это необходимо для тестирования и работы с небольшим количеством пользователей
-    // Бан все еще работает для предотвращения немедленного рематча при большом количестве пользователей
+    // Даже если в очереди осталось только 2 пользователя, соблюдаем rematch-ban.
+    // Иначе после нажатия "Далее" сервер мгновенно сводит ту же пару обратно,
+    // и клиент выглядит так, будто новый поиск у одного пользователя не начался.
     if (queueSize <= 2) {
       if (isBanned) {
-        logger.debug('Only 2 users in queue, allowing match despite ban (testing/small user base)', {
+        logger.debug('Only 2 users in queue, rematch ban still active', {
           socketId: socket.id,
           otherId: other.id,
           waitQueueSize: queueSize
         });
-        // Разрешаем матч даже если в бане, если в очереди только 2 пользователя
-        candidateSid = sid;
-        break;
+        continue;
       }
       logger.debug('Only 2 users in queue, allowing match');
       candidateSid = sid;

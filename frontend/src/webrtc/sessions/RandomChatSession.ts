@@ -69,6 +69,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   private isDisconnecting = false;
   private disconnectHandled = false;
   private disconnectPromise: Promise<void> | null = null;
+  private pendingMatchFound: MatchPayload | null = null;
+  private partnerGoneFallbackTimer: NodeJS.Timeout | null = null;
   private currentRoomName: string | null = null; // Имя текущей подключенной комнаты LiveKit
   // Socket-level match room id (can differ from LiveKit roomName when we use userId-based room names).
   // Used for cam-toggle filtering to ensure "Отошел" is driven only by explicit UI camera toggles.
@@ -156,6 +158,76 @@ export class RandomChatSession extends SimpleEventEmitter {
     });
   }
 
+  private clearPartnerGoneFallbackTimer(): void {
+    if (this.partnerGoneFallbackTimer) {
+      clearTimeout(this.partnerGoneFallbackTimer);
+      this.partnerGoneFallbackTimer = null;
+    }
+  }
+
+  private bufferMatchFoundDuringDisconnect(data: MatchPayload): void {
+    this.pendingMatchFound = data;
+    this.logReconnectTrace('match_found_buffered_during_disconnect', {
+      partnerId: data.id,
+      roomId: data.roomId ?? null,
+      livekitRoomName: data.livekitRoomName ?? null,
+    });
+  }
+
+  private flushPendingMatchFound(trigger: string): void {
+    if (!this.started || this.isDisconnecting || !this.pendingMatchFound) {
+      return;
+    }
+
+    const pending = this.pendingMatchFound;
+    this.pendingMatchFound = null;
+    this.clearPartnerGoneFallbackTimer();
+    this.logReconnectTrace('match_found_flush_buffered', {
+      trigger,
+      partnerId: pending.id,
+      roomId: pending.roomId ?? null,
+      livekitRoomName: pending.livekitRoomName ?? null,
+    });
+
+    setTimeout(() => {
+      void this.handleMatchFound(pending).catch((e) => {
+        logger.error('[RandomChatSession] Failed to process buffered match_found', e);
+      });
+    }, 0);
+  }
+
+  private schedulePartnerGoneFallback(reason: 'peer_left' | 'disconnected'): void {
+    this.clearPartnerGoneFallbackTimer();
+    if (!this.started) {
+      return;
+    }
+
+    const delayMs = reason === 'peer_left' ? 1800 : 150;
+    this.partnerGoneFallbackTimer = setTimeout(() => {
+      this.partnerGoneFallbackTimer = null;
+
+      if (!this.started || this.isDisconnecting) {
+        return;
+      }
+
+      if (this.pendingMatchFound) {
+        this.flushPendingMatchFound(`partner_gone:${reason}:timer`);
+        return;
+      }
+
+      if (this.pendingConnectRequestId !== null) {
+        return;
+      }
+
+      if (this.room && this.room.state !== 'disconnected') {
+        return;
+      }
+
+      this.logReconnectTrace('partner_gone_schedule_auto_next', { reason });
+      this.autoNext(reason === 'peer_left' ? 'peer_left_fallback' : 'disconnected');
+    }, delayMs);
+  }
+
   constructor(config: WebRTCSessionConfig) {
     super();
     this.config = config;
@@ -172,6 +244,8 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   async startRandomChat(): Promise<void> {
     this.started = true;
+    this.pendingMatchFound = null;
+    this.clearPartnerGoneFallbackTimer();
     this.isCamOn = true;
     this.isMicOn = true;
     this.config.setIsInactiveState?.(false);
@@ -185,6 +259,8 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   stopRandomChat(): void {
     this.started = false;
+    this.pendingMatchFound = null;
+    this.clearPartnerGoneFallbackTimer();
     this.config.setStarted?.(false);
     this.config.callbacks.onLoadingChange?.(false);
     this.config.onLoadingChange?.(false);
@@ -234,6 +310,9 @@ export class RandomChatSession extends SimpleEventEmitter {
       logger.debug('[RandomChatSession] next: room is connecting/reconnecting, skipping');
       return;
     }
+
+    this.pendingMatchFound = null;
+    this.clearPartnerGoneFallbackTimer();
 
     // Anti-ghost guard:
     // Only allow "next" from a stable active call state, otherwise we can trigger
@@ -705,14 +784,9 @@ export class RandomChatSession extends SimpleEventEmitter {
         this.resetRemoteState();
         if (!this.started) {
           this.stopLocalTracks();
-        } else if (reason === 'disconnected') {
-          // peer_left: бэкенд уже вернул в очередь, autoNext не нужен. disconnected: запускаем поиск снова.
-          setTimeout(() => {
-            if (this.started && !this.isDisconnecting) {
-              this.logReconnectTrace('partner_gone_schedule_auto_next', { reason });
-              this.autoNext('disconnected');
-            }
-          }, 150);
+        } else {
+          this.flushPendingMatchFound(`partner_gone:${reason}:post_disconnect`);
+          this.schedulePartnerGoneFallback(reason);
         }
       } catch (e) {
         logger.warn('[RandomChatSession] handlePartnerGone error', { reason, error: e });
@@ -892,6 +966,16 @@ export class RandomChatSession extends SimpleEventEmitter {
       });
       return;
     }
+    if (this.isDisconnecting) {
+      logger.debug('[RandomChatSession] Disconnecting in progress, buffering match_found', {
+        partnerId,
+        roomName: data.livekitRoomName
+      });
+      this.bufferMatchFoundDuringDisconnect(data);
+      return;
+    }
+
+    this.clearPartnerGoneFallbackTimer();
     // Save socket-level match room id (used for cam-toggle relay).
     this.matchRoomId = roomId;
 
@@ -926,16 +1010,6 @@ export class RandomChatSession extends SimpleEventEmitter {
         this.room.state === 'connected' && 
         this.room.name === data.livekitRoomName) {
       logger.debug('[RandomChatSession] Room already connected to this room, ignoring match_found', { 
-        partnerId, 
-        roomName: data.livekitRoomName 
-      });
-      return;
-    }
-
-    // КРИТИЧНО: Если идет отключение, не обрабатываем новый match_found.
-    // Это защищает от overlap двух комнат/negotiation гонок.
-    if (this.isDisconnecting) {
-      logger.debug('[RandomChatSession] Disconnecting in progress, ignoring match_found', { 
         partnerId, 
         roomName: data.livekitRoomName 
       });
@@ -3494,6 +3568,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       } catch (e) {
         logger.debug('[RandomChatSession] Error clearing room reference', e);
       }
+      this.flushPendingMatchFound('disconnect_complete');
     }).catch((e: any) => {
       // КРИТИЧНО: В случае ошибки все равно очищаем, но с защитой от крашей
       try {
@@ -3512,6 +3587,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       } catch (cleanupError) {
         logger.debug('[RandomChatSession] Error in catch cleanup', cleanupError);
       }
+      this.flushPendingMatchFound('disconnect_complete_error');
     });
     
     return this.disconnectPromise;
