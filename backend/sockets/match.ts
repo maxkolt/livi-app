@@ -8,6 +8,7 @@ import User from '../models/User';
 // === Очередь ожидания ========================================================
 // Используем распределенное хранилище через queueStore
 const matchInProgress = new Set<string>(); // Локальный Set для предотвращения одновременных матчей на одном инстансе
+const delayedRetryTimers = new Map<string, NodeJS.Timeout>();
 
 // === Константы ===============================================================
 const NEXT_DEBOUNCE_MS = 500;
@@ -21,6 +22,34 @@ const QUEUE_CLEANUP_INTERVAL_MS = 30 * 1000; // Очистка каждые 30 �
 function safeGet(io: Server, sid: string): AuthedSocket | undefined {
   const s = io.sockets.sockets.get(sid) as AuthedSocket | undefined;
   return s && s.connected ? s : undefined;
+}
+function clearDelayedRetry(sid: string) {
+  const timer = delayedRetryTimers.get(String(sid));
+  if (timer) {
+    clearTimeout(timer);
+    delayedRetryTimers.delete(String(sid));
+  }
+}
+function scheduleDelayedRetry(io: Server, sid: string, delayMs: number, reason: string) {
+  const id = String(sid);
+  clearDelayedRetry(id);
+  const timer = setTimeout(() => {
+    delayedRetryTimers.delete(id);
+    const target = safeGet(io, id);
+    if (!target) return;
+    if (target.data.partnerSid || target.data.inCall) return;
+    if (matchInProgress.has(id)) return;
+    matchInProgress.add(id);
+    logger.debug('Running delayed match retry', { socketId: id, reason, delayMs });
+    void tryMatch(io, target)
+      .catch((e: any) => {
+        logger.error('Delayed tryMatch failed', { socketId: id, reason, error: e?.message || e });
+      })
+      .finally(() => {
+        matchInProgress.delete(id);
+      });
+  }, delayMs);
+  delayedRetryTimers.set(id, timer);
 }
 async function removeFromQueue(sid: string) {
   await queueStore.removeFromQueue(sid);
@@ -220,6 +249,9 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
   const other = safeGet(io, candidateSid);
   if (!other) return false;
 
+  clearDelayedRetry(socket.id);
+  clearDelayedRetry(other.id);
+
   logger.info('Match found', { socket1: socket.id, socket2: other.id });
 
   socket.data.partnerSid = other.id;
@@ -389,6 +421,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
           await pushToQueue(other.id);
           logger.debug('Partner re-added to queue after next', { socketId: other.id });
           runTryMatch(other);
+          scheduleDelayedRetry(io, other.id, REMATCH_BAN_MS + 250, 'next_rematch_window');
         }, reEnqueueDelayMs);
       }
     }
@@ -414,11 +447,13 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
       await pushToQueue(socket.id);
       logger.debug('Socket re-added to queue', { socketId: socket.id });
       runTryMatch(socket);
+      scheduleDelayedRetry(io, socket.id, REMATCH_BAN_MS + 250, 'next_rematch_window');
     }, reEnqueueDelayMs);
   });
 
   // === STOP ================================================================
   socket.on('stop', async () => {
+    clearDelayedRetry(socket.id);
     await removeFromQueue(socket.id);
     await clearPartner(io, socket, true, 'stop');
     socket.data.inCall = false;
@@ -428,6 +463,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
   // === DISCONNECT ==========================================================
   socket.on('disconnect', async (reason) => {
     logger.debug('Socket disconnected', { socketId: socket.id, reason });
+    clearDelayedRetry(socket.id);
 
     // Если пользователь нажал "Next" — не удаляем и не трогаем очередь
     if (socket.data?.isNexting) {
