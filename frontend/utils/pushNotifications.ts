@@ -3,7 +3,7 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { CommonActions } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, acceptCall, declineCall, ensureSocketConnected } from '../sockets/socket';
+import { API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, acceptCall, declineCall, ensureSocketConnected, getUnreadCount } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
@@ -50,18 +50,21 @@ export async function dismissMissedCallNotificationsOnly(): Promise<void> {
   } catch (_) {}
 }
 
-/** Синхронизировать бейдж иконки: если пользователь уже «увидел» пропущенные (вкладка Друзья) — бейдж 0; иначе — сумма по всем. Уведомления в шторке не снимаются здесь (только при переходе по тапу «Пропущенный вызов»). */
+/** Синхронизировать бейдж иконки: непрочитанные сообщения + пропущенные вызовы.
+ * Если пользователь уже «увидел» пропущенные (вкладка Друзья), в бейдж не попадают только missed calls.
+ * Уведомления в шторке не снимаются здесь.
+ */
 export async function syncAppBadgeFromMissedCount(): Promise<void> {
   try {
     const cleared = await AsyncStorage.getItem(MISSED_BADGE_CLEARED_KEY);
-    if (cleared === 'true') {
-      await Notifications.setBadgeCountAsync(0);
-      return;
-    }
     const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
     const map = raw ? JSON.parse(raw) : {};
-    const total = Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
-    await Notifications.setBadgeCountAsync(Math.min(99, total));
+    const missedTotal = cleared === 'true'
+      ? 0
+      : Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
+    const unreadResult = await getUnreadCount();
+    const unreadTotal = unreadResult?.ok ? Math.max(0, Number(unreadResult.count || 0)) : 0;
+    await Notifications.setBadgeCountAsync(Math.min(99, missedTotal + unreadTotal));
   } catch (e) {
     try { await Notifications.setBadgeCountAsync(0); } catch {}
   }
@@ -79,9 +82,7 @@ export async function clearNotificationIndicators() {
   try {
     await Notifications.dismissAllNotificationsAsync();
   } catch {}
-  try {
-    await Notifications.setBadgeCountAsync(0);
-  } catch {}
+  await syncAppBadgeFromMissedCount();
 }
 
 // Состояние приложения: для звонков показываем пуш только когда приложение в фоне/убито

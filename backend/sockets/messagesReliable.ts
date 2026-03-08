@@ -214,6 +214,14 @@ function markSingleMessageAsRead(userId: string, fromUser: string, messageId: st
   unreadMessages.set(userId, filtered);
 }
 
+/**
+ * Удалить одно сообщение из server-side unread очереди.
+ * Нужен для delete-for-both, когда сообщение еще не было прочитано получателем.
+ */
+export function removeUnreadMessage(userId: string, fromUser: string, messageId: string) {
+  markSingleMessageAsRead(userId, fromUser, messageId);
+}
+
 export default function registerMessageSockets(io: Server) {
   io.on('connection', (sock) => {
     registerMessageHandlers(io, sock);
@@ -694,9 +702,26 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
       if (!foundFriendship) return ack?.({ ok: false, error: 'not_found' });
 
+      const targetMessage = (foundFriendship as any).findMessageById(messageId);
+      const fromUserId = String((targetMessage as any)?.from?.toString?.() || (targetMessage as any)?.from || '');
+      const toUserId = String((targetMessage as any)?.to?.toString?.() || (targetMessage as any)?.to || '');
+
       // Удаляем запись
       const removed = await (foundFriendship as any).removeMessage(messageId);
       if (!removed) return ack?.({ ok: false, error: 'remove_failed' });
+
+      // Если сообщение было непрочитанным у получателя, уменьшаем unread и удаляем offline-копию.
+      try {
+        if (toUserId && fromUserId) {
+          removeUnreadMessage(toUserId, fromUserId, messageId);
+          await OfflineMessage.deleteMany({
+            recipientId: new mongoose.Types.ObjectId(toUserId),
+            messageId,
+          });
+        }
+      } catch (cleanupError) {
+        console.warn('[message:delete] unread cleanup failed:', cleanupError);
+      }
 
       // Уведомляем обе стороны, если онлайн
       const u1 = foundFriendship.user1.toString();

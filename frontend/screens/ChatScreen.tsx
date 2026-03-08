@@ -4517,31 +4517,16 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </TouchableOpacity>
                 )}
 
-                {voiceIsRecording ? (
-                  <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', height: 36 }}>
-                    <Animated.View
-                      style={{
-                        opacity: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.45] }),
-                        transform: [
-                          {
-                            translateX: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) as any,
-                          },
-                        ],
-                      }}
-                    >
-                      <Ionicons name="chevron-back" size={18} color={LIVI.titan} />
-                    </Animated.View>
-                  </View>
-                ) : (
+                <View style={{ flex: 1, justifyContent: 'center' }}>
                   <TextInput
                     style={{
                       flex: 1,
-                      color: LIVI.white,
+                      color: voiceIsRecording ? 'transparent' : LIVI.white,
                       fontSize: 16,
                       maxHeight: 100,
                     }}
                     placeholder={t('chatMessagePlaceholder', lang)}
-                    placeholderTextColor={LIVI.titan}
+                    placeholderTextColor={voiceIsRecording ? 'transparent' : LIVI.titan}
                     value={messageText}
                     onChangeText={(txt) => {
                       setMessageText(txt);
@@ -4550,9 +4535,35 @@ export default function ChatScreen({ route, navigation }: Props) {
                     multiline
                     onSubmitEditing={sendMessage}
                     returnKeyType="send"
-                    editable={!voiceIsRecording}
+                    caretHidden={voiceIsRecording}
                   />
-                )}
+                  {voiceIsRecording ? (
+                    <View
+                      pointerEvents="none"
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', height: 36 }}>
+                        <Animated.View
+                          style={{
+                            opacity: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.45] }),
+                            transform: [
+                              {
+                                translateX: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) as any,
+                              },
+                            ],
+                          }}
+                        >
+                          <Ionicons name="chevron-back" size={18} color={LIVI.titan} />
+                        </Animated.View>
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
 
                 <Animated.View
                   {...micPanResponder.panHandlers}
@@ -4780,26 +4791,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </TouchableOpacity>
                 )}
 
-                {voiceIsRecording ? (
-                  <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', height: 36 }}>
-                    <Animated.View
-                      style={{
-                        opacity: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.45] }),
-                        transform: [
-                          {
-                            translateX: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) as any,
-                          },
-                        ],
-                      }}
-                    >
-                      <Ionicons name="chevron-back" size={18} color={LIVI.titan} />
-                    </Animated.View>
-                  </View>
-                ) : (
+                <View style={{ flex: 1, justifyContent: 'center' }}>
                   <TextInput
-                    style={{ flex: 1, color: LIVI.white, fontSize: 16, maxHeight: 100 }}
+                    style={{ flex: 1, color: voiceIsRecording ? 'transparent' : LIVI.white, fontSize: 16, maxHeight: 100 }}
                     placeholder={t('chatMessagePlaceholder', lang)}
-                    placeholderTextColor={LIVI.titan}
+                    placeholderTextColor={voiceIsRecording ? 'transparent' : LIVI.titan}
                     value={messageText}
                     onChangeText={(txt) => {
                       setMessageText(txt);
@@ -4808,9 +4804,35 @@ export default function ChatScreen({ route, navigation }: Props) {
                     multiline
                     onSubmitEditing={sendMessage}
                     returnKeyType="send"
-                    editable={!voiceIsRecording}
+                    caretHidden={voiceIsRecording}
                   />
-                )}
+                  {voiceIsRecording ? (
+                    <View
+                      pointerEvents="none"
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', height: 36 }}>
+                        <Animated.View
+                          style={{
+                            opacity: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.45] }),
+                            transform: [
+                              {
+                                translateX: recordViz.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) as any,
+                              },
+                            ],
+                          }}
+                        >
+                          <Ionicons name="chevron-back" size={18} color={LIVI.titan} />
+                        </Animated.View>
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
 
                 <Animated.View
                   {...micPanResponder.panHandlers}

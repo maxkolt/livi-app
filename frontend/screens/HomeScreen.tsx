@@ -73,7 +73,7 @@ const LinearGradient: any = (() => {
 import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { usePiP } from '../src/pip/PiPContext';
-import { onMessageReceived, onMessageReadReceipt, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
+import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled } from '../utils/callKeep';
 import { setMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly } from '../utils/pushNotifications';
@@ -2419,6 +2419,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
   }, [missedByUser, missedLoaded]);
 
+  useEffect(() => {
+    syncAppBadgeFromMissedCount().catch(() => {});
+  }, [unreadByUser]);
+
   /* ===== reconnect handling ===== */
   useEffect(() => {
     const off = onConnected(() => {
@@ -3145,10 +3149,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       scheduleRecalcAll(); // Пересчитываем все счетчики
     });
 
+    // Если отправитель удалил сообщения "для всех", unread тоже должен уменьшиться.
+    const offDeleted = onMessageDeleted(() => {
+      scheduleRecalcAll();
+    });
+
     return () => { 
       disposed = true; 
       offReceived?.(); 
       offReadReceipt?.();
+      offDeleted?.();
       if (allTimer) { 
         clearTimeout(allTimer); 
         allTimer = null; 

@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import FriendshipMessages, { IFriendshipMessages } from '../models/FriendshipMessages';
 import OfflineMessage from '../models/OfflineMessage';
 import { areFriendsCached } from '../utils/friendshipUtils';
+import { removeUnreadMessage } from '../sockets/messagesReliable';
 
 const router = Router();
 
@@ -292,9 +293,21 @@ router.post('/messages/delete', async (req, res) => {
 
     // Allow either participant to delete any message in this friendship (delete for both).
     // This matches the product requirement: deletion removes message for BOTH users.
+    const fromUserId = String((msg as any)?.from?.toString?.() || (msg as any)?.from || '');
+    const toUserId = String((msg as any)?.to?.toString?.() || (msg as any)?.to || '');
 
     const removed = await (friendship as any).removeMessage(messageId);
     if (!removed) return res.json({ ok: false, error: 'remove_failed' });
+
+    try {
+      if (toUserId && fromUserId) {
+        removeUnreadMessage(toUserId, fromUserId, messageId);
+        await OfflineMessage.deleteMany({
+          recipientId: new mongoose.Types.ObjectId(toUserId),
+          messageId,
+        });
+      }
+    } catch {}
 
     // Best-effort realtime notify (if sockets are up)
     try {
