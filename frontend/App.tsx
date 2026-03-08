@@ -420,6 +420,7 @@ function AppContent() {
   const VIDEO_SESSION_PIP_GRACE_MS = 3000;
   const videoSessionRouteEnteredAtRef = React.useRef<number>(0);
   const videoSessionRouteLastRef = React.useRef<string | undefined>(undefined);
+  const systemPiPDecisionLogRef = React.useRef<string>('');
 
 
   // ==== incoming call (global, когда не на экране видеозвонка) ====
@@ -1044,6 +1045,15 @@ function AppContent() {
         // чтобы исключить гонку (cleanup/reset → onUserLeaveHint → PiP + лаунчер).
         const disableUntil = (global as any).__disableSystemPiPUntilRef?.current;
         if (typeof disableUntil === 'number' && disableUntil > Date.now()) {
+          const logKey = `guard:disableUntil:${currentRoute}:${disableUntil}`;
+          if (systemPiPDecisionLogRef.current !== logKey) {
+            systemPiPDecisionLogRef.current = logKey;
+            logger.info('[App] system PiP leaveHint disabled by global guard', {
+              currentRoute,
+              disableUntil,
+              remainingMs: disableUntil - Date.now(),
+            });
+          }
           NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
         } else {
         const g = (global as any);
@@ -1065,6 +1075,34 @@ function AppContent() {
           pipVisible ||
           !!incoming ||
           ((hasActiveCallForPiP || onVideoCallWithActiveSession) && !onVideoCallRecently);
+        const logKey = JSON.stringify({
+          currentRoute,
+          allowSystemPiP: !!allowSystemPiP,
+          pipVisible: !!pipVisible,
+          hasIncoming: !!incoming,
+          hasActiveCallForPiP: !!hasActiveCallForPiP,
+          onVideoCallWithActiveSession: !!onVideoCallWithActiveSession,
+          onVideoCallRecently: !!onVideoCallRecently,
+          hasParamsCallId: !!params?.callId,
+          hasParamsRoomId: !!params?.roomId,
+          sessionNotEnded: !!sessionNotEnded,
+        });
+        if (systemPiPDecisionLogRef.current !== logKey) {
+          systemPiPDecisionLogRef.current = logKey;
+          logger.info('[App] system PiP leaveHint recalculated', {
+            currentRoute,
+            allowSystemPiP: !!allowSystemPiP,
+            pipVisible: !!pipVisible,
+            hasIncoming: !!incoming,
+            hasActiveCallForPiP: !!hasActiveCallForPiP,
+            onVideoCallWithActiveSession: !!onVideoCallWithActiveSession,
+            onVideoCallRecently: !!onVideoCallRecently,
+            timeSinceVideoRouteMs: onVideoSessionRoute ? Date.now() - videoSessionRouteEnteredAtRef.current : null,
+            hasParamsCallId: !!params?.callId,
+            hasParamsRoomId: !!params?.roomId,
+            sessionNotEnded: !!sessionNotEnded,
+          });
+        }
         NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!allowSystemPiP);
         }
       } catch (_) {}

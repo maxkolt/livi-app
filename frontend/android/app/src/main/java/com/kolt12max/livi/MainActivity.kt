@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Rational
+import androidx.activity.OnBackPressedCallback
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -36,6 +37,7 @@ class MainActivity : ReactActivity() {
 
   /** Закрыть системный PiP при пуше call_ended (endedFromActive): собеседник в PiP не получает call:ended по сокету — пуш доходит, закрываем окно сразу. */
   private var closePipCallEndedReceiver: BroadcastReceiver? = null
+  private var backPressLoggingCallback: OnBackPressedCallback? = null
 
   private fun buildSystemPiPSourceRect(): Rect? {
     return try {
@@ -162,9 +164,19 @@ class MainActivity : ReactActivity() {
    */
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
-    if (LiviAppModule.getEndingCallInProgress()) return
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && LiviAppModule.getShouldEnterPiPOnLeaveHint()) {
+    val endingCallInProgress = LiviAppModule.getEndingCallInProgress()
+    val shouldEnterPiP = LiviAppModule.getShouldEnterPiPOnLeaveHint()
+    android.util.Log.i(
+      "MainActivity",
+      "onUserLeaveHint: sdk=${Build.VERSION.SDK_INT} endingCallInProgress=$endingCallInProgress shouldEnterPiP=$shouldEnterPiP isInPiP=$isInPictureInPictureMode hasFocus=${window?.decorView?.hasWindowFocus() == true}"
+    )
+    if (endingCallInProgress) {
+      android.util.Log.i("MainActivity", "onUserLeaveHint: skip system PiP because endingCallInProgress=true")
+      return
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && shouldEnterPiP) {
       try {
+        android.util.Log.i("MainActivity", "onUserLeaveHint: preparing system PiP entry")
         LiviAppModule.emitAboutToEnterSystemPiP()
         val handler = Handler(Looper.getMainLooper())
         val tryEnterPiP = Runnable {
@@ -202,6 +214,11 @@ class MainActivity : ReactActivity() {
       } catch (e: Exception) {
         android.util.Log.w("MainActivity", "emitAboutToEnterSystemPiP failed", e)
       }
+    } else {
+      android.util.Log.i(
+        "MainActivity",
+        "onUserLeaveHint: skip system PiP because shouldEnterPiPOnLeaveHint=false or sdk<26"
+      )
     }
   }
 
@@ -249,6 +266,23 @@ class MainActivity : ReactActivity() {
       setTheme(R.style.AppTheme)
     }
     super.onCreate(null)
+    if (backPressLoggingCallback == null) {
+      backPressLoggingCallback = object : OnBackPressedCallback(true) {
+        override fun handleOnBackPressed() {
+          android.util.Log.i(
+            "MainActivity",
+            "System back pressed: route delegated to React Native / activity handler; isInPiP=$isInPictureInPictureMode hasFocus=${window?.decorView?.hasWindowFocus() == true}"
+          )
+          isEnabled = false
+          try {
+            onBackPressedDispatcher.onBackPressed()
+          } finally {
+            isEnabled = true
+          }
+        }
+      }
+      onBackPressedDispatcher.addCallback(this, backPressLoggingCallback!!)
+    }
     // FCM входящий при разблокированном экране (холодный старт) — сохраняем для CallKeep
     if (intent?.action == LiviAppModule.ACTION_INCOMING_CALL_CALLKEEP) {
       val callId = intent.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID)

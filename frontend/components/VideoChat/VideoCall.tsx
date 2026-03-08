@@ -514,6 +514,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
   // Задержка перед включением системного PiP после принятия/подключения (избегаем ложного onUserLeaveHint при закрытии IncomingCallActivity).
   const systemPiPGraceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const systemPiPLeaveHintLogRef = useRef<string>('');
+  const systemPiPGraceKeyRef = useRef<string>('');
+  const systemPiPGraceCompletedRef = useRef(false);
 
   // __currentCallPiPParamsRef — callId/roomId/navParams для системного PiP и для returnToCall. Читается в PiPContext
   // при AboutToEnterSystemPiP и в App при SystemPiPExpanded fallback. Не обнуляем при !canEnableSystemPiP, только
@@ -521,10 +524,24 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     const g = (global as any);
     g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
+    const systemPiPKey = `${roomId || ''}:${callId || ''}`;
+    if (systemPiPGraceKeyRef.current !== systemPiPKey) {
+      if (systemPiPGraceTimerRef.current) {
+        clearTimeout(systemPiPGraceTimerRef.current);
+        systemPiPGraceTimerRef.current = null;
+      }
+      systemPiPGraceKeyRef.current = systemPiPKey;
+      systemPiPGraceCompletedRef.current = false;
+    }
     // ВАЖНО: Включаем системный PiP только когда звонок уже "стабилен" (есть roomId),
     // экран VideoCall в фокусе и приложение активно. Иначе на части устройств возможен
     // ложный onUserLeaveHint во время переходов (accept/закрытие нативных экранов),
     // и пользователя "выбрасывает" на рабочий стол с системным PiP.
+    const hasStableSystemPiPContext =
+      Platform.OS === 'android' &&
+      !!roomId &&
+      !isInactiveState &&
+      !!sessionRef.current;
     const canEnableSystemPiP =
       Platform.OS === 'android' &&
       appState === 'active' &&
@@ -535,27 +552,125 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
     // Не очищаем ref при !canEnableSystemPiP — иначе при возврате из системного PiP returnToCall получит null.
     // Очищаем только в cleanup эффекта, когда сессия реально завершена (stillActive === false).
-    if (!canEnableSystemPiP) {
+    if (!hasStableSystemPiPContext) {
       if (systemPiPGraceTimerRef.current) {
         clearTimeout(systemPiPGraceTimerRef.current);
         systemPiPGraceTimerRef.current = null;
+      }
+      const logKey = JSON.stringify({
+        state: 'blocked',
+        appState,
+        isFocused,
+        hasRoomId: !!roomId,
+        isInactiveState,
+        hasSession: !!sessionRef.current,
+      });
+      if (systemPiPLeaveHintLogRef.current !== logKey) {
+        systemPiPLeaveHintLogRef.current = logKey;
+        logger.info('[VideoCall] system PiP leaveHint blocked in VideoCall effect', {
+          appState,
+          isFocused,
+          hasRoomId: !!roomId,
+          isInactiveState,
+          hasSession: !!sessionRef.current,
+        });
       }
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
       return;
     }
-    // После принятия вызова возможен ложный onUserLeaveHint при закрытии нативного экрана входящего/исходящего.
-    // Включаем PiP по LeaveHint только через 2 с после стабилизации, чтобы не сворачивать в PiP и сразу разворачивать.
-    if (Platform.OS === 'android') {
+    // После первого успешного grace оставляем leaveHint включённым на весь текущий звонок.
+    // Иначе при Home/background effect успевает выключить флаг раньше onUserLeaveHint,
+    // и системный PiP открывается нестабильно.
+    if (systemPiPGraceCompletedRef.current) {
+      const readyLogKey = JSON.stringify({
+        state: 'ready',
+        appState,
+        isFocused,
+        hasRoomId: !!roomId,
+        isInactiveState,
+        hasSession: !!sessionRef.current,
+      });
+      if (systemPiPLeaveHintLogRef.current !== readyLogKey) {
+        systemPiPLeaveHintLogRef.current = readyLogKey;
+        logger.info('[VideoCall] system PiP leaveHint kept enabled for active call', {
+          appState,
+          isFocused,
+          hasRoomId: !!roomId,
+          isInactiveState,
+          hasSession: !!sessionRef.current,
+        });
+      }
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
+      }
+    } else if (!canEnableSystemPiP) {
       if (systemPiPGraceTimerRef.current) {
         clearTimeout(systemPiPGraceTimerRef.current);
         systemPiPGraceTimerRef.current = null;
       }
+      const logKey = JSON.stringify({
+        state: 'waiting-for-grace',
+        appState,
+        isFocused,
+        hasRoomId: !!roomId,
+        isInactiveState,
+        hasSession: !!sessionRef.current,
+      });
+      if (systemPiPLeaveHintLogRef.current !== logKey) {
+        systemPiPLeaveHintLogRef.current = logKey;
+        logger.info('[VideoCall] system PiP leaveHint waiting for active/focused state before grace completes', {
+          appState,
+          isFocused,
+          hasRoomId: !!roomId,
+          isInactiveState,
+          hasSession: !!sessionRef.current,
+        });
+      }
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+      }
+    } else {
+    // После принятия вызова возможен ложный onUserLeaveHint при закрытии нативного экрана входящего/исходящего.
+    // Включаем PiP по LeaveHint только через 2 с после стабилизации, чтобы не сворачивать в PiP и сразу разворачивать.
+    if (Platform.OS === 'android' && !systemPiPGraceTimerRef.current) {
+      if (systemPiPGraceTimerRef.current) {
+        clearTimeout(systemPiPGraceTimerRef.current);
+        systemPiPGraceTimerRef.current = null;
+      }
+      const scheduleLogKey = JSON.stringify({
+        state: 'scheduled',
+        roomId: !!roomId,
+        appState,
+        isFocused,
+        isInactiveState,
+      });
+      if (systemPiPLeaveHintLogRef.current !== scheduleLogKey) {
+        systemPiPLeaveHintLogRef.current = scheduleLogKey;
+        logger.info('[VideoCall] system PiP leaveHint grace timer scheduled', {
+          delayMs: 2000,
+          appState,
+          isFocused,
+          hasRoomId: !!roomId,
+          isInactiveState,
+          hasSession: !!sessionRef.current,
+        });
+      }
       systemPiPGraceTimerRef.current = setTimeout(() => {
         systemPiPGraceTimerRef.current = null;
+        systemPiPGraceCompletedRef.current = true;
+        logger.info('[VideoCall] system PiP leaveHint enabled after grace timer', {
+          delayMs: 2000,
+          hasRoomId: !!roomId,
+          appState,
+          isFocused,
+          isInactiveState,
+          hasSession: !!sessionRef.current,
+        });
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
       }, 2000);
+    }
     }
     const partner = partnerUserId
       ? friendsRef.current?.find((f: any) => String(f._id) === String(partnerUserId))
@@ -602,6 +717,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       const stillActive = session && (typeof session.isEnded !== 'function' || !session.isEnded());
       if (stillActive) return;
       g.__currentCallPiPParamsRef.current = null;
+      systemPiPGraceCompletedRef.current = false;
+      systemPiPGraceKeyRef.current = '';
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }

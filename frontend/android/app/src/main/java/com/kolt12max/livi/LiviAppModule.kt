@@ -575,7 +575,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   /** Включить/выключить системный PiP при нажатии Home: true = при уходе в фон перейти в Picture-in-Picture (окно поверх лаунчера). Вызывать из JS при активном видеозвонке или при показе in-app PiP. На Android 12+ дополнительно включается авто-вход в PiP для совместимости со всеми устройствами. */
   @ReactMethod
   fun setShouldEnterPiPOnLeaveHint(enabled: Boolean) {
+    val prev = LiviAppModule.getShouldEnterPiPOnLeaveHint()
     LiviAppModule.setPiPOnLeaveHintEnabled(enabled)
+    if (prev != enabled) {
+      Log.i(NAME, "setShouldEnterPiPOnLeaveHint: $prev -> $enabled")
+    }
     // ВАЖНО: сознательно НЕ включаем Activity#setAutoEnterPictureInPictureEnabled на Android 12+.
     // Причина: авто-вход в PiP может срабатывать в неожиданные моменты (особенно на Samsung/OneUI)
     // во время переходов/закрытия нативных экранов, что выглядит как "само выбросило из приложения".
@@ -625,13 +629,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
             Log.w("LiviAppModule", "requestEnterPictureInPicture attempt failed", e2)
           }
         }
-        // ВАЖНО: первая попытка с задержкой, чтобы JS успел отрисовать оверлей 9:16 с видео
-        // и RTCView успел отдать первый кадр (избегаем чёрных полос и кропа в системном PiP).
+        // ВАЖНО: небольшая стартовая пауза всё ещё нужна, чтобы JS успел отрисовать overlay 9:16,
+        // но прежние 450ms ощущались как "залипание" на первом Back. Делаем раннюю попытку
+        // и оставляем более поздние ретраи как страховку для медленных устройств.
+        handler.postDelayed(tryEnterPiP, 120)
+        handler.postDelayed(tryEnterPiP, 260)
         handler.postDelayed(tryEnterPiP, 450)
-        handler.postDelayed(tryEnterPiP, 650)
-        handler.postDelayed(tryEnterPiP, 900)
-        handler.postDelayed(tryEnterPiP, 1200)
-        handler.postDelayed(tryEnterPiP, 1600)
+        handler.postDelayed(tryEnterPiP, 700)
+        handler.postDelayed(tryEnterPiP, 1000)
       } catch (e: Exception) {
         Log.w("LiviAppModule", "requestEnterPictureInPicture failed", e)
       }
