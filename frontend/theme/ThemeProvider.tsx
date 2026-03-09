@@ -9,7 +9,7 @@ const STORAGE_KEY = 'theme_preference_v1';
 
 export const LightPalette = {
   primary: '#715BA8',
-  background: 'rgba(182, 203, 216, 0.93)',
+  background: '#B6CBD8',
   surface: 'rgb(230, 230, 230)',
   outline: 'rgba(0,0,0,0.12)',
   onSurfaceVariant: '#4A5568',

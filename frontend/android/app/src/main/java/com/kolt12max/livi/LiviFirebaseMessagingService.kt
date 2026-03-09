@@ -114,6 +114,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
         if (typeNorm == "call_canceled" && callId != null) {
             EndedCallIds.add(this, callId)
+            LiviOngoingCallHelper.clearOngoingCall(applicationContext)
             LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
@@ -139,22 +140,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     showMissedCallNotification(callId, fromCanceled.toString(), fromNickCanceled)
                 }
             }
-            // Fallback через startActivity нужен только когда приложение в фоне/убито.
-            // Если IncomingCallActivity уже на экране, достаточно broadcast — второй запуск
-            // "just_close" создаёт лишний activity/task transition и даёт визуальный double-close.
-            val shouldLaunchCloseActivity = !IncomingCallActivity.isInForeground && !isAppProcessForeground()
-            if (shouldLaunchCloseActivity) {
-                val activityIntent = Intent(this, IncomingCallActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    putExtra(IncomingCallActivity.EXTRA_JUST_CLOSE, true)
-                    putExtra(IncomingCallActivity.EXTRA_CALL_ID, callId)
-                }
-                try {
-                    startActivity(activityIntent)
-                } catch (e: Exception) {
-                    Log.w(TAG, "FCM call_canceled: startActivity close IncomingCall failed", e)
-                }
-            }
+            // ВАЖНО: не запускаем IncomingCallActivity повторно ради "just_close".
+            // Если экран входящего существует, broadcast ACTION_CALL_CANCELED его уже закроет.
+            // Если процесса/активности нет, закрывать уже нечего, а повторный startActivity
+            // после Expo body-push даёт заметное мерцание (экран успевает открыться и сразу закрыться).
+            val shouldLaunchCloseActivity = false
             Log.d(
                 TAG,
                 "FCM call_canceled: ended id stored, incoming canceled, missed shown, closeFallback=$shouldLaunchCloseActivity callId=$callId"

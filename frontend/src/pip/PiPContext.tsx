@@ -337,13 +337,23 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // Не затираем navParams undefined-ом: это ломает returnToCall (нечем восстановить экран звонка).
     setLastNavParams((prev: any) => (p.navParams !== undefined ? p.navParams : prev));
 
-    // By default show immediately. On Android BackHandler, defer visibility so navigation can happen first.
+    // By default show immediately. For Android Back we now also reveal PiP immediately,
+    // so the overlay appears without an extra frame of waiting.
     if (p.deferVisible) {
-      requestAnimationFrame(() => {
+      if (Platform.OS === 'android') {
+        if (Platform.OS === 'android' && remoteStreamRef.current) {
+          try {
+            if (allowVideoRenderTimeoutRef.current) {
+              clearTimeout(allowVideoRenderTimeoutRef.current);
+              allowVideoRenderTimeoutRef.current = null;
+            }
+          } catch {}
+          setAllowVideoRender(true);
+        }
+        setVisible(true);
+        console.log('[PiPContext] ✅ PiP состояние установлено (deferred), visible=true');
+      } else {
         requestAnimationFrame(() => {
-          // Android Back → сначала навигация назад, затем показываем PiP.
-          // ВАЖНО: включаем allowVideoRender В ТОТ ЖЕ КАДР, что и visible=true,
-          // чтобы PiP не "мигнул" аватаркой/плейсхолдером перед первым кадром видео.
           if (Platform.OS === 'android' && remoteStreamRef.current) {
             try {
               if (allowVideoRenderTimeoutRef.current) {
@@ -356,7 +366,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setVisible(true);
           console.log('[PiPContext] ✅ PiP состояние установлено (deferred), visible=true');
         });
-      });
+      }
     } else {
       setVisible(true);
       console.log('[PiPContext] ✅ PiP состояние установлено, visible=true');
@@ -402,6 +412,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         g.__pipInSystemModeRef.current = true;
         g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
         g.__pipVisibleRef.current = true;
+        g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
+        g.__enterSystemPiPAfterVideoCallRef.current = null;
       } catch (_) {}
       // Не входить в PiP без нажатия пользователя: при завершении звонка (переход на Home) onUserLeaveHint может сработать раньше нативного флага.
       if (g.__endingCallInProgressRef?.current === true) {
@@ -413,6 +425,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         try { g.__pipInSystemModeRef.current = false; g.__pipVisibleRef.current = false; } catch (_) {}
         return;
       }
+      try {
+        g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+        g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 2000;
+      } catch (_) {}
 
       // До входа в системный PiP переводим VideoCall в компактный режим (только удалённое видео),
       // чтобы избежать "чёрных блоков" от лишних SurfaceView/RTCView при захвате окна PiP.
@@ -426,6 +442,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       setTimeout(() => {
         setPendingSystemPiP(false);
         setDecorSizeForPiP(null);
+        try {
+          const until = g.__systemPiPEntryInProgressUntilRef?.current;
+          if (typeof until === 'number' && until <= Date.now()) {
+            g.__systemPiPEntryInProgressUntilRef.current = 0;
+          }
+        } catch (_) {}
       }, 1500);
 
       let params = g.__currentCallPiPParamsRef?.current;
@@ -477,6 +499,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     try {
       const r = (global as any).__pipReturnToCallJustPressedRef;
       if (r && typeof r === 'object') r.current = true;
+    } catch (_) {}
+    try {
+      const g = global as any;
+      g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
+      g.__returningFromSystemPiPUntilRef.current = Date.now() + 4000;
     } catch (_) {}
     console.log('🔥🔥🔥 [PiPContext] returnToCall вызван', { callId, roomId, lastNavParams });
 

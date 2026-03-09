@@ -17,6 +17,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { PiPContext } from './PiPContext';
 import { logger } from '../../utils/logger';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
+import { RemoteVideo } from '../../components/VideoChat/shared/RemoteVideo';
+import { defaultLang } from '../../utils/i18n';
 
 const PIP_W = 150;
 const PIP_H = 260;
@@ -166,16 +168,13 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   if (!shouldShowOverlay) {
     return null;
   }
-  // In-app PiP отключён: показываем оверлей только для системного PiP (вход или уже в PiP).
-  if (!isSystemPiPLayout) {
-    return null;
-  }
 
   const streamURL = remoteStream?.toURL?.();
   const canRenderVideo =
     allowVideoRender &&
     remoteStream &&
     (Platform.OS !== 'ios' || (streamURL && streamURL.length > 0));
+  const session = (global as any).__webrtcSessionRef?.current;
 
   // Системный PiP: только видео собеседника по центру 9:16, без лишних элементов.
   if (isSystemPiPLayout) {
@@ -188,19 +187,21 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
           <Pressable style={StyleSheet.absoluteFill} onPress={returnToCall} android_ripple={{ color: 'rgba(255,255,255,0.08)', borderless: true }}>
             {canRenderVideo && remoteStream ? (
               <View style={[styles.pipSystemVideoBlock, { left: 0, top: pipTop, width: pipBlockW, height: pipBlockH }]}>
-                {Platform.OS === 'android' ? (
-                  <RTCView
-                    key={`pip-remote-${remoteStream.id}`}
-                    stream={remoteStream}
-                    streamURL={streamURL}
-                    style={styles.rtcViewSystem}
-                    objectFit="cover"
-                    mirror={false}
-                    {...({ renderToHardwareTextureAndroid: true, zOrderMediaOverlay: false, useTextureView: true } as any)}
-                  />
-                ) : (
-                  <RTCView key={`pip-remote-${remoteStream.id}`} streamURL={streamURL!} style={styles.rtcViewSystem} objectFit="cover" mirror={false} />
-                )}
+                <RemoteVideo
+                  remoteStream={remoteStream as any}
+                  remoteCamOn={true}
+                  remoteMuted={false}
+                  isInactiveState={false}
+                  wasFriendCallEnded={false}
+                  started={true}
+                  loading={false}
+                  remoteViewKey={0}
+                  showFriendBadge={false}
+                  lang={defaultLang}
+                  session={session}
+                  partnerInPiP={false}
+                  forceTextureView={true}
+                />
               </View>
             ) : (
               <View style={[styles.pipSystemVideoBlock, { left: 0, top: pipTop, width: pipBlockW, height: pipBlockH }]}>

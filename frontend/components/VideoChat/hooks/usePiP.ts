@@ -1,5 +1,5 @@
 import { useCallback, useRef, useEffect } from 'react';
-import { BackHandler, PanResponder, Platform, Dimensions } from 'react-native';
+import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { usePiP as usePiPContext } from '../../../src/pip/PiPContext';
 import { logger } from '../../../utils/logger';
@@ -300,8 +300,29 @@ export const usePiP = ({
       const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current;
 
       if (hasActiveCall) {
-        // Android: Back обрабатывает usePreventRemove в VideoCall — сразу системный PiP. In-app PiP отключён.
-        return false;
+        logger.info('[usePiP] BackHandler (Android): активный звонок — показываем in-app PiP и возвращаемся назад', {
+          actualRoomId,
+          actualCallId,
+          actualPartnerId,
+        });
+        try {
+          const g = global as any;
+          g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+          g.__leavingVideoCallByBackRef.current = true;
+          g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+          g.__disableSystemPiPUntilRef.current = Date.now() + 1000;
+        } catch {}
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
+        enterPiPMode({ deferVisible: true });
+        const returnTo = (routeParams as any)?.returnTo;
+        if (navigation.canGoBack && navigation.canGoBack()) {
+          navigation.goBack();
+        } else if (returnTo?.name) {
+          (navigation as any).navigate(returnTo.name, returnTo.params);
+        } else {
+          navigation.navigate('Home' as never);
+        }
+        return true;
       }
 
       return false; // Разрешаем закрытие если нет активного звонка

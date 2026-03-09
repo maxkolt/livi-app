@@ -1199,48 +1199,24 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     }
   }, [stopSpeaker]);
   
-  // Обработка AppState - для рандомного чата останавливаем при уходе в фон
+  // Обработка AppState - при уходе приложения в фон рандомный чат должен
+  // немедленно завершаться, чтобы при возврате экран был в неактивном состоянии.
   useEffect(() => {
-    let bgTimer: any = null;
-    let bgDisconnectTimer: any = null;
     const sub = AppState.addEventListener('change', async (nextAppState) => {
       try {
         if (nextAppState === 'background') {
-          // На некоторых Android (особенно ColorOS) AppState может кратковременно дергаться.
-          // Делаем debounce: останавливаем только если background держится > ~1.2s.
-          try {
-            if (bgTimer) clearTimeout(bgTimer);
-            if (bgDisconnectTimer) clearTimeout(bgDisconnectTimer);
-          } catch {}
-          // Быстрый "мягкий" разрыв LiveKit комнаты (без полного cleanup),
-          // чтобы не получить WARN "ping timeout triggered" после лок/фон.
-          // Делаем небольшой debounce, чтобы не реагировать на transient AppState дергания.
-          bgDisconnectTimer = setTimeout(() => {
-            try {
-              if (AppState.currentState === 'background' && (startedRef.current || loadingRef.current)) {
-                sessionRef.current?.leaveRoom?.();
-              }
-            } catch {}
-          }, 250);
-          bgTimer = setTimeout(() => {
-            try {
-              if (AppState.currentState === 'background' && (startedRef.current || loadingRef.current)) {
-                logger.info('[RandomChat] AppState stayed background, stopping chat');
-                forceStopRandomChat();
-              }
-            } catch {}
-          }, 1200);
+          if (startedRef.current || loadingRef.current) {
+            logger.info('[RandomChat] App moved to background, stopping chat immediately');
+            forceStopRandomChat();
+          }
         } else if (nextAppState === 'inactive') {
-          // iOS: просто отмечаем состояние, но не рвем соединение
+          // Пока приложение теряет фокус, сразу переводим экран в неактивное состояние.
           setIsInactiveState(true);
         } else if (nextAppState === 'active') {
-          try {
-            if (bgTimer) clearTimeout(bgTimer);
-            if (bgDisconnectTimer) clearTimeout(bgDisconnectTimer);
-          } catch {}
-          bgTimer = null;
-          bgDisconnectTimer = null;
-          setIsInactiveState(false);
+          // Если чат уже был остановлен из-за background, не "оживляем" UI обратно.
+          if (startedRef.current || loadingRef.current) {
+            setIsInactiveState(false);
+          }
           // Аудио-роутинг поднимется через useAudioRouting (без ручных "пинков")
         }
       } catch (e) {
@@ -1249,10 +1225,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     });
     
     return () => {
-      try {
-        if (bgTimer) clearTimeout(bgTimer);
-        if (bgDisconnectTimer) clearTimeout(bgDisconnectTimer);
-      } catch {}
       sub.remove();
     };
   }, [forceStopRandomChat]);

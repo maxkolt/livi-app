@@ -183,7 +183,10 @@ class MainActivity : ReactActivity() {
           try {
             if (isInPictureInPictureMode) return@Runnable
             if (LiviAppModule.getEndingCallInProgress()) return@Runnable
-            if (!LiviAppModule.getShouldEnterPiPOnLeaveHint()) return@Runnable
+            if (!shouldEnterPiP) {
+              android.util.Log.i("MainActivity", "onUserLeaveHint: skip retry because initial shouldEnterPiP=false")
+              return@Runnable
+            }
             // Базовый размер системного PiP (как в исходном варианте).
             val ratio = Rational(9, 16)
             val builder = PictureInPictureParams.Builder()
@@ -203,11 +206,11 @@ class MainActivity : ReactActivity() {
             android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode failed", e2)
           }
         }
-        tryEnterPiP.run()
-        handler.postDelayed(tryEnterPiP, 0) // ещё одна попытка после обработки текущего сообщения (на части устройств синхронный run слишком рано)
-        handler.postDelayed(tryEnterPiP, 30)
-        handler.postDelayed(tryEnterPiP, 80)
-        handler.postDelayed(tryEnterPiP, 200)
+        // ВАЖНО: не входим в PiP синхронно сразу после AboutToEnterSystemPiP.
+        // Иначе на части устройств Android успевает захватить ещё маленький in-app PiP,
+        // а не подготовленный полноэкранный layout для system PiP, что выглядит как сильный зум.
+        handler.postDelayed(tryEnterPiP, 180)
+        handler.postDelayed(tryEnterPiP, 320)
         handler.postDelayed(tryEnterPiP, 450)
         handler.postDelayed(tryEnterPiP, 800)
         handler.postDelayed(tryEnterPiP, 1200) // на части устройств (Samsung) переход в фон занимает больше времени

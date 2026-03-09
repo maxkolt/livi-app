@@ -1041,22 +1041,28 @@ function AppContent() {
     // а не просто потому что текущий экран = VideoCall (иначе при call:ended может произойти автозаход в PiP).
     if (Platform.OS === 'android') {
       try {
+        const allowWhileGuardActive =
+          !!pipVisible && !isVideoSessionRoute(currentRoute);
         // Глобальный guard: после завершения звонка запрещаем системный PiP на короткое время,
         // чтобы исключить гонку (cleanup/reset → onUserLeaveHint → PiP + лаунчер).
         const disableUntil = (global as any).__disableSystemPiPUntilRef?.current;
-        if (typeof disableUntil === 'number' && disableUntil > Date.now()) {
-          const logKey = `guard:disableUntil:${currentRoute}:${disableUntil}`;
+        if (typeof disableUntil === 'number' && disableUntil > Date.now() && !allowWhileGuardActive) {
+          const logKey = `guard:disableUntil:${currentRoute}:${disableUntil}:${allowWhileGuardActive}`;
           if (systemPiPDecisionLogRef.current !== logKey) {
             systemPiPDecisionLogRef.current = logKey;
             logger.info('[App] system PiP leaveHint disabled by global guard', {
               currentRoute,
               disableUntil,
               remainingMs: disableUntil - Date.now(),
+              allowWhileGuardActive,
             });
           }
           NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
         } else {
         const g = (global as any);
+        const systemPiPEntryUntil = g.__systemPiPEntryInProgressUntilRef?.current;
+        const systemPiPEntryInProgress =
+          typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
         const session = g.__webrtcSessionRef?.current;
         const sessionNotEnded =
           !!session && (typeof session.isEnded === 'function' ? !session.isEnded() : true);
@@ -1072,6 +1078,7 @@ function AppContent() {
         // не разрешаем системный PiP по onUserLeaveHint (ложный hint при закрытии IncomingCallActivity).
         const onVideoCallRecently = onVideoSessionRoute && (Date.now() - videoSessionRouteEnteredAtRef.current) < VIDEO_SESSION_PIP_GRACE_MS;
         const allowSystemPiP =
+          (systemPiPEntryInProgress && hasActiveCallForPiP) ||
           pipVisible ||
           !!incoming ||
           ((hasActiveCallForPiP || onVideoCallWithActiveSession) && !onVideoCallRecently);
@@ -1086,12 +1093,14 @@ function AppContent() {
           hasParamsCallId: !!params?.callId,
           hasParamsRoomId: !!params?.roomId,
           sessionNotEnded: !!sessionNotEnded,
+          systemPiPEntryInProgress: !!systemPiPEntryInProgress,
         });
         if (systemPiPDecisionLogRef.current !== logKey) {
           systemPiPDecisionLogRef.current = logKey;
           logger.info('[App] system PiP leaveHint recalculated', {
             currentRoute,
             allowSystemPiP: !!allowSystemPiP,
+            allowWhileGuardActive,
             pipVisible: !!pipVisible,
             hasIncoming: !!incoming,
             hasActiveCallForPiP: !!hasActiveCallForPiP,
@@ -1101,6 +1110,7 @@ function AppContent() {
             hasParamsCallId: !!params?.callId,
             hasParamsRoomId: !!params?.roomId,
             sessionNotEnded: !!sessionNotEnded,
+            systemPiPEntryInProgress: !!systemPiPEntryInProgress,
           });
         }
         NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!allowSystemPiP);
@@ -2472,58 +2482,49 @@ export default function App() {
       // Завершение звонка по кнопке «Завершить»: не переходить в PiP по Back (как и по Home).
       if ((global as any).__endingCallInProgressRef?.current === true) return false;
       const currentRoute = navRef.getCurrentRoute?.()?.name;
-      // На экране VideoCall при нажатии Back — сразу переход в системный PiP (как при нажатии Домой).
+      // На экране VideoCall кнопку Back обрабатывает сам экран: возвращаемся на предыдущую
+      // страницу приложения и показываем in-app PiP, не уводя задачу в фон.
       if (currentRoute === 'VideoCall' && hasActiveCall) {
-        try {
-          // КРИТИЧНО: Выставляем ref'ы PiP синхронно до вызова нативного PiP, чтобы к моменту
-          // AppState 'background' проверка inPiP в handleAppStateChange уже была true и InCallManager.stop() не вызвался (release vs dev гонка).
-          const g = (global as any);
-          g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
-          g.__pipVisibleRef.current = true;
-          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-          g.__pipInSystemModeRef.current = true;
-
-          const params = (global as any).__currentCallPiPParamsRef?.current;
-          const callId = params?.callId ?? (typeof session?.getCallId === 'function' ? session.getCallId() : null);
-          const roomId = params?.roomId ?? (typeof session?.getRoomId === 'function' ? session.getRoomId() : null);
-          if (callId != null && roomId != null && NativeModules.LiviAppModule?.setPiPEndCallParams) {
-            NativeModules.LiviAppModule.setPiPEndCallParams(callId, roomId);
-          }
-          const prepSystemPiPUI = () => {
-            try {
-              const upd = (global as any).__pipUpdateStateRef?.current;
-              if (typeof upd === 'function') upd({ pendingSystemPiP: true, allowVideoRender: true });
-              setTimeout(() => {
-                try {
-                  const upd2 = (global as any).__pipUpdateStateRef?.current;
-                  if (typeof upd2 === 'function') upd2({ pendingSystemPiP: false });
-                } catch (_) {}
-              }, 1500);
-            } catch (_) {}
-          };
-          prepSystemPiPUI();
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              try { NativeModules.LiviAppModule?.requestEnterPictureInPicture?.(); } catch (_) {}
-            });
-          });
-        } catch (_) {}
-        return true;
+        return false;
       }
 
       if (navRef.canGoBack()) return false; // не на корне — пусть экран/навигация обработает Back
       try {
-        const prepSystemPiPUI = () => {
+        const SYSTEM_PIP_PREP_DELAY_MS = pipVisible ? 700 : 420;
+        const prepSystemPiPUI = (onPrepared?: () => void) => {
           try {
             const upd = (global as any).__pipUpdateStateRef?.current;
-            if (typeof upd === 'function') upd({ pendingSystemPiP: true, allowVideoRender: true });
-            setTimeout(() => {
+            const apply = (size: { width: number; height: number } | null) => {
               try {
-                const upd2 = (global as any).__pipUpdateStateRef?.current;
-                if (typeof upd2 === 'function') upd2({ pendingSystemPiP: false });
+                if (typeof upd === 'function') {
+                  upd({
+                    pendingSystemPiP: true,
+                    allowVideoRender: true,
+                    ...(size ? { decorSizeForPiP: size } : {}),
+                  });
+                }
               } catch (_) {}
-            }, 1500);
-          } catch (_) {}
+              setTimeout(() => {
+                try {
+                  const upd2 = (global as any).__pipUpdateStateRef?.current;
+                  if (typeof upd2 === 'function') upd2({ pendingSystemPiP: false, decorSizeForPiP: null });
+                } catch (_) {}
+              }, 1500);
+              setTimeout(() => {
+                try { onPrepared?.(); } catch (_) {}
+              }, SYSTEM_PIP_PREP_DELAY_MS);
+            };
+            const getDecor = NativeModules.LiviAppModule?.getDecorViewSize;
+            if (typeof getDecor === 'function') {
+              getDecor().then((size: { width: number; height: number }) => apply(size)).catch(() => apply(null));
+            } else {
+              apply(null);
+            }
+          } catch (_) {
+            setTimeout(() => {
+              try { onPrepared?.(); } catch (_) {}
+            }, SYSTEM_PIP_PREP_DELAY_MS);
+          }
         };
         const requestSystemPiP = () => {
           const raf = (typeof requestAnimationFrame !== 'undefined')
@@ -2535,12 +2536,33 @@ export default function App() {
             });
           });
         };
+        const params = (global as any).__currentCallPiPParamsRef?.current;
+        const callId = params?.callId ?? (typeof session.getCallId === 'function' ? session.getCallId() : null);
+        const roomId = params?.roomId ?? (typeof session.getRoomId === 'function' ? session.getRoomId() : null);
+        if (currentRoute !== 'VideoCall' && callId && roomId) {
+          const g = global as any;
+          g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
+          g.__enterSystemPiPAfterVideoCallRef.current = {
+            callId,
+            roomId,
+            source: 'back-root',
+            requestedAt: Date.now(),
+          };
+          try {
+            const hidePiP = g.__pipHidePiPRef?.current;
+            if (typeof hidePiP === 'function') hidePiP();
+          } catch (_) {}
+          navRef.navigate('VideoCall' as any, {
+            ...(params?.navParams ?? {}),
+            callId,
+            roomId,
+            directCall: true,
+          });
+          return true;
+        }
         if (!pipVisible && hasActiveCall) {
           // Сначала показываем in-app PiP с видео, чтобы в системном PiP было видео собеседника
-          const params = (global as any).__currentCallPiPParamsRef?.current;
           const showPiP = (global as any).__pipShowPiPRef?.current;
-          const callId = params?.callId ?? (typeof session.getCallId === 'function' ? session.getCallId() : null);
-          const roomId = params?.roomId ?? (typeof session.getRoomId === 'function' ? session.getRoomId() : null);
           const remoteStream = params?.remoteStream ?? (typeof session.getRemoteStream === 'function' ? session.getRemoteStream() : null);
           if (typeof showPiP === 'function' && callId && roomId) {
             showPiP({
@@ -2558,17 +2580,12 @@ export default function App() {
               NativeModules.LiviAppModule.setPiPEndCallParams(callId, roomId);
             }
             if (session && typeof session.enterPiP === 'function') session.enterPiP();
-            setTimeout(() => {
-              prepSystemPiPUI();
-              requestSystemPiP();
-            }, 350);
+            prepSystemPiPUI(requestSystemPiP);
           } else {
-            prepSystemPiPUI();
-            requestSystemPiP();
+            prepSystemPiPUI(requestSystemPiP);
           }
         } else {
-          prepSystemPiPUI();
-          requestSystemPiP();
+          prepSystemPiPUI(requestSystemPiP);
         }
       } catch (_) {}
       return true; // перехватываем — уходим в системный PiP, не закрываем приложение

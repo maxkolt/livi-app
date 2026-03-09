@@ -39,15 +39,17 @@ class IncomingCallActivity : AppCompatActivity() {
     private var callCanceledReceiver: BroadcastReceiver? = null
     private var callAnsweredReceiver: BroadcastReceiver? = null
     private var ringtonePlayer: MediaPlayer? = null
+    private val timeoutHandler = Handler(Looper.getMainLooper())
+    private var timeoutRunnable: Runnable? = null
+    private var closeHandled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val callIdFromIntent = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
         // FCM call_canceled может запустить активность с флагом «только закрыть» (приложение в фоне/убито — broadcast не дошёл)
         if (intent.getBooleanExtra(EXTRA_JUST_CLOSE, false) && callIdFromIntent.isNotEmpty()) {
-            EndedCallIds.add(this, callIdFromIntent)
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
-            finish()
+            closeIncomingScreen(callIdFromIntent)
             return
         }
         // КРИТИЧНО: Если звонок уже отменён/завершён (пущ пришёл с опозданием или пользователь открыл уведомление позже) — не показывать экран
@@ -58,9 +60,10 @@ class IncomingCallActivity : AppCompatActivity() {
                 putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callIdFromIntent)
             }
             sendBroadcast(shown)
-            finish()
+            closeIncomingScreen()
             return
         }
+        isAlive = true
         // Убираем уведомление полностью — при входящем звонке только нативный экран, без шторки и баннера
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         // Сообщаем IncomingCallForegroundService, что экран открыт — сервис снимет уведомление и остановится (важно для заблокированного/домашнего экрана)
@@ -90,19 +93,22 @@ class IncomingCallActivity : AppCompatActivity() {
         val from = intent.getStringExtra(EXTRA_FROM) ?: ""
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
         LiviOngoingCallHelper.setIncomingCall(this, callId, from, fromNick)
+        scheduleIncomingTimeout(callId)
 
         findViewById<TextView>(R.id.caller_name).text = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_unknown)
         findViewById<TextView>(R.id.call_subtitle).text = getString(R.string.incoming_call_title)
 
         findViewById<ImageButton>(R.id.btn_accept).setOnClickListener {
+            clearIncomingTimeout()
             stopCallRingtone()
             stopRepeatingVibration()
             val answerUri = "livi://answer-call?callId=${Uri.encode(callId)}&from=${Uri.encode(from)}&fromNick=${URLEncoder.encode(fromNick, StandardCharsets.UTF_8.toString())}"
             startMainWithDeepLink(answerUri)
-            finish()
+            closeIncomingScreen()
         }
 
         findViewById<ImageButton>(R.id.btn_decline).setOnClickListener {
+            clearIncomingTimeout()
             stopCallRingtone()
             stopRepeatingVibration()
             LiviAppModule.emitIncomingCallDeclinedByUser(callId)
@@ -114,9 +120,7 @@ class IncomingCallActivity : AppCompatActivity() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val canceledCallId = intent?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
                 if (canceledCallId == currentCallId) {
-                    stopCallRingtone()
-                    stopRepeatingVibration()
-                    finish()
+                    closeIncomingScreen()
                 }
             }
         }
@@ -132,9 +136,7 @@ class IncomingCallActivity : AppCompatActivity() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val answeredCallId = intent?.getStringExtra(EXTRA_CALL_ID) ?: return
                 if (answeredCallId == currentCallId) {
-                    stopCallRingtone()
-                    stopRepeatingVibration()
-                    finish()
+                    closeIncomingScreen()
                 }
             }
         }
@@ -175,12 +177,14 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         isInForeground = false
+        isAlive = false
         LiviOngoingCallHelper.clearOngoingCall(applicationContext)
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         callCanceledReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         callCanceledReceiver = null
         callAnsweredReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         callAnsweredReceiver = null
+        clearIncomingTimeout()
         stopCallRingtone()
         stopRepeatingVibration()
         super.onDestroy()
@@ -280,12 +284,9 @@ class IncomingCallActivity : AppCompatActivity() {
         if (intent.getBooleanExtra(EXTRA_JUST_CLOSE, false)) {
             val cid = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
             if (cid.isNotEmpty()) {
-                EndedCallIds.add(this, cid)
                 (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
             }
-            stopCallRingtone()
-            stopRepeatingVibration()
-            finish()
+            closeIncomingScreen(cid.ifEmpty { null })
         }
     }
 
@@ -337,8 +338,49 @@ class IncomingCallActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Локальный fail-safe: если сокет/FCM не доставили call:timeout или call_canceled,
+     * всё равно останавливаем рингтон и закрываем экран через тот же 20-секундный интервал.
+     */
+    private fun scheduleIncomingTimeout(callId: String) {
+        if (callId.isEmpty()) return
+        clearIncomingTimeout()
+        timeoutRunnable = Runnable {
+            try {
+                EndedCallIds.add(this, callId)
+                val cancelIntent = Intent(LiviFirebaseMessagingService.ACTION_CALL_CANCELED).apply {
+                    setPackage(packageName)
+                    putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
+                }
+                sendBroadcast(cancelIntent)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "scheduleIncomingTimeout broadcast failed", e)
+            }
+            stopCallRingtone()
+            stopRepeatingVibration()
+            finish()
+        }
+        timeoutHandler.postDelayed(timeoutRunnable!!, INCOMING_TIMEOUT_MS)
+    }
+
+    private fun clearIncomingTimeout() {
+        timeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
+        timeoutRunnable = null
+    }
+
+    private fun closeIncomingScreen(callIdToEnd: String? = null) {
+        callIdToEnd?.takeIf { it.isNotEmpty() }?.let { EndedCallIds.add(this, it) }
+        clearIncomingTimeout()
+        stopCallRingtone()
+        stopRepeatingVibration()
+        if (closeHandled || isFinishing || isDestroyed) return
+        closeHandled = true
+        finish()
+    }
+
     companion object {
         private const val TAG = "IncomingCallActivity"
+        private const val INCOMING_TIMEOUT_MS = 20_000L
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"
@@ -348,5 +390,8 @@ class IncomingCallActivity : AppCompatActivity() {
         /** true пока нативный экран входящего на экране (защита от heads-up поверх него). */
         @JvmField
         var isInForeground: Boolean = false
+        /** true пока экземпляр IncomingCallActivity существует, даже если он ушёл в фон. */
+        @JvmField
+        var isAlive: Boolean = false
     }
 }

@@ -445,9 +445,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     routeParams: route?.params,
     session: sessionRef.current,
     acceptCallTimeRef,
-    // Android: хотим сначала уйти назад, а PiP показать уже на предыдущем экране
-    // (BackHandler внутри usePiP иначе показывает PiP "на этом экране" перед pop).
-    enableAndroidBackHandler: false,
+    // Android Back обрабатываем внутри usePiP: уходим на предыдущий экран приложения
+    // и показываем поверх него in-app PiP без сворачивания задачи.
+    enableAndroidBackHandler: true,
   });
   
   // Сохраняем ссылку на enterPiPMode для использования в beforeRemove
@@ -549,6 +549,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       !!roomId &&
       !isInactiveState &&
       !!sessionRef.current;
+    const systemPiPEntryUntil = g.__systemPiPEntryInProgressUntilRef?.current;
+    const systemPiPEntryInProgress =
+      typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
 
     // Не очищаем ref при !canEnableSystemPiP — иначе при возврате из системного PiP returnToCall получит null.
     // Очищаем только в cleanup эффекта, когда сессия реально завершена (stillActive === false).
@@ -610,8 +613,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         clearTimeout(systemPiPGraceTimerRef.current);
         systemPiPGraceTimerRef.current = null;
       }
+      const state = systemPiPEntryInProgress ? 'preserved-during-entry' : 'waiting-for-grace';
       const logKey = JSON.stringify({
-        state: 'waiting-for-grace',
+        state,
         appState,
         isFocused,
         hasRoomId: !!roomId,
@@ -620,15 +624,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       });
       if (systemPiPLeaveHintLogRef.current !== logKey) {
         systemPiPLeaveHintLogRef.current = logKey;
-        logger.info('[VideoCall] system PiP leaveHint waiting for active/focused state before grace completes', {
-          appState,
-          isFocused,
-          hasRoomId: !!roomId,
-          isInactiveState,
-          hasSession: !!sessionRef.current,
-        });
+        logger.info(
+          systemPiPEntryInProgress
+            ? '[VideoCall] system PiP leaveHint preserved while native PiP entry is in progress'
+            : '[VideoCall] system PiP leaveHint waiting for active/focused state before grace completes',
+          {
+            appState,
+            isFocused,
+            hasRoomId: !!roomId,
+            isInactiveState,
+            hasSession: !!sessionRef.current,
+            systemPiPEntryInProgress,
+          }
+        );
       }
-      if (Platform.OS === 'android') {
+      if (!systemPiPEntryInProgress && Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
     } else {
@@ -744,6 +754,113 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
     }
   }, [route?.params]);
+
+  // Возврат с Home/in-app PiP на экран звонка только ради корректного входа в системный PiP.
+  // На некоторых устройствах Android захватывает неверный кадр поверх Home (с сильным зумом),
+  // поэтому для системного PiP кратко возвращаем живую сессию на VideoCall и входим в PiP уже отсюда.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const g = global as any;
+    g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
+    const pending = g.__enterSystemPiPAfterVideoCallRef.current;
+    if (!pending) return;
+    const pendingAgeMs =
+      typeof pending?.requestedAt === 'number' ? Date.now() - pending.requestedAt : Number.POSITIVE_INFINITY;
+    if (pending?.source !== 'back-root' || pendingAgeMs > 2500) {
+      g.__enterSystemPiPAfterVideoCallRef.current = null;
+      logger.info('[VideoCall] Ignoring stale system PiP transition request', {
+        source: pending?.source,
+        pendingAgeMs,
+      });
+      return;
+    }
+    const fromPiP = !!route?.params?.fromPiP;
+    const resume = !!route?.params?.resume;
+    if (fromPiP || resume) return;
+    const globalSession = g.__webrtcSessionRef?.current;
+    if (!globalSession || sessionRef.current) return;
+    sessionRef.current = globalSession;
+    setSessionTick((t) => t + 1);
+    const restoredRemote = pip.remoteStream || globalSession.getRemoteStream?.() || null;
+    const restoredLocal = pip.localStream || globalSession.getLocalStream?.() || null;
+    if (restoredRemote) {
+      setRemoteStream(restoredRemote);
+      remoteStreamRef.current = restoredRemote as any;
+      remoteStreamReceivedAtRef.current = Date.now();
+    }
+    if (restoredLocal) {
+      setLocalStream(restoredLocal);
+      localStreamRef.current = restoredLocal as any;
+      setLocalRenderKey((k: number) => k + 1);
+    }
+    logger.info('[VideoCall] Reused existing session for system PiP transition from Home', {
+      callId: pending.callId,
+      roomId: pending.roomId,
+      hasRemote: !!restoredRemote,
+      hasLocal: !!restoredLocal,
+    });
+  }, [route?.params?.fromPiP, route?.params?.resume, pip.localStream, pip.remoteStream]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const g = global as any;
+    g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
+    const pending = g.__enterSystemPiPAfterVideoCallRef.current;
+    if (!pending) return;
+    const pendingAgeMs =
+      typeof pending?.requestedAt === 'number' ? Date.now() - pending.requestedAt : Number.POSITIVE_INFINITY;
+    if (pending?.source !== 'back-root' || pendingAgeMs > 2500) {
+      g.__enterSystemPiPAfterVideoCallRef.current = null;
+      logger.info('[VideoCall] Dropping stale system PiP entry after VideoCall restore', {
+        source: pending?.source,
+        pendingAgeMs,
+      });
+      return;
+    }
+    if (!isFocused || appState !== 'active') return;
+    const session = sessionRef.current || g.__webrtcSessionRef?.current;
+    if (!session) return;
+    const effectiveCallId =
+      callId || route?.params?.callId || session.getCallId?.() || null;
+    const effectiveRoomId =
+      roomId || route?.params?.roomId || session.getRoomId?.() || null;
+    if (!effectiveCallId || !effectiveRoomId) return;
+    if (
+      (pending.callId && pending.callId !== effectiveCallId) ||
+      (pending.roomId && pending.roomId !== effectiveRoomId)
+    ) {
+      return;
+    }
+    g.__enterSystemPiPAfterVideoCallRef.current = null;
+    try {
+      if (pipRef.current.visible) pipRef.current.hidePiP();
+    } catch (_) {}
+    try { NativeModules.LiviAppModule?.setPiPEndCallParams?.(effectiveCallId, effectiveRoomId); } catch (_) {}
+    try {
+      if (typeof session.enterPiP === 'function') session.enterPiP();
+    } catch (_) {}
+    const upd = g.__pipUpdateStateRef?.current;
+    const apply = (size: { width: number; height: number } | null) => {
+      try {
+        if (typeof upd === 'function') {
+          upd({ pendingSystemPiP: true, allowVideoRender: true, ...(size ? { decorSizeForPiP: size } : {}) });
+        }
+      } catch (_) {}
+      setTimeout(() => {
+        try { NativeModules.LiviAppModule?.requestEnterPictureInPicture?.(); } catch (_) {}
+      }, 480);
+    };
+    const getDecor = NativeModules.LiviAppModule?.getDecorViewSize;
+    if (typeof getDecor === 'function') {
+      getDecor().then((size: { width: number; height: number }) => apply(size)).catch(() => apply(null));
+    } else {
+      apply(null);
+    }
+    logger.info('[VideoCall] Entering system PiP from restored VideoCall screen', {
+      callId: effectiveCallId,
+      roomId: effectiveRoomId,
+    });
+  }, [appState, isFocused, callId, roomId, route?.params?.callId, route?.params?.roomId]);
   
   // КРИТИЧНО: При входе в видеочат с конкретным другом — обнуляем пропущенные вызовы для него
   // Это нужно чтобы счетчик пропущенных звонков сбрасывался при открытии видеочата
@@ -2029,13 +2146,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     return () => {
       const pipVisible = (global as any).__pipVisibleRef?.current === true;
+      const returningFromSystemPiPUntil = (global as any).__returningFromSystemPiPUntilRef?.current;
+      const returningFromSystemPiP =
+        typeof returningFromSystemPiPUntil === 'number' &&
+        Date.now() < returningFromSystemPiPUntil;
       // Если звонок уже корректно завершили через handleCallEnded/onAbortCall — не дёргаем cleanup повторно.
       // Иначе для "второго участника" (который не нажимал end) получается двойное завершение.
       const alreadyEndedOrEnding =
         isInactiveStateRef.current ||
         isEndingCallRef.current ||
         callEndedTransitionDoneRef.current;
-      if (!pipVisible && !alreadyEndedOrEnding) {
+      if (returningFromSystemPiP) {
+        logger.info('[VideoCall] cleanup при размонтировании пропущен (возврат из system PiP)', {
+          returningFromSystemPiPUntil,
+        });
+      } else if (!pipVisible && !alreadyEndedOrEnding) {
         const cleanupFn = (global as any).__endCallCleanupRef?.current;
         if (typeof cleanupFn === 'function') {
           try {
@@ -2174,25 +2299,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   // КРИТИЧНО: На iOS отключаем usePreventRemove - он мешает нормальному свайпу
   // PanResponder полностью обрабатывает свайп: показывает PiP и делает навигацию
-  // На Android используем usePreventRemove как fallback для BackHandler
+  // На Android hardware Back обрабатывается в usePiP и возвращает на предыдущий экран
+  // приложения с in-app PiP, поэтому system PiP fallback через usePreventRemove не нужен.
   const shouldPreventRemove = (() => {
     // На iOS не блокируем навигацию - PanResponder обработает жест
     if (Platform.OS === 'ios') return false;
-
-    // На Android блокируем навигацию только если есть активный звонок и PiP еще не показан.
-    // ВАЖНО: используем pipRef.current.visible (в логах pip.visible может оставаться false
-    // сразу после showPiP, из-за чего поп может "залипать" на секунды).
-    const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
-    const actualRoomId = roomId || session?.getRoomId?.() || null;
-    const actualCallId = callId || session?.getCallId?.() || null;
-    const actualPartnerId = partnerId || session?.getPartnerId?.() || null;
-    const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveState && !wasFriendCallEnded;
-    const pipVisibleNow = !!pipRef.current?.visible;
-
-    return hasActiveCall && !pipVisibleNow;
+    return false;
   })();
 
-  // Один Back → сразу системный PiP с видео собеседника. Оверлей с remote показываем до входа в PiP, чтобы в кадр попал собеседник.
+  // Legacy fallback для системного PiP по remove-навигации. На Android сейчас отключён:
+  // hardware Back обрабатывается в usePiP и возвращает на предыдущий экран с in-app PiP.
   const backPiPInProgressRef = useRef(false);
   usePreventRemove(
     shouldPreventRemove,
