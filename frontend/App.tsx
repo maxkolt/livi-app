@@ -656,6 +656,14 @@ function AppContent() {
         await ensureInitialMediaPermissions();
       } catch {}
 
+      // 📞 Android: разрешение «звонки и управление ими» (CallKeep/ConnectionService) — запрашиваем вместе с остальными,
+      // чтобы диалог не появлялся поверх экрана исходящего звонка.
+      if (Platform.OS === 'android') {
+        try {
+          await setupCallKeep({ requestPermission: true });
+        } catch {}
+      }
+
         // 📱 Android: пока системная функция выключена, показываем подсказку при каждом заходе в приложение.
       if (Platform.OS === 'android') {
         try {

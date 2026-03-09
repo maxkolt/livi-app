@@ -1358,12 +1358,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     try {
       setCalling({ visible: true, friend, callId: null });
       startWaves();
-      // Не отключать сокет при «background», пока на нативном экране исходящего — инициатор должен получить call:accepted
+      // Сразу помечаем «исходящий на экране», чтобы сокет не отключался при уходе в фон (диалог разрешений).
+      // Иначе звонок не дойдёт до абонента (startCall по сокету).
       setOutgoingCallScreenVisible(true);
+      // Запрашиваем разрешение до показа нативного экрана, чтобы диалог не появлялся поверх «Вы звоните».
       if (Platform.OS === 'android') {
         await setupCallKeep({ requestPermission: true });
       }
-      // Нативный экран исходящего — показываем сразу без задержки (до ответа сервера)
+      // Нативный экран исходящего — только после завершения запроса разрешений
       logger.info('[outgoing] about to displayOutgoingCallImmediate', { friendId });
       displayOutgoingCallImmediate(friend.id, friendName);
       logger.info('[outgoing] displayOutgoingCallImmediate returned', { friendId });
