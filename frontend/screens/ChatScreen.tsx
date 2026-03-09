@@ -444,6 +444,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const messageActionsOpacity = useRef(new Animated.Value(0)).current;
   const messageActionsTranslateY = useRef(new Animated.Value(30)).current;
   const forwardToastOpacity = useRef(new Animated.Value(0)).current;
+  const forwardToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const forwardSheetTranslateY = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -802,8 +803,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   const GapCenterIndicator = React.useMemo(() => {
     const peerTyping = peerActivity === 'typing';
     const peerRecording = peerActivity === 'recording';
+    const isDeleteToast = forwardToast.visible && String(forwardToast.text || '') === t('chatDeleted', lang);
     // Приоритет: "Записывает" > "Печатает..." > "Отправлено"
-    if (!peerTyping && !peerRecording && !forwardToast.visible) return null;
+    if (!peerTyping && !peerRecording && (!forwardToast.visible || isDeleteToast)) return null;
 
     const baseStyle = {
       fontSize: 13,
@@ -837,6 +839,31 @@ export default function ChatScreen({ route, navigation }: Props) {
       </Animated.View>
     );
   }, [peerActivity, peerTypingDots, isDark, forwardToast.visible, forwardToast.text, forwardToast.ok, forwardToastOpacity, lang]);
+
+  const DeleteToastInline = React.useMemo(() => {
+    if (!forwardToast.visible || String(forwardToast.text || '') !== t('chatDeleted', lang)) return null;
+    return (
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          alignItems: 'center',
+          opacity: forwardToastOpacity,
+        }}
+      >
+        <Text
+          style={{
+            fontSize: 13,
+            fontStyle: 'italic',
+            fontWeight: '500',
+            letterSpacing: 0.2,
+            color: '#FF5A67',
+          }}
+        >
+          {forwardToast.text}
+        </Text>
+      </Animated.View>
+    );
+  }, [forwardToast.visible, forwardToast.text, forwardToastOpacity, lang]);
 
   // Кэшируем миниатюру при инициализации (если передана)
   useEffect(() => {
@@ -2008,7 +2035,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         delete (next as any)[mid];
         return next as any;
       });
-      showForwardToastBadge(true, t('chatDeleted', lang));
+      showForwardToastBadge(false, t('chatDeleted', lang));
       return;
     }
 
@@ -2115,6 +2142,12 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [resolveMediaUri]);
 
   const showForwardToastBadge = React.useCallback((ok: boolean, text: string) => {
+    try {
+      if (forwardToastTimerRef.current) {
+        clearTimeout(forwardToastTimerRef.current);
+        forwardToastTimerRef.current = null;
+      }
+    } catch {}
     setForwardToast({ visible: true, ok, text });
     forwardToastOpacity.setValue(0);
     Animated.timing(forwardToastOpacity, {
@@ -2122,16 +2155,18 @@ export default function ChatScreen({ route, navigation }: Props) {
       duration: 180,
       useNativeDriver: true,
     }).start();
-    setTimeout(() => {
+    const holdMs = text === t('chatDeleted', lang) ? 1900 : 1400;
+    forwardToastTimerRef.current = setTimeout(() => {
       Animated.timing(forwardToastOpacity, {
         toValue: 0,
         duration: 220,
         useNativeDriver: true,
       }).start(() => {
+        forwardToastTimerRef.current = null;
         setForwardToast((p) => ({ ...p, visible: false }));
       });
-    }, 1400);
-  }, [forwardToastOpacity]);
+    }, holdMs);
+  }, [forwardToastOpacity, lang]);
 
   const openForwardPicker = React.useCallback(async () => {
     setShowForwardPicker(true);
@@ -2566,7 +2601,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     if (failedServer.length === 0) {
       exitSelectionMode();
-      showForwardToastBadge(true, t('chatDeleted', lang));
+      showForwardToastBadge(false, t('chatDeleted', lang));
       return;
     }
 
@@ -4429,6 +4464,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                 );
               }}
             />
+            {DeleteToastInline ? (
+              <View pointerEvents="none" style={{ alignItems: 'center', paddingTop: 8, paddingBottom: 8 }}>
+                {DeleteToastInline}
+              </View>
+            ) : null}
             {/* Поле ввода для iOS */}
             <View
               style={{
@@ -4700,6 +4740,20 @@ export default function ChatScreen({ route, navigation }: Props) {
                 );
               }}
             />
+            {DeleteToastInline ? (
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: keyboardLift + (inputHeight > 0 ? inputHeight : 96) + 8,
+                  alignItems: 'center',
+                }}
+              >
+                {DeleteToastInline}
+              </View>
+            ) : null}
 
             {/* Поле ввода для Android: поднимаем над клавиатурой, если система не ресайзит окно */}
             <View
