@@ -17,7 +17,8 @@ const { width, height } = Dimensions.get('window');
 interface SplashLoaderProps {
   dataLoaded: boolean;
   onComplete?: () => void;
-  // Опциональные проверки реальных данных
+  // Устаревшие флаги полноты профиля. Оставлены для совместимости с текущими вызовами,
+  // но больше не блокируют скрытие сплеша: новый пользователь может не иметь ни ника, ни аватара.
   hasNick?: boolean;
   hasAvatar?: boolean;
   /** На Android: true когда аватар разрешён (data: -> file:) или аватара нет. Не скрываем сплеш пока false — избегаем мерцания и ошибки Glide. */
@@ -51,13 +52,12 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
     return () => clearTimeout(timer);
   }, [overlayMode]);
 
-  // Скрываем заглушку когда прошло минимум времени И данные загружены И (на Android) аватар готов к показу
+  // Скрываем заглушку когда прошло минимум времени и данные загружены.
+  // Наличие ника/аватара не обязательно: для нового пользователя после первого запуска
+  // нужно показать экран заполнения профиля, а не держать вечный сплеш.
   useEffect(() => {
-    // Если переданы проверки данных, используем их - хотя бы одно должно быть true
-    let dataReady = (hasNick !== undefined || hasAvatar !== undefined)
-      ? ((hasNick === true) || (hasAvatar === true)) // хотя бы одно должно быть true
-      : true; // если проверки не переданы, используем старую логику
-    if (hasAvatarReady !== undefined) dataReady = dataReady && hasAvatarReady;
+    let dataReady = true;
+    if (hasAvatarReady !== undefined) dataReady = hasAvatarReady;
     
     if (minTimeElapsed && dataLoaded && dataReady) {
       // Плавное исчезновение (чуть дольше — мягче переход к странице приветствия)
@@ -71,7 +71,7 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
         onComplete?.();
       });
     }
-  }, [minTimeElapsed, dataLoaded, hasNick, hasAvatar, hasAvatarReady, overlayMode]);
+  }, [minTimeElapsed, dataLoaded, hasAvatarReady, overlayMode]);
 
   // Анимация 3D парения логотипа
   useEffect(() => {

@@ -132,61 +132,153 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 // КРИТИЧНО: Глобальная ссылка на функцию переключения камеры из VideoCall (для PiP).
 (global as any).__toggleCamRef = { current: null as (() => void) | null };
 
-const overlayPermissionModalStyles = StyleSheet.create({
+const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => StyleSheet.create({
   overlayPermissionBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: isDark ? 'rgba(5, 8, 14, 0.66)' : 'rgba(26, 35, 52, 0.28)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    paddingHorizontal: 16,
+    paddingVertical: 24,
   },
   overlayPermissionCard: {
-    backgroundColor: '#1a1a2e',
-    borderRadius: 16,
-    padding: 24,
     width: '100%',
-    maxWidth: 340,
+    maxWidth: 360,
+    borderRadius: 24,
+    padding: 22,
+    backgroundColor: isDark ? '#0D0E10' : '#F0F2F5',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(113,91,168,0.16)',
+    shadowColor: '#000',
+    shadowOpacity: isDark ? 0.32 : 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+  },
+  overlayPermissionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  overlayPermissionIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    backgroundColor: isDark ? 'rgba(4, 4, 4, 0.8)' : 'rgba(113,91,168,0.12)',
+    borderWidth: 1,
+    borderColor: isDark ? '#4DD0E1' : theme.colors.primary,
+  },
+  overlayPermissionTitleWrap: {
+    flex: 1,
+    minWidth: 0,
   },
   overlayPermissionTitle: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 12,
+    fontWeight: '700',
+    color: isDark ? '#4DD0E1' : '#8B7BC8',
   },
   overlayPermissionText: {
     fontSize: 15,
-    color: 'rgba(255,255,255,0.85)',
+    color: isDark ? '#AEB6C6' : '#444444',
     lineHeight: 22,
-    marginBottom: 24,
+    marginBottom: 16,
+  },
+  overlayPermissionNote: {
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 18,
+    backgroundColor: isDark ? '#201C31' : '#F2EEF9',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(113,91,168,0.34)' : 'rgba(113,91,168,0.22)',
+  },
+  overlayPermissionNoteText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: isDark ? '#AEB6C6' : '#444444',
+    fontWeight: '600',
   },
   overlayPermissionButtons: {
     flexDirection: 'row',
-    gap: 12,
-    justifyContent: 'flex-end',
+    gap: 10,
+    justifyContent: 'space-between',
+    alignItems: 'stretch',
   },
   overlayPermissionButtonSecondary: {
+    flex: 0.82,
+    minHeight: 52,
     paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: isDark ? 'rgba(138, 143, 153, 0.28)' : 'rgba(59, 68, 83, 0.2)',
+    borderWidth: 0.2,
+    borderColor: isDark ? 'rgba(138, 143, 153, 0.45)' : 'rgba(59, 68, 83, 0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   overlayPermissionButtonSecondaryText: {
-    fontSize: 16,
-    color: 'rgba(255,255,255,0.7)',
+    fontSize: 15,
+    fontWeight: '600',
+    color: isDark ? '#AEB6C6' : '#444444',
   },
   overlayPermissionButtonPrimary: {
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    backgroundColor: '#4a7cff',
-    borderRadius: 10,
+    flex: 1.28,
+    minHeight: 52,
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  overlayPermissionButtonPrimaryLightOuter: {
+    backgroundColor: theme.colors.primary,
+    paddingTop: 1,
+    paddingLeft: 1,
+    paddingRight: 1,
+    paddingBottom: 1.5,
+  },
+  overlayPermissionButtonPrimaryDarkOuter: {
+    backgroundColor: '#4DD0E1',
+    padding: 1,
+  },
+  overlayPermissionButtonPrimaryLightInner: {
+    flex: 1,
+    borderTopLeftRadius: 13,
+    borderTopRightRadius: 13,
+    borderBottomLeftRadius: 12.5,
+    borderBottomRightRadius: 12.5,
+    backgroundColor: '#9E8FD6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  overlayPermissionButtonPrimaryDark: {
+    flex: 1,
+    borderRadius: 13,
+    backgroundColor: 'rgba(4, 4, 4, 0.8)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
   },
   overlayPermissionButtonPrimaryText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+    color: isDark ? '#AEB6C6' : '#444444',
+    textAlign: 'center',
+  },
+  overlayPermissionLinkButton: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    paddingVertical: 6,
   },
 });
 
 function AppContent() {
   const { theme, isDark } = useAppTheme();
+  const overlayPermissionModalStyles = React.useMemo(
+    () => getOverlayPermissionModalStyles(theme, isDark),
+    [theme, isDark]
+  );
   const pip = usePiP();
   const lang = useLang((s) => s.lang);
   const hydrateLang = useLang((s) => s.hydrate);
@@ -205,12 +297,6 @@ function AppContent() {
   // Ref для различения в onEnd: мы принимающий (отклонили входящий) или звонящий (отменили исходящий)
   const incomingCallIdRef = React.useRef<string | null>(null);
 
-  // CallKeep (нативный экран звонка на Android): selfManaged + задержка
-  React.useEffect(() => {
-    const t = setTimeout(() => void setupCallKeep(), 3000);
-    return () => clearTimeout(t);
-  }, []);
-
   // FCM входящий при разблокированном экране: pending передан через MainActivity → показать через ConnectionService/CallKeep (баннер не исчезает)
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -218,11 +304,16 @@ function AppContent() {
       const pending = await getAndClearPendingIncomingCallForCallKeep();
       if (!pending?.callId || !pending?.from) return;
       try {
-        await setupCallKeep();
-        displayIncomingCall(pending.callId, pending.from, pending.fromNick ?? '', true);
-        startIncomingCallRingtoneAndVibration();
+        const ready = await setupCallKeep({ requestPermission: false });
+        if (ready) {
+          displayIncomingCall(pending.callId, pending.from, pending.fromNick ?? '', true);
+          startIncomingCallRingtoneAndVibration();
+          logger.info('[App] Pending CallKeep incoming shown', { callId: pending.callId });
+        } else {
+          await launchIncomingCallActivityScreen(pending.callId, pending.from, pending.fromNick ?? '', true);
+          logger.info('[App] Pending incoming shown via native activity fallback', { callId: pending.callId });
+        }
         stopIncomingCallForegroundService();
-        logger.info('[App] Pending CallKeep incoming shown', { callId: pending.callId });
       } catch (e) {
         logger.warn('[App] Pending CallKeep incoming failed', e);
       }
@@ -565,36 +656,19 @@ function AppContent() {
         await ensureInitialMediaPermissions();
       } catch {}
 
-      // 📱 Android: разрешение «Отображение поверх других окон» (Всегда сверху) — запрос при первом заходе, как камера/микрофон.
+        // 📱 Android: пока системная функция выключена, показываем подсказку при каждом заходе в приложение.
       if (Platform.OS === 'android') {
         try {
           const can = await canDrawOverlays();
           if (!can) {
-            const raw = await AsyncStorage.getItem('overlay_permission_prompt_last_shown');
-            const last = raw ? parseInt(raw, 10) : 0;
-            const interval = 7 * 24 * 60 * 60 * 1000;
-            if (Date.now() - last >= interval) {
-              await AsyncStorage.setItem('overlay_permission_prompt_last_shown', String(Date.now()));
-              setOverlayPermissionModalVisible(true);
-            }
+            setOverlayPermissionModalVisible(true);
           }
         } catch (_) {}
-        // Android 14+: полноэкранные уведомления (FSI). Без них на блокировке показывается только шторка. На части устройств (Samsung) API возвращает false даже при включённых настройках — даём «Больше не показывать».
+        // Android 14+: пока полноэкранные уведомления выключены, показываем подсказку при каждом заходе в приложение.
         try {
-          const dontShowAgain = await AsyncStorage.getItem('full_screen_intent_dont_show_again');
-          if (dontShowAgain === 'true') {
-            // Пользователь уже включил настройки или не хочет видеть подсказку.
-          } else {
-            const canFSI = await canUseFullScreenIntent();
-            if (!canFSI) {
-              const raw = await AsyncStorage.getItem('full_screen_intent_prompt_last_shown');
-              const last = raw ? parseInt(raw, 10) : 0;
-              const interval = 7 * 24 * 60 * 60 * 1000;
-              if (Date.now() - last >= interval) {
-                await AsyncStorage.setItem('full_screen_intent_prompt_last_shown', String(Date.now()));
-                setFullScreenIntentModalVisible(true);
-              }
-            }
+          const canFSI = await canUseFullScreenIntent();
+          if (!canFSI) {
+            setFullScreenIntentModalVisible(true);
           }
         } catch (_) {}
       }
@@ -735,7 +809,6 @@ function AppContent() {
       if (callId && from) {
         logger.info('[App] Incoming call deep link: showing native IncomingCallActivity', { callId, from });
         if (Platform.OS === 'android') {
-          await setupCallKeep();
           launchIncomingCallActivityScreen(callId, from, fromNick);
         } else {
           await openIncomingCallScreen(from, callId);
@@ -2243,22 +2316,41 @@ function AppContent() {
                 onPress={() => setOverlayPermissionModalVisible(false)}
               >
                 <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={overlayPermissionModalStyles.overlayPermissionCard}>
-                  <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>{t('incomingCallTitle', lang)}</Text>
+                  <View style={overlayPermissionModalStyles.overlayPermissionHeader}>
+                    <View style={overlayPermissionModalStyles.overlayPermissionIconWrap}>
+                      <MaterialIcons name="lock-open" size={20} color={isDark ? '#4DD0E1' : theme.colors.primary} />
+                    </View>
+                    <View style={overlayPermissionModalStyles.overlayPermissionTitleWrap}>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>Вызовы на заблокированном экране</Text>
+                    </View>
+                  </View>
                   <Text style={overlayPermissionModalStyles.overlayPermissionText}>
-                    Чтобы входящие видеозвонки показывались на заблокированном экране и работал режим «картинка в картинке», разрешите LiVi отображаться поверх других приложений.
+                    Включите для LiVi показ поверх других приложений.
                   </Text>
+                  <View style={overlayPermissionModalStyles.overlayPermissionNote}>
+                    <Text style={overlayPermissionModalStyles.overlayPermissionNoteText}>
+                      Это нужно, чтобы принимать входящие вызовы, когда экран телефона заблокирован.
+                    </Text>
+                  </View>
                   <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
                     <TouchableOpacity style={overlayPermissionModalStyles.overlayPermissionButtonSecondary} onPress={() => setOverlayPermissionModalVisible(false)}>
-                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>Позже</Text>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>Не сейчас</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={overlayPermissionModalStyles.overlayPermissionButtonPrimary}
+                      style={[
+                        overlayPermissionModalStyles.overlayPermissionButtonPrimary,
+                        isDark
+                          ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDarkOuter
+                          : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightOuter,
+                      ]}
                       onPress={() => {
                         openOverlayPermissionSettings();
                         setOverlayPermissionModalVisible(false);
                       }}
                     >
-                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>Открыть настройки</Text>
+                      <View style={isDark ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDark : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightInner}>
+                        <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>Открыть настройки</Text>
+                      </View>
                     </TouchableOpacity>
                   </View>
                 </TouchableOpacity>
@@ -2278,33 +2370,43 @@ function AppContent() {
                 onPress={() => setFullScreenIntentModalVisible(false)}
               >
                 <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={overlayPermissionModalStyles.overlayPermissionCard}>
-                  <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>{t('incomingCallTitle', lang)}</Text>
+                  <View style={overlayPermissionModalStyles.overlayPermissionHeader}>
+                    <View style={overlayPermissionModalStyles.overlayPermissionIconWrap}>
+                      <MaterialIcons name="notifications-active" size={20} color={isDark ? '#4DD0E1' : theme.colors.primary} />
+                    </View>
+                    <View style={overlayPermissionModalStyles.overlayPermissionTitleWrap}>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>Вызовы на заблокированном экране</Text>
+                    </View>
+                  </View>
                   <Text style={overlayPermissionModalStyles.overlayPermissionText}>
-                    Чтобы входящие звонки показывались на заблокированном экране, включите для LiVi «Полноэкранные уведомления» или «Показ поверх других окон» в настройках уведомлений.
+                    Включите для LiVi полноэкранные уведомления в настройках уведомлений.
                   </Text>
+                  <View style={overlayPermissionModalStyles.overlayPermissionNote}>
+                    <Text style={overlayPermissionModalStyles.overlayPermissionNoteText}>
+                      Это нужно, чтобы принимать входящие вызовы, когда экран телефона заблокирован.
+                    </Text>
+                  </View>
                   <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
                     <TouchableOpacity style={overlayPermissionModalStyles.overlayPermissionButtonSecondary} onPress={() => setFullScreenIntentModalVisible(false)}>
-                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>Позже</Text>
+                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>Не сейчас</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={overlayPermissionModalStyles.overlayPermissionButtonPrimary}
+                      style={[
+                        overlayPermissionModalStyles.overlayPermissionButtonPrimary,
+                        isDark
+                          ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDarkOuter
+                          : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightOuter,
+                      ]}
                       onPress={() => {
                         openAppNotificationSettings();
                         setFullScreenIntentModalVisible(false);
                       }}
                     >
-                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>Открыть настройки</Text>
+                      <View style={isDark ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDark : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightInner}>
+                        <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>Открыть настройки</Text>
+                      </View>
                     </TouchableOpacity>
                   </View>
-                  <TouchableOpacity
-                    style={{ marginTop: 12, paddingVertical: 4 }}
-                    onPress={async () => {
-                      try { await AsyncStorage.setItem('full_screen_intent_dont_show_again', 'true'); } catch (_) {}
-                      setFullScreenIntentModalVisible(false);
-                    }}
-                  >
-                    <Text style={[overlayPermissionModalStyles.overlayPermissionButtonSecondaryText, { fontSize: 13 }]}>Больше не показывать</Text>
-                  </TouchableOpacity>
                 </TouchableOpacity>
               </TouchableOpacity>
             </Modal>

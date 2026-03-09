@@ -15,16 +15,20 @@ let hasPhoneNumbersPermission = false;
 /** callId (uuid) -> { from, fromNick } для навигации при answer из нативного UI */
 const pendingCallByUuid: Record<string, { from: string; fromNick?: string }> = {};
 
-/** Один раз при старте приложения (только Android). Ничего не ломает при ошибке. */
-export async function setupCallKeep(): Promise<boolean> {
+type SetupCallKeepOptions = {
+  requestPermission?: boolean;
+};
+
+/** Ленивая инициализация CallKeep. Permission можно только проверить или запросить явно. */
+export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
-  if (isSetup) return true;
+  const requestPermission = options?.requestPermission === true;
 
   try {
     const status = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS);
     if (status) {
       hasPhoneNumbersPermission = true;
-    } else {
+    } else if (requestPermission) {
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS,
         { title: 'Доступ к звонкам', message: 'Нужен для отображения входящих видеозвонков в системном экране.', buttonPositive: 'Разрешить' }
@@ -33,10 +37,16 @@ export async function setupCallKeep(): Promise<boolean> {
       if (!hasPhoneNumbersPermission) {
         logger.warn('[callKeep] READ_PHONE_NUMBERS not granted — нативный экран звонка отключён, только модалка в приложении');
       }
+    } else {
+      hasPhoneNumbersPermission = false;
+      logger.info('[callKeep] READ_PHONE_NUMBERS not granted yet — skipping CallKeep setup without prompt');
     }
   } catch (e) {
     logger.warn('[callKeep] READ_PHONE_NUMBERS check/request failed', e as Error);
   }
+
+  if (!hasPhoneNumbersPermission) return false;
+  if (isSetup) return true;
 
   try {
     const RNCallKeep = require('react-native-callkeep');
@@ -490,7 +500,7 @@ export type CallKeepEventCallbacks = {
  * Возвращает функцию отписки.
  */
 export function registerCallKeepEvents(callbacks: CallKeepEventCallbacks): () => void {
-  if (Platform.OS !== 'android' || !isSetup) return () => {};
+  if (Platform.OS !== 'android') return () => {};
   try {
     const RNCallKeep = require('react-native-callkeep');
     const onAnswer = ({ callUUID }: { callUUID?: string }) => {

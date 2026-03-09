@@ -75,7 +75,7 @@ import { logger } from '../utils/logger';
 import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals } from '../utils/globalEvents';
-import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled } from '../utils/callKeep';
+import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
 import { setMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
@@ -1360,6 +1360,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       startWaves();
       // Не отключать сокет при «background», пока на нативном экране исходящего — инициатор должен получить call:accepted
       setOutgoingCallScreenVisible(true);
+      if (Platform.OS === 'android') {
+        await setupCallKeep({ requestPermission: true });
+      }
       // Нативный экран исходящего — показываем сразу без задержки (до ответа сервера)
       logger.info('[outgoing] about to displayOutgoingCallImmediate', { friendId });
       displayOutgoingCallImmediate(friend.id, friendName);

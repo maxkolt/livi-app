@@ -7,7 +7,7 @@ import './utils/pushNotifications';
 import { Alert, AppRegistry, Platform } from 'react-native';
 import { registerRootComponent } from 'expo';
 import App from './App';
-import { isEndedCallId, setupCallKeep, displayIncomingCall, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration } from './utils/callKeep';
+import { isEndedCallId, setupCallKeep, displayIncomingCall, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, showIncomingCallSystemUI } from './utils/callKeep';
 import * as Notifications from 'expo-notifications';
 
 // Headless: при входящем пуше показываем баннер через ConnectionService/CallKeep (как в Telegram) — он не исчезает через 5–7 сек.
@@ -20,15 +20,20 @@ AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (dat
       console.log('[headless] skip (call already ended)', data.callId);
       return;
     }
-    // Баннер ConnectionService (как в Telegram): висит до Принять/Отклонить/таймаут. Мелодия и вибрация — из настроек телефона (звонок).
-    await setupCallKeep();
-    displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
-    startIncomingCallRingtoneAndVibration();
+    // Без READ_PHONE_NUMBERS не показываем prompt в фоне: используем CallKeep только если он уже доступен,
+    // иначе переключаемся на нативный системный fallback.
+    const ready = await setupCallKeep({ requestPermission: false });
+    if (ready) {
+      displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
+      startIncomingCallRingtoneAndVibration();
+    } else {
+      showIncomingCallSystemUI(data.callId, data.from, data.fromNick ?? '');
+    }
     // Даём системе время показать баннер CallKeep, затем снимаем уведомление FGS (иначе на части устройств баннер не успевает появиться)
     setTimeout(() => {
       try { stopIncomingCallForegroundService(); } catch {}
     }, 1500);
-    console.log('[headless] displayIncomingCall + ringtone/vibration done', data.callId);
+    console.log('[headless] incoming UI shown', { callId: data.callId, viaCallKeep: ready });
   } catch (e) {
     console.warn('[headless] RNCallKeepBackgroundMessage failed', e);
   }
