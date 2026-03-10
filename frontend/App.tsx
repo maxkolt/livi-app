@@ -63,6 +63,10 @@ try {
   };
 }
 
+/** Модалки «Вызовы на заблокированном экране» показываются только один раз при первом запуске после установки. */
+const OVERLAY_PERMISSION_MODAL_SHOWN_KEY = 'overlay_permission_modal_shown_v1';
+const FULL_SCREEN_INTENT_MODAL_SHOWN_KEY = 'full_screen_intent_modal_shown_v1';
+
 // Экспортируем функции для использования в других компонентах
 export { activateKeepAwakeAsync, deactivateKeepAwakeAsync };
 
@@ -664,19 +668,26 @@ function AppContent() {
         } catch {}
       }
 
-        // 📱 Android: пока системная функция выключена, показываем подсказку при каждом заходе в приложение.
+        // 📱 Android: модалки про «показ поверх» и «полноэкранные уведомления» — только один раз при первом запуске после установки.
       if (Platform.OS === 'android') {
         try {
-          const can = await canDrawOverlays();
-          if (!can) {
-            setOverlayPermissionModalVisible(true);
+          const overlayShown = await AsyncStorage.getItem(OVERLAY_PERMISSION_MODAL_SHOWN_KEY);
+          if (overlayShown !== '1') {
+            const can = await canDrawOverlays();
+            if (!can) {
+              await AsyncStorage.setItem(OVERLAY_PERMISSION_MODAL_SHOWN_KEY, '1');
+              setOverlayPermissionModalVisible(true);
+            }
           }
         } catch (_) {}
-        // Android 14+: пока полноэкранные уведомления выключены, показываем подсказку при каждом заходе в приложение.
         try {
-          const canFSI = await canUseFullScreenIntent();
-          if (!canFSI) {
-            setFullScreenIntentModalVisible(true);
+          const fsiShown = await AsyncStorage.getItem(FULL_SCREEN_INTENT_MODAL_SHOWN_KEY);
+          if (fsiShown !== '1') {
+            const canFSI = await canUseFullScreenIntent();
+            if (!canFSI) {
+              await AsyncStorage.setItem(FULL_SCREEN_INTENT_MODAL_SHOWN_KEY, '1');
+              setFullScreenIntentModalVisible(true);
+            }
           }
         } catch (_) {}
       }
