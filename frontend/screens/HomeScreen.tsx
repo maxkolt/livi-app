@@ -782,17 +782,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [dataLoaded, setDataLoaded] = useState(homeScreenAlreadyBooted);
   // Сплеш поверх уже отрисованного Home: при уходе сплеша видна страница приветствия с актуальными данными
   const [splashDismissed, setSplashDismissed] = useState(homeScreenAlreadyBooted);
-  // Автоскрытие бейджа «Скачайте обновление» через 5 сек — только когда заглушка уже скрыта (пользователь видит страницу приветствия).
-  // Иначе при долгой заглушке (например VPN 20+ сек) бейдж успевает исчезнуть до перехода на приветствие.
-  const splashVisible = !dataLoaded || (dataLoaded && !profileLoaded);
+  // Автоскрытие бейджа «Скачайте обновление» через 5 сек — только когда оверлей сплеша уже скрыт (пользователь видит страницу приветствия).
+  // Раньше таймер был привязан к splashVisible (data/profile) и стартовал под оверлеем — бейдж исчезал через 1–2 сек после появления.
   useEffect(() => {
-    if (!showUpdateBadge || splashVisible) return;
+    if (!showUpdateBadge || !splashDismissed) return;
     const t = setTimeout(() => {
       setShowUpdateBadgeState(false);
       markUpdateBadgeShown();
     }, 5000);
     return () => clearTimeout(t);
-  }, [showUpdateBadge, splashVisible]);
+  }, [showUpdateBadge, splashDismissed]);
   const [nick, setNick] = useState('');
   // На медленных девайсах (Android 8.1/старые модели) setState может "догонять" ввод,
   // и при нажатии "Сохранить" в тот же момент на сервер может уйти только первая буква.
@@ -4111,7 +4110,7 @@ const handleClearNick = useCallback(async () => {
               minWidth: 120,
             }}
           >
-            <Animated.View style={{ transform: [{ rotate: updateSpinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }] }}>
+            <Animated.View style={{ transform: [{ scaleX: -1 }, { rotate: updateSpinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-360deg'] }) }] }}>
               <ExpoImage source={require('../assets/icon-update.png')} style={{ width: 18, height: 18 }} contentFit="contain" />
             </Animated.View>
             <Text style={{ color: LIVI.text2, fontSize: 14, fontWeight: '300' }}>{L('updateBtn')}</Text>
@@ -4385,17 +4384,20 @@ const handleClearNick = useCallback(async () => {
             </View>
             {/* Только рамка в градиенте; середина — сплошной фон страницы */}
             <View style={{ margin: 0.3, borderRadius: 17.7, flexDirection: 'row', alignItems: 'center', paddingLeft: 10, paddingRight: 4, backgroundColor: theme.colors.background, flex: 1, paddingTop: 0, paddingBottom: 0, zIndex: 1 }}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={{ flex: 1, justifyContent: 'center', minWidth: 140 }}
+              <Pressable
+                style={({ pressed }) => [
+                  { flex: 1, justifyContent: 'center', minWidth: 140, borderRadius: 14, marginLeft: 4, marginRight: 2 },
+                  pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
+                ]}
                 onPress={() => {
                   setShowUpdateBadgeState(false);
                   markUpdateBadgeShown();
                   Linking.openURL(PLAY_STORE_UPDATE_URL);
                 }}
+                android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: false, radius: 14 }}
               >
                 <Text style={{ color: isDark ? LIVI.text : LIVI.textThemeWhite, fontSize: 13, fontWeight: '400', lineHeight: 13, ...(Platform.OS === 'android' && { includeFontPadding: false }) }} numberOfLines={1}>{L('updateDownloadNew')}</Text>
-              </TouchableOpacity>
+              </Pressable>
               <View style={{ width: 0.3, alignSelf: 'stretch', marginVertical: 6, marginLeft: 0, overflow: 'hidden', borderRadius: 1 }}>
                 <LinearGradient
                   colors={isDark ? ['#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0'] : ['#a78bfa', '#FFF8F0', '#B0B5BF']}
@@ -4404,16 +4406,20 @@ const handleClearNick = useCallback(async () => {
                   style={{ flex: 1, width: 0.3 }}
                 />
               </View>
-              <TouchableOpacity
+              <Pressable
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 onPress={() => {
                   setShowUpdateBadgeState(false);
                   markUpdateBadgeShown();
                 }}
-                style={{ paddingVertical: 2, paddingHorizontal: 2 }}
+                style={({ pressed }) => [
+                  { paddingVertical: 8, paddingHorizontal: 8, borderRadius: 12, marginRight: 2 },
+                  pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
+                ]}
+                android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: true }}
               >
                 <Ionicons name="close" size={18} color={isDark ? LIVI.text : LIVI.textThemeWhite} />
-              </TouchableOpacity>
+              </Pressable>
             </View>
           </View>
         )}
@@ -5198,7 +5204,7 @@ const handleClearNick = useCallback(async () => {
         {active && <View style={[StyleSheet.absoluteFill, styles.segActiveBg]} />}
         {active && <View style={styles.segTopShadow} />}
         {updateAvailable && (
-          <View style={{ position: 'absolute', right: 7, top: 2, bottom: 0, justifyContent: 'center', width: 22, alignItems: 'center', zIndex: 1 }} pointerEvents="none">
+          <View style={{ position: 'absolute', right: 7, top: 2, bottom: 0, justifyContent: 'center', width: 22, alignItems: 'center', zIndex: 1, transform: [{ scaleX: -1 }] }} pointerEvents="none">
             <ExpoImage
               source={require('../assets/icon-update.png')}
               style={{ width: 14, height: 14 }}

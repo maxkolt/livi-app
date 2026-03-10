@@ -187,8 +187,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const [toastVisible, setToastVisible] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   
-  // Session
+  // Session (sessionKey пересоздаёт сессию после forceStopRandomChat, чтобы кнопка «Начать» работала)
   const sessionRef = useRef<RandomChatSession | null>(null);
+  const [sessionKey, setSessionKey] = useState(0);
 
   // Сброс удаленного состояния при смене партнера
   useEffect(() => {
@@ -687,7 +688,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         sessionRef.current = null;
       }
     };
-  }, [myUserId]);
+  }, [myUserId, sessionKey]);
 
   // Network overlay heuristic:
   // If we had remote video before, remote cam is ON, but video is not renderable for a long time,
@@ -1194,6 +1195,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       localStreamTimestampRef.current = 0;
       needsIOSUpdateAfterNextRef.current = false;
       stopSpeaker();
+      // Пересоздаём сессию при следующем рендере, чтобы по «Начать» снова запускался поиск
+      setSessionKey((k) => k + 1);
     } catch (e) {
       logger.error('[RandomChat] Error resetting state in forceStopRandomChat:', e);
     }
@@ -1213,10 +1216,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           // Пока приложение теряет фокус, сразу переводим экран в неактивное состояние.
           setIsInactiveState(true);
         } else if (nextAppState === 'active') {
-          // Если чат уже был остановлен из-за background, не "оживляем" UI обратно.
-          if (startedRef.current || loadingRef.current) {
-            setIsInactiveState(false);
-          }
+          // После возврата из фона кнопка «Начать» должна быть кликабельна и запускать поиск.
+          setIsInactiveState(false);
           // Аудио-роутинг поднимется через useAudioRouting (без ручных "пинков")
         }
       } catch (e) {
