@@ -17,7 +17,7 @@ import {
   VideoPresets,
 } from 'livekit-client';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
-import type { WebRTCSessionConfig, CamSide } from '../types';
+import type { WebRTCSessionConfig, WebRTCSessionCallbacks, CamSide } from '../types';
 import socket, { API_BASE, setActiveVideoCall } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
@@ -482,6 +482,24 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     this.config.callbacks.onMicStateChange?.(this.isMicOn);
     this.config.onMicStateChange?.(this.isMicOn);
+  }
+
+  /**
+   * Обновляет колбэки сессии (при переиспользовании сессии после возврата из PiP).
+   * Иначе UI текущего экземпляра VideoCall не получает onMicStateChange/onCamStateChange и кнопки «не реагируют».
+   */
+  updateCallbacks(callbacks: Partial<WebRTCSessionCallbacks>): void {
+    if (!callbacks || !this.config?.callbacks) return;
+    this.config.callbacks = { ...this.config.callbacks, ...callbacks };
+    if (callbacks.onMicStateChange) this.config.onMicStateChange = callbacks.onMicStateChange;
+    if (callbacks.onCamStateChange) this.config.onCamStateChange = callbacks.onCamStateChange;
+    if (callbacks.onLocalStreamChange) this.config.onLocalStreamChange = callbacks.onLocalStreamChange;
+    if (callbacks.onRemoteStreamChange) this.config.onRemoteStreamChange = callbacks.onRemoteStreamChange;
+    if (callbacks.onRemoteCamStateChange) this.config.onRemoteCamStateChange = callbacks.onRemoteCamStateChange;
+    if (callbacks.onLoadingChange) this.config.onLoadingChange = callbacks.onLoadingChange;
+    if (callbacks.onPartnerIdChange) this.config.onPartnerIdChange = callbacks.onPartnerIdChange;
+    if (callbacks.onRoomIdChange) this.config.onRoomIdChange = callbacks.onRoomIdChange;
+    if (callbacks.onCallIdChange) this.config.onCallIdChange = callbacks.onCallIdChange;
   }
 
   async toggleCam(): Promise<void> {
@@ -3727,6 +3745,12 @@ export class VideoCallSession extends SimpleEventEmitter {
           unpublishAll(lp.audioTrackPublications);
         }
         try {
+          // Повторная проверка: за время ожидания комната могла перейти в reconnecting (уход в фон) — тогда disconnect() бросает "Received leave request while trying to (re)connect".
+          if (roomToDisconnect.state !== 'connected') {
+            logger.debug('[VideoCallSession] Room no longer connected before disconnect(), skipping', { state: roomToDisconnect.state });
+            this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:not_connected_before_disconnect');
+            return;
+          }
           await roomToDisconnect.disconnect();
           logger.debug('[VideoCallSession] Room disconnect() called, waiting for Disconnected event');
           // Короткая задержка перед forceDisposeRoom: даём движку LiveKit обновить состояние (closed/transports),
@@ -3735,8 +3759,12 @@ export class VideoCallSession extends SimpleEventEmitter {
           this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:after_await');
         } catch (e: any) {
           const errorMessage = e?.message || String(e || '');
-          if (!errorMessage.includes('before connected') && !errorMessage.includes('already disconnected')) {
+          const isLeaveWhileReconnect = /leave request|LeaveRequest|reconnect/i.test(errorMessage);
+          if (!errorMessage.includes('before connected') && !errorMessage.includes('already disconnected') && !isLeaveWhileReconnect) {
             logger.warn('[VideoCallSession] Error disconnecting room', e);
+          }
+          if (isLeaveWhileReconnect) {
+            logger.debug('[VideoCallSession] Leave during reconnect (e.g. app to background) — ignored', { state: roomToDisconnect.state });
           }
           this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:after_catch');
         }

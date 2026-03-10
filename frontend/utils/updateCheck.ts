@@ -158,23 +158,11 @@ export async function isUpdateAvailable(): Promise<boolean> {
   return false;
 }
 
-/** Показывать ли бейдж «Скачайте обновление». В релизе — при каждом входе, если есть обновление; в __DEV__ — раз в сутки (или всегда для проверки UI). */
+/** Показывать ли бейдж «Скачайте обновление». В dev не показываем; в релизе — при каждом заходе, если есть обновление. */
 export async function shouldShowUpdateBadge(): Promise<boolean> {
+  if (__DEV__) return false; // в dev не показываем бейдж обновления
   const available = await isUpdateAvailable();
-  if (!available) return false;
-  if (__DEV__) {
-    // в dev можно ограничить показ раз в сутки или показывать всегда
-    try {
-      const raw = await AsyncStorage.getItem(LAST_UPDATE_BADGE_SHOWN_KEY);
-      const last = raw ? parseInt(raw, 10) : 0;
-      if (Number.isNaN(last) || Date.now() - last >= BADGE_COOLDOWN_MS) return true;
-    } catch {
-      return true;
-    }
-    return false;
-  }
-  // в релизе — показывать бейдж при каждом входе, если приложение не обновлено
-  return true;
+  return available; // в релизе — при каждом входе, если есть обновление
 }
 
 /** Отметить, что бейдж показан (сбрасывает показ на 24 ч). */

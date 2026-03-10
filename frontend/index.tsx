@@ -47,6 +47,14 @@ try {
     if (error?.message?.includes('useInsertionEffect must not schedule')) {
       return;
     }
+    // LiveKit при уходе в фон/системный PiP может выбросить, если leave пришёл во время reconnecting — не показываем красный экран.
+    const msg = String(error?.message || error?.reasonName || '');
+    if (msg.includes('leave request') || msg.includes('LeaveRequest') || (msg.includes('reconnect') && msg.includes('leave'))) {
+      if (typeof console?.warn === 'function') {
+        console.warn('[Global Error Handler] Suppressed LiveKit leave/reconnect error (non-fatal)', msg);
+      }
+      return;
+    }
     
     // Логируем все ошибки для отладки
     console.error('[Global Error Handler]', {

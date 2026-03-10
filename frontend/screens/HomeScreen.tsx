@@ -4090,9 +4090,9 @@ const handleClearNick = useCallback(async () => {
         </View>
       </TouchableOpacity>
 
-      {/* Кнопка «Обновить»: рамка как у «Пригласить друзей», фон прозрачный, шрифт тонкий */}
+      {/* Кнопка «Обновить»: компактная, чтобы за неё ничего не вылезало */}
       {updateAvailable && (
-        <View style={{ marginTop: 'auto', marginBottom: 50, alignItems: 'center', alignSelf: 'stretch' }}>
+        <View style={{ marginTop: 'auto', marginBottom: 36, alignItems: 'center', alignSelf: 'stretch' }}>
           <TouchableOpacity
             activeOpacity={0.85}
             onPress={() => Linking.openURL(PLAY_STORE_UPDATE_URL)}
@@ -4100,20 +4100,20 @@ const handleClearNick = useCallback(async () => {
               backgroundColor: 'transparent',
               borderWidth: StyleSheet.hairlineWidth,
               borderColor: '#5A5F69',
-              borderRadius: 24,
-              paddingVertical: 8,
-              paddingHorizontal: 14,
+              borderRadius: 20,
+              paddingVertical: 6,
+              paddingHorizontal: 12,
               flexDirection: 'row',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: 6,
-              minWidth: 120,
+              gap: 5,
+              minWidth: 100,
             }}
           >
             <Animated.View style={{ transform: [{ scaleX: -1 }, { rotate: updateSpinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-360deg'] }) }] }}>
-              <ExpoImage source={require('../assets/icon-update.png')} style={{ width: 18, height: 18 }} contentFit="contain" />
+              <ExpoImage source={require('../assets/icon-update.png')} style={{ width: 16, height: 16 }} contentFit="contain" />
             </Animated.View>
-            <Text style={{ color: LIVI.text2, fontSize: 14, fontWeight: '300' }}>{L('updateBtn')}</Text>
+            <Text style={{ color: LIVI.text2, fontSize: 13, fontWeight: '300' }}>{L('updateBtn')}</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -4383,10 +4383,10 @@ const handleClearNick = useCallback(async () => {
               />
             </View>
             {/* Только рамка в градиенте; середина — сплошной фон страницы */}
-            <View style={{ margin: 0.3, borderRadius: 17.7, flexDirection: 'row', alignItems: 'center', paddingLeft: 10, paddingRight: 4, backgroundColor: theme.colors.background, flex: 1, paddingTop: 0, paddingBottom: 0, zIndex: 1 }}>
+            <View style={{ margin: 0.3, borderRadius: 17.7, flexDirection: 'row', alignItems: 'center', paddingLeft: 10, paddingRight: 10, backgroundColor: theme.colors.background, flex: 1, paddingTop: 0, paddingBottom: 0, zIndex: 1 }}>
               <Pressable
                 style={({ pressed }) => [
-                  { flex: 1, justifyContent: 'center', minWidth: 140, borderRadius: 14, marginLeft: 4, marginRight: 2 },
+                  { justifyContent: 'center', borderRadius: 14, marginLeft: 4, marginRight: 4 },
                   pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
                 ]}
                 onPress={() => {
@@ -4396,14 +4396,14 @@ const handleClearNick = useCallback(async () => {
                 }}
                 android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: false, radius: 14 }}
               >
-                <Text style={{ color: isDark ? LIVI.text : LIVI.textThemeWhite, fontSize: 13, fontWeight: '400', lineHeight: 13, ...(Platform.OS === 'android' && { includeFontPadding: false }) }} numberOfLines={1}>{L('updateDownloadNew')}</Text>
+                <Text style={{ color: isDark ? LIVI.text : LIVI.textThemeWhite, fontSize: 12, fontWeight: '400', lineHeight: 12, ...(Platform.OS === 'android' && { includeFontPadding: false }) }} numberOfLines={1}>{L('updateDownloadNew')}</Text>
               </Pressable>
-              <View style={{ width: 0.3, alignSelf: 'stretch', marginVertical: 6, marginLeft: 0, overflow: 'hidden', borderRadius: 1 }}>
+              <View style={{ width: 1, alignSelf: 'stretch', marginVertical: 6, marginLeft: 8, marginRight: 4, overflow: 'hidden', borderRadius: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)' }}>
                 <LinearGradient
                   colors={isDark ? ['#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0'] : ['#a78bfa', '#FFF8F0', '#B0B5BF']}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 0, y: 1 }}
-                  style={{ flex: 1, width: 0.3 }}
+                  style={{ flex: 1, width: 1 }}
                 />
               </View>
               <Pressable
@@ -4413,12 +4413,12 @@ const handleClearNick = useCallback(async () => {
                   markUpdateBadgeShown();
                 }}
                 style={({ pressed }) => [
-                  { paddingVertical: 8, paddingHorizontal: 8, borderRadius: 12, marginRight: 2 },
+                  { paddingVertical: 6, paddingHorizontal: 6, borderRadius: 12, marginRight: 0 },
                   pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
                 ]}
                 android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: true }}
               >
-                <Ionicons name="close" size={18} color={isDark ? LIVI.text : LIVI.textThemeWhite} />
+                <Ionicons name="close" size={16} color={isDark ? LIVI.text : LIVI.textThemeWhite} />
               </Pressable>
             </View>
           </View>
@@ -5240,7 +5240,7 @@ const handleClearNick = useCallback(async () => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: LIVI.bg, paddingHorizontal: 14, paddingBottom: 10, justifyContent: 'center' },
   topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
-  brand: { color: LIVI.text, fontSize: Platform.OS === "ios" ? 39 : 35, fontWeight: Platform.OS === "ios" ? '600' : '800', letterSpacing: 0.3 },
+  brand: { color: LIVI.text, fontSize: 41, lineHeight: 40, fontWeight: '600', letterSpacing: 0.3 },
   menuBtn: { backgroundColor: LIVI.glass, borderRadius: 14 },
   menuBtnOuter: { borderRadius: 14, padding: 1, alignSelf: 'flex-start', overflow: 'hidden' },
   menuBtnInner: { borderRadius: 13, overflow: 'hidden', minWidth: 40, minHeight: 40, justifyContent: 'center', alignItems: 'center' },

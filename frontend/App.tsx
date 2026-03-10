@@ -511,8 +511,9 @@ function AppContent() {
   const [routeName, setRouteName] = React.useState<string | undefined>(undefined);
   const lastLoggedRouteRef = React.useRef<string | undefined>(undefined);
   // Grace period после перехода на VideoCall/RandomChat: не разрешаем системный PiP по onUserLeaveHint
-  // первые 3 с, чтобы избежать ложного сворачивания при закрытии IncomingCallActivity.
-  const VIDEO_SESSION_PIP_GRACE_MS = 3000;
+  // первые 1 с (должен совпадать с таймером в VideoCall), чтобы избежать ложного сворачивания при закрытии IncomingCallActivity.
+  // Короткий grace — чтобы на обоих устройствах leaveHint успевал включиться до нажатия Home.
+  const VIDEO_SESSION_PIP_GRACE_MS = 1000;
   const videoSessionRouteEnteredAtRef = React.useRef<number>(0);
   const videoSessionRouteLastRef = React.useRef<string | undefined>(undefined);
   const systemPiPDecisionLogRef = React.useRef<string>('');
@@ -1133,11 +1134,18 @@ function AppContent() {
     // а не просто потому что текущий экран = VideoCall (иначе при call:ended может произойти автозаход в PiP).
     if (Platform.OS === 'android') {
       try {
+        const g = (global as any);
+        const sessionForGuard = g.__webrtcSessionRef?.current;
+        const sessionNotEndedForGuard =
+          !!sessionForGuard && (typeof sessionForGuard.isEnded === 'function' ? !sessionForGuard.isEnded() : true);
+        // При активном звонке (экран VideoCall или in-app PiP) guard не должен гасить leaveHint —
+        // иначе по нажатию Home системный PiP не покажется.
         const allowWhileGuardActive =
-          !!pipVisible && !isVideoSessionRoute(currentRoute);
+          (!!pipVisible && !isVideoSessionRoute(currentRoute)) ||
+          (isVideoSessionRoute(currentRoute) && sessionNotEndedForGuard);
         // Глобальный guard: после завершения звонка запрещаем системный PiP на короткое время,
         // чтобы исключить гонку (cleanup/reset → onUserLeaveHint → PiP + лаунчер).
-        const disableUntil = (global as any).__disableSystemPiPUntilRef?.current;
+        const disableUntil = g.__disableSystemPiPUntilRef?.current;
         if (typeof disableUntil === 'number' && disableUntil > Date.now() && !allowWhileGuardActive) {
           const logKey = `guard:disableUntil:${currentRoute}:${disableUntil}:${allowWhileGuardActive}`;
           if (systemPiPDecisionLogRef.current !== logKey) {
@@ -1151,7 +1159,6 @@ function AppContent() {
           }
           NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
         } else {
-        const g = (global as any);
         const systemPiPEntryUntil = g.__systemPiPEntryInProgressUntilRef?.current;
         const systemPiPEntryInProgress =
           typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
@@ -1174,6 +1181,10 @@ function AppContent() {
           pipVisible ||
           !!incoming ||
           ((hasActiveCallForPiP || onVideoCallWithActiveSession) && !onVideoCallRecently);
+        // На экране VideoCall во время grace не трогаем leaveHint — управляет только VideoCall.
+        // Иначе эффект App перезаписывает флаг в false и на одном устройстве системный PiP не открывается по Home.
+        const skipSetLeaveHint =
+          onVideoSessionRoute && sessionNotEnded && onVideoCallRecently;
         const logKey = JSON.stringify({
           currentRoute,
           allowSystemPiP: !!allowSystemPiP,
@@ -1198,6 +1209,7 @@ function AppContent() {
             hasActiveCallForPiP: !!hasActiveCallForPiP,
             onVideoCallWithActiveSession: !!onVideoCallWithActiveSession,
             onVideoCallRecently: !!onVideoCallRecently,
+            skipSetLeaveHint: !!skipSetLeaveHint,
             timeSinceVideoRouteMs: onVideoSessionRoute ? Date.now() - videoSessionRouteEnteredAtRef.current : null,
             hasParamsCallId: !!params?.callId,
             hasParamsRoomId: !!params?.roomId,
@@ -1205,7 +1217,9 @@ function AppContent() {
             systemPiPEntryInProgress: !!systemPiPEntryInProgress,
           });
         }
-        NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!allowSystemPiP);
+        if (!skipSetLeaveHint) {
+          NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!allowSystemPiP);
+        }
         }
       } catch (_) {}
     }
@@ -1374,7 +1388,14 @@ function AppContent() {
     return () => {
       if (Platform.OS === 'android') {
         try {
-          NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+          // Не выключать leaveHint во время входа в системный PiP (Home во время звонка):
+          // иначе повторный запуск эффекта (из-за pip.visible/route) гасит флаг до срабатывания onUserLeaveHint.
+          const g = (global as any);
+          const systemPiPEntryUntil = g?.__systemPiPEntryInProgressUntilRef?.current;
+          const enteringSystemPiP = typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
+          if (!enteringSystemPiP) {
+            NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+          }
         } catch (_) {}
       }
       // Останавливаем интервалы
@@ -2294,7 +2315,7 @@ function AppContent() {
                   presentation: 'card',
                   gestureEnabled: true,
                   animation: 'fade',
-                  animationDuration: 450,
+                  animationDuration: 80,
                   contentStyle: { backgroundColor: 'transparent' },
                 }}
               />

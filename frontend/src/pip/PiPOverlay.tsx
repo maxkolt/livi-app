@@ -97,6 +97,41 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const updatePiPPosition = ctx?.updatePiPPosition ?? (() => {});
   const partnerAvatarUrl = ctx?.partnerAvatarUrl;
   const partnerName = ctx?.partnerName ?? '';
+  const localCamOn = ctx?.localCamOn ?? true;
+  const isMuted = ctx?.isMuted ?? false;
+
+  const toggleCamera = useCallback(() => {
+    try {
+      const toggleFromVideoCall = (global as any).__toggleCamRef?.current;
+      if (typeof toggleFromVideoCall === 'function') {
+        toggleFromVideoCall();
+        return;
+      }
+      // В PiP экран VideoCall размонтирован, ref обнулён — переключаем камеру через сессию и обновляем PiP state
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (session && typeof session.toggleCam === 'function') {
+        const nextCamOn = !localCamOn;
+        (global as any).__pipUpdateStateRef?.current?.({ localCamOn: nextCamOn });
+        session.toggleCam().catch(() => {});
+      }
+    } catch (_) {}
+  }, [localCamOn]);
+
+  const toggleMic = useCallback(() => {
+    try {
+      const toggleFromVideoCall = (global as any).__toggleMicRef?.current;
+      if (typeof toggleFromVideoCall === 'function') {
+        toggleFromVideoCall();
+        return;
+      }
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (session && typeof session.toggleMic === 'function') {
+        const nextMuted = !isMuted;
+        (global as any).__pipUpdateStateRef?.current?.({ isMuted: nextMuted });
+        session.toggleMic();
+      }
+    } catch (_) {}
+  }, [isMuted]);
 
   // Системный PiP: overlay = область контента (window), блок 9:16 по центру — совпадает с buildSystemPiPSourceRect на нативе.
   const dims = Dimensions.get('window');
@@ -237,20 +272,50 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
           <View style={[styles.pipWindowInner, { width: PIP_W, height: PIP_H }]}>
             <View style={styles.pipTopBar}>
               <Pressable
-                onPress={returnToCall}
+                onPress={toggleCamera}
                 style={styles.pipTopBarBtn}
                 hitSlop={8}
                 android_ripple={{ color: 'rgba(255,255,255,0.2)', borderless: true }}
               >
-                <MaterialIcons name="fullscreen" size={18} color="#fff" />
+                <View style={styles.pipTopBarIconCircle}>
+                  <View style={styles.pipTopBarIconCenter}>
+                    <MaterialIcons
+                      name={localCamOn ? 'videocam' : 'videocam-off'}
+                      size={24}
+                      color={localCamOn ? '#fff' : '#E53935'}
+                    />
+                  </View>
+                </View>
+              </Pressable>
+              <Pressable
+                onPress={toggleMic}
+                style={styles.pipTopBarBtn}
+                hitSlop={8}
+                android_ripple={{ color: 'rgba(255,255,255,0.2)', borderless: true }}
+              >
+                <View style={styles.pipTopBarIconCircle}>
+                  <View style={styles.pipTopBarIconCenter}>
+                    <MaterialIcons
+                      name={isMuted ? 'mic-off' : 'mic'}
+                      size={24}
+                      color={isMuted ? '#E53935' : '#fff'}
+                    />
+                  </View>
+                </View>
               </Pressable>
               <Pressable
                 onPress={endCall}
                 style={styles.pipTopBarBtn}
                 hitSlop={8}
-                android_ripple={{ color: 'rgba(255,255,255,0.2)', borderless: true }}
+                android_ripple={{ color: 'rgba(229,57,53,0.4)', borderless: true }}
               >
-                <Text style={styles.pipCloseText}>✕</Text>
+                {({ pressed }) => (
+                  <View style={styles.pipTopBarIconCircle}>
+                    <View style={styles.pipTopBarIconCenter}>
+                      <Text style={[styles.pipCloseText, pressed && styles.pipCloseTextPressed]}>✕</Text>
+                    </View>
+                  </View>
+                )}
               </Pressable>
             </View>
             <Pressable
@@ -361,25 +426,42 @@ const styles = StyleSheet.create({
   },
   pipTopBar: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 36,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    top: 10,
+    left: 10,
+    right: 10,
+    height: 44,
+    backgroundColor: 'transparent',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     zIndex: 1,
   },
   pipTopBarBtn: {
-    width: 32,
-    height: 32,
+    width: 38,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pipTopBarIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.45)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pipTopBarIconCenter: {
     justifyContent: 'center',
     alignItems: 'center',
   },
   pipCloseText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 20,
+  },
+  pipCloseTextPressed: {
+    color: '#E53935',
   },
   pipVideoArea: {
     ...StyleSheet.absoluteFillObject,

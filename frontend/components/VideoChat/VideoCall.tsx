@@ -638,12 +638,28 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           }
         );
       }
-      if (!systemPiPEntryInProgress && Platform.OS === 'android') {
+      // Не выключать leaveHint при уходе в background при активном звонке — иначе по нажатию Home
+      // эффект перезапускается (appState='background'), canEnableSystemPiP=false, и мы гасим системный PiP.
+      // Учитываем background+звонок даже без завершённого grace: иначе у одного пользователя (напр. звонящий,
+      // только что открывший VideoCall) PiP не сработает, если он нажал Home до истечения grace.
+      const hasSessionAny = !!sessionRef.current || !!g.__webrtcSessionRef?.current;
+      const isBackgroundWithActiveCall =
+        appState === 'background' &&
+        Platform.OS === 'android' &&
+        !!roomId &&
+        !isInactiveState &&
+        !!hasSessionAny;
+      if (!systemPiPEntryInProgress && !isBackgroundWithActiveCall && Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+      }
+      if (isBackgroundWithActiveCall && Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
       }
     } else {
     // После принятия вызова возможен ложный onUserLeaveHint при закрытии нативного экрана входящего/исходящего.
-    // Включаем PiP по LeaveHint только через 2 с после стабилизации, чтобы не сворачивать в PiP и сразу разворачивать.
+    // Включаем PiP по LeaveHint через 1 с после стабилизации (короткий grace — чтобы на обоих устройствах
+    // leaveHint успевал включиться до нажатия Home и звонок не обрывался).
+    const SYSTEM_PIP_GRACE_MS = 1000;
     if (Platform.OS === 'android' && !systemPiPGraceTimerRef.current) {
       if (systemPiPGraceTimerRef.current) {
         clearTimeout(systemPiPGraceTimerRef.current);
@@ -659,7 +675,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (systemPiPLeaveHintLogRef.current !== scheduleLogKey) {
         systemPiPLeaveHintLogRef.current = scheduleLogKey;
         logger.info('[VideoCall] system PiP leaveHint grace timer scheduled', {
-          delayMs: 2000,
+          delayMs: SYSTEM_PIP_GRACE_MS,
           appState,
           isFocused,
           hasRoomId: !!roomId,
@@ -671,7 +687,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         systemPiPGraceTimerRef.current = null;
         systemPiPGraceCompletedRef.current = true;
         logger.info('[VideoCall] system PiP leaveHint enabled after grace timer', {
-          delayMs: 2000,
+          delayMs: SYSTEM_PIP_GRACE_MS,
           hasRoomId: !!roomId,
           appState,
           isFocused,
@@ -679,7 +695,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           hasSession: !!sessionRef.current,
         });
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
-      }, 2000);
+      }, SYSTEM_PIP_GRACE_MS);
     }
     }
     const partner = partnerUserId
@@ -1004,11 +1020,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (pip.remoteStream) {
         setRemoteStream(pip.remoteStream);
       }
+      // Восстанавливаем состояние микрофона из PiP (isMuted = true → мик выключен → micOn = false)
+      setMicOn(!pip.isMuted);
       if (session.exitPiP) {
         session.exitPiP();
       }
     }
-  }, [route?.params?.resume, route?.params?.fromPiP, pip.localStream, pip.remoteStream, pip.localCamOn]);
+    // sessionTick нужен: при возврате из PiP сессия подставляется в другом эффекте (sessionRef = global);
+    // без sessionTick эффект восстановления запускается до этого и видит session = null, поэтому setMicOn не вызывается.
+  }, [route?.params?.resume, route?.params?.fromPiP, pip.localStream, pip.remoteStream, pip.localCamOn, pip.isMuted, sessionTick]);
 
   // При возврате из фона во время видеозвонка — переподключить камеру, если система её закрыла
   useEffect(() => {
@@ -1055,6 +1075,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             streamId: sessionRemoteStream.id,
           });
         }
+        // Восстанавливаем состояние микрофона из PiP сразу при подстановке сессии (надёжно, до любого другого эффекта)
+        setMicOn(!pip.isMuted);
         // КРИТИЧНО: НЕ возвращаемся здесь - нужно установить обработчики событий
         // Обработчики будут установлены ниже в этом же useEffect
       }
@@ -1541,7 +1563,23 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       hasSession: !!session,
       sessionType: session.constructor.name
     });
-    
+
+    // КРИТИЧНО: При переиспользовании сессии (возврат из PiP) колбэки указывают на размонтированный экземпляр.
+    // Обновляем onMicStateChange/onCamStateChange чтобы кнопки микрофона и камеры реагировали на тап.
+    if (typeof (session as any).updateCallbacks === 'function') {
+      (session as any).updateCallbacks({
+        onMicStateChange: (enabled: boolean) => {
+          setMicOn(enabled);
+          if (pip.visible) pip.updatePiPState({ isMuted: !enabled });
+        },
+        onCamStateChange: (enabled: boolean) => {
+          if (enabled) setLocalRenderKey((k: number) => k + 1);
+          if (pip.visible) pip.updatePiPState({ localCamOn: enabled });
+          setCamOn(enabled);
+        },
+      });
+    }
+
     const handleRemoteViewKeyChange = (key: number) => {
       setRemoteViewKey(key);
     };

@@ -309,10 +309,11 @@ export const usePiP = ({
           const g = global as any;
           g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
           g.__leavingVideoCallByBackRef.current = true;
+          // Блокируем usePreventRemove в VideoCall на 2 с: иначе при goBack() срабатывает beforeRemove,
+          // вызывается дублирующий showPiP + setTimeout(480) + moveTaskToBackAndEnterPiP и задержка 3–5 сек.
           g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
-          g.__disableSystemPiPUntilRef.current = Date.now() + 1000;
+          g.__disableSystemPiPUntilRef.current = Date.now() + 2000;
         } catch {}
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
         enterPiPMode({ deferVisible: true });
         const returnTo = (routeParams as any)?.returnTo;
         if (navigation.canGoBack && navigation.canGoBack()) {
