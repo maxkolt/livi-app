@@ -403,7 +403,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
     const emitter = new NativeEventEmitter();
-    const sub = emitter.addListener('AboutToEnterSystemPiP', () => {
+    const sub = emitter.addListener('AboutToEnterSystemPiP', (payload: { width?: number; height?: number } | null) => {
       const g = (global as any);
       // КРИТИЧНО (релиз): Сразу помечаем PiP ДО любых проверок, чтобы stopSpeaker() в cleanup useAudioRouting
       // не успел вызвать InCallManager.stop() до обработки события (в релизе порядок событий может отличаться).
@@ -430,15 +430,22 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 2000;
       } catch (_) {}
 
-      // До входа в системный PiP переводим VideoCall в компактный режим (только удалённое видео),
-      // чтобы избежать "чёрных блоков" от лишних SurfaceView/RTCView при захвате окна PiP.
+      // Сразу включаем layout «только видео собеседника», чтобы к моменту enterPictureInPictureMode() (через 80ms на нативе) кадр был правильный.
+      setPendingSystemPiP(true);
       const apply = (decorSize: { width: number; height: number } | null) => {
         console.log('[PiPContext] AboutToEnterSystemPiP apply', { decorSize });
-        setPendingSystemPiP(true);
-        if (decorSize) setDecorSizeForPiP(decorSize);
+        // Не применять размер окна PiP (типично ~334x594) — иначе при повторном входе layout/зум ломается.
+        if (decorSize && decorSize.width > 400 && decorSize.height > 400) setDecorSizeForPiP(decorSize);
       };
-      NativeModules.LiviAppModule?.getDecorViewSize?.()?.then?.(apply)?.catch?.(() => apply(null));
-      if (!NativeModules.LiviAppModule?.getDecorViewSize) apply(null);
+      // Натив передаёт размер экрана в payload до входа в PiP; иначе getDecorViewSize() после перехода вернёт размер окна PiP (334x594) и при повторном входе будет «зум».
+      const pw = payload?.width ?? 0;
+      const ph = payload?.height ?? 0;
+      if (pw > 400 && ph > 400) {
+        apply({ width: pw, height: ph });
+      } else {
+        NativeModules.LiviAppModule?.getDecorViewSize?.()?.then?.(apply)?.catch?.(() => apply(null));
+        if (!NativeModules.LiviAppModule?.getDecorViewSize) apply(null);
+      }
       setTimeout(() => {
         setPendingSystemPiP(false);
         setDecorSizeForPiP(null);

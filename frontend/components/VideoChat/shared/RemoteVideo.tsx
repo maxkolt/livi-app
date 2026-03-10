@@ -22,6 +22,8 @@ interface RemoteVideoProps {
   remoteStreamReceivedAt?: number | null; // Время получения remoteStream для предотвращения мерцания
   partnerInPiP?: boolean; // Партнер в режиме PiP
   forceTextureView?: boolean; // Принудительно использовать TextureView (например, для системного PiP)
+  /** 'contain' — собеседник целиком в кадре (системный PiP); 'cover' — заполнение с обрезкой (по умолчанию). */
+  objectFit?: 'contain' | 'cover';
 }
 
 /**
@@ -44,6 +46,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   remoteStreamReceivedAt,
   partnerInPiP = false,
   forceTextureView = false,
+  objectFit: objectFitProp = 'cover',
 }) => {
   const L = (key: string) => t(key, lang);
   // На Android 8.1 и старше (API <= 27) SurfaceView overlay/z-order часто ломает отображение (особенно на OPPO/ColorOS).
@@ -115,7 +118,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           key={rtcViewKey}
           {...(rtcViewProps as any)}
           style={styles.rtc}
-          objectFit="cover"
+          objectFit={objectFitProp}
           mirror={false}
           zOrder={0}
         />
@@ -125,6 +128,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       isLegacyAndroidSurface,
       logRenderState,
       useTextureViewOnAndroid,
+      objectFitProp,
     ]
   );
 
@@ -584,7 +588,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           key={rtcViewKey}
           {...(rtcViewProps as any)}
           style={styles.rtc}
-          objectFit="cover"
+          objectFit={objectFitProp}
           mirror={false}
           // Удаленное видео - базовый слой
           zOrder={0}

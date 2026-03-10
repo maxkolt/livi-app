@@ -177,14 +177,17 @@ class MainActivity : ReactActivity() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && shouldEnterPiP) {
       try {
         android.util.Log.i("MainActivity", "onUserLeaveHint: preparing system PiP entry")
-        LiviAppModule.emitAboutToEnterSystemPiP()
+        val root = window?.decorView
+        val decorW = root?.width ?: 0
+        val decorH = root?.height ?: 0
+        LiviAppModule.emitAboutToEnterSystemPiP(decorW, decorH)
         val handler = Handler(Looper.getMainLooper())
         val tryEnterPiP = Runnable {
           try {
             if (isInPictureInPictureMode) return@Runnable
             if (LiviAppModule.getEndingCallInProgress()) return@Runnable
-            if (!shouldEnterPiP) {
-              android.util.Log.i("MainActivity", "onUserLeaveHint: skip retry because initial shouldEnterPiP=false")
+            if (!LiviAppModule.getShouldEnterPiPOnLeaveHint()) {
+              android.util.Log.i("MainActivity", "onUserLeaveHint: skip retry because shouldEnterPiPOnLeaveHint=false")
               return@Runnable
             }
             // Базовый размер системного PiP (как в исходном варианте).
@@ -206,14 +209,19 @@ class MainActivity : ReactActivity() {
             android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode failed", e2)
           }
         }
-        // ВАЖНО: не входим в PiP синхронно сразу после AboutToEnterSystemPiP.
-        // Иначе на части устройств Android успевает захватить ещё маленький in-app PiP,
-        // а не подготовленный полноэкранный layout для system PiP, что выглядит как сильный зум.
-        handler.postDelayed(tryEnterPiP, 180)
-        handler.postDelayed(tryEnterPiP, 320)
-        handler.postDelayed(tryEnterPiP, 450)
-        handler.postDelayed(tryEnterPiP, 800)
-        handler.postDelayed(tryEnterPiP, 1200) // на части устройств (Samsung) переход в фон занимает больше времени
+        // КРИТИЧНО: первый вызов синхронно — в logcat событие AboutToEnterSystemPiP приходит в JS с задержкой 0.7–1.7s,
+        // к моменту post()/postDelayed активность уже не resumed, enterPictureInPictureMode() бросает или возвращает false.
+        // Синхронный вызов гарантирует вход в PiP; кадр может быть старым при повторном входе (митируем через setPendingSystemPiP в JS при получении события).
+        tryEnterPiP.run()
+        if (!isInPictureInPictureMode) {
+          handler.post(tryEnterPiP)
+          handler.postDelayed(tryEnterPiP, 80)
+          handler.postDelayed(tryEnterPiP, 180)
+          handler.postDelayed(tryEnterPiP, 320)
+          handler.postDelayed(tryEnterPiP, 450)
+          handler.postDelayed(tryEnterPiP, 800)
+          handler.postDelayed(tryEnterPiP, 1200)
+        }
       } catch (e: Exception) {
         android.util.Log.w("MainActivity", "emitAboutToEnterSystemPiP failed", e)
       }

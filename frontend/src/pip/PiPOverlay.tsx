@@ -236,6 +236,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                   session={session}
                   partnerInPiP={false}
                   forceTextureView={true}
+                  objectFit="contain"
                 />
               </View>
             ) : (

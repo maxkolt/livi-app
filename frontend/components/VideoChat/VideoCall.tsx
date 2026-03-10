@@ -2775,11 +2775,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   
   // Как в WhatsApp/Telegram: в системном PiP рисуем только видео собеседника; фон прозрачный, чтобы в окне PiP не было чёрных областей.
-  // При возврате из PiP (fromPiP) всегда показываем полноэкранный вид: 2 блока + кнопка «Завершить».
+  // При возврате из PiP (fromPiP) показываем полноэкранный вид; при повторном входе в PiP (pendingSystemPiP) — компакт, иначе захватится layout с бейджем/кнопкой.
   const systemPiPCompact =
     Platform.OS === 'android' &&
     (pip.pendingSystemPiP || pip.inSystemPiPMode) &&
-    !route?.params?.fromPiP;
+    (pip.pendingSystemPiP || !route?.params?.fromPiP);
   if (systemPiPCompact) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: 'transparent' }]} edges={[]}>
@@ -2800,6 +2800,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
               partnerInPiP={partnerInPiP}
               forceTextureView={true}
+              objectFit="contain"
             />
           </View>
         </View>

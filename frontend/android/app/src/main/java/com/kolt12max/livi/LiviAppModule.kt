@@ -603,7 +603,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         // Как в onUserLeaveHint(Home): сначала сигнализируем JS подготовить fullscreen PiP UI,
         // затем пробуем несколько раз с короткими задержками, чтобы Android захватил уже
         // подготовленный кадр (без случайного зума при сценарии Back).
-        emitAboutToEnterSystemPiP()
+        val root = activity.window?.decorView
+        val decorW = root?.width ?: 0
+        val decorH = root?.height ?: 0
+        emitAboutToEnterSystemPiP(decorW, decorH)
         val ratio = Rational(9, 16)
         val builder = PictureInPictureParams.Builder()
           .setAspectRatio(ratio)
@@ -919,11 +922,19 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       }
     }
 
-    /** Уведомить JS, что скоро включится системный PiP — чтобы переключить UI на «только PiP» (видео собеседника + верхние кнопки) до входа в PiP. */
+    /** Уведомить JS, что скоро включится системный PiP — чтобы переключить UI на «только PiP» (видео собеседника + верхние кнопки) до входа в PiP.
+     * decorWidth/decorHeight — размер decorView на момент вызова (до входа в PiP), чтобы JS не вызывал getDecorViewSize() после перехода (там уже размер окна PiP 334x594 и ломается отображение при повторном входе). */
     @JvmStatic
-    fun emitAboutToEnterSystemPiP() {
+    fun emitAboutToEnterSystemPiP(decorWidth: Int = 0, decorHeight: Int = 0) {
       reactContextRef?.runOnUiQueueThread {
-        reactContextRef?.emitDeviceEvent("AboutToEnterSystemPiP", null)
+        if (decorWidth > 0 && decorHeight > 0) {
+          val params = Arguments.createMap()
+          params.putInt("width", decorWidth)
+          params.putInt("height", decorHeight)
+          reactContextRef?.emitDeviceEvent("AboutToEnterSystemPiP", params)
+        } else {
+          reactContextRef?.emitDeviceEvent("AboutToEnterSystemPiP", null)
+        }
       }
     }
 
