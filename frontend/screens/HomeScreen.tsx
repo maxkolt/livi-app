@@ -1608,8 +1608,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 avatar: f.avatar || prevOne?.avatar || '',
                 avatarVer: newAvatarVer,
                 avatarThumbB64: finalAvatarThumbB64,
-                online: !!f.online,
-                isBusy: !!f.isBusy,
+                online: f.online !== undefined ? !!f.online : !!prevOne?.online,
+                isBusy: f.isBusy !== undefined ? !!f.isBusy : !!prevOne?.isBusy,
                 isRandomBusy: !!prevOne?.isRandomBusy,
                 inCall: !!prevOne?.inCall,
               } as any;
@@ -1640,8 +1640,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               avatar: f.avatar || prevOne?.avatar || '',
               avatarVer: newAvatarVer,
               avatarThumbB64: finalAvatarThumbB64,
-              online: !!f.online,
-              isBusy: !!f.isBusy, // Используем новое значение из API
+              online: f.online !== undefined ? !!f.online : !!prevOne?.online,
+              isBusy: f.isBusy !== undefined ? !!f.isBusy : !!prevOne?.isBusy,
               isRandomBusy: !!prevOne?.isRandomBusy,
               inCall: !!prevOne?.inCall,
             } as any;

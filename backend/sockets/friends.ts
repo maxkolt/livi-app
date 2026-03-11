@@ -42,11 +42,11 @@ export default function registerFriendSockets(io: Server) {
         // Добавляем информацию об онлайн статусе и занятости
         const list = result.friends.map((friend) => {
           const friendId = String(friend._id);
-          // Проверяем занятость через socket.data.busy
+          // Занят, если хотя бы один сокет этого пользователя в видеозвонке (busy)
           let isFriendBusy = false;
           for (const s of io.sockets.sockets.values()) {
-            if (String((s as any).data?.userId) === friendId) {
-              isFriendBusy = (s as any).data?.busy || false;
+            if (String((s as any).data?.userId) === friendId && (s as any).data?.busy === true) {
+              isFriendBusy = true;
               break;
             }
           }

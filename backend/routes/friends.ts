@@ -2,10 +2,33 @@
 import { Router } from 'express';
 import User from '../models/User';
 import { getFriendsPaginated, areFriendsCached } from '../utils/friendshipUtils';
+import { getIoInstance } from '../utils/ioInstance';
 
 const router = Router();
 
 const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(String(s || '').trim());
+
+/** Проверка онлайн и занятости по сокетам (как в friends:fetch) */
+function getOnlineAndBusyFromSockets() {
+  const io = getIoInstance();
+  if (!io) return { isOnline: () => false, isBusy: () => false };
+
+  const isOnline = (uid: string) => {
+    for (const s of io.sockets.sockets.values()) {
+      if (String((s as any).data?.userId) === String(uid)) return true;
+    }
+    return false;
+  };
+  const isBusy = (uid: string) => {
+    for (const s of io.sockets.sockets.values()) {
+      if (String((s as any).data?.userId) === String(uid)) {
+        if ((s as any).data?.busy === true) return true;
+      }
+    }
+    return false;
+  };
+  return { isOnline, isBusy };
+}
 
 router.get('/friends', async (req, res) => {
   try {
@@ -18,14 +41,20 @@ router.get('/friends', async (req, res) => {
     // Используем оптимизированную функцию с пагинацией
     const result = await getFriendsPaginated(userId, page, limit);
 
-    const list = result.friends.map((friend) => ({
-      _id: String(friend._id),
-      nick: friend.nick || '',
-      avatar: (friend as any).avatar || '',
-      avatarVer: (friend as any).avatarVer || 0,
-      avatarThumbB64: (friend as any).avatarThumbB64 || '', // мини сразу в список
-      online: false, // TODO: добавить проверку онлайн статуса
-    }));
+    const { isOnline, isBusy } = getOnlineAndBusyFromSockets();
+
+    const list = result.friends.map((friend) => {
+      const friendId = String(friend._id);
+      return {
+        _id: friendId,
+        nick: friend.nick || '',
+        avatar: (friend as any).avatar || '',
+        avatarVer: (friend as any).avatarVer || 0,
+        avatarThumbB64: (friend as any).avatarThumbB64 || '', // мини сразу в список
+        online: isOnline(friendId),
+        isBusy: isBusy(friendId),
+      };
+    });
 
     res.json({ 
       ok: true, 
