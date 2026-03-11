@@ -4575,6 +4575,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                     onSubmitEditing={sendMessage}
                     returnKeyType="send"
                     caretHidden={voiceIsRecording}
+                    autoCorrect={true}
+                    spellCheck={true}
                   />
                   {voiceIsRecording ? (
                     <View
@@ -4858,6 +4860,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                     onSubmitEditing={sendMessage}
                     returnKeyType="send"
                     caretHidden={voiceIsRecording}
+                    autoCorrect={true}
+                    spellCheck={true}
                   />
                   {voiceIsRecording ? (
                     <View
@@ -5250,7 +5254,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </View>
                   {/* Отступ 12px — виден фон модалки (на нём лежат оба блока) */}
                   {/* Блок 2: список действий */}
-                  <View style={{ marginTop: 12, width: 256, borderRadius: 12, overflow: 'hidden', backgroundColor: LIVI.bg, borderWidth: 1, borderColor }}>
+                  <View style={{ marginTop: 12, width: 245, borderRadius: 12, overflow: 'hidden', backgroundColor: LIVI.bg, borderWidth: 1, borderColor }}>
                     {(String(selectedMessage?.text || '').trim() || String(selectedMessage?.uri || '').trim()) && (
                       <>
                         <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
@@ -5265,7 +5269,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                             backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
                           })}
                         >
-                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '600' }}>{t('chatActionCopy', lang)}</Text>
+                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionCopy', lang)}</Text>
                           <Ionicons name="copy-outline" size={20} color={LIVI.titan} />
                         </Pressable>
                         <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
@@ -5280,7 +5284,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                             backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
                           })}
                         >
-                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '600' }}>{t('chatActionForward', lang)}</Text>
+                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionForward', lang)}</Text>
                           <Ionicons name="paper-plane-outline" size={20} color={LIVI.titan} />
                         </Pressable>
                         <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
@@ -5295,7 +5299,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                             backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
                           })}
                         >
-                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '600' }}>{t('chatActionSelect', lang)}</Text>
+                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionSelect', lang)}</Text>
                           <Ionicons name="checkbox-outline" size={20} color={LIVI.titan} />
                         </Pressable>
                         {(selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me') && String(selectedMessage?.type || '') === 'text' && (
@@ -5316,7 +5320,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                                 backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
                               })}
                             >
-                              <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '600' }}>{t('chatActionEdit', lang)}</Text>
+                              <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionEdit', lang)}</Text>
                               <Ionicons name="pencil-outline" size={20} color={LIVI.titan} />
                             </Pressable>
                           </>
@@ -5336,7 +5340,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         backgroundColor: pressed ? 'rgba(255,90,103,0.08)' : 'transparent',
                       })}
                     >
-                      <Text style={{ color: '#FF5A67', fontSize: 15, fontWeight: '700' }}>{t('delete', lang)}</Text>
+                      <Text style={{ color: '#FF5A67', fontSize: 15, fontWeight: '400' }}>{t('delete', lang)}</Text>
                       <Ionicons name="trash-outline" size={20} color="#FF5A67" />
                     </Pressable>
                     <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
@@ -5350,7 +5354,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent',
                       })}
                     >
-                      <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '600' }}>{t('cancelAction', lang)}</Text>
+                      <Text style={{ color: LIVI.titan, fontSize: 15, fontWeight: '400' }}>{t('cancelAction', lang)}</Text>
                     </Pressable>
                   </View>
                 </View>
