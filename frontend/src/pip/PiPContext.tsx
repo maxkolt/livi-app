@@ -24,6 +24,8 @@ type PiPState = {
 
   // Состояние камеры на момент входа в PiP (нужно для точного восстановления при возврате)
   localCamOn?: boolean;
+  /** Камера собеседника включена — для отображения заглушки «Отошел» в PiP при выключении. */
+  remoteCamOn?: boolean;
 
   // позиция in-app PiP (маленькое окно)
   pipPos: { x: number; y: number };
@@ -40,6 +42,7 @@ type PiPState = {
     localStream?: MediaStreamLike | null;
     remoteStream?: MediaStreamLike | null;
     localCamOn?: boolean;
+    remoteCamOn?: boolean;
     muteLocal?: boolean;
     muteRemote?: boolean;
     navParams?: any; // ← кто нас вызвал (для корректного возврата)
@@ -103,6 +106,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const localStreamRef = useRef<MediaStreamLike | null>(null);
   const remoteStreamRef = useRef<MediaStreamLike | null>(null);
   const [localCamOn, setLocalCamOn] = useState<boolean | undefined>(undefined);
+  const [remoteCamOn, setRemoteCamOn] = useState<boolean>(true);
   const [pipPos, setPipPos] = useState({ x: 12, y: 120 });
 
   // для возврата
@@ -331,6 +335,18 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setLocalCamOn(enabled);
         }
       } catch {}
+    }
+    // КРИТИЧНО: remoteCamOn берём из сессии, если есть — она обновляется синхронно при cam-toggle;
+    // иначе при быстром выходе в PiP после выключения камеры партнёра React state ещё не обновился и заглушка «Отошел» не показывалась.
+    try {
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (session && typeof (session as any).getRemoteCamEnabled === 'function') {
+        setRemoteCamOn((session as any).getRemoteCamEnabled());
+      } else if (typeof p.remoteCamOn === 'boolean') {
+        setRemoteCamOn(p.remoteCamOn);
+      }
+    } catch (_) {
+      if (typeof p.remoteCamOn === 'boolean') setRemoteCamOn(p.remoteCamOn);
     }
     if (typeof p.muteLocal === 'boolean') setIsMuted(!!p.muteLocal);
     if (typeof p.muteRemote === 'boolean') setIsRemoteMuted(!!p.muteRemote);
@@ -755,6 +771,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.isMuted !== undefined) setIsMuted(patch.isMuted);
     if (patch.isRemoteMuted !== undefined) setIsRemoteMuted(patch.isRemoteMuted);
     if (patch.localCamOn !== undefined) setLocalCamOn(patch.localCamOn);
+    if (patch.remoteCamOn !== undefined) setRemoteCamOn(patch.remoteCamOn);
     if (patch.pipPos) setPipPos(patch.pipPos);
     if (patch.allowVideoRender !== undefined) setAllowVideoRender(!!patch.allowVideoRender);
     if (patch.inSystemPiPMode !== undefined) setInSystemPiPMode(!!patch.inSystemPiPMode);
@@ -795,6 +812,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     localStream: localStreamRef.current,
     remoteStream: remoteStreamRef.current,
     localCamOn,
+    remoteCamOn,
     pipPos,
     lastNavParams,
 
@@ -811,7 +829,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     updatePiPState,
   }), [
     visible, callId, roomId, partnerName, partnerAvatarUrl,
-    isMuted, isRemoteMuted, localCamOn, pipPos, allowVideoRender, inSystemPiPMode, pendingSystemPiP, suppressOverlayForReturn, decorSizeForPiP, remoteStreamVersion,
+    isMuted, isRemoteMuted, localCamOn, remoteCamOn, pipPos, allowVideoRender, inSystemPiPMode, pendingSystemPiP, suppressOverlayForReturn, decorSizeForPiP, remoteStreamVersion,
     showPiP, hidePiP, updatePiPPosition, returnToCall, endCall, updatePiPState
   ]);
 

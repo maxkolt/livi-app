@@ -232,15 +232,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     };
   }, [isInactiveState]);
 
-  // Ref текущего собеседника и активного звонка — чтобы App не показывал «входящий» от того же пользователя (дубликат после отмены на нативном экране)
-  const hasActiveCallWithPartnerRef = !!(roomId || callId || partnerId) && !isInactiveState;
+  // Ref текущего собеседника и активного звонка — чтобы App не показывал «входящий» от того же пользователя и список друзей держал кнопку задизейбленной.
+  // КРИТИЧНО: Считаем звонок активным только по факту завершения (wasFriendCallEnded), не по isInactiveState — иначе при PiP/возврате/рассинхроне бейдж и кнопка сбрасываются.
+  const hasActiveCallWithPartnerRef = !!(roomId || callId || partnerId) && !wasFriendCallEnded;
   useEffect(() => {
-    (global as any).__videoCallPartnerUserIdRef = { current: hasActiveCallWithPartnerRef ? partnerUserId : null };
-    (global as any).__videoCallActiveRef = { current: hasActiveCallWithPartnerRef };
-    return () => {
-      (global as any).__videoCallPartnerUserIdRef = { current: null };
-      (global as any).__videoCallActiveRef = { current: false };
-    };
+    const g = global as any;
+    if (!g.__videoCallPartnerUserIdRef) g.__videoCallPartnerUserIdRef = { current: null };
+    if (!g.__videoCallActiveRef) g.__videoCallActiveRef = { current: false };
+    g.__videoCallPartnerUserIdRef.current = hasActiveCallWithPartnerRef ? partnerUserId : null;
+    g.__videoCallActiveRef.current = hasActiveCallWithPartnerRef;
+    // Не очищаем refs в cleanup при размонтировании (PiP) — только при завершении звонка (effect перезапишет при wasFriendCallEnded или handleCallEnded явно очистит).
   }, [hasActiveCallWithPartnerRef, partnerUserId]);
   const [friendCallAccepted, setFriendCallAccepted] = useState(false);
   const [buttonsOpacity] = useState(new Animated.Value(1));
@@ -251,7 +252,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     if (isInactiveStateRef.current || isEndingCallRef.current) return;
     if (!remoteStream) {
-      remoteCamStateKnownRef.current = false;
+      // Не сбрасываем remoteCamStateKnownRef: состояние камеры уже известно из cam-toggle.
+      // Иначе при возврате стрима (смена трека/ренегоциация) эффект перезапишет remoteCamOn из трека,
+      // и заглушка «Отошел» перестанет показываться у одного из пользователей (застывший кадр).
       setRemoteCamOn(true);
       return;
     }
@@ -439,6 +442,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     camOn,
     micOn,
     remoteMuted,
+    remoteCamOn,
     localStream,
     remoteStream,
     friends,
@@ -721,6 +725,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       localStream: localStream || null,
       remoteStream: remoteStream || null,
       localCamOn: camOn,
+      remoteCamOn,
       navParams: { ...route?.params, peerUserId: partnerUserId, partnerId } as any,
     };
     return () => {
@@ -749,7 +754,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
     };
-  }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, route?.params, isFocused, appState]);
+  }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, remoteCamOn, route?.params, isFocused, appState]);
 
   // КРИТИЧНО: Выставляем «активный видеозвонок» при показе экрана VideoCall (а не только после connectToLiveKit),
   // чтобы сокет не отключался при уходе в фон до создания комнаты (например, ответ на звонок с блокировки).
@@ -1521,6 +1526,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           } else {
             logger.warn('[VideoCall] session.endCall недоступен в cleanupFunction');
           }
+          // КРИТИЧНО: Сбрасываем refs активного звонка, чтобы в списке друзей кнопка и бейдж «Занят» снялись сразу после завершения (в т.ч. при завершении из PiP).
+          try {
+            (global as any).__videoCallPartnerUserIdRef = { current: null };
+            (global as any).__videoCallActiveRef = { current: false };
+            (global as any).__onVideoCallEndedRef?.current?.();
+          } catch (_) {}
 
           // КРИТИЧНО: Если звонок завершают из PiP (экран звонка уже размонтирован),
           // то useAudioRouting больше не будет вызван для остановки аудио-сессии.
@@ -1677,6 +1688,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           sessionSnapshot.cleanup();
         }
         clearSessionRefs();
+        try {
+          (global as any).__videoCallPartnerUserIdRef = { current: null };
+          (global as any).__videoCallActiveRef = { current: false };
+          (global as any).__onVideoCallEndedRef?.current?.();
+        } catch (_) {}
         const localStreamSnapshot = localStreamRef.current;
         stopStreamTracks(localStreamSnapshot, 'callEnded/localStreamState');
         const sessionLocalStream = sessionSnapshot?.getLocalStream?.();
@@ -2065,6 +2081,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           sessionRefForCleanup.cleanup();
         }
         clearSessionRefs();
+        try {
+          (global as any).__videoCallPartnerUserIdRef = { current: null };
+          (global as any).__videoCallActiveRef = { current: false };
+          (global as any).__onVideoCallEndedRef?.current?.();
+        } catch (_) {}
         clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
       } catch (e) {
         logger.warn('[VideoCall] onAbortCall deferred cleanup failed', e);
@@ -2300,29 +2321,24 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   }, [partnerUserId, friends, isDirectCall]);
   
   // Показывать ли бейдж "Друг"
-  // КРИТИЧНО: Показываем бейдж если партнер - друг и звонок активен
-  // Не требуем remoteStream сразу, так как он может еще не быть установлен
+  // КРИТИЧНО: Показываем бейдж если партнер - друг и звонок активен. Убираем только по факту завершения звонка (wasFriendCallEnded),
+  // не при isInactiveState/PiP/рассинхроне — иначе при возврате из PiP (started: false) бейдж пропадал.
   const showFriendBadge = useMemo(() => {
     const hasPartnerUserId = !!partnerUserId;
     const hasStarted = !!started;
-    const isInactive = !!isInactiveState;
     const callEnded = !!wasFriendCallEnded;
     const hasActiveCall = !!partnerId || !!roomId || !!callId;
     // При завершении звонка не показываем бейдж и не логируем, чтобы не было мерцания и лишних ререндеров
     if (isEndingCallRef.current || isEndingCall) return false;
 
-    // Показываем бейдж если:
-    // - Есть partnerUserId
-    // - Звонок начат (started) ИЛИ есть активный звонок (для принимающего звонок)
-    // - Звонок не завершен
-    // - Партнёр друг (по списку friends или directCall)
-    const shouldShow = hasPartnerUserId && (hasStarted || hasActiveCall) && !isInactive && !callEnded && isPartnerFriend;
-    
+    // Показываем бейдж если: есть partnerUserId, звонок идёт (started или hasActiveCall), звонок не завершён, партнёр друг.
+    // Не используем isInactiveState — при PiP/возврате он может быть true, бейдж должен оставаться до конца звонка.
+    const shouldShow = hasPartnerUserId && (hasStarted || hasActiveCall) && !callEnded && isPartnerFriend;
+
     if (shouldShow) {
       logger.info('[VideoCall] Показываем бейдж друга', {
         partnerUserId,
         started,
-        isInactive,
         callEnded,
         hasActiveCall,
         isPartnerFriend,
@@ -2331,9 +2347,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         callId
       });
     }
-    
+
     return shouldShow;
-  }, [partnerUserId, friends, started, isInactiveState, wasFriendCallEnded, partnerId, roomId, callId, isPartnerFriend, isEndingCall]);
+  }, [partnerUserId, friends, started, wasFriendCallEnded, partnerId, roomId, callId, isPartnerFriend, isEndingCall]);
   
   // КРИТИЧНО: На iOS отключаем usePreventRemove - он мешает нормальному свайпу
   // PanResponder полностью обрабатывает свайп: показывает PiP и делает навигацию
@@ -2395,6 +2411,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             localStream: params?.localStream ?? (typeof session?.getLocalStream === 'function' ? session.getLocalStream() : null),
             remoteStream: params?.remoteStream ?? (typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null),
             localCamOn: params?.localCamOn,
+            remoteCamOn: params?.remoteCamOn,
             navParams: params?.navParams,
             deferVisible: false,
           });
@@ -2718,6 +2735,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             muteRemote: remoteMuted,
             localStream: localStream || null,
             remoteStream: remoteStream || null,
+            localCamOn: camOn,
+            remoteCamOn,
             navParams: {
               ...route?.params,
               peerUserId: partnerUserId,

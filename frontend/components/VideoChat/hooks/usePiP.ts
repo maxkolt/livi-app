@@ -1,5 +1,5 @@
 import { useCallback, useRef, useEffect } from 'react';
-import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
+import { BackHandler, InteractionManager, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { usePiP as usePiPContext } from '../../../src/pip/PiPContext';
 import { logger } from '../../../utils/logger';
@@ -23,6 +23,7 @@ interface UsePiPProps {
   camOn: boolean;
   micOn: boolean;
   remoteMuted: boolean;
+  remoteCamOn: boolean;
   localStream: any;
   remoteStream: any;
   friends: any[];
@@ -46,6 +47,7 @@ export const usePiP = ({
   camOn,
   micOn,
   remoteMuted,
+  remoteCamOn,
   localStream,
   remoteStream,
   friends,
@@ -62,33 +64,51 @@ export const usePiP = ({
   const startXRef = useRef<number | null>(null);
   
   // КРИТИЧНО: Используем ref для хранения актуальных значений состояния звонка
-  // Это нужно для PanResponder, который создается один раз и может иметь устаревшие значения в замыкании
   const isInactiveStateRef = useRef(isInactiveState);
   const wasFriendCallEndedRef = useRef(wasFriendCallEnded);
-  
+  // В BackHandler только читаем ref — без вызовов session.getRoomId() и т.д., чтобы нажатие Back срабатывало моментально.
+  const hasActiveCallRef = useRef(false);
+
   useEffect(() => {
     pipRef.current = pip;
     pipVisibleRef.current = pip.visible;
   }, [pip, pip.visible]);
-  
+
   useEffect(() => {
     isInactiveStateRef.current = isInactiveState;
   }, [isInactiveState]);
-  
+
   useEffect(() => {
     wasFriendCallEndedRef.current = wasFriendCallEnded;
   }, [wasFriendCallEnded]);
 
+  useEffect(() => {
+    const currentSession = session || (global as any).__webrtcSessionRef?.current;
+    const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
+    const actualCallId = callId || currentSession?.getCallId?.() || null;
+    const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
+    hasActiveCallRef.current =
+      (!!actualRoomId || !!actualCallId || !!actualPartnerId) &&
+      !isInactiveState &&
+      !wasFriendCallEnded;
+  }, [session, roomId, callId, partnerId, isInactiveState, wasFriendCallEnded]);
+
   // Функция для входа в PiP
   const enterPiPMode = useCallback((opts?: { deferVisible?: boolean }) => {
-    // КРИТИЧНО: Сначала проверяем, завершен ли звонок - если да, НЕ показываем PiP
-    // Это предотвращает появление PiP при свайпе назад после завершения звонка
-    if (isInactiveState || wasFriendCallEnded) {
+    // КРИТИЧНО: Проверяем по refs (актуальное состояние), чтобы при отложенном вызове после Back
+    // не показывать PiP, если звонок успел завершиться. Пропы могут быть устаревшими в замыкании.
+    const inactive = isInactiveStateRef.current || wasFriendCallEndedRef.current;
+    if (inactive || isInactiveState || wasFriendCallEnded) {
       logger.info('[usePiP] enterPiPMode - звонок завершен, НЕ показываем PiP', {
+        inactive,
         isInactiveState,
         wasFriendCallEnded
       });
-      
+      // Сбрасываем ref, если его выставили в BackHandler до goBack() (чтобы не остаться в "PiP visible" без оверлея).
+      try {
+        const g = global as any;
+        if (g.__pipVisibleRef?.current === true && !pip.visible) g.__pipVisibleRef.current = false;
+      } catch {}
       // Закрываем PiP если он был открыт
       if (pip.visible) {
         logger.info('[usePiP] Закрываем PiP - звонок завершен');
@@ -121,9 +141,8 @@ export const usePiP = ({
       pipVisible: pip.visible
     });
 
-    // Не показываем PiP если звонок завершен
-    // КРИТИЧНО: Используем актуальные значения из session
-    const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveState && !wasFriendCallEnded;
+    // Не показываем PiP если звонок завершен (refs — актуальное состояние при отложенном вызове)
+    const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current && !isInactiveState && !wasFriendCallEnded;
 
     logger.info('[usePiP] enterPiPMode - hasActiveCall:', hasActiveCall);
 
@@ -207,6 +226,7 @@ export const usePiP = ({
         localStream: localStream || null,
         remoteStream: remoteStream || null,
         localCamOn: camOn,
+        remoteCamOn,
         deferVisible: !!opts?.deferVisible,
         navParams: {
           ...routeParams,
@@ -258,6 +278,10 @@ export const usePiP = ({
         hasActiveCall,
         pipVisible: pip.visible
       });
+      try {
+        const g = global as any;
+        if (g.__pipVisibleRef?.current === true && !pip.visible) g.__pipVisibleRef.current = false;
+      } catch {}
     }
   }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, camOn, micOn, remoteMuted, localStream, remoteStream, routeParams, session]);
 
@@ -278,10 +302,6 @@ export const usePiP = ({
       // Если звонок завершён — сами делаем шаг назад (goBack/navigate Home) и потребляем событие.
       // Иначе при return false на части устройств Back доходит до Activity и вызывает finish() → при следующем открытии приложения показывается заглушка (холодный старт).
       if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
-        logger.info('[usePiP] BackHandler (Android): звонок завершен — шаг назад вручную', {
-          isInactiveState: isInactiveStateRef.current,
-          wasFriendCallEnded: wasFriendCallEndedRef.current
-        });
         requestAnimationFrame(() => {
           if (navigation.canGoBack && navigation.canGoBack()) {
             navigation.goBack();
@@ -289,48 +309,35 @@ export const usePiP = ({
             navigation.navigate('Home' as never);
           }
         });
-        return true; // Потребляем Back — не даём Activity завершиться
-      }
-      
-      // КРИТИЧНО: Получаем актуальные значения из session (включая глобальную ссылку)
-      const currentSession = session || (global as any).__webrtcSessionRef?.current;
-      const actualRoomId = roomId || currentSession?.getRoomId?.() || null;
-      const actualCallId = callId || currentSession?.getCallId?.() || null;
-      const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
-      const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current;
-
-      if (hasActiveCall) {
-        logger.info('[usePiP] BackHandler (Android): активный звонок — показываем in-app PiP и возвращаемся назад', {
-          actualRoomId,
-          actualCallId,
-          actualPartnerId,
-        });
-        try {
-          const g = global as any;
-          g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
-          g.__leavingVideoCallByBackRef.current = true;
-          // Блокируем usePreventRemove в VideoCall на 2 с: иначе при goBack() срабатывает beforeRemove,
-          // вызывается дублирующий showPiP + setTimeout(480) + moveTaskToBackAndEnterPiP и задержка 3–5 сек.
-          g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
-          g.__disableSystemPiPUntilRef.current = Date.now() + 2000;
-        } catch {}
-        enterPiPMode({ deferVisible: true });
-        const returnTo = (routeParams as any)?.returnTo;
-        if (navigation.canGoBack && navigation.canGoBack()) {
-          navigation.goBack();
-        } else if (returnTo?.name) {
-          (navigation as any).navigate(returnTo.name, returnTo.params);
-        } else {
-          navigation.navigate('Home' as never);
-        }
         return true;
       }
 
-      return false; // Разрешаем закрытие если нет активного звонка
+      if (!hasActiveCallRef.current) return false;
+
+      // Refs и goBack() синхронно — переход начинается сразу. PiP после завершения анимации перехода.
+      try {
+        const g = global as any;
+        g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+        g.__leavingVideoCallByBackRef.current = true;
+        g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+        g.__disableSystemPiPUntilRef.current = Date.now() + 2000;
+        g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+        g.__pipVisibleRef.current = true;
+      } catch {}
+      const returnTo = (routeParams as any)?.returnTo;
+      if (navigation.canGoBack && navigation.canGoBack()) {
+        navigation.goBack();
+      } else if (returnTo?.name) {
+        (navigation as any).navigate(returnTo.name, returnTo.params);
+      } else {
+        navigation.navigate('Home' as never);
+      }
+      InteractionManager.runAfterInteractions(() => enterPiPMode({ deferVisible: true }));
+      return true;
     });
 
     return () => backHandler.remove();
-  }, [enableAndroidBackHandler, enterPiPMode, roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, session, navigation]);
+  }, [enableAndroidBackHandler, enterPiPMode, roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, session, navigation, routeParams]);
 
   // Обработка Swipe Left to Right для входа в PiP и возврата на предыдущую страницу
   // Порог: 25% ширины экрана для iOS (уменьшено для более чувствительного свайпа)

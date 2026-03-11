@@ -1000,6 +1000,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.callId;
   }
 
+  /** Текущее состояние камеры собеседника (синхронно обновляется при cam-toggle/LiveKit). Используется в showPiP, чтобы заглушка «Отошел» показывалась сразу при входе в PiP без гонки с React state. */
+  getRemoteCamEnabled(): boolean {
+    return this.remoteCamEnabled;
+  }
+
   /** Звонок уже завершён (endCall вызван или получен call:ended). Используется в App, чтобы не показывать PiP с пустыми данными. */
   isEnded(): boolean {
     return this.ended || this.endCallInProgress;
@@ -1279,7 +1284,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         // Уведомляем компонент об изменении состояния камеры
         this.config.callbacks.onRemoteCamStateChange?.(data.enabled);
         this.config.onRemoteCamStateChange?.(data.enabled);
-        
+        try {
+          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+          if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: data.enabled });
+        } catch (_) {}
         logger.info('[VideoCallSession] ✅ Вызван onRemoteCamStateChange через cam-toggle', { enabled: data.enabled });
       } else {
         logger.debug('[VideoCallSession] cam-toggle событие проигнорировано - не совпадает roomId', {
@@ -2765,7 +2773,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config.onRemoteStreamChange?.(null);
     try {
       const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-      if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: null });
+      if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: null, remoteCamOn: false });
     } catch (_) {}
     this.config.callbacks.onRemoteCamStateChange?.(false);
     this.config.onRemoteCamStateChange?.(false);
@@ -4163,6 +4171,10 @@ export class VideoCallSession extends SimpleEventEmitter {
           this.clearRemoteCamOffTimeout();
           this.config.callbacks.onRemoteCamStateChange?.(true);
           this.config.onRemoteCamStateChange?.(true);
+          try {
+            const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+            if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: true });
+          } catch (_) {}
         }
       })
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
@@ -4417,6 +4429,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (!track.isMuted) {
         this.config.callbacks.onRemoteCamStateChange?.(true);
         this.config.onRemoteCamStateChange?.(true);
+        try {
+          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+          if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: true });
+        } catch (_) {}
       }
     }
     
@@ -4446,7 +4462,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Обновляем PiP (в т.ч. системный) при смене удалённого стрима — иначе при включении камеры партнёром из app PiP видео не восстановится у пользователя в системном PiP
     try {
       const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-      if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: this.remoteStream });
+      if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: this.remoteStream, remoteCamOn: this.remoteCamEnabled });
     } catch (_) {}
 
     // КРИТИЧНО: Устанавливаем loading=false только когда приходит remoteStream с треками
@@ -4549,6 +4565,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.remoteCamEnabled = false;
       this.config.callbacks.onRemoteCamStateChange?.(false);
       this.config.onRemoteCamStateChange?.(false);
+      try {
+        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+        if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: false });
+      } catch (_) {}
       logger.debug('[VideoCallSession] Remote camera set OFF after grace period', { reason, ms: REMOTE_CAM_OFF_GRACE_MS });
     }, REMOTE_CAM_OFF_GRACE_MS);
   }

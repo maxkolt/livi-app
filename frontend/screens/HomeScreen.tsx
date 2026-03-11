@@ -805,6 +805,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [avatarUri, setAvatarUri] = useState<string>('');      // может быть file:// для локального превью
   const [myFullAvatarUri, setMyFullAvatarUri] = useState<string>(''); // полный аватар (data URI)
   const [avatarRefreshKey, setAvatarRefreshKey] = useState(0); // для принудительного обновления на Android
+  const [videoCallEndedTick, setVideoCallEndedTick] = useState(0); // при завершении звонка вызываем setVideoCallEndedTick → ре-рендер списка друзей, снимаются бейдж «Занят» и disabled
   const [resolvedAvatarUri, resolvedAvatarReady] = useResolvedImageUri(avatarUri || ''); // на Android data: -> file: для Glide
   const [, myFullAvatarResolvedReady] = useResolvedImageUri(myFullAvatarUri || ''); // кешированный аватар (data:) -> file: для Glide на Android
   const [savedNick, setSavedNick] = useState<string>('');      // сохранённый ник
@@ -2651,6 +2652,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => { try { unsub?.(); } catch {} };
   }, [navigation, friends]);
 
+  // Регистрируем колбэк, чтобы при завершении видеозвонка (в т.ч. из PiP) принудительно обновить список друзей — снять бейдж «Занят» и disabled с кнопки.
+  useEffect(() => {
+    const g = global as any;
+    if (!g.__onVideoCallEndedRef) g.__onVideoCallEndedRef = { current: null };
+    g.__onVideoCallEndedRef.current = () => setVideoCallEndedTick((t) => t + 1);
+    return () => {
+      if (g.__onVideoCallEndedRef) g.__onVideoCallEndedRef.current = null;
+    };
+  }, []);
+
   /* ===== presence & friend events ===== */
   useEffect(() => {
     // Если пришёл запрос закрыть входящий (из других экранов/чата) — закрываем и здесь
@@ -3797,9 +3808,13 @@ const handleClearNick = useCallback(async () => {
     const friendIdStr = String(friend.id);
     const missedCount = missedByUser[friendIdStr] || 0;
 
-    // Кнопка видеозвонка показывается всегда; дизейблится и бейдж «Занят» только когда друг занят в видеочате
+    // Кнопка видеозвонка показывается всегда; дизейблится и бейдж «Занят» только когда друг занят в видеочате.
+    // КРИТИЧНО: Учитываем и глобальные refs из VideoCall — пока мы в активном звонке с этим другом, кнопка задизейблена,
+    // даже при рассинхроне presence или при возврате из PiP (refs сбрасываются только по успешному завершению звонка).
     const isFriendBusy = friend.isBusy || false; // Флаг от сервера через presence:update
-    const busy = isFriendBusy;
+    const videoCallActive = (global as any).__videoCallActiveRef?.current;
+    const videoCallPartner = (global as any).__videoCallPartnerUserIdRef?.current;
+    const busy = isFriendBusy || (!!videoCallActive && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
     const pulse = React.useRef(new Animated.Value(0)).current;
     useEffect(() => {
       if (busy) {
@@ -4092,7 +4107,7 @@ const handleClearNick = useCallback(async () => {
 
       {/* Кнопка «Обновить»: компактная, чтобы за неё ничего не вылезало */}
       {updateAvailable && (
-        <View style={{ marginTop: 'auto', marginBottom: 36, alignItems: 'center', alignSelf: 'stretch' }}>
+        <View style={{ marginTop: 'auto', marginBottom: 56, alignItems: 'center', alignSelf: 'stretch' }}>
           <TouchableOpacity
             activeOpacity={0.85}
             onPress={() => Linking.openURL(PLAY_STORE_UPDATE_URL)}
@@ -5381,7 +5396,7 @@ const styles = StyleSheet.create({
   },
   busyText: {
     color: '#FF5A67',
-    fontWeight: '700',
+    fontWeight: '400',
     fontSize: 11,
   },
 

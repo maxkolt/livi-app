@@ -18,6 +18,7 @@ import { PiPContext } from './PiPContext';
 import { logger } from '../../utils/logger';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { RemoteVideo } from '../../components/VideoChat/shared/RemoteVideo';
+import AwayPlaceholder from '../../components/AwayPlaceholder';
 import { defaultLang } from '../../utils/i18n';
 
 const PIP_W = 150;
@@ -98,6 +99,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const partnerAvatarUrl = ctx?.partnerAvatarUrl;
   const partnerName = ctx?.partnerName ?? '';
   const localCamOn = ctx?.localCamOn ?? true;
+  const remoteCamOn = ctx?.remoteCamOn ?? true;
   const isMuted = ctx?.isMuted ?? false;
 
   const toggleCamera = useCallback(() => {
@@ -224,7 +226,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               <View style={[styles.pipSystemVideoBlock, { left: 0, top: pipTop, width: pipBlockW, height: pipBlockH }]}>
                 <RemoteVideo
                   remoteStream={remoteStream as any}
-                  remoteCamOn={true}
+                  remoteCamOn={remoteCamOn}
                   remoteMuted={false}
                   isInactiveState={false}
                   wasFriendCallEnded={false}
@@ -324,7 +326,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               onPress={returnToCall}
               android_ripple={{ color: 'rgba(255,255,255,0.08)', borderless: true }}
             >
-              {canRenderVideo && remoteStream ? (
+              {!remoteCamOn ? (
+                <View style={StyleSheet.absoluteFill}>
+                  <AwayPlaceholder />
+                </View>
+              ) : canRenderVideo && remoteStream ? (
                 <View style={StyleSheet.absoluteFill}>
                   {Platform.OS === 'android' ? (
                     <RTCView

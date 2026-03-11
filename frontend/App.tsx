@@ -115,6 +115,9 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 // Это нужно чтобы можно было вызвать очистку даже когда экран звонка размонтирован (в PiP)
 (global as any).__endCallCleanupRef = { current: null as (() => void) | null };
 
+// Колбэк для принудительного ре-рендера списка друзей при завершении видеозвонка (чтобы снялись бейдж «Занят» и disabled кнопки).
+(global as any).__onVideoCallEndedRef = { current: null as (() => void) | null };
+
 // КРИТИЧНО: Глобальная ссылка на WebRTC session
 // Это нужно чтобы можно было остановить стримы даже когда экран звонка размонтирован (в PiP)
 (global as any).__webrtcSessionRef = { current: null as any };
@@ -2315,7 +2318,7 @@ function AppContent() {
                   presentation: 'card',
                   gestureEnabled: true,
                   animation: 'fade',
-                  animationDuration: 80,
+                  animationDuration: 10,
                   contentStyle: { backgroundColor: 'transparent' },
                 }}
               />
@@ -2715,6 +2718,7 @@ export default function App() {
               localStream: params?.localStream ?? null,
               remoteStream: remoteStream ?? null,
               localCamOn: params?.localCamOn,
+              remoteCamOn: params?.remoteCamOn,
               navParams: params?.navParams,
               deferVisible: false,
             });

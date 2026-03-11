@@ -391,10 +391,23 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }
 
   // Нет стрима — показываем лоадер при загрузке или если звонок активен (started)
-  // КРИТИЧНО: При активном звонке (started=true) показываем ActivityIndicator вместо черного экрана
-  // Это предотвращает черный экран при принятии звонка, когда remoteStream еще не установлен
-  // КРИТИЧНО: Показываем бейдж друга даже когда нет стрима (для инициатора звонка)
+  // КРИТИЧНО: Если партнер уже выключил камеру (remoteCamOn=false), показываем заглушку "Отошел", а не лоадер.
+  // Иначе при первом нажатии "выключить камеру" у собеседника стрим может временно пропасть (removeTrack) и показывался лоадер.
   if (!streamToUse) {
+    if (started && !wasFriendCallEnded && !isInactiveState && !remoteCamOn && !partnerInPiP) {
+      logRenderState('no-stream-but-cam-off', { remoteCamOn });
+      return (
+        <View style={styles.videoContainer}>
+          <AwayPlaceholder />
+          {showFriendBadge && (
+            <View style={styles.friendBadge}>
+              <MaterialIcons name="check-circle" size={16} color="#0f0" />
+              <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
     if (loading || started) {
       if (shouldSuppressTransientRemoteUi) {
         const held = renderHeldRemoteFrame('suppress-no-stream-during-local-flip', {
