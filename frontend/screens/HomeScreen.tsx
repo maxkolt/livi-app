@@ -73,10 +73,10 @@ const LinearGradient: any = (() => {
 import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { usePiP } from '../src/pip/PiPContext';
-import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, getUnreadCount, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onMissedIncrement, onMissedClear, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals } from '../utils/globalEvents';
+import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, getUnreadCount, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
+import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
-import { setMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly } from '../utils/pushNotifications';
+import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
 // УБРАНО: forceClearUserDataOnly не используется - вместо этого используется hardLocalReset() и clearAllUserData() из socket.ts
@@ -1206,6 +1206,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [calling, setCalling] = useState<{ visible: boolean; friend?: Friend | null; callId?: string | null }>({ visible: false });
   const [missedByUser, setMissedByUser] = useState<Record<string, number>>({});
   const [missedLoaded, setMissedLoaded] = useState(false);
+  const [markReadMenu, setMarkReadMenu] = useState<{ friendId: string; type: 'video' | 'chat' } | null>(null);
+  const menuStripWidth = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (markReadMenu) {
+      Animated.timing(menuStripWidth, { toValue: 273, duration: 220, useNativeDriver: false }).start();
+    } else {
+      Animated.timing(menuStripWidth, { toValue: 0, duration: 180, useNativeDriver: false }).start();
+    }
+  }, [markReadMenu, menuStripWidth]);
   const lastIncomingFromRef = useRef<string | null>(null);
   const [roomFull, setRoomFull] = useState<{ visible: boolean; name?: string }>({ visible: false });
   const wave1 = useRef(new Animated.Value(0)).current;
@@ -2624,7 +2633,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (badgeCleared !== 'true') {
           await syncAppBadgeFromMissedCount();
         }
-        
+
         // КРИТИЧНО: Обновляем счетчики непрочитанных сообщений при фокусе
         if (friends.length > 0) {
           const entries: Record<string, number> = {};
@@ -2651,6 +2660,28 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     });
     return () => { try { unsub?.(); } catch {} };
   }, [navigation, friends]);
+
+  // После восстановления сети reauth приносит пропущенные с сервера — перечитываем из AsyncStorage и обновляем UI
+  useEffect(() => {
+    const off = onMissedFetchedFromServer(async () => {
+      try {
+        const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        const normalized: Record<string, number> = {};
+        if (parsed && typeof parsed === 'object') {
+          Object.keys(parsed).forEach(key => {
+            const value = parsed[key];
+            if (typeof value === 'number' && value > 0) normalized[String(key)] = value;
+          });
+        }
+        setMissedByUser(normalized);
+        setMissedLoaded(true);
+        await clearMissedBadgeCleared();
+        await syncAppBadgeFromMissedCount();
+      } catch {}
+    });
+    return off;
+  }, []);
 
   // Регистрируем колбэк, чтобы при завершении видеозвонка (в т.ч. из PiP) принудительно обновить список друзей — снять бейдж «Занят» и disabled с кнопки.
   useEffect(() => {
@@ -3722,6 +3753,7 @@ const handleClearNick = useCallback(async () => {
               borderColor: 'rgba(255,255,255,0.12)',
             },
           ]}
+          onLongPress={count > 0 ? () => setMarkReadMenu({ friendId: friendIdStr, type: 'chat' }) : undefined}
           onPress={handlePress}
         />
         {count > 0 && (
@@ -3800,7 +3832,22 @@ const handleClearNick = useCallback(async () => {
 
     return { displayName, avatarLetter, hasAvatar };
   };
-  
+
+  const clearMissedCallsForFriend = useCallback((friendIdStr: string) => {
+    if (Platform.OS === 'android') {
+      try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(friendIdStr); } catch (_) {}
+    }
+    setMissedByUser((prev) => {
+      const next = { ...prev };
+      if (next[friendIdStr] !== undefined) {
+        delete next[friendIdStr];
+      }
+      AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(() => {});
+      logger.debug('[HomeScreen] Reset missed calls for friend (removed key)', { friendId: friendIdStr });
+      return next;
+    });
+    syncAppBadgeFromMissedCount().catch(() => {});
+  }, []);
 
   const InviteButton = ({ friend }: { friend: Friend }) => {
     const { displayName } = getFriendDisplay(friend);
@@ -3854,23 +3901,10 @@ const handleClearNick = useCallback(async () => {
               busy ? styles.inviteBtnDisabled : null,
             ]}
             disabled={busy}
+            onLongPress={missedCount > 0 ? () => setMarkReadMenu({ friendId: friendIdStr, type: 'video' }) : undefined}
             onPress={() => {
-              // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) и УДАЛЯЕМ ключ вместо установки в 0
-              const friendIdStr = String(friend.id);
-              if (Platform.OS === 'android') {
-                try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(friendIdStr); } catch (_) {}
-              }
-              setMissedByUser((prev) => {
-                const next = { ...prev };
-                // Удаляем ключ вместо установки в 0, чтобы не было нулевых значений в объекте
-                if (next[friendIdStr] !== undefined) {
-                  delete next[friendIdStr];
-                }
-                // Сохраняем очищенный объект (без нулевых значений)
-                AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(()=>{});
-                logger.debug('[HomeScreen] Reset missed calls for friend (removed key)', { friendId: friendIdStr });
-                return next;
-              });
+              const fid = String(friend.id);
+              clearMissedCallsForFriend(fid);
               handleStartVideoCall(friend);
             }}
           />
@@ -3902,6 +3936,7 @@ const handleClearNick = useCallback(async () => {
       ItemSeparatorComponent={() => <View style={styles.friendSeparator} />}
       refreshing={refreshing}
       onRefresh={onRefreshFriends}
+      onScrollBeginDrag={() => setMarkReadMenu(null)}
       renderItem={({ item }) => (
         <Swipeable
           ref={(r) => { if (r) swipeableRefsMap.current[item.id] = r; }}
@@ -3909,11 +3944,12 @@ const handleClearNick = useCallback(async () => {
           onSwipeableClose={() => { if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) openSwipeableRef.current = null; }}
           renderRightActions={() => renderRightActions(item.id)}
         >
-          <List.Item
-            style={[styles.listRow, styles.listRowAligned]}
-            contentStyle={{ marginLeft: 0 }}
-            rippleColor="transparent"
-            left={() => {
+          <View style={styles.listRowWrap}>
+            <List.Item
+              style={[styles.listRow, styles.listRowAligned]}
+              contentStyle={{ marginLeft: 0 }}
+              rippleColor="transparent"
+              left={() => {
               const { avatarLetter } = getFriendDisplay(item);
               return (
                 <View style={styles.avatarBox}>
@@ -3936,10 +3972,9 @@ const handleClearNick = useCallback(async () => {
             
             title={() => {
               const { displayName } = getFriendDisplay(item);
-              // КРИТИЧНО: Используем displayName (полный никнейм) для текста
-              // avatarLetter используется только для fallbackText в аватаре (первая буква)
+              const hidden = markReadMenu?.friendId === item.id;
               return (
-                <View style={styles.nameCol}>
+                <View style={[styles.nameCol, hidden && { opacity: 0 }]}>
                   <Text style={styles.friendName}>{displayName}</Text>
                   <Text style={[styles.friendStatus, { color: item.online ? LIVI.green : LIVI.red }]}>
                     {item.online ? L('online') : L('offline')}
@@ -3947,13 +3982,54 @@ const handleClearNick = useCallback(async () => {
                 </View>
               );
             }}            
-            right={() => (
-              <View style={styles.rowRightActions}>
-                <InviteButton friend={item} />
-                <ChatButton friend={item} />
+            right={() => {
+              const hidden = markReadMenu?.friendId === item.id;
+              return (
+                <View style={[styles.rowRightActions, hidden && { opacity: 0 }]}>
+                  <InviteButton friend={item} />
+                  <ChatButton friend={item} />
+                </View>
+              );
+            }}
+          />
+            {markReadMenu && markReadMenu.friendId === item.id && (
+              <View style={styles.markReadMenuOverlay} pointerEvents="box-none">
+                <View style={styles.markReadMenuStripGap}>
+                  <Animated.View style={[styles.markReadMenuStrip, { width: menuStripWidth }]} collapsable={false}>
+                  <View style={styles.markReadMenuStripInner} pointerEvents="box-none">
+                    <Text numberOfLines={1} ellipsizeMode="tail" style={styles.markReadMenuStripText}>
+                      {markReadMenu.type === 'video' ? t('markAsViewed', lang) : t('markAsRead', lang)}
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.markReadMenuBtn}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        const { friendId, type } = markReadMenu;
+                        setMarkReadMenu(null);
+                        if (type === 'video') {
+                          clearMissedCallsForFriend(friendId);
+                        } else {
+                          markMessagesAsRead(friendId).then(() => {
+                            setUnreadByUser((prev) => ({ ...prev, [friendId]: 0 }));
+                          }).catch(() => {});
+                        }
+                      }}
+                    >
+                      <Ionicons name="checkmark" size={18} color={LIVI.white} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.markReadMenuBtn}
+                      activeOpacity={0.8}
+                      onPress={() => setMarkReadMenu(null)}
+                    >
+                      <MaterialIcons name="close" size={18} color={LIVI.text2} />
+                    </TouchableOpacity>
+                  </View>
+                </Animated.View>
+                </View>
               </View>
             )}
-          />
+          </View>
         </Swipeable>
       )}
       contentContainerStyle={{ paddingBottom: 24, paddingHorizontal: 16 }}
@@ -5265,6 +5341,7 @@ const styles = StyleSheet.create({
   // Симметричные отступы: левый край -> аватар = правый край -> иконка чата.
   // Горизонтальные отступы задаются contentContainerStyle у FlatList (paddingHorizontal: 16),
   // поэтому не добавляем дополнительный paddingRight на уровне строки.
+  listRowWrap: { position: 'relative' },
   listRow: { backgroundColor: 'transparent', paddingVertical: 10, paddingRight: 0 },
   listRowAligned: { alignItems: 'center', paddingLeft: 0, paddingRight: 0, minHeight: 72 },
   nameCol: { marginLeft: 0, justifyContent: 'center' },
@@ -5276,8 +5353,9 @@ const styles = StyleSheet.create({
   },
   friendStatus: {
     marginTop: 2,
-    fontSize: Platform.OS === "android" ? 12 : 14,
-    fontWeight: '500',
+    fontSize: Platform.OS === "android" ? 11 : 13,
+    fontWeight: '300',
+    ...(Platform.OS === 'android' && { fontFamily: 'sans-serif-light' }),
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4 },
   centerAvatarWrap: {
@@ -5364,6 +5442,56 @@ const styles = StyleSheet.create({
     // бейдж может обрезаться у правого края на разных девайсах/скейлах.
     position: 'absolute', top: 2, right: 2, minWidth: 12, height: 12, paddingHorizontal: 2,
     borderRadius: 6, backgroundColor: 'rgba(255,90,103,0.9)', alignItems: 'center', justifyContent: 'center',
+  },
+
+  markReadMenuOverlay: {
+    position: 'absolute',
+    left: Platform.OS === 'ios' ? 40 : 36,
+    right: 0,
+    top: 0,
+    bottom: 3,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    zIndex: 10,
+  },
+  markReadMenuStripGap: {
+    marginLeft: Platform.OS === 'ios' ? 24 : 20,
+    alignSelf: 'flex-end',
+  },
+  markReadMenuStrip: {
+    overflow: 'hidden',
+    height: 40,
+    borderRadius: 50,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: LIVI.border,
+    backgroundColor: LIVI.glass,
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  markReadMenuStripInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 15,
+    height: 48,
+    minWidth: 260,
+  },
+  markReadMenuStripText: {
+    flex: 1,
+    color: LIVI.white,
+    fontSize: 12,
+    fontWeight: '400',
+    marginRight: 16,
+  },
+  markReadMenuBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: LIVI.border,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 14,
   },
 
   rightWrap: { width: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
