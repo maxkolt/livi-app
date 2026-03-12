@@ -47,6 +47,29 @@ const __devTypingLogState = new Map<string, boolean>();
 import { NativeModules, Platform } from "react-native";
 import { AppState, type AppStateStatus } from "react-native";
 import { getInstallId } from "../utils/installId";
+import { emitMissedFetchedFromServer } from '../utils/globalEvents';
+
+const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
+
+/** Мержим пропущенные с сервера (после reauth) в AsyncStorage и уведомляем UI. */
+async function applyMissedFromReauth(response: { missed?: { from: string; fromNick?: string }[] }) {
+  const missed = response?.missed;
+  if (!Array.isArray(missed) || missed.length === 0) return;
+  try {
+    const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+    const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+    for (const m of missed) {
+      const uid = String(m?.from || '').trim();
+      if (uid) {
+        map[uid] = (map[uid] || 0) + 1;
+      }
+    }
+    await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(map));
+    emitMissedFetchedFromServer();
+  } catch (e) {
+    logger.warn('[applyMissedFromReauth] failed', e as any);
+  }
+}
 
 /* ========= Server URL ========= */
 // Получаем BASE_URL из переменных окружения
@@ -246,7 +269,8 @@ async function boot() {
       // Не пересоздаём пользователя на временных проблемах сети/авторизации — сначала пробуем reauth.
       try {
         if (socket.connected) {
-          await emitAck<{ ok: boolean; userId?: string; error?: string }>('reauth', { userId: saved }, 6000, 1);
+          const reauthRes = await emitAck<{ ok: boolean; userId?: string; error?: string; missed?: { from: string; fromNick?: string }[] }>('reauth', { userId: saved }, 6000, 1);
+          if (reauthRes?.missed?.length) applyMissedFromReauth(reauthRes).catch(() => {});
         }
       } catch (e) {
         // мягко игнорируем — может быть оффлайн, но userId локально сохраняем
@@ -299,9 +323,10 @@ async function boot() {
     // Если socket уже подключен, но у нас есть userId - отправляем reauth
     logger.debug('Socket connected, sending reauth with userId:', currentUserId);
     try {
-      const reauthResponse = await emitAck<{ ok: boolean; userId?: string; error?: string }>('reauth', { userId: currentUserId });
+      const reauthResponse = await emitAck<{ ok: boolean; userId?: string; error?: string; missed?: { from: string; fromNick?: string }[] }>('reauth', { userId: currentUserId });
       if (reauthResponse?.ok) {
         logger.debug('Reauth successful');
+        if (reauthResponse?.missed?.length) applyMissedFromReauth(reauthResponse).catch(() => {});
       } else {
         logger.warn('Reauth failed:', reauthResponse?.error);
         // Если пользователь не найден на сервере - очищаем локальный userId и создаем нового
@@ -440,9 +465,10 @@ socket.on("connect", async () => {
   if (currentUserId && !(socket as any).data?.userId) {
     console.log('[socket] Connected without userId, sending reauth:', currentUserId);
     try {
-      const reauthResponse = await emitAck<{ ok: boolean; userId?: string; error?: string }>('reauth', { userId: currentUserId });
+      const reauthResponse = await emitAck<{ ok: boolean; userId?: string; error?: string; missed?: { from: string; fromNick?: string }[] }>('reauth', { userId: currentUserId });
       if (reauthResponse?.ok) {
         console.log('[socket] Reauth successful after connect');
+        if (reauthResponse?.missed?.length) applyMissedFromReauth(reauthResponse).catch(() => {});
       } else {
         console.warn('[socket] Reauth failed after connect:', reauthResponse?.error);
         // Если пользователь не найден на сервере - очищаем локальный userId и создаем нового

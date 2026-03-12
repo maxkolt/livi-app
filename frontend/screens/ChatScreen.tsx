@@ -882,12 +882,26 @@ export default function ChatScreen({ route, navigation }: Props) {
     let cancelled = false;
 
     (async () => {
-      if (!peerId || !peerAvatarVerState) {
-        // Если нет версии, но есть миниатюра из параметров - используем её
-        if (peerAvatarThumbB64Param) {
-          setFullAvatarUri(peerAvatarThumbB64Param);
-        } else {
-          setFullAvatarUri('');
+      if (!peerId) {
+        setFullAvatarUri(peerAvatarThumbB64Param || '');
+        return;
+      }
+
+      // Открыто по пушу (нет версии аватара) — запрашиваем аватар по peerId
+      if (!peerAvatarVerState) {
+        if (peerAvatarThumbB64Param && !cancelled) setFullAvatarUri(peerAvatarThumbB64Param);
+        try {
+          const res = await getAvatar(peerId);
+          if (cancelled) return;
+          if (res?.ok && res.avatarB64 && res.avatarVer) {
+            await putFull(peerId, res.avatarVer, res.avatarB64);
+            setFullAvatarUri(res.avatarB64);
+            setPeerAvatarVerState(res.avatarVer);
+          } else if (!peerAvatarThumbB64Param) {
+            setFullAvatarUri('');
+          }
+        } catch {
+          if (!peerAvatarThumbB64Param && !cancelled) setFullAvatarUri('');
         }
         return;
       }
@@ -2714,7 +2728,13 @@ export default function ChatScreen({ route, navigation }: Props) {
           {selectionMode ? t('chatSelectedCount', lang).replace('{count}', String(selectedCount)) : peerNameState}
         </Text>
         {!selectionMode && (
-          <Text style={{ marginTop: 2, fontSize: 12, color: peerOnline ? LIVI.green : LIVI.red, fontWeight: "500" }}>
+          <Text style={{
+              marginTop: 2,
+              fontSize: 11,
+              color: peerOnline ? LIVI.green : LIVI.red,
+              fontWeight: '300',
+              ...(Platform.OS === 'android' && { fontFamily: 'sans-serif-light' }),
+            }}>
             {peerOnline ? t('online', lang) : t('offline', lang)}
           </Text>
         )}

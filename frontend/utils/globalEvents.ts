@@ -25,6 +25,18 @@ export function emitMissedIncrement(userId: string) {
   }
 }
 
+/** Пропущенные подтянуты с сервера (после reauth) — подписчики перечитывают AsyncStorage. */
+const missedFetchedFromServerListeners = new Set<() => void>();
+export function onMissedFetchedFromServer(cb: () => void): () => void {
+  missedFetchedFromServerListeners.add(cb);
+  return () => { missedFetchedFromServerListeners.delete(cb); };
+}
+export function emitMissedFetchedFromServer() {
+  for (const l of missedFetchedFromServerListeners) {
+    try { l(); } catch {}
+  }
+}
+
 /** Сбросить счётчик пропущенных для userId (при принятии вызова получателем или входе в чат/видеозвонок). */
 export function onMissedClear(cb: Listener<{ userId: string }>): () => void {
   missedClearListeners.add(cb);

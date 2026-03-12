@@ -28,6 +28,7 @@ import { bindAvatarSockets } from './sockets/avatar';
 import { setIoInstance } from './utils/ioInstance';
 import User from './models/User';
 import Install from './models/Install';
+import MissedCall from './models/MissedCall';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl, isAllowedParticipant } from './routes/livekit';
@@ -875,6 +876,20 @@ function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'cancele
   callOfUser.delete(link.b);
 }
 
+/** Сохранить пропущенный вызов для получателя (после восстановления сети он подтянет через reauth). */
+async function saveMissedCall(calleeId: string, callerId: string, callerNick: string) {
+  if (!isMongoReady() || !isOid(calleeId) || !isOid(callerId)) return;
+  try {
+    await MissedCall.create({
+      calleeId: new mongoose.Types.ObjectId(calleeId),
+      callerId: new mongoose.Types.ObjectId(callerId),
+      callerNick: String(callerNick || '').trim(),
+    });
+  } catch (e: any) {
+    logger.warn('[saveMissedCall] failed', { calleeId, callerId, error: e?.message });
+  }
+}
+
 /** Отклонение звонка по HTTP (из IncomingCallActivity без открытия приложения). Auth по x-install-id. */
 app.post('/api/calls/decline', async (req, res) => {
   try {
@@ -960,6 +975,7 @@ app.post('/api/calls/cancel', async (req, res) => {
       }
     } catch {}
     try { await sendCallCanceledToRecipient(link.b, callId, link.a, fromNick); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
+    await saveMissedCall(link.b, link.a, fromNick || '');
     logger.info('[api/calls/cancel] call ended for both: callee got missed from native', { callId, caller: link.a, callee: link.b });
     cleanupCall(callId, 'canceled');
     return res.json({ ok: true });
@@ -1063,7 +1079,17 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
 
       logger.debug('User reauthorized successfully', { userId: mappedUserId });
-      ack?.({ ok: true, userId: mappedUserId });
+      let missed: { from: string; fromNick: string }[] = [];
+      try {
+        if (isMongoReady()) {
+          const docs = await MissedCall.find({ calleeId: mappedUserId }).sort({ createdAt: -1 }).limit(50).lean();
+          missed = (docs as any[]).map((d) => ({ from: String(d.callerId), fromNick: String(d.callerNick || '').trim() }));
+          if (docs.length) await MissedCall.deleteMany({ _id: { $in: docs.map((d: any) => d._id) } });
+        }
+      } catch (e: any) {
+        logger.warn('[reauth] fetch missed failed', { error: e?.message });
+      }
+      ack?.({ ok: true, userId: mappedUserId, missed });
     } catch (e) {
       logger.error('Reauth error', { error: (e as any)?.message || String(e) });
       ack?.({ ok: false, error: 'server_error' });
@@ -1742,6 +1768,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         } catch (e: any) {
           logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
         }
+        await saveMissedCall(link.b, link.a, fromNick || '');
         logger.info('[call:timeout] call ended for both: callee notified (socket+missed push), caller gets timeout', { callId, caller: link.a, callee: link.b });
         cleanupCall(callId, 'timeout');
       }, 20000);
@@ -2154,6 +2181,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     } catch {}
     // FCM data-only получателю: снимаем «входящий вызов», показываем «пропущенный вызов», счётчик на иконке
     try { await sendCallCanceledToRecipient(link.b, id, link.a, fromNick); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
+    await saveMissedCall(link.b, link.a, fromNick || '');
     logger.info('[call:cancel] call ended for both: both notified (socket+FCM, callee got missed from native)', { callId: id, caller: link.a, callee: link.b });
     cleanupCall(id, 'canceled');
   });

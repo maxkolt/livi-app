@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
+import { View, Text, TouchableOpacity, Platform } from 'react-native';
 import AvatarImage from './AvatarImage';
 import { useNavigation } from '@react-navigation/native';
 import { putThumb, getThumb } from '../utils/avatarCache';
@@ -104,7 +104,12 @@ export default function FriendItem({ friend }: { friend: Friend }) {
       <View style={{ flex: 1 }}>
         <Text style={{ color: '#E6E8EB', fontSize: 16, fontWeight: '600' }}>{showName}</Text>
         {typeof friend.online === 'boolean' && (
-          <Text style={{ color: friend.online ? '#55d187' : '#ff6b6b', fontSize: 12, fontWeight: '500' }}>
+          <Text style={{
+            color: friend.online ? '#55d187' : '#ff6b6b',
+            fontSize: 12,
+            fontWeight: '300',
+            ...(Platform.OS === 'android' && { fontFamily: 'sans-serif-light' }),
+          }}>
             {friend.online ? t('online', lang) : t('offline', lang)}
           </Text>
         )}
