@@ -2184,6 +2184,10 @@ function AppContent() {
           await clearMissedBadgeCleared();
           await syncAppBadgeFromMissedCount();
           try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
+          // Дедуп: убрать этого пользователя из нативного pending, чтобы при getAndClearPendingMissedCalls не инкрементировать повторно (FCM call_ended тоже добавляет в pending)
+          try {
+            if (Platform.OS === 'android') NativeModules.LiviAppModule?.removePendingMissedCall?.(uid);
+          } catch (_) {}
         }
       } catch {}
     });

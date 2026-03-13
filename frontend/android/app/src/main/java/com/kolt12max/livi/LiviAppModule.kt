@@ -795,6 +795,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /** Удалить userId из списка pending пропущенных (дедуп: после инкремента по сокету call:timeout не считать повторно при getAndClearPendingMissedCalls). */
+  @ReactMethod
+  fun removePendingMissedCall(userId: String) {
+    try {
+      removePendingMissedCall(reactApplicationContext, userId)
+    } catch (_: Exception) {}
+  }
+
   /** Прочитать и сбросить флаг «открыть вкладку Друзья» (тап по уведомлению о пропущенном вызове). Возвращает true, если нужно перейти на вкладку Друзья. */
   @ReactMethod
   fun getAndClearPendingOpenTabFriends(promise: Promise) {
@@ -1108,6 +1116,18 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       val current = prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: ""
       prefs.edit().remove(KEY_PENDING_MISSED_IDS).apply()
       return if (current.isEmpty()) emptyList() else current.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    /** Удалить userId из списка pending пропущенных (чтобы при следующем getAndClearPendingMissedCalls не дублировать инкремент). Вызывать из JS после инкремента по сокету call:timeout. */
+    @JvmStatic
+    fun removePendingMissedCall(context: Context, userId: String) {
+      if (userId.isBlank()) return
+      val prefs = context.getSharedPreferences(PREFS_PENDING_MISSED, Context.MODE_PRIVATE)
+      val current = prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: ""
+      if (current.isEmpty()) return
+      val key = userId.trim()
+      val list = current.split(',').map { it.trim() }.filter { it.isNotEmpty() }.filter { it != key }
+      prefs.edit().putString(KEY_PENDING_MISSED_IDS, list.joinToString(",")).apply()
     }
 
     /** Счётчик пропущенных по userId для одного уведомления на пользователя. Увеличить и вернуть новый счёт. */

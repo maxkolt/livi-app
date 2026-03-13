@@ -31,20 +31,30 @@ export async function clearMissedBadgeCleared(): Promise<void> {
   } catch {}
 }
 
-/** Снять только уведомления «пропущенный вызов» в шторке (без обнуления счётчиков). Вызывать при заходе в Друзья. Сначала нативный список (тот же источник, что и при показе), затем по AsyncStorage. */
+/** Снять только уведомления «пропущенный вызов» в шторке (без обнуления счётчиков). Вызывать при заходе в Друзья. Android: нативный список; iOS: Expo getPresentedNotificationsAsync + dismiss по type === 'missed_call'. */
 export async function dismissMissedCallNotificationsOnly(): Promise<void> {
-  if (Platform.OS !== 'android') return;
   try {
-    if (NativeModules.LiviAppModule?.dismissAllMissedCallNotifications) {
-      NativeModules.LiviAppModule.dismissAllMissedCallNotifications();
-    }
-    if (NativeModules.LiviAppModule?.dismissMissedCallNotificationOnly) {
-      const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
-      const map = raw ? (JSON.parse(raw) as Record<string, number>) : {};
-      for (const uid of Object.keys(map || {})) {
-        if (uid && typeof map[uid] === 'number' && map[uid] > 0) {
-          try { NativeModules.LiviAppModule.dismissMissedCallNotificationOnly(String(uid)); } catch (_) {}
+    if (Platform.OS === 'android') {
+      if (NativeModules.LiviAppModule?.dismissAllMissedCallNotifications) {
+        NativeModules.LiviAppModule.dismissAllMissedCallNotifications();
+      }
+      if (NativeModules.LiviAppModule?.dismissMissedCallNotificationOnly) {
+        const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+        const map = raw ? (JSON.parse(raw) as Record<string, number>) : {};
+        for (const uid of Object.keys(map || {})) {
+          if (uid && typeof map[uid] === 'number' && map[uid] > 0) {
+            try { NativeModules.LiviAppModule.dismissMissedCallNotificationOnly(String(uid)); } catch (_) {}
+          }
         }
+      }
+      return;
+    }
+    // iOS: снять только уведомления с data.type === 'missed_call' (Expo показывает их при call_ended)
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    for (const n of presented || []) {
+      const type = (n?.request?.content?.data as Record<string, unknown>)?.type;
+      if (type === 'missed_call' && n?.request?.identifier) {
+        try { await Notifications.dismissNotificationAsync(n.request.identifier); } catch (_) {}
       }
     }
   } catch (_) {}

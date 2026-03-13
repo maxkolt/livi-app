@@ -975,7 +975,7 @@ app.post('/api/calls/cancel', async (req, res) => {
       }
     } catch {}
     try { await sendCallCanceledToRecipient(link.b, callId, link.a, fromNick); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    await saveMissedCall(link.b, link.a, fromNick || '');
+    if (!bSock) await saveMissedCall(link.b, link.a, fromNick || '');
     logger.info('[api/calls/cancel] call ended for both: callee got missed from native', { callId, caller: link.a, callee: link.b });
     cleanupCall(callId, 'canceled');
     return res.json({ ok: true });
@@ -1768,7 +1768,8 @@ io.on('connection', async (sock: AuthedSocket) => {
         } catch (e: any) {
           logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
         }
-        await saveMissedCall(link.b, link.a, fromNick || '');
+        // Сохраняем пропущенный только если получатель офлайн — иначе он уже получил socket+FCM и при reauth получит дубль через missed_calls:sync
+        if (!bSock) await saveMissedCall(link.b, link.a, fromNick || '');
         logger.info('[call:timeout] call ended for both: callee notified (socket+missed push), caller gets timeout', { callId, caller: link.a, callee: link.b });
         cleanupCall(callId, 'timeout');
       }, 20000);
@@ -2181,7 +2182,8 @@ io.on('connection', async (sock: AuthedSocket) => {
     } catch {}
     // FCM data-only получателю: снимаем «входящий вызов», показываем «пропущенный вызов», счётчик на иконке
     try { await sendCallCanceledToRecipient(link.b, id, link.a, fromNick); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    await saveMissedCall(link.b, link.a, fromNick || '');
+    const bSockCancel = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
+    if (!bSockCancel) await saveMissedCall(link.b, link.a, fromNick || '');
     logger.info('[call:cancel] call ended for both: both notified (socket+FCM, callee got missed from native)', { callId: id, caller: link.a, callee: link.b });
     cleanupCall(id, 'canceled');
   });

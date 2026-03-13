@@ -3124,42 +3124,46 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => { off?.(); };
   }, [stopWaves]);
 
-  // Мгновенное обновление бейджа при инкременте в App.tsx (главная/меню)
-  // КРИТИЧНО: Обновляем состояние и сохраняем в AsyncStorage синхронно
+  // Мгновенное обновление UI при инкременте в App.tsx (главная/меню). Запись в AsyncStorage только в App — здесь только state, чтобы не было двух писателей и гонок.
   useEffect(() => {
-    const off = onMissedIncrement(async ({ userId }) => {
+    const off = onMissedIncrement(({ userId }) => {
       if (!userId) return;
       const userIdStr = String(userId);
       setMissedByUser((prev) => {
         const next = { ...prev, [userIdStr]: (prev[userIdStr] || 0) + 1 };
-        // КРИТИЧНО: Сохраняем в AsyncStorage и синхронизируем бейдж после записи
-        AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next))
-          .then(() => syncAppBadgeFromMissedCount())
-          .catch(() => {});
-        logger.debug('[HomeScreen] Missed call incremented', { userId: userIdStr, count: next[userIdStr] });
+        logger.debug('[HomeScreen] Missed call incremented (UI only, App already persisted)', { userId: userIdStr, count: next[userIdStr] });
         return next;
       });
+      syncAppBadgeFromMissedCount().catch(() => {});
     });
     return () => off?.();
   }, []);
 
-  // Сброс счётчика пропущенных при принятии вызова получателем или входе в видеозвонок/чат с другом
+  // Сброс счётчика пропущенных при принятии вызова получателем или входе в видеозвонок/чат с другом. Сохраняем в AsyncStorage с await, чтобы сброс не терялся при быстром выходе.
   useEffect(() => {
-    const off = onMissedClear(({ userId }) => {
+    const off = onMissedClear(async ({ userId }) => {
       const userIdStr = String(userId);
       if (!userIdStr) return;
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(userIdStr); } catch (_) {}
       }
-      setMissedByUser((prev) => {
-        if (prev[userIdStr] === undefined) return prev;
-        const next = { ...prev };
-        delete next[userIdStr];
-        AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(() => {});
-        syncAppBadgeFromMissedCount().catch(() => {});
+      try {
+        const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+        const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+        if (map[userIdStr] === undefined) return;
+        delete map[userIdStr];
+        await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(map));
+        setMissedByUser((prev) => {
+          if (prev[userIdStr] === undefined) return prev;
+          const next = { ...prev };
+          delete next[userIdStr];
+          return next;
+        });
+        await syncAppBadgeFromMissedCount();
         logger.debug('[HomeScreen] Missed calls cleared for user (emitMissedClear)', { userId: userIdStr });
-        return next;
-      });
+      } catch (e) {
+        logger.warn('[HomeScreen] onMissedClear failed', { userId: userIdStr, error: (e as Error)?.message });
+      }
     });
     return () => off?.();
   }, []);
@@ -3857,20 +3861,27 @@ const handleClearNick = useCallback(async () => {
     return { displayName, avatarLetter, hasAvatar };
   };
 
-  const clearMissedCallsForFriend = useCallback((friendIdStr: string) => {
+  const clearMissedCallsForFriend = useCallback(async (friendIdStr: string) => {
     if (Platform.OS === 'android') {
       try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(friendIdStr); } catch (_) {}
     }
-    setMissedByUser((prev) => {
-      const next = { ...prev };
-      if (next[friendIdStr] !== undefined) {
-        delete next[friendIdStr];
+    try {
+      const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+      const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+      if (typeof map === 'object' && map !== null) {
+        delete map[friendIdStr];
+        await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(map));
       }
-      AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(() => {});
+      setMissedByUser((prev) => {
+        const next = { ...prev };
+        delete next[friendIdStr];
+        return next;
+      });
       logger.debug('[HomeScreen] Reset missed calls for friend (removed key)', { friendId: friendIdStr });
-      return next;
-    });
-    syncAppBadgeFromMissedCount().catch(() => {});
+      await syncAppBadgeFromMissedCount();
+    } catch (e) {
+      logger.warn('[HomeScreen] clearMissedCallsForFriend failed', { friendId: friendIdStr, error: (e as Error)?.message });
+    }
   }, []);
 
   const InviteButton = ({ friend }: { friend: Friend }) => {
