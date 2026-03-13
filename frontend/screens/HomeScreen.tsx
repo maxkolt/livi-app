@@ -1208,13 +1208,37 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [missedLoaded, setMissedLoaded] = useState(false);
   const [markReadMenu, setMarkReadMenu] = useState<{ friendId: string; type: 'video' | 'chat' } | null>(null);
   const menuStripWidth = useRef(new Animated.Value(0)).current;
+  const rowRefForMarkReadMenu = useRef<View>(null);
+  const avatarRefForMarkReadMenu = useRef<View>(null);
+  const [markReadOverlayLeft, setMarkReadOverlayLeft] = useState<number | null>(null);
+  const GAP_AFTER_AVATAR = 12;
+  const MAX_MARK_READ_STRIP_WIDTH = 320;
+  const LIST_PADDING_H = 16;
+  const STRIP_RIGHT_MARGIN = 8;
   useEffect(() => {
     if (markReadMenu) {
-      Animated.timing(menuStripWidth, { toValue: 273, duration: 220, useNativeDriver: false }).start();
+      const overlayLeft = markReadOverlayLeft ?? (Platform.OS === 'ios' ? 52 + GAP_AFTER_AVATAR : 44 + GAP_AFTER_AVATAR);
+      const windowWidth = Dimensions.get('window').width;
+      const targetWidth = Math.min(
+        MAX_MARK_READ_STRIP_WIDTH,
+        Math.max(0, windowWidth - LIST_PADDING_H * 2 - overlayLeft - STRIP_RIGHT_MARGIN)
+      );
+      Animated.timing(menuStripWidth, { toValue: targetWidth, duration: 220, useNativeDriver: false }).start();
     } else {
+      setMarkReadOverlayLeft(null);
       Animated.timing(menuStripWidth, { toValue: 0, duration: 180, useNativeDriver: false }).start();
     }
-  }, [markReadMenu, menuStripWidth]);
+  }, [markReadMenu, markReadOverlayLeft, menuStripWidth]);
+  const measureAvatarForOverlay = useCallback(() => {
+    const row = rowRefForMarkReadMenu.current;
+    const avatar = avatarRefForMarkReadMenu.current;
+    if (row && avatar && typeof (avatar as any).measureLayout === 'function') {
+      (avatar as any).measureLayout(
+        row as any,
+        (x: number, _y: number, width: number, _h: number) => setMarkReadOverlayLeft(x + width + GAP_AFTER_AVATAR)
+      );
+    }
+  }, []);
   const lastIncomingFromRef = useRef<string | null>(null);
   const [roomFull, setRoomFull] = useState<{ visible: boolean; name?: string }>({ visible: false });
   const wave1 = useRef(new Animated.Value(0)).current;
@@ -3944,15 +3968,23 @@ const handleClearNick = useCallback(async () => {
           onSwipeableClose={() => { if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) openSwipeableRef.current = null; }}
           renderRightActions={() => renderRightActions(item.id)}
         >
-          <View style={styles.listRowWrap}>
+          <View
+            style={styles.listRowWrap}
+            ref={markReadMenu?.friendId === item.id ? rowRefForMarkReadMenu : undefined}
+          >
             <List.Item
               style={[styles.listRow, styles.listRowAligned]}
               contentStyle={{ marginLeft: 0 }}
               rippleColor="transparent"
               left={() => {
               const { avatarLetter } = getFriendDisplay(item);
+              const isMenuRow = markReadMenu?.friendId === item.id;
               return (
-                <View style={styles.avatarBox}>
+                <View
+                  style={styles.avatarBox}
+                  ref={isMenuRow ? avatarRefForMarkReadMenu : undefined}
+                  onLayout={isMenuRow ? measureAvatarForOverlay : undefined}
+                >
                   <AvatarImage
                     userId={item.id}
                     avatarVer={item.avatarVer || 0}
@@ -3993,11 +4025,22 @@ const handleClearNick = useCallback(async () => {
             }}
           />
             {markReadMenu && markReadMenu.friendId === item.id && (
-              <View style={styles.markReadMenuOverlay} pointerEvents="box-none">
+              <View
+                style={[
+                  styles.markReadMenuOverlay,
+                  { left: markReadOverlayLeft ?? (Platform.OS === 'ios' ? 52 + GAP_AFTER_AVATAR : 44 + GAP_AFTER_AVATAR) },
+                ]}
+                pointerEvents="box-none"
+              >
                 <View style={styles.markReadMenuStripGap}>
                   <Animated.View style={[styles.markReadMenuStrip, { width: menuStripWidth }]} collapsable={false}>
                   <View style={styles.markReadMenuStripInner} pointerEvents="box-none">
-                    <Text numberOfLines={1} ellipsizeMode="tail" style={styles.markReadMenuStripText}>
+                    <Text
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      style={styles.markReadMenuStripText}
+                      allowFontScaling={false}
+                    >
                       {markReadMenu.type === 'video' ? t('markAsViewed', lang) : t('markAsRead', lang)}
                     </Text>
                     <TouchableOpacity
@@ -5444,10 +5487,9 @@ const styles = StyleSheet.create({
     borderRadius: 6, backgroundColor: 'rgba(255,90,103,0.9)', alignItems: 'center', justifyContent: 'center',
   },
 
-  // Отступ полоски от аватара: привязка к ширине avatarBox + фиксированный зазор, чтобы на всех устройствах был одинаковый отступ
+  // left задаётся инлайн по measureLayout аватара + GAP_AFTER_AVATAR, чтобы отступ был одинаков на всех устройствах
   markReadMenuOverlay: {
     position: 'absolute',
-    left: (Platform.OS === 'ios' ? 52 : 44) + 12, // avatarBox width + 12px gap
     right: 0,
     top: 0,
     bottom: 3,
