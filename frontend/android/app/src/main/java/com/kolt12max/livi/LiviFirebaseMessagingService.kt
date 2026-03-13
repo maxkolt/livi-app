@@ -75,16 +75,12 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive == true
             } catch (_: Exception) { true }
             Log.e(TAG, "[INCOMING_CALL] FCM call push: callId=$callId from=$from keyguardLocked=$keyguardLocked isInteractive=$isInteractive SDK=${Build.VERSION.SDK_INT} IncomingCallFg=${IncomingCallActivity.isInForeground} MainFg=${MainActivity.isInForeground}")
+            // Единственный пропуск: экран входящего уже на экране (тот же или другой callId — не дублируем).
             if (IncomingCallActivity.isInForeground) {
                 Log.w(TAG, "[INCOMING_CALL] Skip: IncomingCallActivity already visible")
                 return
             }
-            // При заблокированном/выключенном экране всегда показываем нативный экран — сокет может быть отключён.
-            val screenLockedOrOff = keyguardLocked || !isInteractive
-            if (MainActivity.isInForeground && !screenLockedOrOff) {
-                Log.w(TAG, "[INCOMING_CALL] Skip: app in foreground and screen unlocked (socket will handle)")
-                return
-            }
+            // Всегда показываем входящий из FCM: без условий по foreground/фоне/блокировке. Пуши — единственный надёжный канал; сокет может быть отключён, приложение убито, экран выключен.
             // Wake lock: даём процессу время запустить FGS и показать full-screen intent (особенно при убитом приложении).
             val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
             val wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "livi:incoming_call")?.apply {

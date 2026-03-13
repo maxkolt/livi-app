@@ -148,6 +148,11 @@ export const getSocket = (): Socket => {
 
 export const socket: Socket = getSocket();
 
+// При подключении сервер шлёт пропущенные звонки (телефон был выключен / нет сети) — мержим в хранилище и обновляем UI
+socket.on('missed_calls:sync', (payload: { missed?: { from: string; fromNick?: string }[] }) => {
+  applyMissedFromReauth(payload).catch(() => {});
+});
+
 /* ========= auth apply & connect ========= */
 async function applyAuthAndConnect() {
   try {

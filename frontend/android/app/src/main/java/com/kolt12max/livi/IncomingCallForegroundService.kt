@@ -42,6 +42,15 @@ class IncomingCallForegroundService : Service() {
         currentCallId = callId
         currentFrom = from
         currentFromNick = fromNick
+        // При повторном onStartCommand (второй звонок подряд) снимаем старых receivers, иначе IntentReceiverLeaked.
+        activityShownReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        activityShownReceiver = null
+        callEndedReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        callEndedReceiver = null
+        answeredReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        answeredReceiver = null
+        timeoutRunnable?.let { handler.removeCallbacks(it) }
+        timeoutRunnable = null
         LiviFirebaseMessagingService.ensureCallChannel(this)
         LiviAppModule.startIncomingCallRingtoneAndVibrationStatic(applicationContext)
         val notification = when {

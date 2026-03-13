@@ -218,13 +218,17 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   for (const r of list) {
     if (r.platform === 'android' && r.fcmToken && messaging) {
       try {
+        // data-only (без notification) — в фоне вызывается onMessageReceived. high priority — доставка без задержек.
+        // Не задаём collapseKey — каждый звонок доставляется отдельно, без «схлопывания» с предыдущим.
         await messaging.send({
           token: r.fcmToken,
           data: Object.fromEntries(Object.entries(fcmDataPayload).map(([k, v]) => [k, String(v)])),
-          android: { priority: 'high' },
-          // без notification — только data, чтобы в фоне вызывался onMessageReceived
+          android: {
+            priority: 'high',
+            // collapseKey не задаём — иначе FCM может отложить/объединить пуши звонков
+          },
         });
-        logger.info('[push] call push sent via FCM (data-only)', { userId });
+        logger.info('[push] call push sent via FCM (data-only, high priority)', { userId });
       } catch (e) {
         const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
         const errCode = (e as { code?: string })?.code;

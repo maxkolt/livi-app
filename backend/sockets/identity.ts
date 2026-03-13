@@ -6,6 +6,7 @@ import Message from '../models/Message';
 import OfflineMessage from '../models/OfflineMessage';
 import FriendshipMessages from '../models/FriendshipMessages';
 import Install from '../models/Install';
+import MissedCall from '../models/MissedCall';
 // Cloudinary удален, используем только MongoDB
 import { getAndClearOfflineMessages, getAndClearOfflineChatClearedQueue } from './messagesReliable';
 
@@ -72,6 +73,26 @@ export async function bindUser(io: Server, sock: any, userId: string) {
     // delivered
   } else {
     // none
+  }
+
+  // Пропущенные звонки за время офлайна (телефон выключен / нет сети): отдаём при подключении, чтобы при включении телефона всё пришло сразу
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const docs = await MissedCall.find({ calleeId: new mongoose.Types.ObjectId(userId) })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean();
+      const missed = (docs as any[]).map((d) => ({
+        from: String(d.callerId),
+        fromNick: String(d.callerNick || '').trim(),
+      }));
+      if (missed.length > 0) {
+        sock.emit('missed_calls:sync', { missed });
+        await MissedCall.deleteMany({ _id: { $in: docs.map((d: any) => d._id) } });
+      }
+    } catch (e) {
+      console.warn('[identity] bindUser missed_calls sync failed', (e as Error)?.message);
+    }
   }
 }
 

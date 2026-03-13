@@ -5444,9 +5444,10 @@ const styles = StyleSheet.create({
     borderRadius: 6, backgroundColor: 'rgba(255,90,103,0.9)', alignItems: 'center', justifyContent: 'center',
   },
 
+  // Отступ полоски от аватара: привязка к ширине avatarBox + фиксированный зазор, чтобы на всех устройствах был одинаковый отступ
   markReadMenuOverlay: {
     position: 'absolute',
-    left: Platform.OS === 'ios' ? 40 : 36,
+    left: (Platform.OS === 'ios' ? 52 : 44) + 12, // avatarBox width + 12px gap
     right: 0,
     top: 0,
     bottom: 3,
@@ -5455,7 +5456,7 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   markReadMenuStripGap: {
-    marginLeft: Platform.OS === 'ios' ? 24 : 20,
+    marginLeft: 0,
     alignSelf: 'flex-end',
   },
   markReadMenuStrip: {
