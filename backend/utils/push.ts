@@ -364,6 +364,8 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
 
   if (expoTokens.length > 0) {
     logger.info('[push] sendCallPushToRecipient: sending via Expo (fallback or iOS)', { userId, tokenCount: expoTokens.length });
+    const callTitle = (data.fromNick || '').trim() || 'Входящий видеозвонок';
+    const callBody = 'Входящий видеозвонок';
     const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
       to,
       sound: 'default',
@@ -371,6 +373,8 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
       kind: 'call' as PushKind,
       channelId: 'calls',
       categoryId: 'incoming_call',
+      title: callTitle,
+      body: callBody,
       data: { ...fcmData, categoryId: 'incoming_call', tag: 'incoming_call' },
     }));
     const chunks = expo.chunkPushNotifications(messages);

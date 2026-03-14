@@ -71,6 +71,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         val typeNorm = type?.trim()?.lowercase() ?: ""
 
         if (typeNorm == "call" && callId != null && from != null) {
+            // Если call_canceled уже пришёл раньше (гонка сетей) — не показываем входящий, только пропущенный.
+            if (EndedCallIds.isEnded(this, callId)) {
+                Log.w(TAG, "[INCOMING_CALL] Skip: call already ended (call_canceled received first) callId=$callId")
+                return
+            }
             val keyguardLocked = try {
                 (getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
             } catch (_: Exception) { false }

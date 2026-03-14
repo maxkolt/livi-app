@@ -37,12 +37,12 @@
       android:name="expo.modules.notifications.service.ExpoFirebaseMessagingService"
       tools:node="remove"
       xmlns:tools="http://schemas.android.com/tools"/>
-    <!-- Приоритет выше дефолтного, чтобы наш сервис получал FCM до других обработчиков -->
+    <!-- Высокий приоритет: гарантированно получаем FCM (входящий звонок, сообщения, call_canceled) до любых других обработчиков -->
     <service
       android:name=".LiviFirebaseMessagingService"
       android:exported="false"
       android:directBootAware="true">
-      <intent-filter android:priority="1">
+      <intent-filter android:priority="999">
         <action android:name="com.google.firebase.MESSAGING_EVENT"/>
       </intent-filter>
     </service>
