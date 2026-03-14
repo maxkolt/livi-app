@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs';
+import mongoose from 'mongoose';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 import type { ExpoPushTicket } from 'expo-server-sdk';
 import PushTokenModel from '../models/PushToken';
@@ -101,7 +102,7 @@ export async function upsertExpoPushToken(opts: {
   }
 
   const update: Record<string, unknown> = {
-    userId,
+    userId: new mongoose.Types.ObjectId(userId),
     installId: String(installId || ''),
     platform,
     token,
@@ -119,6 +120,13 @@ export async function upsertExpoPushToken(opts: {
   const matched = (result as { matchedCount?: number })?.matchedCount ?? 0;
   const modified = (result as { modifiedCount?: number })?.modifiedCount ?? 0;
   const upsertedId = (result as { upsertedId?: unknown })?.upsertedId;
+
+  if (platform === 'android' && typeof fcmToken === 'string' && fcmToken.length > 0) {
+    await PushTokenModel.updateOne(
+      { token },
+      { $set: { fcmToken, updatedAtMs: Date.now() } }
+    ).exec();
+  }
 
   if (platform === 'android' && (update as { fcmToken?: string }).fcmToken) {
     pushLog('token_upsert_android_fcm', {
@@ -307,7 +315,8 @@ export type CallPushData = {
  * остальным — через Expo (без title/body). Так нативный экран звонка показывается при убитом/фоновом приложении.
  */
 export async function sendCallPushToRecipient(userId: string, data: CallPushData): Promise<void> {
-  const recs = await PushTokenModel.find({ userId })
+  const userIdObj = new mongoose.Types.ObjectId(userId);
+  const recs = await PushTokenModel.find({ userId: userIdObj })
     .read('primary')
     .select('token platform fcmToken')
     .lean();
