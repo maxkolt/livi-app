@@ -309,8 +309,6 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
   try {
     await sendPushToUser(callerUserId, {
       kind: 'message',
-      title: '',
-      body: '',
       data: { type: 'call_declined', callId: String(callId) },
     });
     logger.info('[push] call_declined sent via Expo to caller', { userId: callerUserId });
@@ -328,8 +326,6 @@ export async function sendCallAcceptedToCaller(callerUserId: string, callId: str
   try {
     await sendPushToUser(callerUserId, {
       kind: 'call',
-      title: '',
-      body: '',
       data: { type: 'call_accepted', callId: String(callId) },
     });
     logger.info('[push] call_accepted sent via Expo to caller', { userId: callerUserId, callId });
@@ -410,8 +406,6 @@ export async function sendCallCanceledToRecipient(
   try {
     await sendPushToUser(calleeUserId, {
       kind: 'message',
-      title: '',
-      body: '',
       data: { type: 'call_canceled', callId: String(callId), from: fromUserId, fromNick: fromNick ?? '' },
     });
     logger.info('[push] call_canceled sent via Expo to callee', { userId: calleeUserId });

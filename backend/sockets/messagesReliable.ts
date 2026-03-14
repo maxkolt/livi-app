@@ -375,7 +375,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         delivered: recipientOnline
       });
 
-      // 📲 PUSH: новое сообщение. Пустые title/body — чтобы в шторке не показывалось второе уведомление «кто + текст».
+      // 📲 PUSH: новое сообщение. Без title/body (data-only) — иначе Android показывает пустое уведомление в шторке.
       // На Android показывается одно сводное из нативного кода: «N непрочитанных» + «От X в HH:MM».
       try {
         let fromNick: string | undefined;
@@ -388,8 +388,6 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
         await sendPushToUser(String(payload.to), {
           kind: 'message',
-          title: '',
-          body: '',
           channelId: 'messages',
           data: {
             type: 'message',
