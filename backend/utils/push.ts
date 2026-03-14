@@ -167,12 +167,11 @@ export async function sendMessagePushToUser(
       }
     }
   }
+  // На Android пушим только через FCM (data-only). Через Expo на Android приходит пустое уведомление — не шлём.
   const iosTokens = list.filter((r) => r.platform === 'ios').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
-  const androidTokensNoFcm = list.filter((r) => r.platform === 'android' && !r.fcmToken).map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
-  const expoTokens = [...iosTokens, ...androidTokensNoFcm];
-  if (expoTokens.length > 0) {
+  if (iosTokens.length > 0) {
     try {
-      const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
+      const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
         to,
         sound: 'default',
         priority: 'high',
@@ -183,18 +182,12 @@ export async function sendMessagePushToUser(
       for (const chunk of chunks) {
         await expo.sendPushNotificationsAsync(chunk);
       }
-      logger.info('[push] message sent via Expo', { userId, count: expoTokens.length });
+      logger.info('[push] message sent via Expo (iOS)', { userId, count: iosTokens.length });
     } catch (e) {
       logger.warn('[push] Expo message failed', { userId, error: (e as Error)?.message });
     }
   }
-  if (!androidSent && expoTokens.length === 0 && list.length > 0) {
-    await sendPushToUser(userId, {
-      kind: 'message',
-      channelId: 'messages',
-      data: { ...dataStr, unreadCount: data.unreadCount },
-    });
-  }
+  // Не fallback'им на Expo для Android — иначе снова придёт пустое уведомление.
 }
 
 export async function sendPushToUser(userId: string, msg: Omit<ExpoPushMessage, 'to'> & { kind: PushKind }) {

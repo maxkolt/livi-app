@@ -587,12 +587,17 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         @JvmStatic
         fun showMessageNotificationWithPreview(context: Context, fromNick: String, timeStr: String, messagePreview: String) {
             ensureUnreadChannel(context)
-            val title = if (timeStr.isNotEmpty()) "$fromNick $timeStr" else fromNick
-            val body = messagePreview.ifEmpty { context.getString(R.string.notification_new_message) }
-            buildAndShowUnreadNotification(context, title, body)
+            val nick = fromNick.trim().ifEmpty { "—" }
+            val time = timeStr.trim()
+            val title = if (time.isNotEmpty()) "$nick $time" else nick
+            val safeTitle = title.ifEmpty { context.getString(R.string.summary_unread_title) }
+            val body = messagePreview.trim().ifEmpty { context.getString(R.string.notification_new_message) }
+            buildAndShowUnreadNotification(context, safeTitle, body)
         }
 
         private fun buildAndShowUnreadNotification(context: Context, title: String, body: String) {
+            val safeTitle = title.trim().ifEmpty { context.getString(R.string.summary_unread_title) }
+            val safeBody = body.trim().ifEmpty { context.getString(R.string.notification_new_message) }
             val contentIntent = Intent(context, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
@@ -601,8 +606,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
             val notification = NotificationCompat.Builder(context, CHANNEL_ID_UNREAD)
                 .setSmallIcon(smallIconRes)
-                .setContentTitle(title)
-                .setContentText(body)
+                .setContentTitle(safeTitle)
+                .setContentText(safeBody)
                 .setContentIntent(contentPending)
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
