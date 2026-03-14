@@ -117,6 +117,86 @@ export async function upsertExpoPushToken(opts: {
   ).exec();
 }
 
+/** Пуш о новом сообщении: на Android — только FCM (data-only), чтобы не было пустого уведомления от Expo; на iOS — Expo. */
+export async function sendMessagePushToUser(
+  userId: string,
+  data: {
+    type: 'message';
+    messageId: string;
+    from: string;
+    to: string;
+    fromNick: string;
+    sentAt: string;
+    unreadCount: number;
+    messagePreview: string;
+  }
+): Promise<void> {
+  const dataStr = {
+    type: data.type,
+    messageId: data.messageId,
+    from: data.from,
+    to: data.to,
+    fromNick: data.fromNick,
+    sentAt: data.sentAt,
+    unreadCount: String(data.unreadCount),
+    messagePreview: data.messagePreview,
+  };
+  const messaging = getFirebaseMessaging();
+  const recs = await PushTokenModel.find({ userId }).select('token platform fcmToken').lean();
+  type Rec = { token: string; platform: string; fcmToken?: string };
+  const list = (recs || []) as unknown as Rec[];
+  let androidSent = false;
+  if (messaging) {
+    for (const r of list) {
+      if (r.platform === 'android' && r.fcmToken) {
+        try {
+          await messaging.send({
+            token: r.fcmToken,
+            data: dataStr,
+            android: { priority: 'high' },
+          });
+          logger.info('[push] message sent via FCM (data-only)', { userId });
+          androidSent = true;
+        } catch (e) {
+          const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
+          const isInvalidToken =
+            isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
+          if (isInvalidToken) await removeInvalidFcmToken(userId, r);
+          logger.warn('[push] FCM message failed', { userId, error: errMsg, isInvalidToken });
+        }
+      }
+    }
+  }
+  const iosTokens = list.filter((r) => r.platform === 'ios').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
+  const androidTokensNoFcm = list.filter((r) => r.platform === 'android' && !r.fcmToken).map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
+  const expoTokens = [...iosTokens, ...androidTokensNoFcm];
+  if (expoTokens.length > 0) {
+    try {
+      const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
+        to,
+        sound: 'default',
+        priority: 'high',
+        channelId: 'messages',
+        data: { ...dataStr, unreadCount: data.unreadCount },
+      }));
+      const chunks = expo.chunkPushNotifications(messages);
+      for (const chunk of chunks) {
+        await expo.sendPushNotificationsAsync(chunk);
+      }
+      logger.info('[push] message sent via Expo', { userId, count: expoTokens.length });
+    } catch (e) {
+      logger.warn('[push] Expo message failed', { userId, error: (e as Error)?.message });
+    }
+  }
+  if (!androidSent && expoTokens.length === 0 && list.length > 0) {
+    await sendPushToUser(userId, {
+      kind: 'message',
+      channelId: 'messages',
+      data: { ...dataStr, unreadCount: data.unreadCount },
+    });
+  }
+}
+
 export async function sendPushToUser(userId: string, msg: Omit<ExpoPushMessage, 'to'> & { kind: PushKind }) {
   try {
     const recs = await PushTokenModel.find({ userId }).select('token').lean();

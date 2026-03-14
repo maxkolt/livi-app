@@ -5,7 +5,7 @@ import User from '../models/User';
 import FriendshipMessages, { IFriendshipMessages } from '../models/FriendshipMessages';
 import OfflineMessage from '../models/OfflineMessage';
 import { areFriendsCached } from '../utils/friendshipUtils';
-import { sendPushToUser } from '../utils/push';
+import { sendMessagePushToUser } from '../utils/push';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
@@ -392,19 +392,15 @@ function registerMessageHandlers(io: Server, sock: Socket) {
               ? '[Фото]'
               : '[Голосовое]';
 
-        await sendPushToUser(String(payload.to), {
-          kind: 'message',
-          channelId: 'messages',
-          data: {
-            type: 'message',
-            messageId,
-            from: String(me),
-            to: String(payload.to),
-            fromNick: fromNick || '',
-            sentAt: message.timestamp.toISOString(),
-            unreadCount,
-            messagePreview,
-          },
+        await sendMessagePushToUser(String(payload.to), {
+          type: 'message',
+          messageId,
+          from: String(me),
+          to: String(payload.to),
+          fromNick: fromNick || '',
+          sentAt: message.timestamp.toISOString(),
+          unreadCount,
+          messagePreview,
         });
       } catch {}
     } catch (e: any) {
