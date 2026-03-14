@@ -375,8 +375,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         delivered: recipientOnline
       });
 
-      // 📲 PUSH: новое сообщение. Без title/body (data-only) — иначе Android показывает пустое уведомление в шторке.
-      // На Android показывается одно сводное из нативного кода: «N непрочитанных» + «От X в HH:MM».
+      // 📲 PUSH: новое сообщение. В data передаём messagePreview для системного уведомления в шторке (кто, время, начало текста).
       try {
         let fromNick: string | undefined;
         try {
@@ -385,6 +384,13 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         } catch {}
 
         const unreadCount = (unreadMessages.get(payload.to) || []).length;
+        const msgType = payload.type === 'image' ? 'image' : payload.type === 'audio' ? 'audio' : 'text';
+        const messagePreview =
+          msgType === 'text'
+            ? (typeof payload.text === 'string' ? String(payload.text).trim().slice(0, 80) : '')
+            : msgType === 'image'
+              ? '[Фото]'
+              : '[Голосовое]';
 
         await sendPushToUser(String(payload.to), {
           kind: 'message',
@@ -397,6 +403,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
             fromNick: fromNick || '',
             sentAt: message.timestamp.toISOString(),
             unreadCount,
+            messagePreview,
           },
         });
       } catch {}

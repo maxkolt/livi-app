@@ -245,27 +245,30 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             Log.d(TAG, "FCM call_ended: incoming canceled, missed=${!endedFromActive}, outgoing closed callId=$callId")
             return
         }
-        // Сообщение: не показывать уведомление «от кого + текст», только одно сводное «N непрочитанных» + «От X в HH:MM»
+        // Сообщение: одно системное уведомление в шторке — «От кого HH:MM» + начало текста сообщения.
         if (typeNorm == "message") {
             var unreadCount = 1
             var fromNickMsg = ""
             var sentAtIso = ""
+            var messagePreview = ""
             if (data["body"] != null) {
                 try {
                     val body = JSONObject(data["body"]!!)
                     unreadCount = body.optInt("unreadCount", 1).coerceAtLeast(1)
                     fromNickMsg = body.optString("fromNick", "").trim()
                     sentAtIso = body.optString("sentAt", "").trim()
+                    messagePreview = body.optString("messagePreview", "").trim()
                 } catch (_: Exception) {}
             }
             if (unreadCount <= 0) unreadCount = data["unreadCount"]?.toString()?.toIntOrNull()?.coerceAtLeast(1) ?: 1
             if (fromNickMsg.isEmpty()) fromNickMsg = data["fromNick"]?.trim() ?: ""
             if (sentAtIso.isEmpty()) sentAtIso = data["sentAt"]?.trim() ?: ""
+            if (messagePreview.isEmpty()) messagePreview = data["messagePreview"]?.trim() ?: ""
             unreadCount = unreadCount.coerceAtLeast(1)
             if (fromNickMsg.isEmpty()) fromNickMsg = "—"
             val timeStr = formatMessageNotificationTime(sentAtIso)
-            updateSummaryUnreadNotificationWithLast(this, unreadCount, fromNickMsg, timeStr)
-            Log.d(TAG, "FCM message: showed summary notification unreadCount=$unreadCount fromNick=$fromNickMsg (no Expo notification)")
+            showMessageNotificationWithPreview(this, fromNickMsg, timeStr, messagePreview)
+            Log.d(TAG, "FCM message: showed notification fromNick=$fromNickMsg time=$timeStr preview=${messagePreview.take(20)}")
             return
         }
         Log.w(TAG, "FCM unhandled: typeNorm=$typeNorm type=$type callId=$callId keys=[$keysStr] → forwarding to Expo")
@@ -310,18 +313,16 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
     }
 
+    /** Учёт пропущенного звонка и одно системное уведомление в шторке: «От кого HH:MM» + «Пропущенный видеозвонок». */
     private fun showMissedCallNotification(callId: String, fromUserId: String, fromNick: String) {
         ensureMissedCallChannel(this)
         LiviAppModule.addPendingMissedCall(this, fromUserId)
         LiviAppModule.saveMissedCallNick(this, fromUserId, fromNick)
         val count = LiviAppModule.incrementMissedCountForUser(this, fromUserId)
-        val title = getString(R.string.missed_call_title)
-        val body = when {
-            count > 1 && fromNick.isNotEmpty() -> getString(R.string.missed_call_from_count, count, fromNick)
-            count > 1 -> getString(R.string.missed_call_from_count, count, getString(R.string.incoming_call_title))
-            fromNick.isNotEmpty() -> getString(R.string.missed_call_from, fromNick)
-            else -> getString(R.string.incoming_call_title)
-        }
+        val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date())
+        val displayNick = fromNick.trim().ifEmpty { getString(R.string.incoming_call_title) }
+        val title = "$displayNick $timeStr"
+        val body = if (count > 1) getString(R.string.missed_call_from_count, count, displayNick) else getString(R.string.missed_call_video)
         val smallIconRes = resources.getIdentifier("ic_launcher", "mipmap", packageName).takeIf { it != 0 }
             ?: android.R.drawable.ic_menu_call
         val contentIntent = Intent(this, MainActivity::class.java).apply {
@@ -329,9 +330,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
         }
         val contentPending = PendingIntent.getActivity(
-            this,
-            0,
-            contentIntent,
+            this, 0, contentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val deleteIntent = Intent(LiviAppModule.ACTION_MISSED_CALL_DISMISSED).apply {
@@ -339,9 +338,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             putExtra(LiviAppModule.EXTRA_USER_ID, fromUserId)
         }
         val deletePending = PendingIntent.getBroadcast(
-            this,
-            fromUserId.hashCode() and 0x7FFF,
-            deleteIntent,
+            this, fromUserId.hashCode() and 0x7FFF, deleteIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(this, CHANNEL_ID_MISSED_CALL)
@@ -356,8 +353,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val notificationId = LiviAppModule.getMissedNotificationIdForUser(fromUserId)
-        nm.notify(notificationId, notification)
+        nm.notify(LiviAppModule.getMissedNotificationIdForUser(fromUserId), notification)
     }
 
     private fun startIncomingCallForegroundService(
@@ -491,18 +487,19 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
         }
 
-        /** Обновить текст уведомления «пропущенный вызов» по счётчику из JS (чтобы в шторке было то же число). */
+        /** Обновить системное уведомление «пропущенный видеозвонок»: «От кого HH:MM» + текст по счётчику. */
         @JvmStatic
         fun updateMissedCallNotification(context: Context, userId: String, count: Int) {
             if (userId.isBlank() || count < 0) return
             ensureMissedCallChannel(context)
             val fromNick = LiviAppModule.getMissedCallNick(context, userId)
-            val title = context.getString(R.string.missed_call_title)
+            val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date())
+            val displayNick = fromNick.trim().ifEmpty { context.getString(R.string.incoming_call_title) }
+            val title = "$displayNick $timeStr"
             val body = when {
-                count > 1 && fromNick.isNotEmpty() -> context.getString(R.string.missed_call_from_count, count, fromNick)
+                count > 1 && displayNick.isNotEmpty() -> context.getString(R.string.missed_call_from_count, count, displayNick)
                 count > 1 -> context.getString(R.string.missed_call_from_count, count, context.getString(R.string.incoming_call_title))
-                fromNick.isNotEmpty() -> context.getString(R.string.missed_call_from, fromNick)
-                else -> context.getString(R.string.incoming_call_title)
+                else -> context.getString(R.string.missed_call_video)
             }
             val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
                 ?: android.R.drawable.ic_menu_call
@@ -559,30 +556,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
         }
 
-        /** Показать/обновить одно уведомление «N пропущенных звонков» в шторке. */
+        /** Уведомления в шторке отключены — только системный бейдж. */
         @JvmStatic
         fun updateSummaryMissedCallsNotification(context: Context, total: Int) {
             if (total <= 0) return
-            ensureMissedCallChannel(context)
-            val title = context.getString(R.string.summary_missed_calls_title)
-            val body = context.getString(R.string.summary_missed_calls_count, total)
-            val contentIntent = Intent(context, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
-            }
-            val contentPending = PendingIntent.getActivity(context, 0, contentIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 } ?: android.R.drawable.ic_menu_call
-            val notification = NotificationCompat.Builder(context, CHANNEL_ID_MISSED_CALL)
-                .setSmallIcon(smallIconRes)
-                .setContentTitle(title)
-                .setContentText(body)
-                .setContentIntent(contentPending)
-                .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .build()
-            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.notify(NOTIFICATION_ID_SUMMARY_MISSED_CALLS, notification)
         }
 
         /** Показать/обновить одно уведомление «N непрочитанных» в шторке. */
@@ -603,6 +580,15 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val title = context.getString(R.string.summary_unread_count, total)
             val fromLabel = lastFromNick.trim().ifEmpty { "—" }
             val body = context.getString(R.string.summary_unread_from_time, fromLabel, timeStr)
+            buildAndShowUnreadNotification(context, title, body)
+        }
+
+        /** Системное уведомление в шторке: «От кого HH:MM» + начало текста сообщения (как на скрине). */
+        @JvmStatic
+        fun showMessageNotificationWithPreview(context: Context, fromNick: String, timeStr: String, messagePreview: String) {
+            ensureUnreadChannel(context)
+            val title = if (timeStr.isNotEmpty()) "$fromNick $timeStr" else fromNick
+            val body = messagePreview.ifEmpty { context.getString(R.string.notification_new_message) }
             buildAndShowUnreadNotification(context, title, body)
         }
 

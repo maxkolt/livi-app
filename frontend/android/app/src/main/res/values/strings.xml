@@ -23,8 +23,10 @@
   <string name="active_call_notification_title_someone">Видеозвонок от кого-то</string>
   <!-- Missed call notification -->
   <string name="missed_call_title">Пропущенный вызов</string>
+  <string name="missed_call_video">Пропущенный видеозвонок</string>
   <string name="missed_call_from">От %s</string>
   <string name="missed_call_from_count">%d пропущенных от %s</string>
+  <string name="notification_new_message">Новое сообщение</string>
   <!-- Summary notifications (общие в шторке) -->
   <string name="summary_missed_calls_title">Пропущенные звонки</string>
   <string name="summary_missed_calls_count">%d пропущенных звонков</string>
