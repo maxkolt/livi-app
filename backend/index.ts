@@ -1358,6 +1358,8 @@ io.on('connection', async (sock: AuthedSocket) => {
             if (peerUserId && peerUserId !== senderUserId) {
               await sendPushToUser(peerUserId, {
                 kind: 'call',
+                title: 'Звонок завершён',
+                body: 'Собеседник завершил разговор',
                 data: { type: 'call_ended', from: senderUserId, fromNick, callId: callId || id, endedFromActive: true },
               });
               break;

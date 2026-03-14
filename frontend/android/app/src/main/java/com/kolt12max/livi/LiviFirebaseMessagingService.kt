@@ -200,7 +200,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
             return
         }
-        // Звонок завершён: снять уведомление входящего, закрыть экран исходящего. «Пропущенный вызов» только если разговор не был принят (таймаут/отмена), не после завершения с видеочата/PiP.
+        // Звонок завершён: снять уведомление входящего, закрыть экран исходящего. «Пропущенный вызов» только если разговор не был принят (таймаут/отмена).
         if (typeNorm == "call_ended" && callId != null) {
             EndedCallIds.add(this, callId)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -221,7 +221,14 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                             fromNickEnded = org.json.JSONObject(data["body"]!!).optString("fromNick", "")
                         } catch (_: Exception) {}
                     }
-                    showMissedCallNotification(callId, from ?: "", fromNickEnded)
+                    val fromUserId = from ?: ""
+                    if (remoteMessage.notification != null) {
+                        // Expo уже показал уведомление (title/body) — только обновляем счётчик, своё не показываем (без дубля и пустого).
+                        recordMissedCallStateOnly(fromUserId, fromNickEnded)
+                        Log.d(TAG, "FCM call_ended: notification payload present, state only (no duplicate)")
+                    } else {
+                        showMissedCallNotification(callId, fromUserId, fromNickEnded)
+                    }
                 }
             }
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
@@ -316,6 +323,14 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         } catch (_: Exception) {
             ""
         }
+    }
+
+    /** Только обновить счётчик пропущенных (без показа уведомления), когда Expo уже показал уведомление. */
+    private fun recordMissedCallStateOnly(fromUserId: String, fromNick: String) {
+        ensureMissedCallChannel(this)
+        LiviAppModule.addPendingMissedCall(this, fromUserId)
+        LiviAppModule.saveMissedCallNick(this, fromUserId, fromNick)
+        LiviAppModule.incrementMissedCountForUser(this, fromUserId)
     }
 
     /** Учёт пропущенного звонка и одно системное уведомление в шторке: «От кого HH:MM» + «Пропущенный видеозвонок». */

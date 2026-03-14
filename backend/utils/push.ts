@@ -417,10 +417,11 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
       }
     }
   }
-  // Всегда шлём ещё и через Expo: при недоставке FCM (invalid token и т.д.) экран исходящего у звонящего закроется по Expo.
   try {
     await sendPushToUser(callerUserId, {
       kind: 'message',
+      title: 'Звонок отклонён',
+      body: 'Собеседник отклонил вызов',
       data: { type: 'call_declined', callId: String(callId) },
     });
     logger.info('[push] call_declined sent via Expo to caller', { userId: callerUserId });
@@ -516,8 +517,12 @@ export async function sendCallCanceledToRecipient(
     }
   }
   try {
+    const title = 'Пропущенный видеозвонок';
+    const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий видеозвонок';
     await sendPushToUser(calleeUserId, {
       kind: 'message',
+      title,
+      body,
       data: { type: 'call_canceled', callId: String(callId), from: fromUserId, fromNick: fromNick ?? '' },
     });
     logger.info('[push] call_canceled sent via Expo to callee', { userId: calleeUserId });
