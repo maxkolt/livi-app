@@ -289,6 +289,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     promise.resolve(LiviAppModule.getAndClearPendingCallAcceptedCallId())
   }
 
+  /** Счётчики пропущенных по userId из нативного хранилища (JSON). Для синхронизации с JS при фокусе — один источник истины. */
+  @ReactMethod
+  fun getMissedCountByUserJson(promise: Promise) {
+    try {
+      promise.resolve(LiviAppModule.getMissedCountByUserJson(reactApplicationContext))
+    } catch (e: Exception) {
+      promise.resolve("{}")
+    }
+  }
+
   /** Единый UI входящего: открыть нативный IncomingCallActivity (foreground и из deep link livi://incoming-call). */
   @ReactMethod
   fun launchIncomingCallActivity(callId: String, from: String, fromNick: String?) {
@@ -1377,6 +1387,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     fun getMessageNotificationIdForUser(userId: String): Int {
       if (userId.isBlank()) return LiviFirebaseMessagingService.NOTIFICATION_ID_MESSAGE_BASE
       return LiviFirebaseMessagingService.NOTIFICATION_ID_MESSAGE_BASE + (userId.hashCode() and 0x7FFF)
+    }
+
+    /** Вернуть JSON счётчиков пропущенных по пользователям из нативного хранилища (источник истины при FCM). Формат: {"userId": count}. Для синхронизации с JS при фокусе. */
+    @JvmStatic
+    fun getMissedCountByUserJson(context: Context): String {
+      val prefs = context.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+      return prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"
     }
 
     /** Суммарное число пропущенных по всем пользователям (из нативного хранилища). Для обновления бейджа иконки из FCM без JS. */

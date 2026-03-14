@@ -5,6 +5,7 @@ import Install from '../models/Install';
 import mongoose from 'mongoose';
 import type { Server as IOServer } from 'socket.io';
 import { sendPushToUser, upsertExpoPushToken } from '../utils/push';
+import { getPushLog, pushLog } from '../utils/pushLogBuffer';
 import { logger } from '../utils/logger';
 import { checkRateLimit } from '../utils/rateLimit';
 
@@ -282,6 +283,11 @@ router.post('/push-token', async (req, res) => {
       tokenPrefix: String(token).slice(0, 18),
       hasFcmToken: !!fcm,
     });
+    pushLog('token_registered', {
+      userId: String(userId),
+      platform,
+      hasFcmToken: !!fcm,
+    });
     return res.json({ ok: true });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
@@ -323,6 +329,18 @@ router.post('/push-test', async (req, res) => {
     return res.json({ ok: true });
   } catch (e: any) {
     logger.warn('[push] push-test failed', e as any);
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
+
+/**
+ * DEBUG: последние события пуша (sendCallPushToRecipient, FCM/Expo, token registered).
+ * Для отладки входящего звонка: после теста вызови GET /api/debug/push-log и проверь, был ли "call push sent via FCM" или "sending via Expo".
+ */
+router.get('/debug/push-log', (_req, res) => {
+  try {
+    return res.json({ ok: true, entries: getPushLog() });
+  } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
   }
 });

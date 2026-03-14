@@ -69,10 +69,13 @@ class IncomingCallForegroundService : Service() {
         // ВАЖНО: регистрируем receivers ДО startForeground().
         // Иначе IncomingCallActivity может отправить ACTION_INCOMING_CALL_ACTIVITY_SHOWN слишком быстро,
         // и сервис не успеет подписаться → уведомление/heads-up останется висеть поверх нативного экрана.
+        // Задержка перед снятием уведомления: чтобы в шторке 3 сек оставалось уведомление с кнопками «Принять»/«Отклонить» (на части устройств full-screen мелькает и исчезает).
         activityShownReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, i: Intent?) {
                 val shownCallId = i?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
-                if (shownCallId == currentCallId) cleanupAndStop()
+                if (shownCallId == currentCallId) {
+                    handler.postDelayed({ if (shownCallId == currentCallId) cleanupAndStop() }, DELAY_CLEANUP_AFTER_ACTIVITY_SHOWN_MS)
+                }
             }
         }
         val filter = IntentFilter(ACTION_INCOMING_CALL_ACTIVITY_SHOWN)
@@ -193,6 +196,8 @@ class IncomingCallForegroundService : Service() {
         private const val TAG = "IncomingCallFGS"
         /** 20 сек без ответа — совпадает с таймаутом на сервере; после этого приходит call_ended и «Пропущенный вызов». */
         private const val TIMEOUT_MS = 20_000L
+        /** Задержка перед снятием уведомления после показа экрана входящего — уведомление с кнопками остаётся в шторке, чтобы пользователь мог нажать «Принять»/«Отклонить». */
+        private const val DELAY_CLEANUP_AFTER_ACTIVITY_SHOWN_MS = 3000L
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"
         /** Broadcast: IncomingCallActivity открылась, сервис может снять уведомление и остановиться */

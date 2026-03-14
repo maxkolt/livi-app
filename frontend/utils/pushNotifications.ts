@@ -31,6 +31,29 @@ export async function clearMissedBadgeCleared(): Promise<void> {
   } catch {}
 }
 
+/** На Android: счётчики пропущенных из нативного хранилища (источник истины при FCM). На iOS — пустой объект. */
+export async function getMissedCountByUserFromNative(): Promise<Record<string, number>> {
+  try {
+    if (Platform.OS !== 'android') return {};
+    if (!NativeModules.LiviAppModule?.getMissedCountByUserJson) {
+      if (__DEV__) console.warn('[push] getMissedCountByUserJson not available on LiviAppModule — rebuild Android app (npm run android:install-all)');
+      return {};
+    }
+    const json = await NativeModules.LiviAppModule.getMissedCountByUserJson();
+    if (typeof json !== 'string') return {};
+    const parsed = JSON.parse(json || '{}');
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: Record<string, number> = {};
+    for (const key of Object.keys(parsed)) {
+      const v = parsed[key];
+      if (typeof v === 'number' && v > 0) out[String(key)] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 /** Формат времени для уведомления о сообщении: «14:35», «вчера 14:35» или «12.03 14:35». */
 function formatMessageNotificationTime(d: Date): string {
   const now = new Date();
@@ -669,7 +692,15 @@ export async function registerAndSendPushToken(userId?: string) {
 
     const installId = await getInstallId();
 
-    // Регистрируем токен на backend
+    // Регистрируем токен на backend. Для Android входящий звонок с кнопками возможен только при отправке fcmToken — бэкенд шлёт FCM data-only.
+    const body: Record<string, unknown> = {
+      token,
+      platform: Platform.OS,
+      ...(Platform.OS === 'android' && fcmToken ? { fcmToken } : {}),
+    };
+    if (Platform.OS === 'android') {
+      logger.info('[push] registering token', { hasFcmToken: !!fcmToken });
+    }
     const resp = await fetch(`${API_BASE}/api/push-token`, {
       method: 'POST',
       headers: {
@@ -677,11 +708,7 @@ export async function registerAndSendPushToken(userId?: string) {
         'x-user-id': String(userId),
         'x-install-id': String(installId),
       },
-      body: JSON.stringify({
-        token,
-        platform: Platform.OS,
-        ...(Platform.OS === 'android' && fcmToken ? { fcmToken } : {}),
-      }),
+      body: JSON.stringify(body),
     }).catch((e) => {
       logger.warn('[push] failed to register token (network)', e);
       return null as any;
@@ -695,6 +722,9 @@ export async function registerAndSendPushToken(userId?: string) {
           status: resp.status,
           body: text ? text.slice(0, 200) : '',
         });
+        if (Platform.OS === 'android' && resp.ok) {
+          logger.info('[push] token registered', { hasFcmToken: !!fcmToken });
+        }
       }
     } catch {}
   } catch (e: any) {

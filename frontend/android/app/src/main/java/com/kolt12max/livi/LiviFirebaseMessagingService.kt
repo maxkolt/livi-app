@@ -97,20 +97,20 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
             } catch (_: Exception) {}
-            // Не запускаем headless для входящего: показ и рингтон идут через IncomingCallForegroundService (full-screen + ringtone сразу).
-            // Headless давал задержку ~5 сек и дублирование UI; один путь — FCM → FGS → full-screen intent + LiviAppModule.startIncomingCallRingtoneAndVibrationStatic.
-            Log.d(TAG, "[INCOMING_CALL] Using FGS-only path (no headless) for immediate full-screen + ringtone")
-            // Всегда показываем входящий полноэкранно с рингтоном/вибрацией: один путь без задержки headless (~5 сек).
-            // Full-screen intent + рингтон в FGS — сразу; не переключаемся на headsUpOnly при разблокированном экране.
+            // Не запускаем headless для входящего: показ и рингтон идут через IncomingCallForegroundService.
+            // При разблокированном экране — только постоянное уведомление в стиле Telegram (крупное, с кнопками Ответить/Отклонить), без маленького всплывающего окна и без full-screen.
+            // При заблокированном экране — full-screen intent + нативный экран входящего поверх блокировки.
+            val headsUpOnly = !keyguardLocked
+            Log.d(TAG, "[INCOMING_CALL] Using FGS path: headsUpOnly=$headsUpOnly (Telegram-style when unlocked)")
             ensureCallChannel(this)
             startIncomingCallForegroundService(
                 callId,
                 from,
                 fromNick,
-                headsUpOnly = false,
+                headsUpOnly = headsUpOnly,
                 silentNotification = false
             )
-            Log.e(TAG, "[INCOMING_CALL] IncomingCallForegroundService started (full-screen + ringtone) keyguardLocked=$keyguardLocked isInteractive=$isInteractive (if FSI denied, check logcat for FSI_REQUESTED_BUT_DENIED or BAL_BLOCK)")
+            Log.e(TAG, "[INCOMING_CALL] IncomingCallForegroundService started headsUpOnly=$headsUpOnly keyguardLocked=$keyguardLocked (if FSI denied, check logcat for FSI_REQUESTED_BUT_DENIED or BAL_BLOCK)")
             return
         }
         if (typeNorm == "call_canceled" && callId != null) {
@@ -718,6 +718,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setContentIntent(fullScreenPendingIntent)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setFullScreenIntent(fullScreenPendingIntent, true)
+                .setOngoing(true)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
                 .setTimeoutAfter(20_000)
@@ -741,11 +742,13 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         private const val REQUEST_DECLINE = 2002
         private const val REQUEST_CONTENT = 2003
 
-        /** Heads-up уведомление без серой карточки: системный вид, кнопки Принять/Отклонить. */
+        /** Постоянное уведомление в стиле Telegram: LiVi, имя звонящего, «Входящий видеозвонок», кнопки Ответить/Отклонить. Не исчезает, без full-screen. */
         @JvmStatic
         fun buildIncomingCallNotificationHeadsUpOnly(context: Context, callId: String, from: String, fromNick: String): Notification {
-            val title = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_title)
-            val subtitle = context.getString(R.string.incoming_call_title)
+            val appName = context.getString(R.string.app_name)
+            val callerName = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_unknown)
+            val title = appName
+            val subtitle = "${callerName} — ${context.getString(R.string.incoming_call_title)}"
             val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
                 ?: android.R.drawable.ic_menu_call
 
@@ -781,21 +784,29 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            return NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
+            val builder = NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(title)
                 .setContentText(subtitle)
                 .setContentIntent(contentPending)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setOngoing(false)
+                .setOngoing(true)
                 .setAutoCancel(false)
                 .setOnlyAlertOnce(true)
                 .setTimeoutAfter(20_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel, context.getString(R.string.incoming_call_decline), declinePending)
-                .addAction(android.R.drawable.ic_menu_call, context.getString(R.string.incoming_call_accept), answerPending)
-                .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val callerPerson = Person.Builder().setName(callerName).build()
+                val callStyle = NotificationCompat.CallStyle.forIncomingCall(callerPerson, declinePending, answerPending)
+                    .setIsVideo(true)
+                builder.setStyle(callStyle)
+            } else {
+                builder
+                    .addAction(android.R.drawable.ic_menu_close_clear_cancel, context.getString(R.string.incoming_call_decline), declinePending)
+                    .addAction(android.R.drawable.ic_menu_call, context.getString(R.string.incoming_call_accept), answerPending)
+            }
+            return builder.build()
         }
 
         /** Тихое уведомление входящего: без heads-up, только иконка в статус-баре и запись в шторке (кнопки Принять/Отклонить сохраняем). */
@@ -844,8 +855,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setContentText(subtitle)
                 .setContentIntent(contentPending)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
-                // Не закрываем автоматически, но позволяем пользователю скрыть уведомление вручную.
-                .setOngoing(false)
+                .setOngoing(true)
                 .setAutoCancel(false)
                 .setOnlyAlertOnce(true)
                 .setTimeoutAfter(20_000)

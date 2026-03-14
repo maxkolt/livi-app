@@ -76,7 +76,7 @@ import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, getUnreadCount, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
-import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly, dismissMessageNotificationsOnly } from '../utils/pushNotifications';
+import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
 // УБРАНО: forceClearUserDataOnly не используется - вместо этого используется hardLocalReset() и clearAllUserData() из socket.ts
@@ -2645,26 +2645,25 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           await dismissMessageNotificationsOnly();
           await syncAppBadgeFromMissedCount();
         }
-        // Обновляем пропущенные звонки
+        // Обновляем пропущенные звонки: синхронизируем с нативным хранилищем (Android — источник истины при FCM), чтобы не было рассинхрона с шторкой и бейджем
         const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
-        // Нормализуем ключи: преобразуем все ключи в строки и фильтруем только значения > 0
-        const normalized: Record<string, number> = {};
-        if (parsed && typeof parsed === 'object') {
-          Object.keys(parsed).forEach(key => {
-            const value = parsed[key];
-            // КРИТИЧНО: Добавляем только значения > 0, игнорируем нулевые
-            if (typeof value === 'number' && value > 0) {
-              normalized[String(key)] = value;
-            }
-          });
-        }
-        setMissedByUser(normalized);
+        const nativeMissed = await getMissedCountByUserFromNative();
+        const merged: Record<string, number> = {};
+        const allKeys = new Set([...Object.keys(parsed || {}), ...Object.keys(nativeMissed || {})]);
+        allKeys.forEach((key) => {
+          const fromStorage = typeof parsed?.[key] === 'number' ? parsed[key] : 0;
+          const fromNative = typeof nativeMissed?.[key] === 'number' ? nativeMissed[key] : 0;
+          const value = Math.max(fromStorage, fromNative);
+          if (value > 0) merged[String(key)] = value;
+        });
+        await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(merged));
+        setMissedByUser(merged);
         setMissedLoaded(true);
-        logger.debug('[HomeScreen] Reloaded missed calls on focus', { 
-          count: Object.keys(normalized).length,
-          total: Object.keys(parsed).length,
-          normalized 
+        logger.info('[HomeScreen] Reloaded missed calls on focus (synced with native)', { 
+          count: Object.keys(merged).length,
+          merged,
+          fromNative: Object.keys(nativeMissed || {}).length,
         });
         // Не пересоздаём уведомления в шторке при фокусе, если пользователь уже «увидел» (вкладка Друзья) или cleared
         const badgeCleared = await AsyncStorage.getItem('missed_calls_badge_cleared_v1');

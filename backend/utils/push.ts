@@ -3,6 +3,7 @@ import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 import type { ExpoPushTicket } from 'expo-server-sdk';
 import PushTokenModel from '../models/PushToken';
 import { logger } from './logger';
+import { pushLog } from './pushLogBuffer';
 
 const expo = new Expo();
 
@@ -319,6 +320,13 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     androidTokensTotal: androidTotal,
     totalTokens: list.length,
   });
+  pushLog('sendCallPushToRecipient_start', {
+    userId,
+    hasFirebase: !!messaging,
+    androidTokensWithFcm: androidWithFcm,
+    androidTokensTotal: androidTotal,
+    totalTokens: list.length,
+  });
   if (!messaging && androidTotal > 0) {
     logger.warn('[push] FCM not configured (FIREBASE_SERVICE_ACCOUNT_JSON missing or invalid). Call pushes will use Expo only — native incoming call screen may NOT show when app is in background.');
   }
@@ -341,6 +349,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
           },
         });
         logger.info('[push] call push sent via FCM (data-only, high priority)', { userId });
+        pushLog('call_push_sent_via_FCM', { userId });
       } catch (e) {
         const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
         const errCode = (e as { code?: string })?.code;
@@ -354,6 +363,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
           if (!removed) logger.warn('[push] FCM invalid token not removed (no match in DB)', { userId });
         } else {
           logger.warn('[push] FCM send failed, falling back to Expo for this device', { error: errMsg });
+          pushLog('call_push_FCM_failed_fallback_Expo', { userId, errMsg });
         }
         if (Expo.isExpoPushToken(r.token)) expoTokens.push(r.token);
       }
@@ -364,6 +374,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
 
   if (expoTokens.length > 0) {
     logger.info('[push] sendCallPushToRecipient: sending via Expo (fallback or iOS)', { userId, tokenCount: expoTokens.length });
+    pushLog('call_push_sending_via_Expo', { userId, tokenCount: expoTokens.length });
     const callTitle = (data.fromNick || '').trim() || 'Входящий видеозвонок';
     const callBody = 'Входящий видеозвонок';
     const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
