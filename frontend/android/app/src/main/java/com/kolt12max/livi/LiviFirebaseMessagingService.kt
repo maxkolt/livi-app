@@ -23,6 +23,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 import com.google.firebase.messaging.RemoteMessage
 import expo.modules.notifications.service.ExpoFirebaseMessagingService
 import io.wazo.callkeep.RNCallKeepBackgroundMessagingService
@@ -71,11 +72,6 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         val typeNorm = type?.trim()?.lowercase() ?: ""
 
         if (typeNorm == "call" && callId != null && from != null) {
-            // Если call_canceled уже пришёл раньше (гонка сетей) — не показываем входящий, только пропущенный.
-            if (EndedCallIds.isEnded(this, callId)) {
-                Log.w(TAG, "[INCOMING_CALL] Skip: call already ended (call_canceled received first) callId=$callId")
-                return
-            }
             val keyguardLocked = try {
                 (getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
             } catch (_: Exception) { false }
@@ -98,7 +94,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 try { wakeLock?.release() } catch (_: Exception) {}
             }, 8000L)
             try {
-                (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancelAll()
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
             } catch (_: Exception) {}
             // Не запускаем headless для входящего: показ и рингтон идут через IncomingCallForegroundService (full-screen + ringtone сразу).
             // Headless давал задержку ~5 сек и дублирование UI; один путь — FCM → FGS → full-screen intent + LiviAppModule.startIncomingCallRingtoneAndVibrationStatic.
@@ -257,35 +254,39 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             Log.d(TAG, "FCM call_ended: incoming canceled, missed=${!endedFromActive}, outgoing closed callId=$callId")
             return
         }
-        // Сообщение: одно системное уведомление в шторке — «От кого HH:MM» + начало текста сообщения.
+        // Сообщение: одно уведомление на чат (от одного отправителя) — «От кого HH:MM» + превью; бейдж по общему unreadCount из пуша.
         if (typeNorm == "message") {
             // Если пуш пришёл через Expo с notification (title/body), система уже показала уведомление — не дублируем.
             if (remoteMessage.notification != null) {
                 Log.d(TAG, "FCM message: notification payload present, skip native (Expo fallback already shown)")
                 return
             }
-            var unreadCount = 1
+            // КРИТИЧНО: unreadCount читаем из корня data (FCM передаёт все ключи плоско) — иначе при отсутствии body остаётся 1 и бейдж неверный.
+            var unreadCount = data["unreadCount"]?.toString()?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+            var fromUserIdMsg = (data["from"] ?: data["fromUserId"])?.toString()?.trim() ?: ""
             var fromNickMsg = ""
             var sentAtIso = ""
             var messagePreview = ""
             if (data["body"] != null) {
                 try {
                     val body = JSONObject(data["body"]!!)
-                    unreadCount = body.optInt("unreadCount", 1).coerceAtLeast(1)
-                    fromNickMsg = body.optString("fromNick", "").trim()
-                    sentAtIso = body.optString("sentAt", "").trim()
-                    messagePreview = body.optString("messagePreview", "").trim()
+                    if (unreadCount <= 0) unreadCount = body.optInt("unreadCount", 1).coerceAtLeast(0)
+                    if (fromUserIdMsg.isEmpty()) fromUserIdMsg = body.optString("from", "").trim().ifEmpty { body.optString("fromUserId", "").trim() }
+                    if (fromNickMsg.isEmpty()) fromNickMsg = body.optString("fromNick", "").trim()
+                    if (sentAtIso.isEmpty()) sentAtIso = body.optString("sentAt", "").trim()
+                    if (messagePreview.isEmpty()) messagePreview = body.optString("messagePreview", "").trim()
                 } catch (_: Exception) {}
             }
-            if (unreadCount <= 0) unreadCount = data["unreadCount"]?.toString()?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+            if (unreadCount <= 0) unreadCount = 1
             if (fromNickMsg.isEmpty()) fromNickMsg = data["fromNick"]?.trim() ?: ""
             if (sentAtIso.isEmpty()) sentAtIso = data["sentAt"]?.trim() ?: ""
             if (messagePreview.isEmpty()) messagePreview = data["messagePreview"]?.trim() ?: ""
-            unreadCount = unreadCount.coerceAtLeast(1)
+            if (fromUserIdMsg.isEmpty()) fromUserIdMsg = data["from"]?.toString()?.trim() ?: data["fromUserId"]?.toString()?.trim() ?: ""
             if (fromNickMsg.isEmpty()) fromNickMsg = "—"
             val timeStr = formatMessageNotificationTime(sentAtIso)
-            showMessageNotificationWithPreview(this, fromNickMsg, timeStr, messagePreview)
-            Log.d(TAG, "FCM message: showed notification fromNick=$fromNickMsg time=$timeStr preview=${messagePreview.take(20)}")
+            showMessageNotificationWithPreview(this, fromUserIdMsg, fromNickMsg, timeStr, messagePreview, unreadCount)
+            LiviAppModule.updateAppIconBadgeFromUnreadAndMissed(this, unreadCount)
+            Log.d(TAG, "FCM message: showed notification from=$fromUserIdMsg fromNick=$fromNickMsg time=$timeStr preview=${messagePreview.take(20)} unreadCount=$unreadCount badge updated")
             return
         }
         Log.w(TAG, "FCM unhandled: typeNorm=$typeNorm type=$type callId=$callId keys=[$keysStr] → forwarding to Expo")
@@ -336,6 +337,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         LiviAppModule.addPendingMissedCall(this, fromUserId)
         LiviAppModule.saveMissedCallNick(this, fromUserId, fromNick)
         LiviAppModule.incrementMissedCountForUser(this, fromUserId)
+        LiviAppModule.updateAppIconBadgeFromMissedCount(this)
     }
 
     /** Учёт пропущенного звонка и одно системное уведомление в шторке: «От кого HH:MM» + «Пропущенный видеозвонок». */
@@ -380,6 +382,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             .build()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(LiviAppModule.getMissedNotificationIdForUser(fromUserId), notification)
+        LiviAppModule.updateAppIconBadgeFromMissedCount(this)
     }
 
     private fun startIncomingCallForegroundService(
@@ -564,6 +567,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         /** ID уведомлений для сводок: общие пропущенные звонки и непрочитанные сообщения. */
         const val NOTIFICATION_ID_SUMMARY_MISSED_CALLS = 2001
         const val NOTIFICATION_ID_SUMMARY_UNREAD = 2002
+        /** База для ID уведомлений о сообщениях от одного пользователя (один ID на чат — группировка в шторке). */
+        const val NOTIFICATION_ID_MESSAGE_BASE = 3000
         private const val CHANNEL_ID_UNREAD = "unread_messages"
 
         @JvmStatic
@@ -596,7 +601,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             ensureUnreadChannel(context)
             val title = context.getString(R.string.summary_unread_title)
             val body = context.getString(R.string.summary_unread_count, total)
-            buildAndShowUnreadNotification(context, title, body)
+            buildAndShowUnreadNotification(context, NOTIFICATION_ID_SUMMARY_UNREAD, title, body)
         }
 
         /** Одно уведомление: сверху «N непрочитанных», снизу «От X в HH:MM». */
@@ -607,22 +612,24 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val title = context.getString(R.string.summary_unread_count, total)
             val fromLabel = lastFromNick.trim().ifEmpty { "—" }
             val body = context.getString(R.string.summary_unread_from_time, fromLabel, timeStr)
-            buildAndShowUnreadNotification(context, title, body)
+            buildAndShowUnreadNotification(context, NOTIFICATION_ID_SUMMARY_UNREAD, title, body)
         }
 
-        /** Системное уведомление в шторке: «От кого HH:MM» + начало текста сообщения (как на скрине). */
+        /** Системное уведомление в шторке: «От кого HH:MM» + превью. Один ID на отправителя — сообщения от одного пользователя группируются в одно уведомление (обновляется при каждом новом сообщении). */
         @JvmStatic
-        fun showMessageNotificationWithPreview(context: Context, fromNick: String, timeStr: String, messagePreview: String) {
+        fun showMessageNotificationWithPreview(context: Context, fromUserId: String, fromNick: String, timeStr: String, messagePreview: String, unreadFromSender: Int = 1) {
             ensureUnreadChannel(context)
             val nick = fromNick.trim().ifEmpty { "—" }
             val time = timeStr.trim()
-            val title = if (time.isNotEmpty()) "$nick $time" else nick
+            var title = if (time.isNotEmpty()) "$nick $time" else nick
+            if (unreadFromSender > 1) title = "$title · $unreadFromSender"
             val safeTitle = title.ifEmpty { context.getString(R.string.summary_unread_title) }
             val body = messagePreview.trim().ifEmpty { context.getString(R.string.notification_new_message) }
-            buildAndShowUnreadNotification(context, safeTitle, body)
+            val notificationId = LiviAppModule.getMessageNotificationIdForUser(fromUserId)
+            buildAndShowUnreadNotification(context, notificationId, safeTitle, body)
         }
 
-        private fun buildAndShowUnreadNotification(context: Context, title: String, body: String) {
+        private fun buildAndShowUnreadNotification(context: Context, notificationId: Int, title: String, body: String) {
             val safeTitle = title.trim().ifEmpty { context.getString(R.string.summary_unread_title) }
             val safeBody = body.trim().ifEmpty { context.getString(R.string.notification_new_message) }
             val contentIntent = Intent(context, MainActivity::class.java).apply {
@@ -641,7 +648,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build()
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.notify(NOTIFICATION_ID_SUMMARY_UNREAD, notification)
+            nm.notify(notificationId, notification)
         }
 
         /** Intent для IncomingCallActivity (поверх блокировки и домашнего экрана). */
@@ -666,7 +673,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
 
         /** Уведомление входящего звонка: только системный вид (без серой карточки).
-         * Full-screen intent открывает IncomingCallActivity; при открытии экрана уведомление снимается. */
+         * Full-screen intent открывает IncomingCallActivity; при открытии экрана уведомление снимается.
+         * На API 31+ используем CallStyle — системный вид звонка с кнопками Принять/Отклонить, чаще показывается полноэкранно. */
         @JvmStatic
         fun buildIncomingCallNotification(context: Context, callId: String, from: String, fromNick: String): Notification {
             val fullScreenIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)
@@ -703,7 +711,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            return NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
+            val builder = NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(title)
                 .setContentText(subtitle)
@@ -715,9 +723,18 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setTimeoutAfter(20_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel, context.getString(R.string.incoming_call_decline), declinePending)
-                .addAction(android.R.drawable.ic_menu_call, context.getString(R.string.incoming_call_accept), answerPending)
-                .build()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val callerPerson = Person.Builder().setName(title).build()
+                val callStyle = NotificationCompat.CallStyle.forIncomingCall(callerPerson, declinePending, answerPending)
+                    .setIsVideo(true)
+                builder.setStyle(callStyle)
+            } else {
+                builder
+                    .addAction(android.R.drawable.ic_menu_close_clear_cancel, context.getString(R.string.incoming_call_decline), declinePending)
+                    .addAction(android.R.drawable.ic_menu_call, context.getString(R.string.incoming_call_accept), answerPending)
+            }
+            return builder.build()
         }
 
         private const val REQUEST_ACCEPT = 2001
