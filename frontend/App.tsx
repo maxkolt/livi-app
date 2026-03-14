@@ -14,7 +14,7 @@ import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, S
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, wasAppliedFromReauth, recordAppliedFromPending } from "./sockets/socket";
 import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
@@ -763,7 +763,9 @@ function AppContent() {
           for (const uid of uniqueUids) {
             const lastInc = lastMissedIncrementTimeByUserRef.current[uid];
             if (lastInc && Date.now() - lastInc < MISSED_APPLY_SKIP_MS) continue;
+            if (wasAppliedFromReauth(uid)) continue;
             map[uid] = (map[uid] || 0) + 1;
+            try { recordAppliedFromPending(uid); } catch {}
             try { emitMissedIncrement(uid); } catch {}
           }
           await AsyncStorage.setItem(key, JSON.stringify(map));
@@ -1851,7 +1853,9 @@ function AppContent() {
                   for (const uid of uniqueUids) {
                     const lastInc = lastMissedIncrementTimeByUserRef.current[uid];
                     if (lastInc && Date.now() - lastInc < MISSED_APPLY_SKIP_MS) continue;
+                    if (wasAppliedFromReauth(uid)) continue;
                     map[uid] = (map[uid] || 0) + 1;
+                    try { recordAppliedFromPending(uid); } catch {}
                     try { emitMissedIncrement(uid); } catch {}
                   }
                   await AsyncStorage.setItem(key, JSON.stringify(map));

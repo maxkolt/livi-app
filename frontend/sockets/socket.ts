@@ -51,6 +51,44 @@ import { emitMissedFetchedFromServer } from '../utils/globalEvents';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 
+/** Uids, для которых мы только что применили пропущенные из reauth (missed_calls:sync). Нужно не дублировать при getAndClearPendingMissedCalls. */
+const appliedFromReauthByUid = new Map<string, number>();
+const APPLIED_FROM_REAUTH_EXPIRY_MS = 30_000;
+
+/** Uids, для которых мы только что применили пропущенные из pending (FCM). Чтобы applyMissedFromReauth не дублировал. */
+const appliedFromPendingByUid = new Map<string, number>();
+const APPLIED_FROM_PENDING_EXPIRY_MS = 30_000;
+
+/** Проверить, что uid недавно учтён в applyMissedFromReauth — чтобы при применении pending не инкрементировать повторно. */
+export function wasAppliedFromReauth(uid: string): boolean {
+  if (!uid) return false;
+  const ts = appliedFromReauthByUid.get(uid);
+  if (ts == null) return false;
+  if (Date.now() - ts > APPLIED_FROM_REAUTH_EXPIRY_MS) {
+    appliedFromReauthByUid.delete(uid);
+    return false;
+  }
+  return true;
+}
+
+/** Записать, что uid только что учтён при применении pending (getAndClearPendingMissedCalls). */
+export function recordAppliedFromPending(uid: string): void {
+  if (!uid) return;
+  appliedFromPendingByUid.set(uid, Date.now());
+}
+
+/** Проверить, что uid недавно учтён при применении pending — чтобы applyMissedFromReauth не инкрементировал повторно. */
+function wasAppliedFromPending(uid: string): boolean {
+  if (!uid) return false;
+  const ts = appliedFromPendingByUid.get(uid);
+  if (ts == null) return false;
+  if (Date.now() - ts > APPLIED_FROM_PENDING_EXPIRY_MS) {
+    appliedFromPendingByUid.delete(uid);
+    return false;
+  }
+  return true;
+}
+
 /** Мержим пропущенные с сервера (после reauth) в AsyncStorage и уведомляем UI. */
 async function applyMissedFromReauth(response: { missed?: { from: string; fromNick?: string }[] }) {
   const missed = response?.missed;
@@ -58,13 +96,24 @@ async function applyMissedFromReauth(response: { missed?: { from: string; fromNi
   try {
     const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
     const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+    const now = Date.now();
     for (const m of missed) {
       const uid = String(m?.from || '').trim();
       if (uid) {
+        if (wasAppliedFromPending(uid)) continue;
         map[uid] = (map[uid] || 0) + 1;
+        appliedFromReauthByUid.set(uid, now);
       }
     }
     await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(map));
+    if (Platform.OS === 'android' && NativeModules.LiviAppModule?.removePendingMissedCall) {
+      for (const m of missed) {
+        const uid = String(m?.from || '').trim();
+        if (uid) {
+          try { NativeModules.LiviAppModule.removePendingMissedCall(uid); } catch (_) {}
+        }
+      }
+    }
     emitMissedFetchedFromServer();
   } catch (e) {
     logger.warn('[applyMissedFromReauth] failed', e as any);

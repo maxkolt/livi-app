@@ -866,13 +866,75 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** Только выставить счётчик в нативе (без обновления уведомления). Вызывать при старте приложения, если бейдж уже «увиден». */
+  /** Выставить счётчик в нативе и обновить текст уведомления в шторке (чтобы число в шторке совпадало с приложением). Вызывать при старте/резюме, если бейдж уже «увиден». */
   @ReactMethod
   fun setMissedCountForUserOnly(userId: String, count: Int) {
     if (userId.isBlank()) return
     try {
-      setMissedCountForUser(reactApplicationContext, userId, count.coerceAtLeast(0))
+      val c = count.coerceAtLeast(0)
+      setMissedCountForUser(reactApplicationContext, userId, c)
+      LiviFirebaseMessagingService.updateMissedCallNotification(reactApplicationContext, userId, c)
     } catch (_: Exception) {}
+  }
+
+  /** Обновить сводные уведомления в шторке: общие пропущенные звонки и общие непрочитанные сообщения (отдельно). Вызывается из JS при syncAppBadgeFromMissedCount когда бейдж не «увиден». */
+  @ReactMethod
+  fun updateSummaryNotifications(missedTotal: Int, unreadTotal: Int) {
+    Handler(Looper.getMainLooper()).post {
+      try {
+        val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (missedTotal > 0) {
+          val prefs = reactApplicationContext.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+          val raw = prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"
+          val map = try { JSONObject(raw) } catch (_: Exception) { JSONObject() }
+          val it = map.keys()
+          while (it.hasNext()) {
+            val key = it.next().toString().trim()
+            if (key.isNotEmpty()) nm.cancel(getMissedNotificationIdForUser(key))
+          }
+          LiviFirebaseMessagingService.updateSummaryMissedCallsNotification(reactApplicationContext, missedTotal)
+        } else {
+          nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
+        }
+        if (unreadTotal > 0) {
+          LiviFirebaseMessagingService.updateSummaryUnreadNotification(reactApplicationContext, unreadTotal)
+        } else {
+          nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
+        }
+      } catch (_: Exception) {}
+    }
+  }
+
+  /** Показать одно уведомление о непрочитанных: заголовок «N непрочитанных», текст «От X в HH:MM». Вызывать из JS при получении пуша о сообщении (вместо двух уведомлений). */
+  @ReactMethod
+  fun updateSummaryUnreadWithLast(unreadTotal: Int, lastFromNick: String, timeStr: String) {
+    Handler(Looper.getMainLooper()).post {
+      try {
+        if (unreadTotal > 0) {
+          LiviFirebaseMessagingService.updateSummaryUnreadNotificationWithLast(
+            reactApplicationContext,
+            unreadTotal,
+            lastFromNick,
+            timeStr
+          )
+        } else {
+          val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+          nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
+        }
+      } catch (_: Exception) {}
+    }
+  }
+
+  /** Снять сводные уведомления из шторки (при заходе во вкладку Друзья). */
+  @ReactMethod
+  fun dismissSummaryNotifications() {
+    Handler(Looper.getMainLooper()).post {
+      try {
+        val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
+        nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
+      } catch (_: Exception) {}
+    }
   }
 
   companion object {
@@ -1038,6 +1100,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     const val PREFS_CALL = "LiviCallPrefs"
     private const val PREFS_PENDING_MISSED = "LiviPendingMissed"
     private const val KEY_PENDING_MISSED_IDS = "user_ids"
+    /** userId, недавно удалённые из pending через removePendingMissedCall (JS по сокету). Не добавлять их снова в pending при FCM, чтобы не дублировать инкремент. Формат "uid1:ts1,uid2:ts2". */
+    private const val PREFS_PENDING_MISSED_REMOVED = "LiviPendingMissedRemoved"
+    private const val KEY_REMOVED_UID_TS = "uid_ts"
+    private const val REMOVED_EXPIRY_MS = 30_000L
     private const val PREFS_MISSED_COUNT = "LiviMissedCount"
     private const val KEY_MISSED_COUNT_BY_USER = "by_user"
     /** callIds, для которых уже показали «пропущенный вызов» (дедуп FCM+Expo). Формат: "callId1:ts,callId2:ts". */
@@ -1099,10 +1165,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       return value
     }
 
-    /** Вызвать из LiviFirebaseMessagingService при показе «Пропущенный вызов» — чтобы при открытии приложения JS обновил счётчик и бейдж. */
+    /** Вызвать из LiviFirebaseMessagingService при показе «Пропущенный вызов» — чтобы при открытии приложения JS обновил счётчик и бейдж. Не добавляем, если JS уже учёл по сокету (wasPendingMissedRecentlyRemoved). */
     @JvmStatic
     fun addPendingMissedCall(context: Context, userId: String) {
       if (userId.isBlank()) return
+      if (wasPendingMissedRecentlyRemoved(context, userId)) return
       val prefs = context.getSharedPreferences(PREFS_PENDING_MISSED, Context.MODE_PRIVATE)
       val current = prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: ""
       val list = if (current.isEmpty()) mutableListOf<String>() else current.split(',').toMutableList()
@@ -1118,16 +1185,47 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       return if (current.isEmpty()) emptyList() else current.split(',').map { it.trim() }.filter { it.isNotEmpty() }
     }
 
-    /** Удалить userId из списка pending пропущенных (чтобы при следующем getAndClearPendingMissedCalls не дублировать инкремент). Вызывать из JS после инкремента по сокету call:timeout. */
+    /** Удалить userId из списка pending пропущенных (чтобы при следующем getAndClearPendingMissedCalls не дублировать инкремент). Вызывать из JS после инкремента по сокету call:timeout. Записываем userId в «недавно удалён», чтобы FCM, пришедший позже сокета, не добавил его снова. */
     @JvmStatic
     fun removePendingMissedCall(context: Context, userId: String) {
       if (userId.isBlank()) return
       val prefs = context.getSharedPreferences(PREFS_PENDING_MISSED, Context.MODE_PRIVATE)
       val current = prefs.getString(KEY_PENDING_MISSED_IDS, "") ?: ""
-      if (current.isEmpty()) return
       val key = userId.trim()
-      val list = current.split(',').map { it.trim() }.filter { it.isNotEmpty() }.filter { it != key }
-      prefs.edit().putString(KEY_PENDING_MISSED_IDS, list.joinToString(",")).apply()
+      if (current.isNotEmpty()) {
+        val list = current.split(',').map { it.trim() }.filter { it.isNotEmpty() }.filter { it != key }
+        prefs.edit().putString(KEY_PENDING_MISSED_IDS, list.joinToString(",")).apply()
+      }
+      val removedPrefs = context.getSharedPreferences(PREFS_PENDING_MISSED_REMOVED, Context.MODE_PRIVATE)
+      val removedRaw = removedPrefs.getString(KEY_REMOVED_UID_TS, "") ?: ""
+      val now = System.currentTimeMillis()
+      val entries = (if (removedRaw.isEmpty()) emptyList() else removedRaw.split(',')).mapNotNull { s ->
+        val parts = s.split(':')
+        if (parts.size >= 2) {
+          val ts = parts[1].toLongOrNull() ?: 0L
+          if (now - ts <= REMOVED_EXPIRY_MS) parts[0].trim() to ts else null
+        } else null
+      }.toMutableList()
+      entries.add(key to now)
+      removedPrefs.edit().putString(KEY_REMOVED_UID_TS, entries.takeLast(20).joinToString(",") { "${it.first}:${it.second}" }).apply()
+    }
+
+    /** Был ли userId недавно удалён из pending (removePendingMissedCall)? Тогда не добавлять снова при FCM. */
+    @JvmStatic
+    fun wasPendingMissedRecentlyRemoved(context: Context, userId: String): Boolean {
+      if (userId.isBlank()) return false
+      val removedPrefs = context.getSharedPreferences(PREFS_PENDING_MISSED_REMOVED, Context.MODE_PRIVATE)
+      val raw = removedPrefs.getString(KEY_REMOVED_UID_TS, "") ?: ""
+      val now = System.currentTimeMillis()
+      for (s in raw.split(',')) {
+        val parts = s.split(':')
+        if (parts.size >= 2 && parts[0].trim() == userId.trim()) {
+          val ts = parts[1].toLongOrNull() ?: 0L
+          if (now - ts <= REMOVED_EXPIRY_MS) return true
+          return false
+        }
+      }
+      return false
     }
 
     /** Счётчик пропущенных по userId для одного уведомления на пользователя. Увеличить и вернуть новый счёт. */

@@ -31,6 +31,23 @@ export async function clearMissedBadgeCleared(): Promise<void> {
   } catch {}
 }
 
+/** Формат времени для уведомления о сообщении: «14:35», «вчера 14:35» или «12.03 14:35». */
+function formatMessageNotificationTime(d: Date): string {
+  const now = new Date();
+  const today = now.getDate() === d.getDate() && now.getMonth() === d.getMonth() && now.getFullYear() === d.getFullYear();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const wasYesterday = yesterday.getDate() === d.getDate() && yesterday.getMonth() === d.getMonth() && yesterday.getFullYear() === d.getFullYear();
+  const h = d.getHours().toString().padStart(2, '0');
+  const min = d.getMinutes().toString().padStart(2, '0');
+  const time = `${h}:${min}`;
+  if (today) return time;
+  if (wasYesterday) return `вчера ${time}`;
+  const day = d.getDate().toString().padStart(2, '0');
+  const month = (d.getMonth() + 1).toString().padStart(2, '0');
+  return `${day}.${month} ${time}`;
+}
+
 /** Снять только уведомления «пропущенный вызов» в шторке (без обнуления счётчиков). Вызывать при заходе в Друзья. Android: нативный список; iOS: Expo getPresentedNotificationsAsync + dismiss по type === 'missed_call'. */
 export async function dismissMissedCallNotificationsOnly(): Promise<void> {
   try {
@@ -61,20 +78,29 @@ export async function dismissMissedCallNotificationsOnly(): Promise<void> {
 }
 
 /** Синхронизировать бейдж иконки: непрочитанные сообщения + пропущенные вызовы.
- * Если пользователь уже «увидел» пропущенные (вкладка Друзья), в бейдж не попадают только missed calls.
- * Уведомления в шторке не снимаются здесь.
+ * Если пользователь «увидел» (зашёл во вкладку Друзья) — бейдж = 0 (на иконке и в шторке ничего не показываем).
+ * Иначе бейдж = пропущенные звонки + непрочитанные сообщения.
  */
 export async function syncAppBadgeFromMissedCount(): Promise<void> {
   try {
     const cleared = await AsyncStorage.getItem(MISSED_BADGE_CLEARED_KEY);
+    if (cleared === 'true') {
+      await Notifications.setBadgeCountAsync(0);
+      if (Platform.OS === 'android' && NativeModules.LiviAppModule?.dismissSummaryNotifications) {
+        try { NativeModules.LiviAppModule.dismissSummaryNotifications(); } catch (_) {}
+      }
+      return;
+    }
     const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
     const map = raw ? JSON.parse(raw) : {};
-    const missedTotal = cleared === 'true'
-      ? 0
-      : Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
+    const missedTotal = Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
     const unreadResult = await getUnreadCount();
     const unreadTotal = unreadResult?.ok ? Math.max(0, Number(unreadResult.count || 0)) : 0;
-    await Notifications.setBadgeCountAsync(Math.min(99, missedTotal + unreadTotal));
+    const total = Math.min(99, missedTotal + unreadTotal);
+    await Notifications.setBadgeCountAsync(total);
+    if (Platform.OS === 'android' && NativeModules.LiviAppModule?.updateSummaryNotifications) {
+      try { NativeModules.LiviAppModule.updateSummaryNotifications(missedTotal, unreadTotal); } catch (_) {}
+    }
   } catch (e) {
     try { await Notifications.setBadgeCountAsync(0); } catch {}
   }
@@ -211,7 +237,7 @@ Notifications.setNotificationHandler({
         shouldSetBadge: false,
       };
     }
-    // Не показывать уведомление о сообщении, если пользователь уже в чате с этим собеседником
+    // Одно уведомление о сообщениях: сверху количество, снизу «От X в HH:MM». Не показывать стандартное Expo.
     if (type === 'message') {
       const data = (n as any)?.request?.content?.data || {};
       const fromId = String(data?.from || data?.fromUserId || '').trim();
@@ -221,6 +247,22 @@ Notifications.setNotificationHandler({
           shouldShowBanner: false,
           shouldShowList: false,
           shouldPlaySound: false,
+          shouldSetBadge: false,
+        };
+      }
+      if (Platform.OS === 'android' && NativeModules.LiviAppModule?.updateSummaryUnreadWithLast) {
+        const unreadCount = Math.max(1, Number(data?.unreadCount) || 1);
+        const fromNick = String(data?.fromNick ?? '').trim() || '—';
+        const sentAt = data?.sentAt ? new Date(data.sentAt) : new Date();
+        const timeStr = formatMessageNotificationTime(sentAt);
+        try {
+          NativeModules.LiviAppModule.updateSummaryUnreadWithLast(unreadCount, fromNick, timeStr);
+        } catch (_) {}
+        syncAppBadgeFromMissedCount().catch(() => {});
+        return {
+          shouldShowBanner: false,
+          shouldShowList: false,
+          shouldPlaySound: true,
           shouldSetBadge: false,
         };
       }

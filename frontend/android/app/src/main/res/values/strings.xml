@@ -25,4 +25,10 @@
   <string name="missed_call_title">Пропущенный вызов</string>
   <string name="missed_call_from">От %s</string>
   <string name="missed_call_from_count">%d пропущенных от %s</string>
+  <!-- Summary notifications (общие в шторке) -->
+  <string name="summary_missed_calls_title">Пропущенные звонки</string>
+  <string name="summary_missed_calls_count">%d пропущенных звонков</string>
+  <string name="summary_unread_title">Непрочитанные сообщения</string>
+  <string name="summary_unread_count">%d непрочитанных</string>
+  <string name="summary_unread_from_time">От %1$s в %2$s</string>
 </resources>

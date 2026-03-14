@@ -18,6 +18,9 @@ import android.os.PowerManager
 import android.util.Log
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.RemoteMessage
@@ -242,6 +245,29 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             Log.d(TAG, "FCM call_ended: incoming canceled, missed=${!endedFromActive}, outgoing closed callId=$callId")
             return
         }
+        // Сообщение: не показывать уведомление «от кого + текст», только одно сводное «N непрочитанных» + «От X в HH:MM»
+        if (typeNorm == "message") {
+            var unreadCount = 1
+            var fromNickMsg = ""
+            var sentAtIso = ""
+            if (data["body"] != null) {
+                try {
+                    val body = JSONObject(data["body"]!!)
+                    unreadCount = body.optInt("unreadCount", 1).coerceAtLeast(1)
+                    fromNickMsg = body.optString("fromNick", "").trim()
+                    sentAtIso = body.optString("sentAt", "").trim()
+                } catch (_: Exception) {}
+            }
+            if (unreadCount <= 0) unreadCount = data["unreadCount"]?.toString()?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+            if (fromNickMsg.isEmpty()) fromNickMsg = data["fromNick"]?.trim() ?: ""
+            if (sentAtIso.isEmpty()) sentAtIso = data["sentAt"]?.trim() ?: ""
+            unreadCount = unreadCount.coerceAtLeast(1)
+            if (fromNickMsg.isEmpty()) fromNickMsg = "—"
+            val timeStr = formatMessageNotificationTime(sentAtIso)
+            updateSummaryUnreadNotificationWithLast(this, unreadCount, fromNickMsg, timeStr)
+            Log.d(TAG, "FCM message: showed summary notification unreadCount=$unreadCount fromNick=$fromNickMsg (no Expo notification)")
+            return
+        }
         Log.w(TAG, "FCM unhandled: typeNorm=$typeNorm type=$type callId=$callId keys=[$keysStr] → forwarding to Expo")
         super.onMessageReceived(remoteMessage)
     }
@@ -253,6 +279,34 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             km.isKeyguardLocked
         } else {
             false
+        }
+    }
+
+    /** «14:35», «вчера 14:35» или «12.03 14:35» для уведомления о сообщении */
+    private fun formatMessageNotificationTime(sentAtIso: String): String {
+        if (sentAtIso.isEmpty()) return ""
+        return try {
+            val utc = java.util.TimeZone.getTimeZone("UTC")
+            val isoFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply { timeZone = utc }
+            var d = isoFormat.parse(sentAtIso)
+            if (d == null) {
+                val isoNoMs = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = utc }
+                d = isoNoMs.parse(sentAtIso)
+            }
+            if (d == null) return ""
+            val cal = Calendar.getInstance().apply { time = d }
+            val now = Calendar.getInstance()
+            val today = cal.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR) && cal.get(Calendar.YEAR) == now.get(Calendar.YEAR)
+            val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+            val wasYesterday = cal.get(Calendar.DAY_OF_YEAR) == yesterday.get(Calendar.DAY_OF_YEAR) && cal.get(Calendar.YEAR) == yesterday.get(Calendar.YEAR)
+            val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(d)
+            when {
+                today -> timeStr
+                wasYesterday -> "вчера $timeStr"
+                else -> SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(d)
+            }
+        } catch (_: Exception) {
+            ""
         }
     }
 
@@ -481,6 +535,95 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .build()
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.notify(LiviAppModule.getMissedNotificationIdForUser(userId), notification)
+        }
+
+        /** ID уведомлений для сводок: общие пропущенные звонки и непрочитанные сообщения. */
+        const val NOTIFICATION_ID_SUMMARY_MISSED_CALLS = 2001
+        const val NOTIFICATION_ID_SUMMARY_UNREAD = 2002
+        private const val CHANNEL_ID_UNREAD = "unread_messages"
+
+        @JvmStatic
+        fun ensureUnreadChannel(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                val channel = NotificationChannel(
+                    CHANNEL_ID_UNREAD,
+                    context.getString(R.string.summary_unread_title),
+                    NotificationManager.IMPORTANCE_DEFAULT
+                ).apply {
+                    setSound(null, null)
+                    setVibrationPattern(longArrayOf(0))
+                    setLockscreenVisibility(Notification.VISIBILITY_PUBLIC)
+                }
+                nm.createNotificationChannel(channel)
+            }
+        }
+
+        /** Показать/обновить одно уведомление «N пропущенных звонков» в шторке. */
+        @JvmStatic
+        fun updateSummaryMissedCallsNotification(context: Context, total: Int) {
+            if (total <= 0) return
+            ensureMissedCallChannel(context)
+            val title = context.getString(R.string.summary_missed_calls_title)
+            val body = context.getString(R.string.summary_missed_calls_count, total)
+            val contentIntent = Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
+            }
+            val contentPending = PendingIntent.getActivity(context, 0, contentIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 } ?: android.R.drawable.ic_menu_call
+            val notification = NotificationCompat.Builder(context, CHANNEL_ID_MISSED_CALL)
+                .setSmallIcon(smallIconRes)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setContentIntent(contentPending)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .build()
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID_SUMMARY_MISSED_CALLS, notification)
+        }
+
+        /** Показать/обновить одно уведомление «N непрочитанных» в шторке. */
+        @JvmStatic
+        fun updateSummaryUnreadNotification(context: Context, total: Int) {
+            if (total <= 0) return
+            ensureUnreadChannel(context)
+            val title = context.getString(R.string.summary_unread_title)
+            val body = context.getString(R.string.summary_unread_count, total)
+            buildAndShowUnreadNotification(context, title, body)
+        }
+
+        /** Одно уведомление: сверху «N непрочитанных», снизу «От X в HH:MM». */
+        @JvmStatic
+        fun updateSummaryUnreadNotificationWithLast(context: Context, total: Int, lastFromNick: String, timeStr: String) {
+            if (total <= 0) return
+            ensureUnreadChannel(context)
+            val title = context.getString(R.string.summary_unread_count, total)
+            val fromLabel = lastFromNick.trim().ifEmpty { "—" }
+            val body = context.getString(R.string.summary_unread_from_time, fromLabel, timeStr)
+            buildAndShowUnreadNotification(context, title, body)
+        }
+
+        private fun buildAndShowUnreadNotification(context: Context, title: String, body: String) {
+            val contentIntent = Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
+            }
+            val contentPending = PendingIntent.getActivity(context, 0, contentIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
+            val notification = NotificationCompat.Builder(context, CHANNEL_ID_UNREAD)
+                .setSmallIcon(smallIconRes)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setContentIntent(contentPending)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .build()
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID_SUMMARY_UNREAD, notification)
         }
 
         /** Intent для IncomingCallActivity (поверх блокировки и домашнего экрана). */

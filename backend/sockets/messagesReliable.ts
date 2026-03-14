@@ -375,7 +375,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         delivered: recipientOnline
       });
 
-      // 📲 PUSH: новое сообщение (нужно для foreground/background/killed)
+      // 📲 PUSH: новое сообщение. Пустые title/body — чтобы в шторке не показывалось второе уведомление «кто + текст».
+      // На Android показывается одно сводное из нативного кода: «N непрочитанных» + «От X в HH:MM».
       try {
         let fromNick: string | undefined;
         try {
@@ -383,18 +384,12 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
         } catch {}
 
-        const title = fromNick || 'Новое сообщение';
-        const body =
-          payload.type === 'image'
-            ? '📷 Фото'
-            : payload.type === 'audio'
-              ? '🎤 Голосовое'
-            : String(payload.text || '').trim() || 'Сообщение';
+        const unreadCount = (unreadMessages.get(payload.to) || []).length;
 
         await sendPushToUser(String(payload.to), {
           kind: 'message',
-          title,
-          body,
+          title: '',
+          body: '',
           channelId: 'messages',
           data: {
             type: 'message',
@@ -402,6 +397,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
             from: String(me),
             to: String(payload.to),
             fromNick: fromNick || '',
+            sentAt: message.timestamp.toISOString(),
+            unreadCount,
           },
         });
       } catch {}

@@ -3209,12 +3209,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
     scheduleRecalcAll();
 
-    // Слушатель новых сообщений для обновления счетчиков
+    // Слушатель новых сообщений для обновления счетчиков; при новом сообщении сбрасываем «увидел», чтобы на иконке снова показывались все пропущенные
     const offReceived = onMessageReceived((message) => {
-      // КРИТИЧНО: Нормализуем ключ для сравнения
       const messageFromStr = String(message.from);
       if (friends.some(f => String(f.id) === messageFromStr)) {
         updateOne(messageFromStr);
+        clearMissedBadgeCleared().then(() => syncAppBadgeFromMissedCount()).catch(() => {});
       }
     });
 
