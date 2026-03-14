@@ -474,9 +474,8 @@ export async function sendCallAcceptedToCaller(callerUserId: string, callId: str
 }
 
 /**
- * Инициатор отменил вызов — шлём callee FCM data-only call_canceled,
- * чтобы на устройстве получателя сняли уведомление «входящий вызов», закрыли экран и показали «пропущенный вызов».
- * fromUserId/fromNick нужны для нативного уведомления «пропущенный вызов» и счётчика.
+ * Инициатор отменил вызов — шлём callee FCM data-only call_canceled (Android), Expo только на iOS.
+ * Иначе на Android приходят два уведомления: нативное по FCM и системное по Expo.
  */
 export async function sendCallCanceledToRecipient(
   calleeUserId: string,
@@ -486,12 +485,13 @@ export async function sendCallCanceledToRecipient(
 ): Promise<void> {
   logger.info('[push] sendCallCanceledToRecipient start', { calleeUserId, callId, fromUserId });
   const messaging = getFirebaseMessaging();
+  const recs = await PushTokenModel.find({ userId: calleeUserId })
+    .select('token platform fcmToken')
+    .lean();
+  type Rec = { token: string; platform: string; fcmToken?: string };
+  const list = (recs || []) as unknown as Rec[];
+  let androidSent = false;
   if (messaging) {
-    const recs = await PushTokenModel.find({ userId: calleeUserId })
-      .select('token platform fcmToken')
-      .lean();
-    type Rec = { token: string; platform: string; fcmToken?: string };
-    const list = (recs || []) as unknown as Rec[];
     for (const r of list) {
       if (r.platform === 'android' && r.fcmToken) {
         try {
@@ -506,6 +506,7 @@ export async function sendCallCanceledToRecipient(
             android: { priority: 'high' },
           });
           logger.info('[push] call_canceled sent via FCM (data-only)', { userId: calleeUserId });
+          androidSent = true;
         } catch (e) {
           const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
           const isInvalidToken =
@@ -516,17 +517,39 @@ export async function sendCallCanceledToRecipient(
       }
     }
   }
-  try {
-    const title = 'Пропущенный видеозвонок';
-    const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий видеозвонок';
-    await sendPushToUser(calleeUserId, {
-      kind: 'message',
-      title,
-      body,
-      data: { type: 'call_canceled', callId: String(callId), from: fromUserId, fromNick: fromNick ?? '' },
-    });
-    logger.info('[push] call_canceled sent via Expo to callee', { userId: calleeUserId });
-  } catch (e) {
-    logger.warn('[push] Expo call_canceled to callee failed', { userId: calleeUserId, error: (e as Error)?.message });
+  const iosTokens = list.filter((r) => r.platform === 'ios').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
+  if (iosTokens.length > 0) {
+    try {
+      const title = 'Пропущенный видеозвонок';
+      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий видеозвонок';
+      const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
+        to,
+        sound: 'default',
+        priority: 'high',
+        title,
+        body,
+        data: { type: 'call_canceled', callId: String(callId), from: fromUserId, fromNick: fromNick ?? '' },
+      }));
+      const chunks = expo.chunkPushNotifications(messages);
+      for (const chunk of chunks) await expo.sendPushNotificationsAsync(chunk);
+      logger.info('[push] call_canceled sent via Expo (iOS)', { userId: calleeUserId, count: iosTokens.length });
+    } catch (e) {
+      logger.warn('[push] Expo call_canceled to callee failed', { userId: calleeUserId, error: (e as Error)?.message });
+    }
+  }
+  if (!androidSent && list.some((r) => r.platform === 'android')) {
+    try {
+      const title = 'Пропущенный видеозвонок';
+      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий видеозвонок';
+      await sendPushToUser(calleeUserId, {
+        kind: 'message',
+        title,
+        body,
+        data: { type: 'call_canceled', callId: String(callId), from: fromUserId, fromNick: fromNick ?? '' },
+      });
+      logger.info('[push] call_canceled sent via Expo (Android fallback)');
+    } catch (e) {
+      logger.warn('[push] Expo call_canceled Android fallback failed', { userId: calleeUserId, error: (e as Error)?.message });
+    }
   }
 }
