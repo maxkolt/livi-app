@@ -48,6 +48,50 @@ function formatMessageNotificationTime(d: Date): string {
   return `${day}.${month} ${time}`;
 }
 
+/** Снять уведомление о сообщениях от одного пользователя (при заходе в чат с ним). */
+export async function dismissMessageNotificationForUser(peerId: string): Promise<void> {
+  try {
+    if (Platform.OS === 'android') {
+      if (NativeModules.LiviAppModule?.dismissMessageNotificationForUser && peerId) {
+        NativeModules.LiviAppModule.dismissMessageNotificationForUser(peerId);
+      }
+      return;
+    }
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    for (const n of presented || []) {
+      const data = (n?.request?.content?.data as Record<string, unknown>) || {};
+      const type = data?.type;
+      const from = String(data?.from ?? data?.fromUserId ?? '').trim();
+      if (type === 'message' && from === peerId && n?.request?.identifier) {
+        try {
+          await Notifications.dismissNotificationAsync(n.request.identifier);
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+
+/** Снять только уведомления о сообщениях в шторке (при заходе во вкладку Друзья). */
+export async function dismissMessageNotificationsOnly(): Promise<void> {
+  try {
+    if (Platform.OS === 'android') {
+      if (NativeModules.LiviAppModule?.dismissAllMessageNotifications) {
+        NativeModules.LiviAppModule.dismissAllMessageNotifications();
+      }
+      return;
+    }
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    for (const n of presented || []) {
+      const type = (n?.request?.content?.data as Record<string, unknown>)?.type;
+      if (type === 'message' && n?.request?.identifier) {
+        try {
+          await Notifications.dismissNotificationAsync(n.request.identifier);
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+
 /** Снять только уведомления «пропущенный вызов» в шторке (без обнуления счётчиков). Вызывать при заходе в Друзья. Android: нативный список; iOS: Expo getPresentedNotificationsAsync + dismiss по type === 'missed_call'. */
 export async function dismissMissedCallNotificationsOnly(): Promise<void> {
   try {
@@ -86,7 +130,8 @@ export async function syncAppBadgeFromMissedCount(): Promise<void> {
     const cleared = await AsyncStorage.getItem(MISSED_BADGE_CLEARED_KEY);
     if (cleared === 'true') {
       await Notifications.setBadgeCountAsync(0);
-      if (Platform.OS === 'android' && NativeModules.LiviAppModule?.dismissSummaryNotifications) {
+      if (Platform.OS === 'android' && NativeModules.LiviAppModule) {
+        try { NativeModules.LiviAppModule.clearAllMissedCountsAndSetBadgeZero?.(); } catch (_) {}
         try { NativeModules.LiviAppModule.dismissSummaryNotifications(); } catch (_) {}
       }
       return;
@@ -250,14 +295,8 @@ Notifications.setNotificationHandler({
           shouldSetBadge: false,
         };
       }
-      if (Platform.OS === 'android' && NativeModules.LiviAppModule?.updateSummaryUnreadWithLast) {
-        const unreadCount = Math.max(1, Number(data?.unreadCount) || 1);
-        const fromNick = String(data?.fromNick ?? '').trim() || '—';
-        const sentAt = data?.sentAt ? new Date(data.sentAt) : new Date();
-        const timeStr = formatMessageNotificationTime(sentAt);
-        try {
-          NativeModules.LiviAppModule.updateSummaryUnreadWithLast(unreadCount, fromNick, timeStr);
-        } catch (_) {}
+      // На Android одно уведомление о сообщении показывается из FCM (От кого HH:MM + превью). Сводное «Непрочитанные сообщения» не показываем.
+      if (Platform.OS === 'android') {
         syncAppBadgeFromMissedCount().catch(() => {});
         return {
           shouldShowBanner: false,

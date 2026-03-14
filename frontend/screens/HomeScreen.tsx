@@ -76,7 +76,7 @@ import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, getUnreadCount, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
-import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly } from '../utils/pushNotifications';
+import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly, dismissMessageNotificationsOnly } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
 // УБРАНО: forceClearUserDataOnly не используется - вместо этого используется hardLocalReset() и clearAllUserData() из socket.ts
@@ -638,6 +638,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const menuOverlayOpacity = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     tabRef.current = tab;
+  }, [tab]);
+
+  // При переходе на вкладку «Друзья» — сразу помечаем «увидел», снимаем все уведомления из шторки и обнуляем бейдж, чтобы они не появлялись снова до нового звонка/сообщения.
+  useEffect(() => {
+    if (tab !== 'friends') return;
+    setMissedBadgeCleared()
+      .then(() => dismissMissedCallNotificationsOnly())
+      .then(() => syncAppBadgeFromMissedCount())
+      .catch(() => {});
   }, [tab]);
 
   // Плавное появление оверлея меню — короткая анимация для быстрого отклика
@@ -2621,7 +2630,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Обновляем пропущенные видеозвонки из AsyncStorage при возврате на экран (iOS/Android)
   // КРИТИЧНО: Нормализуем ключи (преобразуем в строки) и фильтруем только значения > 0
   // Также обновляем счетчики непрочитанных сообщений при фокусе
-  // При фокусе на экране, если открыта вкладка «Друзья» — только помечаем «увидел» (без sync, чтобы не было звука/вибрации)
+  // При фокусе: если открыта вкладка «Друзья» — помечаем «увидел», снимаем уведомления и не показываем их снова; иначе при не-cleared обновляем бейдж (без повторного появления в шторке — только если уже были показаны).
   useEffect(() => {
     const unsub = navigation?.addListener?.('focus', async () => {
       try {
@@ -2629,8 +2638,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if ((global as any).__skipAppStateActiveSetAppIsActiveRef?.current === true) {
           return;
         }
-        if (tabRef.current === 'friends') {
+        const onFriendsTab = tabRef.current === 'friends';
+        if (onFriendsTab) {
           await setMissedBadgeCleared();
+          await dismissMissedCallNotificationsOnly();
+          await dismissMessageNotificationsOnly();
+          await syncAppBadgeFromMissedCount();
         }
         // Обновляем пропущенные звонки
         const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
@@ -2653,8 +2666,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           total: Object.keys(parsed).length,
           normalized 
         });
+        // Не пересоздаём уведомления в шторке при фокусе, если пользователь уже «увидел» (вкладка Друзья) или cleared
         const badgeCleared = await AsyncStorage.getItem('missed_calls_badge_cleared_v1');
-        if (badgeCleared !== 'true') {
+        if (badgeCleared !== 'true' && !onFriendsTab) {
           await syncAppBadgeFromMissedCount();
         }
 
@@ -3781,7 +3795,14 @@ const handleClearNick = useCallback(async () => {
               borderColor: 'rgba(255,255,255,0.12)',
             },
           ]}
-          onLongPress={count > 0 ? () => setMarkReadMenu({ friendId: friendIdStr, type: 'chat' }) : undefined}
+          onLongPress={
+            count > 0
+              ? () => {
+                  try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(15); }
+                  setMarkReadMenu({ friendId: friendIdStr, type: 'chat' });
+                }
+              : undefined
+          }
           onPress={handlePress}
         />
         {count > 0 && (
@@ -3936,7 +3957,14 @@ const handleClearNick = useCallback(async () => {
               busy ? styles.inviteBtnDisabled : null,
             ]}
             disabled={busy}
-            onLongPress={missedCount > 0 ? () => setMarkReadMenu({ friendId: friendIdStr, type: 'video' }) : undefined}
+            onLongPress={
+            missedCount > 0
+              ? () => {
+                  try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(15); }
+                  setMarkReadMenu({ friendId: friendIdStr, type: 'video' });
+                }
+              : undefined
+          }
             onPress={() => {
               const fid = String(friend.id);
               clearMissedCallsForFriend(fid);
@@ -4063,8 +4091,9 @@ const handleClearNick = useCallback(async () => {
                         if (type === 'video') {
                           clearMissedCallsForFriend(friendId);
                         } else {
-                          markMessagesAsRead(friendId).then(() => {
+                          markMessagesAsRead(friendId).then((r) => {
                             setUnreadByUser((prev) => ({ ...prev, [friendId]: 0 }));
+                            if (r?.ok) syncAppBadgeFromMissedCount().catch(() => {});
                           }).catch(() => {});
                         }
                       }}

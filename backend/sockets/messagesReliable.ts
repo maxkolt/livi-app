@@ -12,6 +12,29 @@ const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 // Простое хранение непрочитанных сообщений в памяти (для быстрого доступа)
 const unreadMessages = new Map<string, Array<{ id: string; from: string; timestamp: string }>>();
 
+/** Присутствие "смотрит чат": userId -> { with: peerId, at: timestamp }. TTL 90s — не слать пуш о сообщении, если получатель в этом чате (как в Telegram). */
+const viewingChat = new Map<string, { with: string; at: number }>();
+const VIEWING_CHAT_TTL_MS = 90_000;
+
+function isViewingChatWith(recipientUserId: string, senderUserId: string): boolean {
+  const entry = viewingChat.get(recipientUserId);
+  if (!entry) return false;
+  if (Date.now() - entry.at > VIEWING_CHAT_TTL_MS) {
+    viewingChat.delete(recipientUserId);
+    return false;
+  }
+  return entry.with === senderUserId;
+}
+
+function setViewingChat(userId: string, withPeerId: string | null) {
+  if (!userId) return;
+  if (withPeerId) {
+    viewingChat.set(userId, { with: withPeerId, at: Date.now() });
+  } else {
+    viewingChat.delete(userId);
+  }
+}
+
 // Кэш для быстрого доступа к дружбам
 const friendshipCache = new Map<string, IFriendshipMessages>();
 
@@ -234,6 +257,24 @@ function registerMessageHandlers(io: Server, sock: Socket) {
   // per-socket handlers
   // console.log(`[sockets] handlers for ${sock.id} user=${meId()}`);
 
+  /** ===== Присутствие "смотрю чат с X" — не слать пуш о сообщении получателю, пока он в этом чате (как в Telegram) ===== */
+  sock.on('chat:viewing', (payload: { with: string | null }, ack?: Function) => {
+    try {
+      const me = meId();
+      if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
+      const withPeer = payload?.with && isOid(String(payload.with)) ? String(payload.with).trim() : null;
+      setViewingChat(me, withPeer);
+      ack?.({ ok: true });
+    } catch (e: any) {
+      ack?.({ ok: false, error: e?.message || 'server_error' });
+    }
+  });
+
+  sock.on('disconnect', () => {
+    const me = meId();
+    if (me) setViewingChat(me, null);
+  });
+
   /** ===== Typing/Recording indicator (chat) ===== */
   sock.on('chat:typing', async (payload: { to: string; typing?: boolean; recording?: boolean }, ack?: Function) => {
     try {
@@ -375,24 +416,27 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         delivered: recipientOnline
       });
 
-      // 📲 PUSH: новое сообщение. В data передаём messagePreview для системного уведомления в шторке (кто, время, начало текста).
+      // 📲 PUSH: новое сообщение. Не слать пуш, если получатель сейчас в этом чате (как в Telegram).
       try {
-        let fromNick: string | undefined;
-        try {
-          const u = await User.findById(me).select('nick').lean();
-          if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
-        } catch {}
+        if (isViewingChatWith(payload.to, me)) {
+          // Получатель смотрит чат с отправителем — пуш не отправляем
+        } else {
+          let fromNick: string | undefined;
+          try {
+            const u = await User.findById(me).select('nick').lean();
+            if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+          } catch {}
 
-        const unreadCount = (unreadMessages.get(payload.to) || []).length;
-        const msgType = payload.type === 'image' ? 'image' : payload.type === 'audio' ? 'audio' : 'text';
-        const messagePreview =
-          msgType === 'text'
-            ? (typeof payload.text === 'string' ? String(payload.text).trim().slice(0, 80) : '')
-            : msgType === 'image'
-              ? '[Фото]'
-              : '[Голосовое]';
+          const unreadCount = (unreadMessages.get(payload.to) || []).length;
+          const msgType = payload.type === 'image' ? 'image' : payload.type === 'audio' ? 'audio' : 'text';
+          const messagePreview =
+            msgType === 'text'
+              ? (typeof payload.text === 'string' ? String(payload.text).trim().slice(0, 80) : '')
+              : msgType === 'image'
+                ? '[Фото]'
+                : '[Голосовое]';
 
-        await sendMessagePushToUser(String(payload.to), {
+          await sendMessagePushToUser(String(payload.to), {
           type: 'message',
           messageId,
           from: String(me),
@@ -402,6 +446,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           unreadCount,
           messagePreview,
         });
+        }
       } catch {}
     } catch (e: any) {
       console.error('[message:send] error:', e?.message || e);

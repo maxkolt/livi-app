@@ -1855,6 +1855,13 @@ export function sendReadReceipt(messageId: string, from: string) {
   socket.emit('message:read', { messageId, from });
 }
 
+/** Сообщить серверу, что пользователь смотрит чат с peerId (или не смотрит, если null). Пуш о новом сообщении в этот чат не отправляется (как в Telegram). */
+export function sendChatViewing(peerId: string | null) {
+  try {
+    socket.emit('chat:viewing', { with: peerId ?? null });
+  } catch {}
+}
+
 export function sendChatTyping(payload: { to: string; typing?: boolean; recording?: boolean }) {
   try {
     if (__DEV__) {

@@ -77,11 +77,12 @@ import {
   fetchMessages,
   fetchFriends,
   getAvatar,
+  sendChatViewing,
 } from "../sockets/socket";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t } from "../utils/i18n";
-import { clearNotificationIndicators, setCurrentChatPeerId } from "../utils/pushNotifications";
+import { clearNotificationIndicators, setCurrentChatPeerId, dismissMessageNotificationForUser } from "../utils/pushNotifications";
 import { useFocusEffect } from "@react-navigation/native";
 
 type RouteParams = {
@@ -378,11 +379,19 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [peerOnline, setPeerOnline] = useState<boolean>(!!route?.params?.peerOnline);
   const [fullAvatarUri, setFullAvatarUri] = useState<string>(peerAvatarThumbB64Param); // Используем миниатюру как начальное значение
 
-  // Не показывать системное уведомление о сообщении от текущего собеседника, пока пользователь в этом чате
+  // Не показывать системное уведомление о сообщении от текущего собеседника, пока пользователь в этом чате.
+  // Сообщить серверу «смотрю этот чат» (не слать пуш), снять уведомление этого чата из шторки.
   useFocusEffect(
     useCallback(() => {
-      if (peerId) setCurrentChatPeerId(peerId);
-      return () => setCurrentChatPeerId(null);
+      if (peerId) {
+        setCurrentChatPeerId(peerId);
+        sendChatViewing(peerId);
+        dismissMessageNotificationForUser(peerId).catch(() => {});
+      }
+      return () => {
+        setCurrentChatPeerId(null);
+        sendChatViewing(null);
+      };
     }, [peerId])
   );
 

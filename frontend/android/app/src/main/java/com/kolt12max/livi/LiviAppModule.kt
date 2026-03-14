@@ -25,6 +25,7 @@ import android.os.VibrationAttributes
 import android.provider.Settings
 import android.util.Log
 import org.json.JSONObject
+import expo.modules.notifications.badge.BadgeHelper
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -896,28 +897,20 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         } else {
           nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
         }
-        if (unreadTotal > 0) {
-          LiviFirebaseMessagingService.updateSummaryUnreadNotification(reactApplicationContext, unreadTotal)
-        } else {
+        // Сводное уведомление «Непрочитанные сообщения» не показываем — в шторке только одно уведомление на сообщение (От кого HH:MM + превью) из FCM.
+        if (unreadTotal <= 0) {
           nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
         }
       } catch (_: Exception) {}
     }
   }
 
-  /** Показать одно уведомление о непрочитанных: заголовок «N непрочитанных», текст «От X в HH:MM». Вызывать из JS при получении пуша о сообщении (вместо двух уведомлений). */
+  /** Больше не показываем сводное уведомление «Непрочитанные сообщения» — только одно уведомление на сообщение (От кого HH:MM + превью) из FCM. Метод оставлен для совместимости: при unreadTotal=0 снимаем сводное. */
   @ReactMethod
   fun updateSummaryUnreadWithLast(unreadTotal: Int, lastFromNick: String, timeStr: String) {
     Handler(Looper.getMainLooper()).post {
       try {
-        if (unreadTotal > 0) {
-          LiviFirebaseMessagingService.updateSummaryUnreadNotificationWithLast(
-            reactApplicationContext,
-            unreadTotal,
-            lastFromNick,
-            timeStr
-          )
-        } else {
+        if (unreadTotal <= 0) {
           val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
           nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
         }
@@ -933,6 +926,52 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
         nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
+      } catch (_: Exception) {}
+    }
+  }
+
+  /** Снять уведомление о сообщениях от одного пользователя (при заходе в чат с ним). */
+  @ReactMethod
+  fun dismissMessageNotificationForUser(userId: String) {
+    if (userId.isBlank()) return
+    Handler(Looper.getMainLooper()).post {
+      try {
+        val id = LiviAppModule.getMessageNotificationIdForUser(userId)
+        (reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)?.cancel(id)
+      } catch (_: Exception) {}
+    }
+  }
+
+  /** Снять все уведомления о сообщениях из шторки (при заходе во вкладку Друзья). */
+  @ReactMethod
+  fun dismissAllMessageNotifications() {
+    Handler(Looper.getMainLooper()).post {
+      try {
+        val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+          try {
+            @Suppress("DEPRECATION")
+            val active = nm.getActiveNotifications()
+            if (active != null) {
+              val base = LiviFirebaseMessagingService.NOTIFICATION_ID_MESSAGE_BASE
+              for (n in active) {
+                val id = n.id
+                if (id >= base && id < base + 0x8000) nm.cancel(id)
+              }
+            }
+          } catch (_: Exception) {}
+        }
+      } catch (_: Exception) {}
+    }
+  }
+
+  /** Очистить нативное хранилище пропущенных вызовов и выставить бейдж иконки в 0. Вызывать из JS при «просмотрено»/«прочитано», чтобы следующий FCM не прибавлял старые пропущенные к unreadCount. */
+  @ReactMethod
+  fun clearAllMissedCountsAndSetBadgeZero() {
+    Handler(Looper.getMainLooper()).post {
+      try {
+        LiviAppModule.clearAllMissedCountsAndSetBadgeZeroStatic(reactApplicationContext)
       } catch (_: Exception) {}
     }
   }
@@ -1242,7 +1281,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       val key = userId.trim()
       val count = map.optInt(key, 0) + 1
       map.put(key, count)
-      prefs.edit().putString(KEY_MISSED_COUNT_BY_USER, map.toString()).apply()
+      prefs.edit().putString(KEY_MISSED_COUNT_BY_USER, map.toString()).commit()
       return count
     }
 
@@ -1331,6 +1370,60 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     fun getMissedNotificationIdForUser(userId: String): Int {
       if (userId.isBlank()) return MISSED_NOTIFICATION_ID_BASE
       return MISSED_NOTIFICATION_ID_BASE + (userId.hashCode() and 0x7FFF)
+    }
+
+    /** Стабильный ID уведомления о сообщениях от пользователя — одно уведомление на чат (группировка по отправителю). */
+    @JvmStatic
+    fun getMessageNotificationIdForUser(userId: String): Int {
+      if (userId.isBlank()) return LiviFirebaseMessagingService.NOTIFICATION_ID_MESSAGE_BASE
+      return LiviFirebaseMessagingService.NOTIFICATION_ID_MESSAGE_BASE + (userId.hashCode() and 0x7FFF)
+    }
+
+    /** Суммарное число пропущенных по всем пользователям (из нативного хранилища). Для обновления бейджа иконки из FCM без JS. */
+    @JvmStatic
+    fun getTotalMissedCount(context: Context): Int {
+      val prefs = context.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+      val raw = prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"
+      val map = try {
+        JSONObject(raw)
+      } catch (_: Exception) {
+        return 0
+      }
+      var total = 0
+      val it = map.keys()
+      while (it.hasNext()) {
+        total += map.optInt(it.next(), 0).coerceAtLeast(0)
+      }
+      return total
+    }
+
+    /** Обновить бейдж на иконке приложения по нативному счётчику пропущенных. Вызывать из FCM после showMissedCallNotification/recordMissedCallStateOnly. Не вызываем setBadgeCount(0), чтобы не триггерить cancelAll() в BadgeHelper. */
+    @JvmStatic
+    fun updateAppIconBadgeFromMissedCount(context: Context) {
+      try {
+        val total = getTotalMissedCount(context).coerceIn(0, 99)
+        if (total > 0) BadgeHelper.setBadgeCount(context.applicationContext, total)
+      } catch (_: Exception) {}
+    }
+
+    /** Обновить бейдж при получении FCM сообщения: unreadCount из пуша + пропущенные из нативного хранилища. */
+    @JvmStatic
+    fun updateAppIconBadgeFromUnreadAndMissed(context: Context, unreadCount: Int) {
+      try {
+        val missed = getTotalMissedCount(context)
+        val total = (unreadCount.coerceAtLeast(0) + missed).coerceIn(0, 99)
+        BadgeHelper.setBadgeCount(context.applicationContext, total)
+      } catch (_: Exception) {}
+    }
+
+    /** Очистить все счётчики пропущенных в нативном хранилище и выставить бейдж в 0. После этого при новом FCM бейдж будет считаться только по unreadCount из пуша. */
+    @JvmStatic
+    fun clearAllMissedCountsAndSetBadgeZeroStatic(context: Context) {
+      try {
+        val prefs = context.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_MISSED_COUNT_BY_USER, "{}").apply()
+        BadgeHelper.setBadgeCount(context.applicationContext, 0)
+      } catch (_: Exception) {}
     }
 
     /**
