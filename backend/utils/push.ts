@@ -339,14 +339,20 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     androidTokensTotal: androidTotal,
     totalTokens: list.length,
   });
+  const androidRecs = list.filter((r) => r.platform === 'android');
   pushLog('sendCallPushToRecipient_start', {
     userId,
     hasFirebase: !!messaging,
     androidTokensWithFcm: androidWithFcm,
     androidTokensTotal: androidTotal,
     totalTokens: list.length,
-    ...(androidTotal > 0 && androidWithFcm === 0
-      ? { androidTokenPrefixes: list.filter((r) => r.platform === 'android').map((r) => String(r.token).slice(0, 24)) }
+    ...(androidTotal > 0
+      ? {
+          androidTokens: androidRecs.map((r) => ({
+            tokenPrefix: String(r.token).slice(0, 24),
+            hasFcm: !!(r.fcmToken && String(r.fcmToken).length > 0),
+          })),
+        }
       : {}),
   });
   if (!messaging && androidTotal > 0) {
