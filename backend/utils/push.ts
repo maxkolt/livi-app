@@ -36,6 +36,12 @@ function isFcmInvalidTokenError(e: unknown): boolean {
   return FCM_INVALID_PHRASES.some(fromMsgOrRaw);
 }
 
+/** Снимать fcmToken в БД только при явном коде ошибки (не по фразам), чтобы не затирать токен из‑за неоднозначных/временных ошибок. */
+function shouldRemoveFcmTokenFromDb(e: unknown): boolean {
+  const code = String((e as { code?: string })?.code ?? '');
+  return FCM_INVALID_TOKEN_CODES.includes(code as (typeof FCM_INVALID_TOKEN_CODES)[number]);
+}
+
 /** Удалить невалидный FCM-токен из БД: по fcmToken (надёжно), иначе по Expo token. */
 async function removeInvalidFcmToken(userId: string, r: { token: string; fcmToken?: string }): Promise<boolean> {
   if (!r.fcmToken) return false;
@@ -195,7 +201,7 @@ export async function sendMessagePushToUser(
           const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
           const isInvalidToken =
             isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
-          if (isInvalidToken) await removeInvalidFcmToken(userId, r);
+          if (shouldRemoveFcmTokenFromDb(e)) await removeInvalidFcmToken(userId, r);
           logger.warn('[push] FCM message failed', { userId, error: errMsg, isInvalidToken });
         }
       }
@@ -406,10 +412,10 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
           isFcmInvalidTokenError(e) ||
           /requested entity was not found|not found|unregistered|invalid.registration.token/i.test(errMsg);
         logger.warn('[push] FCM call push error', { userId, errMsg, errCode, isInvalidToken });
-        if (isInvalidToken) {
+        if (shouldRemoveFcmTokenFromDb(e)) {
           const removed = await removeInvalidFcmToken(userId, r);
           if (!removed) logger.warn('[push] FCM invalid token not removed (no match in DB)', { userId });
-        } else {
+        } else if (!isInvalidToken) {
           logger.warn('[push] FCM send failed, falling back to Expo for this device', { error: errMsg });
           pushLog('call_push_FCM_failed_fallback_Expo', { userId, errMsg });
         }
@@ -474,7 +480,7 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
           const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
           const isInvalidToken =
             isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
-          if (isInvalidToken) await removeInvalidFcmToken(callerUserId, r);
+          if (shouldRemoveFcmTokenFromDb(e)) await removeInvalidFcmToken(callerUserId, r);
           logger.warn('[push] FCM call_declined to caller failed', { userId: callerUserId, error: errMsg, isInvalidToken });
         }
       }
@@ -528,7 +534,7 @@ export async function sendCallAcceptedToCaller(callerUserId: string, callId: str
           const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
           const isInvalidToken =
             isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
-          if (isInvalidToken) await removeInvalidFcmToken(callerUserId, r);
+          if (shouldRemoveFcmTokenFromDb(e)) await removeInvalidFcmToken(callerUserId, r);
           logger.warn('[push] FCM call_accepted to caller failed', { userId: callerUserId, error: errMsg, isInvalidToken });
         }
       }
@@ -574,7 +580,7 @@ export async function sendCallCanceledToRecipient(
           const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
           const isInvalidToken =
             isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
-          if (isInvalidToken) await removeInvalidFcmToken(calleeUserId, r);
+          if (shouldRemoveFcmTokenFromDb(e)) await removeInvalidFcmToken(calleeUserId, r);
           logger.warn('[push] FCM call_canceled failed', { userId: calleeUserId, error: errMsg, isInvalidToken });
         }
       }
