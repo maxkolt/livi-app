@@ -307,7 +307,10 @@ export type CallPushData = {
  * остальным — через Expo (без title/body). Так нативный экран звонка показывается при убитом/фоновом приложении.
  */
 export async function sendCallPushToRecipient(userId: string, data: CallPushData): Promise<void> {
-  const recs = await PushTokenModel.find({ userId }).select('token platform fcmToken').lean();
+  const recs = await PushTokenModel.find({ userId })
+    .read('primary')
+    .select('token platform fcmToken')
+    .lean();
   if (!recs?.length) {
     logger.warn('[push] sendCallPushToRecipient: no tokens for user', { userId });
     return;
