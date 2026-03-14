@@ -111,11 +111,30 @@ export async function upsertExpoPushToken(opts: {
     update.fcmToken = fcmToken;
   }
 
-  await PushTokenModel.updateOne(
+  const result = await PushTokenModel.updateOne(
     { token },
     { $set: update },
     { upsert: true }
   ).exec();
+  const matched = (result as { matchedCount?: number })?.matchedCount ?? 0;
+  const modified = (result as { modifiedCount?: number })?.modifiedCount ?? 0;
+  const upsertedId = (result as { upsertedId?: unknown })?.upsertedId;
+
+  if (platform === 'android' && (update as { fcmToken?: string }).fcmToken) {
+    pushLog('token_upsert_android_fcm', {
+      userId,
+      tokenPrefix: String(token).slice(0, 20),
+      matched,
+      modified,
+      hadUpsert: !!upsertedId,
+    });
+    const doc = await PushTokenModel.findOne({ token }).select('fcmToken').lean();
+    const hasFcmNow = !!(doc as { fcmToken?: string } | null)?.fcmToken;
+    if (!hasFcmNow) {
+      logger.warn('[push] upsertExpoPushToken: fcmToken not persisted after update', { userId, tokenPrefix: String(token).slice(0, 20) });
+      pushLog('token_upsert_fcm_missing_after', { userId });
+    }
+  }
 }
 
 /** Пуш о новом сообщении: на Android — только FCM (data-only), чтобы не было пустого уведомления от Expo; на iOS — Expo. */
@@ -326,6 +345,9 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     androidTokensWithFcm: androidWithFcm,
     androidTokensTotal: androidTotal,
     totalTokens: list.length,
+    ...(androidTotal > 0 && androidWithFcm === 0
+      ? { androidTokenPrefixes: list.filter((r) => r.platform === 'android').map((r) => String(r.token).slice(0, 24)) }
+      : {}),
   });
   if (!messaging && androidTotal > 0) {
     logger.warn('[push] FCM not configured (FIREBASE_SERVICE_ACCOUNT_JSON missing or invalid). Call pushes will use Expo only — native incoming call screen may NOT show when app is in background.');
