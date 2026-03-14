@@ -167,8 +167,9 @@ export async function sendMessagePushToUser(
       }
     }
   }
-  // На Android пушим только через FCM (data-only). Через Expo на Android приходит пустое уведомление — не шлём.
   const iosTokens = list.filter((r) => r.platform === 'ios').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
+  const androidTokens = list.filter((r) => r.platform === 'android').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
+
   if (iosTokens.length > 0) {
     try {
       const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
@@ -187,7 +188,45 @@ export async function sendMessagePushToUser(
       logger.warn('[push] Expo message failed', { userId, error: (e as Error)?.message });
     }
   }
-  // Не fallback'им на Expo для Android — иначе снова придёт пустое уведомление.
+
+  // Fallback для Android: если FCM не сработал — шлём через Expo с заполненными title/body (пустых уведомлений не должно быть).
+  if (!androidSent && androidTokens.length > 0) {
+    const timeStr = formatPushTime(data.sentAt);
+    const nick = (data.fromNick || '').trim() || '—';
+    const title = `${nick} ${timeStr}`.trim() || 'Новое сообщение';
+    const body = (data.messagePreview || '').trim() || 'Новое сообщение';
+    try {
+      const messages: ExpoPushMessage[] = androidTokens.map((to) => ({
+        to,
+        sound: 'default',
+        priority: 'high',
+        channelId: 'messages',
+        title,
+        body,
+        data: { ...dataStr, unreadCount: data.unreadCount },
+      }));
+      const chunks = expo.chunkPushNotifications(messages);
+      for (const chunk of chunks) {
+        await expo.sendPushNotificationsAsync(chunk);
+      }
+      logger.info('[push] message sent via Expo (Android fallback)', { userId, count: androidTokens.length });
+    } catch (e) {
+      logger.warn('[push] Expo Android fallback failed', { userId, error: (e as Error)?.message });
+    }
+  }
+}
+
+/** Форматирует ISO время в HH:mm (локальная зона сервера для fallback-уведомления). */
+function formatPushTime(iso: string): string {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    const h = d.getHours().toString().padStart(2, '0');
+    const m = d.getMinutes().toString().padStart(2, '0');
+    return `${h}:${m}`;
+  } catch {
+    return '';
+  }
 }
 
 export async function sendPushToUser(userId: string, msg: Omit<ExpoPushMessage, 'to'> & { kind: PushKind }) {

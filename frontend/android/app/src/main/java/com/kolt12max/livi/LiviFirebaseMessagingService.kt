@@ -247,6 +247,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
         // Сообщение: одно системное уведомление в шторке — «От кого HH:MM» + начало текста сообщения.
         if (typeNorm == "message") {
+            // Если пуш пришёл через Expo с notification (title/body), система уже показала уведомление — не дублируем.
+            if (remoteMessage.notification != null) {
+                Log.d(TAG, "FCM message: notification payload present, skip native (Expo fallback already shown)")
+                return
+            }
             var unreadCount = 1
             var fromNickMsg = ""
             var sentAtIso = ""
@@ -321,8 +326,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         val count = LiviAppModule.incrementMissedCountForUser(this, fromUserId)
         val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date())
         val displayNick = fromNick.trim().ifEmpty { getString(R.string.incoming_call_title) }
-        val title = "$displayNick $timeStr"
+        val title = "$displayNick $timeStr".trim().ifEmpty { getString(R.string.missed_call_video) }
         val body = if (count > 1) getString(R.string.missed_call_from_count, count, displayNick) else getString(R.string.missed_call_video)
+        val safeBody = body.ifEmpty { getString(R.string.missed_call_video) }
         val smallIconRes = resources.getIdentifier("ic_launcher", "mipmap", packageName).takeIf { it != 0 }
             ?: android.R.drawable.ic_menu_call
         val contentIntent = Intent(this, MainActivity::class.java).apply {
@@ -344,7 +350,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID_MISSED_CALL)
             .setSmallIcon(smallIconRes)
             .setContentTitle(title)
-            .setContentText(body)
+            .setContentText(safeBody)
             .setContentIntent(contentPending)
             .setDeleteIntent(deletePending)
             .setAutoCancel(true)
@@ -495,12 +501,13 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val fromNick = LiviAppModule.getMissedCallNick(context, userId)
             val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date())
             val displayNick = fromNick.trim().ifEmpty { context.getString(R.string.incoming_call_title) }
-            val title = "$displayNick $timeStr"
+            val title = "$displayNick $timeStr".trim().ifEmpty { context.getString(R.string.missed_call_video) }
             val body = when {
                 count > 1 && displayNick.isNotEmpty() -> context.getString(R.string.missed_call_from_count, count, displayNick)
                 count > 1 -> context.getString(R.string.missed_call_from_count, count, context.getString(R.string.incoming_call_title))
                 else -> context.getString(R.string.missed_call_video)
             }
+            val safeBody = body.ifEmpty { context.getString(R.string.missed_call_video) }
             val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
                 ?: android.R.drawable.ic_menu_call
             val contentIntent = Intent(context, MainActivity::class.java).apply {
@@ -522,7 +529,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val notification = NotificationCompat.Builder(context, CHANNEL_ID_MISSED_CALL)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(title)
-                .setContentText(body)
+                .setContentText(safeBody)
                 .setContentIntent(contentPending)
                 .setDeleteIntent(deletePending)
                 .setAutoCancel(true)

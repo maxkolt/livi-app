@@ -267,10 +267,11 @@ Notifications.setNotificationHandler({
         };
       }
     }
+    // Не показывать баннер для необработанных типов — иначе возможно пустое уведомление.
     return {
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
+      shouldShowBanner: false,
+      shouldShowList: false,
+      shouldPlaySound: false,
       shouldSetBadge: false,
     };
   },
