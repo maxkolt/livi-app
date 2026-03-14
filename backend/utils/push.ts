@@ -129,15 +129,21 @@ export async function upsertExpoPushToken(opts: {
   }
 
   if (platform === 'android' && (update as { fcmToken?: string }).fcmToken) {
+    const doc = await PushTokenModel.findOne({ token }).select('_id userId fcmToken').lean();
+    const d = doc as { _id?: unknown; userId?: unknown; fcmToken?: string } | null;
+    const hasFcmNow = !!(d?.fcmToken && String(d.fcmToken).length > 0);
+    const docUserId = d?.userId != null ? String(d.userId) : '';
     pushLog('token_upsert_android_fcm', {
       userId,
       tokenPrefix: String(token).slice(0, 20),
       matched,
       modified,
       hadUpsert: !!upsertedId,
+      docId: d?._id != null ? String(d._id) : '',
+      docUserId,
+      userIdMatch: docUserId === userId,
+      fcmLen: d?.fcmToken != null ? String(d.fcmToken).length : 0,
     });
-    const doc = await PushTokenModel.findOne({ token }).select('fcmToken').lean();
-    const hasFcmNow = !!(doc as { fcmToken?: string } | null)?.fcmToken;
     if (!hasFcmNow) {
       logger.warn('[push] upsertExpoPushToken: fcmToken not persisted after update', { userId, tokenPrefix: String(token).slice(0, 20) });
       pushLog('token_upsert_fcm_missing_after', { userId });
@@ -318,7 +324,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   const userIdObj = new mongoose.Types.ObjectId(userId);
   const recs = await PushTokenModel.find({ userId: userIdObj })
     .read('primary')
-    .select('token platform fcmToken')
+    .select('_id token platform fcmToken')
     .lean();
   if (!recs?.length) {
     logger.warn('[push] sendCallPushToRecipient: no tokens for user', { userId });
@@ -340,7 +346,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   };
 
   const messaging = getFirebaseMessaging();
-  type Rec = { token: string; platform: string; fcmToken?: string };
+  type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string };
   const list = recs as unknown as Rec[];
   const androidWithFcm = list.filter((r) => r.platform === 'android' && r.fcmToken).length;
   const androidTotal = list.filter((r) => r.platform === 'android').length;
@@ -361,8 +367,10 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     ...(androidTotal > 0
       ? {
           androidTokens: androidRecs.map((r) => ({
+            docId: r._id != null ? String(r._id) : '',
             tokenPrefix: String(r.token).slice(0, 24),
             hasFcm: !!(r.fcmToken && String(r.fcmToken).length > 0),
+            fcmLen: r.fcmToken != null ? String(r.fcmToken).length : 0,
           })),
         }
       : {}),
