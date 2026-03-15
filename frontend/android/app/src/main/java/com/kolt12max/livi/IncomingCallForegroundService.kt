@@ -26,6 +26,7 @@ class IncomingCallForegroundService : Service() {
     private var currentFromNick: String? = null
     private var activityShownReceiver: BroadcastReceiver? = null
     private var callEndedReceiver: BroadcastReceiver? = null
+    private var declinedReceiver: BroadcastReceiver? = null
     private val handler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
 
@@ -39,14 +40,17 @@ class IncomingCallForegroundService : Service() {
         val headsUpOnly = intent.getBooleanExtra(EXTRA_HEADS_UP_ONLY, false)
         val silentNotification = intent.getBooleanExtra(EXTRA_SILENT_NOTIFICATION, false)
 
+        Log.e(TAG, "[INCOMING_FGS] onStartCommand callId=$callId from=$from (2nd call = fresh FGS if previous was declined)")
+
         currentCallId = callId
         currentFrom = from
         currentFromNick = fromNick
-        // При повторном onStartCommand (второй звонок подряд) снимаем старых receivers, иначе IntentReceiverLeaked.
         activityShownReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         activityShownReceiver = null
         callEndedReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         callEndedReceiver = null
+        declinedReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        declinedReceiver = null
         answeredReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         answeredReceiver = null
         timeoutRunnable?.let { handler.removeCallbacks(it) }
@@ -111,6 +115,22 @@ class IncomingCallForegroundService : Service() {
             registerReceiver(answeredReceiver, filterAnswered)
         }
 
+        declinedReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, i: Intent?) {
+                val declinedCallId = i?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
+                if (declinedCallId == currentCallId) {
+                    Log.e(TAG, "[INCOMING_FGS] ACTION_INCOMING_CALL_DECLINED received callId=$declinedCallId → cleanupAndStop (so 2nd call gets fresh FGS)")
+                    cleanupAndStop()
+                }
+            }
+        }
+        val filterDeclined = IntentFilter(ACTION_INCOMING_CALL_DECLINED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(declinedReceiver, filterDeclined, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(declinedReceiver, filterDeclined)
+        }
+
         ServiceCompat.startForeground(
             this,
             LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL,
@@ -122,24 +142,29 @@ class IncomingCallForegroundService : Service() {
             silentNotification -> Log.e(TAG, "[INCOMING_FGS] Mode=silent (shade only)")
             headsUpOnly -> Log.e(TAG, "[INCOMING_FGS] Mode=headsUpOnly (no full-screen)")
             else -> {
-                Log.e(TAG, "[INCOMING_FGS] Mode=fullScreenIntent SDK=${Build.VERSION.SDK_INT}")
-                // На части устройств (Samsung Android 14) система отклоняет FSI (FSI_REQUESTED_BUT_DENIED), и нативный экран не показывается.
-                // FGS с типом PHONE_CALL имеет право запускать активность (BAL exemption). Запускаем IncomingCallActivity вручную.
-                // Небольшая задержка даёт системе время учесть FGS и разрешить запуск активности (BAL при разблокированном экране).
+                Log.e(TAG, "[INCOMING_FGS] Mode=fullScreenIntent SDK=${Build.VERSION.SDK_INT} callId=$callId posting 3 startActivity attempts")
                 val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick)
-                handler.postDelayed({
-                    try {
-                        startActivity(launchIntent)
-                        Log.d(TAG, "[INCOMING_FGS] startActivity(IncomingCallActivity) called after delay")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "[INCOMING_FGS] startActivity(IncomingCallActivity) failed", e)
-                    }
-                }, 400L)
+                val delaysMs = longArrayOf(300L, 900L, 2200L)
+                for (i in delaysMs.indices) {
+                    handler.postDelayed({
+                        val cur = currentCallId
+                        if (cur != callId) {
+                            Log.e(TAG, "[INCOMING_FGS] startActivity attempt ${i + 1}/${delaysMs.size} SKIP currentCallId=$cur != callId=$callId")
+                            return@postDelayed
+                        }
+                        try {
+                            startActivity(launchIntent)
+                            Log.e(TAG, "[INCOMING_FGS] startActivity(IncomingCallActivity) attempt ${i + 1}/${delaysMs.size} OK callId=$callId")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "[INCOMING_FGS] startActivity(IncomingCallActivity) attempt ${i + 1}/${delaysMs.size} FAILED callId=$callId", e)
+                        }
+                    }, delaysMs[i])
+                }
             }
         }
 
         timeoutRunnable = Runnable {
-            Log.d(TAG, "IncomingCallForegroundService: timeout 20s, closing native screen and stopping")
+            Log.e(TAG, "[INCOMING_FGS] timeout 20s currentCallId=$currentCallId closing and stopping")
             val cid = currentCallId
             if (!cid.isNullOrEmpty()) {
                 // Закрываем IncomingCallActivity через broadcast (startActivity из сервиса блокируется BAL на Android 14+).
@@ -157,6 +182,7 @@ class IncomingCallForegroundService : Service() {
     }
 
     private fun cleanupAndStop() {
+        Log.e(TAG, "[INCOMING_FGS] cleanupAndStop currentCallId=$currentCallId")
         LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
@@ -168,6 +194,10 @@ class IncomingCallForegroundService : Service() {
             try { unregisterReceiver(it) } catch (_: Exception) {}
         }
         callEndedReceiver = null
+        declinedReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        declinedReceiver = null
         answeredReceiver?.let {
             try { unregisterReceiver(it) } catch (_: Exception) {}
         }
@@ -186,6 +216,7 @@ class IncomingCallForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        Log.e(TAG, "[INCOMING_FGS] onDestroy")
         LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
         super.onDestroy()
     }
@@ -206,5 +237,7 @@ class IncomingCallForegroundService : Service() {
         const val EXTRA_HEADS_UP_ONLY = "heads_up_only"
         /** Тихий режим: без heads-up (только иконка/шторка). */
         const val EXTRA_SILENT_NOTIFICATION = "silent_notification"
+        /** Broadcast: пользователь нажал «Отклонить» — FGS останавливается, чтобы второй звонок получил новый FGS. */
+        const val ACTION_INCOMING_CALL_DECLINED = "com.kolt12max.livi.INCOMING_CALL_DECLINED"
     }
 }

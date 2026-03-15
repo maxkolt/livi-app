@@ -64,6 +64,7 @@ class IncomingCallActivity : AppCompatActivity() {
             return
         }
         isAlive = true
+        android.util.Log.e(TAG, "IncomingCallActivity onCreate: isAlive=true isInForeground=(set in onResume) callId=$callIdFromIntent")
         // Убираем уведомление полностью — при входящем звонке только нативный экран, без шторки и баннера
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         // Сообщаем IncomingCallForegroundService, что экран открыт — сервис снимет уведомление и остановится (важно для заблокированного/домашнего экрана)
@@ -113,6 +114,13 @@ class IncomingCallActivity : AppCompatActivity() {
             stopRepeatingVibration()
             LiviAppModule.emitIncomingCallDeclinedByUser(callId)
             EndedCallIds.add(this, callId)
+            isInForeground = false
+            android.util.Log.e(TAG, "IncomingCallActivity Decline pressed: isInForeground=false callId=$callId sending ACTION_INCOMING_CALL_DECLINED so FGS stops")
+            val declinedIntent = Intent(IncomingCallForegroundService.ACTION_INCOMING_CALL_DECLINED).apply {
+                setPackage(packageName)
+                putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
+            }
+            sendBroadcast(declinedIntent)
             declineCallFromNative(callId)
         }
 
@@ -158,13 +166,14 @@ class IncomingCallActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         isInForeground = true
-        // Уведомление не показываем ни в шторке, ни в строке состояния
+        android.util.Log.e(TAG, "IncomingCallActivity onResume: isInForeground=true callId=$currentCallId")
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
     }
 
     override fun onPause() {
         super.onPause()
         isInForeground = false
+        android.util.Log.e(TAG, "IncomingCallActivity onPause: isInForeground=false callId=$currentCallId")
     }
 
     /**
@@ -178,6 +187,7 @@ class IncomingCallActivity : AppCompatActivity() {
     override fun onDestroy() {
         isInForeground = false
         isAlive = false
+        android.util.Log.e(TAG, "IncomingCallActivity onDestroy: isInForeground=false isAlive=false callId=$currentCallId")
         LiviOngoingCallHelper.clearOngoingCall(applicationContext)
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         callCanceledReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
@@ -358,6 +368,8 @@ class IncomingCallActivity : AppCompatActivity() {
             }
             stopCallRingtone()
             stopRepeatingVibration()
+            isInForeground = false
+            android.util.Log.e(TAG, "IncomingCallActivity timeout 20s: isInForeground=false calling finish() callId=$callId")
             finish()
         }
         timeoutHandler.postDelayed(timeoutRunnable!!, INCOMING_TIMEOUT_MS)
@@ -369,12 +381,15 @@ class IncomingCallActivity : AppCompatActivity() {
     }
 
     private fun closeIncomingScreen(callIdToEnd: String? = null) {
+        android.util.Log.e(TAG, "IncomingCallActivity closeIncomingScreen: callIdToEnd=$callIdToEnd closeHandled=$closeHandled isFinishing=$isFinishing isDestroyed=$isDestroyed")
         callIdToEnd?.takeIf { it.isNotEmpty() }?.let { EndedCallIds.add(this, it) }
         clearIncomingTimeout()
         stopCallRingtone()
         stopRepeatingVibration()
         if (closeHandled || isFinishing || isDestroyed) return
         closeHandled = true
+        isInForeground = false
+        android.util.Log.e(TAG, "IncomingCallActivity closeIncomingScreen: setting isInForeground=false, calling finish()")
         finish()
     }
 

@@ -821,6 +821,16 @@ function AppContent() {
     return () => sub.remove();
   }, []);
 
+  // При возврате в приложение перерегистрируем push-токен (в т.ч. fcmToken на Android), чтобы не терять FCM после пуша сообщения.
+  React.useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      const uid = getCurrentUserId?.();
+      if (uid) registerAndSendPushToken(uid).catch(() => {});
+    });
+    return () => sub.remove();
+  }, []);
+
   // ===== Deep Linking: звонки livi://incoming-call | livi://answer-call | livi://decline-call =====
   const handleIncomingCallDeepLink = async (url: string) => {
     try {

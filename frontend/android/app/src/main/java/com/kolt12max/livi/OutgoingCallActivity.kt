@@ -82,7 +82,7 @@ class OutgoingCallActivity : AppCompatActivity() {
             } else {
                 registerReceiver(callIdReadyReceiver, filterReady)
             }
-            // Холодный старт: если callId так и не пришёл (нет реального исходящего вызова) — закрыть экран
+            // Холодный старт: если callId так и не пришёл (нет реального исходящего вызова) — закрыть экран. 20 сек — как серверный таймаут входящего.
             callIdEmptyTimeoutRunnable = Runnable {
                 callIdEmptyTimeoutRunnable = null
                 if (this@OutgoingCallActivity.callId.isEmpty()) {
@@ -91,7 +91,7 @@ class OutgoingCallActivity : AppCompatActivity() {
                     finish()
                 }
             }
-            timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 5000L)
+            timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 20000L)
         }
 
         findViewById<ImageButton>(R.id.btn_cancel).setOnClickListener {
@@ -184,7 +184,7 @@ class OutgoingCallActivity : AppCompatActivity() {
                     finish()
                 }
             }
-            timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 5000L)
+            timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 20000L)
         }
     }
 

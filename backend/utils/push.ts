@@ -201,7 +201,8 @@ export async function sendMessagePushToUser(
           const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
           const isInvalidToken =
             isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
-          if (shouldRemoveFcmTokenFromDb(e)) await removeInvalidFcmToken(userId, r);
+          // Не снимаем fcmToken при ошибке пуша сообщения — иначе следующий звонок не получит FCM (androidTokensWithFcm=0).
+          // Удаление только при ошибке call push (sendCallPushToRecipient и т.д.).
           logger.warn('[push] FCM message failed', { userId, error: errMsg, isInvalidToken });
         }
       }

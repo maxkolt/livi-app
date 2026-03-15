@@ -41,7 +41,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         val keysStr = data.keys.joinToString(", ")
         val typeRaw = data["type"]
         val callIdRaw = data["callId"]
-        Log.e(TAG, "FCM onMessageReceived keys=[$keysStr] type=$typeRaw callId=$callIdRaw")
+        Log.e(TAG, "FCM onMessageReceived FULL data=$data keys=[$keysStr] type=$typeRaw callId=$callIdRaw")
 
         var type = typeRaw
         var callId = callIdRaw
@@ -70,6 +70,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
 
         val typeNorm = type?.trim()?.lowercase() ?: ""
+        Log.e(TAG, "FCM parsed typeNorm=$typeNorm type=$type callId=$callId from=$from fromNick=$fromNick")
 
         if (typeNorm == "call" && callId != null && from != null) {
             val keyguardLocked = try {
@@ -78,12 +79,13 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val isInteractive = try {
                 (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive == true
             } catch (_: Exception) { true }
-            Log.e(TAG, "[INCOMING_CALL] FCM call push: callId=$callId from=$from keyguardLocked=$keyguardLocked isInteractive=$isInteractive SDK=${Build.VERSION.SDK_INT} IncomingCallFg=${IncomingCallActivity.isInForeground} MainFg=${MainActivity.isInForeground}")
-            // Единственный пропуск: экран входящего уже на экране (тот же или другой callId — не дублируем).
+            Log.e(TAG, "[INCOMING_CALL] FCM call push: callId=$callId from=$from keyguardLocked=$keyguardLocked isInteractive=$isInteractive SDK=${Build.VERSION.SDK_INT} IncomingCallFg=${IncomingCallActivity.isInForeground} IncomingCallAlive=${IncomingCallActivity.isAlive} MainFg=${MainActivity.isInForeground}")
+            // Пропуск только если пользователь прямо сейчас смотрит на экран входящего (дубликат пуша или тот же звонок). Иначе показываем — в т.ч. повторный звонок после отмены/сообщения.
             if (IncomingCallActivity.isInForeground) {
-                Log.w(TAG, "[INCOMING_CALL] Skip: IncomingCallActivity already visible")
+                Log.w(TAG, "[INCOMING_CALL] SKIP show: IncomingCallActivity.isInForeground=true (duplicate or same call) callId=$callId")
                 return
             }
+            Log.e(TAG, "[INCOMING_CALL] not skipped, proceeding: dismissMessageNotifications → immediate startActivity → startIncomingCallForegroundService")
             // Всегда показываем входящий из FCM: без условий по foreground/фоне/блокировке. Пуши — единственный надёжный канал; сокет может быть отключён, приложение убито, экран выключен.
             // Wake lock: даём процессу время запустить FGS и показать full-screen intent (особенно при убитом приложении).
             val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -96,10 +98,23 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             try {
                 val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
-            } catch (_: Exception) {}
-            // Не запускаем headless для входящего: показ и рингтон идут через IncomingCallForegroundService.
-            // Всегда full-screen intent + нативный экран входящего (Принять/Отклонить), чтобы экран не исчезал и звук/вибрация были системного звонка.
+                dismissMessageNotificationsForIncomingCall(nm)
+                Log.e(TAG, "[INCOMING_CALL] dismissMessageNotificationsForIncomingCall done")
+            } catch (e: Exception) {
+                Log.w(TAG, "[INCOMING_CALL] dismissMessageNotificationsForIncomingCall failed", e)
+            }
             ensureCallChannel(this)
+            // Как в Telegram: сразу пробуем показать экран входящего из контекста FCM (до FGS), чтобы сработало даже после только что пришедшего сообщения.
+            try {
+                val launchIntent = buildIncomingCallActivityIntent(this, callId, from, fromNick).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(launchIntent)
+                Log.e(TAG, "[INCOMING_CALL] startActivity(IncomingCallActivity) immediate from FCM OK callId=$callId")
+            } catch (e: Exception) {
+                Log.e(TAG, "[INCOMING_CALL] immediate startActivity from FCM FAILED (FGS will retry) callId=$callId", e)
+            }
+            // FGS: рингтон/вибрация + уведомление с full-screen intent + повторные попытки startActivity (300/900/2200 ms).
             startIncomingCallForegroundService(
                 callId,
                 from,
@@ -107,7 +122,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 headsUpOnly = false,
                 silentNotification = false
             )
-            Log.e(TAG, "[INCOMING_CALL] IncomingCallForegroundService started (full-screen) keyguardLocked=$keyguardLocked (if FSI denied, check logcat for FSI_REQUESTED_BUT_DENIED or BAL_BLOCK)")
+            Log.e(TAG, "[INCOMING_CALL] startIncomingCallForegroundService returned callId=$callId keyguardLocked=$keyguardLocked")
             return
         }
         if (typeNorm == "call_canceled" && callId != null) {
@@ -253,9 +268,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
         // Сообщение: одно уведомление на чат (от одного отправителя) — «От кого HH:MM» + превью; бейдж по общему unreadCount из пуша.
         if (typeNorm == "message") {
-            // Если пуш пришёл через Expo с notification (title/body), система уже показала уведомление — не дублируем.
+            Log.e(TAG, "FCM type=message received (before notification check)")
             if (remoteMessage.notification != null) {
-                Log.d(TAG, "FCM message: notification payload present, skip native (Expo fallback already shown)")
+                Log.e(TAG, "FCM message: notification payload present, skip native (Expo fallback already shown)")
                 return
             }
             // КРИТИЧНО: unreadCount читаем из корня data (FCM передаёт все ключи плоско) — иначе при отсутствии body остаётся 1 и бейдж неверный.
@@ -283,10 +298,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val timeStr = formatMessageNotificationTime(sentAtIso)
             showMessageNotificationWithPreview(this, fromUserIdMsg, fromNickMsg, timeStr, messagePreview, unreadCount)
             LiviAppModule.updateAppIconBadgeFromUnreadAndMissed(this, unreadCount)
-            Log.d(TAG, "FCM message: showed notification from=$fromUserIdMsg fromNick=$fromNickMsg time=$timeStr preview=${messagePreview.take(20)} unreadCount=$unreadCount badge updated")
+            Log.e(TAG, "FCM message: showed notification from=$fromUserIdMsg fromNick=$fromNickMsg time=$timeStr preview=${messagePreview.take(20)} unreadCount=$unreadCount")
             return
         }
-        Log.w(TAG, "FCM unhandled: typeNorm=$typeNorm type=$type callId=$callId keys=[$keysStr] → forwarding to Expo")
+        Log.e(TAG, "FCM unhandled: typeNorm=$typeNorm type=$type callId=$callId keys=[$keysStr] FULL data=$data → forwarding to Expo")
         super.onMessageReceived(remoteMessage)
     }
 
@@ -567,6 +582,23 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         /** База для ID уведомлений о сообщениях от одного пользователя (один ID на чат — группировка в шторке). */
         const val NOTIFICATION_ID_MESSAGE_BASE = 3000
         private const val CHANNEL_ID_UNREAD = "unread_messages"
+
+        /** Снять уведомления о сообщениях перед показом входящего звонка, чтобы они не перекрывали полноэкранный экран. */
+        @JvmStatic
+        private fun dismissMessageNotificationsForIncomingCall(nm: NotificationManager) {
+            try {
+                nm.cancel(NOTIFICATION_ID_SUMMARY_UNREAD)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    @Suppress("DEPRECATION")
+                    val active = nm.activeNotifications
+                    val base = NOTIFICATION_ID_MESSAGE_BASE
+                    for (n in active) {
+                        val id = n.id
+                        if (id in base until base + 0x8000) nm.cancel(id)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
 
         @JvmStatic
         fun ensureUnreadChannel(context: Context) {
