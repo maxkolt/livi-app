@@ -32,7 +32,7 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, canUseFullScreenIntent, openAppNotificationSettings, notifyCallCanceled } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, notifyCallCanceled } from './utils/callKeep';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
@@ -65,7 +65,6 @@ try {
 
 /** Модалки «Вызовы на заблокированном экране» показываются только один раз при первом запуске после установки. */
 const OVERLAY_PERMISSION_MODAL_SHOWN_KEY = 'overlay_permission_modal_shown_v1';
-const FULL_SCREEN_INTENT_MODAL_SHOWN_KEY = 'full_screen_intent_modal_shown_v1';
 
 // Экспортируем функции для использования в других компонентах
 export { activateKeepAwakeAsync, deactivateKeepAwakeAsync };
@@ -294,8 +293,6 @@ function AppContent() {
   const [initialUrlProcessed, setInitialUrlProcessed] = React.useState(false);
   /** Android: модалка «Разрешить отображение поверх других окон» при первом заходе (как камера/микрофон). */
   const [overlayPermissionModalVisible, setOverlayPermissionModalVisible] = React.useState(false);
-  /** Android 14+: модалка «Включить полноэкранные уведомления» — без этого входящий на блокировке не показывается (FSI_REQUESTED_BUT_DENIED). */
-  const [fullScreenIntentModalVisible, setFullScreenIntentModalVisible] = React.useState(false);
 
   React.useEffect(() => {
     void hydrateLang();
@@ -672,7 +669,7 @@ function AppContent() {
         } catch {}
       }
 
-        // 📱 Android: модалки про «показ поверх» и «полноэкранные уведомления» — только один раз при первом запуске после установки.
+        // 📱 Android: модалка «показ поверх других окон» — только один раз при первом запуске после установки.
       if (Platform.OS === 'android') {
         try {
           const overlayShown = await AsyncStorage.getItem(OVERLAY_PERMISSION_MODAL_SHOWN_KEY);
@@ -681,16 +678,6 @@ function AppContent() {
             if (!can) {
               await AsyncStorage.setItem(OVERLAY_PERMISSION_MODAL_SHOWN_KEY, '1');
               setOverlayPermissionModalVisible(true);
-            }
-          }
-        } catch (_) {}
-        try {
-          const fsiShown = await AsyncStorage.getItem(FULL_SCREEN_INTENT_MODAL_SHOWN_KEY);
-          if (fsiShown !== '1') {
-            const canFSI = await canUseFullScreenIntent();
-            if (!canFSI) {
-              await AsyncStorage.setItem(FULL_SCREEN_INTENT_MODAL_SHOWN_KEY, '1');
-              setFullScreenIntentModalVisible(true);
             }
           }
         } catch (_) {}
@@ -2407,60 +2394,6 @@ function AppContent() {
                       onPress={() => {
                         openOverlayPermissionSettings();
                         setOverlayPermissionModalVisible(false);
-                      }}
-                    >
-                      <View style={isDark ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDark : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightInner}>
-                        <Text style={overlayPermissionModalStyles.overlayPermissionButtonPrimaryText}>Открыть настройки</Text>
-                      </View>
-                    </TouchableOpacity>
-                  </View>
-                </TouchableOpacity>
-              </TouchableOpacity>
-            </Modal>
-          )}
-          {fullScreenIntentModalVisible && (
-            <Modal
-              visible={fullScreenIntentModalVisible}
-              transparent
-              animationType="fade"
-              onRequestClose={() => setFullScreenIntentModalVisible(false)}
-            >
-              <TouchableOpacity
-                activeOpacity={1}
-                style={overlayPermissionModalStyles.overlayPermissionBackdrop}
-                onPress={() => setFullScreenIntentModalVisible(false)}
-              >
-                <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={overlayPermissionModalStyles.overlayPermissionCard}>
-                  <View style={overlayPermissionModalStyles.overlayPermissionHeader}>
-                    <View style={overlayPermissionModalStyles.overlayPermissionIconWrap}>
-                      <MaterialIcons name="notifications-active" size={20} color={isDark ? '#4DD0E1' : theme.colors.primary} />
-                    </View>
-                    <View style={overlayPermissionModalStyles.overlayPermissionTitleWrap}>
-                      <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>Вызовы на заблокированном экране</Text>
-                    </View>
-                  </View>
-                  <Text style={overlayPermissionModalStyles.overlayPermissionText}>
-                    Включите для LiVi полноэкранные уведомления в настройках уведомлений.
-                  </Text>
-                  <View style={overlayPermissionModalStyles.overlayPermissionNote}>
-                    <Text style={overlayPermissionModalStyles.overlayPermissionNoteText}>
-                      Это нужно, чтобы принимать входящие вызовы, когда экран телефона заблокирован.
-                    </Text>
-                  </View>
-                  <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
-                    <TouchableOpacity style={overlayPermissionModalStyles.overlayPermissionButtonSecondary} onPress={() => setFullScreenIntentModalVisible(false)}>
-                      <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>Не сейчас</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        overlayPermissionModalStyles.overlayPermissionButtonPrimary,
-                        isDark
-                          ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDarkOuter
-                          : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightOuter,
-                      ]}
-                      onPress={() => {
-                        openAppNotificationSettings();
-                        setFullScreenIntentModalVisible(false);
                       }}
                     >
                       <View style={isDark ? overlayPermissionModalStyles.overlayPermissionButtonPrimaryDark : overlayPermissionModalStyles.overlayPermissionButtonPrimaryLightInner}>

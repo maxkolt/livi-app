@@ -701,9 +701,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
         }
 
-        /** Уведомление входящего звонка: только системный вид (без серой карточки).
-         * Full-screen intent открывает IncomingCallActivity; при открытии экрана уведомление снимается.
-         * На API 31+ используем CallStyle — системный вид звонка с кнопками Принять/Отклонить, чаще показывается полноэкранно. */
+        /** Уведомление входящего звонка: заголовок, текст, full-screen intent. Без кнопок — принять/отклонить только на нативном экране. */
         @JvmStatic
         fun buildIncomingCallNotification(context: Context, callId: String, from: String, fromNick: String): Notification {
             val fullScreenIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)
@@ -718,29 +716,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
                 ?: android.R.drawable.ic_menu_call
 
-            val declineIntent = Intent(DeclineCallReceiver.ACTION_DECLINE_CALL).apply {
-                setPackage(context.packageName)
-                putExtra(DeclineCallReceiver.EXTRA_CALL_ID, callId)
-            }
-            val declinePending = PendingIntent.getBroadcast(
-                context,
-                REQUEST_DECLINE,
-                declineIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val answerUri = "livi://answer-call?callId=${Uri.encode(callId)}&from=${Uri.encode(from)}&fromNick=${URLEncoder.encode(fromNick, StandardCharsets.UTF_8.name())}"
-            val answerIntent = Intent(Intent.ACTION_VIEW, Uri.parse(answerUri)).apply {
-                setClassName(context, "com.kolt12max.livi.MainActivity")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            }
-            val answerPending = PendingIntent.getActivity(
-                context,
-                REQUEST_ACCEPT,
-                answerIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val builder = NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
+            return NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(title)
                 .setContentText(subtitle)
@@ -753,25 +729,12 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setTimeoutAfter(20_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val callerPerson = Person.Builder().setName(title).build()
-                val callStyle = NotificationCompat.CallStyle.forIncomingCall(callerPerson, declinePending, answerPending)
-                    .setIsVideo(true)
-                builder.setStyle(callStyle)
-            } else {
-                builder
-                    .addAction(android.R.drawable.ic_menu_close_clear_cancel, context.getString(R.string.incoming_call_decline), declinePending)
-                    .addAction(android.R.drawable.ic_menu_call, context.getString(R.string.incoming_call_accept), answerPending)
-            }
-            return builder.build()
+                .build()
         }
 
-        private const val REQUEST_ACCEPT = 2001
-        private const val REQUEST_DECLINE = 2002
         private const val REQUEST_CONTENT = 2003
 
-        /** Постоянное уведомление в стиле Telegram: LiVi, имя звонящего, «Входящий видеозвонок», кнопки Ответить/Отклонить. Не исчезает, без full-screen. */
+        /** Постоянное уведомление (heads-up): LiVi, имя звонящего, «Входящий видеозвонок». Без кнопок. */
         @JvmStatic
         fun buildIncomingCallNotificationHeadsUpOnly(context: Context, callId: String, from: String, fromNick: String): Notification {
             val appName = context.getString(R.string.app_name)
@@ -781,7 +744,6 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
                 ?: android.R.drawable.ic_menu_call
 
-            // Тап по уведомлению в шторке открывает нативный IncomingCallActivity (если звонок ещё активен).
             val contentIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)
             val contentPending = PendingIntent.getActivity(
                 context,
@@ -790,30 +752,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            val declineIntent = Intent(DeclineCallReceiver.ACTION_DECLINE_CALL).apply {
-                setPackage(context.packageName)
-                putExtra(DeclineCallReceiver.EXTRA_CALL_ID, callId)
-            }
-            val declinePending = PendingIntent.getBroadcast(
-                context,
-                REQUEST_DECLINE,
-                declineIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val answerUri = "livi://answer-call?callId=${Uri.encode(callId)}&from=${Uri.encode(from)}&fromNick=${URLEncoder.encode(fromNick, StandardCharsets.UTF_8.name())}"
-            val answerIntent = Intent(Intent.ACTION_VIEW, Uri.parse(answerUri)).apply {
-                setClassName(context, "com.kolt12max.livi.MainActivity")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            }
-            val answerPending = PendingIntent.getActivity(
-                context,
-                REQUEST_ACCEPT,
-                answerIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val builder = NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
+            return NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(title)
                 .setContentText(subtitle)
@@ -825,20 +764,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setTimeoutAfter(20_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val callerPerson = Person.Builder().setName(callerName).build()
-                val callStyle = NotificationCompat.CallStyle.forIncomingCall(callerPerson, declinePending, answerPending)
-                    .setIsVideo(true)
-                builder.setStyle(callStyle)
-            } else {
-                builder
-                    .addAction(android.R.drawable.ic_menu_close_clear_cancel, context.getString(R.string.incoming_call_decline), declinePending)
-                    .addAction(android.R.drawable.ic_menu_call, context.getString(R.string.incoming_call_accept), answerPending)
-            }
-            return builder.build()
+                .build()
         }
 
-        /** Тихое уведомление входящего: без heads-up, только иконка в статус-баре и запись в шторке (кнопки Принять/Отклонить сохраняем). */
+        /** Тихое уведомление входящего: без heads-up, только иконка в статус-баре и запись в шторке. Без кнопок. */
         @JvmStatic
         fun buildIncomingCallNotificationSilent(context: Context, callId: String, from: String, fromNick: String): Notification {
             val title = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_title)
@@ -846,35 +775,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
                 ?: android.R.drawable.ic_menu_call
 
-            // Тап по уведомлению в шторке открывает нативный IncomingCallActivity (если звонок ещё активен).
             val contentIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)
             val contentPending = PendingIntent.getActivity(
                 context,
                 NOTIFICATION_ID_INCOMING_CALL,
                 contentIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val declineIntent = Intent(DeclineCallReceiver.ACTION_DECLINE_CALL).apply {
-                setPackage(context.packageName)
-                putExtra(DeclineCallReceiver.EXTRA_CALL_ID, callId)
-            }
-            val declinePending = PendingIntent.getBroadcast(
-                context,
-                REQUEST_DECLINE,
-                declineIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val answerUri = "livi://answer-call?callId=${Uri.encode(callId)}&from=${Uri.encode(from)}&fromNick=${URLEncoder.encode(fromNick, StandardCharsets.UTF_8.name())}"
-            val answerIntent = Intent(Intent.ACTION_VIEW, Uri.parse(answerUri)).apply {
-                setClassName(context, "com.kolt12max.livi.MainActivity")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            }
-            val answerPending = PendingIntent.getActivity(
-                context,
-                REQUEST_ACCEPT,
-                answerIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
@@ -890,8 +795,6 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setTimeoutAfter(20_000)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel, context.getString(R.string.incoming_call_decline), declinePending)
-                .addAction(android.R.drawable.ic_menu_call, context.getString(R.string.incoming_call_accept), answerPending)
                 .build()
         }
     }

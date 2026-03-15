@@ -57,10 +57,11 @@ class IncomingCallForegroundService : Service() {
         timeoutRunnable = null
         LiviFirebaseMessagingService.ensureCallChannel(this)
         LiviAppModule.startIncomingCallRingtoneAndVibrationStatic(applicationContext)
+        // При видеозвонке сразу «только шторка»: иконка в статус-баре, в шторке — полное уведомление (тап → экран входящего). Нативный экран открываем через startActivity ниже.
         val notification = when {
             silentNotification -> LiviFirebaseMessagingService.buildIncomingCallNotificationSilent(this, callId, from, fromNick)
             headsUpOnly -> LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
-            else -> LiviFirebaseMessagingService.buildIncomingCallNotification(this, callId, from, fromNick)
+            else -> LiviFirebaseMessagingService.buildIncomingCallNotificationSilent(this, callId, from, fromNick)
         }
         // Android 14+ (API 34): тип PHONE_CALL — система не накладывает ограничение «no camera/microphone» при старте из фона (VoIP/входящий вызов).
         // На старых версиях — SPECIAL_USE (только показ уведомления, камера/микрофон не используем в сервисе).
@@ -69,16 +70,12 @@ class IncomingCallForegroundService : Service() {
         } else {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         }
-
         // ВАЖНО: регистрируем receivers ДО startForeground().
-        // Иначе IncomingCallActivity может отправить ACTION_INCOMING_CALL_ACTIVITY_SHOWN слишком быстро,
-        // и сервис не успеет подписаться → уведомление/heads-up останется висеть поверх нативного экрана.
-        // Задержка перед снятием уведомления: чтобы в шторке 3 сек оставалось уведомление с кнопками «Принять»/«Отклонить» (на части устройств full-screen мелькает и исчезает).
         activityShownReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, i: Intent?) {
                 val shownCallId = i?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
                 if (shownCallId == currentCallId) {
-                    handler.postDelayed({ if (shownCallId == currentCallId) cleanupAndStop() }, DELAY_CLEANUP_AFTER_ACTIVITY_SHOWN_MS)
+                    handler.postDelayed({ if (shownCallId == currentCallId) cleanupAndStop(keepNotificationInShade = true) }, DELAY_CLEANUP_AFTER_ACTIVITY_SHOWN_MS)
                 }
             }
         }
@@ -181,8 +178,13 @@ class IncomingCallForegroundService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun cleanupAndStop() {
-        Log.e(TAG, "[INCOMING_FGS] cleanupAndStop currentCallId=$currentCallId")
+    /**
+     * @param keepNotificationInShade true когда нативный экран входящего уже показан:
+     *   уведомление не снимается, а остаётся в шторке (STOP_FOREGROUND_DETACH), чтобы пользователь
+     *   мог свернуть экран, открыть шторку и по тапу на уведомление снова открыть экран входящего.
+     */
+    private fun cleanupAndStop(keepNotificationInShade: Boolean = false) {
+        Log.e(TAG, "[INCOMING_FGS] cleanupAndStop currentCallId=$currentCallId keepNotificationInShade=$keepNotificationInShade")
         LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
@@ -205,8 +207,13 @@ class IncomingCallForegroundService : Service() {
         currentCallId = null
         currentFrom = null
         currentFromNick = null
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        if (!keepNotificationInShade) {
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        } else {
+            // Оставляем уведомление в шторке; по тапу откроется IncomingCallActivity (contentIntent).
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
+        }
         stopSelf()
     }
 
@@ -227,7 +234,7 @@ class IncomingCallForegroundService : Service() {
         private const val TAG = "IncomingCallFGS"
         /** 20 сек без ответа — совпадает с таймаутом на сервере; после этого приходит call_ended и «Пропущенный вызов». */
         private const val TIMEOUT_MS = 20_000L
-        /** Задержка перед снятием уведомления после показа экрана входящего — уведомление с кнопками остаётся в шторке, чтобы пользователь мог нажать «Принять»/«Отклонить». */
+        /** Задержка перед остановкой FGS с оставлением уведомления в шторке (DETACH). */
         private const val DELAY_CLEANUP_AFTER_ACTIVITY_SHOWN_MS = 3000L
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"
