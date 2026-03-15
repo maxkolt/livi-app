@@ -336,10 +336,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   /**
-   * Показ системного UI входящего:
-   * - Если телефон заблокирован или экран "спит" → full-screen intent через IncomingCallForegroundService (система откроет IncomingCallActivity).
-   * - Если телефон разблокирован (другое приложение/домашний экран) → heads-up уведомление с кнопками (как на скрине), без открытия IncomingCallActivity.
-   *
+   * Показ системного UI входящего: всегда full-screen intent через IncomingCallForegroundService
+   * (экран с кнопками Принять/Отклонить не исчезает, мелодия и вибрация — системного звонка).
    * Используется для socket-path, когда приложение не в фокусе (AppState != active).
    */
   @ReactMethod
@@ -350,39 +348,28 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
     } catch (_: Exception) {}
 
-    val locked = try {
-      (ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
-    } catch (_: Exception) { false }
-    val interactive = try {
-      (ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive ?: true
-    } catch (_: Exception) { true }
-    val lockedOrSleeping = locked || !interactive
-
     try {
       LiviFirebaseMessagingService.ensureCallChannel(ctx)
       val serviceIntent = Intent(ctx, IncomingCallForegroundService::class.java).apply {
         putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
         putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
         putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick ?: "")
-        putExtra(IncomingCallForegroundService.EXTRA_HEADS_UP_ONLY, !lockedOrSleeping)
+        putExtra(IncomingCallForegroundService.EXTRA_HEADS_UP_ONLY, false)
         putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, false)
       }
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(serviceIntent) else ctx.startService(serviceIntent)
-      Log.d(NAME, "showIncomingCallSystemUI: started IncomingCallForegroundService headsUpOnly=${!lockedOrSleeping}")
+      Log.d(NAME, "showIncomingCallSystemUI: started IncomingCallForegroundService (full-screen)")
     } catch (e: Exception) {
       Log.w(NAME, "showIncomingCallSystemUI: failed to start IncomingCallForegroundService", e)
-      // Fallback: если нужно full-screen и FGS не стартанул — пробуем открыть activity напрямую (user might miss call otherwise)
-      if (lockedOrSleeping) {
-        try {
-          val intent = Intent(ctx, IncomingCallActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            putExtra(IncomingCallActivity.EXTRA_CALL_ID, callId)
-            putExtra(IncomingCallActivity.EXTRA_FROM, from)
-            putExtra(IncomingCallActivity.EXTRA_FROM_NICK, fromNick ?: "")
-          }
-          ctx.startActivity(intent)
-        } catch (_: Exception) {}
-      }
+      try {
+        val intent = Intent(ctx, IncomingCallActivity::class.java).apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+          putExtra(IncomingCallActivity.EXTRA_CALL_ID, callId)
+          putExtra(IncomingCallActivity.EXTRA_FROM, from)
+          putExtra(IncomingCallActivity.EXTRA_FROM_NICK, fromNick ?: "")
+        }
+        ctx.startActivity(intent)
+      } catch (_: Exception) {}
     }
   }
 
@@ -1074,7 +1061,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
 
     /** Запуск мелодии звонка и вибрации звонка из нативного кода (FGS, без React).
-     * Вибрация только при заблокированном экране (как в Telegram: на разблокированном — только мелодия). */
+     * Системная мелодия звонка и вибрация звонка (не уведомления) — и при заблокированном, и при разблокированном экране. */
     @JvmStatic
     internal fun startIncomingCallRingtoneAndVibrationStatic(ctx: Context) {
       try {
@@ -1097,13 +1084,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           }
           ringtonePlayerForCallKeep = player
         }
-        // Вибрация только при заблокированном экране; на разблокированном (heads-up вне приложения) — без вибрации, как в Telegram.
-        val screenLocked = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-          (ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isDeviceLocked == true
-        } else {
-          true
-        }
-        if (!screenLocked) return
+        // Вибрация звонка (USAGE_RINGTONE) — и при заблокированном, и при разблокированном экране.
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
         } else {

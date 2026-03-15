@@ -416,18 +416,19 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
           const removed = await removeInvalidFcmToken(userId, r);
           if (!removed) logger.warn('[push] FCM invalid token not removed (no match in DB)', { userId });
         } else if (!isInvalidToken) {
-          logger.warn('[push] FCM send failed, falling back to Expo for this device', { error: errMsg });
-          pushLog('call_push_FCM_failed_fallback_Expo', { userId, errMsg });
+          logger.warn('[push] FCM call push failed — not falling back to Expo for Android (would show small notification without Accept/Decline)', { error: errMsg });
+          pushLog('call_push_FCM_failed_no_Expo_fallback', { userId, errMsg });
         }
-        if (Expo.isExpoPushToken(r.token)) expoTokens.push(r.token);
+        // Android: не слать звонок через Expo — иначе показывается маленькое уведомление без кнопок Принять/Отклонить.
       }
-    } else {
+    } else if (r.platform !== 'android') {
+      // Только iOS получает звонок через Expo (с кнопками через categoryId).
       if (Expo.isExpoPushToken(r.token)) expoTokens.push(r.token);
     }
   }
 
   if (expoTokens.length > 0) {
-    logger.info('[push] sendCallPushToRecipient: sending via Expo (fallback or iOS)', { userId, tokenCount: expoTokens.length });
+    logger.info('[push] sendCallPushToRecipient: sending via Expo (iOS only)', { userId, tokenCount: expoTokens.length });
     pushLog('call_push_sending_via_Expo', { userId, tokenCount: expoTokens.length });
     const callTitle = (data.fromNick || '').trim() || 'Входящий видеозвонок';
     const callBody = 'Входящий видеозвонок';

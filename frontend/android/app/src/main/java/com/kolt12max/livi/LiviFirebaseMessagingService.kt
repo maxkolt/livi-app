@@ -98,19 +98,16 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
             } catch (_: Exception) {}
             // Не запускаем headless для входящего: показ и рингтон идут через IncomingCallForegroundService.
-            // При разблокированном экране — только постоянное уведомление в стиле Telegram (крупное, с кнопками Ответить/Отклонить), без маленького всплывающего окна и без full-screen.
-            // При заблокированном экране — full-screen intent + нативный экран входящего поверх блокировки.
-            val headsUpOnly = !keyguardLocked
-            Log.d(TAG, "[INCOMING_CALL] Using FGS path: headsUpOnly=$headsUpOnly (Telegram-style when unlocked)")
+            // Всегда full-screen intent + нативный экран входящего (Принять/Отклонить), чтобы экран не исчезал и звук/вибрация были системного звонка.
             ensureCallChannel(this)
             startIncomingCallForegroundService(
                 callId,
                 from,
                 fromNick,
-                headsUpOnly = headsUpOnly,
+                headsUpOnly = false,
                 silentNotification = false
             )
-            Log.e(TAG, "[INCOMING_CALL] IncomingCallForegroundService started headsUpOnly=$headsUpOnly keyguardLocked=$keyguardLocked (if FSI denied, check logcat for FSI_REQUESTED_BUT_DENIED or BAL_BLOCK)")
+            Log.e(TAG, "[INCOMING_CALL] IncomingCallForegroundService started (full-screen) keyguardLocked=$keyguardLocked (if FSI denied, check logcat for FSI_REQUESTED_BUT_DENIED or BAL_BLOCK)")
             return
         }
         if (typeNorm == "call_canceled" && callId != null) {
