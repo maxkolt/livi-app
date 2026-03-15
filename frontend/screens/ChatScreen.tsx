@@ -444,6 +444,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [reactionBarForMessageId, setReactionBarForMessageId] = useState<string | null>(null);
   /** ID сообщения, которое пользователь редактирует (текст в поле ввода). */
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  /** Сообщение, на которое отвечаем (показываем превью над полем ввода). */
+  const [replyingToMessage, setReplyingToMessage] = useState<{ id: string; text: string; from?: string; isOwn?: boolean } | null>(null);
   const [forwardToast, setForwardToast] = useState<{ visible: boolean; ok: boolean; text: string }>({
     visible: false,
     ok: true,
@@ -2867,11 +2869,12 @@ export default function ChatScreen({ route, navigation }: Props) {
       const isText = String(m?.type || '') === 'text';
       const showEdit = isOwn && isText;
 
-      const actionIds = ['copy', 'forward', 'select', ...(showEdit ? (['edit'] as const) : []), 'delete', 'cancel'] as const;
+      const actionIds = ['copy', 'forward', 'select', 'reply', ...(showEdit ? (['edit'] as const) : []), 'delete', 'cancel'] as const;
       const options = [
         t('chatActionCopy', lang),
         t('chatActionForward', lang),
         t('chatActionSelect', lang),
+        t('chatActionReply', lang),
         ...(showEdit ? [t('chatActionEdit', lang)] : []),
         t('delete', lang),
         t('cancelAction', lang),
@@ -2891,9 +2894,21 @@ export default function ChatScreen({ route, navigation }: Props) {
           (buttonIndex) => {
             const action = actionIds[buttonIndex] || 'cancel';
             if (action === 'cancel') return;
+            if (action === 'reply') {
+              setEditingMessageId(null);
+              setMessageText('');
+              setReplyingToMessage({
+                id: String(m?.id ?? ''),
+                text: String(m?.text ?? m?.name ?? ''),
+                from: m?.from,
+                isOwn: isOwn,
+              });
+              return;
+            }
             if (action === 'edit') {
               setMessageText(String(m?.text ?? ''));
               setEditingMessageId(m?.id ?? null);
+              setReplyingToMessage(null);
               return;
             }
             if (action === 'delete') return confirmDeleteSelectedMessage(m);
@@ -3005,7 +3020,9 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
 
     const messageToSend = messageText.trim();
+    const replyTo = replyingToMessage ? { id: replyingToMessage.id, text: replyingToMessage.text, from: replyingToMessage.from, isOwn: replyingToMessage.isOwn } : undefined;
     setMessageText(""); // Очищаем поле сразу
+    setReplyingToMessage(null);
     // Если отправили сообщение — прекращаем "typing"
     stopLocalTyping();
     
@@ -3019,6 +3036,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       to: peerId,
       timestamp: new Date(),
       type: 'text',
+      ...(replyTo ? { replyTo } : {}),
     };
     
     const updatedMessages = [...messages, newMessage];
@@ -3635,7 +3653,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
   // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
-  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri }: any) => {
+  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName }: any) => {
     const bubbleRef = React.useRef<View>(null);
     const [imageLoadError, setImageLoadError] = React.useState(false);
     const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
@@ -4206,6 +4224,28 @@ export default function ChatScreen({ route, navigation }: Props) {
               maxWidth: '100%',
             }}
           >
+          {/* Цитата ответа (если сообщение — ответ на другое) */}
+          {item.replyTo && (
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'flex-start',
+                marginBottom: 8,
+                paddingLeft: 8,
+                borderLeftWidth: 3,
+                borderLeftColor: '#7eb8ff',
+              }}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#7eb8ff', fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
+                  {item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—')}
+                </Text>
+                <Text style={{ color: LIVI.white, fontSize: 13, opacity: 0.85 }} numberOfLines={2}>
+                  {item.replyTo.text || '—'}
+                </Text>
+              </View>
+            </View>
+          )}
           {/* Основной контент */}
           {renderContent()}
           
@@ -4373,8 +4413,9 @@ export default function ChatScreen({ route, navigation }: Props) {
       isSelected={selectedMessageIds.has(String(item.id))}
       onToggleSelect={toggleSelectMessage}
       resolveMediaUri={resolveMediaUri}
+      peerDisplayName={peerNameState}
     />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, handleReactionPress, selectionMode, selectedMessageIds, toggleSelectMessage, resolveMediaUri]);
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, handleReactionPress, selectionMode, selectedMessageIds, toggleSelectMessage, resolveMediaUri, peerNameState]);
 
   return (
     <SafeAreaView 
@@ -4542,6 +4583,38 @@ export default function ChatScreen({ route, navigation }: Props) {
                       / 1:00
                     </Text>
                   </View>
+                </View>
+              )}
+              {replyingToMessage && (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    marginBottom: 10,
+                    paddingVertical: 10,
+                    paddingHorizontal: 12,
+                    borderRadius: 14,
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+                    borderWidth: 1,
+                    borderColor: BORDER_COLOR,
+                  }}
+                >
+                  <Ionicons name="arrow-undo-outline" size={20} color="#7eb8ff" style={{ marginRight: 10 }} />
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <Text style={{ color: '#7eb8ff', fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
+                      {t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
+                    </Text>
+                    <Text style={{ color: LIVI.white, fontSize: 14, opacity: 0.9 }} numberOfLines={2}>
+                      {replyingToMessage.text || '—'}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setReplyingToMessage(null)}
+                    hitSlop={8}
+                    style={{ padding: 4 }}
+                  >
+                    <Ionicons name="close-circle" size={24} color={LIVI.titan} />
+                  </TouchableOpacity>
                 </View>
               )}
               <View
@@ -4834,6 +4907,38 @@ export default function ChatScreen({ route, navigation }: Props) {
                       / 1:00
                     </Text>
                   </View>
+                </View>
+              )}
+              {replyingToMessage && (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    marginBottom: 10,
+                    paddingVertical: 10,
+                    paddingHorizontal: 12,
+                    borderRadius: 14,
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+                    borderWidth: 1,
+                    borderColor: BORDER_COLOR,
+                  }}
+                >
+                  <Ionicons name="arrow-undo-outline" size={20} color="#7eb8ff" style={{ marginRight: 10 }} />
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <Text style={{ color: '#7eb8ff', fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
+                      {t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
+                    </Text>
+                    <Text style={{ color: LIVI.white, fontSize: 14, opacity: 0.9 }} numberOfLines={2}>
+                      {replyingToMessage.text || '—'}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setReplyingToMessage(null)}
+                    hitSlop={8}
+                    style={{ padding: 4 }}
+                  >
+                    <Ionicons name="close-circle" size={24} color={LIVI.titan} />
+                  </TouchableOpacity>
                 </View>
               )}
               <View
@@ -5331,6 +5436,31 @@ export default function ChatScreen({ route, navigation }: Props) {
                           <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionSelect', lang)}</Text>
                           <Ionicons name="checkbox-outline" size={20} color={LIVI.titan} />
                         </Pressable>
+                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
+                        <Pressable
+                          onPress={() => {
+                            hideMessageActions();
+                            setEditingMessageId(null);
+                            setMessageText('');
+                            setReplyingToMessage({
+                              id: String(selectedMessage?.id ?? ''),
+                              text: String(selectedMessage?.text ?? selectedMessage?.name ?? ''),
+                              from: selectedMessage?.from,
+                              isOwn: selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me',
+                            });
+                          }}
+                          style={({ pressed }) => ({
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            paddingVertical: 12,
+                            paddingHorizontal: 14,
+                            backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
+                          })}
+                        >
+                          <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionReply', lang)}</Text>
+                          <Ionicons name="arrow-undo-outline" size={20} color={LIVI.titan} />
+                        </Pressable>
                         {(selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me') && String(selectedMessage?.type || '') === 'text' && (
                           <>
                             <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
@@ -5339,6 +5469,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                                 hideMessageActions();
                                 setMessageText(String(selectedMessage?.text ?? ''));
                                 setEditingMessageId(selectedMessage?.id ?? null);
+                                setReplyingToMessage(null);
                               }}
                               style={({ pressed }) => ({
                                 flexDirection: 'row',

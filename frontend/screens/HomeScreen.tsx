@@ -4120,7 +4120,7 @@ const handleClearNick = useCallback(async () => {
   );
 
   const MoreTab = () => (
-    <View style={{ padding: 16, gap: 16, flex: 1 }}>
+    <View style={{ paddingTop: 8, paddingLeft: 8, paddingRight: 16, paddingBottom: 16, gap: 16, flex: 1 }}>
 
 
       {/* UI Settings */}
@@ -4172,7 +4172,7 @@ const handleClearNick = useCallback(async () => {
         <Text style={{ color: LIVI.text2, marginTop: 6, fontSize: 12 }}>{L('baseLang')}: {defaultLang.toUpperCase()}</Text>
       </View>
 
-      {/* Donate — рамка 1px сверху/по бокам, 1.5px снизу */}
+      {/* Donate — рамка 0.2, снизу 0.3 */}
       <TouchableOpacity 
         activeOpacity={0.85}
         onPress={async () => {
@@ -4182,18 +4182,15 @@ const handleClearNick = useCallback(async () => {
         style={{ 
           backgroundColor: LIVI.accent, 
           borderRadius: 12, 
-          paddingTop: 1,
-          paddingLeft: 1,
-          paddingRight: 1,
-          paddingBottom: 1.5,
+          paddingTop: 0.2,
+          paddingLeft: 0.2,
+          paddingRight: 0.2,
+          paddingBottom: 0.3,
         }}
       >
         <View style={{ 
           backgroundColor: 'rgba(4, 4, 4, 0.8)', 
-          borderTopLeftRadius: 11, 
-          borderTopRightRadius: 11, 
-          borderBottomLeftRadius: 10.5, 
-          borderBottomRightRadius: 10.5, 
+          borderRadius: 11.8, 
           padding: 14,
           flexDirection: 'row',
           alignItems: 'center'
@@ -4223,19 +4220,25 @@ const handleClearNick = useCallback(async () => {
         </View>
       </TouchableOpacity>
 
-      {/* Invite Friends — рамка одной толщины на прямых и закруглённых краях (обёртка с padding) */}
+      {/* Invite Friends — рамка 0.2, снизу 1px чтобы отображалась */}
       <TouchableOpacity 
         activeOpacity={0.85}
         onPress={generateInviteLink}
         style={{ 
           backgroundColor: '#4DD0E1', 
-          borderRadius: 12, 
-          padding: 1,
+          borderRadius: 11, 
+          paddingTop: 0.2,
+          paddingLeft: 0.2,
+          paddingRight: 0.2,
+          paddingBottom: 0.5,
         }}
       >
         <View style={{ 
           backgroundColor: 'rgba(4, 4, 4, 0.8)', 
-          borderRadius: 11, 
+          borderBottomLeftRadius: 11,
+          borderBottomRightRadius: 11,
+          borderTopLeftRadius: 11.8,
+          borderTopRightRadius: 11.8, 
           padding: 14,
           flexDirection: 'row',
           alignItems: 'center'
