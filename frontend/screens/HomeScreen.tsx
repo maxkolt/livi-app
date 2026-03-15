@@ -715,20 +715,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const check = async () => {
       try {
         lastUpdateCheckAtRef.current = Date.now();
-        // Сразу скрыть бейдж/индикатор, если ранее уже определили, что на последней версии (не зависит от VPN)
+        // Сразу скрыть бейдж/индикатор, если ранее уже определили, что на последней версии (не зависит от VPN). В dev не сбрасываем — бейдж показываем при каждом заходе.
         const likelyOnLatest = await isLikelyOnLatestVersion();
-        if (!cancelled && likelyOnLatest) {
+        if (!__DEV__ && !cancelled && likelyOnLatest) {
           setUpdateAvailable(false);
           setShowUpdateBadgeState(false);
         }
         const available = await isUpdateAvailable();
         if (!cancelled) {
-          setUpdateAvailable(!!available);
+          // В dev всегда считаем, что обновление доступно — бейдж показывается при каждом заходе
+          setUpdateAvailable(__DEV__ ? true : !!available);
           // Показываем бейдж только через shouldShowUpdateBadge():
           // - в релизе: при каждом входе (если updateAvailable)
-          // - в dev: раз в сутки
-          // Здесь же лишь гарантированно убираем бейдж, если обновления нет.
-          if (!available) setShowUpdateBadgeState(false); // после обновления — сразу убрать бейдж и индикатор
+          // - в dev: при каждом заходе
+          if (!__DEV__ && !available) setShowUpdateBadgeState(false); // после обновления — сразу убрать бейдж и индикатор
         }
       } catch {}
     };
@@ -3747,7 +3747,12 @@ const handleClearNick = useCallback(async () => {
 
   /* ================= UI ================= */
 
-  const onRefreshFriends = async () => { setRefreshing(true); await loadFriends(); setRefreshing(false); };
+  const onRefreshFriends = async () => {
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
+    setRefreshing(true);
+    await loadFriends();
+    setRefreshing(false);
+  };
 
   const ChatButton = ({ friend }: { friend: Friend }) => {
     // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) для корректной работы с счетчиками
@@ -4533,36 +4538,37 @@ const handleClearNick = useCallback(async () => {
 
         {/* Бейдж «Скачайте обновление»: между LiVi и меню, градиент только в рамке 0.3px, скруглённые углы, 5 сек автоскрытие, X закрыть, тап — Google Play */}
         {showUpdateBadge && (
-          <View style={{ padding: 0.3, borderRadius: 18, marginHorizontal: 8, position: 'relative', overflow: 'hidden', alignSelf: 'center', minWidth: 180, maxHeight: Platform.OS === 'ios' ? 42 : 34 }}>
+          <View style={{ padding: 0.2, borderRadius: 18, marginHorizontal: 8, position: 'relative', overflow: 'hidden', alignSelf: 'center', minWidth: 180, maxHeight: Platform.OS === 'ios' ? 42 : 34 }}>
             <LinearGradient
-              colors={isDark ? ['#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0', '#14b8a6'] : ['#a78bfa', '#FFF8F0', '#B0B5BF', '#a78bfa']}
+              colors={isDark ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf'] : ['#a78bfa', '#FFF8F0', '#B0B5BF', '#a78bfa']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={[StyleSheet.absoluteFillObject, { borderRadius: 18 }]}
             />
-            {/* Верхняя линия рамки — те же цвета, горизонтальный градиент (светлое правее) */}
-            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0.3, borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden', zIndex: 2 }}>
+            {/* Верхняя линия рамки — бирюза → голубой → белый → синий (слева направо); в тёмной теме чуть посветлее */}
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0.2, borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden', zIndex: 2 }}>
               <LinearGradient
-                colors={isDark ? ['#14b8a6', '#00b5ff', '#FFF8F0', '#3b82f6'] : ['#a78bfa', '#8b6cf0', '#a78bfa']}
+                colors={isDark ? ['#2dd4bf', '#38bdf8', '#FFF8F0', '#60a5fa'] : ['#a78bfa', '#8b6cf0', '#FFF8F0', '#a78bfa']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={[StyleSheet.absoluteFillObject, { borderTopLeftRadius: 18, borderTopRightRadius: 18 }]}
               />
             </View>
-            {/* Нижняя линия рамки — меньше белого и серого */}
-            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 0.3, borderBottomLeftRadius: 18, borderBottomRightRadius: 18, overflow: 'hidden', zIndex: 2 }}>
+            {/* Нижняя линия рамки — другая гамма и направление; в тёмной теме без фиолетового, чуть посветлее */}
+            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 0.2, borderBottomLeftRadius: 18, borderBottomRightRadius: 18, overflow: 'hidden', zIndex: 2 }}>
               <LinearGradient
-                colors={isDark ? ['#14b8a6', '#00b5ff', '#3b82f6'] : ['#a78bfa', '#8b6cf0', '#a78bfa']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
+                colors={isDark ? ['#60a5fa', '#38bdf8', '#2dd4bf', '#F0EEEC'] : ['#a78bfa', '#B0B5BF', '#8b6cf0', '#a78bfa']}
+                start={{ x: 1, y: 0 }}
+                end={{ x: 0, y: 0 }}
                 style={[StyleSheet.absoluteFillObject, { borderBottomLeftRadius: 18, borderBottomRightRadius: 18 }]}
               />
             </View>
             {/* Только рамка в градиенте; середина — сплошной фон страницы */}
-            <View style={{ margin: 0.3, borderRadius: 17.7, flexDirection: 'row', alignItems: 'center', paddingLeft: 10, paddingRight: 10, backgroundColor: theme.colors.background, flex: 1, paddingTop: 0, paddingBottom: 0, zIndex: 1 }}>
+            <View style={{ margin: 0.2, borderRadius: 17.8, flexDirection: 'row', alignItems: 'center', paddingLeft: 10, paddingRight: 10, backgroundColor: theme.colors.background, flex: 1, paddingTop: 0, paddingBottom: 0, zIndex: 1 }}>
+              {/* Вся зона от внутреннего края бейджа до разделителя | — одна кликабельная кнопка «Обновить» */}
               <Pressable
                 style={({ pressed }) => [
-                  { justifyContent: 'center', borderRadius: 14, marginLeft: 4, marginRight: 4 },
+                  { flex: 1, justifyContent: 'center', alignItems: 'center', borderRadius: 14, marginLeft: 4, marginRight: 4, paddingVertical: 10, minHeight: 32 },
                   pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
                 ]}
                 onPress={() => {
@@ -4572,11 +4578,11 @@ const handleClearNick = useCallback(async () => {
                 }}
                 android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: false, radius: 14 }}
               >
-                <Text style={{ color: isDark ? LIVI.text : LIVI.textThemeWhite, fontSize: 12, fontWeight: '400', lineHeight: 12, ...(Platform.OS === 'android' && { includeFontPadding: false }) }} numberOfLines={1}>{L('updateDownloadNew')}</Text>
+                <Text style={{ color: isDark ? LIVI.text : LIVI.textThemeWhite, fontSize: 14, fontWeight: '400', lineHeight: 12, ...(Platform.OS === 'android' && { includeFontPadding: false }) }} numberOfLines={1}>{L('updateBtn')}</Text>
               </Pressable>
               <View style={{ width: 1, alignSelf: 'stretch', marginVertical: 6, marginLeft: 8, marginRight: 4, overflow: 'hidden', borderRadius: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)' }}>
                 <LinearGradient
-                  colors={isDark ? ['#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0'] : ['#a78bfa', '#FFF8F0', '#B0B5BF']}
+                  colors={isDark ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0'] : ['#a78bfa', '#FFF8F0', '#B0B5BF']}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 0, y: 1 }}
                   style={{ flex: 1, width: 1 }}

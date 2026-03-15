@@ -1779,8 +1779,8 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (link) link.timer = timer;
 
       // отправим входящий вызов получателю (с ником инициатора, если есть)
+      let fromNick: string | undefined;
       try {
-        let fromNick: string | undefined;
         try {
           // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
           if (isMongoReady()) {
@@ -1804,17 +1804,16 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.info('[call:initiate] emitting call:incoming to recipient', { peerId, callId, recipientSocketsCount: recipientSockets.length, roomUSize: roomSize });
         io.to(`u:${peerId}`).emit('call:incoming', { callId, from: me, fromNick });
         io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
-
-        // Push для входящего звонка: Android с FCM-токеном — data-only через FCM (onMessageReceived в фоне);
-        // остальные — через Expo без title/body. Так показывается нативный экран CallKeep при убитом/фоне.
-        try {
-          logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
-          await sendCallPushToRecipient(peerId, { callId, from: me, fromNick: fromNick || '' });
-          logger.info('[call:initiate] call push sent', { peerId });
-        } catch (pushErr: any) {
-          logger.warn('[call:initiate] push to recipient failed', { peerId, error: pushErr?.message });
-        }
       } catch {}
+
+      // КРИТИЧНО: пуш всегда отправляем в отдельном шаге, чтобы исключение в блоке с Mongo/сокетами не пропустило доставку в глубоком сне
+      try {
+        logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
+        await sendCallPushToRecipient(peerId, { callId, from: me, fromNick: fromNick ?? '' });
+        logger.info('[call:initiate] call push sent', { peerId });
+      } catch (pushErr: any) {
+        logger.warn('[call:initiate] push to recipient failed', { peerId, error: pushErr?.message });
+      }
 
       return ack?.({ ok: true, callId });
     } catch (e: any) {

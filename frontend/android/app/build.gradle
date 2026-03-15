@@ -107,8 +107,8 @@ android {
         applicationId 'com.kolt12max.livi'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 95
-        versionName "1.0.94"
+        versionCode 96
+        versionName "1.0.95"
     }
     signingConfigs {
     debug {

@@ -158,9 +158,9 @@ export async function isUpdateAvailable(): Promise<boolean> {
   return false;
 }
 
-/** Показывать ли бейдж «Скачайте обновление». В dev не показываем; в релизе — при каждом заходе, если есть обновление. */
+/** Показывать ли бейдж «Скачайте обновление». В dev — при каждом заходе; в релизе — при каждом заходе, если есть обновление. */
 export async function shouldShowUpdateBadge(): Promise<boolean> {
-  if (__DEV__) return false; // в dev не показываем бейдж обновления
+  if (__DEV__) return true; // в dev показываем бейдж при каждом заходе (для проверки UI)
   const available = await isUpdateAvailable();
   return available; // в релизе — при каждом входе, если есть обновление
 }
