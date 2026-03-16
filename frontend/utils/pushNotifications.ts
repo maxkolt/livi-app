@@ -814,6 +814,32 @@ export function addNotificationListeners() {
           logger.info('[push] incoming call notification ignored (call already ended)', { callId: data.callId });
           return;
         }
+        // Пуш «call» пришёл с задержкой (устройство было офлайн): показываем только «Пропущенный вызов», не полноэкранный входящий.
+        const STALE_CALL_MS = 22 * 1000; // 22 сек — чуть больше таймаута звонка на сервере (20 сек)
+        const ts = data.ts != null ? Number(data.ts) : NaN;
+        if (!Number.isNaN(ts) && Date.now() - ts > STALE_CALL_MS) {
+          logger.info('[push] incoming call notification treated as stale (delayed delivery)', { callId: data.callId, ts, ageMs: Date.now() - ts });
+          try {
+            addEndedCallId(String(data.callId));
+          } catch {}
+          const fromNick = String(data.fromNick || '').trim();
+          const fromUserId = String(data.from || '');
+          try {
+            const title = 'Пропущенный вызов';
+            const body = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
+            await Notifications.scheduleNotificationAsync({
+              content: {
+                title,
+                body,
+                data: { type: 'missed_call', from: fromUserId, fromNick },
+              },
+              trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
+            });
+          } catch (e) {
+            logger.warn('[push] failed to show missed_call for stale call', e as any);
+          }
+          return;
+        }
         logger.info('[push] incoming call notification received', { callId: data.callId, from: data.from });
         if (Platform.OS === 'android') {
           await launchIncomingCallActivityScreen(data.callId, data.from, data.fromNick ?? '', true);

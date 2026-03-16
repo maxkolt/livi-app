@@ -73,6 +73,27 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         Log.e(TAG, "FCM parsed typeNorm=$typeNorm type=$type callId=$callId from=$from fromNick=$fromNick")
 
         if (typeNorm == "call" && callId != null && from != null) {
+            // Пуш «call» пришёл с задержкой (устройство было офлайн): показываем только «Пропущенный вызов», не полноэкранный входящий (порог 22 сек — чуть больше таймаута звонка на сервере).
+            val STALE_CALL_MS = 22_000L
+            var callTs: Long? = data["ts"]?.toLongOrNull()
+            if (callTs == null && data["body"] != null) {
+                try {
+                    val body = JSONObject(data["body"]!!)
+                    callTs = body.optString("ts", "").takeIf { it.isNotEmpty() }?.toLongOrNull()
+                } catch (_: Exception) {}
+            }
+            if (callTs != null) {
+                val ageMs = System.currentTimeMillis() - callTs
+                if (ageMs > STALE_CALL_MS) {
+                    Log.i(TAG, "[INCOMING_CALL] FCM call push treated as stale (delayed delivery) callId=$callId ageMs=$ageMs")
+                    EndedCallIds.add(this, callId)
+                    if (!LiviAppModule.wasMissedShownForCallId(this, callId)) {
+                        LiviAppModule.markMissedShownForCallId(this, callId)
+                        showMissedCallNotification(callId, from, fromNick)
+                    }
+                    return
+                }
+            }
             val keyguardLocked = try {
                 (getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
             } catch (_: Exception) { false }

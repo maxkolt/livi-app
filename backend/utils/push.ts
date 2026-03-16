@@ -338,11 +338,13 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     return;
   }
 
+  const callTs = Date.now();
   const fcmData = {
     type: 'call',
     callId: data.callId,
     from: data.from,
     fromNick: data.fromNick || '',
+    ts: String(callTs),
   };
   // FCM data payload: ключ "from" зарезервирован, используем fromUserId для FCM
   const fcmDataPayload: Record<string, string> = {
@@ -350,6 +352,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     callId: data.callId,
     fromUserId: data.from,
     fromNick: data.fromNick || '',
+    ts: String(callTs),
   };
 
   const messaging = getFirebaseMessaging();
