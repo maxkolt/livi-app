@@ -16,14 +16,6 @@ livekit.liviapp.com {
   reverse_proxy 127.0.0.1:7880
 }
 
-api.staging.liviapp.com {
-        reverse_proxy 127.0.0.1:3000
-}
-
-livekit.staging.liviapp.com {
-        reverse_proxy 127.0.0.1:7880
-}
-
 # Доступ по IP-адресу (без SSL)
 :80 {
         reverse_proxy 127.0.0.1:3000 {

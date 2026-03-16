@@ -1028,7 +1028,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.config.onRoomIdChange?.(roomId);
     }
 
-    // Staging: prefer env EXPO_PUBLIC_LIVEKIT_URL so staging build always uses livekit.staging
     const resolvedLivekitUrl = (LIVEKIT_URL || data.livekitUrl || '').trim();
     if (!resolvedLivekitUrl) {
       logger.error('[RandomChatSession] LiveKit URL is not configured', {

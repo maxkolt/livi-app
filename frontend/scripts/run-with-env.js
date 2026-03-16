@@ -1,10 +1,8 @@
 /**
  * Load env from a .env file and run a command with that env.
- * Used for start:staging (load .env.development so dev build uses staging API/LiveKit).
  *
  * Usage:
  *   node scripts/run-with-env.js .env.development npx expo start --dev-client
- *   node scripts/run-with-env.js .env.development node ./scripts/adb-reverse-usb.js 8081 && npx expo start ...
  *
  * We only support a single command; for "cmd1 && cmd2" the shell runs that.
  */

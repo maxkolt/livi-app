@@ -265,7 +265,7 @@ app.use((req, _res, next) => {
 app.get('/', (_req, res) => res.send('🚀 Сервер работает!'));
 app.get('/health', (_req, res) => res.json({ ok: true, mongo: mongoose.connection.readyState }));
 
-// Capacity Stage A: только при CAPACITY_METRICS_ENABLED=1 (staging). В проде — 404.
+// Capacity: только при CAPACITY_METRICS_ENABLED=1. В проде — 404.
 app.get('/metrics', (_req, res) => {
   if (!capacityMetrics.isCapacityMetricsEnabled()) return res.status(404).end();
   res.set('Content-Type', 'text/plain; charset=utf-8');

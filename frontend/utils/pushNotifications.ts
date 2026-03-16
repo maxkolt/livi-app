@@ -822,21 +822,24 @@ export function addNotificationListeners() {
           try {
             addEndedCallId(String(data.callId));
           } catch {}
-          const fromNick = String(data.fromNick || '').trim();
-          const fromUserId = String(data.from || '');
-          try {
-            const title = 'Пропущенный вызов';
-            const body = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
-            await Notifications.scheduleNotificationAsync({
-              content: {
-                title,
-                body,
-                data: { type: 'missed_call', from: fromUserId, fromNick },
-              },
-              trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
-            });
-          } catch (e) {
-            logger.warn('[push] failed to show missed_call for stale call', e as any);
+          // На Android пропущенный уже показывается нативным кодом (FCM → showMissedCallNotification), не дублируем Expo-уведомлением
+          if (Platform.OS !== 'android') {
+            const fromNick = String(data.fromNick || '').trim();
+            const fromUserId = String(data.from || '');
+            try {
+              const title = 'Пропущенный вызов';
+              const body = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
+              await Notifications.scheduleNotificationAsync({
+                content: {
+                  title,
+                  body,
+                  data: { type: 'missed_call', from: fromUserId, fromNick },
+                },
+                trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
+              });
+            } catch (e) {
+              logger.warn('[push] failed to show missed_call for stale call', e as any);
+            }
           }
           return;
         }

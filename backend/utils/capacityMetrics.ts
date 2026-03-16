@@ -1,7 +1,7 @@
 /**
  * Метрики для capacity Stage A: join time, RTT, packet loss, token success/failure.
  * In-memory агрегация; клиент присылает sample через POST /api/capacity/client-metrics.
- * В проде отключено: задать CAPACITY_METRICS_ENABLED=1 только на staging.
+ * В проде отключено: задать CAPACITY_METRICS_ENABLED=1 для включения.
  */
 
 const CAPACITY_METRICS_ENABLED = String(process.env.CAPACITY_METRICS_ENABLED || '').trim() === '1';

@@ -130,8 +130,7 @@ const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EX
 
 export const API_BASE = (Platform.OS === 'android' ? ANDROID_URL : IOS_URL).replace(/\/+$/, '');
 
-// Лог при загрузке модуля: для проверки staging (API и LiveKit в настройках)
-if (__DEV__ || (API_BASE && API_BASE.includes('staging'))) {
+if (__DEV__) {
   const lk = (process.env.EXPO_PUBLIC_LIVEKIT_URL || '').trim();
   console.log('[socket] API_BASE=', API_BASE, 'EXPO_PUBLIC_LIVEKIT_URL=', lk || '—');
 }

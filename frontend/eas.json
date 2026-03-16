@@ -32,20 +32,6 @@
       "android": {
         "buildType": "app-bundle"
       }
-    },
-    "staging": {
-      "distribution": "internal",
-      "env": {
-        "EXPO_PUBLIC_SERVER_URL": "https://api.staging.liviapp.com",
-        "EXPO_PUBLIC_LIVEKIT_URL": "wss://livekit.staging.liviapp.com",
-        "EXPO_PUBLIC_LIVEKIT_DYNACAST": "1",
-        "EXPO_PUBLIC_LIVEKIT_ADAPTIVE_STREAM": "0",
-        "EXPO_PUBLIC_LOG_LEVEL": "info",
-        "BUILD_SKIP_GOOGLE_SERVICES_CHECK": "1"
-      },
-      "android": {
-        "buildType": "apk"
-      }
     }
   }
 }

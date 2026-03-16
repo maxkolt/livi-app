@@ -1,7 +1,7 @@
 /**
- * Capacity Stage A: отправка client-metrics на backend для SLO (join time, RTT, packet loss, failure).
+ * Capacity: отправка client-metrics на backend для SLO (join time, RTT, packet loss, failure).
  * POST /api/capacity/client-metrics
- * Отправляем только на staging (apiBase содержит "staging"), в проде не шлём.
+ * Отключено: ранее отправлялось только на staging; staging убран из проекта.
  */
 export type ClientMetricsPayload = {
   joinTimeMs?: number;
@@ -12,28 +12,9 @@ export type ClientMetricsPayload = {
   joinFailure?: boolean;
 };
 
-function isStagingApi(apiBase: string): boolean {
-  const base = (apiBase || '').toLowerCase();
-  return base.includes('staging');
-}
-
 export async function sendClientMetrics(
-  apiBase: string,
-  payload: ClientMetricsPayload
+  _apiBase: string,
+  _payload: ClientMetricsPayload
 ): Promise<void> {
-  if (!isStagingApi(apiBase)) return;
-  const url = `${apiBase.replace(/\/+$/, '')}/api/capacity/client-metrics`;
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      // Не логируем в консоль при ошибке, чтобы не засорять прод
-      __DEV__ && console.warn('[capacityClientMetrics] POST failed', res.status, await res.text());
-    }
-  } catch (e) {
-    __DEV__ && console.warn('[capacityClientMetrics]', (e as Error)?.message);
-  }
+  // Отключено: staging убран из проекта.
 }

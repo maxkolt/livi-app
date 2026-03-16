@@ -1,6 +1,6 @@
 /**
  * Распределённое хранилище очереди/состояний.
- * При REDIS_URL (или REDIS_URI) используется Redis (staging/prod, несколько инстансов backend).
+ * При REDIS_URL (или REDIS_URI) используется Redis (несколько инстансов backend).
  * Без Redis — in-memory (только один процесс).
  */
 

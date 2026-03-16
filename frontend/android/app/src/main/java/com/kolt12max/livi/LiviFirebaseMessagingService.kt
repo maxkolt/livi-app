@@ -87,6 +87,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 if (ageMs > STALE_CALL_MS) {
                     Log.i(TAG, "[INCOMING_CALL] FCM call push treated as stale (delayed delivery) callId=$callId ageMs=$ageMs")
                     EndedCallIds.add(this, callId)
+                    try {
+                        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
+                    } catch (_: Exception) {}
                     if (!LiviAppModule.wasMissedShownForCallId(this, callId)) {
                         LiviAppModule.markMissedShownForCallId(this, callId)
                         showMissedCallNotification(callId, from, fromNick)

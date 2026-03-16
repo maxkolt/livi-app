@@ -746,12 +746,18 @@ function AppContent() {
           const raw = await AsyncStorage.getItem(key);
           const map = raw ? JSON.parse(raw) : {};
           const MISSED_APPLY_SKIP_MS = 15000;
-          const uniqueUids = [...new Set(arr.filter((u: string) => u))];
-          for (const uid of uniqueUids) {
+          // Считаем количество пропущенных по каждому userId (массив — по одному элементу на каждый показ «Пропущенный вызов» из FCM)
+          const countByUid: Record<string, number> = {};
+          for (const u of arr) {
+            if (!u) continue;
+            countByUid[u] = (countByUid[u] || 0) + 1;
+          }
+          for (const uid of Object.keys(countByUid)) {
             const lastInc = lastMissedIncrementTimeByUserRef.current[uid];
             if (lastInc && Date.now() - lastInc < MISSED_APPLY_SKIP_MS) continue;
             if (wasAppliedFromReauth(uid)) continue;
-            map[uid] = (map[uid] || 0) + 1;
+            const add = countByUid[uid] || 1;
+            map[uid] = (map[uid] || 0) + add;
             try { recordAppliedFromPending(uid); } catch {}
             try { emitMissedIncrement(uid); } catch {}
           }
@@ -1846,12 +1852,17 @@ function AppContent() {
                   const raw = await AsyncStorage.getItem(key);
                   const map = raw ? JSON.parse(raw) : {};
                   const MISSED_APPLY_SKIP_MS = 15000;
-                  const uniqueUids = [...new Set(arr.filter((u: string) => u))];
-                  for (const uid of uniqueUids) {
+                  const countByUid: Record<string, number> = {};
+                  for (const u of arr) {
+                    if (!u) continue;
+                    countByUid[u] = (countByUid[u] || 0) + 1;
+                  }
+                  for (const uid of Object.keys(countByUid)) {
                     const lastInc = lastMissedIncrementTimeByUserRef.current[uid];
                     if (lastInc && Date.now() - lastInc < MISSED_APPLY_SKIP_MS) continue;
                     if (wasAppliedFromReauth(uid)) continue;
-                    map[uid] = (map[uid] || 0) + 1;
+                    const add = countByUid[uid] || 1;
+                    map[uid] = (map[uid] || 0) + add;
                     try { recordAppliedFromPending(uid); } catch {}
                     try { emitMissedIncrement(uid); } catch {}
                   }

@@ -3922,6 +3922,10 @@ const handleClearNick = useCallback(async () => {
     const videoCallActive = (global as any).__videoCallActiveRef?.current;
     const videoCallPartner = (global as any).__videoCallPartnerUserIdRef?.current;
     const busy = isFriendBusy || (!!videoCallActive && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
+    // Исходящий вызов в процессе (инициатор свернул нативный экран в шторку): у того, кому звоним — стиль «занято» без бейджа; у остальных — просто неактивная кнопка
+    const outgoingInProgress = calling.visible;
+    const isOutgoingToThisFriend = outgoingInProgress && !!calling.friend && String(calling.friend.id) === friendIdStr;
+    const useBusyButtonStyle = busy || isOutgoingToThisFriend; // тот же визуал что и при «Занято», но бейдж только при busy
     const pulse = React.useRef(new Animated.Value(0)).current;
     useEffect(() => {
       if (busy) {
@@ -3950,7 +3954,7 @@ const handleClearNick = useCallback(async () => {
           <IconButton
             icon="video"
             size={23}
-            iconColor={busy ? '#ddd' : LIVI.white}
+            iconColor={useBusyButtonStyle ? '#ddd' : LIVI.white}
             style={[
               styles.friendActionBtnSize,
               {
@@ -3958,9 +3962,9 @@ const handleClearNick = useCallback(async () => {
                 borderWidth: 1,
                 borderColor: 'rgba(255,255,255,0.12)',
               },
-              busy ? styles.inviteBtnDisabled : null,
+              useBusyButtonStyle ? styles.inviteBtnDisabled : null,
             ]}
-            disabled={busy}
+            disabled={busy || outgoingInProgress}
             onLongPress={
             missedCount > 0
               ? () => {
@@ -3975,7 +3979,7 @@ const handleClearNick = useCallback(async () => {
               handleStartVideoCall(friend);
             }}
           />
-          {busy && Platform.OS === 'android' && (
+          {useBusyButtonStyle && Platform.OS === 'android' && (
             <View style={styles.videoIconOverlay}>
               <MaterialIcons name="videocam" size={23} color="rgba(136, 136, 136, 0.3)" />
             </View>

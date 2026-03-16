@@ -327,7 +327,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       
       if (tokenData.ok && tokenData.token) {
-        // Staging: prefer env so staging build always uses livekit.staging
         const resolvedLivekitUrl = ((envLivekitUrl || LIVEKIT_URL || (tokenData.url as string | undefined)) || '').trim();
         if (!resolvedLivekitUrl) {
           logger.error('[VideoCallSession] LiveKit URL is not configured (token received but no URL)', {
