@@ -1393,29 +1393,42 @@ io.on('connection', async (sock: AuthedSocket) => {
       const status = payload?.status;
       const busy = status === 'busy';
       
+      // КРИТИЧНО: Получатель (callee) не должен показывать бейдж «Занято» до принятия вызова.
+      // Если этот пользователь — link.b в ожидающем звонке и inCall ещё не установлен, игнорируем busy (не ставим на сокет, не рассылаем).
+      let ignoreBusyForCallee = false;
+      if (busy && callOfUser.has(userId)) {
+        const entry = callOfUser.get(userId);
+        if (entry) {
+          const link = callsById.get(entry.callId);
+          if (link && link.b === userId && !(sock as any).data.inCall) {
+            ignoreBusyForCallee = true;
+            logger.debug('📍 [presence:update] Callee busy ignored until call accepted', { userId, callId: entry.callId });
+          }
+        }
+      }
+      const effectiveBusy = busy && !ignoreBusyForCallee;
+      
       // Обновляем состояние сокета
-      (sock as any).data.busy = busy;
-      if (payload?.roomId) {
+      (sock as any).data.busy = effectiveBusy;
+      if (payload?.roomId && !ignoreBusyForCallee) {
         (sock as any).data.roomId = payload.roomId;
-      } else if (!busy) {
-        // КРИТИЧНО: Очищаем roomId только когда пользователь не busy
-        // Если busy: true и roomId не передан, это означает что пользователь ищет (next()),
-        // и roomId должен остаться undefined - не удаляем его явно, так как он уже undefined
+      } else if (!effectiveBusy) {
         delete (sock as any).data.roomId;
       } else {
-        // КРИТИЧНО: Если busy: true и roomId не передан (поиск после next()),
-        // явно очищаем roomId чтобы синхронизировать состояние
         delete (sock as any).data.roomId;
       }
       
-      // Рассылаем обновление друзьям
-      await emitPresenceUpdateToFriends(io, userId, busy);
+      if (!ignoreBusyForCallee) {
+        await emitPresenceUpdateToFriends(io, userId, effectiveBusy);
+      }
       
       logger.debug('📍 [presence:update] Status updated', {
         userId,
         status,
         busy,
-        roomId: payload?.roomId
+        effectiveBusy,
+        roomId: payload?.roomId,
+        ignoreBusyForCallee
       });
     } catch (e) {
       logger.error('❌ [presence:update] Error', { error: (e as any)?.message || String(e) });
