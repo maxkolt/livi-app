@@ -721,6 +721,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const onCallEnded = (data?: any) => {
       // Закрываем PiP при call:ended и когда in-app PiP виден, и когда в системном PiP (inSystemPiPMode), чтобы у второго пользователя PiP закрывался сразу.
       const shouldClosePiP = (visible || inSystemPiPMode) && (callId || roomId);
+      // КРИТИЧНО: При получении call:ended (собеседник завершил из системного PiP и т.п.) сразу сбрасываем refs и уведомляем HomeScreen, чтобы кнопки видеозвонка и бейдж «Занят» восстановились. Иначе при закрытии PiP кнопки остаются неактивными (порядок вызова App vs PiPContext не гарантирован).
+      try {
+        const g = global as any;
+        g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
+        g.__videoCallPartnerUserIdRef.current = null;
+        g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
+        g.__videoCallActiveRef.current = false;
+        g.__onVideoCallEndedRef?.current?.();
+      } catch (_) {}
       if (!shouldClosePiP) return;
 
       console.log('[PiPContext] Call ended event received, closing PiP:', {

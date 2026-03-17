@@ -1640,6 +1640,14 @@ function AppContent() {
     const onCallEnded = (data?: { callId?: string }) => {
       const g = global as any;
       console.log('[App] [call:ended] 📩 onCallEnded вызван', { callId: data?.callId, inSystem: g.__pipInSystemModeRef?.current, __callEndedFromPiPNoOpen: g.__callEndedFromPiPNoOpenRef?.current });
+      // КРИТИЧНО: Сразу сбрасываем refs и уведомляем HomeScreen у обоих участников (кто нажал «Завершить», кто получил call:ended), чтобы кнопки видеозвонка и бейдж «Занят» восстановились.
+      try {
+        g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
+        g.__videoCallPartnerUserIdRef.current = null;
+        g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
+        g.__videoCallActiveRef.current = false;
+        g.__onVideoCallEndedRef?.current?.();
+      } catch (_) {}
       // Очищаем сохранённый call:accepted, чтобы следующий звонок не подхватил старый payload (логи: «Found pending call:accepted» со старым callId).
       if (g.__pendingCallAcceptedRef) g.__pendingCallAcceptedRef.current = null;
       // Сразу закрываем системный PiP у собеседника (до любых очисток), иначе окно успевает показать лоадер.
@@ -2547,6 +2555,15 @@ export default function App() {
     } catch (e) {
       console.warn('[App] Error calling endCall cleanup:', e);
     }
+
+    // КРИТИЧНО: Всегда сбрасываем refs и уведомляем HomeScreen при завершении из PiP (in-app или системный), чтобы кнопки видеозвонка и бейдж «Занят» восстановились у того, кто нажал «Завершить». (cleanupFn может быть null, если VideoCall уже размонтирован при системном PiP.)
+    try {
+      g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
+      g.__videoCallPartnerUserIdRef.current = null;
+      g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
+      g.__videoCallActiveRef.current = false;
+      g.__onVideoCallEndedRef?.current?.();
+    } catch (_) {}
 
     // При завершении из системного PiP (X): только закрываем PiP, приложение не открываем.
     // endingFromSystemPiP = inSystem || fromPiPButton: fromPiPButton true, когда вызов из EndCallFromPiP (SystemPiPModeChanged(true) может прийти позже).

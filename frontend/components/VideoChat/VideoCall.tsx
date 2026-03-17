@@ -1497,7 +1497,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const cleanupFunction = () => {
       logger.info('[VideoCall] 🔥 cleanupFunction вызвана из глобальной ссылки (PiP/фон)');
       
-      // КРИТИЧНО: Защита от повторных вызовов - если звонок уже завершён/в процессе завершения, игнорируем.
+      // КРИТИЧНО: Всегда сбрасываем refs и уведомляем HomeScreen сразу, чтобы кнопки видеозвонка и бейдж «Занят»
+      // обновились сразу после завершения из in-app PiP (даже при раннем return ниже).
+      try {
+        (global as any).__videoCallPartnerUserIdRef = (global as any).__videoCallPartnerUserIdRef || { current: null };
+        (global as any).__videoCallPartnerUserIdRef.current = null;
+        (global as any).__videoCallActiveRef = (global as any).__videoCallActiveRef || { current: false };
+        (global as any).__videoCallActiveRef.current = false;
+        (global as any).__onVideoCallEndedRef?.current?.();
+      } catch (_) {}
+
+      // КРИТИЧНО: Защита от повторных вызовов - если звонок уже завершён/в процессе завершения, не трогаем сессию.
       // Это важно для сценария: пришёл call:ended → handleCallEnded сделал cleanup → затем компонент размонтировался и unmount-cleanup попытался вызвать cleanupFunction ещё раз.
       if (isInactiveStateRef.current || isEndingCallRef.current || callEndedTransitionDoneRef.current) {
         logger.info('[VideoCall] cleanupFunction вызвана, но уже в неактивном состоянии или звонок завершается - игнорируем повторный вызов', {
@@ -1534,12 +1544,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           } else {
             logger.warn('[VideoCall] session.endCall недоступен в cleanupFunction');
           }
-          // КРИТИЧНО: Сбрасываем refs активного звонка, чтобы в списке друзей кнопка и бейдж «Занят» снялись сразу после завершения (в т.ч. при завершении из PiP).
-          try {
-            (global as any).__videoCallPartnerUserIdRef = { current: null };
-            (global as any).__videoCallActiveRef = { current: false };
-            (global as any).__onVideoCallEndedRef?.current?.();
-          } catch (_) {}
+          // Refs и __onVideoCallEndedRef уже вызваны в начале cleanupFunction.
 
           // КРИТИЧНО: Если звонок завершают из PiP (экран звонка уже размонтирован),
           // то useAudioRouting больше не будет вызван для остановки аудио-сессии.

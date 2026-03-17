@@ -3935,14 +3935,14 @@ const handleClearNick = useCallback(async () => {
     const videoCallActive = (global as any).__videoCallActiveRef?.current;
     const videoCallPartner = (global as any).__videoCallPartnerUserIdRef?.current;
     const busy = isFriendBusy || (!!videoCallActive && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
-    // Бейдж «Занято» только когда сервер помечает друга занятым (принят вызов, оба в звонке). Не показывать при дозвоне (исходящем/входящем).
-    const showBusyBadge = isFriendBusy;
     // Исходящий вызов в процессе (инициатор свернул нативный экран в шторку): у того, кому звоним — стиль «занято» без бейджа; у остальных — просто неактивная кнопка
     const outgoingInProgress = calling.visible;
     const isOutgoingToThisFriend = outgoingInProgress && !!calling.friend && String(calling.friend.id) === friendIdStr;
     // Входящий вызов в процессе (нативный экран входящего): у звонящего — стиль «занято» без бейджа; у остальных — неактивная кнопка. На всё время активного звонка все кнопки неактивны.
     const incomingInProgress = incomingCallScreen.visible;
     const isIncomingFromThisFriend = incomingInProgress && incomingCallScreen.fromUserId != null && String(incomingCallScreen.fromUserId) === friendIdStr;
+    // Бейдж «Занято» только когда друг реально в звонке (принят вызов). Не показывать: (1) при входящем от этого друга — защита от старого busy и от незадеплоенного бэкенда; (2) при исходящем к этому другу уже учтено (showBusyBadge не использует isOutgoingToThisFriend).
+    const showBusyBadge = isFriendBusy && !isIncomingFromThisFriend;
     const activeCallInProgress = !!videoCallActive;
     // Стиль «занято» (серая кнопка) только у участника звонка или при дозвоне. У остальных друзей кнопка как обычно, просто не кликабельна.
     const useBusyButtonStyle = busy || isOutgoingToThisFriend || isIncomingFromThisFriend;

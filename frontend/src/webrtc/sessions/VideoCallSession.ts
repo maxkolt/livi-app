@@ -1798,6 +1798,15 @@ export class VideoCallSession extends SimpleEventEmitter {
       const hidePiP = (global as any).__pipHidePiPRef?.current;
       if (typeof hidePiP === 'function') hidePiP();
     } catch {}
+    // КРИТИЧНО: Сбрасываем refs и уведомляем HomeScreen при любом завершении (socket call:ended или ParticipantDisconnected). Иначе у того, кто в in-app PiP на вкладке «Друзья», кнопки видеозвонка остаются неактивными (сокет мог быть отключён, call:ended придёт позже; сюда попали по ParticipantDisconnected).
+    try {
+      const g = global as any;
+      g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
+      g.__videoCallPartnerUserIdRef.current = null;
+      g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
+      g.__videoCallActiveRef.current = false;
+      g.__onVideoCallEndedRef?.current?.();
+    } catch (_) {}
     // Idempotency: server may deliver call:ended multiple times (e.g., room + direct).
     // Also, call:ended can arrive after local cleanup already cleared ids.
     // In those cases, ignore to avoid duplicate cleanup and "null callId" log noise.
