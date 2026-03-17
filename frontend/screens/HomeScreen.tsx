@@ -3930,10 +3930,12 @@ const handleClearNick = useCallback(async () => {
     // Кнопка видеозвонка показывается всегда; дизейблится и бейдж «Занят» только когда друг занят в видеочате.
     // КРИТИЧНО: Учитываем и глобальные refs из VideoCall — пока мы в активном звонке с этим другом, кнопка задизейблена,
     // даже при рассинхроне presence или при возврате из PiP (refs сбрасываются только по успешному завершению звонка).
-    const isFriendBusy = friend.isBusy || false; // Флаг от сервера через presence:update
+    const isFriendBusy = friend.isBusy || false; // Флаг от сервера через presence:update (только когда вызов принят и оба в видеосвязи)
     const videoCallActive = (global as any).__videoCallActiveRef?.current;
     const videoCallPartner = (global as any).__videoCallPartnerUserIdRef?.current;
     const busy = isFriendBusy || (!!videoCallActive && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
+    // Бейдж «Занято» только когда сервер помечает друга занятым (принят вызов, оба в звонке). Не показывать при дозвоне (исходящем/входящем).
+    const showBusyBadge = isFriendBusy;
     // Исходящий вызов в процессе (инициатор свернул нативный экран в шторку): у того, кому звоним — стиль «занято» без бейджа; у остальных — просто неактивная кнопка
     const outgoingInProgress = calling.visible;
     const isOutgoingToThisFriend = outgoingInProgress && !!calling.friend && String(calling.friend.id) === friendIdStr;
@@ -3941,10 +3943,11 @@ const handleClearNick = useCallback(async () => {
     const incomingInProgress = incomingCallScreen.visible;
     const isIncomingFromThisFriend = incomingInProgress && incomingCallScreen.fromUserId != null && String(incomingCallScreen.fromUserId) === friendIdStr;
     const activeCallInProgress = !!videoCallActive;
-    const useBusyButtonStyle = busy || isOutgoingToThisFriend || isIncomingFromThisFriend; // тот же визуал что и при «Занято», но бейдж только при busy
+    // Стиль «занято» (серая кнопка) только у участника звонка или при дозвоне. У остальных друзей кнопка как обычно, просто не кликабельна.
+    const useBusyButtonStyle = busy || isOutgoingToThisFriend || isIncomingFromThisFriend;
     const pulse = React.useRef(new Animated.Value(0)).current;
     useEffect(() => {
-      if (busy) {
+      if (showBusyBadge) {
         const anim = Animated.loop(
           Animated.sequence([
             Animated.timing(pulse, { toValue: 1, duration: 900, useNativeDriver: true }),
@@ -3957,11 +3960,11 @@ const handleClearNick = useCallback(async () => {
         pulse.stopAnimation();
         pulse.setValue(0);
       }
-    }, [busy, pulse]);
+    }, [showBusyBadge, pulse]);
 
     return (
       <View style={styles.rightWrap}>
-        {busy && (
+        {showBusyBadge && (
           <Animated.View style={[styles.busyBadge, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.65, 1] }) }]}>
             <Text style={styles.busyText}>{t('busy', lang)}</Text>
           </Animated.View>
@@ -4197,7 +4200,7 @@ const handleClearNick = useCallback(async () => {
         <Text style={{ color: LIVI.text2, marginTop: 6, fontSize: 12 }}>{L('baseLang')}: {defaultLang.toUpperCase()}</Text>
       </View>
 
-      {/* Donate — рамка 0.2, снизу 0.3 */}
+      {/* Donate — сплошная рамка одной толщины со всех сторон, адаптивно */}
       <TouchableOpacity 
         activeOpacity={0.85}
         onPress={async () => {
@@ -4205,17 +4208,14 @@ const handleClearNick = useCallback(async () => {
           setDonateVisible(true);
         }}
         style={{ 
-          backgroundColor: LIVI.accent, 
           borderRadius: 12, 
-          paddingTop: 0.2,
-          paddingLeft: 0.2,
-          paddingRight: 0.2,
-          paddingBottom: 0.3,
+          borderWidth: 1,
+          borderColor: LIVI.accent,
         }}
       >
         <View style={{ 
-          backgroundColor: 'rgba(4, 4, 4, 0.8)', 
-          borderRadius: 11.8, 
+          backgroundColor: 'rgba(255,255,255,0.03)', 
+          borderRadius: 11, 
           padding: 14,
           flexDirection: 'row',
           alignItems: 'center'
@@ -4245,25 +4245,19 @@ const handleClearNick = useCallback(async () => {
         </View>
       </TouchableOpacity>
 
-      {/* Invite Friends — рамка 0.2, снизу 1px чтобы отображалась */}
+      {/* Invite Friends — сплошная рамка одной толщины со всех сторон, адаптивно */}
       <TouchableOpacity 
         activeOpacity={0.85}
         onPress={generateInviteLink}
         style={{ 
-          backgroundColor: '#4DD0E1', 
           borderRadius: 11, 
-          paddingTop: 0.2,
-          paddingLeft: 0.2,
-          paddingRight: 0.2,
-          paddingBottom: 0.5,
+          borderWidth: 1,
+          borderColor: '#4DD0E1',
         }}
       >
         <View style={{ 
-          backgroundColor: 'rgba(4, 4, 4, 0.8)', 
-          borderBottomLeftRadius: 11,
-          borderBottomRightRadius: 11,
-          borderTopLeftRadius: 11.8,
-          borderTopRightRadius: 11.8, 
+          backgroundColor: 'rgba(255,255,255,0.03)', 
+          borderRadius: 10, 
           padding: 14,
           flexDirection: 'row',
           alignItems: 'center'

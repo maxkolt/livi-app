@@ -1411,31 +1411,44 @@ io.on('connection', async (sock: AuthedSocket) => {
       const busy = status === 'busy';
       
       // КРИТИЧНО: Получатель (callee) не должен показывать бейдж «Занято» до принятия вызова.
-      // Если этот пользователь — link.b в ожидающем звонке и inCall ещё не установлен, игнорируем busy (не ставим на сокет, не рассылаем).
       let ignoreBusyForCallee = false;
+      // КРИТИЧНО: Инициатор (caller) не должен показывать бейдж «Занято» у того, кому звонят, пока вызов не принят (нативный экран входящего, дозвон).
+      let ignoreBusyForCaller = false;
       if (busy && callOfUser.has(userId)) {
         const entry = callOfUser.get(userId);
         if (entry) {
           const link = callsById.get(entry.callId);
-          if (link && link.b === userId && !(sock as any).data.inCall) {
-            ignoreBusyForCallee = true;
-            logger.debug('📍 [presence:update] Callee busy ignored until call accepted', { userId, callId: entry.callId });
+          if (link) {
+            if (link.b === userId && !(sock as any).data.inCall) {
+              ignoreBusyForCallee = true;
+              logger.debug('📍 [presence:update] Callee busy ignored until call accepted', { userId, callId: entry.callId });
+            }
+            // Инициатор: не рассылаем его busy друзьям (в т.ч. получателю), пока получатель не принял (у получателя нет inCall).
+            if (link.a === userId) {
+              const calleeSock = Array.from(io.sockets.sockets.values()).find((s) => String((s as any)?.data?.userId || '') === link.b);
+              const calleeInCall = !!(calleeSock && (calleeSock as any).data?.inCall);
+              if (!calleeInCall) {
+                ignoreBusyForCaller = true;
+                logger.debug('📍 [presence:update] Caller busy ignored until callee accepted', { userId, callId: entry.callId });
+              }
+            }
           }
         }
       }
-      const effectiveBusy = busy && !ignoreBusyForCallee;
+      const effectiveBusy = busy && !ignoreBusyForCallee && !ignoreBusyForCaller;
       
-      // Обновляем состояние сокета
-      (sock as any).data.busy = effectiveBusy;
-      if (payload?.roomId && !ignoreBusyForCallee) {
-        (sock as any).data.roomId = payload.roomId;
-      } else if (!effectiveBusy) {
-        delete (sock as any).data.roomId;
-      } else {
-        delete (sock as any).data.roomId;
+      // Обновляем состояние сокета (при ignoreBusyForCaller не трогаем data.busy — он уже true с call:initiate, просто не рассылаем друзьям)
+      if (!ignoreBusyForCaller) {
+        (sock as any).data.busy = effectiveBusy;
+        if (payload?.roomId && !ignoreBusyForCallee) {
+          (sock as any).data.roomId = payload.roomId;
+        } else if (!effectiveBusy) {
+          delete (sock as any).data.roomId;
+        } else {
+          delete (sock as any).data.roomId;
+        }
       }
-      
-      if (!ignoreBusyForCallee) {
+      if (!ignoreBusyForCallee && !ignoreBusyForCaller) {
         await emitPresenceUpdateToFriends(io, userId, effectiveBusy);
       }
       
@@ -1445,7 +1458,8 @@ io.on('connection', async (sock: AuthedSocket) => {
         busy,
         effectiveBusy,
         roomId: payload?.roomId,
-        ignoreBusyForCallee
+        ignoreBusyForCallee,
+        ignoreBusyForCaller
       });
     } catch (e) {
       logger.error('❌ [presence:update] Error', { error: (e as any)?.message || String(e) });

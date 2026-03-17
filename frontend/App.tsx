@@ -1953,6 +1953,12 @@ function AppContent() {
       logger.info('[decline/инициатор] App: закрываем нативное окно и сбрасываем visible');
       try { closeOutgoingCallActivity(); } catch {}
       try { setOutgoingCallScreenVisible(false); } catch {}
+      // Сбрасываем refs активного звонка, чтобы кнопки видеозвонка у инициатора снова стали активными
+      try {
+        (global as any).__videoCallPartnerUserIdRef = { current: null };
+        (global as any).__videoCallActiveRef = { current: false };
+        (global as any).__onVideoCallEndedRef?.current?.();
+      } catch (_) {}
       // Не эмитим emitCloseOutgoingCall — иначе onCloseOutgoingCall вызовет второй setCalling и второе мерцание
       // call:declined = тот, кому звонили, отклонил — пропущенным не считаем, счётчик не увеличиваем
     });
@@ -1969,6 +1975,12 @@ function AppContent() {
       stopIncomingCallRingtoneAndVibration();
       try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
+      // Сбрасываем refs активного звонка при отмене вызова
+      try {
+        (global as any).__videoCallPartnerUserIdRef = { current: null };
+        (global as any).__videoCallActiveRef = { current: false };
+        (global as any).__onVideoCallEndedRef?.current?.();
+      } catch (_) {}
       // КРИТИЧНО: Обновляем canceledCallsRef для защиты от гонки событий
       try {
         const id = String((d as any)?.callId || '');
@@ -2164,6 +2176,12 @@ function AppContent() {
       if (d?.callId) try { reportEndCallToCallKeep(d.callId); } catch {}
       try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
+      // Сбрасываем refs активного звонка, чтобы кнопки видеозвонка у инициатора снова стали активными
+      try {
+        (global as any).__videoCallPartnerUserIdRef = { current: null };
+        (global as any).__videoCallActiveRef = { current: false };
+        (global as any).__onVideoCallEndedRef?.current?.();
+      } catch (_) {}
       // Мгновенно закрываем UI
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
       // Переход на Home с бейджем «Вызов отменен»

@@ -926,31 +926,32 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     })();
   }, []);
   
-  // Отправка статуса "busy" при активном общении в видеозвонке
+  // Отправка статуса "busy" только когда вызов принят и оба в видеосвязи (не при дозвоне).
+  // Иначе у того, кому звонят, бейдж «Занято» появляется до нажатия «Принять».
   useEffect(() => {
-    const hasActiveCall = (!!roomId || !!callId || !!partnerId) && !isInactiveState;
+    const callConnected = !!friendCallAccepted || !!remoteStream;
+    const hasActiveCall = (!!roomId || !!callId || !!partnerId) && !isInactiveState && callConnected;
     
     if (hasActiveCall) {
-      // Отправляем статус "busy" когда есть активное общение
       try {
         socket.emit('presence:update', { status: 'busy', roomId: roomId || callId || undefined });
       } catch (e) {
         logger.warn('[VideoCall] Error sending presence:update busy:', e);
       }
     } else {
-      // Сбрасываем статус "busy" когда нет активного общения
       try {
         socket.emit('presence:update', { status: 'online' });
       } catch (e) {
         logger.warn('[VideoCall] Error sending presence:update online:', e);
       }
     }
-  }, [roomId, callId, partnerId, isInactiveState]);
+  }, [roomId, callId, partnerId, isInactiveState, friendCallAccepted, remoteStream]);
   
   // При реконнекте сокета сервер может сбросить busy — переотправляем busy, если мы всё ещё в звонке
   useEffect(() => {
     const off = onConnected(() => {
-      const hasActiveCall = (!!roomId || !!callId || !!partnerId) && !isInactiveState;
+      const callConnected = !!friendCallAccepted || !!remoteStream;
+      const hasActiveCall = (!!roomId || !!callId || !!partnerId) && !isInactiveState && callConnected;
       if (hasActiveCall) {
         try {
           socket.emit('presence:update', { status: 'busy', roomId: roomId || callId || undefined });
@@ -960,7 +961,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
     });
     return () => { try { off?.(); } catch {} };
-  }, [roomId, callId, partnerId, isInactiveState]);
+  }, [roomId, callId, partnerId, isInactiveState, friendCallAccepted, remoteStream]);
   
   // Используем функции из хука входящих звонков
   const { getDeclinedBlock, clearDeclinedBlock, setDeclinedBlock } = incomingCallHook;
@@ -1751,14 +1752,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         timestamp: Date.now()
       });
       
+      // КРИТИЧНО: Сбрасываем глобальные refs, чтобы кнопки видеозвонка у инициатора снова стали активными
+      try {
+        (global as any).__videoCallPartnerUserIdRef = { current: null };
+        (global as any).__videoCallActiveRef = { current: false };
+        (global as any).__onVideoCallEndedRef?.current?.();
+      } catch (_) {}
+      
       // КРИТИЧНО: Очищаем состояние звонка при отклонении
-      // Это предотвращает конфликты при следующем звонке
       incomingCallHook.setIncomingFriendCall(null);
       incomingCallHook.setIncomingCall(null);
       incomingCallHook.setIncomingOverlay(false);
       
       // КРИТИЧНО: Очищаем состояние сессии для инициатора и уходим с экрана
-      // Если мы инициатор и звонок был отклонен, нужно очистить состояние и закрыть модалку
       if (route?.params?.directInitiator) {
         setStarted(false);
         setLoading(false);
@@ -1771,7 +1777,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         setPartnerId(null);
         currentCallIdRef.current = null;
         
-        // Останавливаем локальные треки если они были созданы
         const localStreamSnapshot = localStreamRef.current;
         if (localStreamSnapshot) {
           stopStreamTracks(localStreamSnapshot, 'callDeclined/localStream');
@@ -1779,7 +1784,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         setLocalStream(null);
         setCamOn(false);
         setMicOn(false);
-        // Закрываем экран исходящего звонка — возврат на предыдущий экран (Chat/Home)
         if (navigation?.canGoBack?.()) {
           navigation.goBack();
         } else {
