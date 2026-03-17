@@ -155,9 +155,25 @@ class IncomingCallActivity : AppCompatActivity() {
             registerReceiver(callAnsweredReceiver, filterAnswered)
         }
 
-        // Назад: экран уходит в фон (уведомление не показываем — только нативный экран при входящем).
+        // Назад: экран уходит в шторку уведомлений (FGS с уведомлением, тап — вернуться на экран входящего).
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (currentCallId.isNotEmpty()) {
+                    val from = intent.getStringExtra(EXTRA_FROM) ?: ""
+                    val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
+                    val serviceIntent = Intent(this@IncomingCallActivity, IncomingCallForegroundService::class.java).apply {
+                        putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, currentCallId)
+                        putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
+                        putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick)
+                        putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, true)
+                        putExtra(IncomingCallForegroundService.EXTRA_MINIMIZED, true)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent)
+                    } else {
+                        startService(serviceIntent)
+                    }
+                }
                 moveTaskToBack(true)
             }
         })

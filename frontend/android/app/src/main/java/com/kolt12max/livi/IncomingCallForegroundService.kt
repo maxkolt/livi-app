@@ -39,8 +39,9 @@ class IncomingCallForegroundService : Service() {
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
         val headsUpOnly = intent.getBooleanExtra(EXTRA_HEADS_UP_ONLY, false)
         val silentNotification = intent.getBooleanExtra(EXTRA_SILENT_NOTIFICATION, false)
+        val minimized = intent.getBooleanExtra(EXTRA_MINIMIZED, false)
 
-        Log.e(TAG, "[INCOMING_FGS] onStartCommand callId=$callId from=$from (2nd call = fresh FGS if previous was declined)")
+        Log.e(TAG, "[INCOMING_FGS] onStartCommand callId=$callId from=$from minimized=$minimized")
 
         currentCallId = callId
         currentFrom = from
@@ -56,7 +57,9 @@ class IncomingCallForegroundService : Service() {
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
         LiviFirebaseMessagingService.ensureCallChannel(this)
-        LiviAppModule.startIncomingCallRingtoneAndVibrationStatic(applicationContext)
+        if (!minimized) {
+            LiviAppModule.startIncomingCallRingtoneAndVibrationStatic(applicationContext)
+        }
         // При видеозвонке сразу «только шторка»: иконка в статус-баре, в шторке — полное уведомление (тап → экран входящего). Нативный экран открываем через startActivity ниже.
         val notification = when {
             silentNotification -> LiviFirebaseMessagingService.buildIncomingCallNotificationSilent(this, callId, from, fromNick)
@@ -244,6 +247,8 @@ class IncomingCallForegroundService : Service() {
         const val EXTRA_HEADS_UP_ONLY = "heads_up_only"
         /** Тихий режим: без heads-up (только иконка/шторка). */
         const val EXTRA_SILENT_NOTIFICATION = "silent_notification"
+        /** Экран входящего свернули по кнопке «Назад» — только уведомление в шторке, без рингтона/вибрации. */
+        const val EXTRA_MINIMIZED = "minimized"
         /** Broadcast: пользователь нажал «Отклонить» — FGS останавливается, чтобы второй звонок получил новый FGS. */
         const val ACTION_INCOMING_CALL_DECLINED = "com.kolt12max.livi.INCOMING_CALL_DECLINED"
     }
