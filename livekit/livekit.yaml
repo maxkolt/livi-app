@@ -1,0 +1,15 @@
+# Порт сигнального сервера (WebSocket). Nginx/Caddy проксируют wss сюда.
+port: 7880
+log_level: info
+
+# WebRTC: TCP fallback и диапазон UDP для медиа (прод: 50000-60000).
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: true
+
+# Ключи — те же, что в backend .env (LIVEKIT_API_KEY : LIVEKIT_API_SECRET).
+# Формат: имя_ключа: "секрет" (одна строка на пару).
+keys:
+  lk_969512bce6a80fb0: "iT0CiEFym3bs91A0yr//fXlfhqNJ0miOLK5ppa1b2yO5DHjduYfWD0bbT68kGAxd"
