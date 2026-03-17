@@ -1,0 +1,15 @@
+# Только LiveKit — для сервера, где нет backend.
+# Запуск: docker-compose -f docker-compose.livekit.yml up -d
+
+services:
+  livekit-sfu:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    stop_grace_period: 10s
+    ports:
+      - "127.0.0.1:7880:7880"
+      - "127.0.0.1:7881:7881"
+      - "127.0.0.1:50000-60000:50000-60000/udp"
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit.yaml:ro
+    command: --config /etc/livekit.yaml
