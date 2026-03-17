@@ -167,7 +167,7 @@ export async function launchIncomingCallActivityScreen(
     const LiviAppModule = NativeModules.LiviAppModule;
     if (LiviAppModule?.launchIncomingCallActivity) {
       LiviAppModule.launchIncomingCallActivity(callId, from, fromNick ?? '');
-      setIncomingCallScreenVisible(true);
+      setIncomingCallScreenVisible(true, from);
       logger.info('[callKeep] launchIncomingCallActivityScreen', { callId, from });
     }
   } catch (e) {
@@ -416,6 +416,7 @@ export function displayIncomingCall(callId: string, fromUserId: string, fromNick
     pendingCallByUuid[callId] = { from: fromUserId, fromNick };
     const RNCallKeep = require('react-native-callkeep');
     RNCallKeep.default.displayIncomingCall(callId, fromUserId, fromNick ?? '', hasVideo);
+    setIncomingCallScreenVisible(true, fromUserId);
     logger.info('[callKeep] displayIncomingCall', { callId, from: fromUserId });
   } catch (e) {
     logger.warn('[callKeep] displayIncomingCall failed', e as Error);

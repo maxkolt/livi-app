@@ -121,6 +121,8 @@ import socket, {
   requestFriend,
   acceptInvite,
   setOutgoingCallScreenVisible,
+  onIncomingCallScreenChange,
+  getIncomingCallScreenState,
 } from '../sockets/socket';
 import {
   isUpdateAvailable,
@@ -1213,6 +1215,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   /* ===== Call (outgoing modal) ===== */
   const [calling, setCalling] = useState<{ visible: boolean; friend?: Friend | null; callId?: string | null }>({ visible: false });
+  const [incomingCallScreen, setIncomingCallScreenState] = useState<{ visible: boolean; fromUserId: string | null }>(() => {
+    const s = getIncomingCallScreenState();
+    return { visible: s.visible, fromUserId: s.fromUserId };
+  });
+  useEffect(() => {
+    const off = onIncomingCallScreenChange((visible, fromUserId) => {
+      setIncomingCallScreenState({ visible, fromUserId: fromUserId ?? null });
+    });
+    return () => off();
+  }, []);
   const [missedByUser, setMissedByUser] = useState<Record<string, number>>({});
   const [missedLoaded, setMissedLoaded] = useState(false);
   const [markReadMenu, setMarkReadMenu] = useState<{ friendId: string; type: 'video' | 'chat' } | null>(null);
@@ -3925,7 +3937,11 @@ const handleClearNick = useCallback(async () => {
     // Исходящий вызов в процессе (инициатор свернул нативный экран в шторку): у того, кому звоним — стиль «занято» без бейджа; у остальных — просто неактивная кнопка
     const outgoingInProgress = calling.visible;
     const isOutgoingToThisFriend = outgoingInProgress && !!calling.friend && String(calling.friend.id) === friendIdStr;
-    const useBusyButtonStyle = busy || isOutgoingToThisFriend; // тот же визуал что и при «Занято», но бейдж только при busy
+    // Входящий вызов в процессе (нативный экран входящего): у звонящего — стиль «занято» без бейджа; у остальных — неактивная кнопка. На всё время активного звонка все кнопки неактивны.
+    const incomingInProgress = incomingCallScreen.visible;
+    const isIncomingFromThisFriend = incomingInProgress && incomingCallScreen.fromUserId != null && String(incomingCallScreen.fromUserId) === friendIdStr;
+    const activeCallInProgress = !!videoCallActive;
+    const useBusyButtonStyle = busy || isOutgoingToThisFriend || isIncomingFromThisFriend; // тот же визуал что и при «Занято», но бейдж только при busy
     const pulse = React.useRef(new Animated.Value(0)).current;
     useEffect(() => {
       if (busy) {
@@ -3964,7 +3980,7 @@ const handleClearNick = useCallback(async () => {
               },
               useBusyButtonStyle ? styles.inviteBtnDisabled : null,
             ]}
-            disabled={busy || outgoingInProgress}
+            disabled={busy || outgoingInProgress || incomingInProgress || activeCallInProgress}
             onLongPress={
             missedCount > 0
               ? () => {

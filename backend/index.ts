@@ -1695,24 +1695,17 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.debug('Initiator joined room', { socketId: sock.id, roomId, callId });
       } catch {}
       
-      // КРИТИЧНО: Устанавливаем busy флаг и состояние звонка для инициатора при инициации
-      // Это гарантирует консистентность состояния, даже если инициатор отключится до принятия
-      // Инициатор
+      // КРИТИЧНО: Устанавливаем busy только для инициатора при инициации. Получатель станет busy только после принятия (call:accept).
+      // Бейдж «Занято» у инициатора и у получателя — только после принятия и на всё время активного разговора.
       (sock as any).data = (sock as any).data || {};
       (sock as any).data.busy = true;
       (sock as any).data.roomId = roomId;
       if (peerSocket) (sock as any).data.partnerSid = peerSocket.id;
       
-      // Если получатель онлайн — также отмечаем его как busy
-      if (peerSocket) {
-        (peerSocket as any).data = (peerSocket as any).data || {};
-        (peerSocket as any).data.busy = true;
-        (peerSocket as any).data.roomId = roomId;
-        (peerSocket as any).data.partnerSid = sock.id;
-      }
+      // Получатель НЕ помечаем busy до принятия — не записываем ему roomId/partnerSid, не рассылаем presence.
       
-      // Рассылаем presence:update обоим участникам для всех друзей обоих (чтобы у общего друга оба были «Занято»)
-      await emitPresenceUpdateCallToFriends(io, me, peerId, true);
+      // Рассылаем presence:update только инициатору (его друзья видят «Занято»). Получатель — после call:accept.
+      await emitPresenceUpdateToFriends(io, me, true);
       logger.debug('Call initiated', { from: me, to: peerId, callId, roomId });
       
       // КРИТИЧНО: Отправляем инициатору roomId для немедленного использования

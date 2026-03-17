@@ -427,6 +427,10 @@ let __realtimePaused = __lastAppState !== 'active';
 let __outgoingCallScreenVisible = false;
 /** Пока на нативном экране входящего (IncomingCallActivity) — не отключать сокет при «background», чтобы получатель мог принять/отклонить по сокету. */
 let __incomingCallScreenVisible = false;
+/** userId звонящего, пока показан нативный экран входящего (для UI: у этого друга кнопка в стиле «занято» без бейджа). */
+let __incomingCallFromUserId: string | null = null;
+const __incomingCallScreenChangeListeners = new Set<(visible: boolean, fromUserId: string | null) => void>();
+
 /** Пока активен видеозвонок (подключение к LiveKit или комната connected) — не отключать сокет при «background», чтобы избежать negotiation disconnected / m-line errors. */
 let __activeVideoCall = false;
 
@@ -440,13 +444,26 @@ export function setOutgoingCallScreenVisible(visible: boolean): void {
   }
 }
 
-export function setIncomingCallScreenVisible(visible: boolean): void {
+export function setIncomingCallScreenVisible(visible: boolean, fromUserId?: string | null): void {
   __incomingCallScreenVisible = visible;
+  __incomingCallFromUserId = visible && fromUserId != null ? String(fromUserId) : null;
+  __incomingCallScreenChangeListeners.forEach((cb) => {
+    try { cb(__incomingCallScreenVisible, __incomingCallFromUserId); } catch {}
+  });
   if (!visible && (__lastAppState !== 'active' && __lastAppState !== 'inactive')) {
     __realtimePaused = true;
     try { (socket as any).io.opts.reconnection = false; } catch {}
     if (socket?.connected) socket.disconnect();
   }
+}
+
+export function getIncomingCallScreenState(): { visible: boolean; fromUserId: string | null } {
+  return { visible: __incomingCallScreenVisible, fromUserId: __incomingCallFromUserId };
+}
+
+export function onIncomingCallScreenChange(cb: (visible: boolean, fromUserId: string | null) => void): () => void {
+  __incomingCallScreenChangeListeners.add(cb);
+  return () => { __incomingCallScreenChangeListeners.delete(cb); };
 }
 
 export function setActiveVideoCall(active: boolean, _partnerDisplayName?: string | null): void {
@@ -494,6 +511,7 @@ try {
         __realtimePaused = false;
         __outgoingCallScreenVisible = false;
         __incomingCallScreenVisible = false;
+        __incomingCallFromUserId = null;
         __activeVideoCall = false;
         try { (socket as any).io.opts.reconnection = true; } catch {}
         // applyAuthAndConnect already sets installId/userId and connects with timeouts.
