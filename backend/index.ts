@@ -602,7 +602,12 @@ app.get('/api/exists/:userId', async (req, res) => {
 
 /* ========= Mongo ========= */
 mongoose
-  .connect(MONGO_URI)
+  .connect(MONGO_URI, {
+    maxPoolSize: 50,
+    minPoolSize: 5,
+    serverSelectionTimeoutMS: 10000,
+    connectTimeoutMS: 10000,
+  })
   .then(async () => {
     const dbName = mongoose.connection.db?.databaseName;
     logger.info('MongoDB connected successfully', {

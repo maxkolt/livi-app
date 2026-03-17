@@ -3,8 +3,9 @@ import { Server, Socket } from 'socket.io';
 import mongoose from 'mongoose';
 import User from '../models/User';
 import FriendshipMessages, { IFriendshipMessages } from '../models/FriendshipMessages';
+import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import OfflineMessage from '../models/OfflineMessage';
-import { areFriendsCached } from '../utils/friendshipUtils';
+import { areFriendsCached, getOrCreateFriendship, invalidateFriendshipCache } from '../utils/friendshipUtils';
 import { sendMessagePushToUser } from '../utils/push';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
@@ -35,55 +36,8 @@ function setViewingChat(userId: string, withPeerId: string | null) {
   }
 }
 
-// Кэш для быстрого доступа к дружбам
-const friendshipCache = new Map<string, IFriendshipMessages>();
-
 /**
- * Получить или создать документ дружбы
- */
-async function getOrCreateFriendship(user1Id: string, user2Id: string): Promise<IFriendshipMessages | null> {
-  try {
-    // Сортируем ID для консистентности
-    const [user1, user2] = [user1Id, user2Id].sort();
-    const cacheKey = `${user1}_${user2}`;
-    
-    // Проверяем кэш
-    if (friendshipCache.has(cacheKey)) {
-      return friendshipCache.get(cacheKey) || null;
-    }
-    
-    // Ищем существующую дружбу
-    let friendship = await FriendshipMessages.findOne({
-      $or: [
-        { user1: user1, user2: user2 },
-        { user1: user2, user2: user1 }
-      ]
-    });
-    
-    // Если дружба не найдена, создаем новую
-    if (!friendship) {
-      friendship = new FriendshipMessages({
-        user1: new mongoose.Types.ObjectId(user1),
-        user2: new mongoose.Types.ObjectId(user2),
-        textMessages: [],
-        imageMessages: [],
-        audioMessages: [],
-        lastActivity: new Date()
-      });
-      await friendship.save();
-    }
-    
-    // Сохраняем в кэш
-    friendshipCache.set(cacheKey, friendship);
-    return friendship;
-  } catch (error) {
-    console.error('Error getting/creating friendship:', error);
-    return null;
-  }
-}
-
-/**
- * Добавить сообщение в дружбу
+ * Добавить сообщение в дружбу (и в отдельную коллекцию FriendshipMessageItem для быстрого GET)
  */
 async function addMessageToFriendship(friendship: IFriendshipMessages, message: any): Promise<boolean> {
   try {
@@ -102,8 +56,21 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
     };
     
     await (friendship as any).addMessage(messageItem);
-    // reduce noise; DB write ok
-    // console.log(`[message] persisted ${message.id}`);
+
+    await FriendshipMessageItem.create({
+      friendshipId: (friendship as any)._id,
+      id: message.id,
+      from: messageItem.from,
+      to: messageItem.to,
+      type: message.type,
+      text: message.text,
+      uri: message.uri,
+      name: message.name,
+      size: message.size,
+      duration: message.duration,
+      timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp),
+      read: !!message.read,
+    });
     return true;
   } catch (error) {
     console.error('Error adding message to friendship:', error);
@@ -454,7 +421,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
     }
   });
 
-  /** ===== Получение сообщений ===== */
+  /** ===== Получение сообщений (из отдельной коллекции FriendshipMessageItem) ===== */
   sock.on('messages:fetch', async (payload: {
     with: string;
     limit?: number;
@@ -470,54 +437,75 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'invalid_with' });
       }
 
-      // Проверяем дружбу
       const isFriend = await areFriendsCached(me, payload.with);
       if (!isFriend) {
         return ack?.({ ok: false, error: 'not_friends' });
       }
 
-      // Получаем дружбу
       const friendship = await getOrCreateFriendship(me, payload.with);
       if (!friendship) {
         return ack?.({ ok: false, error: 'friendship_not_found' });
       }
 
-      // Получаем все сообщения
-      const allMessages = (friendship as any).getAllMessages();
-
-      // Применяем пагинацию
-      let messages = allMessages;
+      const friendshipId = (friendship as any)._id;
+      const limit = Math.min(200, Math.max(1, payload.limit || 50));
+      const query: any = { friendshipId };
       if (payload.before) {
-        const beforeIndex = messages.findIndex((msg: any) => msg.id === payload.before);
-        if (beforeIndex > 0) {
-          messages = messages.slice(0, beforeIndex);
+        const beforeDoc = await FriendshipMessageItem.findOne(
+          { friendshipId, id: payload.before },
+          { timestamp: 1 }
+        ).lean();
+        if (beforeDoc && (beforeDoc as any).timestamp) {
+          query.timestamp = { $lt: (beforeDoc as any).timestamp };
         }
       }
-
-      const limit = payload.limit || 50;
-      messages = messages.slice(-limit);
-
-      // Форматируем сообщения для отправки (включая реакции)
-      const formattedMessages = messages.map((msg: any) => ({
+      let raw = await FriendshipMessageItem.find(query)
+        .sort({ timestamp: -1 })
+        .limit(limit + 1)
+        .lean();
+      if (raw.length === 0) {
+        const allMessages = (friendship as any).getAllMessages?.() || [];
+        let messages = allMessages;
+        if (payload.before) {
+          const beforeIndex = messages.findIndex((msg: any) => msg.id === payload.before);
+          if (beforeIndex > 0) messages = messages.slice(0, beforeIndex);
+        }
+        const limitOld = payload.limit || 50;
+        messages = messages.slice(-limitOld);
+        const formattedMessages = messages.map((msg: any) => ({
+          id: msg.id,
+          from: msg.from?.toString?.() || String(msg.from),
+          to: msg.to?.toString?.() || String(msg.to),
+          type: msg.type,
+          text: msg.text,
+          uri: msg.uri,
+          name: msg.name,
+          size: msg.size,
+          duration: msg.duration,
+          timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
+          read: !!msg.read,
+          reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : []
+        }));
+        return ack?.({ ok: true, messages: formattedMessages, hasMore: allMessages.length > limitOld });
+      }
+      const hasMore = raw.length > limit;
+      const slice = hasMore ? raw.slice(0, limit) : raw;
+      const formattedMessages = slice.reverse().map((msg: any) => ({
         id: msg.id,
-        from: msg.from.toString(),
-        to: msg.to.toString(),
+        from: msg.from?.toString?.() || String(msg.from),
+        to: msg.to?.toString?.() || String(msg.to),
         type: msg.type,
         text: msg.text,
         uri: msg.uri,
         name: msg.name,
         size: msg.size,
         duration: msg.duration,
-        timestamp: msg.timestamp.toISOString(),
-        read: msg.read,
+        timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
+        read: !!msg.read,
         reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : []
       }));
 
-      ack?.({ 
-        ok: true, 
-        messages: formattedMessages,
-        hasMore: allMessages.length > limit
-      });
+      ack?.({ ok: true, messages: formattedMessages, hasMore });
     } catch (e: any) {
       console.error('[messages:fetch] error:', e?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
@@ -712,7 +700,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
     }
   });
 
-  /** ===== Удаление одного сообщения (для обоих) ===== */
+  /** ===== Удаление одного сообщения (для обоих). Поиск по messageId в БД. ===== */
   sock.on('message:delete', async (payload: { messageId: string }, ack?: Function) => {
     try {
       const me = meId();
@@ -720,40 +708,55 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
       if (!messageId) return ack?.({ ok: false, error: 'bad_message_id' });
 
-      // Находим дружбу, в которой есть это сообщение
-      // Пробуем обе стороны: найдём все дружбы, где участвует пользователь
-      // и проверим наличие сообщения (их обычно немного)
-      const candidates: IFriendshipMessages[] = [];
-      for (const [key, f] of friendshipCache.entries()) {
-        const hasMe = (f.user1?.toString?.() === me) || (f.user2?.toString?.() === me);
-        if (hasMe) candidates.push(f);
-      }
+      let fromUserId = '';
+      let toUserId = '';
+      let friendshipId: mongoose.Types.ObjectId | null = null;
+      let msgType: 'text' | 'image' | 'audio' = 'text';
 
-      let foundFriendship: IFriendshipMessages | null = null;
-      for (const f of candidates) {
-        if ((f as any).findMessageById(messageId)) { foundFriendship = f; break; }
-      }
-      // Если в кэше нет — подгружаем из БД по пользователю
-      if (!foundFriendship) {
+      const doc = await FriendshipMessageItem.findOne({ id: messageId }).select('from to friendshipId type').lean();
+      if (doc) {
+        fromUserId = String((doc as any).from);
+        toUserId = String((doc as any).to);
+        friendshipId = (doc as any).friendshipId;
+        msgType = (doc as any).type;
+        if (fromUserId !== me && toUserId !== me) return ack?.({ ok: false, error: 'not_found' });
+      } else {
         const list = await FriendshipMessages.find({
-          $or: [ { user1: me }, { user2: me } ]
+          $and: [
+            { $or: [{ user1: me }, { user2: me }] },
+            { $or: [{ 'textMessages.id': messageId }, { 'imageMessages.id': messageId }, { 'audioMessages.id': messageId }] },
+          ],
+        }).lean();
+        const fd = list.find((f: any) => {
+          const arr = [...(f.textMessages || []), ...(f.imageMessages || []), ...(f.audioMessages || [])];
+          const m = arr.find((x: any) => x.id === messageId);
+          if (m) {
+            fromUserId = String(m.from);
+            toUserId = String(m.to);
+            friendshipId = f._id;
+            msgType = m.type || 'text';
+            return true;
+          }
+          return false;
         });
-        for (const f of list) {
-          if ((f as any).findMessageById(messageId)) { foundFriendship = f; break; }
-        }
+        if (!fd) return ack?.({ ok: false, error: 'not_found' });
       }
 
-      if (!foundFriendship) return ack?.({ ok: false, error: 'not_found' });
+      if (doc) {
+        await FriendshipMessageItem.deleteOne({ id: messageId });
+        const path = msgType === 'text' ? 'textMessages' : msgType === 'image' ? 'imageMessages' : 'audioMessages';
+        await FriendshipMessages.updateOne(
+          { _id: friendshipId },
+          { $pull: { [path]: { id: messageId } }, $set: { lastActivity: new Date() } }
+        ).exec();
+      } else {
+        const friendship = await FriendshipMessages.findOne({
+          _id: friendshipId,
+          $or: [{ user1: me }, { user2: me }],
+        });
+        if (friendship) await (friendship as any).removeMessage(messageId);
+      }
 
-      const targetMessage = (foundFriendship as any).findMessageById(messageId);
-      const fromUserId = String((targetMessage as any)?.from?.toString?.() || (targetMessage as any)?.from || '');
-      const toUserId = String((targetMessage as any)?.to?.toString?.() || (targetMessage as any)?.to || '');
-
-      // Удаляем запись
-      const removed = await (foundFriendship as any).removeMessage(messageId);
-      if (!removed) return ack?.({ ok: false, error: 'remove_failed' });
-
-      // Если сообщение было непрочитанным у получателя, уменьшаем unread и удаляем offline-копию.
       try {
         if (toUserId && fromUserId) {
           removeUnreadMessage(toUserId, fromUserId, messageId);
@@ -761,15 +764,13 @@ function registerMessageHandlers(io: Server, sock: Socket) {
             recipientId: new mongoose.Types.ObjectId(toUserId),
             messageId,
           });
+          invalidateFriendshipCache(fromUserId, toUserId);
         }
       } catch (cleanupError) {
         console.warn('[message:delete] unread cleanup failed:', cleanupError);
       }
 
-      // Уведомляем обе стороны, если онлайн
-      const u1 = foundFriendship.user1.toString();
-      const u2 = foundFriendship.user2.toString();
-      const recipients = [u1, u2];
+      const recipients = [fromUserId, toUserId].filter(Boolean);
       for (const s of io.sockets.sockets.values()) {
         const uid = (s as any).data?.userId;
         if (uid && recipients.includes(String(uid))) {
@@ -784,7 +785,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
     }
   });
 
-  /** ===== Редактирование текстового сообщения (только отправитель) ===== */
+  /** ===== Редактирование текстового сообщения (только отправитель). Поиск по messageId в БД. ===== */
   sock.on('message:edit', async (payload: { messageId: string; text: string }, ack?: Function) => {
     try {
       const me = meId();
@@ -793,34 +794,52 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
       if (!messageId || text === '') return ack?.({ ok: false, error: 'bad_request' });
 
-      const candidates: IFriendshipMessages[] = [];
-      for (const [, f] of friendshipCache.entries()) {
-        const hasMe = (f.user1?.toString?.() === me) || (f.user2?.toString?.() === me);
-        if (hasMe) candidates.push(f);
-      }
-      let foundFriendship: IFriendshipMessages | null = null;
-      for (const f of candidates) {
-        const msg = (f as any).findMessageById(messageId);
-        if (msg && msg.type === 'text') { foundFriendship = f; break; }
-      }
-      if (!foundFriendship) {
-        const list = await FriendshipMessages.find({ $or: [{ user1: me }, { user2: me }] });
-        for (const f of list) {
-          const msg = (f as any).findMessageById(messageId);
-          if (msg && msg.type === 'text') { foundFriendship = f; break; }
+      let u1 = '';
+      let u2 = '';
+      let updated = false;
+
+      const doc = await FriendshipMessageItem.findOne({ id: messageId }).select('from type friendshipId').lean();
+      if (doc) {
+        if ((doc as any).type !== 'text') return ack?.({ ok: false, error: 'not_found_or_forbidden' });
+        if (String((doc as any).from) !== me) return ack?.({ ok: false, error: 'not_found_or_forbidden' });
+        await FriendshipMessageItem.updateOne({ id: messageId }, { $set: { text } }).exec();
+        const fr = await FriendshipMessages.findById((doc as any).friendshipId).select('user1 user2').lean();
+        if (fr) {
+          u1 = String((fr as any).user1);
+          u2 = String((fr as any).user2);
+        }
+        await FriendshipMessages.updateOne(
+          { _id: (doc as any).friendshipId, 'textMessages.id': messageId },
+          { $set: { 'textMessages.$.text': text, lastActivity: new Date() } }
+        ).exec();
+        updated = true;
+      } else {
+        const list = await FriendshipMessages.find({
+          $and: [
+            { $or: [{ user1: me }, { user2: me }] },
+            { 'textMessages.id': messageId },
+          ],
+        }).lean();
+        const fd = list.find((f: any) => (f.textMessages || []).some((m: any) => m.id === messageId && String(m.from) === me));
+        if (fd) {
+          u1 = String((fd as any).user1);
+          u2 = String((fd as any).user2);
+          await FriendshipMessages.updateOne(
+            { _id: (fd as any)._id, 'textMessages.id': messageId },
+            { $set: { 'textMessages.$.text': text, lastActivity: new Date() } }
+          ).exec();
+          updated = true;
         }
       }
-      if (!foundFriendship) return ack?.({ ok: false, error: 'not_found' });
 
-      const updated = await (foundFriendship as any).updateMessage(messageId, me, text);
       if (!updated) return ack?.({ ok: false, error: 'not_found_or_forbidden' });
 
-      const u1 = foundFriendship.user1.toString();
-      const u2 = foundFriendship.user2.toString();
       const payloadOut = { messageId, text };
-      for (const s of io.sockets.sockets.values()) {
-        const uid = (s as any).data?.userId;
-        if (uid && (uid === u1 || uid === u2)) s.emit('message:edited', payloadOut);
+      if (u1 || u2) {
+        for (const s of io.sockets.sockets.values()) {
+          const uid = (s as any).data?.userId;
+          if (uid && (uid === u1 || uid === u2)) s.emit('message:edited', payloadOut);
+        }
       }
       return ack?.({ ok: true, messageId, text });
     } catch (e: any) {

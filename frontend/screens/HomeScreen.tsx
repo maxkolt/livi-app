@@ -1590,25 +1590,36 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
 
         if (!res?.ok) {
-          // REST fallback (не зависит от сокета)
+          // REST fallback (не зависит от сокета). Два таймаута для VPN: быстрая сеть 7s, медленная 20s.
           const base = String(API_BASE || 'https://api.liviapp.com').replace(/\/+$/, '');
           const id = await getInstallId().catch(() => '');
           if (id) {
-            try {
-              const url = `${base}/api/friends?page=1&limit=50`;
-              const httpRes = await Promise.race([
-                fetch(url, {
+            const url = `${base}/api/friends?page=1&limit=50`;
+            const timeouts = [7000, 20000];
+            for (const ms of timeouts) {
+              try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), ms);
+                const httpRes = await fetch(url, {
                   method: 'GET',
                   headers: {
                     'Content-Type': 'application/json',
                     'x-install-id': String(id),
                   },
-                }),
-                new Promise<Response>((_, reject) => setTimeout(() => reject(new Error('friends http timeout')), 3500)),
-              ]);
-              const json = await (httpRes as Response).json().catch(() => null);
-              if (json?.ok) res = json;
-            } catch {}
+                  signal: controller.signal,
+                });
+                clearTimeout(timeoutId);
+                if (httpRes.ok) {
+                  const json = await httpRes.json().catch(() => null);
+                  if (json?.ok) {
+                    res = json;
+                    break;
+                  }
+                }
+              } catch (_) {
+                await new Promise((r) => setTimeout(r, 200));
+              }
+            }
           }
         }
         

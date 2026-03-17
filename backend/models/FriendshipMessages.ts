@@ -129,16 +129,18 @@ FriendshipMessagesSchema.methods.getAllMessages = function() {
   return allMessages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 };
 
-// Метод для добавления нового сообщения
+// Метод для добавления нового сообщения (updateOne вместо save для скорости)
 FriendshipMessagesSchema.methods.addMessage = function(message: IMessageItem) {
   const messageArray = this.getMessagesArray(message.type);
   messageArray.push(message);
-  
-  // Обновляем последнее сообщение и активность
   this.lastMessage = message;
   this.lastActivity = new Date();
-  
-  return this.save();
+
+  const path = message.type === 'text' ? 'textMessages' : message.type === 'image' ? 'imageMessages' : 'audioMessages';
+  return (this as any).constructor.updateOne(
+    { _id: this._id },
+    { $push: { [path]: message }, $set: { lastMessage: message, lastActivity: new Date() } }
+  ).exec();
 };
 
 // Метод для получения массива сообщений по типу
@@ -157,32 +159,38 @@ FriendshipMessagesSchema.methods.findMessageById = function(messageId: string) {
   return allMessages.find((msg: IMessageItem) => msg.id === messageId);
 };
 
-// Метод для удаления сообщения
+// Метод для удаления сообщения (updateOne с $pull вместо save)
 FriendshipMessagesSchema.methods.removeMessage = function(messageId: string) {
   const message = this.findMessageById(messageId);
-  if (message) {
-    const array = this.getMessagesArray(message.type);
-    const index = array.findIndex((msg: IMessageItem) => msg.id === messageId);
-    if (index !== -1) {
-      array.splice(index, 1);
-      return this.save();
-    }
-  }
-  return false;
+  if (!message) return Promise.resolve(false);
+  const array = this.getMessagesArray(message.type);
+  const index = array.findIndex((msg: IMessageItem) => msg.id === messageId);
+  if (index === -1) return Promise.resolve(false);
+  array.splice(index, 1);
+
+  const path = message.type === 'text' ? 'textMessages' : message.type === 'image' ? 'imageMessages' : 'audioMessages';
+  return (this as any).constructor.updateOne(
+    { _id: this._id },
+    { $pull: { [path]: { id: messageId } }, $set: { lastActivity: new Date() } }
+  ).exec().then((r: any) => r.modifiedCount > 0);
 };
 
-// Метод для редактирования текстового сообщения (только текст, только отправитель)
+// Метод для редактирования текстового сообщения (updateOne с $set по elemMatch вместо save)
 FriendshipMessagesSchema.methods.updateMessage = function(messageId: string, fromUserId: string, newText: string) {
   const message = this.findMessageById(messageId);
-  if (!message || message.type !== 'text') return false;
+  if (!message || message.type !== 'text') return Promise.resolve(false);
   const fromStr = message.from?.toString?.() || String(message.from);
-  if (fromStr !== fromUserId) return false;
+  if (fromStr !== fromUserId) return Promise.resolve(false);
   const array = this.getMessagesArray('text');
   const index = array.findIndex((msg: IMessageItem) => msg.id === messageId);
-  if (index === -1) return false;
+  if (index === -1) return Promise.resolve(false);
   array[index].text = newText;
   this.lastActivity = new Date();
-  return this.save();
+
+  return (this as any).constructor.updateOne(
+    { _id: this._id, 'textMessages.id': messageId },
+    { $set: { 'textMessages.$.text': newText, lastActivity: new Date() } }
+  ).exec().then((r: any) => r.modifiedCount > 0);
 };
 
 export default mongoose.model<IFriendshipMessages>('FriendshipMessages', FriendshipMessagesSchema);

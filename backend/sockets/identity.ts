@@ -5,6 +5,7 @@ import User from '../models/User';
 import Message from '../models/Message';
 import OfflineMessage from '../models/OfflineMessage';
 import FriendshipMessages from '../models/FriendshipMessages';
+import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import Install from '../models/Install';
 import MissedCall from '../models/MissedCall';
 // Cloudinary удален, используем только MongoDB
@@ -198,92 +199,48 @@ export default function registerIdentitySockets(io: Server) {
           return;
         }
 
-        // 1) install уже существует -> пользователь есть/нет
-        // КРИТИЧНО: Проверка готовности уже выполнена выше, но проверяем еще раз для безопасности
-        if (mongoose.connection.readyState !== 1) {
-          console.error(`[identity] MongoDB not ready (state: ${mongoose.connection.readyState}) during Install.findOne`);
-          ack?.({ ok: false, error: 'database_unavailable' });
-          setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
-          return;
-        }
+        // 1) install уже существует -> пользователь есть/нет. Независимые запросы параллельно.
         const inst = await Install.findOne({ installId }).lean();
         if (inst) {
           const userId = String((inst as any).user);
           console.log(`[identity] Install found for ${installId}, checking user: ${userId}`);
-          // КРИТИЧНО: Проверяем готовность перед User.exists
-          if (mongoose.connection.readyState !== 1) {
-            console.error(`[identity] MongoDB not ready (state: ${mongoose.connection.readyState}) during User.exists`);
-            ack?.({ ok: false, error: 'database_unavailable' });
-            setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
-            return;
-          }
           const exists = await User.exists({ _id: userId });
 
           if (!exists) {
-            // Пользователь был удалён - создаём НОВОГО пользователя и обновляем привязку installId -> user.
-            // ВАЖНО: нельзя "воскрешать" удалённый userId, иначе клиент будет зацикливаться на user_not_found.
             const newUserId = new Types.ObjectId();
-
             console.log(`[identity] User ${userId} not found, creating new user and rebinding install...`, {
               oldUserId: userId,
               newUserId: String(newUserId),
               installId,
             });
-            
-            // КРИТИЧНО: Проверяем готовность MongoDB перед User.create
-            if (mongoose.connection.readyState !== 1) {
-              console.error(`[identity] MongoDB not ready (state: ${mongoose.connection.readyState}) during User.create`);
-              ack?.({ ok: false, error: 'database_unavailable' });
-              setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
-              return;
-            }
-            
-            const newUser = await User.create({
-              _id: newUserId,
-              nick: '', // ВСЕГДА пустой для нового пользователя
-              avatar: '', // ВСЕГДА пустой для нового пользователя
-              friends: [],
-            });
-            // Обновляем привязку installId -> newUserId
-            try {
-              await Install.updateOne({ installId }, { $set: { user: newUserId } }).exec();
-            } catch (e) {
-              console.warn('[identity] Failed to rebind install to new userId', e as any);
-            }
-
+            const [newUser] = await Promise.all([
+              User.create({
+                _id: newUserId,
+                nick: '',
+                avatar: '',
+                friends: [],
+              }),
+              Install.updateOne({ installId }, { $set: { user: newUserId } }).exec(),
+            ]);
             console.log(`[identity] ✅ User created (recovered): ${String(newUserId)}`, {
               _id: String(newUser._id),
               nick: newUser.nick,
               friendsCount: newUser.friends?.length || 0,
               dbName: mongoose.connection.db?.databaseName
             });
-            // Переопределяем userId для bindUser/ack
-            const reboundUserId = String(newUserId);
-            await bindUser(io, sock, reboundUserId);
-            ack?.({ ok: true, userId: reboundUserId });
-
-            // Очищаем кэш
+            await bindUser(io, sock, String(newUserId));
+            ack?.({ ok: true, userId: String(newUserId) });
             setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
             return;
-          } else {
-            console.log(`[identity] User ${userId} already exists, skipping creation`);
-            // Пользователь существует - можно обновлять профиль
-            // КРИТИЧНО: Проверяем готовность MongoDB перед User.updateOne
-            if (mongoose.connection.readyState === 1) {
-              const $set = buildSetFromProfile(payload?.profile || undefined);
-              if (Object.keys($set).length) {
-                await User.updateOne({ _id: userId }, { $set });
-                await broadcastProfileToFriends(io, userId);
-              }
-            } else {
-              console.warn(`[identity] MongoDB not ready (state: ${mongoose.connection.readyState}), skipping profile update`);
-            }
           }
 
+          const $set = buildSetFromProfile(payload?.profile || undefined);
+          if (Object.keys($set).length) {
+            await User.updateOne({ _id: userId }, { $set });
+            broadcastProfileToFriends(io, userId).catch(() => {});
+          }
           await bindUser(io, sock, userId);
           ack?.({ ok: true, userId });
-
-          // Очищаем кэш
           setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
           return;
         }
@@ -431,9 +388,11 @@ export default function registerIdentitySockets(io: Server) {
             opt as any,
           );
 
-          // 3) Чистим сообщения (две модели + офлайн)
+          // 3) Чистим сообщения (две модели + офлайн + отдельная коллекция сообщений)
           await Message.deleteMany({ $or: [{ from: userId }, { to: userId }] }, opt as any);
           await OfflineMessage.deleteMany({ $or: [{ senderId: userId }, { recipientId: userId }] }, opt as any);
+          const friendshipIds = (await FriendshipMessages.find({ $or: [{ user1: userId }, { user2: userId }] }).select('_id').lean()).map((d: any) => d._id);
+          if (friendshipIds.length) await FriendshipMessageItem.deleteMany({ friendshipId: { $in: friendshipIds } }, opt as any);
           await FriendshipMessages.deleteMany({ $or: [{ user1: userId }, { user2: userId }] }, opt as any);
 
           // 4) Очищаем данные пользователя вместо удаления

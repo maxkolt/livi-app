@@ -129,13 +129,13 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
   const now = Date.now();
   if (!forceRefresh && cachedConfig && now < cacheUntil) return cachedConfig;
 
-  // ОПТИМИЗИРОВАНО: Уменьшены таймауты для более быстрого подключения
-  // Используем агрессивные таймауты, чтобы быстро переключиться на fallback
-  const maxRetries = 2; // Уменьшено с 3-5 до 2 для быстрого fallback
-  const timeoutMs = 3000; // Уменьшено с 8-15s до 3s для быстрого переключения на fallback
+  // Таймауты: первая попытка 5s (VPN может быть медленнее), вторая 10s для надёжности
+  const maxRetries = 2;
+  const timeoutPerAttempt = [5000, 10000];
   let lastError: any = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const timeoutMs = timeoutPerAttempt[attempt - 1] ?? 5000;
     try {
       // Используем AbortController для таймаута
       const controller = new AbortController();
@@ -249,17 +249,21 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
   // (только TURN, без прямых P2P соединений)
   const fallbackConfig = getEnvFallbackConfiguration({ forceRelayOnly: forceRelayOnly || relayActive });
   
-  // Если на iOS и есть проблемы с сетью, принудительно используем relay-only
-  // Это поможет обойти проблемы VPN с UDP трафиком
+  // Если на iOS и есть проблемы с сетью — принудительно relay-only (обход VPN блокировки UDP)
   if (Platform.OS === 'ios' && lastError) {
-    const isNetworkIssue = lastError?.message?.includes('Network request failed') || 
+    const isNetworkIssue = lastError?.message?.includes('Network request failed') ||
                           lastError?.message?.includes('Failed to fetch') ||
                           lastError?.name === 'AbortError';
-    
     if (isNetworkIssue) {
-      console.warn('[ICE Config] ⚠️ Network issues detected on iOS. Consider using relay-only mode if VPN is active.');
-      // Можно принудительно включить relay-only, но пока оставляем выбор пользователю
-      // fallbackConfig.iceTransportPolicy = 'relay';
+      const hasTurn = (fallbackConfig.iceServers as any[])?.some?.((s: any) => {
+        const u = s?.urls;
+        const list = Array.isArray(u) ? u : (typeof u === 'string' ? [u] : []);
+        return list.some((url: string) => typeof url === 'string' && url.startsWith('turn:'));
+      });
+      if (hasTurn) {
+        (fallbackConfig as any).iceTransportPolicy = 'relay';
+        console.warn('[ICE Config] iOS + network issues: using relay-only for VPN compatibility.');
+      }
     }
   }
   

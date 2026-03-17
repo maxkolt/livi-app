@@ -54,7 +54,7 @@ export async function getMissedCountByUserFromNative(): Promise<Record<string, n
   }
 }
 
-/** Формат времени для уведомления о сообщении: «14:35», «вчера 14:35» или «12.03 14:35». */
+/** Формат времени для уведомления о сообщении: «14:35», «вчера 14:35» или «12.03 14:35». Используем getFullYear (не getYear), чтобы не было багов с годом. */
 function formatMessageNotificationTime(d: Date): string {
   const now = new Date();
   const today = now.getDate() === d.getDate() && now.getMonth() === d.getMonth() && now.getFullYear() === d.getFullYear();

@@ -196,6 +196,10 @@ export const getSocket = (): Socket => {
 
 export const socket: Socket = getSocket();
 
+// Для первого подключения (VPN/медленный DNS) даём больший таймаут в waitForConnect
+let __hasConnectedEver = false;
+socket.on('connect', () => { __hasConnectedEver = true; });
+
 // При подключении сервер шлёт пропущенные звонки (телефон был выключен / нет сети) — мержим в хранилище и обновляем UI
 socket.on('missed_calls:sync', (payload: { missed?: { from: string; fromNick?: string }[] }) => {
   applyMissedFromReauth(payload).catch(() => {});
@@ -619,6 +623,8 @@ export function socketFlushBufferedIceCandidates(from: string): any[] {
 /* ========= small utils ========= */
 async function waitForConnect(ms = 8000): Promise<void> {
   if (socket.connected) return;
+  // Первое подключение (VPN/медленная сеть): даём 12s. Реконнект — переданный ms (обычно 7s).
+  const effectiveMs = !__hasConnectedEver && ms <= 8000 ? 12000 : ms;
   // CRITICAL: ensure installId is attached before any implicit connect().
   // Some codepaths call waitForConnect() (emitAck) which triggers socket.connect().
   // Without installId in handshake server can treat client as guest and return empty profile/avatar.
@@ -632,7 +638,7 @@ async function waitForConnect(ms = 8000): Promise<void> {
   } catch {}
   return new Promise((resolve, reject) => {
     const onOk = () => { cleanup(); resolve(); };
-    const t = setTimeout(() => { cleanup(); reject(new Error("wait connect timeout")); }, ms);
+    const t = setTimeout(() => { cleanup(); reject(new Error("wait connect timeout")); }, effectiveMs);
     const cleanup = () => { clearTimeout(t); socket.off("connect", onOk); };
     socket.once("connect", onOk);
     // гарантируем попытку соединения

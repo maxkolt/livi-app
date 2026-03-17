@@ -1,0 +1,55 @@
+import mongoose, { Schema, Document } from 'mongoose';
+
+export interface IReaction {
+  emoji: string;
+  userId: string;
+}
+
+export interface IFriendshipMessageItem extends Document {
+  _id: mongoose.Types.ObjectId;
+  friendshipId: mongoose.Types.ObjectId;
+  id: string; // messageId (msg_...)
+  from: mongoose.Types.ObjectId;
+  to: mongoose.Types.ObjectId;
+  type: 'text' | 'image' | 'audio';
+  text?: string;
+  uri?: string;
+  name?: string;
+  size?: number;
+  duration?: number;
+  timestamp: Date;
+  read: boolean;
+  reactions?: IReaction[];
+}
+
+const ReactionSchema = new Schema<IReaction>(
+  { emoji: { type: String, required: true }, userId: { type: String, required: true } },
+  { _id: false }
+);
+
+const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
+  {
+    friendshipId: { type: Schema.Types.ObjectId, ref: 'FriendshipMessages', required: true },
+    id: { type: String, required: true },
+    from: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    to: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    type: { type: String, enum: ['text', 'image', 'audio'], required: true },
+    text: String,
+    uri: String,
+    name: String,
+    size: Number,
+    duration: Number,
+    timestamp: { type: Date, default: Date.now },
+    read: { type: Boolean, default: false },
+    reactions: [ReactionSchema],
+  },
+  { timestamps: false }
+);
+
+FriendshipMessageItemSchema.index({ friendshipId: 1, timestamp: -1 });
+FriendshipMessageItemSchema.index({ id: 1 }, { unique: true });
+
+export default mongoose.model<IFriendshipMessageItem>(
+  'FriendshipMessageItem',
+  FriendshipMessageItemSchema
+);
