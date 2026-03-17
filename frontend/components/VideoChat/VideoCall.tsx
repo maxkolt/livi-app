@@ -931,7 +931,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     const callConnected = !!friendCallAccepted || !!remoteStream;
     const hasActiveCall = (!!roomId || !!callId || !!partnerId) && !isInactiveState && callConnected;
-    
+    logger.info('[VideoCall] presence:update решение', {
+      sendBusy: hasActiveCall,
+      callConnected,
+      friendCallAccepted,
+      hasRemoteStream: !!remoteStream,
+      hasRoomId: !!roomId,
+      isInactiveState,
+    });
     if (hasActiveCall) {
       try {
         socket.emit('presence:update', { status: 'busy', roomId: roomId || callId || undefined });

@@ -1421,7 +1421,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           if (link) {
             if (link.b === userId && !(sock as any).data.inCall) {
               ignoreBusyForCallee = true;
-              logger.debug('📍 [presence:update] Callee busy ignored until call accepted', { userId, callId: entry.callId });
+              logger.info('📍 [presence:update] Callee busy ignored until call accepted', { userId, callId: entry.callId });
             }
             // Инициатор: не рассылаем его busy друзьям (в т.ч. получателю), пока получатель не принял (у получателя нет inCall).
             if (link.a === userId) {
@@ -1429,7 +1429,7 @@ io.on('connection', async (sock: AuthedSocket) => {
               const calleeInCall = !!(calleeSock && (calleeSock as any).data?.inCall);
               if (!calleeInCall) {
                 ignoreBusyForCaller = true;
-                logger.debug('📍 [presence:update] Caller busy ignored until callee accepted', { userId, callId: entry.callId });
+                logger.info('📍 [presence:update] Caller busy ignored until callee accepted (no badge during incoming)', { userId, callerId: link.a, calleeId: link.b, callId: entry.callId });
               }
             }
           }
@@ -1452,12 +1452,12 @@ io.on('connection', async (sock: AuthedSocket) => {
         await emitPresenceUpdateToFriends(io, userId, effectiveBusy);
       }
       
-      logger.debug('📍 [presence:update] Status updated', {
+      logger.info('📍 [presence:update] Status updated', {
         userId,
         status,
         busy,
         effectiveBusy,
-        roomId: payload?.roomId,
+        broadcast: !ignoreBusyForCallee && !ignoreBusyForCaller,
         ignoreBusyForCallee,
         ignoreBusyForCaller
       });

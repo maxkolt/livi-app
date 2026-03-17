@@ -2806,7 +2806,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         // Формат объекта: обновление busy статуса
         const userId = String(data.userId);
         const busy = data.busy !== undefined ? !!data.busy : undefined;
-        
+        // Лог: откуда приходит бейдж «Занято» — если busy=true приходит до принятия вызова, источник на сервере или у звонящего
+        logger.info('[presence:update] busy от друга', { userId, busy, myUserId: getCurrentUserId?.() ?? '' });
         if (busy !== undefined) {
           setFriends((prev) => {
             const updated = prev.map((f) => {
