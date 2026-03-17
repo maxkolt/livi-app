@@ -3,12 +3,13 @@ import { Router } from 'express';
 import User from '../models/User';
 import { getFriendsPaginated, areFriendsCached } from '../utils/friendshipUtils';
 import { getIoInstance } from '../utils/ioInstance';
+import { getEffectiveBusy } from '../utils/effectiveBusy';
 
 const router = Router();
 
 const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(String(s || '').trim());
 
-/** Проверка онлайн и занятости по сокетам (как в friends:fetch) */
+/** Проверка онлайн и занятости по сокетам (как в friends:fetch; callee до принятия не занят) */
 function getOnlineAndBusyFromSockets() {
   const io = getIoInstance();
   if (!io) return { isOnline: () => false, isBusy: () => false };
@@ -19,14 +20,7 @@ function getOnlineAndBusyFromSockets() {
     }
     return false;
   };
-  const isBusy = (uid: string) => {
-    for (const s of io.sockets.sockets.values()) {
-      if (String((s as any).data?.userId) === String(uid)) {
-        if ((s as any).data?.busy === true) return true;
-      }
-    }
-    return false;
-  };
+  const isBusy = (uid: string) => getEffectiveBusy(io, uid);
   return { isOnline, isBusy };
 }
 

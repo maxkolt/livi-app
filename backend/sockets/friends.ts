@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import User from '../models/User';
 import { areFriendsCached, getFriendsPaginated, clearFriendshipCache } from '../utils/friendshipUtils';
 import { logger } from '../utils/logger';
+import { getEffectiveBusy } from '../utils/effectiveBusy';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
@@ -39,17 +40,10 @@ export default function registerFriendSockets(io: Server) {
         const result = await getFriendsPaginated(me, page, limit);
         logger.debug('Friends fetched', { userId: me, friendsCount: result.friends.length, total: result.total });
 
-        // Добавляем информацию об онлайн статусе и занятости
+        // Добавляем информацию об онлайн статусе и занятости (callee до принятия не показывается занятым)
         const list = result.friends.map((friend) => {
           const friendId = String(friend._id);
-          // Занят, если хотя бы один сокет этого пользователя в видеозвонке (busy)
-          let isFriendBusy = false;
-          for (const s of io.sockets.sockets.values()) {
-            if (String((s as any).data?.userId) === friendId && (s as any).data?.busy === true) {
-              isFriendBusy = true;
-              break;
-            }
-          }
+          const isFriendBusy = getEffectiveBusy(io, friendId);
           
           return {
             _id: friendId,

@@ -26,6 +26,7 @@ import registerMessageSockets from './sockets/messagesReliable';
 import { socketHandler } from './sockets/handler';
 import { bindAvatarSockets } from './sockets/avatar';
 import { setIoInstance } from './utils/ioInstance';
+import { setGetEffectiveBusy } from './utils/effectiveBusy';
 import User from './models/User';
 import Install from './models/Install';
 import MissedCall from './models/MissedCall';
@@ -875,6 +876,22 @@ function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'cancele
   callOfUser.delete(link.a);
   callOfUser.delete(link.b);
 }
+
+/** Callee в ожидающем звонке (без inCall) не считается занятым при отображении в списке друзей. */
+function getEffectiveBusyForExport(io: Server, userId: string): boolean {
+  for (const s of io.sockets.sockets.values()) {
+    if (String((s as any).data?.userId) !== String(userId)) continue;
+    if ((s as any).data?.busy !== true) continue;
+    const entry = callOfUser.get(userId);
+    if (entry) {
+      const link = callsById.get(entry.callId);
+      if (link && link.b === userId && !(s as any).data.inCall) continue;
+    }
+    return true;
+  }
+  return false;
+}
+setGetEffectiveBusy(getEffectiveBusyForExport);
 
 /** Сохранить пропущенный вызов для получателя (после восстановления сети он подтянет через reauth). */
 async function saveMissedCall(calleeId: string, callerId: string, callerNick: string) {
