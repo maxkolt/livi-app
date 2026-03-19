@@ -455,6 +455,11 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
   socket.on('stop', async () => {
     clearDelayedRetry(socket.id);
     await removeFromQueue(socket.id);
+    // Ban pair to prevent immediate rematch (same race as "Next" — device may still be reconnecting)
+    const partnerSid = socket.data.partnerSid as string | undefined;
+    if (partnerSid) {
+      await banPair(socket.id, partnerSid);
+    }
     await clearPartner(io, socket, true, 'stop');
     socket.data.inCall = false;
     await markBusy(io, socket, false);
