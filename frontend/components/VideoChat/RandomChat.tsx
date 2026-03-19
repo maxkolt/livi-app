@@ -1713,8 +1713,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         
         {/* Эквалайзер отключен */}
         
-        {/* Карточка "Вы" */}
-        <View style={styles.card} ref={localModerationTargetRef}>
+        {/* Карточка "Вы" — collapsable={false} нужен для captureRef/captureScreen на Android */}
+        <View style={styles.card} ref={localModerationTargetRef} collapsable={false}>
           {(() => {
             // КРИТИЧНО: Если поиск не начат, всегда показываем "Вы"
             if (!started) {

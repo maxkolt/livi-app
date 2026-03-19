@@ -6,9 +6,16 @@ const router = Router();
 
 const moderationEnabled = String(process.env.MODERATION_ENABLED || '0') === '1';
 const minLabelConfidence = Number(process.env.MODERATION_MIN_LABEL_CONFIDENCE || 0.8);
+// Оружие — критично; Vision API часто даёт 0.6–0.8 для gun/handgun
+const minWeaponConfidence = Number(process.env.MODERATION_MIN_WEAPON_CONFIDENCE || 0.6);
+const debugLabels = String(process.env.MODERATION_DEBUG_LABELS || '0') === '1';
 
 const violenceLabels = new Set(['violence', 'fight', 'physical violence', 'assault']);
-const weaponLabels = new Set(['weapon', 'gun', 'knife', 'firearm']);
+// Google Vision возвращает разные метки для оружия: Handgun, Pistol, Gun, Weapon, Firearm, Rifle и т.д.
+const weaponLabels = new Set([
+  'weapon', 'gun', 'knife', 'firearm', 'handgun', 'pistol', 'revolver', 'rifle',
+  'blade', 'sword', 'machete',
+]);
 
 type ModerationCategory = {
   matched: boolean;
@@ -73,10 +80,11 @@ router.post('/moderate', async (req, res) => {
 
     for (const item of labels) {
       const score = Number(item.score || 0);
-      if (score < minLabelConfidence) continue;
-
       const label = normalizeLabel(item.description ?? undefined);
       if (!label) continue;
+
+      const minConf = weaponLabels.has(label) ? minWeaponConfidence : minLabelConfidence;
+      if (score < minConf) continue;
 
       if (violenceLabels.has(label)) {
         violence.matched = true;
@@ -89,6 +97,20 @@ router.post('/moderate', async (req, res) => {
     }
 
     const violation = nsfw.matched || violence.matched || weapon.matched;
+
+    if (violation) {
+      logger.info('[Moderation] violation detected', {
+        nsfw: nsfw.matched,
+        violence: violence.reasons,
+        weapon: weapon.reasons,
+      });
+    } else if (debugLabels && labels.length > 0) {
+      const top = labels
+        .slice(0, 10)
+        .map((l) => `${l.description}:${Number(l.score || 0).toFixed(2)}`)
+        .join(', ');
+      logger.info('[Moderation] top labels (no violation)', { labels: top });
+    }
 
     return res.json({
       ok: true,

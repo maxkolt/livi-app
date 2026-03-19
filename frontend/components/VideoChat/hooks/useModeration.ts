@@ -1,7 +1,8 @@
 import { RefObject, useEffect, useMemo, useRef, useState } from 'react';
-import { View } from 'react-native';
-import { captureRef } from 'react-native-view-shot';
+import { InteractionManager, PixelRatio, Platform, View } from 'react-native';
+import { captureRef, captureScreen } from 'react-native-view-shot';
 import * as FileSystem from 'expo-file-system';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { API_BASE } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 
@@ -26,6 +27,9 @@ const WARNING_TEXT = 'Пожалуйста, соблюдайте правила.
 const MUTE_TEXT = 'Вы временно ограничены за нарушение правил.';
 const BAN_TEXT = 'Вы заблокированы на 1 час за повторные нарушения.';
 
+/** Задержка после подключения перед началом захвата — избегаем race с обновлением view hierarchy (IndexOutOfBoundsException в gatherTransparentRegion) */
+const STABLE_DELAY_MS = 3000;
+
 export function useModeration({
   enabled,
   chatType,
@@ -44,8 +48,18 @@ export function useModeration({
   const lastCheckAtRef = useRef(0);
   const consecutiveBadFramesRef = useRef(0);
   const strikesRef = useRef(0);
+  const activeSinceRef = useRef<number | null>(null);
 
   const active = useMemo(() => enabled && chatType === 'random' && shouldCheck, [enabled, chatType, shouldCheck]);
+
+  // Отслеживаем момент, когда модерация стала активной (после подключения к комнате)
+  useEffect(() => {
+    if (active) {
+      if (activeSinceRef.current === null) activeSinceRef.current = Date.now();
+    } else {
+      activeSinceRef.current = null;
+    }
+  }, [active]);
 
   const applyStrike = () => {
     const next = Math.min(3, strikesRef.current + 1);
@@ -71,6 +85,10 @@ export function useModeration({
 
     const now = Date.now();
     if (now - lastCheckAtRef.current < cooldownMs) return;
+
+    // Не захватываем экран в первые N секунд после подключения — view hierarchy ещё стабилизируется
+    const activeSince = activeSinceRef.current;
+    if (activeSince === null || now - activeSince < STABLE_DELAY_MS) return;
     lastCheckAtRef.current = now;
 
     const target = targetRef.current;
@@ -80,19 +98,70 @@ export function useModeration({
     setIsChecking(true);
 
     try {
-      const tmpUri = await captureRef(target, {
-        format: 'jpg',
+      // Даём UI отрисоваться перед обходом view tree (снижает риск IndexOutOfBoundsException)
+      await new Promise<void>((r) => InteractionManager.runAfterInteractions(() => r()));
+
+      let base64: string | undefined;
+
+      // 1) Пробуем captureRef с handleGLSurfaceViewOnAndroid (Android: SurfaceView/TextureView)
+      const captureRefOpts = {
+        format: 'jpg' as const,
         quality: 0.3,
         width: 150,
         height: 200,
-        result: 'tmpfile',
-      });
+        result: 'tmpfile' as const,
+        ...(Platform.OS === 'android' ? { handleGLSurfaceViewOnAndroid: true } : {}),
+      };
 
-      const base64 = await FileSystem.readAsStringAsync(tmpUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      try {
+        const tmpUri = await captureRef(target, captureRefOpts);
+        const raw = await FileSystem.readAsStringAsync(tmpUri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        void FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => {});
+        base64 = raw;
+      } catch (_refErr) {
+        // 2) Fallback: captureScreen + crop (RTCView часто не поддерживает captureRef)
+        const bounds = await new Promise<{ x: number; y: number; width: number; height: number } | null>(
+          (resolve) => {
+            (target as any).measureInWindow?.((x: number, y: number, w: number, h: number) => {
+              if (w >= 50 && h >= 50) resolve({ x, y, width: w, height: h });
+              else resolve(null);
+            });
+          }
+        );
+        if (!bounds) return;
 
-      void FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => {});
+        const tmpUri = await captureScreen({
+          format: 'jpg',
+          quality: 0.5,
+          result: 'tmpfile',
+          ...(Platform.OS === 'android' ? { handleGLSurfaceViewOnAndroid: true } : {}),
+        });
+
+        const pixelRatio = PixelRatio.get();
+        const crop = {
+          originX: Math.max(0, Math.floor(bounds.x * pixelRatio)),
+          originY: Math.max(0, Math.floor(bounds.y * pixelRatio)),
+          width: Math.floor(bounds.width * pixelRatio),
+          height: Math.floor(bounds.height * pixelRatio),
+        };
+        if (crop.width < 50 || crop.height < 50) return;
+
+        const cropped = await ImageManipulator.manipulateAsync(
+          tmpUri,
+          [{ crop }, { resize: { width: 150, height: 200 } }],
+          { compress: 0.3, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+        );
+
+        void FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => {});
+        if (cropped.uri !== tmpUri) {
+          void FileSystem.deleteAsync(cropped.uri, { idempotent: true }).catch(() => {});
+        }
+        base64 = cropped.base64;
+      }
+
+      if (!base64) return;
 
       const response = await fetch(`${API_BASE}/api/moderate`, {
         method: 'POST',
@@ -117,6 +186,7 @@ export function useModeration({
       }
 
       consecutiveBadFramesRef.current = 0;
+      logger.info('[Moderation] frame checked OK');
     } catch (e) {
       logger.warn('[Moderation] frame check failed', { error: (e as any)?.message || String(e) });
     } finally {
