@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
-    "build": "npx tsc",
+    "build": "node ./node_modules/typescript/bin/tsc",
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn --transpile-only index.ts"
   },
@@ -24,14 +24,14 @@
     "sharp": "^0.33.5",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
-    "stream-chat": "^9.17.0"
-  },
-  "devDependencies": {
+    "stream-chat": "^9.17.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/node": "^24.3.0",
-    "ts-node": "^10.9.2",
-    "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.2"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0"
   }
 }
