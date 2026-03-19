@@ -15,12 +15,18 @@ type UseModerationOptions = {
   enabled: boolean;
   chatType: 'random' | 'private' | string;
   targetRef: RefObject<View | null>;
+  /** 'remote' = проверяем собеседника, при нарушении блокируем его. 'local' = проверяем себя. */
+  moderationTarget: 'local' | 'remote';
+  /** Только для moderationTarget='remote': userId партнёра для репорта */
+  partnerUserId?: string | null;
   shouldCheck: boolean;
   cooldownMs?: number;
   badFramesThreshold?: number;
   onWarning: (message: string) => void;
   onMute: (seconds: number, message: string) => void;
   onBan: (seconds: number, message: string) => void;
+  /** Вызывается при нарушении в remote-видео: блокируем партнёра, не локального юзера */
+  onRemoteViolation?: (partnerUserId: string) => void;
 };
 
 const WARNING_TEXT = 'Пожалуйста, соблюдайте правила. Обнаружен нежелательный контент.';
@@ -28,18 +34,21 @@ const MUTE_TEXT = 'Вы временно ограничены за наруше�
 const BAN_TEXT = 'Вы заблокированы на 1 час за повторные нарушения.';
 
 /** Задержка после подключения перед началом захвата — избегаем race с обновлением view hierarchy (IndexOutOfBoundsException в gatherTransparentRegion) */
-const STABLE_DELAY_MS = 5000;
+const STABLE_DELAY_MS = 3000;
 
 export function useModeration({
   enabled,
   chatType,
   targetRef,
+  moderationTarget,
+  partnerUserId,
   shouldCheck,
   cooldownMs = 1300,
   badFramesThreshold = 3,
   onWarning,
   onMute,
   onBan,
+  onRemoteViolation,
 }: UseModerationOptions) {
   const [isChecking, setIsChecking] = useState(false);
   const [strikes, setStrikes] = useState(0);
@@ -132,20 +141,17 @@ export function useModeration({
         );
         if (!bounds) return;
 
-        // КРИТИЧНО: Карточка «Вы» должна быть в нижней половине экрана (под «Собеседник»).
-        // Если bounds.y < 25% высоты — это скорее всего верхняя карточка (remote), не локальная.
-        // В таком случае мы бы забанили зрителя вместо того, кто показывает пистолет.
+        // Санити-чек: для remote (Собеседник) bounds.y обычно в верхней половине; для local (Вы) — в нижней.
         const screenH = Dimensions.get('window').height;
-        const minY = screenH * 0.25;
-        if (bounds.y < minY) {
-          logger.warn('[Moderation] skip: bounds too high (likely capturing remote, not local)', {
-            boundsY: bounds.y,
-            minY,
-            screenH,
-          });
+        if (moderationTarget === 'remote' && bounds.y > screenH * 0.6) {
+          logger.warn('[Moderation] skip: remote card expected in upper half', { boundsY: bounds.y, screenH });
           return;
         }
-        logger.info('[Moderation] captureScreen+crop bounds OK', { y: bounds.y, screenH });
+        if (moderationTarget === 'local' && bounds.y < screenH * 0.25) {
+          logger.warn('[Moderation] skip: local card expected in lower half', { boundsY: bounds.y, screenH });
+          return;
+        }
+        logger.info('[Moderation] captureScreen+crop bounds OK', { target: moderationTarget, y: bounds.y, screenH });
 
         // Небольшая пауза перед captureScreen — снижает риск IndexOutOfBoundsException при обходе view tree
         await new Promise((r) => setTimeout(r, 100));
@@ -198,7 +204,11 @@ export function useModeration({
         consecutiveBadFramesRef.current += 1;
         if (consecutiveBadFramesRef.current >= badFramesThreshold) {
           consecutiveBadFramesRef.current = 0;
-          applyStrike();
+          if (moderationTarget === 'remote' && partnerUserId && onRemoteViolation) {
+            onRemoteViolation(partnerUserId);
+          } else {
+            applyStrike();
+          }
         }
         return;
       }
@@ -219,7 +229,7 @@ export function useModeration({
       void runCheck();
     }, cooldownMs);
     return () => clearInterval(interval);
-  }, [active, cooldownMs]);
+  }, [active, cooldownMs, moderationTarget, partnerUserId]);
 
   return {
     isChecking,

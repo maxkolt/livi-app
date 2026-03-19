@@ -451,6 +451,19 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     }, reEnqueueDelayMs);
   });
 
+  // === MODERATION: report partner for violation (e.g. showed weapon) =======
+  socket.on('moderation:reportPartner', async ({ partnerUserId }: { partnerUserId?: string }) => {
+    const reporterId = (socket as any)?.data?.userId;
+    const reported = String(partnerUserId || '').trim();
+    if (!reported) return;
+    logger.info('[Moderation] partner reported for violation', {
+      reporterUserId: reporterId,
+      reportedUserId: reported,
+      reporterSocketId: socket.id,
+    });
+    // TODO: добавить бан reportedUserId в random chat (отдельное хранилище)
+  });
+
   // === STOP ================================================================
   socket.on('stop', async () => {
     clearDelayedRetry(socket.id);

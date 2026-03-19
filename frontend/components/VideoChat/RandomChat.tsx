@@ -173,7 +173,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   // Входящий звонок (когда пользователь в неактивном состоянии)
   const [incomingCall, setIncomingCall] = useState<{ callId: string; from: string; fromNick?: string } | null>(null);
   const moderationEnabled = String(process.env.EXPO_PUBLIC_RANDOM_CHAT_MODERATION || '0') === '1';
-  const localModerationTargetRef = useRef<View | null>(null);
+  const remoteModerationTargetRef = useRef<View | null>(null);
   const [muteByModerationUntil, setMuteByModerationUntil] = useState(0);
   const [banByModerationUntil, setBanByModerationUntil] = useState(0);
   const myUserId = useMemo(() => {
@@ -1258,16 +1258,32 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     }
   }, [stopSpeaker]);
 
+  const onRemoteViolation = useCallback(
+    (reportedUserId: string) => {
+      try {
+        socket.emit('moderation:reportPartner', { partnerUserId: reportedUserId });
+      } catch (e) {
+        logger.warn('[RandomChat] Failed to report partner for moderation', e);
+      }
+      showToast('Собеседник нарушил правила. Ищем нового...', 2400);
+      sessionRef.current?.next();
+    },
+    [showToast]
+  );
+
   useModeration({
     enabled: moderationEnabled,
     chatType: 'random',
-    targetRef: localModerationTargetRef,
-    shouldCheck: started && !loading && !isInactiveState && !isNexting && camOn && !!localStream && !!remoteStream && !isModerationBanned,
-    cooldownMs: 1300,
-    badFramesThreshold: 3,
+    targetRef: remoteModerationTargetRef,
+    moderationTarget: 'remote',
+    partnerUserId,
+    shouldCheck: started && !loading && !isInactiveState && !isNexting && !!remoteStream && !isModerationBanned,
+    cooldownMs: 900,
+    badFramesThreshold: 2,
     onWarning: showWarning,
     onMute: muteUser,
     onBan: banUser,
+    onRemoteViolation,
   });
   
   // Обработка AppState - при уходе приложения в фон рандомный чат должен
@@ -1542,8 +1558,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       >
         <View style={[styles.content, androidContentInsets]}>
         <View style={styles.topSection}>
-        {/* Карточка "Собеседник" */}
-        <View style={styles.card}>
+        {/* Карточка "Собеседник" — ref для модерации (проверяем партнёра, не себя) */}
+        <View style={styles.card} ref={remoteModerationTargetRef} collapsable={false}>
           {(() => {
             // КРИТИЧНО: Если поиск остановлен (started=false), всегда показываем текст "Собеседник"
             if (!started) {
@@ -1713,8 +1729,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         
         {/* Эквалайзер отключен */}
         
-        {/* Карточка "Вы" — collapsable={false} нужен для captureRef/captureScreen на Android */}
-        <View style={styles.card} ref={localModerationTargetRef} collapsable={false}>
+        {/* Карточка "Вы" */}
+        <View style={styles.card} collapsable={false}>
           {(() => {
             // КРИТИЧНО: Если поиск не начат, всегда показываем "Вы"
             if (!started) {

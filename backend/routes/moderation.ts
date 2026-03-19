@@ -5,16 +5,23 @@ import { logger } from '../utils/logger';
 const router = Router();
 
 const moderationEnabled = String(process.env.MODERATION_ENABLED || '0') === '1';
-const minLabelConfidence = Number(process.env.MODERATION_MIN_LABEL_CONFIDENCE || 0.8);
-// Оружие — критично; Vision API часто даёт 0.6–0.8 для gun/handgun
-const minWeaponConfidence = Number(process.env.MODERATION_MIN_WEAPON_CONFIDENCE || 0.6);
+const minLabelConfidence = Number(process.env.MODERATION_MIN_LABEL_CONFIDENCE || 0.7);
+// Оружие — критично; Vision API часто даёт 0.5–0.8 для gun/handgun
+const minWeaponConfidence = Number(process.env.MODERATION_MIN_WEAPON_CONFIDENCE || 0.5);
 const debugLabels = String(process.env.MODERATION_DEBUG_LABELS || '0') === '1';
+// LIKELY в дополнение к VERY_LIKELY — быстрее ловим, но больше false positive
+const useLikelyThreshold = String(process.env.MODERATION_USE_LIKELY || '1') === '1';
 
-const violenceLabels = new Set(['violence', 'fight', 'physical violence', 'assault']);
-// Google Vision возвращает разные метки для оружия: Handgun, Pistol, Gun, Weapon, Firearm, Rifle и т.д.
+const violenceLabels = new Set(['violence', 'fight', 'physical violence', 'assault', 'blood', 'gore']);
+// Google Vision возвращает разные метки для оружия
 const weaponLabels = new Set([
   'weapon', 'gun', 'knife', 'firearm', 'handgun', 'pistol', 'revolver', 'rifle',
-  'blade', 'sword', 'machete',
+  'blade', 'sword', 'machete', 'ammunition',
+]);
+// NSFW-метки из Label Detection (дополняют SafeSearch adult/racy)
+const nsfwLabels = new Set([
+  'nudity', 'nude', 'underwear', 'lingerie', 'bikini', 'erotic', 'sexual',
+  'pornography', 'explicit', 'indecent',
 ]);
 
 type ModerationCategory = {
@@ -68,14 +75,22 @@ router.post('/moderate', async (req, res) => {
 
     const adultLikelihood = String(safe?.adult || 'UNKNOWN');
     const racyLikelihood = String(safe?.racy || 'UNKNOWN');
+    const violenceLikelihood = String(safe?.violence || 'UNKNOWN');
 
-    if (adultLikelihood === 'VERY_LIKELY') {
+    // SafeSearch: adult (nudity, porn, sexual)
+    if (adultLikelihood === 'VERY_LIKELY' || (useLikelyThreshold && adultLikelihood === 'LIKELY')) {
       nsfw.matched = true;
-      nsfw.reasons.push('adult_very_likely');
+      nsfw.reasons.push(`adult_${adultLikelihood.toLowerCase()}`);
     }
-    if (racyLikelihood === 'VERY_LIKELY') {
+    // SafeSearch: racy (skimpy, provocative, close-ups)
+    if (racyLikelihood === 'VERY_LIKELY' || (useLikelyThreshold && racyLikelihood === 'LIKELY')) {
       nsfw.matched = true;
-      nsfw.reasons.push('racy_very_likely');
+      nsfw.reasons.push(`racy_${racyLikelihood.toLowerCase()}`);
+    }
+    // SafeSearch: violence (death, harm, injury)
+    if (violenceLikelihood === 'VERY_LIKELY' || (useLikelyThreshold && violenceLikelihood === 'LIKELY')) {
+      violence.matched = true;
+      violence.reasons.push(`safeSearch_violence_${violenceLikelihood.toLowerCase()}`);
     }
 
     for (const item of labels) {
@@ -93,6 +108,10 @@ router.post('/moderate', async (req, res) => {
       if (weaponLabels.has(label)) {
         weapon.matched = true;
         weapon.reasons.push(`${label}:${score.toFixed(2)}`);
+      }
+      if (nsfwLabels.has(label)) {
+        nsfw.matched = true;
+        nsfw.reasons.push(`label_${label}:${score.toFixed(2)}`);
       }
     }
 
@@ -118,6 +137,8 @@ router.post('/moderate', async (req, res) => {
       categories: { nsfw, violence, weapon },
       meta: {
         minLabelConfidence,
+        minWeaponConfidence,
+        useLikelyThreshold,
       },
     });
   } catch (e: any) {
