@@ -77,7 +77,7 @@ livekit.твойдомен.com {
 
 ```env
 LIVEKIT_URL=wss://livekit.твойдомен.com
-LIVEKIT_API_KEY=lk_969512bce6a80fb0
+LIVEKIT_API_KEY=lk_XXXX
 LIVEKIT_API_SECRET=твой_секрет
 ```
 

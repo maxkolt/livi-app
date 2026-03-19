@@ -1,0 +1,14 @@
+# Узкий UDP-диапазон (200 портов) — быстрый старт контейнера, без таймаута.
+# Для большей нагрузки скопируй livekit.yaml (50000-60000) и используй основной compose.
+port: 7880
+log_level: info
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50199
+  use_external_ip: true
+
+# Те же ключи, что в backend/.env и в livekit.yaml (локально подставь свои).
+keys:
+  your_api_key: "your_api_secret"

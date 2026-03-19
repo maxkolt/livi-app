@@ -4,6 +4,7 @@
  * Run once from project root: npx ts-node backend/scripts/migrate-messages-to-items.ts
  * Or from backend/: npx ts-node scripts/migrate-messages-to-items.ts
  * Requires MONGO_URI/MONGO_DB in env (loads backend/.env if present).
+ * Safe to re-run: skips messages that already exist in friendshipmessageitems.
  */
 import path from 'path';
 import dotenv from 'dotenv';
@@ -57,8 +58,14 @@ async function run() {
       }
     }
     if (items.length) {
-      await FriendshipMessageItem.insertMany(items);
-      inserted += items.length;
+      const ids = items.map((i) => i.id);
+      const existing = await FriendshipMessageItem.find({ id: { $in: ids } }).select('id').lean();
+      const existingSet = new Set((existing as any[]).map((e) => e.id));
+      const toInsert = items.filter((i) => !existingSet.has(i.id));
+      if (toInsert.length) {
+        await FriendshipMessageItem.insertMany(toInsert);
+        inserted += toInsert.length;
+      }
     }
   }
   console.log(`Migrated ${inserted} messages from ${docs.length} friendships.`);

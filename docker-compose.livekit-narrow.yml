@@ -1,0 +1,15 @@
+# LiveKit с узким UDP (200 портов) — быстрый старт, без таймаута при создании контейнера.
+# Запуск на сервере: docker-compose -f docker-compose.livekit-narrow.yml up -d
+
+services:
+  livekit-sfu:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    stop_grace_period: 10s
+    ports:
+      - "127.0.0.1:7880:7880"
+      - "127.0.0.1:7881:7881"
+      - "127.0.0.1:50000-50199:50000-50199/udp"
+    volumes:
+      - ./livekit/livekit.narrow.yaml:/etc/livekit.yaml:ro
+    command: --config /etc/livekit.yaml
