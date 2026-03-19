@@ -1,5 +1,5 @@
 import { RefObject, useEffect, useMemo, useRef, useState } from 'react';
-import { InteractionManager, PixelRatio, Platform, View } from 'react-native';
+import { Dimensions, InteractionManager, PixelRatio, Platform, View } from 'react-native';
 import { captureRef, captureScreen } from 'react-native-view-shot';
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -28,7 +28,7 @@ const MUTE_TEXT = 'Вы временно ограничены за наруше�
 const BAN_TEXT = 'Вы заблокированы на 1 час за повторные нарушения.';
 
 /** Задержка после подключения перед началом захвата — избегаем race с обновлением view hierarchy (IndexOutOfBoundsException в gatherTransparentRegion) */
-const STABLE_DELAY_MS = 3000;
+const STABLE_DELAY_MS = 5000;
 
 export function useModeration({
   enabled,
@@ -131,6 +131,24 @@ export function useModeration({
           }
         );
         if (!bounds) return;
+
+        // КРИТИЧНО: Карточка «Вы» должна быть в нижней половине экрана (под «Собеседник»).
+        // Если bounds.y < 25% высоты — это скорее всего верхняя карточка (remote), не локальная.
+        // В таком случае мы бы забанили зрителя вместо того, кто показывает пистолет.
+        const screenH = Dimensions.get('window').height;
+        const minY = screenH * 0.25;
+        if (bounds.y < minY) {
+          logger.warn('[Moderation] skip: bounds too high (likely capturing remote, not local)', {
+            boundsY: bounds.y,
+            minY,
+            screenH,
+          });
+          return;
+        }
+        logger.info('[Moderation] captureScreen+crop bounds OK', { y: bounds.y, screenH });
+
+        // Небольшая пауза перед captureScreen — снижает риск IndexOutOfBoundsException при обходе view tree
+        await new Promise((r) => setTimeout(r, 100));
 
         const tmpUri = await captureScreen({
           format: 'jpg',

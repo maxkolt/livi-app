@@ -1262,7 +1262,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     enabled: moderationEnabled,
     chatType: 'random',
     targetRef: localModerationTargetRef,
-    shouldCheck: started && !loading && !isInactiveState && camOn && !!localStream && !isModerationBanned,
+    shouldCheck: started && !loading && !isInactiveState && !isNexting && camOn && !!localStream && !!remoteStream && !isModerationBanned,
     cooldownMs: 1300,
     badFramesThreshold: 3,
     onWarning: showWarning,
