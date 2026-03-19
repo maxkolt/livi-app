@@ -25,7 +25,9 @@ type UseModerationOptions = {
   onWarning: (message: string) => void;
   onMute: (seconds: number, message: string) => void;
   onBan: (seconds: number, message: string) => void;
-  /** Вызывается при нарушении в remote-видео: блокируем партнёра, не локального юзера */
+  /** Первое нарушение: предупреждение партнёру (он видит в своём блоке «Вы») */
+  onRemoteWarning?: (partnerUserId: string) => void;
+  /** Второе нарушение: бан партнёра, зрителю — «Собеседник забанен на час» */
   onRemoteViolation?: (partnerUserId: string) => void;
 };
 
@@ -48,6 +50,7 @@ export function useModeration({
   onWarning,
   onMute,
   onBan,
+  onRemoteWarning,
   onRemoteViolation,
 }: UseModerationOptions) {
   const [isChecking, setIsChecking] = useState(false);
@@ -58,6 +61,9 @@ export function useModeration({
   const consecutiveBadFramesRef = useRef(0);
   const strikesRef = useRef(0);
   const activeSinceRef = useRef<number | null>(null);
+  /** Для remote: счётчик нарушений текущего партнёра (1=warning, 2+=ban) */
+  const partnerStrikesRef = useRef(0);
+  const lastPartnerUserIdRef = useRef<string | null>(null);
 
   const active = useMemo(() => enabled && chatType === 'random' && shouldCheck, [enabled, chatType, shouldCheck]);
 
@@ -204,8 +210,17 @@ export function useModeration({
         consecutiveBadFramesRef.current += 1;
         if (consecutiveBadFramesRef.current >= badFramesThreshold) {
           consecutiveBadFramesRef.current = 0;
-          if (moderationTarget === 'remote' && partnerUserId && onRemoteViolation) {
-            onRemoteViolation(partnerUserId);
+          if (moderationTarget === 'remote' && partnerUserId) {
+            if (lastPartnerUserIdRef.current !== partnerUserId) {
+              partnerStrikesRef.current = 0;
+              lastPartnerUserIdRef.current = partnerUserId;
+            }
+            partnerStrikesRef.current += 1;
+            if (partnerStrikesRef.current === 1 && onRemoteWarning) {
+              onRemoteWarning(partnerUserId);
+            } else if (partnerStrikesRef.current >= 2 && onRemoteViolation) {
+              onRemoteViolation(partnerUserId);
+            }
           } else {
             applyStrike();
           }

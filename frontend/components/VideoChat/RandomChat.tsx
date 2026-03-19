@@ -1258,6 +1258,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     }
   }, [stopSpeaker]);
 
+  const onRemoteWarning = useCallback(() => {
+    try {
+      socket.emit('moderation:warningPartner');
+    } catch (e) {
+      logger.warn('[RandomChat] Failed to warn partner for moderation', e);
+    }
+  }, []);
+
   const onRemoteViolation = useCallback(
     (reportedUserId: string) => {
       try {
@@ -1265,7 +1273,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       } catch (e) {
         logger.warn('[RandomChat] Failed to report partner for moderation', e);
       }
-      showToast('Собеседник нарушил правила. Ищем нового...', 2400);
+      showToast('Собеседник забанен на час. Он нарушил правила пользования.', 2800);
       sessionRef.current?.next();
     },
     [showToast]
@@ -1283,9 +1291,21 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     onWarning: showWarning,
     onMute: muteUser,
     onBan: banUser,
+    onRemoteWarning,
     onRemoteViolation,
   });
-  
+
+  // Слушаем предупреждение от модерации (мы — партнёр, нас предупредили)
+  useEffect(() => {
+    const handler = () => {
+      showToast('Пожалуйста, соблюдайте правила. Обнаружен нежелательный контент.', 2400);
+    };
+    socket.on('moderation:warning', handler);
+    return () => {
+      socket.off('moderation:warning', handler);
+    };
+  }, [showToast]);
+
   // Обработка AppState - при уходе приложения в фон рандомный чат должен
   // немедленно завершаться, чтобы при возврате экран был в неактивном состоянии.
   useEffect(() => {

@@ -451,7 +451,19 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     }, reEnqueueDelayMs);
   });
 
-  // === MODERATION: report partner for violation (e.g. showed weapon) =======
+  // === MODERATION: предупреждение партнёру (первое нарушение) =============
+  socket.on('moderation:warningPartner', () => {
+    const partnerSid = socket.data.partnerSid as string | undefined;
+    if (partnerSid) {
+      const partner = safeGet(io, partnerSid);
+      if (partner) {
+        partner.emit('moderation:warning');
+        logger.debug('[Moderation] warning sent to partner', { reporterSocketId: socket.id, partnerSocketId: partnerSid });
+      }
+    }
+  });
+
+  // === MODERATION: report partner for violation (второе нарушение — бан) ===
   socket.on('moderation:reportPartner', async ({ partnerUserId }: { partnerUserId?: string }) => {
     const reporterId = (socket as any)?.data?.userId;
     const reported = String(partnerUserId || '').trim();
