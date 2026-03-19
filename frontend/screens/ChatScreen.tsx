@@ -345,11 +345,17 @@ export default function ChatScreen({ route, navigation }: Props) {
     rgb: theme.colors.background === '#151F33' ? 'rgba(21, 31, 51, 0.3)' : 'rgba(0,0,0,0.06)',
     bg: theme.colors.background,
     surface: theme.colors.surface,
+    feedBg: isDark ? theme.colors.surface : 'rgb(200, 206, 216)',
     titan: theme.colors.onSurfaceVariant as string,
     text: theme.colors.onSurfaceVariant as string,
     white: theme.colors.onSurface as string,
     green: '#2ECC71',
     red: '#FF5A67',
+    presenceGreen: isDark ? '#2ECC71' : '#28A85E',
+    presenceRed: isDark ? '#FF5A67' : '#E64E59',
+    replyQuoteAccent: isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(154, 134, 190, 0.98)',
+    replyQuotePressBg: isDark ? 'rgba(186, 236, 224, 0.14)' : 'rgba(154, 134, 190, 0.22)',
+    replyHighlightAccent: isDark ? 'rgba(186, 236, 224, 0.95)' : 'rgba(154, 134, 190, 0.96)',
   } as const), [theme, isDark]);
 
   // Защита от полупрозрачного фона темы: панель ввода всегда должна быть полностью непрозрачной,
@@ -965,7 +971,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     if (!avatarModalVisible) return;
-    setModalAvatarUri(fullAvatarUri || '');
+    if (!modalAvatarUri && fullAvatarUri) setModalAvatarUri(fullAvatarUri);
     if (peerId && peerAvatarVerState > 0) {
       getFull(peerId, peerAvatarVerState).then((fullUri) => {
         if (fullUri) setModalAvatarUri(fullUri);
@@ -974,11 +980,23 @@ export default function ChatScreen({ route, navigation }: Props) {
     avatarModalPinchScale.setValue(1);
     avatarModalBaseScale.setValue(1);
     avatarModalLastScale.current = 1;
-  }, [avatarModalVisible, fullAvatarUri, peerId, peerAvatarVerState, avatarModalPinchScale, avatarModalBaseScale]);
+  }, [avatarModalVisible, modalAvatarUri, fullAvatarUri, peerId, peerAvatarVerState, avatarModalPinchScale, avatarModalBaseScale]);
 
+  // Предразрешаем URI аватара из шапки, чтобы в модалке не было промежуточного кадра.
+  const [headerAvatarResolvedUri, headerAvatarResolvedReady] = useResolvedImageUri(fullAvatarUri || '');
   // На Android в модалке data: URI показываем через разрешённый file: (Glide иначе не показывает)
   const [modalAvatarResolvedUri] = useResolvedImageUri(avatarModalVisible ? modalAvatarUri : '');
   const modalAvatarDisplayUri = (Platform.OS === 'android' && /^data:/i.test(modalAvatarUri)) ? modalAvatarResolvedUri : modalAvatarUri;
+  const modalAvatarInstantUri =
+    modalAvatarDisplayUri ||
+    ((Platform.OS === 'android' && /^data:/i.test(modalAvatarUri))
+      ? (headerAvatarResolvedReady ? headerAvatarResolvedUri : '')
+      : modalAvatarUri) ||
+    ((Platform.OS === 'android' && /^data:/i.test(fullAvatarUri))
+      ? (headerAvatarResolvedReady ? headerAvatarResolvedUri : '')
+      : fullAvatarUri) ||
+    '';
+  const modalAvatarExpected = !!modalAvatarUri || !!fullAvatarUri || peerAvatarVerState > 0;
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -1007,10 +1025,20 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   }, [avatarModalBaseScale, avatarModalPinchScale]);
 
-  const openAvatarModal = useCallback(() => {
-    setModalAvatarUri(fullAvatarUri || '');
+  const openAvatarModal = useCallback(async () => {
+    let initialUri = fullAvatarUri || '';
+    if (Platform.OS === 'android' && /^data:/i.test(initialUri) && headerAvatarResolvedReady && headerAvatarResolvedUri) {
+      initialUri = headerAvatarResolvedUri;
+    }
+    if (!initialUri && peerId && peerAvatarVerState > 0) {
+      try {
+        const cachedFull = await getFull(peerId, peerAvatarVerState);
+        if (cachedFull) initialUri = cachedFull;
+      } catch {}
+    }
+    setModalAvatarUri(initialUri);
     setAvatarModalVisible(true);
-  }, [fullAvatarUri]);
+  }, [fullAvatarUri, headerAvatarResolvedReady, headerAvatarResolvedUri, peerId, peerAvatarVerState]);
 
   // Функция для открытия медиа в полноэкранном режиме
   const openMediaViewer = React.useCallback((type: 'image', uri: string, name?: string) => {
@@ -1963,7 +1991,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         flex: 1,
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: LIVI.surface,
+        backgroundColor: LIVI.feedBg,
       }}
     >
       <ActivityIndicator />
@@ -2394,8 +2422,8 @@ export default function ChatScreen({ route, navigation }: Props) {
       for (const m of selected) {
         const type = String(m?.type || '').trim();
         if (type === 'text') parts.push(String(m?.text ?? '').trim());
-        else if (type === 'image') parts.push('🖼 Фото');
-        else if (type === 'audio') parts.push('🎤 Голосовое');
+        else if (type === 'image') parts.push(t('mediaPhotoLabel', lang));
+        else if (type === 'audio') parts.push(`🎤 ${t('chatVoiceMessage', lang)}`);
       }
       shareText = parts.filter(Boolean).join('\n');
       const firstMedia = selected.find((m) => String(m?.type || '').trim() !== 'text');
@@ -2404,11 +2432,11 @@ export default function ChatScreen({ route, navigation }: Props) {
       const type = String(selectedMessage?.type || '').trim();
       if (type === 'text') shareText = String(selectedMessage?.text ?? '').trim();
       else if (type === 'image') {
-        shareText = '🖼 Фото';
+        shareText = t('mediaPhotoLabel', lang);
         const raw = String(selectedMessage?.uri ?? '').trim();
         if (raw) shareUrl = normalizeUri(raw);
       } else if (type === 'audio') {
-        shareText = '🎤 Голосовое';
+        shareText = `🎤 ${t('chatVoiceMessage', lang)}`;
         const raw = String(selectedMessage?.uri ?? '').trim();
         if (raw) shareUrl = normalizeUri(raw);
       }
@@ -2814,7 +2842,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           <Text style={{
               marginTop: 2,
               fontSize: 11,
-              color: peerOnline ? LIVI.green : LIVI.red,
+              color: peerOnline ? LIVI.presenceGreen : LIVI.presenceRed,
               fontWeight: '300',
               ...(Platform.OS === 'android' && { fontFamily: 'sans-serif-light' }),
             }}>
@@ -2907,8 +2935,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     LIVI.bg,
     LIVI.white,
     LIVI.titan,
-    LIVI.green,
-    LIVI.red,
+    LIVI.presenceGreen,
+    LIVI.presenceRed,
     BORDER_WIDTH,
     BORDER_COLOR,
     navigation,
@@ -4236,11 +4264,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     const isQuotedTargetHighlighted =
       highlightedMessageId != null && String(highlightedMessageId) === String(item.id);
 
-    // Цитата в ответе: те же «жемчужные» акценты, что и рамка подсветки при переходе к сообщению
-    const replyQuoteAccent = isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(198, 182, 234, 0.98)';
-    const replyQuotePressBg = isDark ? 'rgba(186, 236, 224, 0.14)' : 'rgba(198, 182, 234, 0.2)';
+    const replyQuoteAccent = LIVI.replyQuoteAccent;
+    const replyQuotePressBg = LIVI.replyQuotePressBg;
     const replyQuoteBarWidth = Platform.OS === 'ios' ? 1 : 2;
-    const highlightAccentColor = isDark ? 'rgba(186, 236, 224, 0.95)' : 'rgba(198, 182, 234, 0.96)';
+    const highlightAccentColor = LIVI.replyHighlightAccent;
     /** Android: borderWidth+radius даёт тонкие углы — делаем ровное «кольцо» через padding */
     const androidHighlightRing = isQuotedTargetHighlighted && Platform.OS === 'android';
     const ANDROID_RING_PX = 1;
@@ -4445,7 +4472,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     padding: ANDROID_RING_PX,
                     backgroundColor: highlightAccentColor,
                     maxWidth: '100%',
-                    elevation: 3,
+                    elevation: 0,
                   }}
                 >
                   {/*
@@ -4455,7 +4482,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   <View
                     style={{
                       borderRadius: BUBBLE_RADIUS,
-                      backgroundColor: LIVI.surface,
+                      backgroundColor: LIVI.feedBg,
                       overflow: 'hidden',
                       maxWidth: '100%',
                     }}
@@ -4482,11 +4509,6 @@ export default function ChatScreen({ route, navigation }: Props) {
                   borderWidth: 1,
                   borderColor: isQuotedTargetHighlighted ? highlightAccentColor : BORDER_COLOR,
                   maxWidth: '100%',
-                  ...(isQuotedTargetHighlighted && Platform.OS === 'ios'
-                    ? isDark
-                      ? { shadowColor: '#8FD4C8', shadowOpacity: 0.42, shadowRadius: 10, shadowOffset: { width: 0, height: 0 } }
-                      : { shadowColor: '#B8A0E8', shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 0 } }
-                    : {}),
                 }}
               >
                 {bubbleInner}
@@ -4530,7 +4552,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     LIVI.white,
     LIVI.titan,
     LIVI.red,
-    LIVI.surface,
+    LIVI.feedBg,
+    LIVI.replyQuoteAccent,
+    LIVI.replyQuotePressBg,
+    LIVI.replyHighlightAccent,
     isDark,
   ]);
 
@@ -4578,7 +4603,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       edges={Platform.OS === 'android' ? ['top', 'left', 'right'] : ['top', 'bottom', 'left', 'right']}
     >
       <View
-        style={{ flex: 1, backgroundColor: LIVI.surface }}
+        style={{ flex: 1, backgroundColor: LIVI.feedBg }}
         // Prevent touch-through during modal close animations (can trigger header back -> Home -> Chat flicker)
         pointerEvents={mediaViewerVisible || composeViewerVisible || avatarModalVisible ? 'none' : 'auto'}
         onLayout={(e) => {
@@ -4647,7 +4672,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         flex: 1,
                         justifyContent: 'center',
                         alignItems: 'center',
-                        backgroundColor: LIVI.surface,
+                        backgroundColor: LIVI.feedBg,
                       }}
                     >
                       <ActivityIndicator color={LIVI.titan} />
@@ -4661,7 +4686,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       flex: 1,
                       justifyContent: 'center',
                       alignItems: 'center',
-                      backgroundColor: LIVI.surface,
+                      backgroundColor: LIVI.feedBg,
                       ...(Platform.OS === 'ios' ? {} : { transform: [{ scaleY: -1 }] }),
                     }}
                   >
@@ -4751,9 +4776,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                     borderColor: BORDER_COLOR,
                   }}
                 >
-                  <Ionicons name="arrow-undo-outline" size={20} color={isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(198, 182, 234, 0.98)'} style={{ marginRight: 10 }} />
+                  <Ionicons name="arrow-undo-outline" size={20} color={LIVI.replyQuoteAccent} style={{ marginRight: 10 }} />
                   <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={{ color: isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(198, 182, 234, 0.98)', fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
+                    <Text style={{ color: LIVI.replyQuoteAccent, fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
                       {t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
                     </Text>
                     <Text style={{ color: LIVI.white, fontSize: 14, opacity: 0.9 }} numberOfLines={2}>
@@ -4959,7 +4984,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         flex: 1,
                         justifyContent: 'center',
                         alignItems: 'center',
-                        backgroundColor: LIVI.surface,
+                        backgroundColor: LIVI.feedBg,
                       }}
                     >
                       <ActivityIndicator color={LIVI.titan} />
@@ -4973,7 +4998,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       flex: 1,
                       justifyContent: 'center',
                       alignItems: 'center',
-                      backgroundColor: LIVI.surface,
+                      backgroundColor: LIVI.feedBg,
                     }}
                   >
                     <Ionicons
@@ -5076,9 +5101,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                     borderColor: BORDER_COLOR,
                   }}
                 >
-                  <Ionicons name="arrow-undo-outline" size={20} color={isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(198, 182, 234, 0.98)'} style={{ marginRight: 10 }} />
+                  <Ionicons name="arrow-undo-outline" size={20} color={LIVI.replyQuoteAccent} style={{ marginRight: 10 }} />
                   <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={{ color: isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(198, 182, 234, 0.98)', fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
+                    <Text style={{ color: LIVI.replyQuoteAccent, fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
                       {t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
                     </Text>
                     <Text style={{ color: LIVI.white, fontSize: 14, opacity: 0.9 }} numberOfLines={2}>
@@ -5245,9 +5270,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                 ]}
               >
                 {modalAvatarUri ? (
-                  modalAvatarDisplayUri ? (
+                  modalAvatarInstantUri ? (
                     <ExpoImage
-                      {...getAvatarImageProps(modalAvatarDisplayUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
+                      {...getAvatarImageProps(modalAvatarInstantUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
                       style={{ width: avatarModalSize, height: avatarModalSize }}
                     />
                   ) : (
@@ -5256,9 +5281,22 @@ export default function ChatScreen({ route, navigation }: Props) {
                     </View>
                   )
                 ) : (
-                  <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</Text>
-                  </View>
+                  modalAvatarExpected ? (
+                    <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
+                      {modalAvatarInstantUri ? (
+                        <ExpoImage
+                          {...getAvatarImageProps(modalAvatarInstantUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
+                          style={{ width: avatarModalSize, height: avatarModalSize }}
+                        />
+                      ) : (
+                        <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</Text>
+                      )}
+                    </View>
+                  ) : (
+                    <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: LIVI.titan, fontSize: avatarModalSize * 0.35, fontWeight: '500' }}>{headerInitial}</Text>
+                    </View>
+                  )
                 )}
               </Animated.View>
             </PinchGestureHandler>

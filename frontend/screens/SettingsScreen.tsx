@@ -555,16 +555,12 @@ export default function SettingsScreen() {
           }}
         >
           <Text style={{ color: '#B7C0CF', fontSize: 15, fontWeight: '600', marginBottom: 4 }}>
-            {lang === 'ru' ? 'Полноэкранные входящие звонки' : 'Full-screen incoming calls'}
+            {t('fullscreenIncomingCallsTitle', lang)}
           </Text>
           <Text style={{ color: '#8A8F99', fontSize: 13 }}>
             {notificationsEnabled === false
-              ? (lang === 'ru'
-                ? 'Уведомления выключены — входящий видеозвонок не будет показываться на экране блокировки и при закрытом приложении. Нажмите, чтобы открыть настройки и включить уведомления и «Полноэкранные уведомления».'
-                : 'Notifications are off — incoming video calls will not show on lock screen or when app is closed. Tap to open settings and enable notifications and "Full screen intent".')
-              : (lang === 'ru'
-                ? 'Чтобы входящий видеозвонок открывался на весь экран (и на блокировке) — откройте настройки и включите «Полноэкранные уведомления» или «Показ как всплывающее окно».'
-                : 'To show incoming video calls on full screen (and on lock screen), open settings and enable "Full screen intent" or "Show as pop-up".')}
+              ? t('fullscreenIncomingCallsDisabledDesc', lang)
+              : t('fullscreenIncomingCallsEnabledDesc', lang)}
           </Text>
         </TouchableOpacity>
       )}

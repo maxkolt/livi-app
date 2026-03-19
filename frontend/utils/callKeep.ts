@@ -5,6 +5,7 @@
 import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import { logger } from './logger';
 import { setIncomingCallScreenVisible } from '../sockets/socket';
+import { loadLang, t } from './i18n';
 
 /** Единый источник таймаута исходящего вызова (мс). Передаётся в натив при старте, используется в HomeScreen/App и в LiviOutgoingCallService. */
 export const OUTGOING_CALL_TIMEOUT_MS = 20_000;
@@ -23,6 +24,7 @@ type SetupCallKeepOptions = {
 export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
   const requestPermission = options?.requestPermission === true;
+  const lang = await loadLang();
 
   try {
     const status = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS);
@@ -31,7 +33,11 @@ export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boo
     } else if (requestPermission) {
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS,
-        { title: 'Доступ к звонкам', message: 'Нужен для отображения входящих видеозвонков в системном экране.', buttonPositive: 'Разрешить' }
+        {
+          title: t('callPermissionTitle', lang),
+          message: t('callPermissionMessage', lang),
+          buttonPositive: t('allowAction', lang),
+        }
       );
       hasPhoneNumbersPermission = granted === PermissionsAndroid.RESULTS.GRANTED;
       if (!hasPhoneNumbersPermission) {
@@ -53,15 +59,15 @@ export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boo
     const options = {
       ios: { appName: 'LiVi' },
       android: {
-        alertTitle: 'Доступ к звонкам',
-        alertDescription: 'LiVi нужен доступ к учётной записи звонков для отображения входящих видеозвонков.',
-        cancelButton: 'Отмена',
-        okButton: 'Разрешить',
+        alertTitle: t('callPermissionTitle', lang),
+        alertDescription: t('callKeepAlertDescription', lang),
+        cancelButton: t('cancelAction', lang),
+        okButton: t('allowAction', lang),
         selfManaged: true,
         foregroundService: {
           channelId: 'livi_call_channel',
-          channelName: 'Звонки LiVi',
-          notificationTitle: 'LiVi — видеозвонок',
+          channelName: t('callChannelName', lang),
+          notificationTitle: t('callNotificationTitle', lang),
           notificationIcon: 'ic_launcher',
         },
       },

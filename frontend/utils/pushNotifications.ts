@@ -9,6 +9,7 @@ import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
 import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration } from './callKeep';
 import { emitCloseOutgoingCall, emitCloseHomeModals } from './globalEvents';
+import { loadLang, t } from './i18n';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 /** Флаг: пользователь заходил во вкладку «Друзья» и «увидел» пропущенные — бейдж и уведомления в шторке скрываем, счётчики в приложении не трогаем. */
@@ -228,8 +229,11 @@ Notifications.setNotificationHandler({
         const fromNick = String(data.fromNick || '').trim();
         const fromUserId = String(data.from || '');
         try {
-          const title = 'Пропущенный вызов';
-          const body = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
+          const lang = await loadLang();
+          const title = t('missedCallTitle', lang);
+          const body = fromNick
+            ? t('incomingFromPrefix', lang).replace('{name}', fromNick)
+            : t('incomingVideoCallBody', lang);
           await Notifications.scheduleNotificationAsync({
             content: {
               title,
@@ -553,6 +557,7 @@ async function navigateFromPushData(data: any) {
 
 export async function ensureAndroidNotificationChannels() {
   if (Platform.OS !== 'android') return;
+  const lang = await loadLang();
 
   // Сообщения
   await Notifications.setNotificationChannelAsync('messages', {
@@ -574,7 +579,7 @@ export async function ensureAndroidNotificationChannels() {
 
   // Пропущенный вызов — без вибрации, только текст в шторке
   await Notifications.setNotificationChannelAsync('missed_call', {
-    name: 'Пропущенный вызов',
+    name: t('missedCallTitle', lang),
     importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0],
     sound: undefined,
@@ -588,9 +593,10 @@ export async function ensureAndroidNotificationChannels() {
  */
 async function ensureIncomingCallNotificationCategory() {
   try {
+    const lang = await loadLang();
     await Notifications.setNotificationCategoryAsync(INCOMING_CALL_CATEGORY_ID, [
-      { identifier: 'answer', buttonTitle: 'Поднять' },
-      { identifier: 'decline', buttonTitle: 'Отменить', options: { isDestructive: true } },
+      { identifier: 'answer', buttonTitle: t('answerAction', lang) },
+      { identifier: 'decline', buttonTitle: t('cancelCall', lang), options: { isDestructive: true } },
     ]);
     logger.debug('[push] incoming call notification category registered');
   } catch (e) {
@@ -827,8 +833,11 @@ export function addNotificationListeners() {
             const fromNick = String(data.fromNick || '').trim();
             const fromUserId = String(data.from || '');
             try {
-              const title = 'Пропущенный вызов';
-              const body = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
+              const lang = await loadLang();
+              const title = t('missedCallTitle', lang);
+              const body = fromNick
+                ? t('incomingFromPrefix', lang).replace('{name}', fromNick)
+                : t('incomingVideoCallBody', lang);
               await Notifications.scheduleNotificationAsync({
                 content: {
                   title,
