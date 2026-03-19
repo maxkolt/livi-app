@@ -192,8 +192,8 @@ export const getSocket = (): Socket => {
       path: "/socket.io",
       // IMPORTANT:
       // Many VPNs / captive portals / corporate networks block WebSocket.
-      // Server supports polling fallback, so allow it on the client too.
-      transports: ["websocket", "polling"],
+      // Start with polling (more likely to pass), then upgrade to WebSocket when possible.
+      transports: ["polling", "websocket"],
       upgrade: true,
       forceNew: false, // не создаём новый, держим singleton
       // CRITICAL:
@@ -205,7 +205,7 @@ export const getSocket = (): Socket => {
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,
-      timeout: 15000,
+      timeout: 25000,
     });
   }
   return socketInstance;
@@ -1502,7 +1502,7 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
           
           // Создаем AbortController для timeout (fallback для старых версий)
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 5000);
+          const timeoutId = setTimeout(() => controller.abort(), 12000);
       
       const response = await fetch(`${API_BASE}/api/exists/${userId}`, {
         method: 'GET',
@@ -1570,12 +1570,16 @@ async function createUserInternal(): Promise<string | null> {
   if (currentUserId) {
     try {
       const exists = await checkUserExists(currentUserId);
-      if (exists) {
+      if (exists === true) {
         console.log('[createUser] User already exists on server:', currentUserId, 'skipping creation');
         return currentUserId;
-      } else {
+      } else if (exists === false) {
         console.warn('[createUser] User exists locally but not on server, clearing and creating new...');
         clearCurrentUserId();
+      } else {
+        // exists === null => сеть/сервер временно недоступны; не сбрасываем userId во избежание ложных ре-созданий.
+        console.warn('[createUser] User existence unknown (temporary offline), keeping local userId and retrying later...');
+        return null;
       }
     } catch (e) {
       console.warn('[createUser] Failed to check user existence, clearing local userId:', e);

@@ -14,8 +14,28 @@ backend/node_modules/
 frontend/.env
 backend/.env
 backend/.env.staging
-livekit/.env.staging
 backend/turn/turnserver.conf
+
+# --- Secrets & local overrides (не коммитить реальные ключи) ---
+# LiveKit: в git остаются шаблоны livekit.yaml / livekit.narrow.yaml; свои ключи — в *.local.yaml
+livekit/.env
+livekit/.env.*
+livekit/*.local.yaml
+livekit/*.pem
+livekit/*.key
+
+# Docker: локальный override (порты, секреты) — см. docker-compose*.yml в репо
+docker-compose.override.yml
+
+# Ключи / учётки (общие; android keystore уже ниже)
+backend/keys/
+backend/*.pem
+backend/*.key
+**/service-account*.json
+**/*firebase-adminsdk*.json
+**/google-services*.json.local
+credentials.json
+.aws/credentials
 
 # Nested clone (duplicate repo, not needed for release)
 /livi-app/

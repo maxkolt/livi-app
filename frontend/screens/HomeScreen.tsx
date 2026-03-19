@@ -4306,7 +4306,7 @@ const handleClearNick = useCallback(async () => {
             style={{
               backgroundColor: 'transparent',
               borderWidth: StyleSheet.hairlineWidth,
-              borderColor: '#5A5F69',
+              borderColor: isDark ? '#5A5F69' : '#2E3643',
               borderRadius: 20,
               paddingVertical: 6,
               paddingHorizontal: 12,
@@ -4566,7 +4566,7 @@ const handleClearNick = useCallback(async () => {
         {showUpdateBadge && (
           <View style={{ padding: 0.2, borderRadius: 18, marginHorizontal: 8, position: 'relative', overflow: 'hidden', alignSelf: 'center', minWidth: 180, maxHeight: Platform.OS === 'ios' ? 42 : 34 }}>
             <LinearGradient
-              colors={isDark ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf'] : ['#a78bfa', '#FFF8F0', '#B0B5BF', '#a78bfa']}
+              colors={isDark ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf'] : ['#6E56C7', '#7F6BC7', '#9E95B3', '#9A90B0']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={[StyleSheet.absoluteFillObject, { borderRadius: 18 }]}
@@ -4574,7 +4574,7 @@ const handleClearNick = useCallback(async () => {
             {/* Верхняя линия рамки — бирюза → голубой → белый → синий (слева направо); в тёмной теме чуть посветлее */}
             <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0.2, borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden', zIndex: 2 }}>
               <LinearGradient
-                colors={isDark ? ['#2dd4bf', '#38bdf8', '#FFF8F0', '#60a5fa'] : ['#a78bfa', '#8b6cf0', '#FFF8F0', '#a78bfa']}
+                colors={isDark ? ['#2dd4bf', '#38bdf8', '#FFF8F0', '#60a5fa'] : ['#6E56C7', '#5E47B8', '#8F86A8', '#988EAF']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={[StyleSheet.absoluteFillObject, { borderTopLeftRadius: 18, borderTopRightRadius: 18 }]}
@@ -4583,7 +4583,7 @@ const handleClearNick = useCallback(async () => {
             {/* Нижняя линия рамки — другая гамма и направление; в тёмной теме без фиолетового, чуть посветлее */}
             <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 0.2, borderBottomLeftRadius: 18, borderBottomRightRadius: 18, overflow: 'hidden', zIndex: 2 }}>
               <LinearGradient
-                colors={isDark ? ['#60a5fa', '#38bdf8', '#2dd4bf', '#F0EEEC'] : ['#a78bfa', '#B0B5BF', '#8b6cf0', '#a78bfa']}
+                colors={isDark ? ['#60a5fa', '#38bdf8', '#2dd4bf', '#F0EEEC'] : ['#A197B8', '#9389AA', '#6E56C7', '#6E56C7']}
                 start={{ x: 1, y: 0 }}
                 end={{ x: 0, y: 0 }}
                 style={[StyleSheet.absoluteFillObject, { borderBottomLeftRadius: 18, borderBottomRightRadius: 18 }]}
@@ -4604,11 +4604,11 @@ const handleClearNick = useCallback(async () => {
                 }}
                 android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: false, radius: 14 }}
               >
-                <Text style={{ color: isDark ? LIVI.text : LIVI.textThemeWhite, fontSize: 14, fontWeight: '400', lineHeight: 12, ...(Platform.OS === 'android' && { includeFontPadding: false }) }} numberOfLines={1}>{L('updateBtn')}</Text>
+                <Text style={{ color: isDark ? LIVI.text : '#2F3742', fontSize: 14, fontWeight: '400', lineHeight: 12, ...(Platform.OS === 'android' && { includeFontPadding: false }) }} numberOfLines={1}>{L('updateBtn')}</Text>
               </Pressable>
-              <View style={{ width: 1, alignSelf: 'stretch', marginVertical: 6, marginLeft: 8, marginRight: 4, overflow: 'hidden', borderRadius: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)' }}>
+              <View style={{ width: 1, alignSelf: 'stretch', marginVertical: 6, marginLeft: 8, marginRight: 4, overflow: 'hidden', borderRadius: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.22)' }}>
                 <LinearGradient
-                  colors={isDark ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0'] : ['#a78bfa', '#FFF8F0', '#B0B5BF']}
+                  colors={isDark ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0'] : ['#7F6BC7', '#D2D8E0', '#8D96A4']}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 0, y: 1 }}
                   style={{ flex: 1, width: 1 }}
@@ -4626,7 +4626,7 @@ const handleClearNick = useCallback(async () => {
                 ]}
                 android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: true }}
               >
-                <Ionicons name="close" size={16} color={isDark ? LIVI.text : LIVI.textThemeWhite} />
+                <Ionicons name="close" size={16} color={isDark ? LIVI.text : '#2F3742'} />
               </Pressable>
             </View>
           </View>
@@ -4706,7 +4706,14 @@ const handleClearNick = useCallback(async () => {
       <View style={[styles.welcomeBlock, Platform.OS === 'android' && { marginTop: 50 }]}>
         <View style={styles.welcomeTextBlock}>
           <Text style={[styles.title, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>{L('welcomeTitle')}</Text>
-          <Text style={[styles.subtitle, { color: isDark ? LIVI.text2 : LIVI.textThemeWhite }]}>{L('welcomeSubtitle')}</Text>
+          <Text
+            style={[styles.subtitle, { color: isDark ? LIVI.text2 : LIVI.textThemeWhite, maxWidth: '92%' }]}
+            numberOfLines={2}
+            adjustsFontSizeToFit
+            minimumFontScale={0.84}
+          >
+            {L('welcomeSubtitle')}
+          </Text>
         </View>
         <View style={styles.noticeSlot}>
           {NoticeView}

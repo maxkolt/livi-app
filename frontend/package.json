@@ -92,6 +92,7 @@
     "react-native-svg": "15.11.2",
     "react-native-vector-icons": "^10.3.0",
     "react-native-video": "^6.16.1",
+    "react-native-view-shot": "^4.0.3",
     "react-native-webview": "13.13.5",
     "socket.io-client": "^4.8.1",
     "uuid": "^11.1.0",

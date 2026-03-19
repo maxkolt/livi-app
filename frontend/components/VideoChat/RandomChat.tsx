@@ -46,6 +46,7 @@ import { BlurView } from 'expo-blur';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/keepAwake';
 import * as Device from 'expo-device';
 import { useAudioRouting } from './hooks/useAudioRouting';
+import { useModeration } from './hooks/useModeration';
 
 type Props = { 
   route?: { 
@@ -171,6 +172,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // Входящий звонок (когда пользователь в неактивном состоянии)
   const [incomingCall, setIncomingCall] = useState<{ callId: string; from: string; fromNick?: string } | null>(null);
+  const moderationEnabled = String(process.env.EXPO_PUBLIC_RANDOM_CHAT_MODERATION || '0') === '1';
+  const localModerationTargetRef = useRef<View | null>(null);
+  const [muteByModerationUntil, setMuteByModerationUntil] = useState(0);
+  const [banByModerationUntil, setBanByModerationUntil] = useState(0);
   const myUserId = useMemo(() => {
     const routeUserId = String(route?.params?.myUserId ?? '').trim();
     if (routeUserId) return routeUserId;
@@ -242,6 +247,52 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       }, ms);
     });
   }, [toastOpacity]);
+
+  const isModerationMuted = muteByModerationUntil > Date.now();
+  const isModerationBanned = banByModerationUntil > Date.now();
+
+  const showWarning = useCallback((message: string) => {
+    showToast(message, 2400);
+  }, [showToast]);
+
+  const muteUser = useCallback((seconds: number, message: string) => {
+    const until = Date.now() + seconds * 1000;
+    setMuteByModerationUntil(until);
+    if (micOn) {
+      try {
+        sessionRef.current?.toggleMic();
+      } catch (e) {
+        logger.warn('[RandomChat] Failed to force mute by moderation', e);
+      }
+    }
+    showToast(message, 2600);
+    setTimeout(() => {
+      setMuteByModerationUntil((prev) => (prev <= Date.now() ? 0 : prev));
+    }, seconds * 1000 + 200);
+  }, [micOn, showToast]);
+
+  const banUser = useCallback((seconds: number, message: string) => {
+    const until = Date.now() + seconds * 1000;
+    setBanByModerationUntil(until);
+    showToast(message, 2800);
+    if (startedRef.current) {
+      try {
+        sessionRef.current?.stopRandomChat();
+      } catch (e) {
+        logger.warn('[RandomChat] Failed to stop session after moderation ban', e);
+      }
+      startedRef.current = false;
+      loadingRef.current = false;
+      isNextingRef.current = false;
+      setStarted(false);
+      setLoading(false);
+      setIsNexting(false);
+      setIsInactiveState(true);
+    }
+    setTimeout(() => {
+      setBanByModerationUntil((prev) => (prev <= Date.now() ? 0 : prev));
+    }, seconds * 1000 + 200);
+  }, [showToast]);
   
   // Обработка заявок в друзья
   useEffect(() => {
@@ -772,6 +823,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   // Обработчики
   const onStartStop = useCallback(async () => {
     if (!canRunAction()) return;
+    if (!startedRef.current && isModerationBanned) {
+      showToast('Вы заблокированы на 1 час за повторные нарушения.', 2400);
+      return;
+    }
     const session = sessionRef.current;
     if (!session) return;
     
@@ -838,7 +893,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         loadingRef.current = false;
       }
     }
-  }, [requestPermissions]);
+  }, [requestPermissions, isModerationBanned, showToast]);
   
   // Дополнительная защита от спама кнопок: минимальный интервал между действиями
   const lastActionRef = useRef<number>(0);
@@ -967,6 +1022,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const toggleRemoteAudioRef = useRef(false);
   
   const toggleMic = useCallback(() => {
+    if (isModerationMuted || isModerationBanned) return;
     // Защита от двойных нажатий
     if (toggleMicRef.current) return;
     toggleMicRef.current = true;
@@ -978,7 +1034,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         toggleMicRef.current = false;
       }, 300);
     }
-  }, []);
+  }, [isModerationMuted, isModerationBanned]);
   
   const toggleCam = useCallback(() => {
     // Защита от двойных нажатий
@@ -1201,6 +1257,18 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       logger.error('[RandomChat] Error resetting state in forceStopRandomChat:', e);
     }
   }, [stopSpeaker]);
+
+  useModeration({
+    enabled: moderationEnabled,
+    chatType: 'random',
+    targetRef: localModerationTargetRef,
+    shouldCheck: started && !loading && !isInactiveState && camOn && !!localStream && !isModerationBanned,
+    cooldownMs: 1300,
+    badFramesThreshold: 3,
+    onWarning: showWarning,
+    onMute: muteUser,
+    onBan: banUser,
+  });
   
   // Обработка AppState - при уходе приложения в фон рандомный чат должен
   // немедленно завершаться, чтобы при возврате экран был в неактивном состоянии.
@@ -1646,7 +1714,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         {/* Эквалайзер отключен */}
         
         {/* Карточка "Вы" */}
-        <View style={styles.card}>
+        <View style={styles.card} ref={localModerationTargetRef}>
           {(() => {
             // КРИТИЧНО: Если поиск не начат, всегда показываем "Вы"
             if (!started) {
@@ -1763,9 +1831,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               <Animated.View style={[styles.bottomOverlay, { opacity: buttonsOpacity }]}>
                 <TouchableOpacity
                   onPress={toggleMic}
+                  disabled={isModerationMuted || isModerationBanned}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   activeOpacity={0.7}
-                  style={styles.iconBtn}
+                  style={[styles.iconBtn, (isModerationMuted || isModerationBanned) && styles.iconBtnDisabled]}
                 >
                   <MaterialIcons
                     name={micOn ? "mic" : "mic-off"}
@@ -1798,10 +1867,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             style={[
               styles.bigBtn,
               started ? styles.btnDanger : styles.btnTitan,
-              isInactiveState && styles.disabled
+              (isInactiveState || isModerationBanned) && styles.disabled
             ]}
-            disabled={isInactiveState}
-            onPress={isInactiveState ? undefined : onStartStop}
+            disabled={isInactiveState || isModerationBanned}
+            onPress={isInactiveState || isModerationBanned ? undefined : onStartStop}
           >
             <Text style={styles.bigBtnText}>
               {started ? L('stop') : L('start')}
@@ -1812,9 +1881,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             style={[
               styles.bigBtn,
               styles.btnTitan,
-              (!started || isNexting || isInactiveState || loading) && styles.disabled
+              (!started || isNexting || isInactiveState || loading || isModerationBanned) && styles.disabled
             ]}
-            disabled={!started || isNexting || isInactiveState || loading}
+            disabled={!started || isNexting || isInactiveState || loading || isModerationBanned}
             onPress={onNext}
           >
             <Text style={styles.bigBtnText}>
