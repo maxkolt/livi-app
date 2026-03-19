@@ -41,7 +41,7 @@ function setViewingChat(userId: string, withPeerId: string | null) {
  */
 async function addMessageToFriendship(friendship: IFriendshipMessages, message: any): Promise<boolean> {
   try {
-    const messageItem = {
+    const messageItem: any = {
       id: message.id,
       from: new mongoose.Types.ObjectId(message.from),
       to: new mongoose.Types.ObjectId(message.to),
@@ -54,10 +54,17 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       timestamp: message.timestamp,
       read: message.read
     };
-    
+    if (message.replyTo && typeof message.replyTo === 'object' && message.replyTo.id) {
+      messageItem.replyTo = {
+        id: String(message.replyTo.id),
+        text: message.replyTo.text != null ? String(message.replyTo.text) : undefined,
+        from: String(message.replyTo.from || ''),
+      };
+    }
+
     await (friendship as any).addMessage(messageItem);
 
-    await FriendshipMessageItem.create({
+    const createPayload: any = {
       friendshipId: (friendship as any)._id,
       id: message.id,
       from: messageItem.from,
@@ -70,7 +77,9 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       duration: message.duration,
       timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp),
       read: !!message.read,
-    });
+    };
+    if (messageItem.replyTo) createPayload.replyTo = messageItem.replyTo;
+    await FriendshipMessageItem.create(createPayload);
     return true;
   } catch (error) {
     console.error('Error adding message to friendship:', error);
@@ -289,6 +298,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
     name?: string;
     size?: number;
     duration?: number;
+    replyTo?: { id: string; text?: string; from: string };
   }, ack?: Function) => {
     try {
       const me = meId();
@@ -316,7 +326,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
 
       // Создаем объект сообщения
-      const message = {
+      const message: any = {
         id: messageId,
         from: me,
         to: payload.to,
@@ -329,6 +339,13 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         timestamp: new Date(),
         read: false
       };
+      if (payload.replyTo && typeof payload.replyTo === 'object' && payload.replyTo.id) {
+        message.replyTo = {
+          id: String(payload.replyTo.id),
+          text: payload.replyTo.text != null ? String(payload.replyTo.text) : undefined,
+          from: String(payload.replyTo.from || ''),
+        };
+      }
 
       // Добавляем сообщение в дружбу
       const success = await addMessageToFriendship(friendship, message);
@@ -342,37 +359,26 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       // Отправляем сообщение получателю если он онлайн
       const recipientOnline = isUserOnline(io, payload.to);
 
+      const emitPayload: any = {
+        id: messageId,
+        from: me,
+        to: payload.to,
+        type: payload.type,
+        text: payload.text,
+        uri: payload.uri,
+        name: payload.name,
+        size: payload.size,
+        duration: payload.duration,
+        timestamp: message.timestamp.toISOString(),
+        read: false
+      };
+      if (message.replyTo) emitPayload.replyTo = message.replyTo;
+
       if (recipientOnline) {
-        const delivered = sendMessageToUser(io, payload.to, {
-          id: messageId,
-          from: me,
-          to: payload.to,
-          type: payload.type,
-          text: payload.text,
-          uri: payload.uri,
-          name: payload.name,
-          size: payload.size,
-          duration: payload.duration,
-          timestamp: message.timestamp.toISOString(),
-          read: false
-        });
-        
+        const delivered = sendMessageToUser(io, payload.to, emitPayload);
         if (delivered) {}
       } else {
-        // Сохраняем офлайн сообщение в базу данных
-        await saveOfflineMessage(payload.to, {
-          id: messageId,
-          from: me,
-          to: payload.to,
-          type: payload.type,
-          text: payload.text,
-          uri: payload.uri,
-          name: payload.name,
-          size: payload.size,
-          duration: payload.duration,
-          timestamp: message.timestamp.toISOString(),
-          read: false
-        });
+        await saveOfflineMessage(payload.to, { ...emitPayload, id: messageId });
       }
 
       // Отправляем подтверждение отправителю
@@ -484,7 +490,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           duration: msg.duration,
           timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
           read: !!msg.read,
-          reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : []
+          reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
+          ...(msg.replyTo && msg.replyTo.id ? { replyTo: { id: String(msg.replyTo.id), text: msg.replyTo.text, from: String(msg.replyTo.from || '') } } : {}),
         }));
         return ack?.({ ok: true, messages: formattedMessages, hasMore: allMessages.length > limitOld });
       }
@@ -502,7 +509,8 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         duration: msg.duration,
         timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
         read: !!msg.read,
-        reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : []
+        reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
+        ...(msg.replyTo && msg.replyTo.id ? { replyTo: { id: String(msg.replyTo.id), text: msg.replyTo.text, from: String(msg.replyTo.from || '') } } : {}),
       }));
 
       ack?.({ ok: true, messages: formattedMessages, hasMore });
@@ -526,8 +534,64 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'invalid_from' });
       }
 
-      // Отмечаем сообщения как прочитанные
+      const friendship = await getOrCreateFriendship(me, payload.from);
+      if (!friendship) {
+        return ack?.({ ok: false, error: 'friendship_not_found' });
+      }
+
+      const fid = (friendship as any)._id;
+      const fromOid = new mongoose.Types.ObjectId(payload.from);
+
+      // Собираем ID непрочитанных сообщений от payload.from, чтобы потом отправить read_receipt отправителю
+      const unreadItems = await FriendshipMessageItem.find(
+        { friendshipId: fid, from: fromOid, read: false },
+        { id: 1 }
+      ).lean();
+      const messageIds = unreadItems.map((doc: any) => String(doc.id)).filter(Boolean);
+
+      // Персистентно помечаем прочитанными в БД (как в HTTP /api/messages/mark_read)
+      await FriendshipMessages.updateOne(
+        { _id: fid },
+        {
+          $set: {
+            'textMessages.$[t].read': true,
+            'imageMessages.$[i].read': true,
+            'audioMessages.$[a].read': true,
+          },
+        },
+        {
+          arrayFilters: [
+            { 't.from': fromOid },
+            { 'i.from': fromOid },
+            { 'a.from': fromOid },
+          ],
+        }
+      ).exec();
+
+      await FriendshipMessageItem.updateMany(
+        { friendshipId: fid, from: fromOid },
+        { $set: { read: true } }
+      ).exec();
+
+      // In-memory очередь непрочитанных
       markMessagesAsRead(me, payload.from);
+
+      // Уведомляем отправителя (payload.from) о прочтении каждого сообщения — тогда у него появятся две галочки
+      const senderSockets = Array.from(io.sockets.sockets.values())
+        .filter((s: any) => String(s?.data?.userId) === String(payload.from));
+
+      for (const messageId of messageIds) {
+        const receipt = {
+          messageId,
+          readBy: me,
+          timestamp: new Date().toISOString(),
+        };
+        for (const s of senderSockets) {
+          try {
+            s.emit('message:read_receipt', receipt);
+          } catch {}
+        }
+      }
 
       ack?.({ ok: true });
     } catch (e: any) {

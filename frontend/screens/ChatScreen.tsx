@@ -439,6 +439,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [forwardSelectedFriendIds, setForwardSelectedFriendIds] = useState<Set<string>>(new Set());
   // Multi-select (режим "Выбрать")
   const [selectionMode, setSelectionMode] = useState(false);
+  /** Подсветка сообщения при переходе по цитате в ответе */
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const highlightClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   // Для панели реакций: id сообщения, по которому дважды нажали (показать полосу эмодзи)
   const [reactionBarForMessageId, setReactionBarForMessageId] = useState<string | null>(null);
@@ -1154,6 +1157,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           to: message.to,
           timestamp: new Date(message.timestamp),
           reactions: Array.isArray((message as any).reactions) ? (message as any).reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
+          ...((message as any).replyTo && (message as any).replyTo.id ? { replyTo: { id: (message as any).replyTo.id, text: (message as any).replyTo.text, from: (message as any).replyTo.from, isOwn: (message as any).replyTo.from === currentUserId } } : {}),
         };
         
         // КРИТИЧНО: Логируем входящие сообщения с изображениями для отладки
@@ -1347,6 +1351,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         timestamp: new Date(msg.timestamp),
         read: !!msg.read,
         reactions: Array.isArray((msg as any).reactions) ? (msg as any).reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
+        ...(msg.replyTo && msg.replyTo.id ? { replyTo: { id: msg.replyTo.id, text: msg.replyTo.text, from: msg.replyTo.from, isOwn: msg.replyTo.from === currentUserId } } : {}),
       }));
 
       const serverIdSet = new Set(formatted.map((m: any) => String(m?.id || '')));
@@ -1364,7 +1369,13 @@ export default function ChatScreen({ route, navigation }: Props) {
           return false;
         });
 
-        const merged = [...formatted, ...localKeep];
+        // Для сообщений с сервера: если у локального есть replyTo, а у серверного нет — сохраняем локальный replyTo (гонка синка).
+        const prevById = new Map(prev.map((m: any) => [String(m?.id || ''), m]));
+        const merged = [...formatted.map((f: any) => {
+          const local = prevById.get(String(f?.id || ''));
+          if (local?.replyTo && !f.replyTo) return { ...f, replyTo: local.replyTo };
+          return f;
+        }), ...localKeep];
         merged.sort((a: any, b: any) => {
           const ta = +new Date(a?.timestamp || 0);
           const tb = +new Date(b?.timestamp || 0);
@@ -1476,6 +1487,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               timestamp: new Date(msg.timestamp),
               read: !!msg.read,
               reactions: Array.isArray((msg as any).reactions) ? (msg as any).reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
+              ...((msg as any).replyTo && (msg as any).replyTo.id ? { replyTo: { id: (msg as any).replyTo.id, text: (msg as any).replyTo.text, from: (msg as any).replyTo.from, isOwn: (msg as any).replyTo.from === currentUserId } } : {}),
             };
           });
           
@@ -2500,6 +2512,66 @@ export default function ChatScreen({ route, navigation }: Props) {
     [],
   );
 
+  const handleScrollToIndexFailed = React.useCallback((info: { index: number; averageItemLength?: number }) => {
+    const fl = flatListRef.current as any;
+    if (!fl) return;
+    setTimeout(() => {
+      try {
+        fl.scrollToIndex?.({ index: info.index, animated: true, viewPosition: 0.35 });
+      } catch {}
+    }, 120);
+  }, []);
+
+  const scrollToQuotedMessage = React.useCallback(
+    (quotedMessageId: string) => {
+      const id = String(quotedMessageId || '').trim();
+      if (!id) return;
+
+      const idxInMessages = messages.findIndex((m: any) => String(m?.id) === id);
+      if (idxInMessages < 0) {
+        showNotice('info', 'LiVi', t('chatReplyOriginalNotFound', lang));
+        return;
+      }
+
+      const index =
+        Platform.OS === 'android' && messages.length > 0
+          ? Math.max(0, messages.length - 1 - idxInMessages)
+          : idxInMessages;
+
+      if (highlightClearTimerRef.current) {
+        clearTimeout(highlightClearTimerRef.current);
+        highlightClearTimerRef.current = null;
+      }
+
+      setHighlightedMessageId(id);
+
+      requestAnimationFrame(() => {
+        try {
+          (flatListRef.current as any)?.scrollToIndex?.({
+            index,
+            animated: true,
+            viewPosition: 0.35,
+          });
+        } catch {}
+      });
+
+      highlightClearTimerRef.current = setTimeout(() => {
+        setHighlightedMessageId(null);
+        highlightClearTimerRef.current = null;
+      }, 1500);
+    },
+    [messages, showNotice, lang],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (highlightClearTimerRef.current) {
+        clearTimeout(highlightClearTimerRef.current);
+        highlightClearTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const openConfirm = React.useCallback(
     (opts: {
       title: string;
@@ -3054,7 +3126,8 @@ export default function ChatScreen({ route, navigation }: Props) {
       const result = await sendSocketMessage({
         to: peerId,
         text: messageToSend,
-        type: 'text'
+        type: 'text',
+        ...(replyTo ? { replyTo: { id: replyTo.id, text: replyTo.text, from: replyTo.from, isOwn: replyTo.isOwn } } : {}),
       });
       
       if (result.ok) {
@@ -3653,7 +3726,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // КРИТИЧНО: если MessageItem создаётся внутри ChatScreen без мемоизации типа компонента,
   // то при каждом setMessageText FlatList будет размонтировать/монтировать все элементы -> мерцание всех картинок.
-  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName }: any) => {
+  const MessageItem = React.useMemo(() => React.memo(({ item, currentUserId, readStatus, uploadStatus, onPressImage, onPressAudio, playingAudioId, playingAudioState, onLongPressMessage, onMessagePress, onReactionPress, selectionMode, isSelected, onToggleSelect, retryUiForId, onToggleRetryUi, onRetryFailed, resolveMediaUri, peerDisplayName, highlightedMessageId, onPressReplyQuote }: any) => {
     const bubbleRef = React.useRef<View>(null);
     const [imageLoadError, setImageLoadError] = React.useState(false);
     const [localImageUri, setLocalImageUri] = React.useState<string | null>(null);
@@ -4160,6 +4233,18 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     const messageAnimation = getMessageAnimation(item.id);
     const canToggle = !!selectionMode;
+    const isQuotedTargetHighlighted =
+      highlightedMessageId != null && String(highlightedMessageId) === String(item.id);
+
+    // Цитата в ответе: те же «жемчужные» акценты, что и рамка подсветки при переходе к сообщению
+    const replyQuoteAccent = isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(198, 182, 234, 0.98)';
+    const replyQuotePressBg = isDark ? 'rgba(186, 236, 224, 0.14)' : 'rgba(198, 182, 234, 0.2)';
+    const replyQuoteBarWidth = Platform.OS === 'ios' ? 1 : 2;
+    const highlightAccentColor = isDark ? 'rgba(186, 236, 224, 0.95)' : 'rgba(198, 182, 234, 0.96)';
+    /** Android: borderWidth+radius даёт тонкие углы — делаем ровное «кольцо» через padding */
+    const androidHighlightRing = isQuotedTargetHighlighted && Platform.OS === 'android';
+    const ANDROID_RING_PX = 1;
+    const BUBBLE_RADIUS = 16;
 
     return (
       <Animated.View
@@ -4199,6 +4284,40 @@ export default function ChatScreen({ route, navigation }: Props) {
         )}
 
         <View ref={bubbleRef} style={{ alignSelf: isMyMessage ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
+          {(() => {
+            const bubbleFill = isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN;
+            const bubbleInner = (
+              <>
+          {/* Цитата ответа — вне TouchableOpacity, чтобы тап вёл к исходному сообщению */}
+          {item.replyTo && (
+            <Pressable
+              disabled={!!selectionMode}
+              onPress={() => onPressReplyQuote?.(String(item.replyTo.id))}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'flex-start',
+                marginBottom: 8,
+                paddingLeft: 8,
+                paddingVertical: 4,
+                marginHorizontal: -4,
+                marginTop: -2,
+                borderRadius: 8,
+                borderLeftWidth: replyQuoteBarWidth,
+                borderLeftColor: replyQuoteAccent,
+                opacity: selectionMode ? 0.5 : pressed ? 0.85 : 1,
+                backgroundColor: pressed && !selectionMode ? replyQuotePressBg : 'transparent',
+              })}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
+                  {item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—')}
+                </Text>
+                <Text style={{ color: LIVI.white, fontSize: 13, opacity: 0.85 }} numberOfLines={2}>
+                  {item.replyTo.text || '—'}
+                </Text>
+              </View>
+            </Pressable>
+          )}
           <TouchableOpacity
             onPress={() => {
               if (canToggle) {
@@ -4215,37 +4334,8 @@ export default function ChatScreen({ route, navigation }: Props) {
               animateMessagePress(item.id, fireLongPressWithLayout);
             }}
             activeOpacity={0.7}
-            style={{
-              padding: 12,
-              backgroundColor: isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN,
-              borderRadius: 16,
-              borderWidth: 1,
-              borderColor: BORDER_COLOR,
-              maxWidth: '100%',
-            }}
+            style={{ maxWidth: '100%' }}
           >
-          {/* Цитата ответа (если сообщение — ответ на другое) */}
-          {item.replyTo && (
-            <View
-              style={{
-                flexDirection: 'row',
-                alignItems: 'flex-start',
-                marginBottom: 8,
-                paddingLeft: 8,
-                borderLeftWidth: 3,
-                borderLeftColor: '#7eb8ff',
-              }}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: '#7eb8ff', fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                  {item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—')}
-                </Text>
-                <Text style={{ color: LIVI.white, fontSize: 13, opacity: 0.85 }} numberOfLines={2}>
-                  {item.replyTo.text || '—'}
-                </Text>
-              </View>
-            </View>
-          )}
           {/* Основной контент */}
           {renderContent()}
           
@@ -4345,6 +4435,64 @@ export default function ChatScreen({ route, navigation }: Props) {
             );
           })()}
           </TouchableOpacity>
+              </>
+            );
+            if (androidHighlightRing) {
+              return (
+                <View
+                  style={{
+                    borderRadius: BUBBLE_RADIUS + ANDROID_RING_PX,
+                    padding: ANDROID_RING_PX,
+                    backgroundColor: highlightAccentColor,
+                    maxWidth: '100%',
+                    elevation: 3,
+                  }}
+                >
+                  {/*
+                    Облака полупрозрачные — без подложки сквозь них просвечивает цвет кольца.
+                    Непрозрачный фон списка сообщений, поверх — как обычно bubbleFill.
+                  */}
+                  <View
+                    style={{
+                      borderRadius: BUBBLE_RADIUS,
+                      backgroundColor: LIVI.surface,
+                      overflow: 'hidden',
+                      maxWidth: '100%',
+                    }}
+                  >
+                    <View
+                      style={{
+                        padding: 12,
+                        backgroundColor: bubbleFill,
+                        maxWidth: '100%',
+                      }}
+                    >
+                      {bubbleInner}
+                    </View>
+                  </View>
+                </View>
+              );
+            }
+            return (
+              <View
+                style={{
+                  padding: 12,
+                  backgroundColor: bubbleFill,
+                  borderRadius: BUBBLE_RADIUS,
+                  borderWidth: 1,
+                  borderColor: isQuotedTargetHighlighted ? highlightAccentColor : BORDER_COLOR,
+                  maxWidth: '100%',
+                  ...(isQuotedTargetHighlighted && Platform.OS === 'ios'
+                    ? isDark
+                      ? { shadowColor: '#8FD4C8', shadowOpacity: 0.42, shadowRadius: 10, shadowOffset: { width: 0, height: 0 } }
+                      : { shadowColor: '#B8A0E8', shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 0 } }
+                    : {}),
+                }}
+              >
+                {bubbleInner}
+              </View>
+            );
+          })()}
         </View>
 
         {selectionMode && isMyMessage && (
@@ -4382,6 +4530,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     LIVI.white,
     LIVI.titan,
     LIVI.red,
+    LIVI.surface,
     isDark,
   ]);
 
@@ -4414,8 +4563,10 @@ export default function ChatScreen({ route, navigation }: Props) {
       onToggleSelect={toggleSelectMessage}
       resolveMediaUri={resolveMediaUri}
       peerDisplayName={peerNameState}
+      highlightedMessageId={highlightedMessageId}
+      onPressReplyQuote={scrollToQuotedMessage}
     />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, handleReactionPress, selectionMode, selectedMessageIds, toggleSelectMessage, resolveMediaUri, peerNameState]);
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, handleReactionPress, selectionMode, selectedMessageIds, toggleSelectMessage, resolveMediaUri, peerNameState, highlightedMessageId, scrollToQuotedMessage]);
 
   return (
     <SafeAreaView 
@@ -4486,6 +4637,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               ) : null}
               showsVerticalScrollIndicator={false}
               inverted={false}
+              onScrollToIndexFailed={handleScrollToIndexFailed}
               onContentSizeChange={() => setTimeout(() => scrollToBottom(), 0)}
               ListEmptyComponent={() => {
                 if (!historyReady) {
@@ -4599,9 +4751,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                     borderColor: BORDER_COLOR,
                   }}
                 >
-                  <Ionicons name="arrow-undo-outline" size={20} color="#7eb8ff" style={{ marginRight: 10 }} />
+                  <Ionicons name="arrow-undo-outline" size={20} color={isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(198, 182, 234, 0.98)'} style={{ marginRight: 10 }} />
                   <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={{ color: '#7eb8ff', fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
+                    <Text style={{ color: isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(198, 182, 234, 0.98)', fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
                       {t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
                     </Text>
                     <Text style={{ color: LIVI.white, fontSize: 14, opacity: 0.9 }} numberOfLines={2}>
@@ -4765,6 +4917,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               inverted={!showEmpty}
+              onScrollToIndexFailed={handleScrollToIndexFailed}
               maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
               ListHeaderComponent={!isEmpty ? () => (
                 <View
@@ -4923,9 +5076,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                     borderColor: BORDER_COLOR,
                   }}
                 >
-                  <Ionicons name="arrow-undo-outline" size={20} color="#7eb8ff" style={{ marginRight: 10 }} />
+                  <Ionicons name="arrow-undo-outline" size={20} color={isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(198, 182, 234, 0.98)'} style={{ marginRight: 10 }} />
                   <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={{ color: '#7eb8ff', fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
+                    <Text style={{ color: isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(198, 182, 234, 0.98)', fontSize: 13, fontWeight: '600', marginBottom: 2 }}>
                       {t('chatReplyingTo', lang).replace('{name}', replyingToMessage.isOwn ? t('you', lang) : peerNameState)}
                     </Text>
                     <Text style={{ color: LIVI.white, fontSize: 14, opacity: 0.9 }} numberOfLines={2}>

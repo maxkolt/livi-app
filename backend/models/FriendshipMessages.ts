@@ -6,6 +6,13 @@ export interface IMessageReaction {
   userId: string;
 }
 
+// Ответ на сообщение (цитата)
+export interface IReplyTo {
+  id: string;   // id сообщения, на которое отвечаем
+  text?: string;
+  from: string; // userId автора цитируемого сообщения
+}
+
 // Интерфейс для отдельного сообщения
 export interface IMessageItem {
   id: string; // Уникальный ID сообщения
@@ -20,6 +27,7 @@ export interface IMessageItem {
   timestamp: Date;
   read: boolean;
   reactions?: IMessageReaction[]; // Реакции (эмодзи + userId)
+  replyTo?: IReplyTo; // Ответ на сообщение (цитата)
 }
 
 // Интерфейс для документа дружбы с сообщениями
@@ -85,6 +93,14 @@ const MessageItemSchema = new Schema<IMessageItem>({
       emoji: { type: String, required: true },
       userId: { type: String, required: true }
     }],
+    default: undefined
+  },
+  replyTo: {
+    type: {
+      id: { type: String, required: true },
+      text: String,
+      from: { type: String, required: true }
+    },
     default: undefined
   }
 }, { _id: false }); // Отключаем автоматический _id для вложенных документов

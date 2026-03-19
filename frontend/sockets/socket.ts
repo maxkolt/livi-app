@@ -18,9 +18,20 @@ export const globalMessageStorage = {
       const existingMessages = await AsyncStorage.getItem(chatKey);
       const messages = existingMessages ? JSON.parse(existingMessages) : [];
 
-      // Проверяем, что сообщение еще не сохранено
-      if (!messages.find((m: any) => m.id === message.id)) {
-        const newMessage = {
+      const replyToPayload =
+        message.replyTo && message.replyTo.id
+          ? {
+              id: String(message.replyTo.id),
+              text: message.replyTo.text,
+              from: String(message.replyTo.from || ''),
+              isOwn: String(message.replyTo.from || '') === String(currentUserId),
+            }
+          : null;
+
+      const existingIdx = messages.findIndex((m: any) => m.id === message.id);
+      let didWrite = false;
+      if (existingIdx < 0) {
+        const newMessage: any = {
           id: message.id,
           text: message.text,
           type: message.type,
@@ -33,10 +44,16 @@ export const globalMessageStorage = {
           to: message.to,
           timestamp: new Date(message.timestamp),
         };
-
+        if (replyToPayload) newMessage.replyTo = replyToPayload;
         messages.push(newMessage);
+        didWrite = true;
+      } else if (replyToPayload && !messages[existingIdx]?.replyTo?.id) {
+        messages[existingIdx] = { ...messages[existingIdx], replyTo: replyToPayload };
+        didWrite = true;
+      }
+      if (didWrite) {
         await AsyncStorage.setItem(chatKey, JSON.stringify(messages));
-      } else {}
+      }
     } catch (error) {
       logger.warn('Failed to save message globally:', error);
     }
@@ -1786,14 +1803,18 @@ export function sendMessage(payload: {
   name?: string;
   size?: number;
   duration?: number;
+  replyTo?: { id: string; text?: string; from: string; isOwn?: boolean };
 }) {
   // Ограничиваем типы сообщений для новой системы
   const messageType = payload.type === 'video' || payload.type === 'document' ? 'text' : payload.type;
 
+  const socketPayload: any = { to: payload.to, text: payload.text, type: messageType, uri: payload.uri, name: payload.name, size: payload.size, duration: payload.duration };
+  if (payload.replyTo?.id) socketPayload.replyTo = { id: payload.replyTo.id, text: payload.replyTo.text, from: payload.replyTo.from };
+
   const viaSocket = () =>
     emitAck<{ ok: boolean; messageId?: string; timestamp?: Date; delivered?: boolean; error?: string }>(
       'message:send',
-      { to: payload.to, text: payload.text, type: messageType, uri: payload.uri, name: payload.name, size: payload.size, duration: payload.duration }
+      socketPayload
     );
 
   const viaHttp = async () => {
@@ -1802,6 +1823,9 @@ export function sendMessage(payload: {
     if (installId) headers['x-install-id'] = String(installId);
     if (currentUserId) headers['x-user-id'] = String(currentUserId);
 
+    const body: any = { to: payload.to, text: payload.text, type: messageType, uri: payload.uri, name: payload.name, size: payload.size, duration: payload.duration };
+    if (payload.replyTo?.id) body.replyTo = { id: payload.replyTo.id, text: payload.replyTo.text, from: payload.replyTo.from };
+
     const url = `${API_BASE}/api/messages/send`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20000);
@@ -1809,7 +1833,7 @@ export function sendMessage(payload: {
       const res = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ to: payload.to, text: payload.text, type: messageType, uri: payload.uri, name: payload.name, size: payload.size, duration: payload.duration }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
       if (!res.ok) {

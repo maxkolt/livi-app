@@ -5,6 +5,12 @@ export interface IReaction {
   userId: string;
 }
 
+export interface IReplyTo {
+  id: string;
+  text?: string;
+  from: string;
+}
+
 export interface IFriendshipMessageItem extends Document {
   _id: mongoose.Types.ObjectId;
   friendshipId: mongoose.Types.ObjectId;
@@ -20,6 +26,7 @@ export interface IFriendshipMessageItem extends Document {
   timestamp: Date;
   read: boolean;
   reactions?: IReaction[];
+  replyTo?: IReplyTo;
 }
 
 const ReactionSchema = new Schema<IReaction>(
@@ -42,6 +49,14 @@ const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
     timestamp: { type: Date, default: Date.now },
     read: { type: Boolean, default: false },
     reactions: [ReactionSchema],
+    replyTo: {
+      type: {
+        id: { type: String, required: true },
+        text: String,
+        from: { type: String, required: true }
+      },
+      default: undefined
+    },
   },
   { timestamps: false }
 );

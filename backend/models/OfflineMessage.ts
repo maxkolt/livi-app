@@ -18,6 +18,7 @@ export interface IOfflineMessage extends Document {
     duration?: number;
     timestamp: Date;
     read: boolean;
+    replyTo?: { id: string; text?: string; from: string };
   };
   createdAt: Date;
   expiresAt: Date; // Автоматическое удаление через 30 дней
@@ -53,7 +54,15 @@ const OfflineMessageSchema = new Schema<IOfflineMessage>({
     size: { type: Number },
     duration: { type: Number },
     timestamp: { type: Date, required: true },
-    read: { type: Boolean, default: false }
+    read: { type: Boolean, default: false },
+    replyTo: {
+      type: {
+        id: { type: String, required: true },
+        text: { type: String },
+        from: { type: String, required: true },
+      },
+      required: false,
+    },
   },
   createdAt: {
     type: Date,

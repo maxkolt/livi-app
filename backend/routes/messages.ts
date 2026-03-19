@@ -26,6 +26,9 @@ router.post('/messages/send', async (req, res) => {
     const name = typeof req.body?.name === 'string' ? String(req.body.name) : undefined;
     const size = typeof req.body?.size === 'number' ? Number(req.body.size) : undefined;
     const duration = typeof req.body?.duration === 'number' ? Number(req.body.duration) : undefined;
+    const replyTo = req.body?.replyTo && typeof req.body.replyTo === 'object' && req.body.replyTo.id
+      ? { id: String(req.body.replyTo.id), text: req.body.replyTo.text != null ? String(req.body.replyTo.text) : undefined, from: String(req.body.replyTo.from || '') }
+      : undefined;
 
     if (!isOid(to)) return res.status(400).json({ ok: false, error: 'invalid_to' });
     if (type !== 'text' && type !== 'image' && type !== 'audio') return res.status(400).json({ ok: false, error: 'invalid_type' });
@@ -39,7 +42,7 @@ router.post('/messages/send', async (req, res) => {
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const timestamp = new Date();
 
-    const messageItem = {
+    const messageItem: any = {
       id: messageId,
       from: new mongoose.Types.ObjectId(me),
       to: new mongoose.Types.ObjectId(to),
@@ -52,10 +55,11 @@ router.post('/messages/send', async (req, res) => {
       timestamp,
       read: false,
     };
+    if (replyTo) messageItem.replyTo = replyTo;
 
     await (friendship as any).addMessage(messageItem);
 
-    await FriendshipMessageItem.create({
+    const createItem: any = {
       friendshipId: (friendship as any)._id,
       id: messageId,
       from: messageItem.from,
@@ -68,7 +72,9 @@ router.post('/messages/send', async (req, res) => {
       duration,
       timestamp,
       read: false,
-    });
+    };
+    if (replyTo) createItem.replyTo = replyTo;
+    await FriendshipMessageItem.create(createItem);
 
     // If recipient is offline, persist as offline message (same semantics as socket flow)
     try {
@@ -77,7 +83,7 @@ router.post('/messages/send', async (req, res) => {
         && Array.from(io.sockets.sockets.values()).some((s: any) => String(s?.data?.userId) === String(to));
 
       if (io && isRecipientOnline) {
-        const payload = {
+        const payload: any = {
           id: messageId,
           from: me,
           to,
@@ -90,6 +96,7 @@ router.post('/messages/send', async (req, res) => {
           timestamp: timestamp.toISOString(),
           read: false,
         };
+        if (replyTo) payload.replyTo = replyTo;
         for (const s of io.sockets.sockets.values()) {
           if (String((s as any)?.data?.userId) === String(to)) {
             try { s.emit('message:received', payload); } catch {}
@@ -99,23 +106,25 @@ router.post('/messages/send', async (req, res) => {
       }
 
       // offline path
+      const messageData: any = {
+        id: messageId,
+        from: me,
+        to,
+        type,
+        text,
+        uri,
+        name,
+        size,
+        duration,
+        timestamp: timestamp.toISOString(),
+        read: false,
+      };
+      if (replyTo) messageData.replyTo = replyTo;
       await OfflineMessage.create({
         recipientId: new mongoose.Types.ObjectId(to),
         senderId: new mongoose.Types.ObjectId(me),
         messageId,
-        messageData: {
-          id: messageId,
-          from: me,
-          to,
-          type,
-          text,
-          uri,
-          name,
-          size,
-          duration,
-          timestamp: timestamp.toISOString(),
-          read: false,
-        },
+        messageData,
       });
       return res.json({ ok: true, messageId, timestamp, delivered: false });
     } catch {
@@ -184,6 +193,7 @@ router.get('/messages', async (req, res) => {
         timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
         read: !!msg.read,
         reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
+        ...(msg.replyTo && msg.replyTo.id ? { replyTo: { id: String(msg.replyTo.id), text: msg.replyTo.text, from: String(msg.replyTo.from || '') } } : {}),
       }));
       return res.json({ ok: true, messages: formatted, hasMore: allMessages.length > limit });
     }
@@ -202,6 +212,7 @@ router.get('/messages', async (req, res) => {
       timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
       read: !!msg.read,
       reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
+      ...(msg.replyTo && msg.replyTo.id ? { replyTo: { id: String(msg.replyTo.id), text: msg.replyTo.text, from: String(msg.replyTo.from || '') } } : {}),
     }));
 
     return res.json({ ok: true, messages: formatted, hasMore });
