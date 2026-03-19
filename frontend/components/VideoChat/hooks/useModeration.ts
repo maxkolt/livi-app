@@ -210,16 +210,21 @@ export function useModeration({
         consecutiveBadFramesRef.current += 1;
         if (consecutiveBadFramesRef.current >= badFramesThreshold) {
           consecutiveBadFramesRef.current = 0;
-          if (moderationTarget === 'remote' && partnerUserId) {
-            if (lastPartnerUserIdRef.current !== partnerUserId) {
-              partnerStrikesRef.current = 0;
-              lastPartnerUserIdRef.current = partnerUserId;
-            }
-            partnerStrikesRef.current += 1;
-            if (partnerStrikesRef.current === 1 && onRemoteWarning) {
-              onRemoteWarning(partnerUserId);
-            } else if (partnerStrikesRef.current >= 2 && onRemoteViolation) {
-              onRemoteViolation(partnerUserId);
+          if (moderationTarget === 'remote') {
+            if (partnerUserId) {
+              if (lastPartnerUserIdRef.current !== partnerUserId) {
+                partnerStrikesRef.current = 0;
+                lastPartnerUserIdRef.current = partnerUserId;
+              }
+              partnerStrikesRef.current += 1;
+              if (partnerStrikesRef.current === 1 && onRemoteWarning) {
+                onRemoteWarning(partnerUserId);
+              } else if (partnerStrikesRef.current >= 2 && onRemoteViolation) {
+                onRemoteViolation(partnerUserId);
+              }
+            } else {
+              // КРИТИЧНО: partnerUserId ещё не установлен — не наказываем зрителя (applyStrike)
+              logger.warn('[Moderation] remote violation but partnerUserId is null, skipping strike');
             }
           } else {
             applyStrike();

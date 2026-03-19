@@ -11,6 +11,8 @@ const queueAddedAt = new Map<string, number>();
 const pair = new Map<string, string>();
 const locks = new Map<string, number>();
 const bans = new Map<string, number>();
+/** Модерация: бан userId в рандомном чате (1 час) */
+const moderationBans = new Map<string, number>();
 const lastMatchAttempt = new Map<string, number>();
 const lastStart = new Map<string, number>();
 const lastSearch = new Map<string, number>();
@@ -109,6 +111,24 @@ export function createMemoryStore() {
       return true;
     },
 
+    async banModerationUser(userId: string, ms: number): Promise<void> {
+      const id = String(userId).trim();
+      if (!id) return;
+      moderationBans.set(id, now() + Math.max(0, Number(ms) || 0));
+    },
+
+    async isModerationBanned(userId: string): Promise<boolean> {
+      const id = String(userId).trim();
+      if (!id) return false;
+      const exp = moderationBans.get(id);
+      if (!exp) return false;
+      if (exp <= now()) {
+        moderationBans.delete(id);
+        return false;
+      }
+      return true;
+    },
+
     async getLastMatchAttempt(sid: string): Promise<number | undefined> {
       return lastMatchAttempt.get(String(sid));
     },
@@ -171,6 +191,11 @@ export function createMemoryStore() {
         if (exp <= n) {
           bans.delete(k);
           cleanedBans++;
+        }
+      }
+      for (const [uid, exp] of moderationBans.entries()) {
+        if (exp <= n) {
+          moderationBans.delete(uid);
         }
       }
       for (const [sid, exp] of locks.entries()) {

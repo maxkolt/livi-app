@@ -57,6 +57,10 @@ type Props = {
   } 
 };
 
+/** Fallback, если сервер прислал событие без текста (старый бэкенд) */
+const MODERATION_FIRST_WARNING_FALLBACK =
+  'Уважаемый пользователь, вы нарушаете правила приложения, при продолжении данных действий вы будете забанены на один час.';
+
 const CARD_BASE = {
   backgroundColor: 'rgba(13,14,16,0.85)',
   borderRadius: 10,
@@ -1269,12 +1273,29 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const onRemoteViolation = useCallback(
     (reportedUserId: string) => {
       try {
-        socket.emit('moderation:reportPartner', { partnerUserId: reportedUserId });
+        socket.timeout(12_000).emit(
+          'moderation:reportPartner',
+          { partnerUserId: reportedUserId },
+          (err: Error | null, res?: { ok?: boolean; reason?: string }) => {
+            if (err) {
+              logger.warn('[RandomChat] moderation:reportPartner ack failed', { message: err?.message });
+              showToast('Не удалось подтвердить действие на сервере. Нажмите «Далее», чтобы продолжить.', 3200);
+              sessionRef.current?.next();
+              return;
+            }
+            if (res?.ok) {
+              showToast('Собеседник забанен на час. Он нарушил правила пользования.', 2800);
+              sessionRef.current?.next();
+            } else {
+              logger.warn('[RandomChat] moderation:reportPartner rejected', { res });
+              sessionRef.current?.next();
+            }
+          }
+        );
       } catch (e) {
         logger.warn('[RandomChat] Failed to report partner for moderation', e);
+        sessionRef.current?.next();
       }
-      showToast('Собеседник забанен на час. Он нарушил правила пользования.', 2800);
-      sessionRef.current?.next();
     },
     [showToast]
   );
@@ -1295,16 +1316,31 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     onRemoteViolation,
   });
 
-  // Слушаем предупреждение от модерации (мы — партнёр, нас предупредили)
+  // Слушаем предупреждение от модерации (мы — нарушитель, первое нарушение)
   useEffect(() => {
-    const handler = () => {
-      showToast('Пожалуйста, соблюдайте правила. Обнаружен нежелательный контент.', 2400);
+    const handler = (payload?: { message?: string }) => {
+      const text =
+        payload && typeof payload.message === 'string' && payload.message.trim()
+          ? payload.message.trim()
+          : MODERATION_FIRST_WARNING_FALLBACK;
+      showToast(text, 5200);
     };
     socket.on('moderation:warning', handler);
     return () => {
       socket.off('moderation:warning', handler);
     };
   }, [showToast]);
+
+  // Слушаем бан от модерации (мы — партнёр, нас забанили за повторное нарушение)
+  useEffect(() => {
+    const handler = () => {
+      banUser(3600, 'Вы заблокированы на 1 час за повторные нарушения.');
+    };
+    socket.on('moderation:banned', handler);
+    return () => {
+      socket.off('moderation:banned', handler);
+    };
+  }, [banUser]);
 
   // Обработка AppState - при уходе приложения в фон рандомный чат должен
   // немедленно завершаться, чтобы при возврате экран был в неактивном состоянии.

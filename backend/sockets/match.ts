@@ -5,6 +5,12 @@ import { createToken, getLiveKitUrl } from '../routes/livekit';
 import * as queueStore from '../utils/queueStore';
 import User from '../models/User';
 
+const MODERATION_BAN_MS = 60 * 60 * 1000; // 1 час
+
+/** Первое предупреждение нарушителю (показывается у него в приложении) */
+export const MODERATION_FIRST_WARNING_TEXT =
+  'Уважаемый пользователь, вы нарушаете правила приложения, при продолжении данных действий вы будете забанены на один час.';
+
 // === Очередь ожидания ========================================================
 // Используем распределенное хранилище через queueStore
 const matchInProgress = new Set<string>(); // Локальный Set для предотвращения одновременных матчей на одном инстансе
@@ -201,11 +207,15 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
     if (!other || other.data.partnerSid) continue;
     
     // Проверяем, что это не один и тот же пользователь (по userId)
-    // Это важно, если пользователь подключен с нескольких устройств
     const myUserId = String(socket.data.userId || '');
     const otherUserId = String(other.data.userId || '');
     if (myUserId && otherUserId && myUserId === otherUserId) {
       logger.debug('Skipping self-match by userId', { socketId: socket.id, userId: myUserId, otherSocketId: sid });
+      continue;
+    }
+    // Пропускаем пользователей, забаненных модерацией (нарушение правил)
+    if (otherUserId && (await queueStore.isModerationBanned(otherUserId))) {
+      logger.debug('Skipping moderation-banned user', { socketId: socket.id, otherUserId, otherSocketId: sid });
       continue;
     }
     
@@ -330,6 +340,13 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
 
   // === START ================================================================
   socket.on('start', async () => {
+    // Бан модерации: пользователь не может войти в рандомный чат
+    const myUserId = String(socket.data.userId || '');
+    if (myUserId && (await queueStore.isModerationBanned(myUserId))) {
+      logger.debug('Start rejected: user is moderation-banned', { socketId: socket.id, userId: myUserId });
+      socket.emit('moderation:banned');
+      return;
+    }
     // Rate limiting: защита от DDoS через множественные start запросы
     const now = Date.now();
     const lastStart = await queueStore.getLastStart(socket.id) || 0;
@@ -457,24 +474,59 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     if (partnerSid) {
       const partner = safeGet(io, partnerSid);
       if (partner) {
-        partner.emit('moderation:warning');
+        partner.emit('moderation:warning', { message: MODERATION_FIRST_WARNING_TEXT });
         logger.debug('[Moderation] warning sent to partner', { reporterSocketId: socket.id, partnerSocketId: partnerSid });
       }
     }
   });
 
+  type ReportAck = { ok: boolean; reason?: string };
+
   // === MODERATION: report partner for violation (второе нарушение — бан) ===
-  socket.on('moderation:reportPartner', async ({ partnerUserId }: { partnerUserId?: string }) => {
-    const reporterId = (socket as any)?.data?.userId;
-    const reported = String(partnerUserId || '').trim();
-    if (!reported) return;
-    logger.info('[Moderation] partner reported for violation', {
-      reporterUserId: reporterId,
-      reportedUserId: reported,
-      reporterSocketId: socket.id,
-    });
-    // TODO: добавить бан reportedUserId в random chat (отдельное хранилище)
-  });
+  socket.on(
+    'moderation:reportPartner',
+    async (
+      { partnerUserId }: { partnerUserId?: string },
+      ack?: (r: ReportAck) => void
+    ) => {
+      const done = (r: ReportAck) => {
+        try {
+          if (typeof ack === 'function') ack(r);
+        } catch {}
+      };
+
+      const reported = String(partnerUserId || '').trim();
+      if (!reported) {
+        done({ ok: false, reason: 'no_partner_user_id' });
+        return;
+      }
+
+      const reporterId = (socket as any)?.data?.userId;
+      logger.info('[Moderation] partner reported for violation, banning userId', {
+        reporterUserId: reporterId,
+        reportedUserId: reported,
+        reporterSocketId: socket.id,
+      });
+
+      await queueStore.banModerationUser(reported, MODERATION_BAN_MS);
+
+      const partnerSid = socket.data.partnerSid as string | undefined;
+      if (partnerSid) {
+        const partner = safeGet(io, partnerSid);
+        if (partner) {
+          partner.emit('moderation:banned');
+          partner.emit('peer:left');
+          partner.data.partnerSid = undefined;
+          partner.data.inCall = false;
+          await unlockPair(partner.id);
+          await removeFromQueue(partner.id);
+          await markBusy(io, partner, false);
+        }
+      }
+
+      done({ ok: true });
+    }
+  );
 
   // === STOP ================================================================
   socket.on('stop', async () => {

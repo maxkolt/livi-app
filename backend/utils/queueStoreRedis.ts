@@ -105,6 +105,20 @@ export function createRedisStore(redisUrl: string) {
       return v !== null;
     },
 
+    async banModerationUser(userId: string, ms: number): Promise<void> {
+      const id = String(userId).trim();
+      if (!id) return;
+      const px = Math.max(0, Number(ms) || 0);
+      if (px > 0) await redis.set(PREFIX + 'modban:' + id, '1', 'PX', px);
+    },
+
+    async isModerationBanned(userId: string): Promise<boolean> {
+      const id = String(userId).trim();
+      if (!id) return false;
+      const v = await redis.get(PREFIX + 'modban:' + id);
+      return v !== null;
+    },
+
     async getLastMatchAttempt(sid: string): Promise<number | undefined> {
       const v = await redis.hget(PREFIX + 'lastMatchAttempt', String(sid));
       return v !== null ? Number(v) : undefined;
