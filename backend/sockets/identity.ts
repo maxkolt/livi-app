@@ -10,6 +10,7 @@ import Install from '../models/Install';
 import MissedCall from '../models/MissedCall';
 // Cloudinary удален, используем только MongoDB
 import { getAndClearOfflineMessages, getAndClearOfflineChatClearedQueue } from './messagesReliable';
+import { auditNickChange } from '../utils/profileNickAudit';
 
 type AttachPayload = {
   installId?: string | null;
@@ -236,7 +237,22 @@ export default function registerIdentitySockets(io: Server) {
 
           const $set = buildSetFromProfile(payload?.profile || undefined);
           if (Object.keys($set).length) {
+            let prevNickForAudit: string | null = null;
+            if ('nick' in $set) {
+              const row = await User.findById(userId).select('nick').lean();
+              prevNickForAudit = String((row as any)?.nick ?? '');
+            }
             await User.updateOne({ _id: userId }, { $set });
+            if (prevNickForAudit !== null) {
+              auditNickChange({
+                source: 'socket.identity:attach',
+                userId,
+                prevNick: prevNickForAudit,
+                nextNick: String($set.nick ?? ''),
+                socketId: sock.id,
+                installId: installId.length > 80 ? installId.slice(0, 80) : installId,
+              });
+            }
             broadcastProfileToFriends(io, userId).catch(() => {});
           }
           await bindUser(io, sock, userId);
@@ -396,6 +412,16 @@ export default function registerIdentitySockets(io: Server) {
           await FriendshipMessages.deleteMany({ $or: [{ user1: userId }, { user2: userId }] }, opt as any);
 
           // 4) Очищаем данные пользователя вместо удаления
+          const beforeWipe = await User.findById(userId).select('nick').lean();
+          const prevNickWipe = String((beforeWipe as any)?.nick ?? '');
+          auditNickChange({
+            source: 'socket.identity:wipeMe',
+            userId,
+            prevNick: prevNickWipe,
+            nextNick: '',
+            socketId: sock.id,
+            installId: id.length > 80 ? id.slice(0, 80) : id,
+          });
           await User.updateOne(
             { _id: userId }, 
             { 

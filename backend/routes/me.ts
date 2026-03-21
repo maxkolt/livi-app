@@ -7,6 +7,7 @@ import type { Server as IOServer } from 'socket.io';
 import { sendPushToUser, upsertExpoPushToken } from '../utils/push';
 import { getPushLog, pushLog } from '../utils/pushLogBuffer';
 import { logger } from '../utils/logger';
+import { auditNickChange } from '../utils/profileNickAudit';
 import { checkRateLimit } from '../utils/rateLimit';
 
 const router = Router();
@@ -176,6 +177,26 @@ router.patch('/me', async (req, res) => {
           friends: current.friends || [],
         },
       });
+    }
+
+    if (typeof nick === 'string') {
+      const nextN = nick.trim();
+      const prevN = String((current as any).nick ?? '');
+      if (nextN !== prevN) {
+        const xf = req.headers['x-forwarded-for'];
+        const clientIp =
+          typeof xf === 'string' && xf.trim()
+            ? xf.split(',')[0].trim()
+            : req.socket.remoteAddress;
+        auditNickChange({
+          source: 'http.PATCH /api/me',
+          userId,
+          prevNick: prevN,
+          nextNick: nextN,
+          userAgent: req.get('user-agent') || undefined,
+          clientIp: clientIp || undefined,
+        });
+      }
     }
 
     // апдейтим и читаем обновлённого

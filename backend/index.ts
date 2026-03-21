@@ -5,6 +5,7 @@ dotenv.config();
 import express from 'express';
 import crypto from 'crypto';
 import { logger } from './utils/logger';
+import { auditNickChange } from './utils/profileNickAudit';
 import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
@@ -1604,6 +1605,15 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       // Обновляем базу данных
       if (Object.keys($set).length > 0 || Object.keys($inc).length > 0) {
+        if (Object.prototype.hasOwnProperty.call($set, 'nick')) {
+          auditNickChange({
+            source: 'socket.profile:update',
+            userId: me,
+            prevNick: String(current.nick ?? ''),
+            nextNick: String($set.nick ?? ''),
+            socketId: sock.id,
+          });
+        }
         const updateOp: any = {};
         if (Object.keys($set).length > 0) updateOp.$set = $set;
         if (Object.keys($inc).length > 0) updateOp.$inc = $inc;
