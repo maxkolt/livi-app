@@ -129,6 +129,19 @@ export function createMemoryStore() {
       return true;
     },
 
+    /** Unix ms, когда истекает бан модерации; null если не забанен */
+    async getModerationBanExpiresAt(userId: string): Promise<number | null> {
+      const id = String(userId).trim();
+      if (!id) return null;
+      const exp = moderationBans.get(id);
+      if (!exp) return null;
+      if (exp <= now()) {
+        moderationBans.delete(id);
+        return null;
+      }
+      return exp;
+    },
+
     async getLastMatchAttempt(sid: string): Promise<number | undefined> {
       return lastMatchAttempt.get(String(sid));
     },

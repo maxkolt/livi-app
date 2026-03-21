@@ -119,6 +119,15 @@ export function createRedisStore(redisUrl: string) {
       return v !== null;
     },
 
+    async getModerationBanExpiresAt(userId: string): Promise<number | null> {
+      const id = String(userId).trim();
+      if (!id) return null;
+      const key = PREFIX + 'modban:' + id;
+      const pttl = await redis.pttl(key);
+      if (pttl < 0) return null;
+      return now() + pttl;
+    },
+
     async getLastMatchAttempt(sid: string): Promise<number | undefined> {
       const v = await redis.hget(PREFIX + 'lastMatchAttempt', String(sid));
       return v !== null ? Number(v) : undefined;

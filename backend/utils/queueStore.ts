@@ -43,6 +43,7 @@ export const banPair = (aSid: string, bSid: string, ms: number) => store.banPair
 export const isBannedTogether = (aSid: string, bSid: string) => store.isBannedTogether(aSid, bSid);
 export const banModerationUser = (userId: string, ms: number) => store.banModerationUser(userId, ms);
 export const isModerationBanned = (userId: string) => store.isModerationBanned(userId);
+export const getModerationBanExpiresAt = (userId: string) => store.getModerationBanExpiresAt(userId);
 export const getLastMatchAttempt = (sid: string) => store.getLastMatchAttempt(sid);
 export const setLastMatchAttempt = (sid: string, ts: number) => store.setLastMatchAttempt(sid, ts);
 export const getLastStart = (sid: string) => store.getLastStart(sid);

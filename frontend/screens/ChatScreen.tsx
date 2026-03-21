@@ -465,6 +465,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const forwardToastOpacity = useRef(new Animated.Value(0)).current;
   const forwardToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const forwardSheetTranslateY = useRef(new Animated.Value(0)).current;
+  /** Блокирует повторный вызов send до ре-рендера (двойной тап по «Отправить»). */
+  const textSendGuardRef = useRef(false);
 
   useEffect(() => {
     if (showForwardPicker) forwardSheetTranslateY.setValue(0);
@@ -3119,6 +3121,12 @@ export default function ChatScreen({ route, navigation }: Props) {
       return;
     }
 
+    if (textSendGuardRef.current) return;
+    textSendGuardRef.current = true;
+    setTimeout(() => {
+      textSendGuardRef.current = false;
+    }, 200);
+
     const messageToSend = messageText.trim();
     const replyTo = replyingToMessage ? { id: replyingToMessage.id, text: replyingToMessage.text, from: replyingToMessage.from, isOwn: replyingToMessage.isOwn } : undefined;
     setMessageText(""); // Очищаем поле сразу
@@ -3127,7 +3135,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     stopLocalTyping();
     
     // Добавляем сообщение локально
-    const messageId = Date.now().toString();
+    const messageId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const newMessage = {
       id: messageId,
       text: messageToSend,
@@ -3139,86 +3147,78 @@ export default function ChatScreen({ route, navigation }: Props) {
       ...(replyTo ? { replyTo } : {}),
     };
     
-    const updatedMessages = [...messages, newMessage];
-    setMessages(updatedMessages);
-    
-    // Сохраняем сообщения в AsyncStorage
-    saveMessages(updatedMessages);
-    
+    setMessages((prev) => {
+      const updatedMessages = [...prev, newMessage];
+      saveMessages(updatedMessages);
+      return updatedMessages;
+    });
     
     // Статус "отправляется" (пока нет птичек)
     updateReadStatuses(prev => ({ ...prev, [messageId]: 'sending' }));
     
-    // Отправляем через сокеты
-    try {
-      const result = await sendSocketMessage({
-        to: peerId,
-        text: messageToSend,
-        type: 'text',
-        ...(replyTo ? { replyTo: { id: replyTo.id, text: replyTo.text, from: replyTo.from, isOwn: replyTo.isOwn } } : {}),
-      });
-      
-      if (result.ok) {
-        // Очищаем кэш для обновления сообщений с правильными полями
-        clearMessageCache(peerId, currentUserId);
+    // Сеть в фоне — UI не ждёт ack (избегаем «зависания» и лишних повторных нажатий)
+    void (async () => {
+      try {
+        const result = await sendSocketMessage({
+          to: peerId,
+          text: messageToSend,
+          type: 'text',
+          ...(replyTo ? { replyTo: { id: replyTo.id, text: replyTo.text, from: replyTo.from, isOwn: replyTo.isOwn } } : {}),
+        });
+        
+        if (result.ok) {
+          clearMessageCache(peerId, currentUserId);
 
-        // Определяем статус доставки
-        const deliveryStatus = result.delivered ? 'delivered' : 'sent';
+          const deliveryStatus = result.delivered ? 'delivered' : 'sent';
 
-        // Сразу ставим статус доставки
-        updateReadStatuses(prev => ({
-          ...prev,
-          [messageId]: deliveryStatus
-        }));
+          updateReadStatuses(prev => ({
+            ...prev,
+            [messageId]: deliveryStatus
+          }));
 
-        // ВСЕГДА обновляем ID если сервер вернул messageId
-        if (result.messageId) {
-          if (result.messageId !== messageId) {
-            // Обновляем ID сообщения на реальный от сервера
-            setMessages(prev => {
-              const updated = prev.map(msg => 
-                msg.id === messageId 
-                  ? { ...msg, id: result.messageId!, from: currentUserId, to: peerId }
-                  : msg
-              );
-              saveMessages(updated);
-              return updated;
-            });
-            
-            // Переносим статус на новый ID
-            updateReadStatuses(prev => {
-              const newStatuses = { ...prev };
-              newStatuses[result.messageId!] = deliveryStatus;
-              delete newStatuses[messageId]; // Убираем старый ID
-              return newStatuses;
-            });
+          if (result.messageId) {
+            if (result.messageId !== messageId) {
+              setMessages(prev => {
+                const updated = prev.map(msg => 
+                  msg.id === messageId 
+                    ? { ...msg, id: result.messageId!, from: currentUserId, to: peerId }
+                    : msg
+                );
+                saveMessages(updated);
+                return updated;
+              });
+              
+              updateReadStatuses(prev => {
+                const newStatuses = { ...prev };
+                newStatuses[result.messageId!] = deliveryStatus;
+                delete newStatuses[messageId];
+                return newStatuses;
+              });
+            } else {
+              updateReadStatuses(prev => ({
+                ...prev,
+                [messageId]: deliveryStatus
+              }));
+            }
           } else {
-            // ID не изменился, просто обновляем статус
             updateReadStatuses(prev => ({
               ...prev,
               [messageId]: deliveryStatus
             }));
           }
         } else {
-          // Нет messageId от сервера - оставляем как есть
-          updateReadStatuses(prev => ({
-            ...prev,
-            [messageId]: deliveryStatus
-          }));
+          throw new Error((result as any).error || 'Failed to send message');
         }
-      } else {
-        throw new Error(result.error || 'Failed to send message');
+        
+      } catch (e) {
+        console.error('❌ Failed to send via socket:', e);
+        updateReadStatuses(prev => ({
+          ...prev,
+          [messageId]: 'failed'
+        }));
+        setUploadStatus(prev => ({ ...prev, [messageId]: 'failed' }));
       }
-      
-    } catch (e) {
-      console.error('❌ Failed to send via socket:', e);
-      // Помечаем сообщение как неотправленное
-      updateReadStatuses(prev => ({
-        ...prev,
-        [messageId]: 'failed'
-      }));
-      setUploadStatus(prev => ({ ...prev, [messageId]: 'failed' }));
-    }
+    })();
   };
 
   const handleAttachments = () => {

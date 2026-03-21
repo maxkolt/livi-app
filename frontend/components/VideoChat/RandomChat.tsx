@@ -178,7 +178,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const [incomingCall, setIncomingCall] = useState<{ callId: string; from: string; fromNick?: string } | null>(null);
   const moderationEnabled = String(process.env.EXPO_PUBLIC_RANDOM_CHAT_MODERATION || '0') === '1';
   const remoteModerationTargetRef = useRef<View | null>(null);
-  const [muteByModerationUntil, setMuteByModerationUntil] = useState(0);
   const [banByModerationUntil, setBanByModerationUntil] = useState(0);
   const myUserId = useMemo(() => {
     const routeUserId = String(route?.params?.myUserId ?? '').trim();
@@ -194,6 +193,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   // Toast уведомления
   const [toastText, setToastText] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
+  /** true — тосты про нарушения правил / модерацию (шрифт 400); иначе обычный стиль */
+  const [toastModerationStyle, setToastModerationStyle] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   
   // Session (sessionKey пересоздаёт сессию после forceStopRandomChat, чтобы кнопка «Начать» работала)
@@ -236,9 +237,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   const L = useCallback((key: string) => t(key, lang), [lang]);
   
-  // Функция показа toast уведомлений
-  const showToast = useCallback((text: string, ms = 1700) => {
+  // Функция показа toast уведомлений (moderationStyle — нарушения правил / бан / предупреждение партнёру)
+  const showToast = useCallback((text: string, ms = 1700, moderationStyle = false) => {
     if (!text || text.toLowerCase() === 'self') return; // скрываем отладочный тост
+    setToastModerationStyle(!!moderationStyle);
     setToastText(text);
     setToastVisible(true);
     Animated.timing(toastOpacity, { toValue: 1, duration: 160, useNativeDriver: true }).start(() => {
@@ -246,57 +248,64 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         Animated.timing(toastOpacity, { toValue: 0, duration: 160, useNativeDriver: true }).start(() => {
           setToastVisible(false);
           setToastText('');
+          setToastModerationStyle(false);
         });
         clearTimeout(t);
       }, ms);
     });
   }, [toastOpacity]);
 
-  const isModerationMuted = muteByModerationUntil > Date.now();
   const isModerationBanned = banByModerationUntil > Date.now();
 
   const showWarning = useCallback((message: string) => {
-    showToast(message, 2400);
+    showToast(message, 4000, true);
   }, [showToast]);
 
-  const muteUser = useCallback((seconds: number, message: string) => {
-    const until = Date.now() + seconds * 1000;
-    setMuteByModerationUntil(until);
-    if (micOn) {
-      try {
-        sessionRef.current?.toggleMic();
-      } catch (e) {
-        logger.warn('[RandomChat] Failed to force mute by moderation', e);
+  /**
+   * untilMs — момент разблокировки (Unix ms).
+   * fromServer: true — не продлеваем бан при повторных moderation:banned (берём более раннее until).
+   */
+  const applyModerationBanUntil = useCallback(
+    (untilMs: number, message: string, fromServer: boolean) => {
+      setBanByModerationUntil((prev) => {
+        if (fromServer && prev > Date.now() && untilMs > prev) return prev;
+        return untilMs;
+      });
+      showToast(message, 4000, true);
+      if (startedRef.current) {
+        try {
+          sessionRef.current?.stopRandomChat();
+        } catch (e) {
+          logger.warn('[RandomChat] Failed to stop session after moderation ban', e);
+        }
+        startedRef.current = false;
+        loadingRef.current = false;
+        isNextingRef.current = false;
+        setStarted(false);
+        setLoading(false);
+        setIsNexting(false);
+        setIsInactiveState(true);
       }
-    }
-    showToast(message, 2600);
-    setTimeout(() => {
-      setMuteByModerationUntil((prev) => (prev <= Date.now() ? 0 : prev));
-    }, seconds * 1000 + 200);
-  }, [micOn, showToast]);
+    },
+    [showToast]
+  );
 
-  const banUser = useCallback((seconds: number, message: string) => {
-    const until = Date.now() + seconds * 1000;
-    setBanByModerationUntil(until);
-    showToast(message, 2800);
-    if (startedRef.current) {
-      try {
-        sessionRef.current?.stopRandomChat();
-      } catch (e) {
-        logger.warn('[RandomChat] Failed to stop session after moderation ban', e);
-      }
-      startedRef.current = false;
-      loadingRef.current = false;
-      isNextingRef.current = false;
-      setStarted(false);
-      setLoading(false);
-      setIsNexting(false);
-      setIsInactiveState(true);
-    }
-    setTimeout(() => {
-      setBanByModerationUntil((prev) => (prev <= Date.now() ? 0 : prev));
-    }, seconds * 1000 + 200);
-  }, [showToast]);
+  const banUser = useCallback(
+    (seconds: number, message: string) => {
+      applyModerationBanUntil(Date.now() + seconds * 1000, message, false);
+    },
+    [applyModerationBanUntil]
+  );
+
+  // Снятие UI-бана ровно к моменту until (синхронно с сервером при переданном bannedUntil)
+  useEffect(() => {
+    if (!banByModerationUntil || banByModerationUntil <= Date.now()) return;
+    const delay = Math.max(0, banByModerationUntil - Date.now()) + 300;
+    const t = setTimeout(() => {
+      setBanByModerationUntil((p) => (p <= Date.now() ? 0 : p));
+    }, delay);
+    return () => clearTimeout(t);
+  }, [banByModerationUntil]);
   
   // Обработка заявок в друзья
   useEffect(() => {
@@ -828,7 +837,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const onStartStop = useCallback(async () => {
     if (!canRunAction()) return;
     if (!startedRef.current && isModerationBanned) {
-      showToast('Вы заблокированы на 1 час за повторные нарушения.', 2400);
+      showToast('Вы заблокированы на 1 час за повторные нарушения.', 4000, true);
       return;
     }
     const session = sessionRef.current;
@@ -1026,7 +1035,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const toggleRemoteAudioRef = useRef(false);
   
   const toggleMic = useCallback(() => {
-    if (isModerationMuted || isModerationBanned) return;
+    if (isModerationBanned) return;
     // Защита от двойных нажатий
     if (toggleMicRef.current) return;
     toggleMicRef.current = true;
@@ -1038,7 +1047,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         toggleMicRef.current = false;
       }, 300);
     }
-  }, [isModerationMuted, isModerationBanned]);
+  }, [isModerationBanned]);
   
   const toggleCam = useCallback(() => {
     // Защита от двойных нажатий
@@ -1279,12 +1288,12 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           (err: Error | null, res?: { ok?: boolean; reason?: string }) => {
             if (err) {
               logger.warn('[RandomChat] moderation:reportPartner ack failed', { message: err?.message });
-              showToast('Не удалось подтвердить действие на сервере. Нажмите «Далее», чтобы продолжить.', 3200);
+              showToast('Не удалось подтвердить действие на сервере. Нажмите «Далее», чтобы продолжить.', 4000, true);
               sessionRef.current?.next();
               return;
             }
             if (res?.ok) {
-              showToast('Собеседник забанен на час. Он нарушил правила пользования.', 2800);
+              showToast('Собеседник забанен на час. Он нарушил правила пользования.', 4000, true);
               sessionRef.current?.next();
             } else {
               logger.warn('[RandomChat] moderation:reportPartner rejected', { res });
@@ -1310,7 +1319,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     cooldownMs: 900,
     badFramesThreshold: 2,
     onWarning: showWarning,
-    onMute: muteUser,
     onBan: banUser,
     onRemoteWarning,
     onRemoteViolation,
@@ -1323,7 +1331,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         payload && typeof payload.message === 'string' && payload.message.trim()
           ? payload.message.trim()
           : MODERATION_FIRST_WARNING_FALLBACK;
-      showToast(text, 5200);
+      showToast(text, 4000, true);
     };
     socket.on('moderation:warning', handler);
     return () => {
@@ -1331,16 +1339,20 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     };
   }, [showToast]);
 
-  // Слушаем бан от модерации (мы — партнёр, нас забанили за повторное нарушение)
+  // Слушаем бан от модерации (сервер шлёт bannedUntil — один час с момента бана, без продления при повторном start)
   useEffect(() => {
-    const handler = () => {
-      banUser(3600, 'Вы заблокированы на 1 час за повторные нарушения.');
+    const handler = (payload?: { bannedUntil?: number }) => {
+      const until =
+        typeof payload?.bannedUntil === 'number' && payload.bannedUntil > Date.now()
+          ? payload.bannedUntil
+          : Date.now() + 3600_000;
+      applyModerationBanUntil(until, 'Вы заблокированы на 1 час за повторные нарушения.', true);
     };
     socket.on('moderation:banned', handler);
     return () => {
       socket.off('moderation:banned', handler);
     };
-  }, [banUser]);
+  }, [applyModerationBanUntil]);
 
   // Обработка AppState - при уходе приложения в фон рандомный чат должен
   // немедленно завершаться, чтобы при возврате экран был в неактивном состоянии.
@@ -1903,10 +1915,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
               <Animated.View style={[styles.bottomOverlay, { opacity: buttonsOpacity }]}>
                 <TouchableOpacity
                   onPress={toggleMic}
-                  disabled={isModerationMuted || isModerationBanned}
+                  disabled={isModerationBanned}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   activeOpacity={0.7}
-                  style={[styles.iconBtn, (isModerationMuted || isModerationBanned) && styles.iconBtnDisabled]}
+                  style={[styles.iconBtn, isModerationBanned && styles.iconBtnDisabled]}
                 >
                   <MaterialIcons
                     name={micOn ? "mic" : "mic-off"}
@@ -2007,7 +2019,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       {/* Toast уведомления */}
       {toastVisible && (
         <Animated.View style={[styles.toast, { opacity: toastOpacity }]}>
-          <Text style={styles.toastText}>{toastText}</Text>
+          <Text style={[styles.toastText, toastModerationStyle && styles.toastTextModeration]}>{toastText}</Text>
         </Animated.View>
       )}
       
@@ -2243,6 +2255,11 @@ const styles = StyleSheet.create({
     color: '#B7C0CF',
     fontSize: 14,
     fontWeight: '600',
+  },
+  /** Модерация: нарушения правил, бан, предупреждение партнёру */
+  toastTextModeration: {
+    fontWeight: '400',
+    fontSize: 15,
   },
   iconBtn: {
     backgroundColor: 'rgba(0,0,0,0.5)',

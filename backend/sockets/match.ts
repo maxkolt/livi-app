@@ -7,6 +7,13 @@ import User from '../models/User';
 
 const MODERATION_BAN_MS = 60 * 60 * 1000; // 1 час
 
+/** Единое время окончания бана на клиенте (не продлевается при повторных start) */
+async function emitModerationBannedToSocket(s: AuthedSocket, userId: string) {
+  const until = await queueStore.getModerationBanExpiresAt(userId);
+  const bannedUntil = until ?? Date.now() + MODERATION_BAN_MS;
+  s.emit('moderation:banned', { bannedUntil });
+}
+
 /** Первое предупреждение нарушителю (показывается у него в приложении) */
 export const MODERATION_FIRST_WARNING_TEXT =
   'Уважаемый пользователь, вы нарушаете правила приложения, при продолжении данных действий вы будете забанены на один час.';
@@ -344,7 +351,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     const myUserId = String(socket.data.userId || '');
     if (myUserId && (await queueStore.isModerationBanned(myUserId))) {
       logger.debug('Start rejected: user is moderation-banned', { socketId: socket.id, userId: myUserId });
-      socket.emit('moderation:banned');
+      await emitModerationBannedToSocket(socket, myUserId);
       return;
     }
     // Rate limiting: защита от DDoS через множественные start запросы
@@ -514,7 +521,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
       if (partnerSid) {
         const partner = safeGet(io, partnerSid);
         if (partner) {
-          partner.emit('moderation:banned');
+          await emitModerationBannedToSocket(partner, reported);
           partner.emit('peer:left');
           partner.data.partnerSid = undefined;
           partner.data.inCall = false;

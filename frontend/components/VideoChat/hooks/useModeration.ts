@@ -23,7 +23,6 @@ type UseModerationOptions = {
   cooldownMs?: number;
   badFramesThreshold?: number;
   onWarning: (message: string) => void;
-  onMute: (seconds: number, message: string) => void;
   onBan: (seconds: number, message: string) => void;
   /** Первое нарушение: предупреждение партнёру (он видит в своём блоке «Вы») */
   onRemoteWarning?: (partnerUserId: string) => void;
@@ -32,7 +31,6 @@ type UseModerationOptions = {
 };
 
 const WARNING_TEXT = 'Пожалуйста, соблюдайте правила. Обнаружен нежелательный контент.';
-const MUTE_TEXT = 'Вы временно ограничены за нарушение правил.';
 const BAN_TEXT = 'Вы заблокированы на 1 час за повторные нарушения.';
 
 /** Задержка после подключения перед началом захвата — избегаем race с обновлением view hierarchy (IndexOutOfBoundsException в gatherTransparentRegion) */
@@ -48,7 +46,6 @@ export function useModeration({
   cooldownMs = 1300,
   badFramesThreshold = 3,
   onWarning,
-  onMute,
   onBan,
   onRemoteWarning,
   onRemoteViolation,
@@ -77,20 +74,14 @@ export function useModeration({
   }, [active]);
 
   const applyStrike = () => {
-    const next = Math.min(3, strikesRef.current + 1);
-    strikesRef.current = next;
-    setStrikes(next);
+    strikesRef.current += 1;
+    const next = strikesRef.current;
+    setStrikes(Math.min(next, 3));
 
     if (next === 1) {
       onWarning(WARNING_TEXT);
       return;
     }
-
-    if (next === 2) {
-      onMute(30, MUTE_TEXT);
-      return;
-    }
-
     onBan(3600, BAN_TEXT);
   };
 
