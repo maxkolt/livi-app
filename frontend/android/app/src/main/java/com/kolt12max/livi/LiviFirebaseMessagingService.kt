@@ -300,7 +300,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
             // КРИТИЧНО: unreadCount читаем из корня data (FCM передаёт все ключи плоско) — иначе при отсутствии body остаётся 1 и бейдж неверный.
             var unreadCount = data["unreadCount"]?.toString()?.toIntOrNull()?.coerceAtLeast(0) ?: 0
-            var fromUserIdMsg = (data["from"] ?: data["fromUserId"])?.toString()?.trim() ?: ""
+            var fromUserIdMsg = (data["fromUserId"] ?: data["from"])?.toString()?.trim() ?: ""
             var fromNickMsg = ""
             var sentAtIso = ""
             var messagePreview = ""
@@ -308,7 +308,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 try {
                     val body = JSONObject(data["body"]!!)
                     if (unreadCount <= 0) unreadCount = body.optInt("unreadCount", 1).coerceAtLeast(0)
-                    if (fromUserIdMsg.isEmpty()) fromUserIdMsg = body.optString("from", "").trim().ifEmpty { body.optString("fromUserId", "").trim() }
+                    if (fromUserIdMsg.isEmpty()) fromUserIdMsg = body.optString("fromUserId", "").trim().ifEmpty { body.optString("from", "").trim() }
                     if (fromNickMsg.isEmpty()) fromNickMsg = body.optString("fromNick", "").trim()
                     if (sentAtIso.isEmpty()) sentAtIso = body.optString("sentAt", "").trim()
                     if (messagePreview.isEmpty()) messagePreview = body.optString("messagePreview", "").trim()
@@ -318,7 +318,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             if (fromNickMsg.isEmpty()) fromNickMsg = data["fromNick"]?.trim() ?: ""
             if (sentAtIso.isEmpty()) sentAtIso = data["sentAt"]?.trim() ?: ""
             if (messagePreview.isEmpty()) messagePreview = data["messagePreview"]?.trim() ?: ""
-            if (fromUserIdMsg.isEmpty()) fromUserIdMsg = data["from"]?.toString()?.trim() ?: data["fromUserId"]?.toString()?.trim() ?: ""
+            if (fromUserIdMsg.isEmpty()) fromUserIdMsg = data["fromUserId"]?.toString()?.trim() ?: data["from"]?.toString()?.trim() ?: ""
             if (fromNickMsg.isEmpty()) fromNickMsg = "—"
             val timeStr = formatMessageNotificationTime(sentAtIso)
             showMessageNotificationWithPreview(this, fromUserIdMsg, fromNickMsg, timeStr, messagePreview, unreadCount)

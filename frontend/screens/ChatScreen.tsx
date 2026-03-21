@@ -83,7 +83,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t } from "../utils/i18n";
 import { clearNotificationIndicators, setCurrentChatPeerId, dismissMessageNotificationForUser } from "../utils/pushNotifications";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 
 type RouteParams = {
   peerId: string;
@@ -387,6 +387,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // Не показывать системное уведомление о сообщении от текущего собеседника, пока пользователь в этом чате.
   // Сообщить серверу «смотрю этот чат» (не слать пуш), снять уведомление этого чата из шторки.
+  const isChatScreenFocused = useIsFocused();
   useFocusEffect(
     useCallback(() => {
       if (peerId) {
@@ -400,6 +401,20 @@ export default function ChatScreen({ route, navigation }: Props) {
       };
     }, [peerId])
   );
+
+  // В фоне / на заблокированном экране сокет часто остаётся подключённым, а экран чата остаётся «в фокусе»
+  // в навигации — сервер не получает disconnect и продолжает считать, что чат открыт, и не шлёт FCM.
+  useEffect(() => {
+    if (!peerId) return;
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        if (isChatScreenFocused) sendChatViewing(peerId);
+      } else {
+        sendChatViewing(null);
+      }
+    });
+    return () => sub.remove();
+  }, [peerId, isChatScreenFocused]);
 
   const [conversation, setConversation] =
     useState<CometChat.Conversation | null>(null);
@@ -3037,38 +3052,43 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [messagePressAnimations]);
 
   // Функция для анимации нажатия на сообщение
-  const animateMessagePress = React.useCallback((messageId: string, callback?: () => void) => {
-    const animation = getMessageAnimation(messageId);
-    
-    // Тактильная обратная связь
-    if (Platform.OS === 'ios') {
-      // Используем мягкую вибрацию для iOS
-      try {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      } catch (error) {
-        // Fallback на обычную вибрацию если Haptics недоступен
-        Vibration.vibrate(3);
+  const animateMessagePress = React.useCallback(
+    (messageId: string, callback?: () => void, options?: { immediate?: boolean }) => {
+      const animation = getMessageAnimation(messageId);
+
+      if (Platform.OS === 'ios') {
+        try {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        } catch {
+          Vibration.vibrate(3);
+        }
+      } else {
+        Vibration.vibrate(25);
       }
-    } else {
-      Vibration.vibrate(25); // Мягкая вибрация для Android
-    }
-    
-    // Анимация сжатия
-    Animated.sequence([
-      Animated.timing(animation, {
-        toValue: 0.95,
-        duration: 100,
-        useNativeDriver: true,
-      }),
-      Animated.timing(animation, {
-        toValue: 1,
-        duration: 100,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      if (callback) callback();
-    });
-  }, [getMessageAnimation]);
+
+      // Long press: меню сразу после системного long-press, без ожидания scale-анимации (+200ms)
+      if (options?.immediate) {
+        callback?.();
+        return;
+      }
+
+      Animated.sequence([
+        Animated.timing(animation, {
+          toValue: 0.95,
+          duration: 100,
+          useNativeDriver: true,
+        }),
+        Animated.timing(animation, {
+          toValue: 1,
+          duration: 100,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        callback?.();
+      });
+    },
+    [getMessageAnimation]
+  );
 
   // Двойной тап по облачку сообщения — показать полосу реакций
   const lastTapForReactionRef = useRef({ time: 0, id: '' });
@@ -3886,8 +3906,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                     onPressImage('image', imageUri, item.name);
                   });
                 }}
+                delayLongPress={400}
                 onLongPress={() => {
-                  animateMessagePress(item.id, fireLongPressWithLayout);
+                  animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
                 }}
                 activeOpacity={0.9}
               >
@@ -3925,8 +3946,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                   onPressImage('image', imageUri, item.name);
                 });
               }}
+              delayLongPress={400}
               onLongPress={() => {
-                animateMessagePress(item.id, fireLongPressWithLayout);
+                animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
               }}
               activeOpacity={0.9}
             >
@@ -4357,8 +4379,9 @@ export default function ChatScreen({ route, navigation }: Props) {
               }
               onMessagePress?.(item);
             }}
+            delayLongPress={400}
             onLongPress={() => {
-              animateMessagePress(item.id, fireLongPressWithLayout);
+              animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
             }}
             activeOpacity={0.7}
             style={{ maxWidth: '100%' }}

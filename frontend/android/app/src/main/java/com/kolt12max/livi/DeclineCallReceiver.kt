@@ -4,6 +4,9 @@ import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import java.net.URL
 
@@ -28,14 +31,20 @@ class DeclineCallReceiver : BroadcastReceiver() {
         val prefs = context.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
         val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
         val serverUrl = prefs.getString(LiviAppModule.KEY_SERVER_URL, null)?.takeIf { it.isNotBlank() }
+        val userIdHeader = prefs.getString(LiviAppModule.KEY_USER_ID_FOR_DECLINE, null)?.takeIf { it.isNotBlank() }
+        val declineUri = "livi://decline-call?callId=${Uri.encode(callId)}"
         if (installId != null && serverUrl != null) {
             Thread {
+                var httpOk = false
                 try {
                     val url = URL("$serverUrl/api/calls/decline")
                     val conn = url.openConnection() as java.net.HttpURLConnection
                     conn.requestMethod = "POST"
                     conn.setRequestProperty("Content-Type", "application/json")
                     conn.setRequestProperty("x-install-id", installId)
+                    if (userIdHeader != null) {
+                        conn.setRequestProperty("x-user-id", userIdHeader)
+                    }
                     conn.doOutput = true
                     conn.connectTimeout = 8000
                     conn.readTimeout = 8000
@@ -43,12 +52,39 @@ class DeclineCallReceiver : BroadcastReceiver() {
                         os.write("{\"callId\":\"${callId.replace("\"", "\\\"")}\"}".toByteArray(Charsets.UTF_8))
                     }
                     val code = conn.responseCode
-                    if (code !in 200..299) Log.w(TAG, "decline HTTP $code")
+                    httpOk = code in 200..299
+                    if (!httpOk) Log.e(TAG, "decline HTTP code=$code callId=$callId (fallback deep link)")
                     conn.disconnect()
                 } catch (e: Exception) {
-                    Log.w(TAG, "decline HTTP failed", e)
+                    Log.e(TAG, "decline HTTP failed callId=$callId (fallback deep link)", e)
+                }
+                if (!httpOk) {
+                    Handler(Looper.getMainLooper()).post {
+                        try {
+                            val i = Intent(Intent.ACTION_VIEW, Uri.parse(declineUri)).apply {
+                                setClassName(context, "com.kolt12max.livi.MainActivity")
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                            }
+                            context.startActivity(i)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "decline fallback startActivity failed", e)
+                        }
+                    }
                 }
             }.start()
+        } else {
+            Log.w(TAG, "decline from notification: no installId/serverUrl, opening app with decline deep link")
+            Handler(Looper.getMainLooper()).post {
+                try {
+                    val i = Intent(Intent.ACTION_VIEW, Uri.parse(declineUri)).apply {
+                        setClassName(context, "com.kolt12max.livi.MainActivity")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    }
+                    context.startActivity(i)
+                } catch (e: Exception) {
+                    Log.e(TAG, "decline deep link from receiver failed", e)
+                }
+            }
         }
     }
 

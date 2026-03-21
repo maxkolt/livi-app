@@ -181,6 +181,17 @@ export async function sendMessagePushToUser(
     unreadCount: String(data.unreadCount),
     messagePreview: data.messagePreview,
   };
+  // FCM v1: ключ "from" в data payload зарезервирован — иначе Invalid data payload key: from
+  const dataStrFcm: Record<string, string> = {
+    type: dataStr.type,
+    messageId: dataStr.messageId,
+    fromUserId: data.from,
+    to: dataStr.to,
+    fromNick: dataStr.fromNick,
+    sentAt: dataStr.sentAt,
+    unreadCount: dataStr.unreadCount,
+    messagePreview: dataStr.messagePreview,
+  };
   const messaging = getFirebaseMessaging();
   const recs = await PushTokenModel.find({ userId }).select('token platform fcmToken').lean();
   type Rec = { token: string; platform: string; fcmToken?: string };
@@ -192,7 +203,7 @@ export async function sendMessagePushToUser(
         try {
           await messaging.send({
             token: r.fcmToken,
-            data: dataStr,
+            data: dataStrFcm,
             android: { priority: 'high' },
           });
           logger.info('[push] message sent via FCM (data-only)', { userId });
@@ -201,9 +212,14 @@ export async function sendMessagePushToUser(
           const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
           const isInvalidToken =
             isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
+          const isPayloadKeyError = /invalid data payload key/i.test(errMsg);
           // Не снимаем fcmToken при ошибке пуша сообщения — иначе следующий звонок не получит FCM (androidTokensWithFcm=0).
           // Удаление только при ошибке call push (sendCallPushToRecipient и т.д.).
-          logger.warn('[push] FCM message failed', { userId, error: errMsg, isInvalidToken });
+          logger.warn('[push] FCM message failed', {
+            userId,
+            error: errMsg,
+            isInvalidToken: isInvalidToken && !isPayloadKeyError,
+          });
         }
       }
     }

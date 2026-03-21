@@ -260,20 +260,27 @@ class IncomingCallActivity : AppCompatActivity() {
 
     /**
      * Отклонение: по HTTP без открытия приложения (нет мерцания, инициатор сразу получает call:declined).
-     * Если installId/serverUrl нет — fallback на livi://decline-call.
+     * Если installId/serverUrl нет или HTTP неуспешен — fallback livi://decline-call (JS/сокет дожмут отмену).
+     * Важно: не вызывать finish() до ответа HTTP, иначе при ошибке сети/401 инициатор остаётся в звонке.
      */
     private fun declineCallFromNative(callId: String) {
         val prefs = applicationContext.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
         val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
         val serverUrl = prefs.getString(LiviAppModule.KEY_SERVER_URL, null)?.takeIf { it.isNotBlank() }
+        val userIdHeader = prefs.getString(LiviAppModule.KEY_USER_ID_FOR_DECLINE, null)?.takeIf { it.isNotBlank() }
+        val declineUri = "livi://decline-call?callId=${Uri.encode(callId)}"
         if (installId != null && serverUrl != null) {
             Thread {
+                var httpOk = false
                 try {
                     val url = URL("$serverUrl/api/calls/decline")
                     val conn = url.openConnection() as java.net.HttpURLConnection
                     conn.requestMethod = "POST"
                     conn.setRequestProperty("Content-Type", "application/json")
                     conn.setRequestProperty("x-install-id", installId)
+                    if (userIdHeader != null) {
+                        conn.setRequestProperty("x-user-id", userIdHeader)
+                    }
                     conn.doOutput = true
                     conn.connectTimeout = 8000
                     conn.readTimeout = 8000
@@ -281,17 +288,27 @@ class IncomingCallActivity : AppCompatActivity() {
                         os.write("{\"callId\":\"${callId.replace("\"", "\\\"")}\"}".toByteArray(Charsets.UTF_8))
                     }
                     val code = conn.responseCode
-                    if (code !in 200..299) {
-                        android.util.Log.w(TAG, "decline HTTP $code")
+                    httpOk = code in 200..299
+                    if (!httpOk) {
+                        android.util.Log.e(TAG, "decline HTTP failed code=$code callId=$callId (will try deep link fallback)")
                     }
                     conn.disconnect()
                 } catch (e: Exception) {
-                    android.util.Log.w(TAG, "decline HTTP failed", e)
+                    android.util.Log.e(TAG, "decline HTTP exception callId=$callId (will try deep link fallback)", e)
+                }
+                runOnUiThread {
+                    if (!httpOk) {
+                        try {
+                            startMainWithDeepLink(declineUri)
+                        } catch (e: Exception) {
+                            android.util.Log.e(TAG, "decline deep link fallback failed", e)
+                        }
+                    }
+                    finish()
                 }
             }.start()
-            finish()
         } else {
-            val declineUri = "livi://decline-call?callId=${Uri.encode(callId)}"
+            android.util.Log.w(TAG, "decline: missing installId or serverUrl, using deep link")
             startMainWithDeepLink(declineUri)
             finish()
         }

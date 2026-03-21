@@ -686,6 +686,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       .apply()
   }
 
+  /** Для POST /api/calls/decline: заголовок x-user-id (сервер сверяет с installId в БД). */
+  @ReactMethod
+  fun setUserIdForDecline(userId: String?) {
+    val p = reactApplicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+    if (userId.isNullOrBlank()) {
+      p.remove(KEY_USER_ID_FOR_DECLINE).apply()
+    } else {
+      p.putString(KEY_USER_ID_FOR_DECLINE, userId.trim()).apply()
+    }
+  }
+
   /** Проверить, разрешены ли уведомления для приложения (Android 4.4+). Если выключены — нативный экран входящего в фоне не покажется. */
   @ReactMethod
   fun areNotificationsEnabled(promise: Promise) {
@@ -1128,6 +1139,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     const val EXTRA_USER_ID = "user_id"
     const val KEY_INSTALL_ID = "install_id"
     const val KEY_SERVER_URL = "server_url"
+    const val KEY_USER_ID_FOR_DECLINE = "user_id_for_decline"
     const val KEY_OUTGOING_CALL_TIMEOUT_MS = "outgoing_call_timeout_ms"
     private const val PREFS_OPEN_TAB = "LiviOpenTab"
     private const val KEY_PENDING_OPEN_TAB_FRIENDS = "pending_open_tab_friends"

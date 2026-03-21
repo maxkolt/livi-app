@@ -921,6 +921,13 @@ app.post('/api/calls/decline', async (req, res) => {
     const userId = (req as any).userId;
     const installId = (req as any).installId;
     if (!userId || !isOid(userId)) {
+      if (mongoose.connection.readyState !== 1) {
+        logger.warn('[api/calls/decline] database_unavailable (cannot resolve installId)', {
+          hasInstallId: !!installId,
+          readyState: mongoose.connection.readyState,
+        });
+        return res.status(503).json({ ok: false, error: 'database_unavailable' });
+      }
       logger.warn('[api/calls/decline] unauthorized', { hasInstallId: !!installId, installIdPrefix: installId ? String(installId).slice(0, 20) : '' });
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }

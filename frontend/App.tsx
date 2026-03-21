@@ -14,7 +14,7 @@ import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, S
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, checkInviteLink, getCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, wasAppliedFromReauth, recordAppliedFromPending } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, wasAppliedFromReauth, recordAppliedFromPending } from "./sockets/socket";
 import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming } from './utils/globalEvents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
@@ -903,19 +903,33 @@ function AppContent() {
     };
   }, []);
 
-  // Сохраняем installId, serverUrl и таймаут исходящего в натив (отклонение по HTTP, LiviOutgoingCallService)
+  // Сохраняем installId, serverUrl, userId в натив (POST /api/calls/decline с экрана входящего без JS)
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
     const LiviAppModule = NativeModules.LiviAppModule;
     if (!LiviAppModule?.setInstallIdForDecline || !LiviAppModule?.setServerUrlForDecline) return;
-    (async () => {
+    const syncDeclinePrefs = async () => {
       try {
         const [installId, url] = await Promise.all([getInstallId(), Promise.resolve(API_BASE)]);
         if (installId) LiviAppModule.setInstallIdForDecline(installId);
         if (url) LiviAppModule.setServerUrlForDecline(url);
+        const uid = getCurrentUserId?.() ?? '';
+        if (LiviAppModule.setUserIdForDecline) {
+          if (uid) LiviAppModule.setUserIdForDecline(uid);
+          else LiviAppModule.setUserIdForDecline(null);
+        }
         setOutgoingCallTimeoutMs(OUTGOING_CALL_TIMEOUT_MS);
       } catch {}
-    })();
+    };
+    void syncDeclinePrefs();
+    const off = onCurrentUserId?.(() => {
+      void syncDeclinePrefs();
+    });
+    return () => {
+      try {
+        off?.();
+      } catch {}
+    };
   }, []);
 
   // ===== Deep Linking обработка для реферальных ссылок =====
