@@ -4562,35 +4562,96 @@ const handleClearNick = useCallback(async () => {
       <View style={[styles.topBar, { backgroundColor: 'transparent' }] }>
         <Text style={[styles.brand, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>LiVi</Text>
 
-        {/* Бейдж «Скачайте обновление»: между LiVi и меню, градиент только в рамке 0.3px, скруглённые углы, 5 сек автоскрытие, X закрыть, тап — Google Play */}
+        {/* Бейдж «Скачайте обновление»: между LiVi и меню, градиент в рамке (тёмная 0.2 / светлая 0.4), скруглённые углы, 5 сек автоскрытие, X закрыть, тап — Google Play */}
         {showUpdateBadge && (
-          <View style={{ padding: 0.2, borderRadius: 18, marginHorizontal: 8, position: 'relative', overflow: 'hidden', alignSelf: 'center', minWidth: 180, maxHeight: Platform.OS === 'ios' ? 42 : 34 }}>
+          <View
+            style={{
+              padding: isDark ? 0.2 : 0.4,
+              borderRadius: 18,
+              marginHorizontal: 8,
+              position: 'relative',
+              overflow: 'hidden',
+              alignSelf: 'center',
+              minWidth: 180,
+              maxHeight: Platform.OS === 'ios' ? 42 : 34,
+            }}
+          >
             <LinearGradient
-              colors={isDark ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf'] : ['#6E56C7', '#7F6BC7', '#9E95B3', '#9A90B0']}
+              colors={
+                isDark
+                  ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf']
+                  : ['#8B82C8', '#9A8FC9', '#A8A0B8', '#ADA9B0']
+              }
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={[StyleSheet.absoluteFillObject, { borderRadius: 18 }]}
             />
             {/* Верхняя линия рамки — бирюза → голубой → белый → синий (слева направо); в тёмной теме чуть посветлее */}
-            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0.2, borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden', zIndex: 2 }}>
+            <View
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                height: isDark ? 0.2 : 0.4,
+                borderTopLeftRadius: 18,
+                borderTopRightRadius: 18,
+                overflow: 'hidden',
+                zIndex: 2,
+              }}
+            >
               <LinearGradient
-                colors={isDark ? ['#2dd4bf', '#38bdf8', '#FFF8F0', '#60a5fa'] : ['#6E56C7', '#5E47B8', '#8F86A8', '#988EAF']}
+                colors={
+                  isDark
+                    ? ['#2dd4bf', '#38bdf8', '#FFF8F0', '#60a5fa']
+                    : ['#8B82C8', '#7468B0', '#9A92A8', '#A09AAE']
+                }
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={[StyleSheet.absoluteFillObject, { borderTopLeftRadius: 18, borderTopRightRadius: 18 }]}
               />
             </View>
             {/* Нижняя линия рамки — другая гамма и направление; в тёмной теме без фиолетового, чуть посветлее */}
-            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 0.2, borderBottomLeftRadius: 18, borderBottomRightRadius: 18, overflow: 'hidden', zIndex: 2 }}>
+            <View
+              style={{
+                position: 'absolute',
+                bottom: 0,
+                left: 0,
+                right: 0,
+                height: isDark ? 0.2 : 0.4,
+                borderBottomLeftRadius: 18,
+                borderBottomRightRadius: 18,
+                overflow: 'hidden',
+                zIndex: 2,
+              }}
+            >
               <LinearGradient
-                colors={isDark ? ['#60a5fa', '#38bdf8', '#2dd4bf', '#F0EEEC'] : ['#A197B8', '#9389AA', '#6E56C7', '#6E56C7']}
+                colors={
+                  isDark
+                    ? ['#60a5fa', '#38bdf8', '#2dd4bf', '#F0EEEC']
+                    : ['#B0A8C4', '#A39BB8', '#8B82C8', '#8B82C8']
+                }
                 start={{ x: 1, y: 0 }}
                 end={{ x: 0, y: 0 }}
                 style={[StyleSheet.absoluteFillObject, { borderBottomLeftRadius: 18, borderBottomRightRadius: 18 }]}
               />
             </View>
             {/* Только рамка в градиенте; середина — сплошной фон страницы */}
-            <View style={{ margin: 0.2, borderRadius: 17.8, flexDirection: 'row', alignItems: 'center', paddingLeft: 10, paddingRight: 10, backgroundColor: theme.colors.background, flex: 1, paddingTop: 0, paddingBottom: 0, zIndex: 1 }}>
+            <View
+              style={{
+                margin: isDark ? 0.2 : 0.4,
+                borderRadius: isDark ? 17.8 : 17.6,
+                flexDirection: 'row',
+                alignItems: 'center',
+                paddingLeft: 10,
+                paddingRight: 10,
+                backgroundColor: theme.colors.background,
+                flex: 1,
+                paddingTop: 0,
+                paddingBottom: 0,
+                zIndex: 1,
+              }}
+            >
               {/* Вся зона от внутреннего края бейджа до разделителя | — одна кликабельная кнопка «Обновить» */}
               <Pressable
                 style={({ pressed }) => [
@@ -4608,7 +4669,11 @@ const handleClearNick = useCallback(async () => {
               </Pressable>
               <View style={{ width: 1, alignSelf: 'stretch', marginVertical: 6, marginLeft: 8, marginRight: 4, overflow: 'hidden', borderRadius: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.22)' }}>
                 <LinearGradient
-                  colors={isDark ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0'] : ['#7F6BC7', '#D2D8E0', '#8D96A4']}
+                  colors={
+                    isDark
+                      ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0']
+                      : ['#9A8FC9', '#D2D8E0', '#8D96A4']
+                  }
                   start={{ x: 0, y: 0 }}
                   end={{ x: 0, y: 1 }}
                   style={{ flex: 1, width: 1 }}

@@ -1,11 +1,8 @@
 // components/AwayPlaceholder.tsx
 import React, { useEffect, useRef } from 'react';
-import { View, Text, Animated, Easing, StyleSheet, Image } from 'react-native';
-import { useLang } from '../store/lang';
-import { t } from '../utils/i18n';
+import { View, Animated, Easing, StyleSheet, Image } from 'react-native';
 
 const AwayPlaceholder = () => {
-  const lang = useLang((s) => s.lang);
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const floatAnim = useRef(new Animated.Value(0)).current;
 
@@ -49,10 +46,8 @@ const AwayPlaceholder = () => {
 
   return (
     <View style={styles.container}>
-      {/* Логотип */}
       <Animated.View
         style={{
-          // 3D без артефактов: выключаем сглаживание обратной стороны и слегка уменьшаем перспективу
           backfaceVisibility: 'visible',
           transform: [
             { perspective: 600 },
@@ -63,43 +58,6 @@ const AwayPlaceholder = () => {
       >
         <Image source={require('../assets/favicon.png')} style={styles.logo} />
       </Animated.View>
-
-      {/* Надпись + анимированные точки */}
-      <View style={styles.textRow}>
-        <Text style={styles.awayText}>{t('away', lang)}</Text>
-        <AnimatedDots />
-      </View>
-    </View>
-  );
-};
-
-// Компонент для анимированных точек
-const AnimatedDots = () => {
-  const opacities = [
-    useRef(new Animated.Value(0.2)).current,
-    useRef(new Animated.Value(0.2)).current,
-    useRef(new Animated.Value(0.2)).current,
-  ];
-
-  useEffect(() => {
-    opacities.forEach((opacity, i) => {
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(i * 300),
-          Animated.timing(opacity, { toValue: 1, duration: 400, useNativeDriver: true }),
-          Animated.timing(opacity, { toValue: 0.2, duration: 400, useNativeDriver: true }),
-        ])
-      ).start();
-    });
-  }, []);
-
-  return (
-    <View style={{ flexDirection: 'row' }}>
-      {opacities.map((opacity, i) => (
-        <Animated.Text key={i} style={[styles.awayText, { opacity }]}>
-          .
-        </Animated.Text>
-      ))}
     </View>
   );
 };
@@ -116,19 +74,6 @@ const styles = StyleSheet.create({
     height: 90,
     resizeMode: 'contain',
     borderRadius: 16,
-  },
-  textRow: {
-    flexDirection: 'row',
-    marginTop: 12,
-    alignItems: 'center',
-  },
-  awayText: {
-    fontSize: 16,
-    color: 'rgba(229, 226, 226, 0.85)',
-    fontWeight: '400',
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
   },
 });
 
