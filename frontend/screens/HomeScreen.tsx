@@ -2106,7 +2106,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Передаём профиль только если пользователь СУЩЕСТВУЕТ на сервере
       // Для новых пользователей profile = {} (будет проигнорирован в attachIdentitySafe)
       if (userExistsOnServer && existingUserId) {
-        if (typeof localNick === 'string') profile.nick = localNick.trim();
+        const trimmedNick = String(localNick ?? '').trim();
+        // Не шлём пустой nick в attach — сервер трактует '' как осознанную очистку (nick_cleared).
+        if (trimmedNick) profile.nick = trimmedNick;
         if (cachedAvatar === '') profile.avatar = '';
         else if (/^https?:\/\//i.test(String(cachedAvatar))) profile.avatar = String(cachedAvatar).trim();
       } else {}
@@ -2536,8 +2538,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         // сервер: явное удаление
         // avatar больше не используется — серверный сброс осуществляется роутом /api/me/avatar
 
-        // socket identity (на случай оффлайна)
-        pendingAttachRef.current = { nick: (savedNick || nick || '').trim(), avatar: '' };
+        // socket identity (на случай оффлайна): только avatar — иначе пустой nick в state затрёт ник в БД
+        pendingAttachRef.current = { avatar: '' };
         await attachIdentitySafe({ installId, profile: pendingAttachRef.current }).catch(() => {});
 
         try { await loadFriends(); } catch {}
