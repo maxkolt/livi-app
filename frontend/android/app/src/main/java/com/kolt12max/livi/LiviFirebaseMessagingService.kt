@@ -143,13 +143,13 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             } catch (e: Exception) {
                 Log.w(TAG, "[INCOMING_CALL] immediate startActivity failed (FGS will retry) callId=$callId", e)
             }
-            // FGS: рингтон/вибрация + heads-up баннер (как системное «всплывающее»); тап — IncomingCallActivity.
+            // FGS: рингтон/вибрация + уведомление только в шторке (без heads-up): экран входящего даёт основной UX; сообщения — отдельный канал с HIGH.
             startIncomingCallForegroundService(
                 callId,
                 from,
                 fromNick,
-                headsUpOnly = true,
-                silentNotification = false
+                headsUpOnly = false,
+                silentNotification = true
             )
             vLog("[INCOMING_CALL] startIncomingCallForegroundService returned callId=$callId")
             return

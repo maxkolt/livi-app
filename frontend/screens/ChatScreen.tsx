@@ -3183,7 +3183,16 @@ export default function ChatScreen({ route, navigation }: Props) {
           to: peerId,
           text: messageToSend,
           type: 'text',
-          ...(replyTo ? { replyTo: { id: replyTo.id, text: replyTo.text, from: replyTo.from, isOwn: replyTo.isOwn } } : {}),
+          ...(replyTo
+            ? {
+                replyTo: {
+                  id: replyTo.id,
+                  text: replyTo.text,
+                  from: replyTo.from ?? '',
+                  isOwn: replyTo.isOwn,
+                },
+              }
+            : {}),
         });
         
         if (result.ok) {

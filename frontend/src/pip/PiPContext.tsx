@@ -265,6 +265,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     localStream?: MediaStreamLike | null;
     remoteStream?: MediaStreamLike | null;
     localCamOn?: boolean;
+    remoteCamOn?: boolean;
     muteLocal?: boolean;
     muteRemote?: boolean;
     navParams?: any; // ← кто нас вызвал (для корректного возврата)
