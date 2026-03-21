@@ -11,10 +11,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/.."
 LOG_DIR="$(pwd)"
-WHEN="$(date +%Y%m%d-%H%M)"
+WHEN="$(date +%Y%m%d-%H%M%S)"
 
-# Фильтр тегов/пакетов LiVi (релиз и отладка)
-LIVI_GREP='LiviAppModule|OutgoingCallActivity|LiviFirebaseMessagingService|MainActivity|kolt12max\.livi|ReactNativeJS.*livi|IncomingCallActivity|ActiveCallForegroundService|IncomingCallForegroundService|LiviOngoingCallHelper|LiviOutgoingCallService|LiviFCM|CallKeep|FCM|Firebase.*livi'
+# Фильтр тегов/пакетов LiVi (релиз и отладка).
+# IncomingCallFGS — тег Log в IncomingCallForegroundService (не путать с именем класса).
+LIVI_GREP='LiviAppModule|OutgoingCallActivity|LiviFirebaseMessagingService|MainActivity|kolt12max\.livi|ReactNativeJS.*livi|IncomingCallActivity|ActiveCallForegroundService|IncomingCallForegroundService|IncomingCallFGS|LiviOngoingCallHelper|LiviOutgoingCallService|LiviFCM|CallKeep|FCM|Firebase.*livi|INCOMING_CALL|INCOMING_FGS'
 
 SERIAL="${1:-}"
 DEVICE_ID="device"
@@ -70,7 +71,8 @@ else
   adb devices -l | grep -q "A35\|a35" && DEVICE_ID="a35" || true
 fi
 
-OUTPUT="${LOG_DIR}/livi-logs-${DEVICE_ID}-${WHEN}.log"
+# Уникальное имя: время с секундами + серийник (два устройства подряд не перезаписывают файл)
+OUTPUT="${LOG_DIR}/livi-logs-${DEVICE_ID}-${WHEN}-${SERIAL}.log"
 echo "Устройство: $SERIAL -> только логи LiVi: $OUTPUT"
 echo "Дамп буфера logcat и фильтр по LiVi..."
 $ADB logcat -d -v time 2>/dev/null | grep -E "$LIVI_GREP" > "$OUTPUT" || true

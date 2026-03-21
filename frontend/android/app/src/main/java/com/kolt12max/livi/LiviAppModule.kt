@@ -1,6 +1,5 @@
 package com.kolt12max.livi
 
-import android.app.ActivityManager
 import android.app.NotificationManager
 import android.app.PictureInPictureParams
 import android.app.RemoteAction
@@ -247,32 +246,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       Log.w(NAME, "bringMainActivityToFront: startActivity OutgoingCall(close) failed", e)
     }
     // 3) Вывести задачу приложения на передний план после задержки (OutgoingCallActivity успеет finish()).
-    // Используем moveTaskToFront вместо startActivity(MainActivity), чтобы не перезапускать MainActivity
-    // и не показывать экран Metro/dev-launcher вместо экрана видеозвонка (JS уже сделал navigate на VideoCall).
+    // Нельзя использовать ActivityManager.moveTaskToFront — для обычных приложений нужен REORDER_TASKS (только системе).
     val mainIntent = Intent(ctx, MainActivity::class.java).apply {
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }
     Handler(Looper.getMainLooper()).postDelayed({
       try {
-        val act = currentActivity
-        if (act != null) {
-          val am = act.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-          if (am != null) {
-            am.moveTaskToFront(act.taskId, 0)
-            Log.d(NAME, "bringMainActivityToFront: moveTaskToFront (taskId=${act.taskId})")
-          } else {
-            ctx.startActivity(mainIntent)
-            Log.d(NAME, "bringMainActivityToFront: MainActivity brought to front (fallback)")
-          }
-        } else {
-          ctx.startActivity(mainIntent)
-          Log.d(NAME, "bringMainActivityToFront: MainActivity brought to front (no currentActivity)")
-        }
+        ctx.startActivity(mainIntent)
+        Log.d(NAME, "bringMainActivityToFront: MainActivity startActivity (reorder to front)")
       } catch (e: Exception) {
-        Log.w(NAME, "bringMainActivityToFront failed", e)
-        try { ctx.startActivity(mainIntent) } catch (e2: Exception) {
-          Log.w(NAME, "bringMainActivityToFront: startActivity MainActivity failed", e2)
-        }
+        Log.w(NAME, "bringMainActivityToFront: startActivity MainActivity failed", e)
       }
     }, 500)
   }

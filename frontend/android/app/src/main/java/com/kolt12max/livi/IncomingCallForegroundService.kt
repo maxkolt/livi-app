@@ -60,11 +60,13 @@ class IncomingCallForegroundService : Service() {
         if (!minimized) {
             LiviAppModule.startIncomingCallRingtoneAndVibrationStatic(applicationContext)
         }
-        // При видеозвонке сразу «только шторка»: иконка в статус-баре, в шторке — полное уведомление (тап → экран входящего). Нативный экран открываем через startActivity ниже.
+        // silent: только иконка/шторка (без heads-up) — тап по уведомлению открывает экран.
+        // headsUpOnly: баннер без full-screen intent (разблокированный экран).
+        // иначе: уведомление с setFullScreenIntent — критично при блокировке startActivity из FGS (BAL Android 14+); см. LiviFirebaseMessagingService «full-screen intent».
         val notification = when {
             silentNotification -> LiviFirebaseMessagingService.buildIncomingCallNotificationSilent(this, callId, from, fromNick)
             headsUpOnly -> LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
-            else -> LiviFirebaseMessagingService.buildIncomingCallNotificationSilent(this, callId, from, fromNick)
+            else -> LiviFirebaseMessagingService.buildIncomingCallNotification(this, callId, from, fromNick)
         }
         // Android 14+ (API 34): тип PHONE_CALL — система не накладывает ограничение «no camera/microphone» при старте из фона (VoIP/входящий вызов).
         // На старых версиях — SPECIAL_USE (только показ уведомления, камера/микрофон не используем в сервисе).

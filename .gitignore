@@ -102,6 +102,7 @@ frontend/.expo/
 
 # Logs
 logs/
+frontend/log-captures/
 frontend/livi_logs_*.txt
 logcat_*.txt
 *.log
