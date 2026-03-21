@@ -31,7 +31,7 @@ import org.json.JSONObject
 
 /**
  * Единственный FCM-сервис приложения: расширяет Expo и перехватывает пуши о звонке.
- * Для type=call показывает уведомление с full-screen intent → IncomingCallActivity (как WhatsApp/Telegram).
+ * Для type=call: сразу startActivity(IncomingCallActivity) + FGS с уведомлением в шторке (без heads-up поверх экрана); тап по уведомлению снова открывает экран.
  * Остальные пуши передаёт в Expo (super.onMessageReceived).
  */
 class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
@@ -139,13 +139,13 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             } catch (e: Exception) {
                 Log.e(TAG, "[INCOMING_CALL] immediate startActivity from FCM FAILED (FGS will retry) callId=$callId", e)
             }
-            // FGS: рингтон/вибрация + уведомление с full-screen intent + повторные попытки startActivity (300/900/2200 ms).
+            // FGS: рингтон/вибрация + уведомление только в шторке (без heads-up/full-screen поверх экрана); тап — снова IncomingCallActivity.
             startIncomingCallForegroundService(
                 callId,
                 from,
                 fromNick,
                 headsUpOnly = false,
-                silentNotification = false
+                silentNotification = true
             )
             Log.e(TAG, "[INCOMING_CALL] startIncomingCallForegroundService returned callId=$callId keyguardLocked=$keyguardLocked")
             return
@@ -447,13 +447,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     startService(serviceIntent)
                 }
             } catch (e: Exception) {
-                // В "тихом" режиме не открываем IncomingCallActivity напрямую (иначе получится popup).
-                // Для full-screen режима (locked) — fallback на прямой запуск activity оставляем.
-                if (!silentNotification) {
-                    Log.w(TAG, "startForegroundService failed, launching activity directly", e)
+                Log.w(TAG, "startForegroundService failed, launching IncomingCallActivity directly", e)
+                try {
                     startActivity(activityIntent)
-                } else {
-                    Log.w(TAG, "startForegroundService failed (silent mode), skipping direct activity launch", e)
+                } catch (e2: Exception) {
+                    Log.e(TAG, "startActivity fallback after FGS failure also failed", e2)
                 }
             }
         } else {

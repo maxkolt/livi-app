@@ -319,8 +319,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   /**
-   * Показ системного UI входящего: всегда full-screen intent через IncomingCallForegroundService
-   * (экран с кнопками Принять/Отклонить не исчезает, мелодия и вибрация — системного звонка).
+   * Показ системного UI входящего через IncomingCallForegroundService (уведомление в шторке, без heads-up поверх экрана).
    * Используется для socket-path, когда приложение не в фокусе (AppState != active).
    */
   @ReactMethod
@@ -338,10 +337,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
         putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick ?: "")
         putExtra(IncomingCallForegroundService.EXTRA_HEADS_UP_ONLY, false)
-        putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, false)
+        putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, true)
       }
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(serviceIntent) else ctx.startService(serviceIntent)
-      Log.d(NAME, "showIncomingCallSystemUI: started IncomingCallForegroundService (full-screen)")
+      Log.d(NAME, "showIncomingCallSystemUI: started IncomingCallForegroundService (shade-only notification)")
     } catch (e: Exception) {
       Log.w(NAME, "showIncomingCallSystemUI: failed to start IncomingCallForegroundService", e)
       try {

@@ -15,9 +15,9 @@ import android.util.Log
 import androidx.core.app.ServiceCompat
 
 /**
- * Foreground-сервис для показа экрана входящего звонка поверх любых приложений, домашнего экрана и блокировки.
- * Уведомление с full-screen intent не снимается сразу — иначе на заблокированном/домашнем экране
- * full-screen не успевает сработать. Сервис останавливается по broadcast (call_canceled/call_ended), от IncomingCallActivity или по таймауту 20 сек.
+ * Foreground-сервис для рингтона/вибрации и постоянного уведомления входящего (по умолчанию только в шторке, без heads-up).
+ * После показа IncomingCallActivity уведомление остаётся в шторке (DETACH) — тап возвращает на экран входящего.
+ * Сервис останавливается по broadcast (call_canceled/call_ended), от IncomingCallActivity или по таймауту 20 сек.
  */
 class IncomingCallForegroundService : Service() {
 
@@ -60,9 +60,9 @@ class IncomingCallForegroundService : Service() {
         if (!minimized) {
             LiviAppModule.startIncomingCallRingtoneAndVibrationStatic(applicationContext)
         }
-        // silent: только иконка/шторка (без heads-up) — тап по уведомлению открывает экран.
+        // silent: только иконка/шторка (без heads-up) — тап по уведомлению открывает экран (основной режим FCM/FGS).
         // headsUpOnly: баннер без full-screen intent (разблокированный экран).
-        // иначе: уведомление с setFullScreenIntent — критично при блокировке startActivity из FGS (BAL Android 14+); см. LiviFirebaseMessagingService «full-screen intent».
+        // иначе (редко): уведомление с setFullScreenIntent — может дать heads-up поверх UI.
         val notification = when {
             silentNotification -> LiviFirebaseMessagingService.buildIncomingCallNotificationSilent(this, callId, from, fromNick)
             headsUpOnly -> LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
@@ -143,25 +143,27 @@ class IncomingCallForegroundService : Service() {
         when {
             silentNotification -> Log.e(TAG, "[INCOMING_FGS] Mode=silent (shade only)")
             headsUpOnly -> Log.e(TAG, "[INCOMING_FGS] Mode=headsUpOnly (no full-screen)")
-            else -> {
-                Log.e(TAG, "[INCOMING_FGS] Mode=fullScreenIntent SDK=${Build.VERSION.SDK_INT} callId=$callId posting 3 startActivity attempts")
-                val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick)
-                val delaysMs = longArrayOf(300L, 900L, 2200L)
-                for (i in delaysMs.indices) {
-                    handler.postDelayed({
-                        val cur = currentCallId
-                        if (cur != callId) {
-                            Log.e(TAG, "[INCOMING_FGS] startActivity attempt ${i + 1}/${delaysMs.size} SKIP currentCallId=$cur != callId=$callId")
-                            return@postDelayed
-                        }
-                        try {
-                            startActivity(launchIntent)
-                            Log.e(TAG, "[INCOMING_FGS] startActivity(IncomingCallActivity) attempt ${i + 1}/${delaysMs.size} OK callId=$callId")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "[INCOMING_FGS] startActivity(IncomingCallActivity) attempt ${i + 1}/${delaysMs.size} FAILED callId=$callId", e)
-                        }
-                    }, delaysMs[i])
-                }
+            else -> Log.e(TAG, "[INCOMING_FGS] Mode=fullScreenIntent SDK=${Build.VERSION.SDK_INT} callId=$callId")
+        }
+        // Повторные startActivity из FGS — и для тихого уведомления (без heads-up): если мгновенный запуск из FCM не прошёл (блокировка/BAL).
+        if (!headsUpOnly) {
+            Log.e(TAG, "[INCOMING_FGS] posting delayed startActivity attempts (300/900/2200 ms) callId=$callId silent=$silentNotification")
+            val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick)
+            val delaysMs = longArrayOf(300L, 900L, 2200L)
+            for (i in delaysMs.indices) {
+                handler.postDelayed({
+                    val cur = currentCallId
+                    if (cur != callId) {
+                        Log.e(TAG, "[INCOMING_FGS] startActivity attempt ${i + 1}/${delaysMs.size} SKIP currentCallId=$cur != callId=$callId")
+                        return@postDelayed
+                    }
+                    try {
+                        startActivity(launchIntent)
+                        Log.e(TAG, "[INCOMING_FGS] startActivity(IncomingCallActivity) attempt ${i + 1}/${delaysMs.size} OK callId=$callId")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "[INCOMING_FGS] startActivity(IncomingCallActivity) attempt ${i + 1}/${delaysMs.size} FAILED callId=$callId", e)
+                    }
+                }, delaysMs[i])
             }
         }
 

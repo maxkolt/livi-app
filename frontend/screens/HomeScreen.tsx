@@ -4773,9 +4773,9 @@ const handleClearNick = useCallback(async () => {
           <Text style={[styles.title, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>{L('welcomeTitle')}</Text>
           <Text
             style={[styles.subtitle, { color: isDark ? LIVI.text2 : LIVI.textThemeWhite, maxWidth: '92%' }]}
-            numberOfLines={2}
+            numberOfLines={1}
             adjustsFontSizeToFit
-            minimumFontScale={0.84}
+            minimumFontScale={0.5}
           >
             {L('welcomeSubtitle')}
           </Text>
