@@ -15,11 +15,14 @@ import android.util.Log
 import androidx.core.app.ServiceCompat
 
 /**
- * Foreground-сервис для рингтона/вибрации и постоянного уведомления входящего (по умолчанию только в шторке, без heads-up).
- * После показа IncomingCallActivity уведомление остаётся в шторке (DETACH) — тап возвращает на экран входящего.
- * Сервис останавливается по broadcast (call_canceled/call_ended), от IncomingCallActivity или по таймауту 20 сек.
+ * Foreground-сервис для рингтона/вибрации и уведомления входящего (режим heads-up или тихий — задаётся из FCM).
+ * После показа IncomingCallActivity уведомление может остаться в шторке — тап возвращает на экран входящего.
  */
 class IncomingCallForegroundService : Service() {
+
+    private fun vl(msg: String) {
+        if (BuildConfig.ENABLE_FCM_VERBOSE_LOG) Log.d(TAG, msg)
+    }
 
     private var currentCallId: String? = null
     private var currentFrom: String? = null
@@ -41,7 +44,7 @@ class IncomingCallForegroundService : Service() {
         val silentNotification = intent.getBooleanExtra(EXTRA_SILENT_NOTIFICATION, false)
         val minimized = intent.getBooleanExtra(EXTRA_MINIMIZED, false)
 
-        Log.e(TAG, "[INCOMING_FGS] onStartCommand callId=$callId from=$from minimized=$minimized")
+        vl("[INCOMING_FGS] onStartCommand callId=$callId minimized=$minimized")
 
         currentCallId = callId
         currentFrom = from
@@ -121,7 +124,7 @@ class IncomingCallForegroundService : Service() {
             override fun onReceive(context: Context?, i: Intent?) {
                 val declinedCallId = i?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
                 if (declinedCallId == currentCallId) {
-                    Log.e(TAG, "[INCOMING_FGS] ACTION_INCOMING_CALL_DECLINED received callId=$declinedCallId → cleanupAndStop (so 2nd call gets fresh FGS)")
+                    vl("[INCOMING_FGS] ACTION_INCOMING_CALL_DECLINED callId=$declinedCallId → cleanupAndStop")
                     cleanupAndStop()
                 }
             }
@@ -141,34 +144,32 @@ class IncomingCallForegroundService : Service() {
         )
 
         when {
-            silentNotification -> Log.e(TAG, "[INCOMING_FGS] Mode=silent (shade only)")
-            headsUpOnly -> Log.e(TAG, "[INCOMING_FGS] Mode=headsUpOnly (no full-screen)")
-            else -> Log.e(TAG, "[INCOMING_FGS] Mode=fullScreenIntent SDK=${Build.VERSION.SDK_INT} callId=$callId")
+            silentNotification -> vl("[INCOMING_FGS] Mode=silent")
+            headsUpOnly -> vl("[INCOMING_FGS] Mode=headsUpOnly")
+            else -> vl("[INCOMING_FGS] Mode=fullScreenIntent SDK=${Build.VERSION.SDK_INT} callId=$callId")
         }
-        // Повторные startActivity из FGS — и для тихого уведомления (без heads-up): если мгновенный запуск из FCM не прошёл (блокировка/BAL).
-        if (!headsUpOnly) {
-            Log.e(TAG, "[INCOMING_FGS] posting delayed startActivity attempts (300/900/2200 ms) callId=$callId silent=$silentNotification")
-            val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick)
-            val delaysMs = longArrayOf(300L, 900L, 2200L)
-            for (i in delaysMs.indices) {
-                handler.postDelayed({
-                    val cur = currentCallId
-                    if (cur != callId) {
-                        Log.e(TAG, "[INCOMING_FGS] startActivity attempt ${i + 1}/${delaysMs.size} SKIP currentCallId=$cur != callId=$callId")
-                        return@postDelayed
-                    }
-                    try {
-                        startActivity(launchIntent)
-                        Log.e(TAG, "[INCOMING_FGS] startActivity(IncomingCallActivity) attempt ${i + 1}/${delaysMs.size} OK callId=$callId")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "[INCOMING_FGS] startActivity(IncomingCallActivity) attempt ${i + 1}/${delaysMs.size} FAILED callId=$callId", e)
-                    }
-                }, delaysMs[i])
-            }
+        // Повторные startActivity из FGS (в т.ч. при heads-up), если мгновенный запуск из FCM не прошёл (BAL/блокировка).
+        vl("[INCOMING_FGS] posting delayed startActivity (300/900/2200 ms) callId=$callId")
+        val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick)
+        val delaysMs = longArrayOf(300L, 900L, 2200L)
+        for (i in delaysMs.indices) {
+            handler.postDelayed({
+                val cur = currentCallId
+                if (cur != callId) {
+                    vl("[INCOMING_FGS] startActivity attempt ${i + 1} SKIP cur=$cur")
+                    return@postDelayed
+                }
+                try {
+                    startActivity(launchIntent)
+                    vl("[INCOMING_FGS] startActivity attempt ${i + 1} OK")
+                } catch (e: Exception) {
+                    Log.w(TAG, "[INCOMING_FGS] startActivity attempt ${i + 1} FAILED callId=$callId", e)
+                }
+            }, delaysMs[i])
         }
 
         timeoutRunnable = Runnable {
-            Log.e(TAG, "[INCOMING_FGS] timeout 20s currentCallId=$currentCallId closing and stopping")
+            vl("[INCOMING_FGS] timeout 20s closing")
             val cid = currentCallId
             if (!cid.isNullOrEmpty()) {
                 // Закрываем IncomingCallActivity через broadcast (startActivity из сервиса блокируется BAL на Android 14+).
@@ -191,7 +192,7 @@ class IncomingCallForegroundService : Service() {
      *   мог свернуть экран, открыть шторку и по тапу на уведомление снова открыть экран входящего.
      */
     private fun cleanupAndStop(keepNotificationInShade: Boolean = false) {
-        Log.e(TAG, "[INCOMING_FGS] cleanupAndStop currentCallId=$currentCallId keepNotificationInShade=$keepNotificationInShade")
+        vl("[INCOMING_FGS] cleanupAndStop keepShade=$keepNotificationInShade")
         LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
@@ -230,7 +231,7 @@ class IncomingCallForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        Log.e(TAG, "[INCOMING_FGS] onDestroy")
+        vl("[INCOMING_FGS] onDestroy")
         LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
         super.onDestroy()
     }
