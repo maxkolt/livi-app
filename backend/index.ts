@@ -196,7 +196,6 @@ app.use(
 
 // json/urlencoded парсеры — один раз и до роутеров
 app.use(express.json({ limit: '500mb' })); // Увеличиваем лимит для очень больших видео
-// Keep /chat route ownership inside routes/chat.ts to avoid shadowed duplicates in index.ts.
 app.use('/chat', createChatRouter());
 app.use(express.urlencoded({ extended: true, limit: '500mb' }));
 
@@ -367,7 +366,6 @@ app.use(express.static(PUBLIC_DIR));
 
 /* ========= REST API ========= */
 app.use('/api', appSettingsRouter);
-// Keep /api/exists ownership in routes/me.ts; redefining it here creates unreachable handlers.
 app.use('/api', meRouter);
 app.use('/api', friendsRouter);
 app.use('/api', uploadRouter);
@@ -377,6 +375,48 @@ app.use('/api', livekitRouter);
 app.use('/api', moderationRouter);
 
 // Stream utility убран - больше не используется
+
+app.post('/chat/ensure-dm', async (req, res) => {
+  try {
+    const meId = String(req.body?.meId ?? '').trim();
+    const peerId = String(req.body?.peerId ?? '').trim();
+    if (!isOid(meId) || !isOid(peerId)) {
+      return res.status(400).json({ ok: false, error: 'bad_ids' });
+    }
+
+    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+    if (!isMongoReady()) {
+      return res.status(503).json({ ok: false, error: 'database_unavailable' });
+    }
+
+    const [me, peer] = (await Promise.all([
+      User.findById(meId).select('nick avatar friends').lean(),
+      User.findById(peerId).select('nick avatar friends').lean(),
+    ])) as [LeanUser | null, LeanUser | null];
+
+    if (!me || !peer) {
+      return res.status(404).json({
+        ok: false,
+        error: 'user_not_found',
+        meExists: !!me,
+        peerExists: !!peer,
+      });
+    }
+
+    const meFriendWithPeer =
+      Array.isArray(me.friends) && me.friends.some((x: any) => String(x) === peerId);
+    if (!meFriendWithPeer) {
+      return res.status(403).json({ ok: false, error: 'not_friends' });
+    }
+
+    // Stream Chat синхронизация убрана - больше не используется
+
+    res.json({ ok: true });
+  } catch (e: any) {
+    logger.error('Chat ensure-dm failed:', e);
+    res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
 
 /**
  * Ephemeral TURN credentials (coturn REST API compatible)
@@ -539,6 +579,25 @@ app.get('/me', async (req, res) => {
         friends: user.friends || [],
       },
     });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
+
+// Endpoint для проверки существования пользователя
+app.get('/api/exists/:userId', async (req, res) => {
+  try {
+    const userId = String(req.params.userId || '').trim();
+    if (!userId || !isOid(userId)) {
+      return res.status(400).json({ ok: false, error: 'invalid_userId' });
+    }
+
+    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+    if (!isMongoReady()) {
+      return res.json({ ok: true, exists: false }); // Если БД недоступна, считаем что пользователь не существует
+    }
+    const exists = await User.exists({ _id: userId });
+    return res.json({ ok: true, exists: !!exists });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
   }
@@ -2281,6 +2340,27 @@ io.on('connection', async (sock: AuthedSocket) => {
 registerIdentitySockets(io);
 registerFriendSockets(io);
 registerMessageSockets(io);
+
+/* ========= REST whoami (как в старой версии) ========= */
+app.get('/whoami', async (req, res) => {
+  try {
+    const installId = String(req.query.installId || '').trim();
+    if (!installId) return res.status(400).json({ ok: false, error: 'no_installId' });
+    // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+    if (!isMongoReady()) {
+      return res.status(503).json({ ok: false, error: 'database_unavailable' });
+    }
+    const inst = (await Install.findOne({ installId }).select('user').lean()) as
+      | { user?: any }
+      | null;
+    if (!inst || !inst.user) {
+      return res.status(404).json({ ok: false, error: 'not_found' });
+    }
+    return res.json({ ok: true, userId: String(inst.user) });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
 
 /* ========= REST presence ========= */
 app.get('/api/presence', (_req, res) => res.json({ ok: true, list: getOnlineListFromIo(io) }));
