@@ -141,7 +141,13 @@ function makeRoomNameByUserId(aUserId: string, bUserId: string) {
   const sorted = [aUserId, bUserId].sort();
   return `room_${sorted[0]}_${sorted[1]}`;
 }
-async function clearPartner(io: Server, me: AuthedSocket, notifyOther: boolean, reason: 'next'|'stop'|'disconnect') {
+async function clearPartner(
+  io: Server,
+  me: AuthedSocket,
+  notifyOther: boolean,
+  reason: 'next'|'stop'|'disconnect',
+  signalData?: { nextTransitionId?: string | null }
+) {
   const otherSid = me.data.partnerSid as string | undefined;
   
   // КРИТИЧНО: Всегда очищаем состояние текущего сокета, даже если партнера нет
@@ -157,8 +163,8 @@ async function clearPartner(io: Server, me: AuthedSocket, notifyOther: boolean, 
       other.data.partnerSid = undefined;
       other.data.inCall = false;
       if (notifyOther) {
-        if (reason === 'disconnect') other.emit('disconnected');
-        else other.emit('peer:stopped');
+        if (reason === 'disconnect') other.emit('disconnected', signalData);
+        else other.emit('peer:stopped', signalData);
       }
       await markBusy(io, other, false);
       await unlockPair(other.id);
@@ -476,7 +482,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         other.rooms.forEach(r => { if (r !== other.id) other.leave(r); });
         other.data.roomId = undefined;
         // ЧАТРУЛЕТКА: Отправляем peer:left партнеру (он нажал "Далее", значит партнер должен начать новый поиск)
-        other.emit('peer:left');
+        other.emit('peer:left', { nextTransitionId: transitionId ?? null });
         // КРИТИЧНО: Автоматически возвращаем партнера в очередь для нового поиска
         await markBusy(io, other, true);
         // Одинаковая задержка для обоих (250ms), чтобы tryMatch не сматчил одного с третьим пока второй ещё не в очереди
@@ -605,7 +611,9 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     if (partnerSid) {
       await banPair(socket.id, partnerSid);
     }
-    await clearPartner(io, socket, true, 'stop');
+    await clearPartner(io, socket, true, 'stop', {
+      nextTransitionId: socket.data.lastNextTransitionId ?? null,
+    });
     socket.data.inCall = false;
     socket.data.lastNextTransitionId = undefined;
     await markBusy(io, socket, false);
@@ -633,7 +641,9 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     }
 
     await queueStore.clearSocketData(socket.id);
-    await clearPartner(io, socket, true, 'disconnect');
+    await clearPartner(io, socket, true, 'disconnect', {
+      nextTransitionId: socket.data.lastNextTransitionId ?? null,
+    });
     socket.data.inCall = false;
     socket.data.lastNextTransitionId = undefined;
     await markBusy(io, socket, false);

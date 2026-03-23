@@ -45,6 +45,10 @@ type MatchPayload = {
   nextTransitionId?: string | null;
 };
 
+type PartnerGonePayload = {
+  nextTransitionId?: string | null;
+};
+
 export class RandomChatSession extends SimpleEventEmitter {
   private hasLoggedLiveKitApiKeyWarning = false;
   private config: WebRTCSessionConfig;
@@ -74,6 +78,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   private disconnectPromise: Promise<void> | null = null;
   private pendingMatchFound: MatchPayload | null = null;
   private partnerGoneFallbackTimer: NodeJS.Timeout | null = null;
+  private lastPartnerGoneSignalKey: string | null = null;
+  private lastPartnerGoneSignalAt = 0;
   private currentRoomName: string | null = null; // Имя текущей подключенной комнаты LiveKit
   // Socket-level match room id (can differ from LiveKit roomName when we use userId-based room names).
   // Used for cam-toggle filtering to ensure "Отошел" is driven only by explicit UI camera toggles.
@@ -112,9 +118,12 @@ export class RandomChatSession extends SimpleEventEmitter {
   private readonly stuckRecoveryCooldownMs = 4_000;
   private roomConnectedAt = 0;
   private remoteMediaFirstSeenAt = 0;
+  private pendingRemoteVideoResetTimer: NodeJS.Timeout | null = null;
+  private pendingRemoteVideoResetTrackSid: string | null = null;
   private readonly nextAfterRemoteMediaCooldownMs = 800;
   private readonly nextMinStableCallAfterRemoteMediaMs = 1300;
   private readonly nextWithoutRemoteMediaGraceMs = 2500;
+  private readonly remoteVideoUnsubscribeGraceMs = 220;
   private reconnectCycleId = 0;
   /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и stop повторно */
   private cleaned = false;
@@ -143,6 +152,92 @@ export class RandomChatSession extends SimpleEventEmitter {
       connectRequestId: this.connectRequestId,
       activeNextTransitionId: this.activeNextTransitionId,
     };
+  }
+
+  private clearPendingRemoteVideoReset(reason: string): void {
+    if (!this.pendingRemoteVideoResetTimer) return;
+    clearTimeout(this.pendingRemoteVideoResetTimer);
+    logger.debug('[RandomChatSession] Cleared pending remote video reset', {
+      reason,
+      trackSid: this.pendingRemoteVideoResetTrackSid,
+    });
+    this.pendingRemoteVideoResetTimer = null;
+    this.pendingRemoteVideoResetTrackSid = null;
+  }
+
+  private scheduleRemoteVideoResetAfterUnsubscribe(trackSid: string, participantId: string): void {
+    this.clearPendingRemoteVideoReset('reschedule');
+    this.pendingRemoteVideoResetTrackSid = trackSid;
+    this.pendingRemoteVideoResetTimer = setTimeout(() => {
+      this.pendingRemoteVideoResetTimer = null;
+      const pendingTrackSid = this.pendingRemoteVideoResetTrackSid;
+      this.pendingRemoteVideoResetTrackSid = null;
+      if (this.remoteVideoTrack) {
+        logger.debug('[RandomChatSession] Skip delayed remote video reset, replacement track already active', {
+          unsubscribedTrackSid: pendingTrackSid,
+          activeTrackSid: this.remoteVideoTrack.sid,
+          participantId,
+        });
+        return;
+      }
+      this.remoteViewKey = Date.now();
+      this.emit('remoteViewKeyChanged', this.remoteViewKey);
+      logger.info('[RandomChatSession] Applied delayed remote video reset after unsubscribe', {
+        unsubscribedTrackSid: pendingTrackSid,
+        participantId,
+        remoteViewKey: this.remoteViewKey,
+        graceMs: this.remoteVideoUnsubscribeGraceMs,
+      });
+    }, this.remoteVideoUnsubscribeGraceMs);
+  }
+
+  private handleSocketPartnerGoneSignal(
+    reason: 'peer_left' | 'disconnected',
+    source: 'peer:left' | 'peer:stopped' | 'disconnected' | 'hangup',
+    data?: PartnerGonePayload
+  ): void {
+    const nextTransitionId =
+      data && typeof data.nextTransitionId === 'string' && data.nextTransitionId.trim().length > 0
+        ? data.nextTransitionId.trim()
+        : null;
+    if (nextTransitionId) {
+      this.activeNextTransitionId = nextTransitionId;
+    }
+
+    const signalKey = `${this.matchRoomId || this.currentRoomName || 'no-room'}:${source}:${reason}:${nextTransitionId || 'none'}`;
+    const now = Date.now();
+    const isDuplicateSignal =
+      this.lastPartnerGoneSignalKey === signalKey && now - this.lastPartnerGoneSignalAt < 1500;
+    this.lastPartnerGoneSignalKey = signalKey;
+    this.lastPartnerGoneSignalAt = now;
+
+    if (!this.started) {
+      logger.debug('[RandomChatSession] Ignoring partner-gone socket signal for stopped session', {
+        source,
+        reason,
+        nextTransitionId,
+      });
+      return;
+    }
+
+    if (this.isDisconnecting || this.disconnectHandled || isDuplicateSignal) {
+      logger.debug('[RandomChatSession] Ignoring duplicate partner-gone socket signal', {
+        source,
+        reason,
+        nextTransitionId,
+        isDisconnecting: this.isDisconnecting,
+        disconnectHandled: this.disconnectHandled,
+        isDuplicateSignal,
+      });
+      return;
+    }
+
+    this.logReconnectTrace('socket_partner_gone_signal', {
+      source,
+      reason,
+      nextTransitionId,
+    });
+    this.handlePartnerGone(reason);
   }
 
   private createNextTransitionId(): string {
@@ -906,18 +1001,20 @@ export class RandomChatSession extends SimpleEventEmitter {
         logger.error('[RandomChatSession] Failed to handle match_found', e);
       });
     };
-    const peerStoppedHandler = () => {
-      this.logReconnectTrace('socket_peer_stopped_event');
-      this.handlePartnerGone('disconnected');
+    const peerStoppedHandler = (data?: PartnerGonePayload) => {
+      this.handleSocketPartnerGoneSignal('disconnected', 'peer:stopped', data);
     };
-    const peerLeftHandler = () => {
-      this.logReconnectTrace('socket_peer_left_event');
-      this.handlePartnerGone('peer_left');
+    const peerLeftHandler = (data?: PartnerGonePayload) => {
+      this.handleSocketPartnerGoneSignal('peer_left', 'peer:left', data);
     };
-    const disconnectedHandler = () => {
-      this.logReconnectTrace('socket_disconnected_event');
-      this.handlePartnerGone('disconnected');
+    const disconnectedHandler = (
+      data?: PartnerGonePayload,
+      source: 'disconnected' | 'hangup' = 'disconnected'
+    ) => {
+      this.handleSocketPartnerGoneSignal('disconnected', source, data);
     };
+    const socketDisconnectedHandler = (data?: PartnerGonePayload) => disconnectedHandler(data, 'disconnected');
+    const hangupHandler = (data?: PartnerGonePayload) => disconnectedHandler(data, 'hangup');
     // RandomChat UX: "Отошел" must be driven ONLY by explicit user action (camera toggle button).
     // We use a dedicated socket relay (cam-toggle) instead of LiveKit TrackMuted/Unmuted to avoid false positives
     // during re-subscribes, network churn, or when a participant is leaving.
@@ -953,16 +1050,16 @@ export class RandomChatSession extends SimpleEventEmitter {
     socket.on('match_found', matchHandler);
     socket.on('peer:stopped', peerStoppedHandler);
     socket.on('peer:left', peerLeftHandler);
-    socket.on('disconnected', disconnectedHandler);
-    socket.on('hangup', disconnectedHandler);
+    socket.on('disconnected', socketDisconnectedHandler);
+    socket.on('hangup', hangupHandler);
     socket.on('cam-toggle', camToggleHandler);
 
     this.socketOffs = [
       () => socket.off('match_found', matchHandler),
       () => socket.off('peer:stopped', peerStoppedHandler),
       () => socket.off('peer:left', peerLeftHandler),
-      () => socket.off('disconnected', disconnectedHandler),
-      () => socket.off('hangup', disconnectedHandler),
+      () => socket.off('disconnected', socketDisconnectedHandler),
+      () => socket.off('hangup', hangupHandler),
       () => socket.off('cam-toggle', camToggleHandler),
     ];
   }
@@ -1873,6 +1970,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   }
 
   private resetRemoteState(): void {
+    this.clearPendingRemoteVideoReset('reset_remote_state');
     this.remoteStream = null;
     this.remoteAudioTrack = null;
     this.remoteVideoTrack = null;
@@ -3925,6 +4023,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (publication.kind === Track.Kind.Audio) {
       this.remoteAudioTrack = track;
     } else if (publication.kind === Track.Kind.Video) {
+      this.clearPendingRemoteVideoReset('video_track_subscribed');
       const wasMutedStateChanged = this.remoteVideoTrack && (this.remoteVideoTrack.isMuted !== track.isMuted);
       this.remoteVideoTrack = track;
       
@@ -4063,9 +4162,28 @@ export class RandomChatSession extends SimpleEventEmitter {
           this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
           this.config.onRemoteStreamChange?.(this.remoteStream);
         }
-        
-        this.remoteViewKey = Date.now();
-        this.emit('remoteViewKeyChanged', this.remoteViewKey);
+
+        const shouldDelayRemoteVideoReset =
+          this.started &&
+          !this.isDisconnecting &&
+          !this.disconnectHandled &&
+          this.room?.state === 'connected' &&
+          this.remoteCamEnabled;
+
+        if (shouldDelayRemoteVideoReset) {
+          this.scheduleRemoteVideoResetAfterUnsubscribe(unsubscribedTrackSid, participant.identity);
+        } else {
+          this.clearPendingRemoteVideoReset('immediate_video_unsubscribe_reset');
+          this.remoteViewKey = Date.now();
+          this.emit('remoteViewKeyChanged', this.remoteViewKey);
+          logger.debug('[RandomChatSession] Applied immediate remote video reset after unsubscribe', {
+            unsubscribedTrackSid,
+            participantId: participant.identity,
+            roomState: this.room?.state ?? 'none',
+            started: this.started,
+            remoteCamEnabled: this.remoteCamEnabled,
+          });
+        }
         return;
       } else {
         logger.debug('[RandomChatSession] Ignoring unsubscription of old video track, new track already active', {
@@ -4088,6 +4206,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.config.onRemoteStreamChange?.(this.remoteStream);
     }
 
+    this.clearPendingRemoteVideoReset('non_video_unsubscribe');
     this.remoteViewKey = Date.now();
     this.emit('remoteViewKeyChanged', this.remoteViewKey);
   }
