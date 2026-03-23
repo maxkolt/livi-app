@@ -441,7 +441,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   const onConfirmRef = useRef<(() => void) | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
-  const [inputHeight, setInputHeight] = useState(0);
+  // Android: до первого onLayout нужен реалистичный размер нижней панели,
+  // иначе входящее сообщение может стартово оказаться под инпутом.
+  const estimatedInputHeight = 124 + Math.max(0, insets.bottom);
+  const [inputHeight, setInputHeight] = useState(estimatedInputHeight);
   const [messageText, setMessageText] = useState("");
   const [peerActivity, setPeerActivity] = useState<'typing' | 'recording' | null>(null);
   const [peerTypingDots, setPeerTypingDots] = useState(1);
@@ -688,26 +691,34 @@ export default function ChatScreen({ route, navigation }: Props) {
     return () => { subs.forEach(s => s.remove()); offClose?.(); try { socket.off('call:timeout', forceClose); } catch {}; try { socket.off('call:declined', forceClose); } catch {}; try { socket.off('call:cancel', forceClose); } catch {}; try { socket.off('call:incoming', onIncoming); } catch {}; try { socket.off('call:accepted', clearIncomingTimer); } catch {}; try { socket.off('call:declined', clearIncomingTimer); } catch {}; try { socket.off('call:cancel', clearIncomingTimer); } catch {}; try { socket.off('call:timeout', clearIncomingTimer); } catch {}; clearIncomingTimer(); };
   }, []);
 
-  // На любое изменение количества сообщений — прижать вниз
+  // На любое изменение количества сообщений — прижать вниз.
+  // Android: делаем дополнительный проход после layout нового пузыря,
+  // иначе первое положение может остаться под инпутом до позднего пересчёта.
   useEffect(() => {
     scheduleScrollToBottom(0);
-  }, [messages.length, keyboardVisible]);
+    if (Platform.OS === 'android') {
+      scheduleScrollToBottom(80);
+      scheduleScrollToBottom(220);
+    }
+  }, [messages.length]);
 
   // Фактический подъём панели над клавиатурой:
   // lift = keyboardInset - (на сколько система уже ужала контейнер)
-  const systemResizeDelta = keyboardVisible ? Math.max(0, baseRootLayoutHRef.current - rootLayoutH) : 0;
-  // Android: если система реально ресайзит окно (adjustResize), панель должна "лежать" на клавиатуре
-  // без какого-либо bottom-offset (иначе появится воздух). Если система НЕ ресайзит — поднимаем сами.
-  const isAndroidResizeMode =
-    Platform.OS === 'android' && keyboardVisible && systemResizeDelta > 80; // 80px threshold to avoid jitter
+  const systemResizeDelta =
+    Platform.OS === 'ios' && keyboardVisible
+      ? Math.max(0, baseRootLayoutHRef.current - rootLayoutH)
+      : 0;
+  // Android: в манифесте уже включён adjustResize, поэтому ручной подъём списка/инпута
+  // только добавляет лишний layout-pass и визуальное мигание FlatList.
   const keyboardLift =
     Platform.OS === 'android'
-      ? (keyboardVisible ? (isAndroidResizeMode ? 0 : Math.max(0, keyboardInset)) : 0)
+      ? 0
       : (keyboardVisible ? Math.max(0, keyboardInset - systemResizeDelta) : 0);
 
   // ===== Typing indicator (peer + local) =====
-  // Высота видимого зазора между последним сообщением и верхом инпута (сюда ставим "Печатает...")
-  const TYPING_GAP_H = 17;
+  // Высота видимого зазора между последним сообщением и верхом инпута
+  // (сюда ставим "Пишет..." / "Записывает..." / служебные события).
+  const TYPING_GAP_H = -20;
   const peerTypingHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localTypingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localTypingActiveRef = useRef(false);
@@ -761,8 +772,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   const signalLocalTyping = React.useCallback(() => {
     if (!peerId) return;
     const now = Date.now();
-    // Throttle "typing:true" to avoid spamming the socket
-    if (!localTypingActiveRef.current || now - lastTypingSentAtRef.current > 900) {
+    // Throttle "typing:true" to avoid spamming the socket,
+    // but keep it frequent enough so the peer sees it almost immediately.
+    if (!localTypingActiveRef.current || now - lastTypingSentAtRef.current > 450) {
       lastTypingSentAtRef.current = now;
       localTypingActiveRef.current = true;
       try {
@@ -772,7 +784,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (localTypingStopTimerRef.current) clearTimeout(localTypingStopTimerRef.current);
     localTypingStopTimerRef.current = setTimeout(() => {
       stopLocalTyping();
-    }, 2000);
+    }, 1200);
   }, [peerId, stopLocalTyping]);
 
   useEffect(() => {
@@ -812,7 +824,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         if (next) {
           // If "stop" event is lost, hide after a short grace period.
           // Recording needs a keep-alive ping while the peer is holding the button.
-          const ttl = next === 'recording' ? 1600 : 2100;
+          const ttl = next === 'recording' ? 1400 : 1600;
           peerTypingHideTimerRef.current = setTimeout(() => {
             setPeerActivity(null);
           }, ttl);
@@ -1228,6 +1240,16 @@ export default function ChatScreen({ route, navigation }: Props) {
           saveMessages(updated);
           return updated;
         });
+
+        // Для получателя: первый скролл часто случается до фактического layout нового пузыря.
+        // Делаем принудительный post-layout double-pass, чтобы сообщение не "проваливалось" под input bar.
+        if (Platform.OS === 'android' && isFromPeer) {
+          requestAnimationFrame(() => {
+            scrollToBottom();
+            setTimeout(() => scrollToBottom(), 90);
+            setTimeout(() => scrollToBottom(), 220);
+          });
+        }
 
         // Сохраняем сообщение глобально для офлайн доступа
         if (isFromPeer && currentUserId) {
@@ -4599,6 +4621,64 @@ export default function ChatScreen({ route, navigation }: Props) {
     return [...messages].reverse();
   }, [isEmpty, messages]);
 
+  const handleToggleRetryUi = React.useCallback((id: string) => {
+    setRetryUiForId((prev) => (prev === id ? null : id));
+  }, []);
+
+  const handleRootLayout = React.useCallback((e: any) => {
+    const h = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
+    if (!h) return;
+    if (Platform.OS === 'android') {
+      if (!keyboardVisible) {
+        baseRootLayoutHRef.current = h;
+      }
+      return;
+    }
+    if (Math.abs(rootLayoutH - h) > 1) {
+      setRootLayoutH(h);
+    }
+    if (!keyboardVisible) {
+      baseRootLayoutHRef.current = h;
+    }
+  }, [keyboardVisible, rootLayoutH]);
+
+  const handleInputBarLayout = React.useCallback((e: any) => {
+    const h = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
+    if (!h || Math.abs(inputHeight - h) <= 1) return;
+    setInputHeight(h);
+  }, [inputHeight]);
+
+  const androidListHeader = React.useMemo(() => {
+    if (isEmpty) return null;
+    return (
+      <View
+        style={{
+          // Spacer so the last message doesn't hide under the input bar (and the keyboard on devices without resize).
+          height: Math.max(inputHeight, estimatedInputHeight) + TYPING_GAP_H + keyboardLift,
+        }}
+      >
+        {/* ВАЖНО: сам spacer живёт "под" инпутом (его цель — добавить padding),
+            поэтому текст нужно рисовать в верхней (видимой) части spacer-а. */}
+        {GapCenterIndicator ? (
+          <View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: TYPING_GAP_H,
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}
+          >
+            {GapCenterIndicator}
+          </View>
+        ) : null}
+      </View>
+    );
+  }, [isEmpty, inputHeight, estimatedInputHeight, keyboardLift, GapCenterIndicator]);
+
   const renderMessageRow = React.useCallback(({ item }: any) => (
     <MessageItem
       item={item}
@@ -4610,7 +4690,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       playingAudioId={playingAudioId}
       playingAudioState={playingAudioState}
       retryUiForId={retryUiForId}
-      onToggleRetryUi={(id: string) => setRetryUiForId((prev) => (prev === id ? null : id))}
+      onToggleRetryUi={handleToggleRetryUi}
       onRetryFailed={retryFailedOutgoingMessage}
       onLongPressMessage={handleLongPressMessage}
       onMessagePress={handleMessagePress}
@@ -4623,7 +4703,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       highlightedMessageId={highlightedMessageId}
       onPressReplyQuote={scrollToQuotedMessage}
     />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, handleReactionPress, selectionMode, selectedMessageIds, toggleSelectMessage, resolveMediaUri, peerNameState, highlightedMessageId, scrollToQuotedMessage]);
+  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, handleToggleRetryUi, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, handleReactionPress, selectionMode, selectedMessageIds, toggleSelectMessage, resolveMediaUri, peerNameState, highlightedMessageId, scrollToQuotedMessage]);
 
   return (
     <SafeAreaView 
@@ -4638,13 +4718,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         style={{ flex: 1, backgroundColor: LIVI.feedBg }}
         // Prevent touch-through during modal close animations (can trigger header back -> Home -> Chat flicker)
         pointerEvents={mediaViewerVisible || composeViewerVisible || avatarModalVisible ? 'none' : 'auto'}
-        onLayout={(e) => {
-          const h = e.nativeEvent.layout.height;
-          setRootLayoutH(h);
-          if (!keyboardVisible) {
-            baseRootLayoutHRef.current = h;
-          }
-        }}
+        onLayout={handleRootLayout}
       >
         {headerEl}
         {loading ? (
@@ -4759,7 +4833,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 // SafeAreaView уже обрабатывает safe area, поэтому не добавляем insets.bottom
                 paddingBottom: 18,
               }}
-              onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
+              onLayout={handleInputBarLayout}
             >
               {voiceIsRecording && (
                 <View style={{ alignItems: 'center', marginBottom: 10 }}>
@@ -4973,41 +5047,10 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
+              removeClippedSubviews={false}
               inverted={!showEmpty}
               onScrollToIndexFailed={handleScrollToIndexFailed}
-              maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-              ListHeaderComponent={!isEmpty ? () => (
-                <View
-                  style={{
-                    // Spacer so the last message doesn't hide under the input bar (and the keyboard on devices without resize).
-                    height:
-                      inputHeight > 0
-                        ? inputHeight +
-                          TYPING_GAP_H +
-                          keyboardLift
-                        : 96,
-                  }}
-                >
-                  {/* ВАЖНО: сам spacer живёт "под" инпутом (его цель — добавить padding),
-                      поэтому текст нужно рисовать в верхней (видимой) части spacer-а. */}
-                  {GapCenterIndicator ? (
-                    <View
-                      pointerEvents="none"
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        height: TYPING_GAP_H,
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                      }}
-                    >
-                      {GapCenterIndicator}
-                    </View>
-                  ) : null}
-                </View>
-              ) : null}
+              ListHeaderComponent={androidListHeader}
               ListEmptyComponent={() => {
                 if (!historyReady) {
                   return (
@@ -5084,7 +5127,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 // Когда клавиатура скрыта — добавляем safe-area снизу, чтобы не упираться в навигацию.
                 paddingBottom: 18 + (keyboardVisible ? 0 : Math.max(0, insets.bottom)),
               }}
-              onLayout={(e) => setInputHeight(e.nativeEvent.layout.height)}
+              onLayout={handleInputBarLayout}
             >
               {voiceIsRecording && (
                 <View style={{ alignItems: 'center', marginBottom: 10 }}>

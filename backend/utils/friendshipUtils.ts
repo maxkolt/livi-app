@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import User from '../models/User';
 import FriendshipMessages, { IFriendshipMessages } from '../models/FriendshipMessages';
 
-const TTL_MS = 30_000; // 30s cache for dev/perf
+const TTL_MS = 5 * 60_000; // reduce repeated DB checks on hot realtime paths like typing
 
 type CacheEntry<T> = { v: T; exp: number };
 const friendsCache = new Map<string, CacheEntry<boolean>>();
