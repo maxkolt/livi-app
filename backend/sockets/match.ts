@@ -360,11 +360,19 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
   };
 
   // === START ================================================================
-  socket.on('start', async () => {
+  socket.on('start', async (data?: { transitionId?: string }) => {
+    const transitionId =
+      data && typeof data.transitionId === 'string' && data.transitionId.trim().length > 0
+        ? data.transitionId.trim()
+        : undefined;
     // Бан модерации: пользователь не может войти в рандомный чат
     const myUserId = String(socket.data.userId || '');
     if (myUserId && (await queueStore.isModerationBanned(myUserId))) {
-      logger.debug('Start rejected: user is moderation-banned', { socketId: socket.id, userId: myUserId });
+      logger.debug('Start rejected: user is moderation-banned', {
+        socketId: socket.id,
+        userId: myUserId,
+        transitionId,
+      });
       await emitModerationBannedToSocket(socket, myUserId);
       return;
     }
@@ -375,7 +383,8 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
       logger.debug('Start request rate limited', { 
         socketId: socket.id, 
         timeSinceLastStart: now - lastStart,
-        rateLimitMs: START_RATE_LIMIT_MS
+        rateLimitMs: START_RATE_LIMIT_MS,
+        transitionId,
       });
       return;
     }
@@ -386,11 +395,19 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     if (existingPartnerSid) {
       const partner = safeGet(io, existingPartnerSid);
       if (partner) {
-        logger.debug('Start ignored: socket already has partner', { socketId: socket.id, partnerSid: existingPartnerSid });
+        logger.debug('Start ignored: socket already has partner', {
+          socketId: socket.id,
+          partnerSid: existingPartnerSid,
+          transitionId,
+        });
         return;
       }
       // Партнер "пропал" — очищаем stale состояние.
-      logger.warn('Start requested but stale partnerSid found, cleaning up', { socketId: socket.id, partnerSid: existingPartnerSid });
+      logger.warn('Start requested but stale partnerSid found, cleaning up', {
+        socketId: socket.id,
+        partnerSid: existingPartnerSid,
+        transitionId,
+      });
       socket.data.partnerSid = undefined;
       socket.data.inCall = false;
       await unlockPair(socket.id);
@@ -399,7 +416,12 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     // Если сокет уже залочен/в колле — не добавляем в очередь повторно.
     const isLocked = await queueStore.isLocked(socket.id);
     if (isLocked || socket.data.inCall) {
-      logger.debug('Start ignored: socket is busy', { socketId: socket.id, inCall: !!socket.data.inCall, inPairLock: isLocked });
+      logger.debug('Start ignored: socket is busy', {
+        socketId: socket.id,
+        inCall: !!socket.data.inCall,
+        inPairLock: isLocked,
+        transitionId,
+      });
       return;
     }
     
@@ -409,9 +431,10 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     socket.data.roomId = undefined;
     socket.data.busy = false;
     socket.data.inCall = false;
-    socket.data.lastNextTransitionId = undefined;
+    socket.data.lastNextTransitionId = transitionId;
     await unlockPair(socket.id);
 
+    logger.debug('Start requested', { socketId: socket.id, transitionId });
     await markBusy(io, socket, true);
     await pushToQueue(socket.id);
     // КРИТИЧНО: Вызываем tryMatch немедленно, без задержек

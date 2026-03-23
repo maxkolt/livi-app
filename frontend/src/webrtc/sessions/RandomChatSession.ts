@@ -575,18 +575,23 @@ export class RandomChatSession extends SimpleEventEmitter {
     const now = Date.now();
     if (now - this.lastAutoSearchAt < 200) return;
     this.lastAutoSearchAt = now;
+    const nextTransitionId = this.activeNextTransitionId;
     this.startReconnectCycle(`autoNext:${reason || 'unspecified'}`);
     try {
-      socket.emit('start');
+      socket.emit('start', nextTransitionId ? { transitionId: nextTransitionId } : undefined);
       this.emit('searching');
       this.config.callbacks.onLoadingChange?.(true);
       this.config.onLoadingChange?.(true);
-      logger.debug('[RandomChatSession] autoNext: emitted start', { reason });
-      this.logReconnectTrace('auto_next_emitted_start', { reason: reason || 'unspecified' });
+      logger.debug('[RandomChatSession] autoNext: emitted start', { reason, nextTransitionId });
+      this.logReconnectTrace('auto_next_emitted_start', {
+        reason: reason || 'unspecified',
+        nextTransitionId,
+      });
     } catch (e) {
       logger.error('[RandomChatSession] autoNext error', e);
       this.logReconnectTrace('auto_next_emit_error', {
         reason: reason || 'unspecified',
+        nextTransitionId,
         error: (e as any)?.message || String(e),
       });
     }
@@ -3867,10 +3872,13 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.currentRemoteParticipant = participant;
     if (this.remoteMediaFirstSeenAt === 0) {
       this.remoteMediaFirstSeenAt = Date.now();
+      const completedNextTransitionId = this.activeNextTransitionId;
       this.logReconnectTrace('remote_media_first_seen', {
         kind: publication.kind,
         participantId: participant.identity,
+        nextTransitionId: completedNextTransitionId,
       });
+      this.activeNextTransitionId = null;
     }
     
     const isVideoTrack = publication.kind === Track.Kind.Video;
