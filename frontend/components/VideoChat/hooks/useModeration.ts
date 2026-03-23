@@ -195,8 +195,18 @@ export function useModeration({
         });
         void FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => {});
         base64 = raw;
-      } catch (_refErr) {
-        // 2) Fallback: captureScreen + crop (RTCView часто не поддерживает captureRef)
+      } catch (refErr) {
+        if (Platform.OS === 'android') {
+          // Android PixelCopy/captureScreen can crash natively while RTCView is detaching during next/disconnect.
+          // Prefer skipping this moderation frame over risking an app crash.
+          logger.warn('[Moderation] skip frame: captureRef failed and Android captureScreen fallback disabled', {
+            target: moderationTarget,
+            error: (refErr as any)?.message || String(refErr),
+          });
+          return;
+        }
+
+        // 2) iOS fallback: captureScreen + crop (RTCView often doesn't support captureRef)
         if (targetRef.current !== target) return;
         logger.info('[Moderation] captureScreen+crop bounds OK', { target: moderationTarget, y: bounds.y, screenH });
 
@@ -208,7 +218,6 @@ export function useModeration({
           format: 'jpg',
           quality: 0.5,
           result: 'tmpfile',
-          ...(Platform.OS === 'android' ? { handleGLSurfaceViewOnAndroid: true } : {}),
         });
 
         const pixelRatio = PixelRatio.get();

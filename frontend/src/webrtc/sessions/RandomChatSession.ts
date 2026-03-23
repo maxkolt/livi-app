@@ -108,6 +108,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   private lastAudioDuration = 0;
   private isMicMonitoringActive = false;
   private flipCamInProgress = false;
+  private suppressLocalVideoEndedRecoverUntil = 0;
+  private suppressLocalVideoEndedReason: 'toggleCam' | 'flipCam' | 'recreate' | 'stop' | null = null;
   private readonly sessionId = `rcs_${Math.random().toString(36).slice(2, 10)}`;
   private readonly deviceModel = String(Device.modelName || Device.modelId || 'unknown');
   private connectingInProgress = false;
@@ -127,6 +129,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   private reconnectCycleId = 0;
   /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и stop повторно */
   private cleaned = false;
+  private stopRequested = false;
 
   private resolveMyUserId(): string | null {
     const configured = String(this.config.myUserId ?? '').trim();
@@ -152,6 +155,58 @@ export class RandomChatSession extends SimpleEventEmitter {
       connectRequestId: this.connectRequestId,
       activeNextTransitionId: this.activeNextTransitionId,
     };
+  }
+
+  private suppressLocalVideoEndedRecovery(
+    reason: 'toggleCam' | 'flipCam' | 'recreate' | 'stop',
+    durationMs = 1800
+  ): void {
+    this.suppressLocalVideoEndedRecoverUntil = Date.now() + durationMs;
+    this.suppressLocalVideoEndedReason = reason;
+    logger.debug('[RandomChatSession] Suppressing local video ended recovery', {
+      reason,
+      durationMs,
+      suppressUntil: this.suppressLocalVideoEndedRecoverUntil,
+    });
+  }
+
+  private isLocalVideoEndedRecoverySuppressed(): boolean {
+    return Date.now() < this.suppressLocalVideoEndedRecoverUntil;
+  }
+
+  private isAbortLikeCameraError(error: unknown): boolean {
+    const message = String((error as any)?.message || error || '').toLowerCase();
+    const name = String((error as any)?.name || '').toLowerCase();
+    return (
+      message.includes('aborterror') ||
+      message.includes('aborted') ||
+      message.includes('could not start video source') ||
+      name.includes('aborterror') ||
+      name.includes('domexception')
+    );
+  }
+
+  private async stopLocalVideoTrackForRestart(
+    track: LocalVideoTrack | null,
+    reason: 'toggleCam' | 'flipCam' | 'recreate'
+  ): Promise<void> {
+    if (!track) return;
+    this.suppressLocalVideoEndedRecovery(reason, 2200);
+    if (track === this.localVideoTrack) {
+      this.detachLocalVideoEndedListener();
+    }
+    try {
+      if (track.mediaStreamTrack) {
+        track.mediaStreamTrack.enabled = false;
+      }
+      track.mute().catch(() => {});
+    } catch {}
+    try {
+      track.stop();
+    } catch {}
+    if (Platform.OS === 'android') {
+      await new Promise((resolve) => setTimeout(resolve, 180));
+    }
   }
 
   private clearPendingRemoteVideoReset(reason: string): void {
@@ -347,6 +402,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   /* ===================== Public API ===================== */
 
   async startRandomChat(): Promise<void> {
+    this.stopRequested = false;
     this.started = true;
     this.activeNextTransitionId = null;
     this.pendingMatchFound = null;
@@ -363,6 +419,17 @@ export class RandomChatSession extends SimpleEventEmitter {
   }
 
   stopRandomChat(): void {
+    if (this.stopRequested) {
+      logger.debug('[RandomChatSession] stopRandomChat already requested, skipping duplicate call', {
+        sessionId: this.sessionId,
+        myUserId: this.resolveMyUserId(),
+        deviceModel: this.deviceModel,
+        hasRoom: !!this.room,
+        isDisconnecting: this.isDisconnecting,
+      });
+      return;
+    }
+    this.stopRequested = true;
     this.started = false;
     this.activeNextTransitionId = null;
     this.pendingMatchFound = null;
@@ -726,6 +793,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   async toggleCam(): Promise<void> {
     if (this.camToggleInProgress) return;
     this.camToggleInProgress = true;
+    this.suppressLocalVideoEndedRecovery('toggleCam');
     this.isCamOn = !this.isCamOn;
     const needsRecovery =
       !this.localVideoTrack ||
@@ -836,6 +904,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
     
     this.flipCamInProgress = true;
+    this.suppressLocalVideoEndedRecovery('flipCam');
     
     try {
       // Flip should NOT implicitly enable the camera.
@@ -853,6 +922,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   }
 
   async restartLocalCamera(): Promise<void> {
+    this.suppressLocalVideoEndedRecovery('flipCam');
     if (!this.room || this.room.state !== 'connected' || !this.room.localParticipant) {
       if (!this.localVideoTrack || !this.localAudioTrack) {
         await this.ensureLocalTracks(true);
@@ -863,20 +933,26 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
     
     const oldVideoTrack = this.localVideoTrack;
-    const newVideoTrack = await this.createFreshLocalVideoTrack('toggleCam');
+    let newVideoTrack: LocalVideoTrack;
+    try {
+      newVideoTrack = await this.createFreshLocalVideoTrack('toggleCam');
+    } catch (error) {
+      if (!oldVideoTrack || Platform.OS !== 'android' || !this.isAbortLikeCameraError(error)) {
+        throw error;
+      }
+      logger.warn('[RandomChatSession] Camera restart hit AbortError, retrying after release', {
+        error: (error as any)?.message || String(error),
+        trackId: oldVideoTrack.mediaStreamTrack?.id,
+        camSide: this.camSide,
+      });
+      await this.stopLocalVideoTrackForRestart(oldVideoTrack, 'flipCam');
+      newVideoTrack = await this.createFreshLocalVideoTrack('toggleCam');
+    }
     this.swapLocalVideoTrack(newVideoTrack, 'toggleCam');
     await this.replacePublishedVideoTrack(newVideoTrack, oldVideoTrack);
     logger.info('[RandomChatSession] Camera restarted and replaced track');
     if (oldVideoTrack && oldVideoTrack !== newVideoTrack) {
-      try {
-        if (oldVideoTrack.mediaStreamTrack) {
-          oldVideoTrack.mediaStreamTrack.enabled = false;
-        }
-        oldVideoTrack.mute().catch(() => {});
-      } catch {}
-      try {
-        oldVideoTrack.stop();
-      } catch {}
+      await this.stopLocalVideoTrackForRestart(oldVideoTrack, 'flipCam');
     }
   }
 
@@ -1364,6 +1440,8 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.localAudioTrack = null;
     }
     if (this.localVideoTrack) {
+      this.suppressLocalVideoEndedRecovery('stop', resetStates ? 2200 : 1200);
+      this.detachLocalVideoEndedListener();
       // Сначала отключаем захват кадров, затем stop() — снижает CameraDeviceClient errorCode 4/5 на Android
       try {
         if (this.localVideoTrack.mediaStreamTrack) {
@@ -1375,7 +1453,6 @@ export class RandomChatSession extends SimpleEventEmitter {
         this.localVideoTrack.stop();
       } catch {}
       this.localVideoTrack = null;
-      this.detachLocalVideoEndedListener();
     }
     this.localStream = null;
     this.lastAudioEnergy = 0;
@@ -1991,9 +2068,28 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.detachLocalVideoEndedListener();
     const mediaTrack = track?.mediaStreamTrack;
     if (!mediaTrack || typeof mediaTrack.addEventListener !== 'function') return;
+    const attachedTrackId = mediaTrack.id;
     
     const handler = () => {
-      logger.warn('[RandomChatSession] Local video track ended, recovering...');
+      const currentTrackId = this.localVideoTrack?.mediaStreamTrack?.id ?? null;
+      const suppressed = this.isLocalVideoEndedRecoverySuppressed();
+      const isCurrentTrack = currentTrackId === attachedTrackId;
+      if (!isCurrentTrack || suppressed || this.camToggleInProgress || this.flipCamInProgress || this.recoveringVideo || !this.started) {
+        logger.info('[RandomChatSession] Ignoring local video track ended during controlled transition', {
+          attachedTrackId,
+          currentTrackId,
+          suppressed,
+          suppressReason: this.suppressLocalVideoEndedReason,
+          camToggleInProgress: this.camToggleInProgress,
+          flipCamInProgress: this.flipCamInProgress,
+          recoveringVideo: this.recoveringVideo,
+          started: this.started,
+        });
+        return;
+      }
+      logger.warn('[RandomChatSession] Local video track ended, recovering...', {
+        attachedTrackId,
+      });
       void this.recoverLocalVideoTrack('ended');
     };
     
@@ -2054,20 +2150,15 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
     const prevTrackId = this.localVideoTrack?.mediaStreamTrack?.id;
+    this.suppressLocalVideoEndedRecovery(reason === 'toggleCam' ? 'toggleCam' : 'recreate');
     
     // Останавливаем старый трек (сначала отключаем захват — снижает errorCode 4/5 на Android)
     if (this.localVideoTrack) {
-      try {
-        if (this.localVideoTrack.mediaStreamTrack) {
-          this.localVideoTrack.mediaStreamTrack.enabled = false;
-        }
-        this.localVideoTrack.mute().catch(() => {});
-      } catch {}
-      try {
-        this.localVideoTrack.stop();
-      } catch {}
+      await this.stopLocalVideoTrackForRestart(
+        this.localVideoTrack,
+        reason === 'toggleCam' ? 'toggleCam' : 'recreate'
+      );
     }
-    this.detachLocalVideoEndedListener();
     
     const facingMode = this.camSide === 'front' ? 'user' : 'environment';
     const preferred = getPreferredVideoCaptureOptions(facingMode);
@@ -2194,6 +2285,31 @@ export class RandomChatSession extends SimpleEventEmitter {
       throw new Error('Failed to create local video track');
     }
     return newVideoTrack;
+  }
+
+  private async refreshEndedLocalVideoTrackBeforeReconnect(): Promise<boolean> {
+    if (Platform.OS !== 'android') return false;
+    if (!this.started || !this.isCamOn) return false;
+    if (!this.localVideoTrack || !this.localAudioTrack) return false;
+    if (this.camToggleInProgress || this.flipCamInProgress || this.recoveringVideo) return false;
+    if (this.localVideoTrack.mediaStreamTrack?.readyState !== 'ended') return false;
+    if (this.localAudioTrack.mediaStreamTrack?.readyState === 'ended') return false;
+
+    logger.info('[RandomChatSession] Refreshing ended local video track before reconnect', {
+      trackId: this.localVideoTrack.mediaStreamTrack?.id,
+      reconnectCycleId: this.reconnectCycleId,
+      deviceModel: this.deviceModel,
+    });
+
+    try {
+      await this.recreateLocalVideoTrack('ended');
+      return this.localVideoTrack?.mediaStreamTrack?.readyState !== 'ended';
+    } catch (error) {
+      logger.warn('[RandomChatSession] Failed to refresh ended local video track before reconnect', {
+        error: (error as any)?.message || String(error),
+      });
+      return false;
+    }
   }
 
   private swapLocalVideoTrack(newVideoTrack: LocalVideoTrack, reason: 'ended' | 'toggleCam' | 'stuck'): void {
@@ -2979,6 +3095,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     // Если треки были остановлены (чего не должно быть при next()), пересоздаем их
     // КРИТИЧНО: Сохраняем текущий localStream ПЕРЕД пересозданием треков, чтобы не было черного экрана
     const prevLocalStream = this.localStream;
+
+    const refreshedEndedVideoBeforeReconnect = await this.refreshEndedLocalVideoTrackBeforeReconnect();
     
     if (!this.localVideoTrack || !this.localAudioTrack) {
       logger.info('[RandomChatSession] Local tracks missing, recreating...');
@@ -2986,9 +3104,22 @@ export class RandomChatSession extends SimpleEventEmitter {
     } else {
       // КРИТИЧНО: Проверяем что треки не остановлены
       // Если треки остановлены, пересоздаем их
-      const videoEnded = this.localVideoTrack.mediaStreamTrack?.readyState === 'ended';
+      const rawVideoEnded = this.localVideoTrack.mediaStreamTrack?.readyState === 'ended';
+      const videoEnded =
+        rawVideoEnded &&
+        !this.isLocalVideoEndedRecoverySuppressed() &&
+        !this.camToggleInProgress &&
+        !this.flipCamInProgress &&
+        !this.recoveringVideo;
       const audioEnded = this.localAudioTrack.mediaStreamTrack?.readyState === 'ended';
-      
+
+      if (refreshedEndedVideoBeforeReconnect && !audioEnded) {
+        logger.info('[RandomChatSession] Reused refreshed local video track for reconnect', {
+          reconnectCycleId: this.reconnectCycleId,
+          trackId: this.localVideoTrack.mediaStreamTrack?.id,
+        });
+      }
+
       if (videoEnded || audioEnded) {
         logger.warn('[RandomChatSession] Local tracks ended, recreating...', { videoEnded, audioEnded });
         // КРИТИЧНО: Сохраняем предыдущий стрим перед пересозданием, чтобы не было черного экрана
@@ -3006,6 +3137,15 @@ export class RandomChatSession extends SimpleEventEmitter {
           this.config.onLocalStreamChange?.(prevStream);
         }
       } else {
+        if (rawVideoEnded && !videoEnded) {
+          logger.info('[RandomChatSession] Skipping local video recreation during controlled transition', {
+            suppressed: this.isLocalVideoEndedRecoverySuppressed(),
+            suppressReason: this.suppressLocalVideoEndedReason,
+            camToggleInProgress: this.camToggleInProgress,
+            flipCamInProgress: this.flipCamInProgress,
+            recoveringVideo: this.recoveringVideo,
+          });
+        }
         // Треки активны, убеждаемся что они включены
         if (this.localVideoTrack.isMuted !== !this.isCamOn) {
           if (this.isCamOn) {
