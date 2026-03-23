@@ -269,7 +269,14 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
   clearDelayedRetry(socket.id);
   clearDelayedRetry(other.id);
 
-  logger.info('Match found', { socket1: socket.id, socket2: other.id });
+  const socketNextTransitionId = socket.data.lastNextTransitionId || null;
+  const otherNextTransitionId = other.data.lastNextTransitionId || null;
+  logger.info('Match found', {
+    socket1: socket.id,
+    socket2: other.id,
+    socket1NextTransitionId: socketNextTransitionId,
+    socket2NextTransitionId: otherNextTransitionId,
+  });
 
   socket.data.partnerSid = other.id;
   other.data.partnerSid = socket.id;
@@ -283,7 +290,9 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
 
   logger.debug('Sending match_found events', { 
     socket1: socket.id, userId1: myUserId, 
-    socket2: other.id, userId2: otherUserId 
+    socket2: other.id, userId2: otherUserId,
+    socket1NextTransitionId: socketNextTransitionId,
+    socket2NextTransitionId: otherNextTransitionId,
   });
 
   const roomId = makeRoomId(socket.id, other.id);
@@ -318,6 +327,7 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
     livekitToken: livekitTokenA,
     livekitRoomName,
     livekitUrl: getLiveKitUrl() || null,
+    nextTransitionId: socketNextTransitionId,
   });
   io.to(other.id).emit('match_found', { 
     roomId, 
@@ -326,7 +336,11 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
     livekitToken: livekitTokenB,
     livekitRoomName,
     livekitUrl: getLiveKitUrl() || null,
+    nextTransitionId: otherNextTransitionId,
   });
+
+  socket.data.lastNextTransitionId = undefined;
+  other.data.lastNextTransitionId = undefined;
 
   return true;
 }
@@ -395,6 +409,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     socket.data.roomId = undefined;
     socket.data.busy = false;
     socket.data.inCall = false;
+    socket.data.lastNextTransitionId = undefined;
     await unlockPair(socket.id);
 
     await markBusy(io, socket, true);
@@ -405,16 +420,21 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
   });
 
   // === NEXT ================================================================
-  socket.on('next', async () => {
+  socket.on('next', async (data?: { transitionId?: string }) => {
+    const transitionId =
+      data && typeof data.transitionId === 'string' && data.transitionId.trim().length > 0
+        ? data.transitionId.trim()
+        : undefined;
     const now = Date.now();
     const last = await queueStore.getLastSearch(socket.id) || 0;
     if (now - last < NEXT_DEBOUNCE_MS) {
-      logger.debug('Next request debounced', { socketId: socket.id, debounceMs: now - last });
+      logger.debug('Next request debounced', { socketId: socket.id, debounceMs: now - last, transitionId });
       return;
     }
     await queueStore.setLastSearch(socket.id, now);
 
-    logger.debug('Next requested', { socketId: socket.id });
+    socket.data.lastNextTransitionId = transitionId;
+    logger.debug('Next requested', { socketId: socket.id, transitionId });
     socket.data.isNexting = true;
 
     // ПРОСТАЯ ЛОГИКА: Полностью очищаем все состояние синхронно
@@ -439,13 +459,25 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         // Одинаковая задержка для обоих (250ms), чтобы tryMatch не сматчил одного с третьим пока второй ещё не в очереди
         const reEnqueueDelayMs = 250;
         setTimeout(async () => {
-          other.data.partnerSid = undefined;
-          other.data.inCall = false;
-          await unlockPair(other.id);
-          await pushToQueue(other.id);
-          logger.debug('Partner re-added to queue after next', { socketId: other.id });
-          runTryMatch(other);
-          scheduleDelayedRetry(io, other.id, REMATCH_BAN_MS + 250, 'next_rematch_window');
+          const currentOther = safeGet(io, other.id);
+          if (!currentOther) {
+            await queueStore.clearSocketData(other.id);
+            logger.debug('Skip partner requeue after next: socket disconnected', {
+              socketId: other.id,
+              triggeredByTransitionId: transitionId,
+            });
+            return;
+          }
+          currentOther.data.partnerSid = undefined;
+          currentOther.data.inCall = false;
+          await unlockPair(currentOther.id);
+          await pushToQueue(currentOther.id);
+          logger.debug('Partner re-added to queue after next', {
+            socketId: currentOther.id,
+            triggeredByTransitionId: transitionId,
+          });
+          runTryMatch(currentOther);
+          scheduleDelayedRetry(io, currentOther.id, REMATCH_BAN_MS + 250, 'next_rematch_window');
         }, reEnqueueDelayMs);
       }
     }
@@ -464,14 +496,20 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     // 4. Та же задержка 250ms — оба в очереди одновременно, меньше гонок при tryMatch
     const reEnqueueDelayMs = 250;
     setTimeout(async () => {
-      socket.data.partnerSid = undefined;
-      socket.data.inCall = false;
-      await unlockPair(socket.id);
-      socket.data.isNexting = false;
-      await pushToQueue(socket.id);
-      logger.debug('Socket re-added to queue', { socketId: socket.id });
-      runTryMatch(socket);
-      scheduleDelayedRetry(io, socket.id, REMATCH_BAN_MS + 250, 'next_rematch_window');
+      const currentSocket = safeGet(io, socket.id);
+      if (!currentSocket) {
+        await queueStore.clearSocketData(socket.id);
+        logger.debug('Skip socket requeue after next: socket disconnected', { socketId: socket.id, transitionId });
+        return;
+      }
+      currentSocket.data.partnerSid = undefined;
+      currentSocket.data.inCall = false;
+      await unlockPair(currentSocket.id);
+      currentSocket.data.isNexting = false;
+      await pushToQueue(currentSocket.id);
+      logger.debug('Socket re-added to queue', { socketId: currentSocket.id, transitionId });
+      runTryMatch(currentSocket);
+      scheduleDelayedRetry(io, currentSocket.id, REMATCH_BAN_MS + 250, 'next_rematch_window');
     }, reEnqueueDelayMs);
   });
 
@@ -546,6 +584,7 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
     }
     await clearPartner(io, socket, true, 'stop');
     socket.data.inCall = false;
+    socket.data.lastNextTransitionId = undefined;
     await markBusy(io, socket, false);
   });
 
@@ -556,14 +595,24 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
 
     // Если пользователь нажал "Next" — не удаляем и не трогаем очередь
     if (socket.data?.isNexting) {
-      logger.debug('Socket was nexting, skip cleanup', { socketId: socket.id });
+      logger.debug('Socket was nexting, cleaning disconnected socket without requeue', {
+        socketId: socket.id,
+        transitionId: socket.data.lastNextTransitionId,
+      });
       socket.data.isNexting = false;
+      await removeFromQueue(socket.id);
+      await queueStore.clearSocketData(socket.id);
+      socket.data.inCall = false;
+      socket.data.lastNextTransitionId = undefined;
+      await unlockPair(socket.id);
+      await markBusy(io, socket, false);
       return;
     }
 
     await queueStore.clearSocketData(socket.id);
     await clearPartner(io, socket, true, 'disconnect');
     socket.data.inCall = false;
+    socket.data.lastNextTransitionId = undefined;
     await markBusy(io, socket, false);
     await unlockPair(socket.id);
   });

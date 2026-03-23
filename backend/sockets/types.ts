@@ -10,5 +10,6 @@ export interface AuthedSocket extends Socket {
     busy?: boolean;
     inCall?: boolean;
     isNexting?: boolean;
+    lastNextTransitionId?: string;
   };
 }

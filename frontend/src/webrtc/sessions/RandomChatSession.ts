@@ -42,6 +42,7 @@ type MatchPayload = {
   livekitToken?: string | null;
   livekitRoomName?: string | null;
   livekitUrl?: string | null;
+  nextTransitionId?: string | null;
 };
 
 export class RandomChatSession extends SimpleEventEmitter {
@@ -65,6 +66,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   private lastAutoSearchAt = 0;
   private socketOffs: Array<() => void> = [];
   private connectRequestId = 0;
+  private nextTransitionCounter = 0;
+  private activeNextTransitionId: string | null = null;
   private disconnectReason: 'user' | 'server' | 'unknown' = 'unknown';
   private isDisconnecting = false;
   private disconnectHandled = false;
@@ -138,7 +141,13 @@ export class RandomChatSession extends SimpleEventEmitter {
       currentRoomName: this.currentRoomName,
       pendingConnectRequestId: this.pendingConnectRequestId,
       connectRequestId: this.connectRequestId,
+      activeNextTransitionId: this.activeNextTransitionId,
     };
+  }
+
+  private createNextTransitionId(): string {
+    this.nextTransitionCounter += 1;
+    return `${this.sessionId}-next-${Date.now()}-${this.nextTransitionCounter}`;
   }
 
   private startReconnectCycle(trigger: string, details: Record<string, unknown> = {}): void {
@@ -244,6 +253,7 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   async startRandomChat(): Promise<void> {
     this.started = true;
+    this.activeNextTransitionId = null;
     this.pendingMatchFound = null;
     this.clearPartnerGoneFallbackTimer();
     this.isCamOn = true;
@@ -259,6 +269,7 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   stopRandomChat(): void {
     this.started = false;
+    this.activeNextTransitionId = null;
     this.pendingMatchFound = null;
     this.clearPartnerGoneFallbackTimer();
     this.config.setStarted?.(false);
@@ -288,19 +299,19 @@ export class RandomChatSession extends SimpleEventEmitter {
   private readonly NEXT_DEBOUNCE_MS = 1500; // Увеличено до 1.5 секунд для надежности
   private nextInProgress = false; // Флаг для защиты от параллельных вызовов
 
-  async next(): Promise<void> {
+  async next(): Promise<boolean> {
     // УПРОЩЕНО: Объединенные проверки для максимальной производительности
     
     // 1. Базовые проверки
     if (this.nextInProgress || this.isDisconnecting || !this.started) {
-      return;
+      return false;
     }
     
     // 2. Debounce защита
     const now = Date.now();
     const timeSinceLastCall = now - this.lastNextCallTime;
     if (timeSinceLastCall < this.NEXT_DEBOUNCE_MS) {
-      return;
+      return false;
     }
     this.lastNextCallTime = now;
     
@@ -308,7 +319,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     // Защита от нажатий во время подключения к LiveKit
     if (this.room && (this.room.state === 'connecting' || this.room.state === 'reconnecting')) {
       logger.debug('[RandomChatSession] next: room is connecting/reconnecting, skipping');
-      return;
+      return false;
     }
 
     this.pendingMatchFound = null;
@@ -332,7 +343,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         hasConnectedRoom,
         hasPartnerContext,
       });
-      return;
+      return false;
     }
 
     // Stabilization guard for rapid reconnect churn:
@@ -353,7 +364,7 @@ export class RandomChatSession extends SimpleEventEmitter {
             cooldownMs: this.nextAfterRemoteMediaCooldownMs,
             sinceConnectedMs,
           });
-          return;
+          return false;
         }
         if (sinceFirstRemoteMediaMs < this.nextMinStableCallAfterRemoteMediaMs) {
           logger.info('[RandomChatSession] next: waiting minimum stable call duration', {
@@ -366,7 +377,7 @@ export class RandomChatSession extends SimpleEventEmitter {
             minStableMs: this.nextMinStableCallAfterRemoteMediaMs,
             sinceConnectedMs,
           });
-          return;
+          return false;
         }
       } else if (sinceConnectedMs < this.nextWithoutRemoteMediaGraceMs) {
         logger.info('[RandomChatSession] next: waiting first remote media (grace)', {
@@ -377,12 +388,19 @@ export class RandomChatSession extends SimpleEventEmitter {
           sinceConnectedMs,
           graceMs: this.nextWithoutRemoteMediaGraceMs,
         });
-        return;
+        return false;
       }
     }
 
     // 4. Устанавливаем флаг выполнения
     this.nextInProgress = true;
+    const nextTransitionId = this.createNextTransitionId();
+    this.activeNextTransitionId = nextTransitionId;
+    this.logReconnectTrace('next_transition_started', {
+      nextTransitionId,
+      roomId: this.matchRoomId,
+      currentRemoteParticipant: this.currentRemoteParticipant?.identity || null,
+    });
     
     // КРИТИЧНО: Локальные треки НЕ останавливаем при next() - они должны продолжать работать
     // Останавливаем только удаленное соединение и сбрасываем состояние удаленного стрима
@@ -390,7 +408,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     try {
       // Clear match room id early to avoid applying stale cam-toggle events during transition.
       this.matchRoomId = null;
-      socket.emit('next');
+      socket.emit('next', { transitionId: nextTransitionId });
     } catch (e) {
       logger.warn('[RandomChatSession] Error emitting next', e);
     }
@@ -485,6 +503,7 @@ export class RandomChatSession extends SimpleEventEmitter {
           }
         }, 700);
       }
+      return true;
     } catch (e: any) {
       // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей на Android
       const errorMsg = e?.message || String(e || '');
@@ -507,6 +526,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       } catch (resetError) {
         logger.debug('[RandomChatSession] Error resetting state in next() catch', resetError);
       }
+      return false;
     } finally {
       // КРИТИЧНО: Сбрасываем флаг выполнения через небольшую задержку
       // Это гарантирует, что следующий вызов next() не произойдет слишком быстро
@@ -875,6 +895,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         roomId: data?.roomId ?? null,
         livekitRoomName: data?.livekitRoomName ?? null,
         partnerId: data?.id ?? null,
+        nextTransitionId: data?.nextTransitionId ?? null,
       });
       this.handleMatchFound(data).catch((e) => {
         logger.error('[RandomChatSession] Failed to handle match_found', e);
@@ -950,12 +971,17 @@ export class RandomChatSession extends SimpleEventEmitter {
     const partnerId = data.id;
     const roomId = data.roomId ?? null;
     const userId = data.userId ?? null;
+    const nextTransitionId = data.nextTransitionId ?? null;
+    if (nextTransitionId) {
+      this.activeNextTransitionId = nextTransitionId;
+    }
     this.logReconnectTrace('handle_match_found_begin', {
       partnerId,
       roomId,
       userId,
       livekitRoomName: data.livekitRoomName ?? null,
       livekitUrl: data.livekitUrl ?? null,
+      nextTransitionId,
     });
 
     if (!this.started) {
@@ -963,6 +989,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         partnerId,
         roomId,
         livekitRoomName: data.livekitRoomName ?? null,
+        nextTransitionId,
       });
       return;
     }
@@ -1019,15 +1046,6 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.lastMatchFoundRoomName = data.livekitRoomName || null;
     this.lastMatchFoundTime = now;
 
-    this.resetRemoteState();
-    this.emit('matchFound', { partnerId, roomId, userId });
-    this.config.callbacks.onPartnerIdChange?.(partnerId);
-    this.config.onPartnerIdChange?.(partnerId);
-    if (roomId) {
-      this.config.callbacks.onRoomIdChange?.(roomId);
-      this.config.onRoomIdChange?.(roomId);
-    }
-
     const resolvedLivekitUrl = (LIVEKIT_URL || data.livekitUrl || '').trim();
     if (!resolvedLivekitUrl) {
       logger.error('[RandomChatSession] LiveKit URL is not configured', {
@@ -1043,6 +1061,15 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
 
+    this.resetRemoteState();
+    this.emit('matchFound', { partnerId, roomId, userId });
+    this.config.callbacks.onPartnerIdChange?.(partnerId);
+    this.config.onPartnerIdChange?.(partnerId);
+    if (roomId) {
+      this.config.callbacks.onRoomIdChange?.(roomId);
+      this.config.onRoomIdChange?.(roomId);
+    }
+
     const connectRequestId = ++this.connectRequestId;
     this.pendingConnectRequestId = connectRequestId;
     
@@ -1050,6 +1077,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.logReconnectTrace('handle_match_found_connect_start', {
         connectRequestId,
         targetRoomName: data.livekitRoomName ?? null,
+        nextTransitionId,
       });
       const connected = await this.connectToLiveKit(
         resolvedLivekitUrl,
@@ -1066,6 +1094,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         this.logReconnectTrace('handle_match_found_connect_not_connected', {
           connectRequestId,
           partnerId,
+          nextTransitionId,
         });
         return;
       }
@@ -1074,6 +1103,7 @@ export class RandomChatSession extends SimpleEventEmitter {
           connectRequestId,
           partnerId,
           targetRoomName: data.livekitRoomName ?? null,
+          nextTransitionId,
         });
         return;
       }
@@ -1081,6 +1111,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         connectRequestId,
         partnerId,
         targetRoomName: data.livekitRoomName ?? null,
+        nextTransitionId,
       });
       this.config.callbacks.onLoadingChange?.(false);
       this.config.onLoadingChange?.(false);

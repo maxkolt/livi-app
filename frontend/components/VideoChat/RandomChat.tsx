@@ -946,6 +946,23 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       return;
     }
 
+      const prevPartnerUserId = partnerUserId;
+      const prevAddPending = addPending;
+      const prevAddBlocked = addBlocked;
+      const prevRemoteCamKnown = remoteCamStateKnownRef.current;
+      const prevRemoteCamEnabled = remoteCamEnabled;
+      const prevHasEverRemoteVideo = hasEverRemoteVideoRef.current;
+      const restoreUiAfterRejectedNext = () => {
+        loadingRef.current = false;
+        setLoading(false);
+        remoteCamStateKnownRef.current = prevRemoteCamKnown;
+        setRemoteCamEnabled(prevRemoteCamEnabled);
+        hasEverRemoteVideoRef.current = prevHasEverRemoteVideo;
+        setPartnerUserId(prevPartnerUserId);
+        setAddPending(prevAddPending);
+        setAddBlocked(prevAddBlocked);
+      };
+
       // Устанавливаем флаги ДО начала операции
       isNextingRef.current = true;
       setIsNexting(true);
@@ -965,9 +982,23 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         needsIOSUpdateAfterNextRef.current = true;
       }
 
+      let nextStarted = false;
       try {
         // Вызываем next() в сессии
-        await session.next();
+        nextStarted = await session.next();
+        if (!nextStarted) {
+          logger.info('[RandomChat] Next request rejected before transition start', {
+            started,
+            loading: loadingRef.current,
+            isNexting: isNextingRef.current,
+            roomState: room?.state ?? 'none',
+          });
+          restoreUiAfterRejectedNext();
+          return;
+        }
+        logger.info('[RandomChat] Next transition started', {
+          roomState: room?.state ?? 'none',
+        });
         
         // КРИТИЧНО для iOS: Устанавливаем флаг для обновления key при следующем localStream
         // НЕ обновляем key здесь, чтобы избежать конфликтов с обработчиком localStream
@@ -975,6 +1006,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           needsIOSUpdateAfterNextRef.current = true;
         }
     } catch (e: any) {
+      if (!nextStarted) {
+        restoreUiAfterRejectedNext();
+      }
       // КРИТИЧНО: Улучшенная обработка ошибок для предотвращения крашей на Android
       const errorMsg = e?.message || String(e || '');
       logger.error('[RandomChat] Error next:', {
@@ -1000,7 +1034,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       setTimeout(() => {
         isNextingRef.current = false;
         setIsNexting(false);
-      }, 1500);
+      }, nextStarted ? 1500 : 0);
     }
   }, [isNexting, started, loading, isInactiveState, canRunAction]);
   
