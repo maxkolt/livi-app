@@ -35,6 +35,7 @@ type UseModerationOptions = {
 
 const WARNING_TEXT = 'Пожалуйста, соблюдайте правила. Обнаружен нежелательный контент.';
 const BAN_TEXT = 'Вы заблокированы на 1 час за повторные нарушения.';
+const WARNING_TO_BAN_DELAY_MS = 10_000;
 
 /** Задержка после подключения перед началом захвата — избегаем race с обновлением view hierarchy (IndexOutOfBoundsException в gatherTransparentRegion) */
 const STABLE_DELAY_MS = 3000;
@@ -63,11 +64,13 @@ export function useModeration({
   const lastCheckAtRef = useRef(0);
   const consecutiveBadFramesRef = useRef(0);
   const strikesRef = useRef(0);
+  const firstWarningAtRef = useRef(0);
   const activeSinceRef = useRef<number | null>(null);
   const suspendCaptureUntilRef = useRef(0);
   const lastStabilityKeyRef = useRef<string | number | null | undefined>(undefined);
   /** Для remote: счётчик нарушений текущего партнёра (1=warning, 2+=ban) */
   const partnerStrikesRef = useRef(0);
+  const partnerFirstWarningAtRef = useRef(0);
   const lastPartnerUserIdRef = useRef<string | null>(null);
 
   const active = useMemo(() => enabled && chatType === 'random' && shouldCheck, [enabled, chatType, shouldCheck]);
@@ -80,6 +83,13 @@ export function useModeration({
       activeSinceRef.current = null;
       suspendCaptureUntilRef.current = 0;
       lastStabilityKeyRef.current = undefined;
+      consecutiveBadFramesRef.current = 0;
+      strikesRef.current = 0;
+      firstWarningAtRef.current = 0;
+      partnerStrikesRef.current = 0;
+      partnerFirstWarningAtRef.current = 0;
+      lastPartnerUserIdRef.current = null;
+      setStrikes(0);
     }
   }, [active]);
 
@@ -120,15 +130,21 @@ export function useModeration({
     );
   };
 
-  const applyStrike = () => {
-    strikesRef.current += 1;
-    const next = strikesRef.current;
-    setStrikes(Math.min(next, 3));
-
-    if (next === 1) {
+  const applyStrike = (now: number) => {
+    if (strikesRef.current === 0) {
+      strikesRef.current = 1;
+      firstWarningAtRef.current = now;
+      setStrikes(1);
       onWarning(WARNING_TEXT);
       return;
     }
+
+    if (now - firstWarningAtRef.current < WARNING_TO_BAN_DELAY_MS) {
+      return;
+    }
+
+    strikesRef.current = 2;
+    setStrikes(2);
     onBan(3600, BAN_TEXT);
   };
 
@@ -260,17 +276,26 @@ export function useModeration({
       if (data.violation) {
         consecutiveBadFramesRef.current += 1;
         if (consecutiveBadFramesRef.current >= badFramesThreshold) {
+          const violationDetectedAt = Date.now();
           consecutiveBadFramesRef.current = 0;
           if (moderationTarget === 'remote') {
             if (partnerUserId) {
               if (lastPartnerUserIdRef.current !== partnerUserId) {
                 partnerStrikesRef.current = 0;
+                partnerFirstWarningAtRef.current = 0;
                 lastPartnerUserIdRef.current = partnerUserId;
               }
-              partnerStrikesRef.current += 1;
-              if (partnerStrikesRef.current === 1 && onRemoteWarning) {
-                onRemoteWarning(partnerUserId);
-              } else if (partnerStrikesRef.current >= 2 && onRemoteViolation) {
+
+              if (partnerStrikesRef.current === 0) {
+                partnerStrikesRef.current = 1;
+                partnerFirstWarningAtRef.current = violationDetectedAt;
+                onRemoteWarning?.(partnerUserId);
+              } else if (
+                partnerStrikesRef.current >= 1 &&
+                violationDetectedAt - partnerFirstWarningAtRef.current >= WARNING_TO_BAN_DELAY_MS &&
+                onRemoteViolation
+              ) {
+                partnerStrikesRef.current = 2;
                 onRemoteViolation(partnerUserId);
               }
             } else {
@@ -278,7 +303,7 @@ export function useModeration({
               logger.warn('[Moderation] remote violation but partnerUserId is null, skipping strike');
             }
           } else {
-            applyStrike();
+            applyStrike(violationDetectedAt);
           }
         }
         return;
