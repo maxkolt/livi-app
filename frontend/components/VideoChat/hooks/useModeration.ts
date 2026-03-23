@@ -15,6 +15,8 @@ type UseModerationOptions = {
   enabled: boolean;
   chatType: 'random' | 'private' | string;
   targetRef: RefObject<View | null>;
+  /** Ключ стабильности target view: при изменении временно пропускаем захват, чтобы переждать churn RTCView/layout. */
+  stabilityKey?: string | number | null;
   /** 'remote' = проверяем собеседника, при нарушении блокируем его. 'local' = проверяем себя. */
   moderationTarget: 'local' | 'remote';
   /** Только для moderationTarget='remote': userId партнёра для репорта */
@@ -22,6 +24,7 @@ type UseModerationOptions = {
   shouldCheck: boolean;
   cooldownMs?: number;
   badFramesThreshold?: number;
+  stabilityDelayMs?: number;
   onWarning: (message: string) => void;
   onBan: (seconds: number, message: string) => void;
   /** Первое нарушение: предупреждение партнёру (он видит в своём блоке «Вы») */
@@ -35,16 +38,19 @@ const BAN_TEXT = 'Вы заблокированы на 1 час за повто�
 
 /** Задержка после подключения перед началом захвата — избегаем race с обновлением view hierarchy (IndexOutOfBoundsException в gatherTransparentRegion) */
 const STABLE_DELAY_MS = 3000;
+const STABILITY_KEY_DELAY_MS = 1800;
 
 export function useModeration({
   enabled,
   chatType,
   targetRef,
+  stabilityKey,
   moderationTarget,
   partnerUserId,
   shouldCheck,
   cooldownMs = 1300,
   badFramesThreshold = 3,
+  stabilityDelayMs = STABILITY_KEY_DELAY_MS,
   onWarning,
   onBan,
   onRemoteWarning,
@@ -58,6 +64,8 @@ export function useModeration({
   const consecutiveBadFramesRef = useRef(0);
   const strikesRef = useRef(0);
   const activeSinceRef = useRef<number | null>(null);
+  const suspendCaptureUntilRef = useRef(0);
+  const lastStabilityKeyRef = useRef<string | number | null | undefined>(undefined);
   /** Для remote: счётчик нарушений текущего партнёра (1=warning, 2+=ban) */
   const partnerStrikesRef = useRef(0);
   const lastPartnerUserIdRef = useRef<string | null>(null);
@@ -70,8 +78,47 @@ export function useModeration({
       if (activeSinceRef.current === null) activeSinceRef.current = Date.now();
     } else {
       activeSinceRef.current = null;
+      suspendCaptureUntilRef.current = 0;
+      lastStabilityKeyRef.current = undefined;
     }
   }, [active]);
+
+  useEffect(() => {
+    if (!active) return;
+    if (lastStabilityKeyRef.current === undefined) {
+      lastStabilityKeyRef.current = stabilityKey;
+      return;
+    }
+    if (lastStabilityKeyRef.current === stabilityKey) return;
+    lastStabilityKeyRef.current = stabilityKey;
+    suspendCaptureUntilRef.current = Date.now() + stabilityDelayMs;
+    logger.info('[Moderation] pause capture due to unstable target', {
+      target: moderationTarget,
+      stabilityKey,
+      stabilityDelayMs,
+    });
+  }, [active, moderationTarget, stabilityDelayMs, stabilityKey]);
+
+  const measureTargetBounds = async (target: View) => {
+    const current = targetRef.current;
+    if (!current || current !== target) return null;
+    return await new Promise<{ x: number; y: number; width: number; height: number } | null>(
+      (resolve) => {
+        try {
+          (target as any).measureInWindow?.((x: number, y: number, w: number, h: number) => {
+            if (targetRef.current !== target) {
+              resolve(null);
+              return;
+            }
+            if (w >= 50 && h >= 50) resolve({ x, y, width: w, height: h });
+            else resolve(null);
+          });
+        } catch {
+          resolve(null);
+        }
+      }
+    );
+  };
 
   const applyStrike = () => {
     strikesRef.current += 1;
@@ -95,6 +142,7 @@ export function useModeration({
     // Не захватываем экран в первые N секунд после подключения — view hierarchy ещё стабилизируется
     const activeSince = activeSinceRef.current;
     if (activeSince === null || now - activeSince < STABLE_DELAY_MS) return;
+    if (now < suspendCaptureUntilRef.current) return;
     lastCheckAtRef.current = now;
 
     const target = targetRef.current;
@@ -106,6 +154,26 @@ export function useModeration({
     try {
       // Даём UI отрисоваться перед обходом view tree (снижает риск IndexOutOfBoundsException)
       await new Promise<void>((r) => InteractionManager.runAfterInteractions(() => r()));
+      await new Promise((r) => setTimeout(r, 120));
+
+      if (!active || targetRef.current !== target) return;
+
+      const bounds = await measureTargetBounds(target);
+      if (!bounds) {
+        logger.warn('[Moderation] skip capture: target bounds unavailable', { target: moderationTarget });
+        return;
+      }
+
+      // Санити-чек: для remote (Собеседник) bounds.y обычно в верхней половине; для local (Вы) — в нижней.
+      const screenH = Dimensions.get('window').height;
+      if (moderationTarget === 'remote' && bounds.y > screenH * 0.6) {
+        logger.warn('[Moderation] skip: remote card expected in upper half', { boundsY: bounds.y, screenH });
+        return;
+      }
+      if (moderationTarget === 'local' && bounds.y < screenH * 0.25) {
+        logger.warn('[Moderation] skip: local card expected in lower half', { boundsY: bounds.y, screenH });
+        return;
+      }
 
       let base64: string | undefined;
 
@@ -120,6 +188,7 @@ export function useModeration({
       };
 
       try {
+        if (targetRef.current !== target) return;
         const tmpUri = await captureRef(target, captureRefOpts);
         const raw = await FileSystem.readAsStringAsync(tmpUri, {
           encoding: FileSystem.EncodingType.Base64,
@@ -128,30 +197,12 @@ export function useModeration({
         base64 = raw;
       } catch (_refErr) {
         // 2) Fallback: captureScreen + crop (RTCView часто не поддерживает captureRef)
-        const bounds = await new Promise<{ x: number; y: number; width: number; height: number } | null>(
-          (resolve) => {
-            (target as any).measureInWindow?.((x: number, y: number, w: number, h: number) => {
-              if (w >= 50 && h >= 50) resolve({ x, y, width: w, height: h });
-              else resolve(null);
-            });
-          }
-        );
-        if (!bounds) return;
-
-        // Санити-чек: для remote (Собеседник) bounds.y обычно в верхней половине; для local (Вы) — в нижней.
-        const screenH = Dimensions.get('window').height;
-        if (moderationTarget === 'remote' && bounds.y > screenH * 0.6) {
-          logger.warn('[Moderation] skip: remote card expected in upper half', { boundsY: bounds.y, screenH });
-          return;
-        }
-        if (moderationTarget === 'local' && bounds.y < screenH * 0.25) {
-          logger.warn('[Moderation] skip: local card expected in lower half', { boundsY: bounds.y, screenH });
-          return;
-        }
+        if (targetRef.current !== target) return;
         logger.info('[Moderation] captureScreen+crop bounds OK', { target: moderationTarget, y: bounds.y, screenH });
 
         // Небольшая пауза перед captureScreen — снижает риск IndexOutOfBoundsException при обходе view tree
         await new Promise((r) => setTimeout(r, 100));
+        if (targetRef.current !== target) return;
 
         const tmpUri = await captureScreen({
           format: 'jpg',
@@ -240,7 +291,7 @@ export function useModeration({
       void runCheck();
     }, cooldownMs);
     return () => clearInterval(interval);
-  }, [active, cooldownMs, moderationTarget, partnerUserId]);
+  }, [active, cooldownMs, moderationTarget, partnerUserId, stabilityKey, stabilityDelayMs]);
 
   return {
     isChecking,
