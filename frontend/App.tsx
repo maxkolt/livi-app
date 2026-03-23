@@ -2363,7 +2363,8 @@ function AppContent() {
                   presentation: 'card',
                   gestureEnabled: true,
                   animation: 'fade',
-                  animationDuration: 450,
+                  // Быстрее переход с welcome-экрана, но с мягким fade без резкости.
+                  animationDuration: 240,
                   contentStyle: { backgroundColor: 'transparent' },
                 }}
               />
