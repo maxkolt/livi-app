@@ -575,28 +575,51 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
         return;
       }
 
+      // SECURITY/CONSISTENCY:
+      // Never trust client-provided partnerUserId blindly.
+      // Ban only the currently connected partner in this random-chat pair.
+      const partnerSid = socket.data.partnerSid as string | undefined;
+      if (!partnerSid) {
+        done({ ok: false, reason: 'no_partner_socket' });
+        return;
+      }
+      const partner = safeGet(io, partnerSid);
+      if (!partner) {
+        done({ ok: false, reason: 'partner_not_connected' });
+        return;
+      }
+      const actualPartnerUserId = String((partner as any)?.data?.userId || '').trim();
+      if (!actualPartnerUserId) {
+        done({ ok: false, reason: 'partner_user_unknown' });
+        return;
+      }
+      if (reported !== actualPartnerUserId) {
+        logger.warn('[Moderation] Reject reportPartner due to mismatched partnerUserId', {
+          reporterSocketId: socket.id,
+          reporterUserId: (socket as any)?.data?.userId,
+          providedPartnerUserId: reported,
+          actualPartnerUserId,
+          partnerSocketId: partnerSid,
+        });
+        done({ ok: false, reason: 'partner_mismatch' });
+        return;
+      }
+
       const reporterId = (socket as any)?.data?.userId;
       logger.info('[Moderation] partner reported for violation, banning userId', {
         reporterUserId: reporterId,
-        reportedUserId: reported,
+        reportedUserId: actualPartnerUserId,
         reporterSocketId: socket.id,
       });
 
-      await queueStore.banModerationUser(reported, MODERATION_BAN_MS);
-
-      const partnerSid = socket.data.partnerSid as string | undefined;
-      if (partnerSid) {
-        const partner = safeGet(io, partnerSid);
-        if (partner) {
-          await emitModerationBannedToSocket(partner, reported);
-          partner.emit('peer:left');
-          partner.data.partnerSid = undefined;
-          partner.data.inCall = false;
-          await unlockPair(partner.id);
-          await removeFromQueue(partner.id);
-          await markBusy(io, partner, false);
-        }
-      }
+      await queueStore.banModerationUser(actualPartnerUserId, MODERATION_BAN_MS);
+      await emitModerationBannedToSocket(partner, actualPartnerUserId);
+      partner.emit('peer:left');
+      partner.data.partnerSid = undefined;
+      partner.data.inCall = false;
+      await unlockPair(partner.id);
+      await removeFromQueue(partner.id);
+      await markBusy(io, partner, false);
 
       done({ ok: true });
     }

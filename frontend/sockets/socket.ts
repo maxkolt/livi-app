@@ -183,6 +183,7 @@ export function onCurrentUserId(cb: CurrentUserIdListener): () => void {
 /* ========= socket (singleton) ========= */
 let socketInstance: Socket | null = null;
 let reconnecting = false;
+let connectAttemptPromise: Promise<void> | null = null;
 // Флаг: гарантировали ли мы, что handshake содержит installId (иначе сервер вернёт guest профиль {})
 let __handshakeHasInstallId = false;
 export const isReconnecting = () => reconnecting;
@@ -194,6 +195,10 @@ export const getSocket = (): Socket => {
       // Many VPNs / captive portals / corporate networks block WebSocket.
       // Start with polling (more likely to pass), then upgrade to WebSocket when possible.
       transports: ["polling", "websocket"],
+      // If first transport fails (e.g. VPN blocks polling), engine.io should try the next one.
+      // This keeps behavior stable both with and without VPN.
+      // @ts-ignore - available in newer engine.io, safe no-op on older versions.
+      tryAllTransports: true,
       upgrade: true,
       forceNew: false, // не создаём новый, держим singleton
       // CRITICAL:
@@ -224,92 +229,121 @@ socket.on('missed_calls:sync', (payload: { missed?: { from: string; fromNick?: s
 
 /* ========= auth apply & connect ========= */
 async function applyAuthAndConnect() {
-  try {
-    const installId = await getInstallId();
-    // @ts-ignore
-    socket.auth = { installId, ...(currentUserId ? { userId: currentUserId } : {}) };
+  if (connectAttemptPromise) return connectAttemptPromise;
 
-    // Если уже подключены, но handshake был без installId (типичный кейс из-за autoConnect),
-    // сервер будет считать нас гостем и profile:me вернёт {}. В этом случае делаем 1 reconnect.
-    if (socket.connected) {
-      if (!__handshakeHasInstallId && installId) {
-        try {
-          const resp = await emitAck<{ ok: boolean; userId?: string; error?: string }>(
-            'reauth',
-            { userId: currentUserId },
-            6000,
-            0
-          );
-          if (resp?.ok) {
-            __handshakeHasInstallId = true;
-            return;
-          }
-          if (resp?.error === 'no_installId') {
-            logger.warn('[applyAuthAndConnect] Connected without installId in handshake, forcing reconnect');
+  connectAttemptPromise = (async () => {
+    try {
+      const installId = await getInstallId();
+      // @ts-ignore
+      socket.auth = { installId, ...(currentUserId ? { userId: currentUserId } : {}) };
+
+      // Если realtime сейчас сознательно поставлен на паузу, не стартуем новый connect().
+      // Иначе при фоне/блокировке экрана можно словить шумный xhr poll error от уже отмененного запроса.
+      if (!shouldAttemptRealtimeConnection()) {
+        logger.debug('[applyAuthAndConnect] Realtime paused, skip connect');
+        return;
+      }
+
+      // Если уже подключены, но handshake был без installId (типичный кейс из-за autoConnect),
+      // сервер будет считать нас гостем и profile:me вернёт {}. В этом случае делаем 1 reconnect.
+      if (socket.connected) {
+        if (!__handshakeHasInstallId && installId) {
+          try {
+            const resp = await emitAck<{ ok: boolean; userId?: string; error?: string }>(
+              'reauth',
+              { userId: currentUserId },
+              6000,
+              0
+            );
+            if (resp?.ok) {
+              __handshakeHasInstallId = true;
+              return;
+            }
+            if (resp?.error === 'no_installId') {
+              logger.warn('[applyAuthAndConnect] Connected without installId in handshake, forcing reconnect');
+              try { socket.disconnect(); } catch {}
+              __handshakeHasInstallId = false;
+              socket.connect();
+            } else {
+              // Если иная ошибка — не делаем агрессивный reconnect, чтобы не ломать релиз-стабильность.
+              return;
+            }
+          } catch (e) {
+            // Если ack завис/упал — мягко пробуем переподключиться один раз.
             try { socket.disconnect(); } catch {}
             __handshakeHasInstallId = false;
             socket.connect();
-          } else {
-            // Если иная ошибка — не делаем агрессивный reconnect, чтобы не ломать релиз-стабильность.
-            return;
           }
-        } catch (e) {
-          // Если ack завис/упал — мягко пробуем переподключиться один раз.
-          try { socket.disconnect(); } catch {}
-          __handshakeHasInstallId = false;
-          socket.connect();
+        } else {
+          return;
         }
+      }
+
+      if (!socket.connected) {
+        logger.debug("Connecting socket...");
+        // Socket.connect() не возвращает промис, поэтому используем события
+        socket.connect();
+
+        // Ждем подключения с таймаутом
+        await new Promise<void>((resolve, reject) => {
+          const cleanup = () => {
+            clearTimeout(timeout);
+            socket.off('connect', onConnect);
+            socket.off('connect_error', onError);
+          };
+          const timeout = setTimeout(() => {
+            cleanup();
+            if (!shouldAttemptRealtimeConnection()) {
+              logger.debug('[applyAuthAndConnect] Connection timeout while realtime paused');
+              resolve();
+              return;
+            }
+            reject(new Error('Socket connection timeout'));
+          }, 10000); // 10 секунд таймаут
+
+          const onConnect = () => {
+            cleanup();
+            logger.debug("Socket connected");
+            resolve();
+          };
+
+          const onError = (err: any) => {
+            cleanup();
+            if (!shouldAttemptRealtimeConnection()) {
+              logger.debug('[applyAuthAndConnect] Ignoring connect error while realtime paused:', err?.message || String(err));
+              resolve();
+              return;
+            }
+            logger.warn("Socket connect error:", err);
+            reject(err);
+          };
+
+          if (socket.connected) {
+            cleanup();
+            resolve();
+          } else {
+            socket.once('connect', onConnect);
+            socket.once('connect_error', onError);
+          }
+        });
+        if (socket.connected && installId) __handshakeHasInstallId = true;
       } else {
+        logger.debug("Socket already connected, skip reconnect");
+      }
+    } catch (error) {
+      if (!shouldAttemptRealtimeConnection()) {
+        logger.debug('[applyAuthAndConnect] Connection attempt stopped while realtime paused');
         return;
       }
+      logger.error('[applyAuthAndConnect] Connection failed:', error);
+      // Не выбрасываем ошибку - приложение должно продолжить работу
+      // Socket переподключится автоматически
+    } finally {
+      connectAttemptPromise = null;
     }
+  })();
 
-    if (!socket.connected) {
-      logger.debug("Connecting socket...");
-      // Socket.connect() не возвращает промис, поэтому используем события
-      socket.connect();
-      
-      // Ждем подключения с таймаутом
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          socket.off('connect', onConnect);
-          socket.off('connect_error', onError);
-          reject(new Error('Socket connection timeout'));
-        }, 10000); // 10 секунд таймаут
-        
-        const onConnect = () => {
-          clearTimeout(timeout);
-          socket.off('connect', onConnect);
-          socket.off('connect_error', onError);
-          logger.debug("Socket connected");
-          resolve();
-        };
-        
-        const onError = (err: any) => {
-          clearTimeout(timeout);
-          socket.off('connect', onConnect);
-          socket.off('connect_error', onError);
-          logger.warn("Socket connect error:", err);
-          reject(err);
-        };
-        
-        if (socket.connected) {
-          clearTimeout(timeout);
-          resolve();
-        } else {
-          socket.once('connect', onConnect);
-          socket.once('connect_error', onError);
-        }
-      });
-      if (installId) __handshakeHasInstallId = true;
-    } else {
-      logger.debug("Socket already connected, skip reconnect");
-    }
-  } catch (error) {
-    logger.error('[applyAuthAndConnect] Connection failed:', error);
-    // Не выбрасываем ошибку - приложение должно продолжить работу
-    // Socket переподключится автоматически
-  }
+  return connectAttemptPromise;
 }
 
 async function boot() {
@@ -455,6 +489,13 @@ const __incomingCallScreenChangeListeners = new Set<(visible: boolean, fromUserI
 /** Пока активен видеозвонок (подключение к LiveKit или комната connected) — не отключать сокет при «background», чтобы избежать negotiation disconnected / m-line errors. */
 let __activeVideoCall = false;
 
+function shouldAttemptRealtimeConnection(): boolean {
+  const inSystemPiP =
+    typeof (global as any).__pipInSystemModeRef?.current === 'boolean' &&
+    (global as any).__pipInSystemModeRef?.current === true;
+  return !__realtimePaused || __outgoingCallScreenVisible || __incomingCallScreenVisible || __activeVideoCall || inSystemPiP;
+}
+
 export function setOutgoingCallScreenVisible(visible: boolean): void {
   __outgoingCallScreenVisible = visible;
   if (!visible && (__lastAppState !== 'active' && __lastAppState !== 'inactive')) {
@@ -596,6 +637,18 @@ socket.on("disconnect", (r) => {
 });
 socket.on("connect_error", (e) => {
   reconnecting = true;
+  // VPNs sometimes break XHR polling while WebSocket is still available.
+  // Switch transport preference for next attempts to avoid stuck retries.
+  try {
+    const msg = String((e as any)?.message || '').toLowerCase();
+    if (msg.includes('xhr poll error')) {
+      const ioOpts: any = (socket as any)?.io?.opts;
+      if (Array.isArray(ioOpts?.transports) && ioOpts.transports[0] !== 'websocket') {
+        ioOpts.transports = ['websocket', 'polling'];
+        logger.warn('[socket] xhr polling failed, preferring websocket for reconnect');
+      }
+    }
+  } catch {}
   console.warn(`[socket] error ${e?.message || e}`);
 });
 // Busy handler (for logging/forwarding to UI screens)
