@@ -8,9 +8,15 @@ import {
   Dimensions,
   Image,
   Platform,
+  Text,
+  TouchableOpacity,
+  Linking,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAppTheme } from '../theme/ThemeProvider';
+import { useLang } from '../store/lang';
+import { t } from '../utils/i18n';
+import { getPrivacyPolicyUrl } from '../utils/privacyPolicyUrl';
 
 const { width, height } = Dimensions.get('window');
 
@@ -31,6 +37,8 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
   const [showSplash, setShowSplash] = useState(true);
   const [minTimeElapsed, setMinTimeElapsed] = useState(!!overlayMode);
   const { theme } = useAppTheme();
+  const lang = useLang((s) => s.lang);
+  const insets = useSafeAreaInsets();
 
   // Анимации для логотипа
   const logoScale = useRef(new Animated.Value(1)).current;
@@ -155,6 +163,7 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <View style={styles.middle}>
       {/* Логотип с тенью */}
       <View style={styles.logoContainer}>
         {/* Дополнительная мягкая тень для реалистичности */}
@@ -209,6 +218,25 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
           />
         </Animated.View>
       </View>
+      </View>
+
+      <TouchableOpacity
+        onPress={() => Linking.openURL(getPrivacyPolicyUrl()).catch(() => {})}
+        activeOpacity={0.65}
+        style={[
+          styles.privacyWrap,
+          { paddingBottom: Math.max(insets.bottom, 10) + 8 },
+        ]}
+        accessibilityRole="link"
+        accessibilityLabel={t('privacyPolicyLink', lang)}
+      >
+        <Text
+          style={[styles.privacyText, { color: theme.colors.titan }]}
+          numberOfLines={2}
+        >
+          {t('privacyPolicyLink', lang)}
+        </Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -216,8 +244,6 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
     position: 'absolute',
     top: 0,
     left: 0,
@@ -225,9 +251,25 @@ const styles = StyleSheet.create({
     bottom: 0,
     zIndex: 9999,
   },
+  middle: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   logoContainer: {
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  privacyWrap: {
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  privacyText: {
+    fontSize: 11,
+    lineHeight: 15,
+    textAlign: 'center',
+    textDecorationLine: 'underline',
   },
   logoWrapper: {
     justifyContent: 'center',

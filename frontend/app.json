@@ -3,7 +3,7 @@
     "name": "LiVi",
     "slug": "livi-video-chat",
     "scheme": "livi",
-    "version": "1.1.3",
+    "version": "1.1.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -30,7 +30,7 @@
     },
     "android": {
       "package": "com.kolt12max.livi",
-      "versionCode": 104,
+      "versionCode": 106,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"

@@ -564,6 +564,7 @@ export default function SettingsScreen() {
           </Text>
         </TouchableOpacity>
       )}
+
       {/* Staging/debug: показать API и LiveKit URL для проверки сборки */}
       <View style={{ marginHorizontal: 20, marginBottom: 24, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
         <Text style={{ color: '#8A8F99', fontSize: 11, marginBottom: 4 }}>API: {API_BASE || '—'}</Text>

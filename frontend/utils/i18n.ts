@@ -3215,6 +3215,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'Входящий видеозвонок',
     incomingFromPrefix: 'От {name}',
     answerAction: 'Поднять',
+    privacyPolicyLink: 'Политика конфиденциальности',
   },
   en: {
     updateDownloadNew: 'Download update',
@@ -3235,6 +3236,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'Incoming video call',
     incomingFromPrefix: 'From {name}',
     answerAction: 'Answer',
+    privacyPolicyLink: 'Privacy policy',
   },
   es: {
     updateDownloadNew: 'Descargar actualizacion',
@@ -3255,6 +3257,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'Videollamada entrante',
     incomingFromPrefix: 'De {name}',
     answerAction: 'Responder',
+    privacyPolicyLink: 'Politica de privacidad',
   },
   de: {
     updateDownloadNew: 'Update herunterladen',
@@ -3275,6 +3278,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'Eingehender Videoanruf',
     incomingFromPrefix: 'Von {name}',
     answerAction: 'Annehmen',
+    privacyPolicyLink: 'Datenschutz',
   },
   fr: {
     updateDownloadNew: 'Telecharger la mise a jour',
@@ -3295,6 +3299,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'Appel video entrant',
     incomingFromPrefix: 'De {name}',
     answerAction: 'Repondre',
+    privacyPolicyLink: 'Politique de confidentialite',
   },
   it: {
     updateDownloadNew: 'Scarica aggiornamento',
@@ -3315,6 +3320,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'Videochiamata in arrivo',
     incomingFromPrefix: 'Da {name}',
     answerAction: 'Rispondi',
+    privacyPolicyLink: 'Privacy policy',
   },
   pt: {
     updateDownloadNew: 'Baixar atualizacao',
@@ -3335,6 +3341,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'Chamada de video recebida',
     incomingFromPrefix: 'De {name}',
     answerAction: 'Atender',
+    privacyPolicyLink: 'Politica de privacidade',
   },
   tr: {
     updateDownloadNew: 'Guncellemeyi indir',
@@ -3355,6 +3362,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'Gelen goruntulu arama',
     incomingFromPrefix: '{name} tarafindan',
     answerAction: 'Yanitla',
+    privacyPolicyLink: 'Gizlilik politikasi',
   },
   ar: {
     updateDownloadNew: 'تنزيل التحديث',
@@ -3375,6 +3383,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'مكالمة فيديو واردة',
     incomingFromPrefix: 'من {name}',
     answerAction: 'رد',
+    privacyPolicyLink: 'سياسة الخصوصية',
   },
   ja: {
     updateDownloadNew: 'アップデートをダウンロード',
@@ -3395,6 +3404,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: '着信ビデオ通話',
     incomingFromPrefix: '{name} から',
     answerAction: '応答',
+    privacyPolicyLink: 'プライバシーポリシー',
   },
   ko: {
     updateDownloadNew: '업데이트 다운로드',
@@ -3415,6 +3425,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: '수신 영상 통화',
     incomingFromPrefix: '{name} 님',
     answerAction: '받기',
+    privacyPolicyLink: '개인정보 처리방침',
   },
   zh: {
     updateDownloadNew: '下载更新',
@@ -3435,6 +3446,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: '来电视频通话',
     incomingFromPrefix: '来自 {name}',
     answerAction: '接听',
+    privacyPolicyLink: '隐私政策',
   },
   'zh-TW': {
     updateDownloadNew: '下載更新',
@@ -3455,6 +3467,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: '來電視訊通話',
     incomingFromPrefix: '來自 {name}',
     answerAction: '接聽',
+    privacyPolicyLink: '隱私權政策',
   },
   hi: {
     updateDownloadNew: 'अपडेट डाउनलोड करें',
@@ -3475,6 +3488,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'इनकमिंग वीडियो कॉल',
     incomingFromPrefix: '{name} से',
     answerAction: 'उत्तर दें',
+    privacyPolicyLink: 'गोपनीयता नीति',
   },
   vi: {
     updateDownloadNew: 'Tai ban cap nhat',
@@ -3495,6 +3509,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'Cuoc goi video den',
     incomingFromPrefix: 'Tu {name}',
     answerAction: 'Tra loi',
+    privacyPolicyLink: 'Chinh sach bao mat',
   },
   th: {
     updateDownloadNew: 'ดาวน์โหลดอัปเดต',
@@ -3515,6 +3530,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'สายวิดีโอขาเข้า',
     incomingFromPrefix: 'จาก {name}',
     answerAction: 'รับสาย',
+    privacyPolicyLink: 'นโยบายความเป็นส่วนตัว',
   },
   id: {
     updateDownloadNew: 'Unduh pembaruan',
@@ -3535,6 +3551,7 @@ const runtimeI18nOverrides: Record<Lang, Record<string, string>> = {
     incomingVideoCallBody: 'Panggilan video masuk',
     incomingFromPrefix: 'Dari {name}',
     answerAction: 'Jawab',
+    privacyPolicyLink: 'Kebijakan privasi',
   },
 };
 
