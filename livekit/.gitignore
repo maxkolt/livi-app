@@ -1,0 +1,4 @@
+# Local LiveKit configs containing real secrets
+*.local.yaml
+*.secrets.yaml
+livekit.yaml.prod

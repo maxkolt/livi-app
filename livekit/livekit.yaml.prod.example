@@ -9,4 +9,4 @@ rtc:
   use_external_ip: true
 
 keys:
-  lk_969512bce6a80fb0: "iT0CiEFym3bs91A0yr//fXlfhqNJ0miOLK5ppa1b2yO5DHjduYfWD0bbT68kGAxd"
+  your_api_key: "your_api_secret"
