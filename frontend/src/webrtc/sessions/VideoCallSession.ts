@@ -112,6 +112,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private liveKitReconnecting = false;
   private lastLiveKitReconnectingAt = 0;
   private pendingRemoteDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastSocketDisconnectLogAt = 0;
   private cameraSwitchInProgress = false;
   /** Set when camera flip ends; used to ignore late TrackUnsubscribed for ~2s and avoid black remote view. */
   private lastCameraFlipEndedAt = 0;
@@ -1192,6 +1193,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     const disconnectedHandler = () => {
       // Временный обрыв сокета НЕ должен рвать LiveKit и сбрасывать remoteStream.
       // Иначе UI показывает "ошибка/нет видео" и потом "соединяет" после reconnect.
+      const now = Date.now();
+      // Защита от log-spam во время нестабильной сети.
+      if (now - this.lastSocketDisconnectLogAt < 5000) return;
+      this.lastSocketDisconnectLogAt = now;
       logger.warn('[VideoCallSession] Socket disconnected (ignored; LiveKit call continues)', {
         callId: this.callId,
         roomId: this.roomId,
@@ -3172,6 +3177,12 @@ export class VideoCallSession extends SimpleEventEmitter {
         expectedPartnerIdentity: this.partnerUserId,
       });
       const joinTimeMs = Date.now() - connectStartTime;
+      const shouldWarnAboutMissingTrack = () => {
+        // В первые секунды после join LiveKit может еще не успеть довезти remote tracks.
+        // В этот период логируем как debug, чтобы не воспринимать это как ошибку звонка.
+        const elapsedMs = Date.now() - connectStartTime;
+        return elapsedMs > 5000 && room.state === 'connected';
+      };
       sendClientMetrics(API_BASE, { joinTimeMs, joinSuccess: true }).catch(() => {});
 
       // Аудио-роутинг управляется на уровне UI (useAudioRouting) — без агрессивных "пинков" из сессии.
@@ -3340,9 +3351,11 @@ export class VideoCallSession extends SimpleEventEmitter {
                 });
                 this.handleTrackSubscribed(publication.track, publication, participant);
               } else {
-                logger.warn('[VideoCallSession] First delayed check - audio track still not loaded', {
+                const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
+                log('[VideoCallSession] First delayed check - audio track still not loaded', {
                   trackSid: publication.trackSid,
                   isSubscribed: publication.isSubscribed,
+                  roomState: room.state,
                 });
               }
             });
@@ -3361,9 +3374,11 @@ export class VideoCallSession extends SimpleEventEmitter {
                 });
                 this.handleTrackSubscribed(publication.track, publication, participant);
               } else {
-                logger.warn('[VideoCallSession] First delayed check - video track still not loaded', {
+                const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
+                log('[VideoCallSession] First delayed check - video track still not loaded', {
                   trackSid: publication.trackSid,
                   isSubscribed: publication.isSubscribed,
+                  roomState: room.state,
                 });
               }
             });
@@ -3393,9 +3408,11 @@ export class VideoCallSession extends SimpleEventEmitter {
                 });
                 this.handleTrackSubscribed(publication.track, publication, participant);
               } else {
-                logger.warn('[VideoCallSession] Second delayed check - audio track still not loaded', {
+                const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
+                log('[VideoCallSession] Second delayed check - audio track still not loaded', {
                   trackSid: publication.trackSid,
                   isSubscribed: publication.isSubscribed,
+                  roomState: room.state,
                 });
               }
             });
@@ -3412,9 +3429,11 @@ export class VideoCallSession extends SimpleEventEmitter {
                 });
                 this.handleTrackSubscribed(publication.track, publication, participant);
               } else {
-                logger.warn('[VideoCallSession] Second delayed check - video track still not loaded', {
+                const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
+                log('[VideoCallSession] Second delayed check - video track still not loaded', {
                   trackSid: publication.trackSid,
                   isSubscribed: publication.isSubscribed,
+                  roomState: room.state,
                 });
               }
             });
