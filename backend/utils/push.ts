@@ -95,6 +95,79 @@ function getFirebaseMessaging(): { send: (msg: unknown) => Promise<string> } | n
   return firebaseApp ? require('firebase-admin').messaging() : null;
 }
 
+const CALL_PUSH_MAX_ATTEMPTS = 3;
+const CALL_PUSH_RETRY_BASE_DELAY_MS = 700;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableFcmCallPushError(e: unknown): boolean {
+  if (isFcmInvalidTokenError(e) || shouldRemoveFcmTokenFromDb(e)) return false;
+  const code = String((e as { code?: string })?.code ?? '').toLowerCase();
+  const msg = String(
+    (e as { message?: string; errorInfo?: { message?: string } })?.message ??
+      (e as { errorInfo?: { message?: string } })?.errorInfo?.message ??
+      ''
+  ).toLowerCase();
+  if (
+    code === 'messaging/internal-error' ||
+    code === 'messaging/server-unavailable' ||
+    code === 'messaging/unknown-error' ||
+    code === 'messaging/quota-exceeded' ||
+    code === 'app/network-error'
+  ) {
+    return true;
+  }
+  return (
+    msg.includes('timeout') ||
+    msg.includes('timed out') ||
+    msg.includes('temporarily unavailable') ||
+    msg.includes('server unavailable') ||
+    msg.includes('internal error') ||
+    msg.includes('network')
+  );
+}
+
+async function sendCallPushViaFcmWithRetry(
+  messaging: { send: (msg: unknown) => Promise<string> },
+  token: string,
+  dataPayload: Record<string, string>,
+  userId: string
+): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= CALL_PUSH_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await messaging.send({
+        token,
+        data: dataPayload,
+        android: {
+          priority: 'high',
+        },
+      });
+      if (attempt > 1) {
+        logger.info('[push] call push sent via FCM after retry', { userId, attempt });
+        pushLog('call_push_sent_via_FCM_after_retry', { userId, attempt });
+      }
+      return;
+    } catch (e) {
+      lastError = e;
+      const retryable = isRetryableFcmCallPushError(e);
+      if (!retryable || attempt >= CALL_PUSH_MAX_ATTEMPTS) break;
+      const delayMs = CALL_PUSH_RETRY_BASE_DELAY_MS * attempt;
+      logger.warn('[push] FCM call push attempt failed, retry scheduled', {
+        userId,
+        attempt,
+        delayMs,
+        error: String((e as Error)?.message ?? ''),
+      });
+      pushLog('call_push_fcm_retry_scheduled', { userId, attempt, delayMs });
+      await sleep(delayMs);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'unknown_fcm_error'));
+}
+
 export async function upsertExpoPushToken(opts: {
   userId: string;
   installId?: string;
@@ -414,14 +487,12 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
       try {
         // data-only (без notification) — в фоне вызывается onMessageReceived. high priority — доставка без задержек.
         // Не задаём collapseKey — каждый звонок доставляется отдельно, без «схлопывания» с предыдущим.
-        await messaging.send({
-          token: r.fcmToken,
-          data: Object.fromEntries(Object.entries(fcmDataPayload).map(([k, v]) => [k, String(v)])),
-          android: {
-            priority: 'high',
-            // collapseKey не задаём — иначе FCM может отложить/объединить пуши звонков
-          },
-        });
+        await sendCallPushViaFcmWithRetry(
+          messaging,
+          r.fcmToken,
+          Object.fromEntries(Object.entries(fcmDataPayload).map(([k, v]) => [k, String(v)])),
+          userId
+        );
         logger.info('[push] call push sent via FCM (data-only, high priority)', { userId });
         pushLog('call_push_sent_via_FCM', { userId });
       } catch (e) {

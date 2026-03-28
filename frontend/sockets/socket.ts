@@ -2524,6 +2524,15 @@ export function onCallIncoming(cb: (d: { callId: string; from: string; fromNick?
   return () => socket.off('call:incoming', h);
 }
 
+/** Получатель сообщает серверу, что входящий экран реально показан (метрика доставки). */
+export function reportIncomingCallShown(callId: string): void {
+  const id = String(callId || '').trim();
+  if (!id) return;
+  try {
+    socket.emit('call:incoming_shown', { callId: id });
+  } catch {}
+}
+
 export function onCallAccepted(cb: (d: { callId: string; from: string }) => void): () => void {
   const h = (d: any) => {
     logger.debug('Socket received call:accepted', { callId: d.callId, from: d.from });

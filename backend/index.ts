@@ -36,6 +36,7 @@ import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl, isAllowedParticipant } from './routes/livekit';
 import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallDeclinedToCaller, sendCallAcceptedToCaller } from './utils/push';
+import { pushLog } from './utils/pushLogBuffer';
 import * as queueStore from './utils/queueStore';
 import * as capacityMetrics from './utils/capacityMetrics';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
@@ -865,9 +866,20 @@ const updateFriendRoomState = (io: Server, roomId: string) => {
 // findRandom/cancelRandom удалены - используется match.ts
 
 /* ========= Direct Calls (P2P invite) ========= */
-type CallLink = { a: string; b: string; timer?: NodeJS.Timeout };
+type CallLink = { a: string; b: string; timer?: NodeJS.Timeout; retryPushTimer?: NodeJS.Timeout };
 const callsById = new Map<string, CallLink>();
 const callOfUser = new Map<string, { with: string; callId: string }>();
+type CallDeliveryTelemetry = {
+  callerId: string;
+  calleeId: string;
+  createdAtMs: number;
+  pushSentAtMs?: number;
+  incomingShownAtMs?: number;
+  incomingShownBy?: 'socket' | 'native_http';
+  closeReason?: 'accepted' | 'declined' | 'canceled' | 'timeout';
+  purgeTimer?: NodeJS.Timeout;
+};
+const callDeliveryById = new Map<string, CallDeliveryTelemetry>();
 // Активный callId для конкретного socket.id (после accept)
 const activeCallBySocket = new Map<string, string>();
 /** callId -> roomId после call:accept (для call:end, когда клиент присылает только callId, напр. принятие из пуша) */
@@ -880,9 +892,20 @@ function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'cancele
   const link = callsById.get(callId);
   if (!link) return;
   if (link.timer) { try { clearTimeout(link.timer); } catch {} }
+  if (link.retryPushTimer) { try { clearTimeout(link.retryPushTimer); } catch {} }
   callsById.delete(callId);
   callOfUser.delete(link.a);
   callOfUser.delete(link.b);
+  const telemetry = callDeliveryById.get(callId);
+  if (telemetry) {
+    telemetry.closeReason = reason;
+    if (telemetry.purgeTimer) {
+      try { clearTimeout(telemetry.purgeTimer); } catch {}
+    }
+    telemetry.purgeTimer = setTimeout(() => {
+      callDeliveryById.delete(callId);
+    }, 10 * 60_000);
+  }
 }
 
 /** Callee в ожидающем звонке (без inCall) не считается занятым при отображении в списке друзей. */
@@ -960,6 +983,52 @@ app.post('/api/calls/decline', async (req, res) => {
     // Отклонение получателем — не пропущенный вызов; call_ended получателю не шлём
     logger.info('[api/calls/decline] call ended for both: caller notified (socket+FCM), callee closed native screen', { callId, caller: link.a, callee: link.b });
     cleanupCall(callId, 'declined');
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
+
+/** Получатель подтвердил, что экран входящего реально показан (метрика E2E по callId). */
+app.post('/api/calls/incoming-shown', async (req, res) => {
+  try {
+    const userId = (req as any).userId;
+    if (!userId || !isOid(userId)) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    const callId = String(req.body?.callId || '').trim();
+    if (!callId) {
+      return res.status(400).json({ ok: false, error: 'callId_required' });
+    }
+
+    const link = callsById.get(callId);
+    const telemetry = callDeliveryById.get(callId);
+    const expectedCallee = link?.b || telemetry?.calleeId;
+    if (!expectedCallee || String(expectedCallee) !== String(userId)) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+
+    const now = Date.now();
+    const t = telemetry ?? {
+      callerId: link?.a || '',
+      calleeId: expectedCallee,
+      createdAtMs: now,
+    };
+    if (!t.incomingShownAtMs) {
+      t.incomingShownAtMs = now;
+      t.incomingShownBy = 'native_http';
+      callDeliveryById.set(callId, t);
+      const ageFromStartMs = now - t.createdAtMs;
+      const ageFromPushMs = t.pushSentAtMs != null ? now - t.pushSentAtMs : undefined;
+      logger.info('[call:incoming_shown] received from native HTTP', {
+        callId,
+        caller: t.callerId,
+        callee: t.calleeId,
+        ageFromStartMs,
+        ageFromPushMs,
+      });
+      pushLog('call_incoming_shown', { callId, via: 'native_http', ageFromStartMs, ageFromPushMs });
+    }
     return res.json({ ok: true });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
@@ -1748,6 +1817,11 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       const callId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       callsById.set(callId, { a: me, b: peerId });
+      callDeliveryById.set(callId, {
+        callerId: me,
+        calleeId: peerId,
+        createdAtMs: Date.now(),
+      });
       callOfUser.set(me, { with: peerId, callId });
       callOfUser.set(peerId, { with: me, callId });
 
@@ -1868,10 +1942,30 @@ io.on('connection', async (sock: AuthedSocket) => {
       try {
         logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
         await sendCallPushToRecipient(peerId, { callId, from: me, fromNick: fromNick ?? '' });
+        const t = callDeliveryById.get(callId);
+        if (t && !t.pushSentAtMs) t.pushSentAtMs = Date.now();
         logger.info('[call:initiate] call push sent', { peerId });
       } catch (pushErr: any) {
         logger.warn('[call:initiate] push to recipient failed', { peerId, error: pushErr?.message });
       }
+
+      // Safety-net: повторить call push один раз, если звонок всё ещё активен.
+      // Это помогает при кратковременных провалах доставки FCM после долгого сна устройства.
+      const retryPushTimer = setTimeout(async () => {
+        const pending = callsById.get(callId);
+        if (!pending) return;
+        try {
+          logger.info('[call:initiate] retrying call push to recipient', { peerId, callId, from: me });
+          await sendCallPushToRecipient(peerId, { callId, from: me, fromNick: fromNick ?? '' });
+          const t = callDeliveryById.get(callId);
+          if (t && !t.pushSentAtMs) t.pushSentAtMs = Date.now();
+          logger.info('[call:initiate] retry call push sent', { peerId, callId });
+        } catch (retryErr: any) {
+          logger.warn('[call:initiate] retry push to recipient failed', { peerId, callId, error: retryErr?.message });
+        }
+      }, 5000);
+      const currentLink = callsById.get(callId);
+      if (currentLink) currentLink.retryPushTimer = retryPushTimer;
 
       return ack?.({ ok: true, callId });
     } catch (e: any) {
@@ -2179,6 +2273,40 @@ io.on('connection', async (sock: AuthedSocket) => {
     } catch (e: any) {
       logger.warn('[call:getAccepted] Failed to send call:accepted', { userId, callId: id, error: e?.message });
     }
+  });
+
+  // Получатель подтверждает фактический показ входящего экрана (когда приложение живо и есть socket).
+  sock.on('call:incoming_shown', ({ callId }: { callId?: string }) => {
+    try {
+      const id = String(callId || '').trim();
+      const me = String((sock as any)?.data?.userId || '');
+      if (!id || !me) return;
+      const link = callsById.get(id);
+      const telemetry = callDeliveryById.get(id);
+      const expectedCallee = link?.b || telemetry?.calleeId;
+      if (!expectedCallee || String(expectedCallee) !== me) return;
+      const now = Date.now();
+      const t = telemetry ?? {
+        callerId: link?.a || '',
+        calleeId: expectedCallee,
+        createdAtMs: now,
+      };
+      if (!t.incomingShownAtMs) {
+        t.incomingShownAtMs = now;
+        t.incomingShownBy = 'socket';
+        callDeliveryById.set(id, t);
+        const ageFromStartMs = now - t.createdAtMs;
+        const ageFromPushMs = t.pushSentAtMs != null ? now - t.pushSentAtMs : undefined;
+        logger.info('[call:incoming_shown] received from socket', {
+          callId: id,
+          caller: t.callerId,
+          callee: t.calleeId,
+          ageFromStartMs,
+          ageFromPushMs,
+        });
+        pushLog('call_incoming_shown', { callId: id, via: 'socket', ageFromStartMs, ageFromPushMs });
+      }
+    } catch {}
   });
 
   sock.on('call:decline', async ({ callId }: { callId?: string }) => {

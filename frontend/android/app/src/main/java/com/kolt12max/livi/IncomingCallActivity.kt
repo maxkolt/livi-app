@@ -42,6 +42,7 @@ class IncomingCallActivity : AppCompatActivity() {
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
     private var closeHandled = false
+    private var incomingShownReported = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -94,6 +95,7 @@ class IncomingCallActivity : AppCompatActivity() {
         val from = intent.getStringExtra(EXTRA_FROM) ?: ""
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
         LiviOngoingCallHelper.setIncomingCall(this, callId, from, fromNick)
+        reportIncomingShownFromNative(callId)
         scheduleIncomingTimeout(callId)
 
         findViewById<TextView>(R.id.caller_name).text = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_unknown)
@@ -184,6 +186,7 @@ class IncomingCallActivity : AppCompatActivity() {
         isInForeground = true
         android.util.Log.e(TAG, "IncomingCallActivity onResume: isInForeground=true callId=$currentCallId")
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+        reportIncomingShownFromNative(currentCallId)
     }
 
     override fun onPause() {
@@ -312,6 +315,40 @@ class IncomingCallActivity : AppCompatActivity() {
             startMainWithDeepLink(declineUri)
             finish()
         }
+    }
+
+    /** Отправить backend-ack: входящий экран реально показан (работает даже при неактивном/спящем JS). */
+    private fun reportIncomingShownFromNative(callId: String) {
+        if (incomingShownReported || callId.isBlank()) return
+        incomingShownReported = true
+        val prefs = applicationContext.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
+        val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
+        val serverUrl = prefs.getString(LiviAppModule.KEY_SERVER_URL, null)?.takeIf { it.isNotBlank() }
+        val userIdHeader = prefs.getString(LiviAppModule.KEY_USER_ID_FOR_DECLINE, null)?.takeIf { it.isNotBlank() }
+        if (installId == null || serverUrl == null) return
+        Thread {
+            try {
+                val url = URL("$serverUrl/api/calls/incoming-shown")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("x-install-id", installId)
+                if (userIdHeader != null) conn.setRequestProperty("x-user-id", userIdHeader)
+                conn.doOutput = true
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                conn.outputStream.use { os ->
+                    os.write("{\"callId\":\"${callId.replace("\"", "\\\"")}\"}".toByteArray(Charsets.UTF_8))
+                }
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    android.util.Log.w(TAG, "incoming-shown HTTP failed code=$code callId=$callId")
+                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "incoming-shown HTTP exception callId=$callId", e)
+            }
+        }.start()
     }
 
     private fun startMainWithDeepLink(deepLink: String) {
