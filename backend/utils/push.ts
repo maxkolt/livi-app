@@ -99,6 +99,8 @@ const CALL_PUSH_MAX_ATTEMPTS = 3;
 const CALL_PUSH_RETRY_BASE_DELAY_MS = 700;
 const CALL_PUSH_ESCALATION_TTL_SECONDS = 15;
 const CALL_PUSH_NOTIFICATION_TTL_SECONDS = 15;
+const PUSH_TOKEN_STALE_TTL_MS = Math.max(24 * 60 * 60 * 1000, Number(process.env.PUSH_TOKEN_STALE_TTL_MS || 45 * 24 * 60 * 60 * 1000));
+const MAX_PUSH_TOKENS_PER_USER_PLATFORM = Math.max(2, Number(process.env.MAX_PUSH_TOKENS_PER_USER_PLATFORM || 4));
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -170,6 +172,108 @@ async function sendCallPushViaFcmWithRetry(
   throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'unknown_fcm_error'));
 }
 
+async function pruneStalePushTokensForUser(opts: {
+  userId: string;
+  platform: 'android' | 'ios';
+  currentToken: string;
+  installId: string;
+}): Promise<void> {
+  const userIdObj = new mongoose.Types.ObjectId(opts.userId);
+  const installId = String(opts.installId || '').trim();
+  const now = Date.now();
+  const staleBeforeMs = now - PUSH_TOKEN_STALE_TTL_MS;
+
+  // 1) Same install + same platform should keep only current token.
+  if (installId) {
+    try {
+      const dupRes = await PushTokenModel.deleteMany({
+        userId: userIdObj,
+        platform: opts.platform,
+        installId,
+        token: { $ne: opts.currentToken },
+      }).exec();
+      const deleted = (dupRes as { deletedCount?: number })?.deletedCount ?? 0;
+      if (deleted > 0) {
+        logger.info('[push] pruned duplicate tokens for install', {
+          userId: opts.userId,
+          platform: opts.platform,
+          deleted,
+        });
+      }
+    } catch (e) {
+      logger.warn('[push] prune duplicate install tokens failed', {
+        userId: opts.userId,
+        platform: opts.platform,
+        error: (e as Error)?.message,
+      });
+    }
+  }
+
+  // 2) Remove stale tokens by age.
+  try {
+    const staleRes = await PushTokenModel.deleteMany({
+      userId: userIdObj,
+      platform: opts.platform,
+      updatedAtMs: { $lt: staleBeforeMs },
+      token: { $ne: opts.currentToken },
+    }).exec();
+    const deleted = (staleRes as { deletedCount?: number })?.deletedCount ?? 0;
+    if (deleted > 0) {
+      logger.info('[push] pruned stale tokens by ttl', {
+        userId: opts.userId,
+        platform: opts.platform,
+        deleted,
+        staleTtlMs: PUSH_TOKEN_STALE_TTL_MS,
+      });
+    }
+  } catch (e) {
+    logger.warn('[push] prune stale tokens failed', {
+      userId: opts.userId,
+      platform: opts.platform,
+      error: (e as Error)?.message,
+    });
+  }
+
+  // 3) Keep bounded count of freshest tokens per user/platform.
+  try {
+    const docs = await PushTokenModel.find({
+      userId: userIdObj,
+      platform: opts.platform,
+    })
+      .select('_id token updatedAtMs')
+      .sort({ updatedAtMs: -1 })
+      .lean();
+
+    const list = (docs || []) as Array<{ _id?: unknown; token?: string }>;
+    if (list.length <= MAX_PUSH_TOKENS_PER_USER_PLATFORM) return;
+
+    const toDelete = list
+      .slice(MAX_PUSH_TOKENS_PER_USER_PLATFORM)
+      .filter((d) => String(d.token || '') !== opts.currentToken)
+      .map((d) => d._id)
+      .filter(Boolean);
+
+    if (toDelete.length === 0) return;
+
+    const capRes = await PushTokenModel.deleteMany({ _id: { $in: toDelete } }).exec();
+    const deleted = (capRes as { deletedCount?: number })?.deletedCount ?? 0;
+    if (deleted > 0) {
+      logger.info('[push] pruned tokens by cap', {
+        userId: opts.userId,
+        platform: opts.platform,
+        deleted,
+        maxPerUserPlatform: MAX_PUSH_TOKENS_PER_USER_PLATFORM,
+      });
+    }
+  } catch (e) {
+    logger.warn('[push] prune tokens by cap failed', {
+      userId: opts.userId,
+      platform: opts.platform,
+      error: (e as Error)?.message,
+    });
+  }
+}
+
 export async function upsertExpoPushToken(opts: {
   userId: string;
   installId?: string;
@@ -230,6 +334,13 @@ export async function upsertExpoPushToken(opts: {
       pushLog('token_upsert_fcm_missing_after', { userId });
     }
   }
+
+  await pruneStalePushTokensForUser({
+    userId,
+    platform,
+    currentToken: token,
+    installId: String(installId || ''),
+  });
 }
 
 /** Пуш о новом сообщении: на Android — только FCM (data-only), чтобы не было пустого уведомления от Expo; на iOS — Expo. */
