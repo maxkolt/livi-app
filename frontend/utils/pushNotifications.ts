@@ -17,6 +17,22 @@ const MISSED_BADGE_CLEARED_KEY = 'missed_calls_badge_cleared_v1';
 
 /** ID категории уведомления входящего звонка с кнопками «Поднять» / «Положить» */
 export const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
+const PUSH_TOKEN_REGISTER_COOLDOWN_MS = 60_000;
+
+type PushTokenSnapshot = {
+  userId: string;
+  expoToken: string;
+  fcmToken: string;
+  atMs: number;
+};
+
+type RegisterPushTokenOptions = {
+  force?: boolean;
+  reason?: 'startup' | 'app_active' | 'socket_reconnect' | 'manual';
+};
+
+let lastRegisteredPushToken: PushTokenSnapshot | null = null;
+let registerPushInFlight: Promise<void> | null = null;
 
 /** Отметить, что пользователь «увидел» пропущенные (зашёл во вкладку Друзья) — бейдж и шторка будут скрыты. */
 export async function setMissedBadgeCleared(): Promise<void> {
@@ -631,126 +647,164 @@ export async function ensureInitialNotificationPermissions(): Promise<void> {
   }
 }
 
-export async function registerAndSendPushToken(userId?: string) {
-  try {
-    if (!userId) return;
-
-    await ensureAndroidNotificationChannels();
-
-    const settings = await Notifications.getPermissionsAsync();
-    let finalStatus = settings.status;
-    if (finalStatus !== 'granted') {
-      const req = await Notifications.requestPermissionsAsync();
-      finalStatus = req.status;
-    }
-    if (finalStatus !== 'granted') {
-      logger.info('[push] permission not granted');
-      return;
-    }
-
-    // FCM token (Android): для data-only пуша звонка — бэкенд шлёт в FCM, onMessageReceived вызывается в фоне → нативный экран.
-    let fcmToken: string | undefined;
+export async function registerAndSendPushToken(userId?: string, options?: RegisterPushTokenOptions) {
+  if (registerPushInFlight) {
+    // Avoid parallel duplicate registrations triggered by app-active + reconnect races.
+    await registerPushInFlight;
+    return;
+  }
+  registerPushInFlight = (async () => {
     try {
-      const deviceTokenResp = await Notifications.getDevicePushTokenAsync();
-      const deviceToken = (deviceTokenResp as any)?.data;
-      const deviceType = String((deviceTokenResp as any)?.type || '');
-      if (deviceToken && Platform.OS === 'android') {
-        fcmToken = String(deviceToken);
-        logger.debug('[push] device push token acquired', {
-          type: deviceType,
-          tokenPrefix: fcmToken.slice(0, 18),
-        });
-        if (__DEV__) {
-          console.log('[push][DEV] DEVICE_PUSH_TOKEN (copy into Firebase Test on device):', fcmToken);
+      if (!userId) return;
+
+      await ensureAndroidNotificationChannels();
+
+      const settings = await Notifications.getPermissionsAsync();
+      let finalStatus = settings.status;
+      if (finalStatus !== 'granted') {
+        const req = await Notifications.requestPermissionsAsync();
+        finalStatus = req.status;
+      }
+      if (finalStatus !== 'granted') {
+        logger.info('[push] permission not granted');
+        return;
+      }
+
+      // FCM token (Android): для data-only пуша звонка — бэкенд шлёт в FCM, onMessageReceived вызывается в фоне → нативный экран.
+      let fcmToken: string | undefined;
+      try {
+        const deviceTokenResp = await Notifications.getDevicePushTokenAsync();
+        const deviceToken = (deviceTokenResp as any)?.data;
+        const deviceType = String((deviceTokenResp as any)?.type || '');
+        if (deviceToken && Platform.OS === 'android') {
+          fcmToken = String(deviceToken);
+          logger.debug('[push] device push token acquired', {
+            type: deviceType,
+            tokenPrefix: fcmToken.slice(0, 18),
+          });
+          if (__DEV__) {
+            console.log('[push][DEV] DEVICE_PUSH_TOKEN (copy into Firebase Test on device):', fcmToken);
+          }
+        }
+      } catch (e) {
+        const msg = String((e as any)?.message || e || '');
+        const looksLikeFcmSetupError =
+          msg.includes('fcm-credentials') ||
+          msg.includes('Default FirebaseApp is not initialized') ||
+          msg.includes('FirebaseApp.initializeApp');
+        if (__DEV__ && looksLikeFcmSetupError) {
+          logger.debug('[push] skipping device push token warning (FCM not configured)', { message: msg.slice(0, 220) });
+        } else {
+          logger.warn('[push] failed to get device push token', e as any);
         }
       }
-    } catch (e) {
-      const msg = String((e as any)?.message || e || '');
+
+      // Получаем Expo push token
+      const projectId =
+        (Constants.expoConfig as any)?.extra?.eas?.projectId ||
+        (Constants as any)?.easConfig?.projectId;
+
+      const tokenResp = await Notifications.getExpoPushTokenAsync(
+        projectId ? { projectId } : undefined
+      );
+      const token = tokenResp?.data;
+      if (!token) return;
+      try {
+        logger.debug('[push] expo token acquired', {
+          userId,
+          tokenPrefix: String(token).slice(0, 18),
+          platform: Platform.OS,
+          hasProjectId: !!projectId,
+        });
+      } catch {}
+
+      const installId = await getInstallId();
+
+      const snapshotNow: PushTokenSnapshot = {
+        userId: String(userId),
+        expoToken: String(token),
+        fcmToken: String(fcmToken || ''),
+        atMs: Date.now(),
+      };
+      const last = lastRegisteredPushToken;
+      const unchanged =
+        !!last &&
+        last.userId === snapshotNow.userId &&
+        last.expoToken === snapshotNow.expoToken &&
+        last.fcmToken === snapshotNow.fcmToken;
+      const withinCooldown = !!last && snapshotNow.atMs - last.atMs < PUSH_TOKEN_REGISTER_COOLDOWN_MS;
+      const force = options?.force === true;
+      if (!force && unchanged && withinCooldown) {
+        logger.debug('[push] token registration skipped (unchanged + cooldown)', {
+          reason: options?.reason || 'manual',
+          cooldownLeftMs: Math.max(0, PUSH_TOKEN_REGISTER_COOLDOWN_MS - (snapshotNow.atMs - (last?.atMs || 0))),
+        });
+        return;
+      }
+
+      // Регистрируем токен на backend. Для Android входящий звонок с кнопками возможен только при отправке fcmToken — бэкенд шлёт FCM data-only.
+      const body: Record<string, unknown> = {
+        token,
+        platform: Platform.OS,
+        ...(Platform.OS === 'android' && fcmToken ? { fcmToken } : {}),
+      };
+      if (Platform.OS === 'android') {
+        logger.info('[push] registering token', { hasFcmToken: !!fcmToken });
+      }
+      const resp = await fetch(`${API_BASE}/api/push-token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': String(userId),
+          'x-install-id': String(installId),
+        },
+        body: JSON.stringify(body),
+      }).catch((e) => {
+        logger.warn('[push] failed to register token (network)', e);
+        return null as any;
+      });
+
+      try {
+        if (resp && typeof resp?.ok === 'boolean') {
+          const text = await resp.text().catch(() => '');
+          logger.debug('[push] token register response', {
+            ok: resp.ok,
+            status: resp.status,
+            body: text ? text.slice(0, 200) : '',
+            reason: options?.reason || 'manual',
+          });
+          if (resp.ok) {
+            lastRegisteredPushToken = snapshotNow;
+          }
+          if (Platform.OS === 'android' && resp.ok) {
+            logger.info('[push] token registered', { hasFcmToken: !!fcmToken });
+          }
+        }
+      } catch {}
+    } catch (e: any) {
+      // Dev-only noise suppression:
+      // In dev builds, Firebase/FCM is often not configured, so expo-notifications may throw.
+      // This should not spam logs during everyday debugging.
+      const msg = String(e?.message || e || '');
       const looksLikeFcmSetupError =
         msg.includes('fcm-credentials') ||
         msg.includes('Default FirebaseApp is not initialized') ||
         msg.includes('FirebaseApp.initializeApp');
+
       if (__DEV__ && looksLikeFcmSetupError) {
-        logger.debug('[push] skipping device push token warning (FCM not configured)', { message: msg.slice(0, 220) });
-      } else {
-        logger.warn('[push] failed to get device push token', e as any);
-      }
-    }
-
-    // Получаем Expo push token
-    const projectId =
-      (Constants.expoConfig as any)?.extra?.eas?.projectId ||
-      (Constants as any)?.easConfig?.projectId;
-
-    const tokenResp = await Notifications.getExpoPushTokenAsync(
-      projectId ? { projectId } : undefined
-    );
-    const token = tokenResp?.data;
-    if (!token) return;
-    try {
-      logger.debug('[push] expo token acquired', {
-        userId,
-        tokenPrefix: String(token).slice(0, 18),
-        platform: Platform.OS,
-        hasProjectId: !!projectId,
-      });
-    } catch {}
-
-    const installId = await getInstallId();
-
-    // Регистрируем токен на backend. Для Android входящий звонок с кнопками возможен только при отправке fcmToken — бэкенд шлёт FCM data-only.
-    const body: Record<string, unknown> = {
-      token,
-      platform: Platform.OS,
-      ...(Platform.OS === 'android' && fcmToken ? { fcmToken } : {}),
-    };
-    if (Platform.OS === 'android') {
-      logger.info('[push] registering token', { hasFcmToken: !!fcmToken });
-    }
-    const resp = await fetch(`${API_BASE}/api/push-token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': String(userId),
-        'x-install-id': String(installId),
-      },
-      body: JSON.stringify(body),
-    }).catch((e) => {
-      logger.warn('[push] failed to register token (network)', e);
-      return null as any;
-    });
-
-    try {
-      if (resp && typeof resp?.ok === 'boolean') {
-        const text = await resp.text().catch(() => '');
-        logger.debug('[push] token register response', {
-          ok: resp.ok,
-          status: resp.status,
-          body: text ? text.slice(0, 200) : '',
+        logger.debug('[push] В dev пуш-токен не зарегистрирован (FCM не настроен). Уведомления о звонках не придут. Собери с google-services.json или проверяй на релизной сборке.', {
+          message: msg.slice(0, 220),
         });
-        if (Platform.OS === 'android' && resp.ok) {
-          logger.info('[push] token registered', { hasFcmToken: !!fcmToken });
-        }
+        return;
       }
-    } catch {}
-  } catch (e: any) {
-    // Dev-only noise suppression:
-    // In dev builds, Firebase/FCM is often not configured, so expo-notifications may throw.
-    // This should not spam logs during everyday debugging.
-    const msg = String(e?.message || e || '');
-    const looksLikeFcmSetupError =
-      msg.includes('fcm-credentials') ||
-      msg.includes('Default FirebaseApp is not initialized') ||
-      msg.includes('FirebaseApp.initializeApp');
 
-    if (__DEV__ && looksLikeFcmSetupError) {
-      logger.debug('[push] В dev пуш-токен не зарегистрирован (FCM не настроен). Уведомления о звонках не придут. Собери с google-services.json или проверяй на релизной сборке.', {
-        message: msg.slice(0, 220),
-      });
-      return;
+      logger.warn('[push] registerAndSendPushToken error', e as any);
     }
-
-    logger.warn('[push] registerAndSendPushToken error', e as any);
+  })();
+  try {
+    await registerPushInFlight;
+  } finally {
+    registerPushInFlight = null;
   }
 }
 

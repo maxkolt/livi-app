@@ -703,7 +703,7 @@ function AppContent() {
         try {
           const uid = getCurrentUserId?.();
           if (uid) {
-            await registerAndSendPushToken(uid);
+            await registerAndSendPushToken(uid, { reason: 'startup' });
             break;
           }
         } catch {}
@@ -819,7 +819,7 @@ function AppContent() {
     const sub = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
       const uid = getCurrentUserId?.();
-      if (uid) registerAndSendPushToken(uid).catch(() => {});
+      if (uid) registerAndSendPushToken(uid, { reason: 'app_active' }).catch(() => {});
     });
     return () => sub.remove();
   }, []);
@@ -1630,7 +1630,7 @@ function AppContent() {
       // После reauth перерегистрируем push-токен, чтобы backend получал его (важно для dev и после выхода из фона)
       setTimeout(() => {
         const uid = getCurrentUserId?.();
-        if (uid) registerAndSendPushToken(uid);
+        if (uid) registerAndSendPushToken(uid, { reason: 'socket_reconnect' });
       }, 2500);
     };
 
