@@ -275,6 +275,32 @@ export function openAppNotificationSettings(): void {
   } catch {}
 }
 
+/** Проверить, отключена ли battery optimization (Doze whitelist) для приложения. */
+export function isIgnoringBatteryOptimizations(): Promise<boolean> {
+  if (Platform.OS !== 'android') return Promise.resolve(true);
+  try {
+    return NativeModules.LiviAppModule?.isIgnoringBatteryOptimizations?.() ?? Promise.resolve(false);
+  } catch {
+    return Promise.resolve(false);
+  }
+}
+
+/** Открыть экран отключения оптимизации батареи для приложения. */
+export function openBatteryOptimizationSettings(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.openBatteryOptimizationSettings?.();
+  } catch {}
+}
+
+/** Открыть OEM-экран автозапуска/фоновой активности (если есть). */
+export function openAutostartSettings(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.openAutostartSettings?.();
+  } catch {}
+}
+
 /** Проверить, разрешены ли уведомления для приложения. Если нет — входящие звонки в фоне не покажут полноэкранный экран. */
 export function areNotificationsEnabled(): Promise<boolean> {
   if (Platform.OS !== 'android') return Promise.resolve(true);

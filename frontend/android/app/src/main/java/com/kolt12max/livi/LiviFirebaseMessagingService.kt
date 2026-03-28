@@ -102,6 +102,12 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     return
                 }
             }
+            // Dual-signal режим (data + notification) может доставить одно и то же call событие дважды.
+            // Отсекаем дубликаты по callId в коротком окне, чтобы не было двойного запуска экрана.
+            if (!markIncomingCallAsFresh(callId)) {
+                vLog("[INCOMING_CALL] SKIP recent duplicate callId=$callId")
+                return
+            }
             val keyguardLocked = try {
                 (getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
             } catch (_: Exception) { false }
@@ -613,6 +619,23 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
          * v3: новый channel id — важность фиксируется при первом создании; MessagingStyle + cancel→notify для heads-up.
          */
         private const val CHANNEL_ID_UNREAD = "unread_messages_v3"
+        private const val RECENT_INCOMING_DEDUP_WINDOW_MS = 10_000L
+        private val recentIncomingByCallId = HashMap<String, Long>()
+
+        @Synchronized
+        @JvmStatic
+        private fun markIncomingCallAsFresh(callId: String): Boolean {
+            val now = System.currentTimeMillis()
+            val it = recentIncomingByCallId.entries.iterator()
+            while (it.hasNext()) {
+                val e = it.next()
+                if (now - e.value > RECENT_INCOMING_DEDUP_WINDOW_MS) it.remove()
+            }
+            val prev = recentIncomingByCallId[callId]
+            if (prev != null && (now - prev) <= RECENT_INCOMING_DEDUP_WINDOW_MS) return false
+            recentIncomingByCallId[callId] = now
+            return true
+        }
 
         /** Снять уведомления о сообщениях перед показом входящего звонка, чтобы они не перекрывали полноэкранный экран. */
         @JvmStatic

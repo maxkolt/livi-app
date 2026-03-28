@@ -97,6 +97,8 @@ function getFirebaseMessaging(): { send: (msg: unknown) => Promise<string> } | n
 
 const CALL_PUSH_MAX_ATTEMPTS = 3;
 const CALL_PUSH_RETRY_BASE_DELAY_MS = 700;
+const CALL_PUSH_ESCALATION_TTL_SECONDS = 15;
+const CALL_PUSH_NOTIFICATION_TTL_SECONDS = 15;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -482,8 +484,11 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   }
 
   const expoTokens: string[] = [];
+  let androidDataSignalSent = 0;
+  let androidNotificationSignalSent = 0;
   for (const r of list) {
     if (r.platform === 'android' && r.fcmToken && messaging) {
+      let canSendNotificationSignal = true;
       try {
         // data-only (без notification) — в фоне вызывается onMessageReceived. high priority — доставка без задержек.
         // Не задаём collapseKey — каждый звонок доставляется отдельно, без «схлопывания» с предыдущим.
@@ -495,6 +500,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
         );
         logger.info('[push] call push sent via FCM (data-only, high priority)', { userId });
         pushLog('call_push_sent_via_FCM', { userId });
+        androidDataSignalSent += 1;
       } catch (e) {
         const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
         const errCode = (e as { code?: string })?.code;
@@ -506,16 +512,71 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
         if (shouldRemoveFcmTokenFromDb(e)) {
           const removed = await removeInvalidFcmToken(userId, r);
           if (!removed) logger.warn('[push] FCM invalid token not removed (no match in DB)', { userId });
+          canSendNotificationSignal = false;
         } else if (!isInvalidToken) {
           logger.warn('[push] FCM call push failed — not falling back to Expo for Android (would show small notification without Accept/Decline)', { error: errMsg });
           pushLog('call_push_FCM_failed_no_Expo_fallback', { userId, errMsg });
         }
-        // Android: не слать звонок через Expo — иначе показывается маленькое уведомление без кнопок Принять/Отклонить.
+      }
+
+      // Второй сигнал СРАЗУ: notification payload (жёсткий системный path).
+      // В foreground onMessageReceived может прийти второй раз — клиент дедупит по callId.
+      if (canSendNotificationSignal) {
+        try {
+          const title = (data.fromNick || '').trim() || 'Входящий видеозвонок';
+          const body = 'Откройте, чтобы ответить';
+          await messaging.send({
+            token: r.fcmToken,
+            data: {
+              ...Object.fromEntries(Object.entries(fcmDataPayload).map(([k, v]) => [k, String(v)])),
+              signal: 'notification',
+              category: 'call',
+            },
+            android: {
+              priority: 'high',
+              ttl: CALL_PUSH_NOTIFICATION_TTL_SECONDS * 1000,
+              notification: {
+                channelId: 'livi_incoming_call_v4',
+                tag: `incoming_call_${data.callId}`,
+                title,
+                body,
+                sound: 'default',
+                visibility: 'public',
+              },
+            },
+          });
+          androidNotificationSignalSent += 1;
+          logger.info('[push] call push sent via FCM (notification signal)', { userId, callId: data.callId });
+          pushLog('call_push_sent_via_FCM_notification_signal', { userId, callId: data.callId });
+        } catch (e) {
+          const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
+          const isInvalidToken =
+            isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered|invalid.registration.token/i.test(errMsg);
+          if (shouldRemoveFcmTokenFromDb(e)) await removeInvalidFcmToken(userId, r);
+          logger.warn('[push] FCM call notification signal failed', { userId, callId: data.callId, error: errMsg, isInvalidToken });
+        }
       }
     } else if (r.platform !== 'android') {
       // Только iOS получает звонок через Expo (с кнопками через categoryId).
       if (Expo.isExpoPushToken(r.token)) expoTokens.push(r.token);
     }
+  }
+
+  if (androidTotal > 0) {
+    logger.info('[push] sendCallPushToRecipient Android dual signals', {
+      userId,
+      callId: data.callId,
+      androidDataSignalSent,
+      androidNotificationSignalSent,
+      androidTokensTotal: androidTotal,
+    });
+    pushLog('call_push_android_dual_signals', {
+      userId,
+      callId: data.callId,
+      androidDataSignalSent,
+      androidNotificationSignalSent,
+      androidTokensTotal: androidTotal,
+    });
   }
 
   if (expoTokens.length > 0) {
@@ -543,6 +604,127 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
       }
     }
   }
+}
+
+/**
+ * Эскалация входящего звонка (fallback-path):
+ * - Android FCM с notification payload + data (high priority, короткий TTL);
+ * - Android Expo fallback с title/body, если FCM недоступен или не доставился.
+ * Используется сервером, когда ACK incoming_shown не получен в срок.
+ */
+export async function sendCallEscalationPushToRecipient(
+  userId: string,
+  data: CallPushData
+): Promise<{ androidTargets: number; fcmSent: number; expoSent: number }> {
+  const userIdObj = new mongoose.Types.ObjectId(userId);
+  const recs = await PushTokenModel.find({ userId: userIdObj })
+    .read('primary')
+    .select('_id token platform fcmToken')
+    .lean();
+  if (!recs?.length) return { androidTargets: 0, fcmSent: 0, expoSent: 0 };
+
+  type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string };
+  const list = recs as unknown as Rec[];
+  const androidRecs = list.filter((r) => r.platform === 'android');
+  const androidTargets = androidRecs.length;
+  if (!androidTargets) return { androidTargets: 0, fcmSent: 0, expoSent: 0 };
+
+  const messaging = getFirebaseMessaging();
+  const callTs = Date.now();
+  const title = (data.fromNick || '').trim() || 'Входящий видеозвонок';
+  const body = 'Откройте, чтобы ответить';
+  const dataPayload: Record<string, string> = {
+    type: 'call',
+    callId: data.callId,
+    fromUserId: data.from,
+    fromNick: data.fromNick || '',
+    ts: String(callTs),
+    escalation: '1',
+  };
+
+  let fcmSent = 0;
+  let expoSent = 0;
+
+  if (messaging) {
+    for (const r of androidRecs) {
+      if (!r.fcmToken) continue;
+      try {
+        await messaging.send({
+          token: r.fcmToken,
+          data: dataPayload,
+          android: {
+            priority: 'high',
+            ttl: CALL_PUSH_ESCALATION_TTL_SECONDS * 1000,
+            notification: {
+              channelId: 'calls',
+              tag: `incoming_call_${data.callId}`,
+              title,
+              body,
+              sound: 'default',
+              visibility: 'public',
+            },
+          },
+        });
+        fcmSent += 1;
+      } catch (e) {
+        const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
+        const isInvalidToken =
+          isFcmInvalidTokenError(e) ||
+          /requested entity was not found|not found|unregistered|invalid.registration.token/i.test(errMsg);
+        if (shouldRemoveFcmTokenFromDb(e)) await removeInvalidFcmToken(userId, r);
+        logger.warn('[push] FCM call escalation failed', { userId, callId: data.callId, error: errMsg, isInvalidToken });
+      }
+    }
+  }
+
+  const expoAndroidTokens = androidRecs
+    .map((r) => String(r.token || ''))
+    .filter((token) => Expo.isExpoPushToken(token));
+  if (expoAndroidTokens.length > 0) {
+    try {
+      const messages: ExpoPushMessage[] = expoAndroidTokens.map((to) => ({
+        to,
+        sound: 'default',
+        priority: 'high',
+        channelId: 'calls',
+        title,
+        body,
+        data: {
+          type: 'call',
+          callId: data.callId,
+          from: data.from,
+          fromNick: data.fromNick || '',
+          ts: String(callTs),
+          escalation: true,
+        },
+      }));
+      const chunks = expo.chunkPushNotifications(messages);
+      for (const chunk of chunks) {
+        const tickets = await expo.sendPushNotificationsAsync(chunk);
+        expoSent += tickets.filter((t) => t.status === 'ok').length;
+      }
+    } catch (e) {
+      logger.warn('[push] Expo call escalation failed', { userId, callId: data.callId, error: (e as Error)?.message });
+    }
+  }
+
+  logger.info('[push] call escalation push sent', {
+    userId,
+    callId: data.callId,
+    androidTargets,
+    fcmSent,
+    expoSent,
+    hasFirebase: !!messaging,
+  });
+  pushLog('call_push_escalation_sent', {
+    userId,
+    callId: data.callId,
+    androidTargets,
+    fcmSent,
+    expoSent,
+    hasFirebase: !!messaging,
+  });
+  return { androidTargets, fcmSent, expoSent };
 }
 
 /**

@@ -680,9 +680,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun setServerUrlForDecline(url: String?) {
     if (url.isNullOrBlank()) return
+    val normalized = normalizeApiServerBase(url) ?: return
     reactApplicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
       .edit()
-      .putString(KEY_SERVER_URL, url.trim().removeSuffix("/"))
+      .putString(KEY_SERVER_URL, normalized)
       .apply()
   }
 
@@ -761,6 +762,94 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     try {
       ctx.startActivity(intent)
     } catch (_: Exception) {}
+  }
+
+  /** Проверить, отключена ли оптимизация батареи для приложения (Doze whitelist). */
+  @ReactMethod
+  fun isIgnoringBatteryOptimizations(promise: Promise) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+      promise.resolve(true)
+      return
+    }
+    try {
+      val pm = reactApplicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+      promise.resolve(pm?.isIgnoringBatteryOptimizations(reactApplicationContext.packageName) == true)
+    } catch (_: Exception) {
+      promise.resolve(false)
+    }
+  }
+
+  /** Открыть системный экран отключения battery optimization для приложения. */
+  @ReactMethod
+  fun openBatteryOptimizationSettings() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+    val ctx = reactApplicationContext
+    val pkgUri = Uri.parse("package:${ctx.packageName}")
+    val intents = listOf(
+      Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+        data = pkgUri
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      },
+      Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      },
+      Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        data = pkgUri
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      },
+    )
+    for (intent in intents) {
+      try {
+        if (intent.resolveActivity(ctx.packageManager) != null) {
+          ctx.startActivity(intent)
+          return
+        }
+      } catch (_: Exception) {}
+    }
+  }
+
+  /** OEM fallback: открыть экран автозапуска/фоновой активности (Xiaomi/Oppo/Vivo/Huawei/Realme и др.). */
+  @ReactMethod
+  fun openAutostartSettings() {
+    val ctx = reactApplicationContext
+    val candidates = listOf(
+      Intent().apply {
+        component = android.content.ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      },
+      Intent().apply {
+        component = android.content.ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      },
+      Intent().apply {
+        component = android.content.ComponentName("com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      },
+      Intent().apply {
+        component = android.content.ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      },
+      Intent().apply {
+        component = android.content.ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      },
+      Intent().apply {
+        component = android.content.ComponentName("com.transsion.phonemaster", "com.cyin.himgr.autostart.AutoStartActivity")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      },
+      Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        data = Uri.parse("package:${ctx.packageName}")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      },
+    )
+    for (intent in candidates) {
+      try {
+        if (intent.resolveActivity(ctx.packageManager) != null) {
+          ctx.startActivity(intent)
+          return
+        }
+      } catch (_: Exception) {}
+    }
   }
 
   /** Единый источник таймаута исходящего (мс): JS передаёт при старте, LiviOutgoingCallService читает. */
@@ -1146,6 +1235,23 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private const val HEADLESS_TASK_CALL_KEEP = "RNCallKeepBackgroundMessage"
 
     private var reactContextRef: ReactApplicationContext? = null
+
+    @JvmStatic
+    fun normalizeApiServerBase(raw: String?): String? {
+      val trimmed = raw?.trim()?.removeSuffix("/") ?: return null
+      if (trimmed.isEmpty()) return null
+      return if (trimmed.endsWith("/api")) trimmed.removeSuffix("/api") else trimmed
+    }
+
+    /** Приоритет: prefs (последняя синхронизация из JS) -> BuildConfig.API_BASE_URL -> production fallback. */
+    @JvmStatic
+    fun resolveServerBaseUrl(context: Context): String? {
+      val prefsUrl = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .getString(KEY_SERVER_URL, null)
+      normalizeApiServerBase(prefsUrl)?.let { return it }
+      normalizeApiServerBase(BuildConfig.API_BASE_URL)?.let { return it }
+      return "https://api.liviapp.com"
+    }
 
     /** Вызвать из MainActivity при intent с EXTRA_OPEN_TAB_FRIENDS (тап по уведомлению «Пропущенный вызов»). */
     @JvmStatic

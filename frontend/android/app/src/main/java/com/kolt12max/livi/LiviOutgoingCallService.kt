@@ -168,7 +168,7 @@ class LiviOutgoingCallService : Service() {
         if (callId.isEmpty()) return
         val prefs = applicationContext.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
         val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
-        val serverUrl = prefs.getString(LiviAppModule.KEY_SERVER_URL, null)?.takeIf { it.isNotBlank() }
+        val serverUrl = LiviAppModule.resolveServerBaseUrl(applicationContext)
         if (installId == null || serverUrl == null) return
         Thread {
             try {
@@ -240,7 +240,7 @@ class LiviOutgoingCallService : Service() {
             if (callId.isEmpty()) return
             val prefs = context.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
             val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
-            val serverUrl = prefs.getString(LiviAppModule.KEY_SERVER_URL, null)?.takeIf { it.isNotBlank() }
+            val serverUrl = LiviAppModule.resolveServerBaseUrl(context)
             if (installId == null || serverUrl == null) return
             Thread {
                 try {

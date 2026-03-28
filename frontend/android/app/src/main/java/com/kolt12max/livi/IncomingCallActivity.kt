@@ -43,6 +43,7 @@ class IncomingCallActivity : AppCompatActivity() {
     private var timeoutRunnable: Runnable? = null
     private var closeHandled = false
     private var incomingShownReported = false
+    private var incomingShownInFlight = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -269,7 +270,7 @@ class IncomingCallActivity : AppCompatActivity() {
     private fun declineCallFromNative(callId: String) {
         val prefs = applicationContext.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
         val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
-        val serverUrl = prefs.getString(LiviAppModule.KEY_SERVER_URL, null)?.takeIf { it.isNotBlank() }
+        val serverUrl = LiviAppModule.resolveServerBaseUrl(applicationContext)
         val userIdHeader = prefs.getString(LiviAppModule.KEY_USER_ID_FOR_DECLINE, null)?.takeIf { it.isNotBlank() }
         val declineUri = "livi://decline-call?callId=${Uri.encode(callId)}"
         if (installId != null && serverUrl != null) {
@@ -319,34 +320,60 @@ class IncomingCallActivity : AppCompatActivity() {
 
     /** Отправить backend-ack: входящий экран реально показан (работает даже при неактивном/спящем JS). */
     private fun reportIncomingShownFromNative(callId: String) {
-        if (incomingShownReported || callId.isBlank()) return
-        incomingShownReported = true
+        if (incomingShownReported || incomingShownInFlight || callId.isBlank()) return
         val prefs = applicationContext.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
         val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
-        val serverUrl = prefs.getString(LiviAppModule.KEY_SERVER_URL, null)?.takeIf { it.isNotBlank() }
+        val serverUrl = LiviAppModule.resolveServerBaseUrl(applicationContext)
         val userIdHeader = prefs.getString(LiviAppModule.KEY_USER_ID_FOR_DECLINE, null)?.takeIf { it.isNotBlank() }
         if (installId == null || serverUrl == null) return
+        incomingShownInFlight = true
         Thread {
             try {
-                val url = URL("$serverUrl/api/calls/incoming-shown")
-                val conn = url.openConnection() as java.net.HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.setRequestProperty("x-install-id", installId)
-                if (userIdHeader != null) conn.setRequestProperty("x-user-id", userIdHeader)
-                conn.doOutput = true
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                conn.outputStream.use { os ->
-                    os.write("{\"callId\":\"${callId.replace("\"", "\\\"")}\"}".toByteArray(Charsets.UTF_8))
+                var ok = false
+                val payload = "{\"callId\":\"${callId.replace("\"", "\\\"")}\"}"
+                val endpoints = listOf(
+                    "$serverUrl/api/calls/incoming-shown",
+                    "$serverUrl/calls/incoming-shown"
+                )
+                for (endpoint in endpoints) {
+                    try {
+                        val url = URL(endpoint)
+                        val conn = url.openConnection() as java.net.HttpURLConnection
+                        conn.requestMethod = "POST"
+                        conn.setRequestProperty("Content-Type", "application/json")
+                        conn.setRequestProperty("x-install-id", installId)
+                        if (userIdHeader != null) conn.setRequestProperty("x-user-id", userIdHeader)
+                        conn.doOutput = true
+                        conn.connectTimeout = 5000
+                        conn.readTimeout = 5000
+                        conn.outputStream.use { os ->
+                            os.write(payload.toByteArray(Charsets.UTF_8))
+                        }
+                        val code = conn.responseCode
+                        conn.disconnect()
+                        if (code in 200..299) {
+                            ok = true
+                            break
+                        }
+                        // 404 на втором endpoint бесполезен, а 401/403 не ретраим.
+                        if (code == 401 || code == 403 || code == 400) break
+                    } catch (_: Exception) {
+                        // Пробуем следующий endpoint/попытку.
+                    }
                 }
-                val code = conn.responseCode
-                if (code !in 200..299) {
-                    android.util.Log.w(TAG, "incoming-shown HTTP failed code=$code callId=$callId")
+                runOnUiThread {
+                    incomingShownInFlight = false
+                    if (ok) {
+                        incomingShownReported = true
+                    } else {
+                        android.util.Log.w(TAG, "incoming-shown HTTP failed callId=$callId")
+                    }
                 }
-                conn.disconnect()
             } catch (e: Exception) {
-                android.util.Log.w(TAG, "incoming-shown HTTP exception callId=$callId", e)
+                runOnUiThread {
+                    incomingShownInFlight = false
+                    android.util.Log.w(TAG, "incoming-shown HTTP exception callId=$callId", e)
+                }
             }
         }.start()
     }

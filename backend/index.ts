@@ -35,12 +35,34 @@ import MissedCall from './models/MissedCall';
 import createChatRouter from './routes/chat';
 import { buildAvatarDataUris } from './utils/avatars';
 import { createToken, getLiveKitUrl, isAllowedParticipant } from './routes/livekit';
-import { sendPushToUser, sendCallPushToRecipient, sendCallCanceledToRecipient, sendCallDeclinedToCaller, sendCallAcceptedToCaller } from './utils/push';
+import {
+  sendPushToUser,
+  sendCallPushToRecipient,
+  sendCallEscalationPushToRecipient,
+  sendCallCanceledToRecipient,
+  sendCallDeclinedToCaller,
+  sendCallAcceptedToCaller,
+} from './utils/push';
 import { pushLog } from './utils/pushLogBuffer';
 import * as queueStore from './utils/queueStore';
 import * as capacityMetrics from './utils/capacityMetrics';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 import { onSocketDisconnectWebRTC } from './sockets/webrtc';
+import {
+  addCallEvent,
+  callFeatureFlags,
+  createOrchestratedCall,
+  finalizeCall,
+  getCallTimeline,
+  getCallTimelineFromDb,
+  getOrchestrationMetrics,
+  getOrchestrationMetricsFromDb,
+  markIncomingShown as markIncomingShownOrchestration,
+  markProviderDelivered,
+  pruneOrchestratedCall,
+  transitionCall,
+} from './utils/callOrchestration';
+import { callProviderAdapter, callProviderMode } from './utils/callProvider';
 
 // Закрываем Redis соединение при завершении приложения
 process.on('SIGTERM', async () => {
@@ -107,6 +129,7 @@ const TURN_ENABLE_TCP = String(process.env.TURN_ENABLE_TCP || '1') === '1';
 // TCP/443 часто занят HTTPS (api/livekit). Поэтому включаем его ТОЛЬКО по явному флагу.
 const TURN_ENABLE_TCP_443 = String(process.env.TURN_ENABLE_TCP_443 || process.env.TURN_TCP_443 || '0') === '1';
 const TURN_TTL_SECONDS = Number(process.env.TURN_TTL || 600); // 10 min default
+const CALL_OBSERVABILITY_API_KEY = String(process.env.CALL_OBSERVABILITY_API_KEY || '').trim();
 
 // Стартовая диагностика TURN (без утечки секретов)
 if (!TURN_SECRET) {
@@ -873,9 +896,12 @@ type CallDeliveryTelemetry = {
   callerId: string;
   calleeId: string;
   createdAtMs: number;
+  callerNick?: string;
   pushSentAtMs?: number;
   incomingShownAtMs?: number;
   incomingShownBy?: 'socket' | 'native_http';
+  retryPushCount?: number;
+  escalationPushCount?: number;
   closeReason?: 'accepted' | 'declined' | 'canceled' | 'timeout';
   purgeTimer?: NodeJS.Timeout;
 };
@@ -897,15 +923,133 @@ function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'cancele
   callOfUser.delete(link.a);
   callOfUser.delete(link.b);
   const telemetry = callDeliveryById.get(callId);
+  if (reason) finalizeCall(callId, reason);
   if (telemetry) {
     telemetry.closeReason = reason;
+    logger.info('[call:delivery_summary]', {
+      callId,
+      caller: telemetry.callerId,
+      callee: telemetry.calleeId,
+      push_sent: telemetry.pushSentAtMs != null,
+      incoming_shown: telemetry.incomingShownAtMs != null,
+      incoming_shown_by: telemetry.incomingShownBy || null,
+      retry_push_count: telemetry.retryPushCount ?? 0,
+      escalation_push_count: telemetry.escalationPushCount ?? 0,
+      close_reason: reason || null,
+      call_duration_before_close_ms: Date.now() - telemetry.createdAtMs,
+    });
+    pushLog('call_delivery_summary', {
+      callId,
+      callerId: telemetry.callerId,
+      calleeId: telemetry.calleeId,
+      push_sent: telemetry.pushSentAtMs != null,
+      incoming_shown: telemetry.incomingShownAtMs != null,
+      incoming_shown_by: telemetry.incomingShownBy || null,
+      retry_push_count: telemetry.retryPushCount ?? 0,
+      escalation_push_count: telemetry.escalationPushCount ?? 0,
+      close_reason: reason || null,
+      ageMs: Date.now() - telemetry.createdAtMs,
+    });
     if (telemetry.purgeTimer) {
       try { clearTimeout(telemetry.purgeTimer); } catch {}
     }
     telemetry.purgeTimer = setTimeout(() => {
       callDeliveryById.delete(callId);
+      pruneOrchestratedCall(callId);
     }, 10 * 60_000);
+  } else {
+    pruneOrchestratedCall(callId);
   }
+}
+
+const CALL_DELIVERY_ACK_WAIT_MS = 3_000;
+const CALL_DELIVERY_RETRY_EVERY_MS = 4_000;
+const CALL_DELIVERY_ESCALATE_AFTER_RETRY = 1;
+const CALL_DELIVERY_RETRY_MAX_WINDOW_MS = 18_000;
+
+function scheduleCallPushRetry(callId: string, delayMs: number) {
+  const link = callsById.get(callId);
+  if (!link) return;
+  if (link.retryPushTimer) {
+    try { clearTimeout(link.retryPushTimer); } catch {}
+  }
+  link.retryPushTimer = setTimeout(() => {
+    void runCallPushRetryCycle(callId);
+  }, delayMs);
+}
+
+async function runCallPushRetryCycle(callId: string): Promise<void> {
+  const link = callsById.get(callId);
+  if (!link) return;
+  const telemetry = callDeliveryById.get(callId);
+  if (!telemetry) return;
+  if (telemetry.incomingShownAtMs) {
+    logger.info('[call:initiate] stop push retry: incoming already shown', { callId, callee: telemetry.calleeId });
+    return;
+  }
+  const elapsedMs = Date.now() - telemetry.createdAtMs;
+  if (elapsedMs >= CALL_DELIVERY_RETRY_MAX_WINDOW_MS) {
+    logger.info('[call:initiate] stop push retry: retry window elapsed', { callId, callee: telemetry.calleeId, elapsedMs });
+    return;
+  }
+
+  const callerNick = telemetry.callerNick ?? '';
+  const retryPushCount = telemetry.retryPushCount ?? 0;
+  const shouldEscalate = retryPushCount >= CALL_DELIVERY_ESCALATE_AFTER_RETRY;
+  try {
+    if (shouldEscalate) {
+      logger.info('[call:initiate] escalation push attempt (no incoming_shown ACK)', {
+        callId,
+        callee: telemetry.calleeId,
+        elapsedMs,
+        retryPushCount,
+      });
+      await sendCallEscalationPushToRecipient(telemetry.calleeId, {
+        callId,
+        from: telemetry.callerId,
+        fromNick: callerNick,
+      });
+      addCallEvent(callId, 'push_escalated', 'backend_retry', {
+        elapsedMs,
+        retryPushCount,
+      });
+      telemetry.escalationPushCount = (telemetry.escalationPushCount ?? 0) + 1;
+      pushLog('call_push_retry_escalation', { callId, calleeId: telemetry.calleeId, elapsedMs, retryPushCount: telemetry.retryPushCount ?? 0 });
+    } else {
+      logger.info('[call:initiate] retry call push attempt (no incoming_shown ACK)', {
+        callId,
+        callee: telemetry.calleeId,
+        elapsedMs,
+        retryPushCount,
+      });
+      await sendCallPushToRecipient(telemetry.calleeId, {
+        callId,
+        from: telemetry.callerId,
+        fromNick: callerNick,
+      });
+      addCallEvent(callId, 'push_retry', 'backend_retry', {
+        elapsedMs,
+        retryPushCount,
+      });
+      telemetry.retryPushCount = retryPushCount + 1;
+      if (!telemetry.pushSentAtMs) telemetry.pushSentAtMs = Date.now();
+      pushLog('call_push_retry_data_only', { callId, calleeId: telemetry.calleeId, elapsedMs, retryPushCount: telemetry.retryPushCount });
+    }
+    callDeliveryById.set(callId, telemetry);
+  } catch (e: any) {
+    logger.warn('[call:initiate] retry/escalation push failed', {
+      callId,
+      callee: telemetry.calleeId,
+      elapsedMs,
+      shouldEscalate,
+      error: e?.message,
+    });
+  }
+
+  if (!callsById.has(callId)) return;
+  const latest = callDeliveryById.get(callId);
+  if (!latest || latest.incomingShownAtMs) return;
+  scheduleCallPushRetry(callId, CALL_DELIVERY_RETRY_EVERY_MS);
 }
 
 /** Callee в ожидающем звонке (без inCall) не считается занятым при отображении в списке друзей. */
@@ -965,6 +1109,13 @@ app.post('/api/calls/decline', async (req, res) => {
     if (link.b !== userId) {
       return res.status(403).json({ ok: false, error: 'only_callee_can_decline' });
     }
+    const shouldProcess = transitionCall(callId, 'declined', {
+      actionKey: `http_decline:${callId}:${userId}`,
+      source: 'http_decline',
+    });
+    if (!shouldProcess) {
+      return res.json({ ok: true, deduped: true });
+    }
     logger.info('[api/calls/decline] callee declined via HTTP', { callId, caller: link.a, callee: link.b });
     const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
     const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
@@ -1018,6 +1169,12 @@ app.post('/api/calls/incoming-shown', async (req, res) => {
       t.incomingShownAtMs = now;
       t.incomingShownBy = 'native_http';
       callDeliveryById.set(callId, t);
+      markIncomingShownOrchestration(callId, 'native_http');
+      const activeLink = callsById.get(callId);
+      if (activeLink?.retryPushTimer) {
+        try { clearTimeout(activeLink.retryPushTimer); } catch {}
+        activeLink.retryPushTimer = undefined;
+      }
       const ageFromStartMs = now - t.createdAtMs;
       const ageFromPushMs = t.pushSentAtMs != null ? now - t.pushSentAtMs : undefined;
       logger.info('[call:incoming_shown] received from native HTTP', {
@@ -1053,6 +1210,13 @@ app.post('/api/calls/cancel', async (req, res) => {
     if (link.a !== userId) {
       return res.status(403).json({ ok: false, error: 'only_caller_can_cancel' });
     }
+    const shouldProcess = transitionCall(callId, 'canceled', {
+      actionKey: `http_cancel:${callId}:${userId}`,
+      source: 'http_cancel',
+    });
+    if (!shouldProcess) {
+      return res.json({ ok: true, deduped: true });
+    }
     logger.info('[api/calls/cancel] caller canceled via HTTP (timeout)', { callId, caller: link.a, callee: link.b });
     const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
     const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
@@ -1083,6 +1247,81 @@ app.post('/api/calls/cancel', async (req, res) => {
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
   }
+});
+
+function hasObservabilityAccess(req: express.Request): boolean {
+  if (!CALL_OBSERVABILITY_API_KEY) return true;
+  const key = String(req.header('x-observability-key') || '').trim();
+  return key.length > 0 && key === CALL_OBSERVABILITY_API_KEY;
+}
+
+app.get('/api/calls/metrics', async (req, res) => {
+  if (!hasObservabilityAccess(req)) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+  const windowMin = Number(req.query.windowMin || 60);
+  const normalizedWindow = Number.isFinite(windowMin) ? windowMin : 60;
+  let metricsSource: 'db' | 'memory' = 'db';
+  let metrics: Awaited<ReturnType<typeof getOrchestrationMetricsFromDb>> | ReturnType<typeof getOrchestrationMetrics>;
+  try {
+    metrics = await getOrchestrationMetricsFromDb(normalizedWindow);
+  } catch (e: any) {
+    metricsSource = 'memory';
+    metrics = getOrchestrationMetrics(normalizedWindow);
+    logger.warn('[call:metrics] db metrics failed, fallback to memory', { error: e?.message });
+  }
+  return res.json({
+    ok: true,
+    source: metricsSource,
+    featureFlags: callFeatureFlags,
+    slo: {
+      incoming_shown_p95_target_seconds: 3,
+      fields: ['incomingShownRate', 'answeredSuccessRate', 'missedDueToDeliveryRate'],
+    },
+    metrics,
+  });
+});
+
+app.get('/api/calls/:callId/timeline', (req, res) => {
+  if (!hasObservabilityAccess(req)) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+  const callId = String(req.params.callId || '').trim();
+  if (!callId) return res.status(400).json({ ok: false, error: 'callId_required' });
+  const timeline = getCallTimeline(callId);
+  if (!timeline) return res.status(404).json({ ok: false, error: 'not_found' });
+  return res.json({ ok: true, timeline });
+});
+
+app.get('/api/calls/:callId/timeline-db', async (req, res) => {
+  if (!hasObservabilityAccess(req)) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+  const callId = String(req.params.callId || '').trim();
+  if (!callId) return res.status(400).json({ ok: false, error: 'callId_required' });
+  const timeline = await getCallTimelineFromDb(callId);
+  if (!timeline) return res.status(404).json({ ok: false, error: 'not_found' });
+  return res.json({ ok: true, timeline });
+});
+
+app.post('/api/calls/provider-delivered', (req, res) => {
+  if (!callProviderAdapter.isEnabled()) {
+    return res.status(409).json({ ok: false, error: 'provider_disabled', mode: callProviderMode });
+  }
+  const verify = callProviderAdapter.verifyWebhook(req);
+  if (!verify.ok) {
+    const status = verify.error === 'provider_webhook_secret_missing' ? 503 : 403;
+    return res.status(status).json({ ok: false, error: verify.error || 'forbidden' });
+  }
+  const event = callProviderAdapter.parseDeliveredEvent(req.body);
+  if (!event?.callId) return res.status(400).json({ ok: false, error: 'callId_required' });
+  const delivered = markProviderDelivered(event.callId, {
+    provider: event.provider,
+    mode: callProviderMode,
+    payload: event.payload,
+  });
+  if (!delivered) return res.status(404).json({ ok: false, error: 'call_not_found' });
+  return res.json({ ok: true });
 });
 
 /* ========= Socket.IO ========= */
@@ -1291,6 +1530,12 @@ io.on('connection', async (sock: AuthedSocket) => {
           resolvedRoomId: resolvedRoomId || null
         });
         return;
+      }
+      if (callId) {
+        transitionCall(String(callId), 'ended', {
+          actionKey: `socket_end:${String(callId)}`,
+          source: 'socket_end',
+        });
       }
       
       // Получаем участников комнаты
@@ -1817,6 +2062,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       const callId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       callsById.set(callId, { a: me, b: peerId });
+      createOrchestratedCall({ callId, callerId: me, calleeId: peerId });
       callDeliveryById.set(callId, {
         callerId: me,
         calleeId: peerId,
@@ -1858,6 +2104,11 @@ io.on('connection', async (sock: AuthedSocket) => {
       const timer = setTimeout(async () => {
         const link = callsById.get(callId);
         if (!link) return;
+        const shouldProcess = transitionCall(callId, 'timeout', {
+          actionKey: `timeout:${callId}`,
+          source: 'timer_timeout',
+        });
+        if (!shouldProcess) return;
         
         // Снимаем busy статус с обоих участников при таймауте
         const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
@@ -1940,32 +2191,26 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       // КРИТИЧНО: пуш всегда отправляем в отдельном шаге, чтобы исключение в блоке с Mongo/сокетами не пропустило доставку в глубоком сне
       try {
+        const t = callDeliveryById.get(callId);
+        if (t) {
+          t.callerNick = fromNick ?? '';
+          callDeliveryById.set(callId, t);
+        }
         logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
         await sendCallPushToRecipient(peerId, { callId, from: me, fromNick: fromNick ?? '' });
-        const t = callDeliveryById.get(callId);
+        addCallEvent(callId, 'push_sent', 'backend_initial', {
+          providerMode: callProviderMode,
+          providerPrimary: callFeatureFlags.providerSignalingEnabled,
+          pushFallbackEnabled: callFeatureFlags.pushFallbackEnabled,
+        });
         if (t && !t.pushSentAtMs) t.pushSentAtMs = Date.now();
         logger.info('[call:initiate] call push sent', { peerId });
       } catch (pushErr: any) {
         logger.warn('[call:initiate] push to recipient failed', { peerId, error: pushErr?.message });
       }
 
-      // Safety-net: повторить call push один раз, если звонок всё ещё активен.
-      // Это помогает при кратковременных провалах доставки FCM после долгого сна устройства.
-      const retryPushTimer = setTimeout(async () => {
-        const pending = callsById.get(callId);
-        if (!pending) return;
-        try {
-          logger.info('[call:initiate] retrying call push to recipient', { peerId, callId, from: me });
-          await sendCallPushToRecipient(peerId, { callId, from: me, fromNick: fromNick ?? '' });
-          const t = callDeliveryById.get(callId);
-          if (t && !t.pushSentAtMs) t.pushSentAtMs = Date.now();
-          logger.info('[call:initiate] retry call push sent', { peerId, callId });
-        } catch (retryErr: any) {
-          logger.warn('[call:initiate] retry push to recipient failed', { peerId, callId, error: retryErr?.message });
-        }
-      }, 5000);
-      const currentLink = callsById.get(callId);
-      if (currentLink) currentLink.retryPushTimer = retryPushTimer;
+      // Надёжная доставка: если incoming_shown ACK не пришёл, запускаем цикл retry + escalation.
+      scheduleCallPushRetry(callId, CALL_DELIVERY_ACK_WAIT_MS);
 
       return ack?.({ ok: true, callId });
     } catch (e: any) {
@@ -2047,6 +2292,11 @@ io.on('connection', async (sock: AuthedSocket) => {
     const bSock = (sock as any)?.data?.userId === link.b ? (sock as AuthedSocket) : Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b) as AuthedSocket | undefined;
     
     if (!bSock) return;
+    const shouldProcess = transitionCall(id, 'accepted', {
+      actionKey: `socket_accept:${id}:${link.b}`,
+      source: 'socket_accept',
+    });
+    if (!shouldProcess) return;
     
     {
       // КРИТИЧНО: Используем user IDs для имени комнаты, чтобы совпадало с LiveKit
@@ -2295,6 +2545,12 @@ io.on('connection', async (sock: AuthedSocket) => {
         t.incomingShownAtMs = now;
         t.incomingShownBy = 'socket';
         callDeliveryById.set(id, t);
+        markIncomingShownOrchestration(id, 'socket');
+        const activeLink = callsById.get(id);
+        if (activeLink?.retryPushTimer) {
+          try { clearTimeout(activeLink.retryPushTimer); } catch {}
+          activeLink.retryPushTimer = undefined;
+        }
         const ageFromStartMs = now - t.createdAtMs;
         const ageFromPushMs = t.pushSentAtMs != null ? now - t.pushSentAtMs : undefined;
         logger.info('[call:incoming_shown] received from socket', {
@@ -2313,6 +2569,11 @@ io.on('connection', async (sock: AuthedSocket) => {
     const id = String(callId || '');
     const link = callsById.get(id);
     if (!link) return;
+    const shouldProcess = transitionCall(id, 'declined', {
+      actionKey: `socket_decline:${id}:${String((sock as any)?.data?.userId || '')}`,
+      source: 'socket_decline',
+    });
+    if (!shouldProcess) return;
     
     // Снимаем busy статус с обоих участников при отклонении
     const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
@@ -2340,6 +2601,11 @@ io.on('connection', async (sock: AuthedSocket) => {
     const id = String(callId || '');
     const link = callsById.get(id);
     if (!link) return;
+    const shouldProcess = transitionCall(id, 'canceled', {
+      actionKey: `socket_cancel:${id}:${String((sock as any)?.data?.userId || '')}`,
+      source: 'socket_cancel',
+    });
+    if (!shouldProcess) return;
     
     // Снимаем busy статус с обоих участников при отмене
     const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);

@@ -6,7 +6,13 @@ import SettingsTab from '../components/SettingsTab';
 import { useMe } from '../store/me';
 import { useLang } from '../store/lang';
 import { t } from '../utils/i18n';
-import { openAppNotificationSettings, areNotificationsEnabled } from '../utils/callKeep';
+import {
+  openAppNotificationSettings,
+  areNotificationsEnabled,
+  isIgnoringBatteryOptimizations,
+  openBatteryOptimizationSettings,
+  openAutostartSettings,
+} from '../utils/callKeep';
 import { getClient } from '../chat/cometchat';
 import { uploadAvatarToCloudinary, normalizeLocalImageUri } from '../utils/uploadAvatar';
 import { getInstallId } from '../utils/installId';
@@ -64,6 +70,7 @@ export default function SettingsScreen() {
 
   const pushedRef = useRef<string>('');
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
+  const [batteryOptimizationOff, setBatteryOptimizationOff] = useState<boolean | null>(null);
 
   /** Синхронизация с глобальным состоянием me */
   useEffect(() => {
@@ -489,6 +496,13 @@ export default function SettingsScreen() {
     areNotificationsEnabled().then(setNotificationsEnabled).catch(() => setNotificationsEnabled(null));
   }, []);
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    isIgnoringBatteryOptimizations()
+      .then(setBatteryOptimizationOff)
+      .catch(() => setBatteryOptimizationOff(null));
+  }, []);
+
   // Показываем SplashLoader пока данные не загружены
   if (!profileLoaded) {
     return (
@@ -561,6 +575,52 @@ export default function SettingsScreen() {
             {notificationsEnabled === false
               ? t('fullscreenIncomingCallsDisabledDesc', lang)
               : t('fullscreenIncomingCallsEnabledDesc', lang)}
+          </Text>
+        </TouchableOpacity>
+      )}
+      {Platform.OS === 'android' && (
+        <TouchableOpacity
+          onPress={openBatteryOptimizationSettings}
+          style={{
+            marginHorizontal: 20,
+            marginBottom: 12,
+            paddingVertical: 14,
+            paddingHorizontal: 16,
+            backgroundColor: batteryOptimizationOff === false ? 'rgba(255,90,103,0.12)' : 'rgba(255,255,255,0.06)',
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: batteryOptimizationOff === false ? 'rgba(255,90,103,0.3)' : 'rgba(255,255,255,0.1)',
+          }}
+        >
+          <Text style={{ color: '#B7C0CF', fontSize: 15, fontWeight: '600', marginBottom: 4 }}>
+            Battery optimization
+          </Text>
+          <Text style={{ color: '#8A8F99', fontSize: 13 }}>
+            {batteryOptimizationOff === false
+              ? 'Disabled state required for stable incoming calls during long sleep. Tap to set Unrestricted battery.'
+              : 'Recommended: keep app in Unrestricted battery mode to reduce delayed incoming calls after Doze.'}
+          </Text>
+        </TouchableOpacity>
+      )}
+      {Platform.OS === 'android' && (
+        <TouchableOpacity
+          onPress={openAutostartSettings}
+          style={{
+            marginHorizontal: 20,
+            marginBottom: 24,
+            paddingVertical: 14,
+            paddingHorizontal: 16,
+            backgroundColor: 'rgba(255,255,255,0.06)',
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.1)',
+          }}
+        >
+          <Text style={{ color: '#B7C0CF', fontSize: 15, fontWeight: '600', marginBottom: 4 }}>
+            Autostart / background activity
+          </Text>
+          <Text style={{ color: '#8A8F99', fontSize: 13 }}>
+            Open OEM settings (Samsung/Xiaomi/Oppo/Vivo/etc.) and allow app autostart and background activity.
           </Text>
         </TouchableOpacity>
       )}

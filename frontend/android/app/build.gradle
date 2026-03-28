@@ -18,6 +18,12 @@ if (file("google-services.json").exists()) {
 }
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+def apiBaseUrlEnv = (System.getenv("EXPO_PUBLIC_SERVER_URL_ANDROID") ?: System.getenv("EXPO_PUBLIC_SERVER_URL") ?: "https://api.liviapp.com")
+        .toString()
+        .trim()
+        .replaceAll('/+$', '')
+if (!apiBaseUrlEnv) apiBaseUrlEnv = "https://api.liviapp.com"
+def apiBaseUrlEscaped = apiBaseUrlEnv.replace("\\", "\\\\").replace("\"", "\\\"")
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -111,8 +117,8 @@ android {
         applicationId 'com.kolt12max.livi'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 106
-        versionName "1.1.5"
+        versionCode 108
+        versionName "1.1.7"
     }
     signingConfigs {
     debug {
@@ -175,10 +181,12 @@ android {
         applicationIdSuffix ".dev"
         resValue "string", "app_name", "LiVi Dev"
         buildConfigField "boolean", "ENABLE_FCM_VERBOSE_LOG", "true"
+        buildConfigField "String", "API_BASE_URL", "\"${apiBaseUrlEscaped}\""
     }
     release {
         signingConfig signingConfigs.release
         buildConfigField "boolean", "ENABLE_FCM_VERBOSE_LOG", "false"
+        buildConfigField "String", "API_BASE_URL", "\"${apiBaseUrlEscaped}\""
         shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
         minifyEnabled enableProguardInReleaseBuilds
         proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"

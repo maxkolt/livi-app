@@ -30,7 +30,7 @@ class DeclineCallReceiver : BroadcastReceiver() {
         context.sendBroadcast(cancelIntent)
         val prefs = context.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
         val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
-        val serverUrl = prefs.getString(LiviAppModule.KEY_SERVER_URL, null)?.takeIf { it.isNotBlank() }
+        val serverUrl = LiviAppModule.resolveServerBaseUrl(context)
         val userIdHeader = prefs.getString(LiviAppModule.KEY_USER_ID_FOR_DECLINE, null)?.takeIf { it.isNotBlank() }
         val declineUri = "livi://decline-call?callId=${Uri.encode(callId)}"
         if (installId != null && serverUrl != null) {
