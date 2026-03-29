@@ -1144,11 +1144,20 @@ app.post('/api/calls/decline', async (req, res) => {
 app.post('/api/calls/incoming-shown', async (req, res) => {
   try {
     const userId = (req as any).userId;
+    const callIdEarly = String(req.body?.callId || '').trim();
+    const hasInstallHeader = !!String(req.header('x-install-id') || '').trim();
     if (!userId || !isOid(userId)) {
+      logger.warn('[call:incoming_shown] rejected 401 (no user for install)', {
+        hasInstallHeader,
+        callId: callIdEarly || undefined,
+      });
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
-    const callId = String(req.body?.callId || '').trim();
+    const callId = callIdEarly;
     if (!callId) {
+      logger.warn('[call:incoming_shown] rejected 400 (callId_required)', {
+        userId: String(userId).slice(0, 8) + '…',
+      });
       return res.status(400).json({ ok: false, error: 'callId_required' });
     }
 
@@ -1156,6 +1165,13 @@ app.post('/api/calls/incoming-shown', async (req, res) => {
     const telemetry = callDeliveryById.get(callId);
     const expectedCallee = link?.b || telemetry?.calleeId;
     if (!expectedCallee || String(expectedCallee) !== String(userId)) {
+      logger.warn('[call:incoming_shown] rejected 403 (callee mismatch)', {
+        callId,
+        userId: String(userId).slice(0, 8) + '…',
+        expectedCallee: expectedCallee ? String(expectedCallee).slice(0, 8) + '…' : null,
+        hasLink: !!link,
+        hasTelemetry: !!telemetry,
+      });
       return res.status(403).json({ ok: false, error: 'forbidden' });
     }
 
