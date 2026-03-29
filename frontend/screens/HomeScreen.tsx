@@ -429,7 +429,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const [blurIntensity, setBlurIntensity] = useState<number>(isDark ? 15 : 20);
   const titanOpacity = useRef(new Animated.Value(0.25)).current;
-  const borderWidth = 0.9; // Рамка кнопки «Начать поиск»
+  const borderWidth = 0.8; // Рамка кнопки «Начать поиск»
 
   // Цвета из палитры эквалайзера для темной темы - зациклены для непрерывности
   const darkColors = [
