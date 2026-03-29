@@ -147,6 +147,9 @@ const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EX
 
 export const API_BASE = (Platform.OS === 'android' ? ANDROID_URL : IOS_URL).replace(/\/+$/, '');
 
+/** Первый коннект / смена сети (VPN, DNS): согласовано с io({ timeout }). Пуши и accept/decline ждут столько же. */
+export const SOCKET_CONNECT_WAIT_MS = 25000;
+
 if (__DEV__) {
   const lk = (process.env.EXPO_PUBLIC_LIVEKIT_URL || '').trim();
   console.log('[socket] API_BASE=', API_BASE, 'EXPO_PUBLIC_LIVEKIT_URL=', lk || '—');
@@ -208,8 +211,9 @@ export const getSocket = (): Socket => {
       // Connection is triggered via applyAuthAndConnect()/emitAck() when ready.
       autoConnect: false,
       reconnection: true,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: 25,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
       timeout: 25000,
     });
   }
@@ -299,7 +303,7 @@ async function applyAuthAndConnect() {
               return;
             }
             reject(new Error('Socket connection timeout'));
-          }, 10000); // 10 секунд таймаут
+          }, SOCKET_CONNECT_WAIT_MS);
 
           const onConnect = () => {
             cleanup();
@@ -693,8 +697,8 @@ export function socketFlushBufferedIceCandidates(from: string): any[] {
 /* ========= small utils ========= */
 async function waitForConnect(ms = 8000): Promise<void> {
   if (socket.connected) return;
-  // Первое подключение (VPN/медленная сеть): даём 12s. Реконнект — переданный ms (обычно 7s).
-  const effectiveMs = !__hasConnectedEver && ms <= 8000 ? 12000 : ms;
+  // Первое подключение (VPN / медленный DNS): не обрываем раньше, чем engine.io handshake.
+  const effectiveMs = !__hasConnectedEver ? Math.max(ms, SOCKET_CONNECT_WAIT_MS) : ms;
   // CRITICAL: ensure installId is attached before any implicit connect().
   // Some codepaths call waitForConnect() (emitAck) which triggers socket.connect().
   // Without installId in handshake server can treat client as guest and return empty profile/avatar.
@@ -717,7 +721,7 @@ async function waitForConnect(ms = 8000): Promise<void> {
 }
 
 /** Ждёт подключения сокета (с таймаутом). Нужно при отмене вызова из вне приложения, чтобы call:decline дошёл до сервера и caller получил call:declined. */
-export async function ensureSocketConnected(ms = 5000): Promise<void> {
+export async function ensureSocketConnected(ms = 15000): Promise<void> {
   if (socket.connected) return;
   try {
     await waitForConnect(ms);
@@ -735,8 +739,11 @@ export async function emitAck<T = any>(
 ): Promise<T> {
   // 1) если оффлайн/реконнект — сначала дождаться коннекта
   if (!socket.connected || reconnecting) {
-    try { await waitForConnect(7000); } 
-    catch { throw new Error(`offline: cannot emit "${event}"`); }
+    try {
+      await waitForConnect(15000);
+    } catch {
+      throw new Error(`offline: cannot emit "${event}"`);
+    }
   }
 
   const tryOnce = () =>
@@ -772,7 +779,9 @@ export async function emitAck<T = any>(
       lastErr = e;
       // если снова ушли в реконнект — подождём и повторим
       if (!socket.connected || reconnecting) {
-        try { await waitForConnect(7000); } catch {}
+        try {
+          await waitForConnect(15000);
+        } catch {}
       }
       // джиттер между попытками
       await new Promise(r => setTimeout(r, 250 + Math.random() * 300));
@@ -1546,59 +1555,59 @@ export async function checkUserExists(userId: string): Promise<boolean | null> {
       }
       
       // Fallback: HTTP запрос с retry (только если socket не работает)
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-          // Логируем только первую попытку, чтобы не засорять логи
+      const httpMaxAttempts = 3;
+      for (let attempt = 1; attempt <= httpMaxAttempts; attempt++) {
+        try {
           if (attempt === 1) {
-            logger.debug('[checkUserExists] Attempt (HTTP)', { attempt, maxAttempts: 2 });
+            logger.debug('[checkUserExists] Attempt (HTTP)', { attempt, maxAttempts: httpMaxAttempts });
           }
-          
-          // Создаем AbortController для timeout (fallback для старых версий)
+
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 12000);
-      
-      const response = await fetch(`${API_BASE}/api/exists/${userId}`, {
-        method: 'GET',
+          const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+          const response = await fetch(`${API_BASE}/api/exists/${userId}`, {
+            method: 'GET',
             headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal
-      });
-          
+            signal: controller.signal,
+          });
+
           clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-            if (attempt === 2) {
+
+          if (!response.ok) {
+            if (attempt === httpMaxAttempts) {
               console.warn(`[checkUserExists] HTTP failed after ${attempt} attempts, status:`, response.status);
             }
-        if (attempt < 2) {
-              await new Promise(resolve => setTimeout(resolve, 500));
-          continue;
-        }
-        return null;
-      }
-      
-      const data = await response.json();
-      if (data.ok) {
+            if (attempt < httpMaxAttempts) {
+              await new Promise((resolve) => setTimeout(resolve, 700));
+              continue;
+            }
+            return null;
+          }
+
+          const data = await response.json();
+          if (data.ok) {
             logger.debug('[checkUserExists] User exists (via HTTP)', { userId, exists: data.exists });
-        userExistsCache.set(userId, { result: data.exists, timestamp: Date.now() });
-        return data.exists;
-      }
+            userExistsCache.set(userId, { result: data.exists, timestamp: Date.now() });
+            return data.exists;
+          }
         } catch (e: any) {
-          // Логируем только финальную ошибку, не каждую попытку
-          if (attempt === 2) {
+          if (attempt === httpMaxAttempts) {
             const errorMsg = e?.message || String(e);
-            // Не логируем как warning если это просто network error - это нормально для мобильных
             if (errorMsg.includes('Network request failed') || errorMsg.includes('timeout')) {
-              logger.debug('[checkUserExists] Network unavailable, will retry later', { attempt, maxAttempts: 2 });
+              logger.debug('[checkUserExists] Network unavailable, will retry later', {
+                attempt,
+                maxAttempts: httpMaxAttempts,
+              });
             } else {
-              console.warn(`[checkUserExists] HTTP error (attempt ${attempt}/2):`, errorMsg);
+              console.warn(`[checkUserExists] HTTP error (attempt ${attempt}/${httpMaxAttempts}):`, errorMsg);
             }
           }
-      if (attempt < 2) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-        continue;
+          if (attempt < httpMaxAttempts) {
+            await new Promise((resolve) => setTimeout(resolve, 700));
+            continue;
+          }
+        }
       }
-    }
-  }
   
       // Не логируем как warning - это нормальная ситуация когда сервер временно недоступен
       logger.debug('[checkUserExists] All attempts failed, server temporarily unavailable');
@@ -2528,9 +2537,14 @@ export function onCallIncoming(cb: (d: { callId: string; from: string; fromNick?
 export function reportIncomingCallShown(callId: string): void {
   const id = String(callId || '').trim();
   if (!id) return;
+  const connected = socket.connected;
+  const sid = connected ? socket.id : null;
   try {
+    logger.info('[call:incoming_shown] socket emit', { callId: id, connected, socketId: sid });
     socket.emit('call:incoming_shown', { callId: id });
-  } catch {}
+  } catch (e) {
+    logger.warn('[call:incoming_shown] socket emit failed', { callId: id, connected, err: String(e) });
+  }
 }
 
 export function onCallAccepted(cb: (d: { callId: string; from: string }) => void): () => void {

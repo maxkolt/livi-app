@@ -177,8 +177,11 @@ const LIVI = {
   textThemeWhite: "#444444" 
 };
 
+/** Android: неактивная кнопка видео в списке друзей — тёмный «чип» и приглушённая иконка (единый вид на всех девайсах). */
+const ANDROID_VIDEO_CALL_DISABLED_BG = '#1C1C1E';
+const ANDROID_VIDEO_CALL_DISABLED_ICON = '#48484A';
+
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
-const { width, height } = Dimensions.get("screen");
 
 const displayName = (name?: string) => (name && name.trim().length ? name : '—');
 const displayAvatarLetter = (name?: string) => {
@@ -3959,6 +3962,7 @@ const handleClearNick = useCallback(async () => {
     const activeCallInProgress = !!videoCallActive;
     // Стиль «занято» (серая кнопка) только у участника звонка или при дозвоне. У остальных друзей кнопка как обычно, просто не кликабельна.
     const useBusyButtonStyle = busy || isOutgoingToThisFriend || isIncomingFromThisFriend;
+    const videoDisabled = busy || outgoingInProgress || incomingInProgress || activeCallInProgress;
     const pulse = React.useRef(new Animated.Value(0)).current;
     useEffect(() => {
       if (showBusyBadge) {
@@ -3983,23 +3987,35 @@ const handleClearNick = useCallback(async () => {
             <Text style={styles.busyText}>{t('busy', lang)}</Text>
           </Animated.View>
         )}
-        <View style={{ position: 'relative' }}>
+        <View
+          style={{ position: 'relative' }}
+          pointerEvents={Platform.OS === 'android' && videoDisabled ? 'none' : 'auto'}
+        >
           <IconButton
             icon="video"
             size={23}
-            iconColor={useBusyButtonStyle ? '#ddd' : LIVI.white}
+            iconColor={
+              Platform.OS === 'android' && videoDisabled
+                ? ANDROID_VIDEO_CALL_DISABLED_BG
+                : useBusyButtonStyle
+                  ? '#ddd'
+                  : LIVI.white
+            }
             style={[
               styles.friendActionBtnSize,
-              {
-                backgroundColor: '#2B2B2B',
-                borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.12)',
-              },
-              useBusyButtonStyle ? styles.inviteBtnDisabled : null,
+              Platform.OS === 'android' && videoDisabled
+                ? styles.androidVideoCallBtnDisabled
+                : {
+                    backgroundColor: '#2B2B2B',
+                    borderWidth: 1,
+                    borderColor: 'rgba(255,255,255,0.12)',
+                  },
+              useBusyButtonStyle && Platform.OS !== 'android' ? styles.inviteBtnDisabled : null,
             ]}
-            disabled={busy || outgoingInProgress || incomingInProgress || activeCallInProgress}
+            disabled={Platform.OS === 'android' ? false : videoDisabled}
+            accessibilityState={{ disabled: !!videoDisabled }}
             onLongPress={
-            missedCount > 0
+            missedCount > 0 && !videoDisabled
               ? () => {
                   try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(15); }
                   setMarkReadMenu({ friendId: friendIdStr, type: 'video' });
@@ -4007,14 +4023,15 @@ const handleClearNick = useCallback(async () => {
               : undefined
           }
             onPress={() => {
+              if (videoDisabled) return;
               const fid = String(friend.id);
               clearMissedCallsForFriend(fid);
               handleStartVideoCall(friend);
             }}
           />
-          {useBusyButtonStyle && Platform.OS === 'android' && (
+          {Platform.OS === 'android' && videoDisabled && (
             <View style={styles.videoIconOverlay}>
-              <MaterialIcons name="videocam" size={23} color="rgba(136, 136, 136, 0.3)" />
+              <MaterialIcons name="videocam" size={23} color={ANDROID_VIDEO_CALL_DISABLED_ICON} />
             </View>
           )}
         </View>
@@ -4531,7 +4548,7 @@ const handleClearNick = useCallback(async () => {
   if (onlySplashPhase) {
     return (
       <View style={{ flex: 1, backgroundColor: '#0D0E10' }}>
-        <StatusBar barStyle="light-content" />
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
         <SplashLoader 
           dataLoaded={dataLoaded} 
           hasNick={!!(currentNick && currentNick.trim())}
@@ -4548,7 +4565,7 @@ const handleClearNick = useCallback(async () => {
 
   // Данные готовы: рисуем Home (уже с актуальной инфой), сверху — сплеш-оверлей, который только исчезает
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
     <SafeAreaView
         style={[
           styles.container,
@@ -4848,118 +4865,118 @@ const handleClearNick = useCallback(async () => {
         style={[styles.overlayMenu, { opacity: menuOverlayOpacity }]}
         pointerEvents={menuOpen ? 'box-none' : 'none'}
       >
-          <View style={StyleSheet.absoluteFill} collapsable={false}>
-            <BlurView intensity={Platform.OS === 'ios' ? 80 : 60} tint="dark" style={StyleSheet.absoluteFill} />
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'ios' ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.6)' }]} />
-          </View>
-          <SafeAreaView 
-            style={[styles.sheetFull]}
-            edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
-          >
-            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-              <View style={styles.sheetTopBar}>
+        <View style={StyleSheet.absoluteFill} collapsable={false}>
+          <BlurView intensity={Platform.OS === 'ios' ? 80 : 60} tint="dark" style={StyleSheet.absoluteFill} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'ios' ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.6)' }]} />
+        </View>
+        <SafeAreaView
+          style={[styles.sheetFull]}
+          edges={Platform.OS === 'android' ? ['top', 'bottom', 'left', 'right'] : undefined}
+        >
+          <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <View style={styles.sheetTopBar}>
+              <TouchableOpacity
+                onPress={() => {
+                  try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
+                  closeMenu();
+                }}
+                activeOpacity={0.5}
+                style={{
+                  width: Platform.OS === 'ios' ? 40 : 38,
+                  height: Platform.OS === 'ios' ? 40 : 38,
+                  borderRadius: Platform.OS === 'ios' ? 16 : 14,
+                  backgroundColor: 'rgba(255,255,255,0.06)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255,255,255,0.12)',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginLeft: 5,
+                }}
+              >
+                <Ionicons name="arrow-back" size={Platform.OS === 'ios' ? 22 : 20} color={LIVI.titan} />
+              </TouchableOpacity>
+              <Text style={styles.sheetTitle}>{L('menuTitle')}</Text>
+              {tab === 'settings' && handleWipeAccount && (
                 <TouchableOpacity
-                  onPress={() => {
-                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
-                    closeMenu();
-                  }}
-                  activeOpacity={0.5}
+                  onPress={handleWipeAccount}
+                  activeOpacity={0.85}
+                  disabled={wiping}
                   style={{
                     width: Platform.OS === 'ios' ? 40 : 38,
                     height: Platform.OS === 'ios' ? 40 : 38,
                     borderRadius: Platform.OS === 'ios' ? 16 : 14,
-                    backgroundColor: 'rgba(255,255,255,0.06)',
+                    backgroundColor: 'rgba(255,90,103,0.1)',
                     borderWidth: 1,
                     borderColor: 'rgba(255,255,255,0.12)',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    marginLeft: 5
+                    marginRight: 5,
+                    opacity: wiping ? 0.7 : 1,
                   }}
                 >
-                  <Ionicons name="arrow-back" size={Platform.OS === 'ios' ? 22 : 20} color={LIVI.titan} />
+                  <Ionicons name="trash" size={Platform.OS === 'ios' ? 20 : 18} color="rgba(255,90,103,0.6)" />
                 </TouchableOpacity>
-                <Text style={styles.sheetTitle}>{L('menuTitle')}</Text>
-                {tab === 'settings' && handleWipeAccount && (
-                  <TouchableOpacity
-                    onPress={handleWipeAccount}
-                    activeOpacity={0.85}
-                    disabled={wiping}
-                    style={{
-                      width: Platform.OS === 'ios' ? 40 : 38,
-                      height: Platform.OS === 'ios' ? 40 : 38,
-                      borderRadius: Platform.OS === 'ios' ? 16 : 14,
-                      backgroundColor: 'rgba(255,90,103,0.1)',
-                      borderWidth: 1,
-                      borderColor: 'rgba(255,255,255,0.12)',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginRight: 5,
-                      opacity: wiping ? 0.7 : 1
-                    }}
-                  >
-                    <Ionicons name="trash" size={Platform.OS === 'ios' ? 20 : 18} color="rgba(255,90,103,0.6)" />
-                  </TouchableOpacity>
-                )}
-                {!(tab === 'settings' && handleWipeAccount) && <View style={{ width: Platform.OS === 'ios' ? 40 : 38 }} />}
-              </View>
+              )}
+              {!(tab === 'settings' && handleWipeAccount) && <View style={{ width: Platform.OS === 'ios' ? 40 : 38 }} />}
+            </View>
 
-              <View style={styles.segmentCapsule}>
-                {renderSegBtn('friends', L('tabFriends'), 'account-multiple', 'left')}
-                <View style={styles.segDivider} />
-                {renderSegBtn('settings', L('tabSettings'), 'account-edit', 'mid')}
-                <View style={styles.segDivider} />
-                {renderMoreSegBtn()}
-              </View>
+            <View style={styles.segmentCapsule}>
+              {renderSegBtn('friends', L('tabFriends'), 'account-multiple', 'left')}
+              <View style={styles.segDivider} />
+              {renderSegBtn('settings', L('tabSettings'), 'account-edit', 'mid')}
+              <View style={styles.segDivider} />
+              {renderMoreSegBtn()}
+            </View>
 
-              <Divider style={{ backgroundColor: LIVI.border, marginTop: 12 }} />
+            <Divider style={{ backgroundColor: LIVI.border, marginTop: 12 }} />
 
-              <View style={{ flex: 1 }}>
-                {tab === 'friends' && FriendsTab()}
-                {tab === 'settings' && (
-                  <SettingsTab
-                      nick={nick}
-                      setNick={(v) => { 
-                        nickLiveRef.current = v;
-                        nickInputDirtyRef.current = true;
-                        setNick(v); 
-                        saveDraftProfile({ nick: v }); 
-                        // ВАЖНО: НЕ сохраняем ник в постоянное хранилище на каждый ввод.
-                        // Иначе при резком "убийстве" приложения может записаться промежуточное значение (например, только первая буква),
-                        // а затем при старте оно перезапишет ник на сервере через ensureIdentity/attachIdentity.
-                      }}
-                      avatarUri={avatarUri}
-                      setAvatarUri={(u) => { 
-                        setAvatarUri(u); 
-                        saveDraftProfile({ avatar: u }); 
-                        setAvatarRefreshKey((k) => k + 1);
-                        // Также сохраняем в основное хранилище
-                        // ВАЖНО: берём ник из live-ref (state может "догонять" при быстром вводе + выборе аватара)
-                        saveProfileToStorage({ nick: String(nickLiveRef.current || nick || ''), avatar: u }).catch(() => {});
-                      }}
-                      refreshKey={avatarRefreshKey}
-                      openAvatarSheet={openAvatarSheet}
-                      handleSaveProfile={handleSaveProfile}
-                      savedToast={savedToast}
-                      setSavedToast={setSavedToast}
-                      LIVI={LIVI}
-                      styles={styles}
-                      onClearNick={handleClearNick}
-                      saving={saving}
-                      onDeleteAvatar={handleDeleteAvatar}
-                      // Передаём информацию о кешированном аватаре
-                      myFullAvatarUri={myFullAvatarUri}
-                      myAvatarVer={myAvatarVer}
-                      myUserId={getCurrentUserId()}
-                      handleWipeAccount={handleWipeAccount}
-                      wiping={wiping}
-                      lang={lang}
-                    />
-                )}
-                {tab === 'more' && MoreTab()}
-              </View>
-            </KeyboardAvoidingView>
-          </SafeAreaView>
-        </Animated.View>
+            <View style={{ flex: 1 }}>
+              {tab === 'friends' && FriendsTab()}
+              {tab === 'settings' && (
+                <SettingsTab
+                  nick={nick}
+                  setNick={(v) => {
+                    nickLiveRef.current = v;
+                    nickInputDirtyRef.current = true;
+                    setNick(v);
+                    saveDraftProfile({ nick: v });
+                    // ВАЖНО: НЕ сохраняем ник в постоянное хранилище на каждый ввод.
+                    // Иначе при резком "убийстве" приложения может записаться промежуточное значение (например, только первая буква),
+                    // а затем при старте оно перезапишет ник на сервере через ensureIdentity/attachIdentity.
+                  }}
+                  avatarUri={avatarUri}
+                  setAvatarUri={(u) => {
+                    setAvatarUri(u);
+                    saveDraftProfile({ avatar: u });
+                    setAvatarRefreshKey((k) => k + 1);
+                    // Также сохраняем в основное хранилище
+                    // ВАЖНО: берём ник из live-ref (state может "догонять" при быстром вводе + выборе аватара)
+                    saveProfileToStorage({ nick: String(nickLiveRef.current || nick || ''), avatar: u }).catch(() => {});
+                  }}
+                  refreshKey={avatarRefreshKey}
+                  openAvatarSheet={openAvatarSheet}
+                  handleSaveProfile={handleSaveProfile}
+                  savedToast={savedToast}
+                  setSavedToast={setSavedToast}
+                  LIVI={LIVI}
+                  styles={styles}
+                  onClearNick={handleClearNick}
+                  saving={saving}
+                  onDeleteAvatar={handleDeleteAvatar}
+                  // Передаём информацию о кешированном аватаре
+                  myFullAvatarUri={myFullAvatarUri}
+                  myAvatarVer={myAvatarVer}
+                  myUserId={getCurrentUserId()}
+                  handleWipeAccount={handleWipeAccount}
+                  wiping={wiping}
+                  lang={lang}
+                />
+              )}
+              {tab === 'more' && MoreTab()}
+            </View>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </Animated.View>
 
       {/* ───── Комната занята (caller info) ───── */}
       {roomFull.visible && (
@@ -5462,6 +5479,7 @@ const handleClearNick = useCallback(async () => {
         )}
       </Portal>
     </SafeAreaView>
+
     {showSplashOverlay && (
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
         <SplashLoader
@@ -5578,20 +5596,14 @@ const styles = StyleSheet.create({
   buttonLabel: { color: '#151515', fontSize: 16, fontWeight: '700', letterSpacing: 0.4 },
 
   // IMPORTANT: do NOT use fixed screenWidth/screenHeight here.
-  // On Android edge-to-edge, window height can exclude the navigation bar area,
-  // which leaves an uncovered strip at the bottom.
   overlayMenu: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent', zIndex: 999 },
   overlayModal: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent', zIndex: 999, alignItems: 'center', justifyContent: 'center' },
 
   sheetFull: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    width,
-    height,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: Platform.OS === "android"
-      ? "#0D0E10"  // Android — темный фон для меню
-      : "rgba(13,14,16,0.88)", // iOS — затемненный фон
+      ? "#0D0E10"
+      : "rgba(13,14,16,0.88)",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: LIVI.border,
   },
@@ -5690,6 +5702,11 @@ const styles = StyleSheet.create({
   inviteBtnDisabled: { 
     backgroundColor: LIVI.glass,
     opacity: 0.5,
+  },
+  androidVideoCallBtnDisabled: {
+    backgroundColor: ANDROID_VIDEO_CALL_DISABLED_BG,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   videoIconOverlay: {
     position: 'absolute',

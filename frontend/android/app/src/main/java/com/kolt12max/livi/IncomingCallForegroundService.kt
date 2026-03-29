@@ -148,40 +148,48 @@ class IncomingCallForegroundService : Service() {
             headsUpOnly -> vl("[INCOMING_FGS] Mode=headsUpOnly")
             else -> vl("[INCOMING_FGS] Mode=fullScreenIntent SDK=${Build.VERSION.SDK_INT} callId=$callId")
         }
-        // Повторные startActivity из FGS (в т.ч. при heads-up), если мгновенный запуск из FCM не прошёл (BAL/блокировка).
-        vl("[INCOMING_FGS] posting delayed startActivity (300/900/2200 ms) callId=$callId")
-        val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick)
-        val delaysMs = longArrayOf(300L, 900L, 2200L)
-        for (i in delaysMs.indices) {
-            handler.postDelayed({
-                val cur = currentCallId
-                if (cur != callId) {
-                    vl("[INCOMING_FGS] startActivity attempt ${i + 1} SKIP cur=$cur")
-                    return@postDelayed
-                }
-                try {
-                    startActivity(launchIntent)
-                    vl("[INCOMING_FGS] startActivity attempt ${i + 1} OK")
-                } catch (e: Exception) {
-                    Log.w(TAG, "[INCOMING_FGS] startActivity attempt ${i + 1} FAILED callId=$callId", e)
-                }
-            }, delaysMs[i])
+        // Сворачивание по «Назад»: только уведомление в шторке — не дёргать startActivity (иначе экран сразу вылезет снова).
+        if (!minimized) {
+            // Повторные startActivity из FGS (в т.ч. при heads-up), если мгновенный запуск из FCM не прошёл (BAL/блокировка).
+            vl("[INCOMING_FGS] posting delayed startActivity (300/900/2200 ms) callId=$callId")
+            val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick)
+            val delaysMs = longArrayOf(300L, 900L, 2200L)
+            for (i in delaysMs.indices) {
+                handler.postDelayed({
+                    val cur = currentCallId
+                    if (cur != callId) {
+                        vl("[INCOMING_FGS] startActivity attempt ${i + 1} SKIP cur=$cur")
+                        return@postDelayed
+                    }
+                    try {
+                        startActivity(launchIntent)
+                        vl("[INCOMING_FGS] startActivity attempt ${i + 1} OK")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "[INCOMING_FGS] startActivity attempt ${i + 1} FAILED callId=$callId", e)
+                    }
+                }, delaysMs[i])
+            }
+        } else {
+            vl("[INCOMING_FGS] minimized=true: skip delayed startActivity")
         }
 
-        timeoutRunnable = Runnable {
-            vl("[INCOMING_FGS] timeout 20s closing")
-            val cid = currentCallId
-            if (!cid.isNullOrEmpty()) {
-                // Закрываем IncomingCallActivity через broadcast (startActivity из сервиса блокируется BAL на Android 14+).
-                val cancelIntent = Intent(LiviFirebaseMessagingService.ACTION_CALL_CANCELED).apply {
-                    setPackage(packageName)
-                    putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, cid)
+        // Таймер 20 с уже крутится в IncomingCallActivity; второй в FGS при «свернуть в шторку» сдвинул бы конец звонка.
+        if (!minimized) {
+            timeoutRunnable = Runnable {
+                vl("[INCOMING_FGS] timeout 20s closing")
+                val cid = currentCallId
+                if (!cid.isNullOrEmpty()) {
+                    // Закрываем IncomingCallActivity через broadcast (startActivity из сервиса блокируется BAL на Android 14+).
+                    val cancelIntent = Intent(LiviFirebaseMessagingService.ACTION_CALL_CANCELED).apply {
+                        setPackage(packageName)
+                        putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, cid)
+                    }
+                    sendBroadcast(cancelIntent)
                 }
-                sendBroadcast(cancelIntent)
+                cleanupAndStop()
             }
-            cleanupAndStop()
+            handler.postDelayed(timeoutRunnable!!, TIMEOUT_MS)
         }
-        handler.postDelayed(timeoutRunnable!!, TIMEOUT_MS)
 
         return START_NOT_STICKY
     }

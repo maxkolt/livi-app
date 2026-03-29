@@ -105,7 +105,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             // Dual-signal режим (data + notification) может доставить одно и то же call событие дважды.
             // Отсекаем дубликаты по callId в коротком окне, чтобы не было двойного запуска экрана.
             if (!markIncomingCallAsFresh(callId)) {
-                vLog("[INCOMING_CALL] SKIP recent duplicate callId=$callId")
+                Log.i(TAG, "[INCOMING_CALL] SKIP dedup window (recent duplicate) callId=$callId")
                 return
             }
             val keyguardLocked = try {
@@ -117,9 +117,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             vLog("[INCOMING_CALL] FCM call push: callId=$callId keyguardLocked=$keyguardLocked isInteractive=$isInteractive")
             // Пропуск только если пользователь прямо сейчас смотрит на экран входящего (дубликат пуша или тот же звонок). Иначе показываем — в т.ч. повторный звонок после отмены/сообщения.
             if (IncomingCallActivity.isInForeground) {
-                vLog("[INCOMING_CALL] SKIP duplicate callId=$callId")
+                Log.i(TAG, "[INCOMING_CALL] SKIP IncomingCallActivity already in foreground callId=$callId")
                 return
             }
+            Log.i(TAG, "[INCOMING_CALL] proceed callId=$callId keyguardLocked=$keyguardLocked isInteractive=$isInteractive")
             vLog("[INCOMING_CALL] proceeding: dismissMessageNotifications → startActivity → FGS")
             // Всегда показываем входящий из FCM: без условий по foreground/фоне/блокировке. Пуши — единственный надёжный канал; сокет может быть отключён, приложение убито, экран выключен.
             // Wake lock: даём процессу время запустить FGS и показать full-screen intent (особенно при убитом приложении).
@@ -145,9 +146,14 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 startActivity(launchIntent)
+                Log.i(TAG, "[INCOMING_CALL] startActivity OK callId=$callId")
                 vLog("[INCOMING_CALL] startActivity(IncomingCallActivity) immediate OK callId=$callId")
             } catch (e: Exception) {
-                Log.w(TAG, "[INCOMING_CALL] immediate startActivity failed (FGS will retry) callId=$callId", e)
+                Log.w(
+                    TAG,
+                    "[INCOMING_CALL] startActivity FAILED callId=$callId msg=${e.message} (FGS will retry)",
+                    e
+                )
             }
             // FGS: рингтон/вибрация + уведомление только в шторке (без heads-up): экран входящего даёт основной UX; сообщения — отдельный канал с HIGH.
             startIncomingCallForegroundService(

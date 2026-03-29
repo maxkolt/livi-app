@@ -3,7 +3,17 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { CommonActions } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, acceptCall, declineCall, ensureSocketConnected, getUnreadCount } from '../sockets/socket';
+import {
+  API_BASE,
+  SOCKET_CONNECT_WAIT_MS,
+  setOutgoingCallScreenVisible,
+  setIncomingCallScreenVisible,
+  setActiveVideoCall,
+  acceptCall,
+  declineCall,
+  ensureSocketConnected,
+  getUnreadCount,
+} from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
 import { stopIncomingCallAlert } from './incomingCallAlert';
@@ -401,7 +411,7 @@ export async function openAnswerCallScreen(peerUserId: string, callId: string): 
     stopIncomingCallAlert();
   } catch {}
   try {
-    await ensureSocketConnected(5000);
+    await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
   } catch (e) {
     logger.warn('[push] ensureSocketConnected failed on answer-call', { callId, error: (e as Error)?.message });
   }
@@ -437,7 +447,7 @@ export async function handleDeclineCallFromDeepLink(callId: string): Promise<voi
     await AsyncStorage.removeItem('last_incoming_from');
   } catch {}
   try {
-    await ensureSocketConnected(5000);
+    await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
     declineCall(callId);
   } catch (e) {
     logger.warn('[push] declineCall from decline-call deep link failed', { callId, error: (e as Error)?.message });
@@ -534,7 +544,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
           stopIncomingCallAlert();
         } catch {}
         try {
-          await ensureSocketConnected(5000);
+          await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
           declineCall(callId);
         } catch (e) {
           logger.warn('[push] declineCall from notification failed', { callId, error: (e as Error)?.message });
@@ -550,7 +560,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
         } catch {}
         // Сначала ждём сокет и сообщаем серверу о принятии, чтобы звонящий получил call:accepted и оба попали на видеозвонок
         try {
-          await ensureSocketConnected(5000);
+          await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
           acceptCall(callId);
         } catch (e) {
           logger.warn('[push] acceptCall from notification failed', { callId, error: (e as Error)?.message });
@@ -906,7 +916,11 @@ export function addNotificationListeners() {
           }
           return;
         }
-        logger.info('[push] incoming call notification received', { callId: data.callId, from: data.from });
+        logger.info('[push] incoming call notification received (Expo path; native FCM may also run)', {
+          callId: data.callId,
+          from: data.from,
+          appState: AppState.currentState,
+        });
         if (Platform.OS === 'android') {
           await launchIncomingCallActivityScreen(data.callId, data.from, data.fromNick ?? '', true);
         } else if (isCallKeepAvailable() && AppState.currentState !== 'active') {
