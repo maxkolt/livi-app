@@ -151,6 +151,9 @@
             document.getElementById('error').classList.remove('hidden');
         });
         
+        /** Публичная установка LiVi (Android) — то же, что кнопка «Обновить» в приложении. */
+        const PLAY_STORE_ANDROID = 'https://play.google.com/store/apps/details?id=com.kolt12max.livi';
+
         try {
             // Получаем код приглашения из URL
             // Формат: /invite/{code} или /invite?code={code}
@@ -183,10 +186,8 @@
             const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
             const isAndroid = /Android/.test(navigator.userAgent);
             
-            // Устанавливаем ссылки для скачивания
-            // TODO: Заменить на реальные ссылки App Store и Google Play
-            document.getElementById('ios-link').href = 'https://apps.apple.com/app/livi'; // Заменить на реальную ссылку
-            document.getElementById('android-link').href = 'https://play.google.com/store/apps/details?id=com.kolt12max.livi'; // Заменить на реальную ссылку
+            document.getElementById('ios-link').href = 'https://apps.apple.com/app/livi';
+            document.getElementById('android-link').href = PLAY_STORE_ANDROID;
             
             // Пытаемся открыть приложение
             let opened = false;
@@ -265,7 +266,7 @@
             } else if (isAndroid) {
                 // Для Android используем intent:// URL для более надежного открытия
                 // Формат: intent://path#Intent;scheme=scheme;package=package;end
-                const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;S.browser_fallback_url=${encodeURIComponent(window.location.href)};end`;
+                const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;S.browser_fallback_url=${encodeURIComponent(PLAY_STORE_ANDROID)};end`;
                 
                 console.log('[invite] Attempting to open app on Android:', { intentUrl, appUrl, code });
                 
@@ -353,7 +354,7 @@
                 e.preventDefault();
                 opened = false;
                 if (isAndroid) {
-                    const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;end`;
+                    const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;S.browser_fallback_url=${encodeURIComponent(PLAY_STORE_ANDROID)};end`;
                     window.location.href = intentUrl;
                 } else {
                     window.location.href = appUrl;
@@ -368,7 +369,7 @@
                     console.log('[invite] Manual open app clicked');
                     try {
                         if (isAndroid) {
-                            const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;end`;
+                            const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;S.browser_fallback_url=${encodeURIComponent(PLAY_STORE_ANDROID)};end`;
                             window.location.href = intentUrl;
                         } else {
                             window.location.href = appUrl;

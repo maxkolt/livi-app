@@ -11,8 +11,9 @@ const LAST_UPDATE_BADGE_SHOWN_KEY = 'livi.lastUpdateBadgeShownAt';
 const LAST_KNOWN_ON_LATEST_VERSION_KEY = 'livi.lastKnownOnLatestVersion'; // после обновления: не показывать бейдж при ошибке сети/VPN
 const BADGE_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 часа
 
-/** Ссылка на страницу обновления в Google Play (internal test). */
-export const PLAY_STORE_UPDATE_URL = 'https://play.google.com/apps/internaltest/4700615664551768658';
+/** Публичная страница LiVi в Google Play (обновление и установка). */
+export const PLAY_STORE_UPDATE_URL =
+  'https://play.google.com/store/apps/details?id=com.kolt12max.livi';
 
 /** Сравнение версий "a.b.c": true если current < latest. */
 function isVersionLess(current: string, latest: string): boolean {
