@@ -126,10 +126,11 @@ import socket, {
 } from '../sockets/socket';
 import {
   isUpdateAvailable,
-  isLikelyOnLatestVersion,
+  isUpdateReminderCooldownActive,
   shouldShowUpdateBadge,
   markUpdateBadgeShown,
   clearUpdateCheckCache,
+  clearUpdatePromotionWhenUpToDate,
   PLAY_STORE_UPDATE_URL,
 } from '../utils/updateCheck';
 
@@ -428,7 +429,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const [blurIntensity, setBlurIntensity] = useState<number>(isDark ? 15 : 20);
   const titanOpacity = useRef(new Animated.Value(0.25)).current;
-  const borderWidth = 0.7; // Рамка кнопки «Начать поиск»
+  const borderWidth = 0.9; // Рамка кнопки «Начать поиск»
 
   // Цвета из палитры эквалайзера для темной темы - зациклены для непрерывности
   const darkColors = [
@@ -438,8 +439,8 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
   
   // Цвета из палитры эквалайзера для светлой темы - зациклены для непрерывности
   const lightColors = [
-    '#a78bfa', '#FFF8F0', '#B0B5BF', // фиолетовый, жемчужно-белый, светлый титан (осветлен)
-    '#a78bfa', '#FFF8F0', '#B0B5BF', // дублируем для плавного перехода
+    '#8f7ad8', '#FFF8F0', '#B0B5BF', // фиолетовый (чуть темнее), жемчужно-белый, светлый титан (осветлен)
+    '#8f7ad8', '#FFF8F0', '#B0B5BF', // дублируем для плавного перехода
   ];
   
   const colors = isDark ? darkColors : lightColors;
@@ -683,6 +684,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showUpdateBadge, setShowUpdateBadgeState] = useState(false);
   const updateBadgeShownRef = useRef(false);
+  /** Результат последней isUpdateAvailable() в check() — для shouldShowUpdateBadge без повторного запроса */
+  const serverSaysUpdateRef = useRef(false);
   const updateSpinAnim = useRef(new Animated.Value(0)).current;
 
   // Единый фон для "титановой" кнопки меню и кружка аватара (в светлой теме),
@@ -720,20 +723,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const check = async () => {
       try {
         lastUpdateCheckAtRef.current = Date.now();
-        // Сразу скрыть бейдж/индикатор, если ранее уже определили, что на последней версии (не зависит от VPN). В dev не сбрасываем — бейдж показываем при каждом заходе.
-        const likelyOnLatest = await isLikelyOnLatestVersion();
-        if (!__DEV__ && !cancelled && likelyOnLatest) {
-          setUpdateAvailable(false);
-          setShowUpdateBadgeState(false);
-        }
-        const available = await isUpdateAvailable();
+        const serverSaysUpdate = await isUpdateAvailable();
+        serverSaysUpdateRef.current = serverSaysUpdate;
+        const cooldown = await isUpdateReminderCooldownActive();
         if (!cancelled) {
-          // В dev всегда считаем, что обновление доступно — бейдж показывается при каждом заходе
-          setUpdateAvailable(__DEV__ ? true : !!available);
-          // Показываем бейдж только через shouldShowUpdateBadge():
-          // - в релизе: при каждом входе (если updateAvailable)
-          // - в dev: при каждом заходе
-          if (!__DEV__ && !available) setShowUpdateBadgeState(false); // после обновления — сразу убрать бейдж и индикатор
+          // Релиз: показываем напоминание только если сервер считает, что есть более новая версия, и не в кулдауне 24 ч
+          // (кулдаун сбрасывается, если latestAppVersion на сервере выросла после закрытия).
+          const showPromotion = __DEV__ ? true : !!(serverSaysUpdate && !cooldown);
+          setUpdateAvailable(showPromotion);
+          if (!__DEV__ && !serverSaysUpdate) {
+            setShowUpdateBadgeState(false);
+            await clearUpdatePromotionWhenUpToDate();
+          }
         }
       } catch {}
     };
@@ -752,13 +753,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     };
   }, []);
 
-  // Показать бейдж «Скачайте обновление»: в релизе — при каждом входе; в dev — раз в сутки
+  // Баннер сверху: в dev при updateAvailable; в релизе updateAvailable уже с учётом кулдауна, shouldShowUpdateBadge — лишняя сеть/дубль
   useEffect(() => {
     if (!updateAvailable) return;
     let cancelled = false;
     (async () => {
       try {
-        const should = await shouldShowUpdateBadge();
+        const should = await shouldShowUpdateBadge(__DEV__ ? undefined : serverSaysUpdateRef.current);
         if (!cancelled && should) {
           if (__DEV__) updateBadgeShownRef.current = true;
           setShowUpdateBadgeState(true);
@@ -4321,7 +4322,10 @@ const handleClearNick = useCallback(async () => {
         <View style={{ marginTop: 'auto', marginBottom: 56, alignItems: 'center', alignSelf: 'stretch' }}>
           <TouchableOpacity
             activeOpacity={0.85}
-            onPress={() => Linking.openURL(PLAY_STORE_UPDATE_URL)}
+            onPress={() => {
+              markUpdateBadgeShown();
+              Linking.openURL(PLAY_STORE_UPDATE_URL);
+            }}
             style={{
               backgroundColor: 'transparent',
               borderWidth: StyleSheet.hairlineWidth,
@@ -4576,7 +4580,11 @@ const handleClearNick = useCallback(async () => {
         ]}
         edges={Platform.OS === "android" ? ['top', 'bottom','left','right'] : ['bottom','left','right','top']}
       >
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      <StatusBar
+        barStyle={menuOpen || isDark ? 'light-content' : 'dark-content'}
+        translucent={Platform.OS === 'android'}
+        backgroundColor={Platform.OS === 'android' ? 'transparent' : undefined}
+      />
 
       <View style={[styles.topBar, { backgroundColor: 'transparent' }] }>
         <Text style={[styles.brand, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>LiVi</Text>

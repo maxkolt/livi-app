@@ -32,8 +32,17 @@ class IncomingCallForegroundService : Service() {
     private var declinedReceiver: BroadcastReceiver? = null
     private val handler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
+    /** Отложенные startActivity(300/900/2200 ms) — обязательно снимать, иначе после «Назад»/stopForeground экран снова всплывает. */
+    private val pendingActivityLaunchRunnables = mutableListOf<Runnable>()
 
     private var answeredReceiver: BroadcastReceiver? = null
+
+    private fun cancelPendingActivityLaunches() {
+        for (r in pendingActivityLaunchRunnables) {
+            handler.removeCallbacks(r)
+        }
+        pendingActivityLaunchRunnables.clear()
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val callId = intent?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID)
@@ -59,6 +68,7 @@ class IncomingCallForegroundService : Service() {
         answeredReceiver = null
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
+        cancelPendingActivityLaunches()
         LiviFirebaseMessagingService.ensureCallChannel(this)
         if (!minimized) {
             LiviAppModule.startIncomingCallRingtoneAndVibrationStatic(applicationContext)
@@ -155,19 +165,22 @@ class IncomingCallForegroundService : Service() {
             val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(this, callId, from, fromNick)
             val delaysMs = longArrayOf(300L, 900L, 2200L)
             for (i in delaysMs.indices) {
-                handler.postDelayed({
+                val attemptIndex = i + 1
+                val runnable = Runnable {
                     val cur = currentCallId
                     if (cur != callId) {
-                        vl("[INCOMING_FGS] startActivity attempt ${i + 1} SKIP cur=$cur")
-                        return@postDelayed
+                        vl("[INCOMING_FGS] startActivity attempt $attemptIndex SKIP cur=$cur")
+                        return@Runnable
                     }
                     try {
                         startActivity(launchIntent)
-                        vl("[INCOMING_FGS] startActivity attempt ${i + 1} OK")
+                        vl("[INCOMING_FGS] startActivity attempt $attemptIndex OK")
                     } catch (e: Exception) {
-                        Log.w(TAG, "[INCOMING_FGS] startActivity attempt ${i + 1} FAILED callId=$callId", e)
+                        Log.w(TAG, "[INCOMING_FGS] startActivity attempt $attemptIndex FAILED callId=$callId", e)
                     }
-                }, delaysMs[i])
+                }
+                pendingActivityLaunchRunnables.add(runnable)
+                handler.postDelayed(runnable, delaysMs[i])
             }
         } else {
             vl("[INCOMING_FGS] minimized=true: skip delayed startActivity")
@@ -204,6 +217,7 @@ class IncomingCallForegroundService : Service() {
         LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
+        cancelPendingActivityLaunches()
         activityShownReceiver?.let {
             try { unregisterReceiver(it) } catch (_: Exception) {}
         }
@@ -240,6 +254,9 @@ class IncomingCallForegroundService : Service() {
 
     override fun onDestroy() {
         vl("[INCOMING_FGS] onDestroy")
+        timeoutRunnable?.let { handler.removeCallbacks(it) }
+        timeoutRunnable = null
+        cancelPendingActivityLaunches()
         LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
         super.onDestroy()
     }

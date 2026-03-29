@@ -122,6 +122,9 @@ export class RandomChatSession extends SimpleEventEmitter {
   private remoteMediaFirstSeenAt = 0;
   private pendingRemoteVideoResetTimer: NodeJS.Timeout | null = null;
   private pendingRemoteVideoResetTrackSid: string | null = null;
+  /** Debounce "камера выкл" в UI, пока возможен ответный видеотрек после аудио (иначе мерцание заглушки Ливи). */
+  private remoteCamImplicitOffTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly remoteCamImplicitOffDebounceMs = 450;
   private readonly nextAfterRemoteMediaCooldownMs = 800;
   private readonly nextMinStableCallAfterRemoteMediaMs = 1300;
   private readonly nextWithoutRemoteMediaGraceMs = 2500;
@@ -218,6 +221,38 @@ export class RandomChatSession extends SimpleEventEmitter {
     });
     this.pendingRemoteVideoResetTimer = null;
     this.pendingRemoteVideoResetTrackSid = null;
+  }
+
+  private clearRemoteCamImplicitOffTimer(reason: string): void {
+    if (!this.remoteCamImplicitOffTimer) return;
+    clearTimeout(this.remoteCamImplicitOffTimer);
+    this.remoteCamImplicitOffTimer = null;
+    logger.debug('[RandomChatSession] Cleared remoteCamImplicitOff timer', { reason });
+  }
+
+  /** SFU уже знает о видеопубликации — ждём подписку, не трактуем как «пользователь выключил камеру». */
+  private remoteParticipantHasAnyVideoPublication(participant: RemoteParticipant | null): boolean {
+    if (!participant) return false;
+    for (const pub of participant.trackPublications.values()) {
+      if (pub.kind === Track.Kind.Video) return true;
+    }
+    return false;
+  }
+
+  private scheduleImplicitRemoteCamOffWhenNoVideoTrack(reason: string): void {
+    this.clearRemoteCamImplicitOffTimer(`reschedule:${reason}`);
+    this.remoteCamImplicitOffTimer = setTimeout(() => {
+      this.remoteCamImplicitOffTimer = null;
+      if (!this.started || this.isDisconnecting) return;
+      if (this.remoteVideoTrack) return;
+      if (this.remoteCamEnabled) return;
+      if (this.remoteParticipantHasAnyVideoPublication(this.currentRemoteParticipant)) return;
+      this.config.callbacks.onRemoteCamStateChange?.(false);
+      this.config.onRemoteCamStateChange?.(false);
+      logger.debug('[RandomChatSession] Implicit remote cam off (no video publication after debounce)', {
+        reason,
+      });
+    }, this.remoteCamImplicitOffDebounceMs);
   }
 
   private scheduleRemoteVideoResetAfterUnsubscribe(trackSid: string, participantId: string): void {
@@ -1116,6 +1151,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         this.remoteCamEnabled = nextEnabled;
         this.remoteViewKey = Date.now();
         this.emit('remoteViewKeyChanged', this.remoteViewKey);
+        this.clearRemoteCamImplicitOffTimer('cam_toggle');
         this.config.callbacks.onRemoteCamStateChange?.(nextEnabled);
         this.config.onRemoteCamStateChange?.(nextEnabled);
       } catch (e) {
@@ -2048,6 +2084,7 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   private resetRemoteState(): void {
     this.clearPendingRemoteVideoReset('reset_remote_state');
+    this.clearRemoteCamImplicitOffTimer('reset_remote_state');
     this.remoteStream = null;
     this.remoteAudioTrack = null;
     this.remoteVideoTrack = null;
@@ -3985,6 +4022,10 @@ export class RandomChatSession extends SimpleEventEmitter {
             isSubscribed: publication.isSubscribed,
             hasTrack: !!publication.track,
           });
+
+          if (publication.kind === Track.Kind.Video) {
+            this.clearRemoteCamImplicitOffTimer('remote_video_track_published');
+          }
           
           // КРИТИЧНО: Всегда подписываемся явно, даже если autoSubscribe включен
           // Это гарантирует, что после переворота камеры удаленный участник получит новый трек
@@ -4164,6 +4205,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.remoteAudioTrack = track;
     } else if (publication.kind === Track.Kind.Video) {
       this.clearPendingRemoteVideoReset('video_track_subscribed');
+      this.clearRemoteCamImplicitOffTimer('video_track_subscribed');
       const wasMutedStateChanged = this.remoteVideoTrack && (this.remoteVideoTrack.isMuted !== track.isMuted);
       this.remoteVideoTrack = track;
       
@@ -4192,14 +4234,20 @@ export class RandomChatSession extends SimpleEventEmitter {
       }
     }
     
-    // КРИТИЧНО: Если у удалённого участника нет видео-трека (только аудио — камера выкл),
-    // сразу помечаем камеру как выключенную и уведомляем UI, иначе заглушка "Отошел" не покажется.
+    // Нет видеотрека в потоке: не считаем это «камера выкл», пока SFU не подтвердил отсутствие видео
+    // или не прошёл debounce — иначе при «сначала аудио, потом видео» UI мелькает заглушкой Ливи.
+    // Реально выключенная камера: нет video publication → debounce → onRemoteCamStateChange(false).
+    // Явное намерение: socket `cam-toggle`.
     if (!this.remoteVideoTrack) {
       this.remoteCamEnabled = false;
-      this.config.callbacks.onRemoteCamStateChange?.(false);
-      this.config.onRemoteCamStateChange?.(false);
-      logger.debug('[RandomChatSession] Remote has no video track, setting remoteCamEnabled=false', {
+      if (this.remoteParticipantHasAnyVideoPublication(this.currentRemoteParticipant)) {
+        this.clearRemoteCamImplicitOffTimer('awaiting_remote_video_track');
+      } else {
+        this.scheduleImplicitRemoteCamOffWhenNoVideoTrack('subscribed_without_video_track_yet');
+      }
+      logger.debug('[RandomChatSession] Remote stream has no video track yet', {
         hasAudioTrack: !!this.remoteAudioTrack,
+        hasVideoPublication: this.remoteParticipantHasAnyVideoPublication(this.currentRemoteParticipant),
       });
     }
     
