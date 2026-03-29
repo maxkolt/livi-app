@@ -528,13 +528,9 @@ function AppContent() {
   const wave1 = React.useRef(new Animated.Value(0)).current;
   const wave2 = React.useRef(new Animated.Value(0)).current;
   
-  // Настройка навигационной панели на Android для edge-to-edge
+  // Android: только стиль кнопок навбара (светлые/тёмные иконки). Цвет полосы — из app.json (expo-navigation-bar), без setBackgroundColorAsync в рантайме (WARN).
   React.useEffect(() => {
     if (Platform.OS === 'android') {
-      // ВНИМАНИЕ:
-      // При включённом edge-to-edge expo-navigation-bar выводит WARN для setPositionAsync/setBackgroundColorAsync/setBorderColorAsync.
-      // Мы переносим цвета в app.json (через плагин expo-navigation-bar), а в рантайме меняем только стиль кнопок.
-      // Это убирает WARN и не ломает UI.
       NavigationBar.setButtonStyleAsync(isDark ? 'light' : 'dark').catch(() => {});
     }
   }, [isDark]);

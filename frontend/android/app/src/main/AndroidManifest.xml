@@ -59,7 +59,19 @@
         <action android:name="android.telecom.ConnectionService"/>
       </intent-filter>
     </service>
-    <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode|smallestScreenSize" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:showWhenLocked="true" android:turnScreenOn="true" android:supportsPictureInPicture="true">
+    <!-- Play / Android 16+: не фиксировать portrait — большие экраны и складные; на телефоне по умолчанию остаётся портрет, при повороте допускается ландшафт (app.json orientation: default). -->
+    <activity
+      android:name=".MainActivity"
+      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode|smallestScreenSize"
+      android:exported="true"
+      android:launchMode="singleTask"
+      android:resizeableActivity="true"
+      android:screenOrientation="unspecified"
+      android:showWhenLocked="true"
+      android:supportsPictureInPicture="true"
+      android:theme="@style/Theme.App.SplashScreen"
+      android:turnScreenOn="true"
+      android:windowSoftInputMode="adjustResize">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
@@ -107,6 +119,11 @@
     <activity android:name=".IncomingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:launchMode="singleInstance" android:finishOnTaskLaunch="false"/>
     <!-- Нативный экран исходящего видеозвонка (вместо in-app модалки при CallKeep) -->
     <activity android:name=".OutgoingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:launchMode="singleInstance" android:finishOnTaskLaunch="false"/>
+    <!-- ML Kit (транзитивно, напр. expo-camera): Play Console требует убрать жёсткий PORTRAIT для больших экранов / Android 16+. -->
+    <activity
+      android:name="com.google.mlkit.vision.codescanner.internal.GmsBarcodeScanningDelegateActivity"
+      android:screenOrientation="unspecified"
+      tools:replace="android:screenOrientation" />
     <!-- Исходящий вызов в фоне: WAV в динамике, уведомление, таймаут 20 сек -->
     <service android:name=".LiviOutgoingCallService" android:exported="false" android:foregroundServiceType="mediaPlayback"/>
     <!-- Входящий звонок: foreground-сервис типа phoneCall (Android 14+) — без ограничения камеры/микрофона при старте из фона; на старых версиях — specialUse -->
