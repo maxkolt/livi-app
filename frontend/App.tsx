@@ -1660,6 +1660,19 @@ function AppContent() {
   React.useEffect(() => {
     const onCallEnded = (data?: { callId?: string }) => {
       const g = global as any;
+      try {
+        g.__lastHandledCallEndedRef = g.__lastHandledCallEndedRef || { key: '', at: 0 };
+        const eventKey = String(data?.callId || g.__currentCallPiPParamsRef?.current?.callId || 'unknown');
+        const now = Date.now();
+        const lastKey = String(g.__lastHandledCallEndedRef.key || '');
+        const lastAt = Number(g.__lastHandledCallEndedRef.at || 0);
+        if (lastKey === eventKey && now - lastAt < 3000) {
+          console.log('[App] [call:ended] duplicate ignored', { callId: eventKey, elapsedMs: now - lastAt });
+          return;
+        }
+        g.__lastHandledCallEndedRef.key = eventKey;
+        g.__lastHandledCallEndedRef.at = now;
+      } catch (_) {}
       console.log('[App] [call:ended] 📩 onCallEnded вызван', { callId: data?.callId, inSystem: g.__pipInSystemModeRef?.current, __callEndedFromPiPNoOpen: g.__callEndedFromPiPNoOpenRef?.current });
       // КРИТИЧНО: Сразу сбрасываем refs и уведомляем HomeScreen у обоих участников (кто нажал «Завершить», кто получил call:ended), чтобы кнопки видеозвонка и бейдж «Занят» восстановились.
       try {

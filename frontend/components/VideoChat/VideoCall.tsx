@@ -933,7 +933,18 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const callConnected = !!friendCallAccepted || !!remoteStream;
     const sessionEnded = !!(session && typeof session.isEnded === 'function' && session.isEnded());
     const endingNow = !!isEndingCallRef.current || (global as any).__endingCallInProgressRef?.current === true;
-    const hasActiveCall = (!!roomId || !!callId || !!partnerId) && !isInactiveState && callConnected && !sessionEnded && !endingNow;
+    const transitionDone =
+      !!callEndedTransitionDoneRef.current ||
+      !!wasFriendCallEnded ||
+      !!isInactiveStateRef.current;
+    const hasActiveCall =
+      (!!roomId || !!callId || !!partnerId) &&
+      !!started &&
+      !isInactiveState &&
+      !transitionDone &&
+      callConnected &&
+      !sessionEnded &&
+      !endingNow;
     logger.info('[VideoCall] presence:update решение', {
       sendBusy: hasActiveCall,
       callConnected,
@@ -943,6 +954,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       isInactiveState,
       sessionEnded,
       endingNow,
+      started,
+      wasFriendCallEnded,
+      transitionDone,
     });
     if (hasActiveCall) {
       try {
@@ -951,13 +965,27 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         logger.warn('[VideoCall] Error sending presence:update busy:', e);
       }
     }
-  }, [roomId, callId, partnerId, isInactiveState, friendCallAccepted, remoteStream]);
+  }, [roomId, callId, partnerId, isInactiveState, friendCallAccepted, remoteStream, started, wasFriendCallEnded]);
   
   // При реконнекте сокета сервер может сбросить busy — переотправляем busy, если мы всё ещё в звонке
   useEffect(() => {
     const off = onConnected(() => {
+      const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
       const callConnected = !!friendCallAccepted || !!remoteStream;
-      const hasActiveCall = (!!roomId || !!callId || !!partnerId) && !isInactiveState && callConnected;
+      const sessionEnded = !!(session && typeof session.isEnded === 'function' && session.isEnded());
+      const endingNow = !!isEndingCallRef.current || (global as any).__endingCallInProgressRef?.current === true;
+      const transitionDone =
+        !!callEndedTransitionDoneRef.current ||
+        !!wasFriendCallEnded ||
+        !!isInactiveStateRef.current;
+      const hasActiveCall =
+        (!!roomId || !!callId || !!partnerId) &&
+        !!started &&
+        !isInactiveState &&
+        !transitionDone &&
+        callConnected &&
+        !sessionEnded &&
+        !endingNow;
       if (hasActiveCall) {
         try {
           socket.emit('presence:update', { status: 'busy', roomId: roomId || callId || undefined });
@@ -967,7 +995,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
     });
     return () => { try { off?.(); } catch {} };
-  }, [roomId, callId, partnerId, isInactiveState, friendCallAccepted, remoteStream]);
+  }, [roomId, callId, partnerId, isInactiveState, friendCallAccepted, remoteStream, started, wasFriendCallEnded]);
   
   // Используем функции из хука входящих звонков
   const { getDeclinedBlock, clearDeclinedBlock, setDeclinedBlock } = incomingCallHook;
@@ -1728,6 +1756,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
         setTimeout(() => {
           isEndingCallRef.current = false;
+          setIsEndingCall(false);
         }, 1000);
       }, 0);
     };
@@ -1991,6 +2020,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       return;
     }
     isEndingCallRef.current = true;
+    setIsEndingCall(true);
 
     const session = sessionRef.current;
     if (!session) return;
@@ -2112,6 +2142,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
       setTimeout(() => {
         isEndingCallRef.current = false;
+        setIsEndingCall(false);
         try {
           const gr = (global as any).__endingCallInProgressRef;
           if (gr && typeof gr.current !== 'undefined') gr.current = false;

@@ -711,6 +711,7 @@ function emitPresence(io: Server) {
 
 const PRESENCE_DISCONNECT_GRACE_MS = 2500;
 const pendingPresenceOfflineByUserId = new Map<string, ReturnType<typeof setTimeout>>();
+const lastBroadcastBusyByUserId = new Map<string, boolean>();
 
 function clearPendingPresenceOffline(userId?: string | null): void {
   const key = String(userId || '').trim();
@@ -740,6 +741,7 @@ function schedulePresenceEmitAfterDisconnect(io: Server, userId?: string | null)
     pendingPresenceOfflineByUserId.delete(key);
     // Пользователь мог переподключиться в пределах grace-окна.
     if (hasAnyOnlineSocketForUser(io, key)) return;
+    lastBroadcastBusyByUserId.delete(key);
     emitPresence(io);
   }, PRESENCE_DISCONNECT_GRACE_MS);
   pendingPresenceOfflineByUserId.set(key, t);
@@ -753,6 +755,7 @@ function schedulePresenceEmitAfterDisconnect(io: Server, userId?: string | null)
 async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boolean) {
   try {
     if (!userId) return;
+    lastBroadcastBusyByUserId.set(String(userId), !!busy);
     
     // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
     if (!isMongoReady()) {
@@ -1857,7 +1860,14 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       }
       const presenceStateChanged = prevBusy !== effectiveBusy || prevRoomId !== nextRoomId;
-      if (!ignoreBusyForCallee && !ignoreBusyForCaller && presenceStateChanged) {
+      const lastBroadcastBusy = lastBroadcastBusyByUserId.get(userId);
+      const shouldBroadcast =
+        !ignoreBusyForCallee &&
+        !ignoreBusyForCaller &&
+        presenceStateChanged &&
+        lastBroadcastBusy !== effectiveBusy;
+      if (shouldBroadcast) {
+        lastBroadcastBusyByUserId.set(userId, effectiveBusy);
         await emitPresenceUpdateToFriends(io, userId, effectiveBusy);
       }
       
@@ -1867,8 +1877,9 @@ io.on('connection', async (sock: AuthedSocket) => {
         busy,
         busyRequested,
         effectiveBusy,
-        broadcast: !ignoreBusyForCallee && !ignoreBusyForCaller && presenceStateChanged,
+        broadcast: shouldBroadcast,
         presenceStateChanged,
+        lastBroadcastBusy,
         ignoreBusyForCallee,
         ignoreBusyForCaller
       });
