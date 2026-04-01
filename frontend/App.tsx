@@ -1660,9 +1660,21 @@ function AppContent() {
   React.useEffect(() => {
     const onCallEnded = (data?: { callId?: string }) => {
       const g = global as any;
+      const eventCallId = String(data?.callId || g.__currentCallPiPParamsRef?.current?.callId || '').trim();
+      try {
+        // Если этот звонок уже завершили локально (например, EndCallFromPiP),
+        // то поздний echo call:ended не должен повторно запускать teardown при возврате в приложение.
+        const locallyEnded = g.__locallyEndedCallRef?.current;
+        const localCallId = String(locallyEnded?.callId || '').trim();
+        const localAt = Number(locallyEnded?.at || 0);
+        if (eventCallId && localCallId && eventCallId === localCallId && Date.now() - localAt < 15000) {
+          console.log('[App] [call:ended] locally-ended echo ignored', { callId: eventCallId, elapsedMs: Date.now() - localAt });
+          return;
+        }
+      } catch (_) {}
       try {
         g.__lastHandledCallEndedRef = g.__lastHandledCallEndedRef || { key: '', at: 0 };
-        const eventKey = String(data?.callId || g.__currentCallPiPParamsRef?.current?.callId || 'unknown');
+        const eventKey = eventCallId || 'unknown';
         const now = Date.now();
         const lastKey = String(g.__lastHandledCallEndedRef.key || '');
         const lastAt = Number(g.__lastHandledCallEndedRef.at || 0);
@@ -2500,6 +2512,13 @@ export default function App() {
 
   const endCallImpl = (callId: string | null, roomId: string | null) => {
     const g = global as any;
+    const localEndCallId = String(callId || g.__currentCallPiPParamsRef?.current?.callId || '').trim();
+    if (localEndCallId) {
+      try {
+        g.__locallyEndedCallRef = g.__locallyEndedCallRef || { current: { callId: '', at: 0 } };
+        g.__locallyEndedCallRef.current = { callId: localEndCallId, at: Date.now() };
+      } catch (_) {}
+    }
     const fromPiPButton = g.__endingFromPiPButtonRef?.current === true;
     if (fromPiPButton) {
       try { g.__endingFromPiPButtonRef.current = false; } catch (_) {}

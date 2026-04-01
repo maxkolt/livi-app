@@ -162,6 +162,9 @@ const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(s);
 let currentUserId: string | undefined;
 let bootInProgress = false; // Защита от повторного вызова boot()
 let createUserPromise: Promise<string | null> | null = null; // Трекер параллельных createUser
+let lastSuccessfulReauthAt = 0;
+let reauthInFlight: Promise<boolean> | null = null;
+const REAUTH_FRESH_MS = 6000;
 
 // Notify UI when currentUserId changes (screens depend on it for profile/avatar).
 type CurrentUserIdListener = (userId: string | undefined) => void;
@@ -382,6 +385,7 @@ async function boot() {
       try {
         if (socket.connected) {
           const reauthRes = await emitAck<{ ok: boolean; userId?: string; error?: string; missed?: { from: string; fromNick?: string }[] }>('reauth', { userId: saved }, 6000, 1);
+          if (reauthRes?.ok) lastSuccessfulReauthAt = Date.now();
           if (reauthRes?.missed?.length) applyMissedFromReauth(reauthRes).catch(() => {});
         }
       } catch (e) {
@@ -437,6 +441,7 @@ async function boot() {
     try {
       const reauthResponse = await emitAck<{ ok: boolean; userId?: string; error?: string; missed?: { from: string; fromNick?: string }[] }>('reauth', { userId: currentUserId });
       if (reauthResponse?.ok) {
+        lastSuccessfulReauthAt = Date.now();
         logger.debug('Reauth successful');
         if (reauthResponse?.missed?.length) applyMissedFromReauth(reauthResponse).catch(() => {});
       } else {
@@ -604,6 +609,7 @@ socket.on("connect", async () => {
     try {
       const reauthResponse = await emitAck<{ ok: boolean; userId?: string; error?: string; missed?: { from: string; fromNick?: string }[] }>('reauth', { userId: currentUserId });
       if (reauthResponse?.ok) {
+        lastSuccessfulReauthAt = Date.now();
         console.log('[socket] Reauth successful after connect');
         if (reauthResponse?.missed?.length) applyMissedFromReauth(reauthResponse).catch(() => {});
       } else {
@@ -790,6 +796,35 @@ export async function emitAck<T = any>(
   throw lastErr;
 }
 
+async function ensureReauthBeforePrivilegedSocketOp(): Promise<boolean> {
+  const uid = String(currentUserId || '').trim();
+  if (!uid) return false;
+  const now = Date.now();
+  if (now - lastSuccessfulReauthAt < REAUTH_FRESH_MS) return true;
+  if (reauthInFlight) return reauthInFlight;
+  reauthInFlight = (async () => {
+    try {
+      const res = await emitAck<{ ok: boolean; userId?: string; error?: string; missed?: { from: string; fromNick?: string }[] }>(
+        'reauth',
+        { userId: uid },
+        6000,
+        1
+      );
+      if (res?.ok) {
+        lastSuccessfulReauthAt = Date.now();
+        if (res?.missed?.length) applyMissedFromReauth(res).catch(() => {});
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      reauthInFlight = null;
+    }
+  })();
+  return reauthInFlight;
+}
+
 export function onConnected(cb: () => void): () => void {
   const h = () => cb();
   if (socket.connected) h();
@@ -935,8 +970,13 @@ export function acceptInvite(inviterId: string) {
 }
 
 export function fetchFriends(page: number = 1, limit: number = 50) {
-  const viaSocket = () =>
-    emitAck<{
+  const viaSocket = async () => {
+    // Защита от гонки: socket connected, но reauth на бэкенде ещё не успел завершиться.
+    if (socket.connected && currentUserId) {
+      const ok = await ensureReauthBeforePrivilegedSocketOp();
+      if (!ok) throw new Error('reauth_before_friends_fetch_failed');
+    }
+    return emitAck<{
       ok: boolean;
       list: FriendListItem[];
       pagination?: {
@@ -947,6 +987,7 @@ export function fetchFriends(page: number = 1, limit: number = 50) {
       };
       error?: string;
     }>('friends:fetch', { page, limit });
+  };
 
   // Fallback for networks/VPNs that break socket connectivity:
   // use REST endpoint that returns the same list shape.
