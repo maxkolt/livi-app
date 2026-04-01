@@ -929,8 +929,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   // Отправка статуса "busy" только когда вызов принят и оба в видеосвязи (не при дозвоне).
   // Иначе у того, кому звонят, бейдж «Занято» появляется до нажатия «Принять».
   useEffect(() => {
+    const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
     const callConnected = !!friendCallAccepted || !!remoteStream;
-    const hasActiveCall = (!!roomId || !!callId || !!partnerId) && !isInactiveState && callConnected;
+    const sessionEnded = !!(session && typeof session.isEnded === 'function' && session.isEnded());
+    const endingNow = !!isEndingCallRef.current || (global as any).__endingCallInProgressRef?.current === true;
+    const hasActiveCall = (!!roomId || !!callId || !!partnerId) && !isInactiveState && callConnected && !sessionEnded && !endingNow;
     logger.info('[VideoCall] presence:update решение', {
       sendBusy: hasActiveCall,
       callConnected,
@@ -938,18 +941,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       hasRemoteStream: !!remoteStream,
       hasRoomId: !!roomId,
       isInactiveState,
+      sessionEnded,
+      endingNow,
     });
     if (hasActiveCall) {
       try {
         socket.emit('presence:update', { status: 'busy', roomId: roomId || callId || undefined });
       } catch (e) {
         logger.warn('[VideoCall] Error sending presence:update busy:', e);
-      }
-    } else {
-      try {
-        socket.emit('presence:update', { status: 'online' });
-      } catch (e) {
-        logger.warn('[VideoCall] Error sending presence:update online:', e);
       }
     }
   }, [roomId, callId, partnerId, isInactiveState, friendCallAccepted, remoteStream]);
@@ -1527,6 +1526,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       
       if (currentSession) {
         try {
+          if (typeof currentSession.isEnded === 'function' && currentSession.isEnded()) {
+            clearSessionRefs();
+            return;
+          }
           // КРИТИЧНО: Сначала останавливаем локальные стримы напрямую
           // Это гарантирует, что камера остановится даже если компонент размонтирован
           const localStream = currentSession.getLocalStream?.();

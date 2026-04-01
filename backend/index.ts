@@ -709,6 +709,42 @@ function emitPresence(io: Server) {
   io.emit('presence:update', list);
 }
 
+const PRESENCE_DISCONNECT_GRACE_MS = 2500;
+const pendingPresenceOfflineByUserId = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearPendingPresenceOffline(userId?: string | null): void {
+  const key = String(userId || '').trim();
+  if (!key) return;
+  const pending = pendingPresenceOfflineByUserId.get(key);
+  if (pending) {
+    clearTimeout(pending);
+    pendingPresenceOfflineByUserId.delete(key);
+  }
+}
+
+function hasAnyOnlineSocketForUser(io: Server, userId: string): boolean {
+  for (const s of io.sockets.sockets.values()) {
+    if (String((s as any)?.data?.userId || '') === userId) return true;
+  }
+  return false;
+}
+
+function schedulePresenceEmitAfterDisconnect(io: Server, userId?: string | null): void {
+  const key = String(userId || '').trim();
+  if (!key) {
+    emitPresence(io);
+    return;
+  }
+  clearPendingPresenceOffline(key);
+  const t = setTimeout(() => {
+    pendingPresenceOfflineByUserId.delete(key);
+    // Пользователь мог переподключиться в пределах grace-окна.
+    if (hasAnyOnlineSocketForUser(io, key)) return;
+    emitPresence(io);
+  }, PRESENCE_DISCONNECT_GRACE_MS);
+  pendingPresenceOfflineByUserId.set(key, t);
+}
+
 /**
  * Оптимизированная отправка presence:update только друзьям пользователя
  * Вместо отправки всем подключенным (io.emit), отправляем только заинтересованным
@@ -910,6 +946,8 @@ const callDeliveryById = new Map<string, CallDeliveryTelemetry>();
 const activeCallBySocket = new Map<string, string>();
 /** callId -> roomId после call:accept (для call:end, когда клиент присылает только callId, напр. принятие из пуша) */
 const callIdToRoomId = new Map<string, string>();
+/** roomId/callId, для которых call:end уже обработан недавно (защита от дублирующих call:end). */
+const recentlyEndedCalls = new Map<string, ReturnType<typeof setTimeout>>();
 /** Участник не был подключён в момент call:accept — при reauth отправим ему call:accepted и он подключится в комнату */
 const activeRoomByUserId = new Map<string, { callId: string; roomId: string; livekitRoomName: string; peerUserId: string }>();
 // Пользователь занят рандом-видеочатом (по userId) — используется также для findRandom
@@ -1392,6 +1430,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         return ack?.({ ok: false, error: 'user_not_found' });
       }
 
+      clearPendingPresenceOffline(mappedUserId);
       bindUserIdentity(io, sock, mappedUserId);
       emitPresence(io);
 
@@ -1478,6 +1517,7 @@ io.on('connection', async (sock: AuthedSocket) => {
   
   if (bindUid) {
     // Привязываем пользователя к сокету
+    clearPendingPresenceOffline(String(bindUid));
     bindUserIdentity(io, sock, String(bindUid));
     emitPresence(io);
     // Участник переподключился — если был принятый звонок без него, отправляем call:accepted
@@ -1547,6 +1587,17 @@ io.on('connection', async (sock: AuthedSocket) => {
         });
         return;
       }
+      if (recentlyEndedCalls.has(id)) {
+        logger.info('⏭️ [call:end] duplicate ignored (already ended recently)', {
+          roomId: id,
+          callId: callId || null,
+          socketId: sock.id,
+        });
+        return;
+      }
+      recentlyEndedCalls.set(id, setTimeout(() => {
+        try { recentlyEndedCalls.delete(id); } catch {}
+      }, 15_000));
       if (callId) {
         transitionCall(String(callId), 'ended', {
           actionKey: `socket_end:${String(callId)}`,
@@ -1754,12 +1805,21 @@ io.on('connection', async (sock: AuthedSocket) => {
       
       const status = payload?.status;
       const busy = status === 'busy';
+      // Если у пользователя есть хотя бы один сокет в активном звонке, не даём ему перейти в "online",
+      // даже если другой сокет прислал presence:update status=online.
+      const hasAnotherBusySocket = Array.from(io.sockets.sockets.values()).some((s) => {
+        const suid = String((s as any)?.data?.userId || '');
+        if (suid !== userId) return false;
+        const sdata = (s as any)?.data || {};
+        return !!(sdata.inCall || sdata.busy || sdata.roomId);
+      });
+      const busyRequested = busy || hasAnotherBusySocket;
       
       // КРИТИЧНО: Получатель (callee) не должен показывать бейдж «Занято» до принятия вызова.
       let ignoreBusyForCallee = false;
       // КРИТИЧНО: Инициатор (caller) не должен показывать бейдж «Занято» у того, кому звонят, пока вызов не принят (нативный экран входящего, дозвон).
       let ignoreBusyForCaller = false;
-      if (busy && callOfUser.has(userId)) {
+      if (busyRequested && callOfUser.has(userId)) {
         const entry = callOfUser.get(userId);
         if (entry) {
           const link = callsById.get(entry.callId);
@@ -1780,9 +1840,12 @@ io.on('connection', async (sock: AuthedSocket) => {
           }
         }
       }
-      const effectiveBusy = busy && !ignoreBusyForCallee && !ignoreBusyForCaller;
+      const effectiveBusy = busyRequested && !ignoreBusyForCallee && !ignoreBusyForCaller;
       
       // Обновляем состояние сокета (при ignoreBusyForCaller не трогаем data.busy — он уже true с call:initiate, просто не рассылаем друзьям)
+      const prevBusy = !!(sock as any).data?.busy;
+      const prevRoomId = String((sock as any).data?.roomId || '');
+      const nextRoomId = payload?.roomId && !ignoreBusyForCallee ? String(payload.roomId) : '';
       if (!ignoreBusyForCaller) {
         (sock as any).data.busy = effectiveBusy;
         if (payload?.roomId && !ignoreBusyForCallee) {
@@ -1793,7 +1856,8 @@ io.on('connection', async (sock: AuthedSocket) => {
           delete (sock as any).data.roomId;
         }
       }
-      if (!ignoreBusyForCallee && !ignoreBusyForCaller) {
+      const presenceStateChanged = prevBusy !== effectiveBusy || prevRoomId !== nextRoomId;
+      if (!ignoreBusyForCallee && !ignoreBusyForCaller && presenceStateChanged) {
         await emitPresenceUpdateToFriends(io, userId, effectiveBusy);
       }
       
@@ -1801,8 +1865,10 @@ io.on('connection', async (sock: AuthedSocket) => {
         userId,
         status,
         busy,
+        busyRequested,
         effectiveBusy,
-        broadcast: !ignoreBusyForCallee && !ignoreBusyForCaller,
+        broadcast: !ignoreBusyForCallee && !ignoreBusyForCaller && presenceStateChanged,
+        presenceStateChanged,
         ignoreBusyForCallee,
         ignoreBusyForCaller
       });
@@ -2728,7 +2794,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
     }
     unbindUser(sock);
-    emitPresence(io);
+    schedulePresenceEmitAfterDisconnect(io, userId ? String(userId) : null);
     // Удаляем из очереди random
     await removeFromWaitingQueue(sock.id);
     // НЕ вызываем setRandomBusy(userId, false): busy снимается только при завершении звонка (call:end),

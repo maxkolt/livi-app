@@ -209,7 +209,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // (Animated/React при смене transform или перестроении дерева). Откладываем на следующий тик.
   useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
-    const emitter = new NativeEventEmitter();
+    const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
     const sub = emitter.addListener('SystemPiPModeChanged', (payload: { isInPiP?: boolean }) => {
       const inPiP = !!payload?.isInPiP;
       const run = () => {
@@ -419,7 +419,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // чтобы окно PiP содержало видео собеседника с текущего экрана VideoCall.
   useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
-    const emitter = new NativeEventEmitter();
+    const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
     const sub = emitter.addListener('AboutToEnterSystemPiP', (payload: { width?: number; height?: number } | null) => {
       const g = (global as any);
       // КРИТИЧНО (релиз): Сразу помечаем PiP ДО любых проверок, чтобы stopSpeaker() в cleanup useAudioRouting
@@ -512,6 +512,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // Параметры для навигации берутся из state (callId, roomId, lastNavParams), при null — из __currentCallPiPParamsRef
   // и __pipLastContextRef (см. комментарий выше), чтобы возврат работал даже при гонках.
   const returnToCall = useCallback(() => {
+    try {
+      const g = (global as any);
+      g.__lastReturnToCallAtRef = g.__lastReturnToCallAtRef || { current: 0 };
+      const now = Date.now();
+      if (now - Number(g.__lastReturnToCallAtRef.current || 0) < 1200) {
+        return;
+      }
+      g.__lastReturnToCallAtRef.current = now;
+    } catch (_) {}
     // Сразу подавляем оверлей (чтобы не мелькнул поверх экрана видеозвонка при навигации).
     // ВАЖНО: не оставляем его включённым навсегда — иначе in-app PiP может не показаться на Home на некоторых девайсах.
     setSuppressOverlayForReturn(true);
@@ -720,6 +729,17 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // поэтому call:ended приходит только после реконнекта; PiP также закрывается по LiveKit (ParticipantDisconnected / Room Disconnected) и при socket reconnect в App.
   useEffect(() => {
     const onCallEnded = (data?: any) => {
+      const receivedCallId = String(data?.callId || '').trim();
+      const receivedRoomId = String(data?.roomId || '').trim();
+      const currentCallId = String(callId || '').trim();
+      const currentRoomId = String(roomId || '').trim();
+      const matchedByCallId = !!receivedCallId && !!currentCallId && receivedCallId === currentCallId;
+      const matchedByRoomId = !!receivedRoomId && !!currentRoomId && receivedRoomId === currentRoomId;
+      // Если прилетел call:ended без id — оставляем старое поведение (закрываем активный PiP).
+      const hasNoIdsInPayload = !receivedCallId && !receivedRoomId;
+      if (!hasNoIdsInPayload && !matchedByCallId && !matchedByRoomId) {
+        return;
+      }
       // Закрываем PiP при call:ended и когда in-app PiP виден, и когда в системном PiP (inSystemPiPMode), чтобы у второго пользователя PiP закрывался сразу.
       const shouldClosePiP = (visible || inSystemPiPMode) && (callId || roomId);
       // КРИТИЧНО: При получении call:ended (собеседник завершил из системного PiP и т.п.) сразу сбрасываем refs и уведомляем HomeScreen, чтобы кнопки видеозвонка и бейдж «Занят» восстановились. Иначе при закрытии PiP кнопки остаются неактивными (порядок вызова App vs PiPContext не гарантирован).
@@ -735,8 +755,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
       console.log('[PiPContext] Call ended event received, closing PiP:', {
         data,
-        currentCallId: callId,
-        currentRoomId: roomId,
+        currentCallId,
+        currentRoomId,
+        matchedByCallId,
+        matchedByRoomId,
         receivedCallId: data?.callId,
         receivedRoomId: data?.roomId,
         inSystemPiPMode,
@@ -805,9 +827,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     (global as any).__pipVisibleRef.current = visible;
     return () => {
       try { (global as any).__pipUpdateStateRef.current = null; } catch {}
-      try { (global as any).__pipVisibleRef.current = false; } catch {}
     };
   }, [updatePiPState, visible]);
+
+  // Сбрасываем __pipVisibleRef только при размонтировании провайдера, а не на каждом re-run эффекта.
+  useEffect(() => {
+    return () => {
+      try { (global as any).__pipVisibleRef.current = false; } catch {}
+    };
+  }, []);
 
   const updatePiPPosition = useCallback((x: number, y: number) => setPipPos({ x, y }), []);
 

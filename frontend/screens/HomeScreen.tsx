@@ -821,6 +821,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [myFullAvatarUri, setMyFullAvatarUri] = useState<string>(''); // полный аватар (data URI)
   const [avatarRefreshKey, setAvatarRefreshKey] = useState(0); // для принудительного обновления на Android
   const [videoCallEndedTick, setVideoCallEndedTick] = useState(0); // при завершении звонка вызываем setVideoCallEndedTick → ре-рендер списка друзей, снимаются бейдж «Занят» и disabled
+  const lastVideoCallPartnerRef = useRef<string | null>(null);
   const [resolvedAvatarUri, resolvedAvatarReady] = useResolvedImageUri(avatarUri || ''); // на Android data: -> file: для Glide
   const [, myFullAvatarResolvedReady] = useResolvedImageUri(myFullAvatarUri || ''); // кешированный аватар (data:) -> file: для Glide на Android
   const [savedNick, setSavedNick] = useState<string>('');      // сохранённый ник
@@ -2753,11 +2754,35 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   useEffect(() => {
     const g = global as any;
     if (!g.__onVideoCallEndedRef) g.__onVideoCallEndedRef = { current: null };
-    g.__onVideoCallEndedRef.current = () => setVideoCallEndedTick((t) => t + 1);
+    g.__onVideoCallEndedRef.current = () => {
+      const currentPartner = String((g.__videoCallPartnerUserIdRef?.current ?? '') || '').trim();
+      const lastPartner = String((lastVideoCallPartnerRef.current ?? '') || '').trim();
+      const partnerToClear = currentPartner || lastPartner;
+      if (partnerToClear) {
+        setFriends((prev) => prev.map((f) => String(f.id) === partnerToClear ? { ...f, isBusy: false } : f));
+      }
+      setVideoCallEndedTick((t) => t + 1);
+    };
     return () => {
       if (g.__onVideoCallEndedRef) g.__onVideoCallEndedRef.current = null;
     };
   }, []);
+
+  // Запоминаем последнего партнера активного видеозвонка, чтобы при завершении можно было снять stale busy.
+  useEffect(() => {
+    const g = global as any;
+    const partner = String((g.__videoCallPartnerUserIdRef?.current ?? '') || '').trim();
+    const active = g.__videoCallActiveRef?.current === true;
+    if (active && partner) {
+      lastVideoCallPartnerRef.current = partner;
+    }
+  });
+
+  // После завершения звонка делаем форс-синхронизацию друзей (в т.ч. busy), если событие busy:false было потеряно.
+  useEffect(() => {
+    if (videoCallEndedTick <= 0) return;
+    void loadFriends();
+  }, [videoCallEndedTick, loadFriends]);
 
   /* ===== presence & friend events ===== */
   useEffect(() => {

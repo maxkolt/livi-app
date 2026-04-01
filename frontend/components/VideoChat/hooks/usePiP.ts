@@ -1,5 +1,5 @@
 import { useCallback, useRef, useEffect } from 'react';
-import { BackHandler, InteractionManager, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
+import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { usePiP as usePiPContext } from '../../../src/pip/PiPContext';
 import { logger } from '../../../utils/logger';
@@ -62,6 +62,7 @@ export const usePiP = ({
   const pipVisibleRef = useRef(pip.visible);
   const pipShownDuringSwipeRef = useRef(false); // Флаг, что PiP уже показан во время текущего свайпа
   const startXRef = useRef<number | null>(null);
+  const pipTransitionUntilRef = useRef(0);
   
   // КРИТИЧНО: Используем ref для хранения актуальных значений состояния звонка
   const isInactiveStateRef = useRef(isInactiveState);
@@ -95,6 +96,12 @@ export const usePiP = ({
 
   // Функция для входа в PiP
   const enterPiPMode = useCallback((opts?: { deferVisible?: boolean }) => {
+    const now = Date.now();
+    if (now < pipTransitionUntilRef.current) {
+      return;
+    }
+    pipTransitionUntilRef.current = now + 800;
+
     // КРИТИЧНО: Проверяем по refs (актуальное состояние), чтобы при отложенном вызове после Back
     // не показывать PiP, если звонок успел завершиться. Пропы могут быть устаревшими в замыкании.
     const inactive = isInactiveStateRef.current || wasFriendCallEndedRef.current;
@@ -151,7 +158,7 @@ export const usePiP = ({
     if (hasActiveCall) {
       logger.info('[usePiP] Показываем PiP', {
         pipVisibleBefore: pip.visible,
-        willUpdate: pip.visible
+        willUpdate: true
       });
       
       // НЕ отключаем локальный видеотрек при входе в in-app PiP: иначе собеседник перестаёт
@@ -238,7 +245,8 @@ export const usePiP = ({
       // КРИТИЧНО: Проверяем, что PiP действительно показался
       logger.info('[usePiP] pip.showPiP вызван, проверяем результат', {
         pipVisibleAfter: pip.visible,
-        pipRefVisible: pipRef.current?.visible
+        pipRefVisible: pipRef.current?.visible,
+        globalPipVisible: (global as any).__pipVisibleRef?.current
       });
 
       // КРИТИЧНО: Вызываем session.enterPiP() для отправки pip:state партнеру
@@ -283,7 +291,7 @@ export const usePiP = ({
         if (g.__pipVisibleRef?.current === true && !pip.visible) g.__pipVisibleRef.current = false;
       } catch {}
     }
-  }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, camOn, micOn, remoteMuted, localStream, remoteStream, routeParams, session]);
+  }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, camOn, micOn, remoteMuted, remoteCamOn, localStream, remoteStream, routeParams, session]);
 
   // Обработка BackHandler для Android:
   // при уходе со страницы внутри приложения показываем in-app PiP.
@@ -324,6 +332,10 @@ export const usePiP = ({
         g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
         g.__pipVisibleRef.current = true;
       } catch {}
+      // Показываем PiP сразу (без runAfterInteractions), чтобы не было заметной задержки
+      // между быстрым goBack и появлением in-app PiP.
+      enterPiPMode({ deferVisible: true });
+
       const returnTo = (routeParams as any)?.returnTo;
       if (navigation.canGoBack && navigation.canGoBack()) {
         navigation.goBack();
@@ -332,7 +344,6 @@ export const usePiP = ({
       } else {
         navigation.navigate('Home' as never);
       }
-      InteractionManager.runAfterInteractions(() => enterPiPMode({ deferVisible: true }));
       return true;
     });
 
@@ -520,16 +531,14 @@ export const usePiP = ({
           const hasActiveCall = !!(actualRoomId || actualCallId || actualPartnerId);
           if (hasActiveCall) {
             if (Platform.OS === 'android') {
+              // На Android при terminate не показываем in-app PiP: логика едина с onPanResponderRelease.
               requestAnimationFrame(() => {
                 if (navigation.canGoBack && navigation.canGoBack()) {
                   navigation.goBack();
                 } else {
                   navigation.navigate('Home' as never);
                 }
-                requestAnimationFrame(() => {
-                  enterPiPMode({ deferVisible: true });
-                  pipShownDuringSwipeRef.current = false;
-                });
+                pipShownDuringSwipeRef.current = false;
               });
             } else {
               if (!pipShownDuringSwipeRef.current) {

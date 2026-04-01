@@ -105,6 +105,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastProcessedCallAccepted: { callId: string | null; roomName: string | null; timestamp: number } | null = null; // Защита от повторной обработки
   private endCallInProgress = false;
   private ended = false;
+  private lastCallEndSentKey: string | null = null;
+  private lastSentPiPState: boolean | null = null;
+  private lastSentPiPRoomId: string | null = null;
   /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и endCall повторно */
   private cleaned = false;
 
@@ -403,6 +406,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Используем переданные из UI callId/roomId как fallback (инициатор может не иметь их в сессии до завершения connectAsInitiatorAfterAccepted)
     const callIdToSend = overrideCallId ?? this.callId;
     const roomIdToSend = overrideRoomId ?? this.roomId;
+    const callEndDedupKey = String(roomIdToSend || callIdToSend || '').trim();
 
     logger.info('[VideoCallSession] 🛑 endCall вызван', {
       callId: this.callId,
@@ -423,6 +427,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Отправляем call:end на сервер ПЕРЕД очисткой callId и roomId
     // Сервер отправит call:ended всем участникам комнаты, что завершит звонок у обоих
     if (callIdToSend || roomIdToSend) {
+      if (callEndDedupKey && this.lastCallEndSentKey === callEndDedupKey) {
+        logger.info('[VideoCallSession] ⏭️ Пропускаем повторную отправку call:end (dedupe)', {
+          callEndDedupKey,
+        });
+      } else {
+        if (callEndDedupKey) this.lastCallEndSentKey = callEndDedupKey;
       try {
         const payload = { 
           callId: callIdToSend || roomIdToSend, 
@@ -436,11 +446,14 @@ export class VideoCallSession extends SimpleEventEmitter {
       } catch (e) {
         logger.warn('[VideoCallSession] Ошибка отправки call:end', e);
       }
+      }
     }
     
     // Очищаем состояние после отправки на сервер
     this.callId = null;
     this.roomId = null;
+    this.lastSentPiPState = null;
+    this.lastSentPiPRoomId = null;
     this.partnerId = null;
     this.partnerUserId = null;
     this.config.callbacks.onPartnerIdChange?.(null);
@@ -1027,9 +1040,14 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       return;
     }
+    if (this.lastSentPiPState === true && this.lastSentPiPRoomId === currentRoomId) {
+      return;
+    }
     try {
       const payload = { inPiP: true, from: socket.id, roomId: currentRoomId };
       socket.emit('pip:state', payload);
+      this.lastSentPiPState = true;
+      this.lastSentPiPRoomId = currentRoomId;
       logger.info('[VideoCallSession] ✅ Отправлено pip:state=true партнеру', { roomId: currentRoomId });
     } catch (e) {
       logger.warn('[VideoCallSession] Ошибка отправки pip:state:', e);
@@ -1045,8 +1063,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.debug('[VideoCallSession] pip:state не отправляем при exitPiP — звонок завершён или нет roomId');
       return;
     }
+    if (this.lastSentPiPState === false && this.lastSentPiPRoomId === currentRoomId) {
+      return;
+    }
     try {
       socket.emit('pip:state', { inPiP: false, from: socket.id, roomId: currentRoomId });
+      this.lastSentPiPState = false;
+      this.lastSentPiPRoomId = currentRoomId;
       logger.info('[VideoCallSession] ✅ Отправлено pip:state=false партнеру', { roomId: currentRoomId });
       // КРИТИЧНО: При возврате из PiP сообщаем партнеру ТЕКУЩЕЕ состояние нашей камеры
       try {
@@ -1158,6 +1181,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     };
     
     const callEndedHandler = (data?: { callId?: string; roomId?: string; reason?: string; scope?: string }) => {
+      if (!this.matchesCurrentCallEvent(data)) return;
       this.handleCallEnded();
     };
 
@@ -1165,7 +1189,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       callEndedHandler(data);
     };
 
-    const onCallCancel = (data?: { callId?: string; from?: string }) => {
+    const onCallCancel = (data?: { callId?: string; from?: string; roomId?: string }) => {
       callEndedHandler(data);
     };
 
@@ -1793,6 +1817,26 @@ export class VideoCallSession extends SimpleEventEmitter {
     });
   }
 
+  private matchesCurrentCallEvent(data?: { callId?: string; roomId?: string }): boolean {
+    const incomingCallId = String(data?.callId || '').trim();
+    const incomingRoomId = String(data?.roomId || '').trim();
+    // Для обратной совместимости: если сервер не прислал идентификаторы, обрабатываем как текущий звонок.
+    if (!incomingCallId && !incomingRoomId) return true;
+
+    const currentCallId = String(this.callId || '').trim();
+    const currentRoomId = String(this.roomId || '').trim();
+    if (incomingCallId && currentCallId && incomingCallId === currentCallId) return true;
+    if (incomingRoomId && currentRoomId && incomingRoomId === currentRoomId) return true;
+
+    logger.info('[VideoCallSession] Ignored call event for another call', {
+      incomingCallId: incomingCallId || null,
+      incomingRoomId: incomingRoomId || null,
+      currentCallId: currentCallId || null,
+      currentRoomId: currentRoomId || null,
+    });
+    return false;
+  }
+
   private handleCallEnded(): void {
     // КРИТИЧНО: Сразу закрываем системный PiP при любом call:ended (до любых return). Иначе при раннем return PiP у собеседника не закрывается.
     if (Platform.OS === 'android') {
@@ -1860,6 +1904,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Очищаем состояние
     this.callId = null;
     this.roomId = null;
+    this.lastSentPiPState = null;
+    this.lastSentPiPRoomId = null;
     this.partnerId = null;
     this.partnerUserId = null;
     this.config.callbacks.onPartnerIdChange?.(null);

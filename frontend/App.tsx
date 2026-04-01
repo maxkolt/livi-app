@@ -391,6 +391,15 @@ function AppContent() {
       console.log('[App] SystemPiPExpanded received');
       try {
         const g = (global as any);
+        g.__lastSystemPiPExpandedAtRef = g.__lastSystemPiPExpandedAtRef || { current: 0 };
+        const now = Date.now();
+        if (now - Number(g.__lastSystemPiPExpandedAtRef.current || 0) < 1200) {
+          return;
+        }
+        g.__lastSystemPiPExpandedAtRef.current = now;
+      } catch (_) {}
+      try {
+        const g = (global as any);
         g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
         g.__disableSystemPiPUntilRef.current = Date.now() + 6000;
         NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);

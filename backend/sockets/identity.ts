@@ -27,14 +27,10 @@ function getOnlineList(io: Server): string[] {
   return Array.from(set);
 }
 export async function bindUser(io: Server, sock: any, userId: string) {
-  // Проверяем, не подключен ли уже этот пользователь
-  const existingSocket = Array.from(io.sockets.sockets.values())
-    .find(s => (s as any)?.data?.userId === userId && s.id !== sock.id);
-
-  if (existingSocket) {
-    console.warn(`[user] duplicate connection ${userId} old=${existingSocket.id} -> disconnect`);
-    existingSocket.disconnect(true);
-  }
+  // Проверяем, не подключен ли уже этот пользователь.
+  // Не отключаем дубликат до bind нового сокета — иначе можно поймать кратковременный "offline" фликер.
+  const duplicateSockets = Array.from(io.sockets.sockets.values())
+    .filter(s => (s as any)?.data?.userId === userId && s.id !== sock.id);
 
   sock.data.userId = String(userId);
 
@@ -49,6 +45,21 @@ export async function bindUser(io: Server, sock: any, userId: string) {
   const list = getOnlineList(io);
   io.emit('presence_update', list);
   io.emit('presence:update', list);
+
+  // Отключаем старые сокеты уже после успешного bind нового.
+  // Так статус пользователя остаётся online без кратковременного провала.
+  if (duplicateSockets.length > 0) {
+    setTimeout(() => {
+      for (const oldSocket of duplicateSockets) {
+        try {
+          if ((oldSocket as any)?.connected) {
+            console.warn(`[user] duplicate connection ${userId} old=${oldSocket.id} -> disconnect`);
+            oldSocket.disconnect(true);
+          }
+        } catch {}
+      }
+    }, 0);
+  }
 
   // Доставляем офлайн сообщения после установки userId
   const offlineMessages = await getAndClearOfflineMessages(userId);
@@ -163,10 +174,8 @@ export default function registerIdentitySockets(io: Server) {
           console.error(`❌ Failed to leave room u:${userId}:`, error);
         }
 
-        // Обновляем список онлайн пользователей
-        const list = getOnlineList(io);
-        io.emit('presence_update', list);
-        io.emit('presence:update', list);
+        // presence_update рассылается единым обработчиком disconnect в backend/index.ts
+        // (там есть вся доменная очистка состояния). Здесь не дублируем рассылку.
       }
     });
     /* -------- identity:attach --------
