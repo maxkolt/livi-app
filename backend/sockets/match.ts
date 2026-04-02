@@ -138,9 +138,13 @@ function makeRoomId(aSid: string, bSid: string) {
   const sorted = [aSid, bSid].sort();
   return `room_${sorted[0]}_${sorted[1]}`;
 }
-function makeRoomNameByUserId(aUserId: string, bUserId: string) {
+/**
+ * LiveKit room for random chat must differ from friend VideoCall (`room_<uid>_<uid>` in index.ts call:accept).
+ * Reusing the same name after a call ends causes SDK races ("track for participant not present").
+ */
+function makeRandomMatchLiveKitRoomName(aUserId: string, bUserId: string) {
   const sorted = [aUserId, bUserId].sort();
-  return `room_${sorted[0]}_${sorted[1]}`;
+  return `rand_room_${sorted[0]}_${sorted[1]}`;
 }
 async function clearPartner(
   io: Server,
@@ -312,7 +316,7 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
   const livekitIdentityB = otherUserId || `socket:${other.id}`;
   
   if (myUserId && otherUserId) {
-    livekitRoomName = makeRoomNameByUserId(myUserId, otherUserId);
+    livekitRoomName = makeRandomMatchLiveKitRoomName(myUserId, otherUserId);
   }
 
   try {
