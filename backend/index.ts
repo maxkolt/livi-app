@@ -69,6 +69,7 @@ import {
 } from './utils/callOrchestration';
 import { callProviderAdapter, callProviderMode } from './utils/callProvider';
 import { isShuttingDown, setShuttingDown } from './utils/shutdownState';
+import { getVisibleOnlineUserIds } from './utils/visibleOnline';
 
 /* ========= Типы ========= */
 type LeanUser = {
@@ -676,12 +677,7 @@ mongoose
 
 /* ========= Presence helpers ========= */
 function getOnlineListFromIo(io: Server): string[] {
-  const set = new Set<string>();
-  for (const s of io.sockets.sockets.values()) {
-    const uid = (s as any)?.data?.userId;
-    if (uid) set.add(String(uid));
-  }
-  return Array.from(set);
+  return getVisibleOnlineUserIds(io);
 }
 function bindUser(sock: AuthedSocket, userId: string) {
   const uid = normalizeMongoObjectId(String(userId));
@@ -1936,6 +1932,20 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
     } catch (e) {
       logger.error('❌ [presence:update] Error', { error: (e as any)?.message || String(e) });
+    }
+  });
+
+  /** Видимый онлайн для друзей: в фоне сокет остаётся подключён, но пользователь не в списке «онлайн». */
+  sock.on('app:visibility', (payload: any) => {
+    try {
+      const userId = String((sock as any).data?.userId || '');
+      if (!userId) return;
+      if (typeof payload?.foreground !== 'boolean') return;
+      (sock as any).data = (sock as any).data || {};
+      (sock as any).data.appForeground = payload.foreground;
+      emitPresence(io);
+    } catch (e) {
+      logger.error('❌ [app:visibility] Error', { error: (e as any)?.message || String(e) });
     }
   });
 

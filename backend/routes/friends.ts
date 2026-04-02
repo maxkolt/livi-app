@@ -4,6 +4,7 @@ import User from '../models/User';
 import { getFriendsPaginated, areFriendsCached } from '../utils/friendshipUtils';
 import { getIoInstance } from '../utils/ioInstance';
 import { getEffectiveBusy } from '../utils/effectiveBusy';
+import { isUserVisibleOnline } from '../utils/visibleOnline';
 
 const router = Router();
 
@@ -14,12 +15,7 @@ function getOnlineAndBusyFromSockets() {
   const io = getIoInstance();
   if (!io) return { isOnline: () => false, isBusy: () => false };
 
-  const isOnline = (uid: string) => {
-    for (const s of io.sockets.sockets.values()) {
-      if (String((s as any).data?.userId) === String(uid)) return true;
-    }
-    return false;
-  };
+  const isOnline = (uid: string) => isUserVisibleOnline(io, uid);
   const isBusy = (uid: string) => getEffectiveBusy(io, uid);
   return { isOnline, isBusy };
 }

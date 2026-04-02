@@ -5,6 +5,7 @@ import User from '../models/User';
 import { areFriendsCached, getFriendsPaginated, clearFriendshipCache } from '../utils/friendshipUtils';
 import { logger } from '../utils/logger';
 import { getEffectiveBusy } from '../utils/effectiveBusy';
+import { isUserVisibleOnline } from '../utils/visibleOnline';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
@@ -15,13 +16,8 @@ const normalizeAvatar = (s?: string) => {
 };
 
 export default function registerFriendSockets(io: Server) {
-  /** Проверка онлайн-статуса по всем подключенным сокетам */
-  const isOnline = (uid: string) => {
-    for (const s of io.sockets.sockets.values()) {
-      if (String((s as any).data?.userId) === String(uid)) return true;
-    }
-    return false;
-  };
+  /** Онлайн для списка друзей: приложение на переднем плане (не только «сокет жив»). */
+  const isOnline = (uid: string) => isUserVisibleOnline(io, uid);
 
   io.on('connection', (sock) => {
     const meId = () => String((sock as any).data?.userId || '');
