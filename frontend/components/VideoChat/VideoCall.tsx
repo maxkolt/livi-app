@@ -944,9 +944,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   // Отправка статуса "busy" только когда вызов принят и оба в видеосвязи (не при дозвоне).
   // Иначе у того, кому звонят, бейдж «Занято» появляется до нажатия «Принять».
+  // Важно: callConnected = friendCallAccepted && remoteStream (не OR). Иначе при обрыве LiveKit
+  // remoteStream обнуляется раньше, чем приходит call:ended — эффект снова шлёт busy:true, сервер
+  // рассылает друзьям бейдж «занято» на секунды после завершения звонка.
   useEffect(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
-    const callConnected = !!friendCallAccepted || !!remoteStream;
+    const callConnected = !!friendCallAccepted && !!remoteStream;
     const sessionEnded = !!(session && typeof session.isEnded === 'function' && session.isEnded());
     const endingNow = !!isEndingCallRef.current || (global as any).__endingCallInProgressRef?.current === true;
     const transitionDone =
@@ -988,7 +991,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     const off = onConnected(() => {
       const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
-      const callConnected = !!friendCallAccepted || !!remoteStream;
+      const callConnected = !!friendCallAccepted && !!remoteStream;
       const sessionEnded = !!(session && typeof session.isEnded === 'function' && session.isEnded());
       const endingNow = !!isEndingCallRef.current || (global as any).__endingCallInProgressRef?.current === true;
       const transitionDone =

@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
@@ -40,6 +41,8 @@ class IncomingCallActivity : AppCompatActivity() {
     private var callAnsweredReceiver: BroadcastReceiver? = null
     private var stopRemoteRingtoneReceiver: BroadcastReceiver? = null
     private var ringtonePlayer: MediaPlayer? = null
+    private var ringtoneAudioManager: AudioManager? = null
+    private var ringtoneAudioFocusRequest: AudioFocusRequest? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
     private var closeHandled = false
@@ -68,9 +71,8 @@ class IncomingCallActivity : AppCompatActivity() {
         }
         isAlive = true
         android.util.Log.e(TAG, "IncomingCallActivity onCreate: isAlive=true isInForeground=(set in onResume) callId=$callIdFromIntent")
-        // Убираем уведомление полностью — при входящем звонке только нативный экран, без шторки и баннера
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
-        // Сообщаем IncomingCallForegroundService, что экран открыт — сервис снимет уведомление и остановится (важно для заблокированного/домашнего экрана)
+        // Сначала broadcast: FGS делает stopForeground(DETACH) и оставляет уведомление в шторке (без отмены — иначе ломаем
+        // foreground до detach и на части OEM обрывается рингтон FGS/Activity).
         if (callIdFromIntent.isNotEmpty()) {
             val shown = Intent(IncomingCallForegroundService.ACTION_INCOMING_CALL_ACTIVITY_SHOWN).apply {
                 setPackage(packageName)
@@ -203,7 +205,6 @@ class IncomingCallActivity : AppCompatActivity() {
         super.onResume()
         isInForeground = true
         android.util.Log.e(TAG, "IncomingCallActivity onResume: isInForeground=true callId=$currentCallId")
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         reportIncomingShownFromNative(currentCallId)
     }
 
@@ -424,10 +425,10 @@ class IncomingCallActivity : AppCompatActivity() {
         overridePendingTransition(0, 0)
     }
 
-    /** Системная мелодия звонка (Настройки → Мелодия звонка), STREAM_RING, зациклена. */
+    /** Системная мелодия звонка (Настройки → Мелодия звонка), зациклена до ответа/отмены/таймаута 20с. */
     private fun startCallRingtone() {
         try {
-            LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
+            LiviAppModule.stopFgsHandoffForIncomingCallActivity(applicationContext)
         } catch (_: Exception) {}
         val uri: Uri? = try {
             RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_RINGTONE)
@@ -436,12 +437,19 @@ class IncomingCallActivity : AppCompatActivity() {
             null
         }
         if (uri == null) return
+        acquireRingtoneAudioFocus()
+        // USAGE_RINGTONE == 6 (API 29+); символ AudioAttributes.USAGE_RINGTONE в части toolchain не резолвится.
+        val usage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            AUDIO_USAGE_RINGTONE
+        } else {
+            android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+        }
         try {
             val player = MediaPlayer().apply {
                 setDataSource(applicationContext, uri)
                 setAudioAttributes(
                     android.media.AudioAttributes.Builder()
-                        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setUsage(usage)
                         .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build()
                 )
@@ -452,7 +460,50 @@ class IncomingCallActivity : AppCompatActivity() {
             ringtonePlayer = player
         } catch (e: Exception) {
             android.util.Log.w(TAG, "startCallRingtone: play failed", e)
+            releaseRingtoneAudioFocus()
         }
+    }
+
+    private fun acquireRingtoneAudioFocus() {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        ringtoneAudioManager = am
+        val usage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            AUDIO_USAGE_RINGTONE
+        } else {
+            android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+        }
+        val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(usage)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+                .setAudioAttributes(attrs)
+                .setOnAudioFocusChangeListener { }
+                .build()
+            ringtoneAudioFocusRequest = req
+            am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        } else {
+            @Suppress("DEPRECATION")
+            am.requestAudioFocus(null, AudioManager.STREAM_RING, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        }
+        if (!ok) {
+            android.util.Log.w(TAG, "acquireRingtoneAudioFocus: not granted, still trying ringtone playback")
+        }
+    }
+
+    private fun releaseRingtoneAudioFocus() {
+        val am = ringtoneAudioManager ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ringtoneAudioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+                ringtoneAudioFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                am.abandonAudioFocus(null)
+            }
+        } catch (_: Exception) {}
+        ringtoneAudioManager = null
     }
 
     private fun stopCallRingtone() {
@@ -465,6 +516,7 @@ class IncomingCallActivity : AppCompatActivity() {
         } catch (e: Exception) {
             android.util.Log.w(TAG, "stopCallRingtone failed", e)
         }
+        releaseRingtoneAudioFocus()
     }
 
     /**
@@ -514,6 +566,8 @@ class IncomingCallActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "IncomingCallActivity"
+        /** Совпадает с [android.media.AudioAttributes.USAGE_RINGTONE] (добавлен в API 29). */
+        private const val AUDIO_USAGE_RINGTONE = 6
         private const val INCOMING_TIMEOUT_MS = 20_000L
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_FROM = "from"

@@ -41,15 +41,22 @@ export function startIncomingCallAlert() {
 }
 
 export function stopIncomingCallAlert() {
+  // Android: всегда дергаем нативный stop. Рингтон/вибрация могли быть запущены FGS, CallKeep или
+  // headless без вызова startIncomingCallAlert() — тогда started=false и раньше мы вообще не вызывали
+  // stopIncomingCallRingtoneAndVibration (вибрация не прекращалась после «Принять»).
+  if (Platform.OS === 'android') {
+    started = false;
+    try {
+      NativeModules.LiviAppModule?.stopIncomingCallRingtoneAndVibration?.();
+    } catch {}
+    return;
+  }
+
   if (!started) return;
   started = false;
 
   try {
-    if (Platform.OS === 'android') {
-      NativeModules.LiviAppModule?.stopIncomingCallRingtoneAndVibration?.();
-    } else {
-      Vibration.cancel();
-    }
+    Vibration.cancel();
   } catch {}
 
   try {
@@ -60,9 +67,7 @@ export function stopIncomingCallAlert() {
   } catch {}
 
   try {
-    if (Platform.OS !== 'android') {
-      InCallManager.stopRingtone();
-    }
+    InCallManager.stopRingtone();
   } catch (e) {
     logger.warn('[incomingCallAlert] stopRingtone failed:', e);
   }

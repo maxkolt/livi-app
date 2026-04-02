@@ -14,7 +14,7 @@ import { View, Text, Animated, TouchableOpacity, StyleSheet, Easing, AppState, S
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, wasAppliedFromReauth, recordAppliedFromPending, reportIncomingCallShown } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, wasAppliedFromReauth, recordAppliedFromPending, reportIncomingCallShown, emitPresenceUpdateIfChanged } from "./sockets/socket";
 import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce } from './utils/globalEvents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
@@ -874,8 +874,11 @@ function AppContent() {
         const from = params.get('from') || params.get('userId') || '';
         if (callId && from) {
           logger.info('[App] answer-call deep link: opening call', { callId, from });
-          // Android: снять уведомление входящего и остановить FGS сразу после "Принять"
+          // Android: сначала глушим рингтон/вибрацию (в т.ч. если JS не вызывал startIncomingCallAlert — флаг started),
+          // затем FGS и broadcast — порядок важен: onDestroy FGS иначе может дернуть полный stop с рассинхроном.
           if (Platform.OS === 'android') {
+            try { stopIncomingCallRingtoneAndVibration(); } catch {}
+            try { stopIncomingCallAlert(); } catch {}
             try { stopIncomingCallForegroundService(); } catch {}
             try { sendCallAnsweredBroadcast(callId); } catch {}
           }
@@ -1698,6 +1701,10 @@ function AppContent() {
         const localCallId = String(locallyEnded?.callId || '').trim();
         const localAt = Number(locallyEnded?.at || 0);
         if (eventCallId && localCallId && eventCallId === localCallId && Date.now() - localAt < 15000) {
+          // Этот путь пропускает тело onCallEnded — всё равно снимаем busy на сервере (иначе гонка с VideoCall / remoteStream).
+          try {
+            emitPresenceUpdateIfChanged({ status: 'online' }, { force: true });
+          } catch (_) {}
           console.log('[App] [call:ended] locally-ended echo ignored', { callId: eventCallId, elapsedMs: Date.now() - localAt });
           return;
         }
@@ -1719,6 +1726,10 @@ function AppContent() {
       console.log('[App] [call:ended] 📩 onCallEnded вызван', { callId: data?.callId, inSystem: g.__pipInSystemModeRef?.current, __callEndedFromPiPNoOpen: g.__callEndedFromPiPNoOpenRef?.current });
       // КРИТИЧНО: Сразу сбрасываем refs и уведомляем HomeScreen (идемпотентно — те же refs трогает PiPContext и VideoCallSession).
       applyCallEndedGlobalRefsOnce(eventCallId || undefined, eventRoomId || undefined);
+      // Сразу фиксируем online на сервере (force), чтобы не было гонки с повторным busy от VideoCall после сброса remoteStream.
+      try {
+        emitPresenceUpdateIfChanged({ status: 'online' }, { force: true });
+      } catch (_) {}
       try {
         setActiveVideoCall(false);
       } catch (_) {}

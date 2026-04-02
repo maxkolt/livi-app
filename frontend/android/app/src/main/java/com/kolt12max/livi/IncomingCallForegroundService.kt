@@ -36,8 +36,10 @@ class IncomingCallForegroundService : Service() {
     private val pendingActivityLaunchRunnables = mutableListOf<Runnable>()
 
     private var answeredReceiver: BroadcastReceiver? = null
-    /** После detach FGS с оставлением уведомления (экран входящего живёт сам) — в onDestroy не вызывать полный stop (иначе рингтон/вибро обрываются через ~3 с). */
+    /** После detach foreground (экран ведёт рингтон) — в onDestroy не дергать полный stop (vibrator.cancel ломает вибро Activity). */
     private var stopFullIncomingAudioOnDestroy = true
+    /** Уже отцепили foreground после показа IncomingCallActivity (избегаем двойного DETACH). */
+    private var didDetachAfterActivityShown = false
 
     private fun cancelPendingActivityLaunches() {
         for (r in pendingActivityLaunchRunnables) {
@@ -71,6 +73,7 @@ class IncomingCallForegroundService : Service() {
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
         cancelPendingActivityLaunches()
+        didDetachAfterActivityShown = false
         LiviFirebaseMessagingService.ensureCallChannel(this)
         if (!minimized) {
             LiviAppModule.startIncomingCallRingtoneAndVibrationStatic(applicationContext)
@@ -95,7 +98,9 @@ class IncomingCallForegroundService : Service() {
             override fun onReceive(context: Context?, i: Intent?) {
                 val shownCallId = i?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
                 if (shownCallId == currentCallId) {
-                    handler.postDelayed({ if (shownCallId == currentCallId) cleanupAndStop(keepNotificationInShade = true) }, DELAY_CLEANUP_AFTER_ACTIVITY_SHOWN_MS)
+                    handler.post {
+                        if (shownCallId == currentCallId) detachForegroundAfterIncomingActivityVisible()
+                    }
                 }
             }
         }
@@ -109,7 +114,7 @@ class IncomingCallForegroundService : Service() {
         callEndedReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, i: Intent?) {
                 val endedCallId = i?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
-                if (endedCallId == currentCallId) cleanupAndStop()
+                if (endedCallId == currentCallId) cleanupAndStopFully()
             }
         }
         val filterEnded = IntentFilter(LiviFirebaseMessagingService.ACTION_CALL_CANCELED)
@@ -122,7 +127,7 @@ class IncomingCallForegroundService : Service() {
         answeredReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, i: Intent?) {
                 val answeredCallId = i?.getStringExtra(IncomingCallActivity.EXTRA_CALL_ID) ?: return
-                if (answeredCallId == currentCallId) cleanupAndStop()
+                if (answeredCallId == currentCallId) cleanupAndStopFully()
             }
         }
         val filterAnswered = IntentFilter(IncomingCallActivity.ACTION_CALL_ANSWERED)
@@ -137,7 +142,7 @@ class IncomingCallForegroundService : Service() {
                 val declinedCallId = i?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
                 if (declinedCallId == currentCallId) {
                     vl("[INCOMING_FGS] ACTION_INCOMING_CALL_DECLINED callId=$declinedCallId → cleanupAndStop")
-                    cleanupAndStop()
+                    cleanupAndStopFully()
                 }
             }
         }
@@ -201,7 +206,7 @@ class IncomingCallForegroundService : Service() {
                     }
                     sendBroadcast(cancelIntent)
                 }
-                cleanupAndStop()
+                cleanupAndStopFully()
             }
             handler.postDelayed(timeoutRunnable!!, TIMEOUT_MS)
         }
@@ -210,19 +215,31 @@ class IncomingCallForegroundService : Service() {
     }
 
     /**
-     * @param keepNotificationInShade true когда нативный экран входящего уже показан:
-     *   уведомление не снимается, а остаётся в шторке (STOP_FOREGROUND_DETACH), чтобы пользователь
-     *   мог свернуть экран, открыть шторку и по тапу на уведомление снова открыть экран входящего.
+     * IncomingCallActivity показала UI и сама ведёт системный рингтон + вибрацию звонка до ответа/отмены/20с.
+     * Раньше через 3с вызывали stopSelf() — на части устройств обрывалась мелодия Activity.
+     * Сейчас: глушим только дублирующий MediaPlayer FGS, отцепляем foreground (уведомление в шторке),
+     * сервис живёт до ответа / отклонения / call_canceled / 20с — таймер и ресиверы не трогаем.
      */
-    private fun cleanupAndStop(keepNotificationInShade: Boolean = false) {
-        vl("[INCOMING_FGS] cleanupAndStop keepShade=$keepNotificationInShade")
-        if (keepNotificationInShade) {
-            LiviAppModule.stopRingtonePlayerForCallKeepOnly()
-            stopFullIncomingAudioOnDestroy = false
-        } else {
-            LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
-            stopFullIncomingAudioOnDestroy = true
+    private fun detachForegroundAfterIncomingActivityVisible() {
+        if (didDetachAfterActivityShown) return
+        didDetachAfterActivityShown = true
+        vl("[INCOMING_FGS] detach after activity visible: FGS MediaPlayer off, DETACH, keep service")
+        LiviAppModule.stopRingtonePlayerForCallKeepOnly()
+        stopFullIncomingAudioOnDestroy = false
+        activityShownReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
         }
+        activityShownReceiver = null
+        try {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
+        } catch (e: Exception) {
+            Log.w(TAG, "[INCOMING_FGS] stopForeground DETACH failed", e)
+        }
+    }
+
+    private fun cleanupAndStopFully() {
+        vl("[INCOMING_FGS] cleanupAndStopFully")
+        LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
         cancelPendingActivityLaunches()
@@ -245,13 +262,13 @@ class IncomingCallForegroundService : Service() {
         currentCallId = null
         currentFrom = null
         currentFromNick = null
-        if (!keepNotificationInShade) {
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+        try {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        } else {
-            // Оставляем уведомление в шторке; по тапу откроется IncomingCallActivity (contentIntent).
-            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
+        } catch (e: Exception) {
+            Log.w(TAG, "[INCOMING_FGS] stopForeground REMOVE failed", e)
         }
+        stopFullIncomingAudioOnDestroy = false
         stopSelf()
     }
 
@@ -266,7 +283,11 @@ class IncomingCallForegroundService : Service() {
         timeoutRunnable = null
         cancelPendingActivityLaunches()
         if (stopFullIncomingAudioOnDestroy) {
-            LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
+            if (!IncomingCallActivity.isAlive) {
+                LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
+            } else {
+                LiviAppModule.stopRingtonePlayerForCallKeepOnly()
+            }
         } else {
             LiviAppModule.stopRingtonePlayerForCallKeepOnly()
         }
@@ -278,10 +299,8 @@ class IncomingCallForegroundService : Service() {
 
     companion object {
         private const val TAG = "IncomingCallFGS"
-        /** 20 сек без ответа — совпадает с таймаутом на сервере; после этого приходит call_ended и «Пропущенный вызов». */
+        /** 20 сек без ответа — совпадает с таймаутом на сервере и с IncomingCallActivity.INCOMING_TIMEOUT_MS. */
         private const val TIMEOUT_MS = 20_000L
-        /** Задержка перед остановкой FGS с оставлением уведомления в шторке (DETACH). */
-        private const val DELAY_CLEANUP_AFTER_ACTIVITY_SHOWN_MS = 3000L
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"
         /** Broadcast: IncomingCallActivity открылась, сервис может снять уведомление и остановиться */

@@ -286,26 +286,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun launchIncomingCallActivity(callId: String, from: String, fromNick: String?) {
     val ctx = reactApplicationContext
-    // ВАЖНО: если IncomingCallForegroundService уже запущен (пуш пришёл в фоне), его heads-up/уведомление
-    // может остаться висеть поверх IncomingCallActivity. Снимаем уведомление и просим сервис остановиться
-    // ещё ДО открытия Activity.
-    try {
-      (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
-        ?.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
-    } catch (_: Exception) {}
+    // Не cancel уведомление до broadcast: иначе срываем foreground FGS до detach. Не stopService(FGS): onDestroy
+    // вызывал полный stop и глушил IncomingCallActivity (один вибросигнал, без мелодии).
     try {
       val shown = Intent(IncomingCallForegroundService.ACTION_INCOMING_CALL_ACTIVITY_SHOWN).apply {
         setPackage(ctx.packageName)
         putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
       }
       ctx.sendBroadcast(shown)
-      // Fallback: повторяем — на некоторых устройствах/в гонках первый broadcast может уйти до регистрации receiver.
       Handler(Looper.getMainLooper()).postDelayed({
         try { ctx.sendBroadcast(shown) } catch (_: Exception) {}
       }, 250)
-    } catch (_: Exception) {}
-    try {
-      ctx.stopService(Intent(ctx, IncomingCallForegroundService::class.java))
     } catch (_: Exception) {}
 
     LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
@@ -1165,7 +1156,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
             setDataSource(ctx, uri)
             setAudioAttributes(
               AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .setUsage(
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    6 // AudioAttributes.USAGE_RINGTONE (API 29+)
+                  } else {
+                    AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+                  }
+                )
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
             )
@@ -1208,6 +1205,26 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       try {
         ringtonePlayerForCallKeep?.apply { if (isPlaying) stop(); release() }
         ringtonePlayerForCallKeep = null
+      } catch (_: Exception) {}
+    }
+
+    /**
+     * Перед стартом локального рингтона на IncomingCallActivity: глушим MediaPlayer FGS и вибратор
+     * от FGS (без двойного звука/вибро). Без STOP broadcast: sendBroadcast асинхронный, иначе receiver
+     * на Activity срабатывает уже после MediaPlayer.start() и сразу глушит мелодию (в фоне «сразу тихо»,
+     * в приложении — нет ни звука, ни вибро).
+     */
+    @JvmStatic
+    internal fun stopFgsHandoffForIncomingCallActivity(ctx: Context) {
+      stopRingtonePlayerForCallKeepOnly()
+      try {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+        } else {
+          @Suppress("DEPRECATION")
+          ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+        vibrator?.cancel()
       } catch (_: Exception) {}
     }
 
