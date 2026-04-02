@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Keyboard, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onCallIncoming, onCallCanceled, acceptCall, declineCall } from '../../../sockets/socket';
-import socket from '../../../sockets/socket';
+import socket, { emitPresenceUpdateIfChanged } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { startIncomingCallAlert, stopIncomingCallAlert } from '../../../utils/incomingCallAlert';
 import { syncAppBadgeFromMissedCount } from '../../../utils/pushNotifications';
@@ -277,7 +277,7 @@ export const useIncomingCall = ({
 
     // Уведомляем друзей что мы заняты
     try {
-      socket.emit('presence:update', { status: 'busy', roomId: finalCallId });
+      emitPresenceUpdateIfChanged({ status: 'busy', roomId: String(finalCallId) });
     } catch (e) {
       logger.warn('[useIncomingCall] Failed to send presence update:', e);
     }

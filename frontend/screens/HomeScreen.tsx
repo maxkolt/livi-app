@@ -182,10 +182,8 @@ const LIVI = {
 const ANDROID_VIDEO_CALL_DISABLED_BG = '#1C1C1E';
 const ANDROID_VIDEO_CALL_DISABLED_ICON = '#48484A';
 
-/** Сервер шлёт полный список онлайн после ~2.5s grace при дисконнекте; чуть больше — не мигать «офлайн» при переподключении друга. */
-const PRESENCE_OFFLINE_DEBOUNCE_MS = 3500;
-/** friends:fetch/REST после звонка может застать друга без сокета; не затираем online:true сразу. */
-const LOADFRIENDS_STICKY_ONLINE_MS = 12_000;
+/** Короткая задержка перед «офлайн» в списке друзей при выпадении из presence-массива (переподключение сокета у друга). Статус совпадает с шапкой чата и с серверным `online` в friends API. */
+const PRESENCE_OFFLINE_DEBOUNCE_MS = 1200;
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -628,7 +626,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const friendsRef = useRef<Friend[]>([]);
   useEffect(() => { friendsRef.current = friends; }, [friends]);
 
-  /** Последний момент, когда считали друга онлайн (массив presence или API online:true) — для «липкого» онлайна в loadFriends. */
+  /** Метки времени «точно онлайн» для debounce офлайна в onPresenceUpdate (loadFriends больше не затирает online сервера). */
   const friendLastOnlineTrueAtRef = useRef<Map<string, number>>(new Map());
   const pendingPresenceOfflineTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -1682,15 +1680,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 finalAvatarThumbB64 = prevOne?.avatarThumbB64 || '';
               }
 
-              const prevOnlineCorr = !!prevOne?.online;
               let mergedOnlineCorr: boolean;
               if (f.online) {
                 friendLastOnlineTrueAtRef.current.set(f.id, Date.now());
                 mergedOnlineCorr = true;
               } else {
-                const lastTrueCorr = friendLastOnlineTrueAtRef.current.get(f.id) || 0;
-                mergedOnlineCorr =
-                  prevOnlineCorr && Date.now() - lastTrueCorr < LOADFRIENDS_STICKY_ONLINE_MS;
+                friendLastOnlineTrueAtRef.current.delete(f.id);
+                mergedOnlineCorr = false;
               }
               
               return {
@@ -1725,15 +1721,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               finalAvatarThumbB64 = prevOne?.avatarThumbB64 || '';
             }
 
-            const prevOnlineMain = !!prevOne?.online;
             let mergedOnlineMain: boolean;
             if (f.online) {
               friendLastOnlineTrueAtRef.current.set(f.id, Date.now());
               mergedOnlineMain = true;
             } else {
-              const lastTrueMain = friendLastOnlineTrueAtRef.current.get(f.id) || 0;
-              mergedOnlineMain =
-                prevOnlineMain && Date.now() - lastTrueMain < LOADFRIENDS_STICKY_ONLINE_MS;
+              friendLastOnlineTrueAtRef.current.delete(f.id);
+              mergedOnlineMain = false;
             }
             
             return {

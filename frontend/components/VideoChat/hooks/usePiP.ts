@@ -1,7 +1,7 @@
 import { useCallback, useRef, useEffect } from 'react';
 import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { usePiP as usePiPContext } from '../../../src/pip/PiPContext';
+import { usePiP as usePiPContext, isPipOverlayVisibleSync } from '../../../src/pip/PiPContext';
 import { logger } from '../../../utils/logger';
 import socket from '../../../sockets/socket';
 
@@ -111,15 +111,13 @@ export const usePiP = ({
         isInactiveState,
         wasFriendCallEnded
       });
-      // Сбрасываем ref, если его выставили в BackHandler до goBack() (чтобы не остаться в "PiP visible" без оверлея).
-      try {
-        const g = global as any;
-        if (g.__pipVisibleRef?.current === true && !pip.visible) g.__pipVisibleRef.current = false;
-      } catch {}
-      // Закрываем PiP если он был открыт
-      if (pip.visible) {
+      // Не сбрасываем __pipVisibleRef по pip.visible — после showPiP он ещё false до ре-рендера.
+      // Закрываем PiP если оверлей реально показан (React и/или синхронный флаг).
+      if (pip.visible || isPipOverlayVisibleSync()) {
         logger.info('[usePiP] Закрываем PiP - звонок завершен');
         pip.hidePiP();
+        pipRef.current = { ...pip, visible: false };
+        pipVisibleRef.current = false;
         const currentSession = session || (global as any).__webrtcSessionRef?.current;
         if (currentSession && currentSession.exitPiP) {
           currentSession.exitPiP();
@@ -241,12 +239,16 @@ export const usePiP = ({
           partnerId: actualPartnerId || partnerId,
         } as any,
       });
-      
-      // КРИТИЧНО: Проверяем, что PiP действительно показался
+      // Синхронно совмещаем ref с showPiP до следующего рендера (pip.visible из замыкания ещё старый).
+      pipRef.current = { ...pip, visible: true };
+      pipVisibleRef.current = true;
+
       logger.info('[usePiP] pip.showPiP вызван, проверяем результат', {
-        pipVisibleAfter: pip.visible,
+        pipVisibleFromRender: pip.visible,
+        pipVisibleAfterSync: true,
+        effectiveSync: isPipOverlayVisibleSync(),
         pipRefVisible: pipRef.current?.visible,
-        globalPipVisible: (global as any).__pipVisibleRef?.current
+        globalPipVisible: (global as any).__pipVisibleRef?.current,
       });
 
       // КРИТИЧНО: Вызываем session.enterPiP() для отправки pip:state партнеру
@@ -286,6 +288,7 @@ export const usePiP = ({
         hasActiveCall,
         pipVisible: pip.visible
       });
+      // Префетч Android Back: __pipVisibleRef=true до goBack(), но PiP не показываем — убираем «висящий» флаг.
       try {
         const g = global as any;
         if (g.__pipVisibleRef?.current === true && !pip.visible) g.__pipVisibleRef.current = false;

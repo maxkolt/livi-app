@@ -4,9 +4,23 @@ import type { PropsWithChildren } from 'react';
 import { AppState, NativeModules, NativeEventEmitter, Platform } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
 import { CommonActions } from '@react-navigation/native';
-import socket, { onConnected } from '../../sockets/socket';
+import socket, { onConnected, emitPresenceUpdateIfChanged } from '../../sockets/socket';
+import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
+
+/**
+ * In-app PiP: `visible` из React context обновляется после ре-рендера, а `showPiP`/`hidePiP`
+ * выставляют `__pipVisibleRef` синхронно. Для проверок в том же тике (навигация, BackHandler)
+ * используйте эту функцию вместе с `pip.visible` / `pipRef.current.visible`.
+ */
+export function isPipOverlayVisibleSync(): boolean {
+  try {
+    return (global as any).__pipVisibleRef?.current === true;
+  } catch {
+    return false;
+  }
+}
 
 type PiPState = {
   visible: boolean;
@@ -124,6 +138,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   // guard от двойной навигации
   const navigatingRef = useRef(false);
+  /** iOS deferVisible: setVisible(true) в следующем кадре — отменяем в hidePiP, иначе PiP всплывёт после закрытия. */
+  const deferVisibleRafRef = useRef<number | null>(null);
 
   // suppressOverlayForReturn сбрасывается только при размонтировании экрана VideoCall (см. VideoCall.tsx),
   // чтобы in-app PiP не показывался поверх полноэкранного видеозвонка после возврата из системного PiP.
@@ -137,12 +153,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
    * Важно: здесь НЕ отправляем status:'online' при hidePiP(), чтобы не "мигать" статусом при возврате на экран звонка.
    * Снятие busy происходит на сервере при завершении звонка (call:end/call:ended) и/или экраном звонка.
    */
-  const sendPresenceBusyFromPiP = useCallback(() => {
+  const sendPresenceBusyFromPiP = useCallback((opts?: { force?: boolean }) => {
     if (!visible) return;
     const rid = String(roomId || callId || '').trim();
     if (!rid) return;
     try {
-      socket.emit('presence:update', { status: 'busy', roomId: rid });
+      emitPresenceUpdateIfChanged({ status: 'busy', roomId: rid }, opts);
     } catch {}
   }, [visible, roomId, callId]);
 
@@ -151,7 +167,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // первичная отправка при показе PiP + при изменении callId/roomId
     sendPresenceBusyFromPiP();
     // переотправка при реконнекте сокета (часто в PiP/фон в релизе)
-    const off = onConnected(() => sendPresenceBusyFromPiP());
+    const off = onConnected(() => sendPresenceBusyFromPiP({ force: true }));
     return () => { try { off?.(); } catch {} };
   }, [visible, callId, roomId, sendPresenceBusyFromPiP]);
 
@@ -370,7 +386,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         setVisible(true);
         console.log('[PiPContext] ✅ PiP состояние установлено (deferred), visible=true');
       } else {
-        requestAnimationFrame(() => {
+        try {
+          const g = global as any;
+          g.__pipDeferVisiblePendingRef = g.__pipDeferVisiblePendingRef || { current: false };
+          g.__pipDeferVisiblePendingRef.current = true;
+        } catch {}
+        if (deferVisibleRafRef.current != null) {
+          cancelAnimationFrame(deferVisibleRafRef.current);
+        }
+        deferVisibleRafRef.current = requestAnimationFrame(() => {
+          deferVisibleRafRef.current = null;
           if (Platform.OS === 'android' && remoteStreamRef.current) {
             try {
               if (allowVideoRenderTimeoutRef.current) {
@@ -391,10 +416,18 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   }, []);
 
   const hidePiP = useCallback(() => {
-    // Сбрасываем флаг синхронно (эффект ниже тоже продублирует)
+    if (deferVisibleRafRef.current != null) {
+      try {
+        cancelAnimationFrame(deferVisibleRafRef.current);
+      } catch {}
+      deferVisibleRafRef.current = null;
+    }
     try {
-      (global as any).__pipVisibleRef = (global as any).__pipVisibleRef || { current: false };
-      (global as any).__pipVisibleRef.current = false;
+      const g = global as any;
+      g.__pipDeferVisiblePendingRef = g.__pipDeferVisiblePendingRef || { current: false };
+      g.__pipDeferVisiblePendingRef.current = false;
+      g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+      g.__pipVisibleRef.current = false;
     } catch {}
     setVisible(false);
   }, []);
@@ -742,15 +775,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
       // Закрываем PiP при call:ended и когда in-app PiP виден, и когда в системном PiP (inSystemPiPMode), чтобы у второго пользователя PiP закрывался сразу.
       const shouldClosePiP = (visible || inSystemPiPMode) && (callId || roomId);
-      // КРИТИЧНО: При получении call:ended (собеседник завершил из системного PiP и т.п.) сразу сбрасываем refs и уведомляем HomeScreen, чтобы кнопки видеозвонка и бейдж «Занят» восстановились. Иначе при закрытии PiP кнопки остаются неактивными (порядок вызова App vs PiPContext не гарантирован).
-      try {
-        const g = global as any;
-        g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
-        g.__videoCallPartnerUserIdRef.current = null;
-        g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
-        g.__videoCallActiveRef.current = false;
-        g.__onVideoCallEndedRef?.current?.();
-      } catch (_) {}
+      // Идемпотентно с App и VideoCallSession (один socket — несколько слушателей call:ended).
+      applyCallEndedGlobalRefsOnce(receivedCallId || undefined, receivedRoomId || undefined);
       if (!shouldClosePiP) return;
 
       console.log('[PiPContext] Call ended event received, closing PiP:', {
@@ -821,10 +847,21 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // КРИТИЧНО: Делаем updatePiPState доступным глобально, чтобы WebRTC session могла обновлять PiP,
   // даже когда экран VideoCall размонтирован (PiP работает поверх приложения).
   useEffect(() => {
-    (global as any).__pipUpdateStateRef = (global as any).__pipUpdateStateRef || { current: null };
-    (global as any).__pipVisibleRef = (global as any).__pipVisibleRef || { current: false };
-    (global as any).__pipUpdateStateRef.current = updatePiPState;
-    (global as any).__pipVisibleRef.current = visible;
+    const g = global as any;
+    g.__pipUpdateStateRef = g.__pipUpdateStateRef || { current: null };
+    g.__pipUpdateStateRef.current = updatePiPState;
+    g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+    g.__pipDeferVisiblePendingRef = g.__pipDeferVisiblePendingRef || { current: false };
+    // Нельзя делать __pipVisibleRef = visible пока visible ещё false, а showPiP уже выставил ref=true для iOS deferVisible (rAF).
+    // Иначе VideoCall размонтируется после goBack(), cleanup видит pipVisible=false и шлёт call:end.
+    if (visible) {
+      g.__pipVisibleRef.current = true;
+      g.__pipDeferVisiblePendingRef.current = false;
+    } else if (g.__pipDeferVisiblePendingRef.current === true) {
+      // оставляем __pipVisibleRef как после showPiP (true)
+    } else {
+      g.__pipVisibleRef.current = false;
+    }
     return () => {
       try { (global as any).__pipUpdateStateRef.current = null; } catch {}
     };

@@ -4139,6 +4139,32 @@ export class RandomChatSession extends SimpleEventEmitter {
       });
       return;
     }
+
+    this.currentRemoteParticipant = participant;
+
+    const mediaTrackEarly = track.mediaStreamTrack;
+    const isVid = publication.kind === Track.Kind.Video;
+    const isAud = publication.kind === Track.Kind.Audio;
+    if (mediaTrackEarly && this.remoteStream?.getTracks().includes(mediaTrackEarly as any)) {
+      if (
+        isVid &&
+        this.remoteVideoTrack?.mediaStreamTrack === mediaTrackEarly &&
+        this.remoteVideoTrack.isMuted === track.isMuted
+      ) {
+        logger.debug('[RandomChatSession] Remote track subscribed (already applied, skipping duplicate)', {
+          trackSid: track.sid,
+          streamId: this.remoteStream.id,
+        });
+        return;
+      }
+      if (isAud && this.remoteAudioTrack?.mediaStreamTrack === mediaTrackEarly) {
+        logger.debug('[RandomChatSession] Remote track subscribed (already applied, skipping duplicate)', {
+          trackSid: track.sid,
+          streamId: this.remoteStream.id,
+        });
+        return;
+      }
+    }
     
     logger.info('[RandomChatSession] Remote track subscribed', {
       kind: publication.kind,
@@ -4148,7 +4174,6 @@ export class RandomChatSession extends SimpleEventEmitter {
       trackReady: track.mediaStreamTrack?.readyState,
     });
     
-    this.currentRemoteParticipant = participant;
     if (this.remoteMediaFirstSeenAt === 0) {
       this.remoteMediaFirstSeenAt = Date.now();
       const completedNextTransitionId = this.activeNextTransitionId;

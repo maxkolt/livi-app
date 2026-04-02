@@ -4,7 +4,11 @@ import type { AuthedSocket } from "./types";
 import { logger } from '../utils/logger';
 import { isShuttingDown } from '../utils/shutdownState';
 import User from '../models/User';
-import { evictExtraUserSocketsInDirectRoom, parseDirectCallRoomParticipants } from "./directCallRoom";
+import {
+  evictExtraUserSocketsInDirectRoom,
+  parseDirectCallRoomParticipants,
+  sanitizeDirectCallSocketIoRoom,
+} from "./directCallRoom";
 
 /**
  * Оптимизированная отправка presence:update только друзьям пользователя
@@ -54,6 +58,11 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     const myUserId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : '';
     if (myUserId) {
       evictExtraUserSocketsInDirectRoom(io, roomId, myUserId, socket.id);
+    }
+    if (parseDirectCallRoomParticipants(roomId)) {
+      try {
+        sanitizeDirectCallSocketIoRoom(io, roomId);
+      } catch {}
     }
     
     // Проверяем что пользователь еще не в этой комнате

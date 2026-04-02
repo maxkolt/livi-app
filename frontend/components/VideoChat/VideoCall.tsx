@@ -35,8 +35,14 @@ import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
-import { usePiP } from '../../src/pip/PiPContext';
-import socket, { fetchFriends, getCurrentUserId, setActiveVideoCall, onConnected } from '../../sockets/socket';
+import { usePiP, isPipOverlayVisibleSync } from '../../src/pip/PiPContext';
+import socket, {
+  fetchFriends,
+  getCurrentUserId,
+  setActiveVideoCall,
+  onConnected,
+  emitPresenceUpdateIfChanged,
+} from '../../sockets/socket';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/keepAwake';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
@@ -466,7 +472,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const unsub = (navigation as any)?.addListener?.('beforeRemove', () => {
       const hasActiveCall = (!!partnerId || !!roomId || !!callId) && !isInactiveState && !wasFriendCallEnded;
       if (!hasActiveCall) return;
-      if (pipRef.current.visible) return;
+      if (pipRef.current.visible || isPipOverlayVisibleSync()) return;
       enterPiPModeRef.current?.();
     });
     return () => { try { unsub?.(); } catch {} };
@@ -541,18 +547,28 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // экран VideoCall в фокусе и приложение активно. Иначе на части устройств возможен
     // ложный onUserLeaveHint во время переходов (accept/закрытие нативных экранов),
     // и пользователя "выбрасывает" на рабочий стол с системным PiP.
+    const sessionForSystemPiP = sessionRef.current || g.__webrtcSessionRef?.current;
+    const sessionAliveForSystemPiP =
+      !sessionForSystemPiP ||
+      typeof (sessionForSystemPiP as any).isEnded !== 'function' ||
+      !(sessionForSystemPiP as any).isEnded();
+    const globalVideoCallActiveForPiP = g.__videoCallActiveRef?.current !== false;
     const hasStableSystemPiPContext =
       Platform.OS === 'android' &&
       !!roomId &&
       !isInactiveState &&
-      !!sessionRef.current;
+      !!sessionForSystemPiP &&
+      sessionAliveForSystemPiP &&
+      globalVideoCallActiveForPiP;
     const canEnableSystemPiP =
       Platform.OS === 'android' &&
       appState === 'active' &&
       isFocused &&
       !!roomId &&
       !isInactiveState &&
-      !!sessionRef.current;
+      !!sessionForSystemPiP &&
+      sessionAliveForSystemPiP &&
+      globalVideoCallActiveForPiP;
     const systemPiPEntryUntil = g.__systemPiPEntryInProgressUntilRef?.current;
     const systemPiPEntryInProgress =
       typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
@@ -854,7 +870,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }
     g.__enterSystemPiPAfterVideoCallRef.current = null;
     try {
-      if (pipRef.current.visible) pipRef.current.hidePiP();
+      if (pipRef.current.visible || isPipOverlayVisibleSync()) pipRef.current.hidePiP();
     } catch (_) {}
     try { NativeModules.LiviAppModule?.setPiPEndCallParams?.(effectiveCallId, effectiveRoomId); } catch (_) {}
     try {
@@ -945,7 +961,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       callConnected &&
       !sessionEnded &&
       !endingNow;
-    logger.info('[VideoCall] presence:update решение', {
+    logger.debug('[VideoCall] presence:update решение', {
       sendBusy: hasActiveCall,
       callConnected,
       friendCallAccepted,
@@ -960,7 +976,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     });
     if (hasActiveCall) {
       try {
-        socket.emit('presence:update', { status: 'busy', roomId: roomId || callId || undefined });
+        const rid = (roomId || callId || '').trim();
+        emitPresenceUpdateIfChanged({ status: 'busy', ...(rid ? { roomId: rid } : {}) });
       } catch (e) {
         logger.warn('[VideoCall] Error sending presence:update busy:', e);
       }
@@ -988,7 +1005,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         !endingNow;
       if (hasActiveCall) {
         try {
-          socket.emit('presence:update', { status: 'busy', roomId: roomId || callId || undefined });
+          const rid = (roomId || callId || '').trim();
+          emitPresenceUpdateIfChanged({ status: 'busy', ...(rid ? { roomId: rid } : {}) }, { force: true });
         } catch (e) {
           logger.warn('[VideoCall] Error re-sending presence:update busy on connect', e);
         }
@@ -1138,14 +1156,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const pendingCallId = pendingCallAccepted ? String(pendingCallAccepted?.callId || '') : null;
     const isDirectCall = !!route?.params?.directCall;
     const isDirectInitiator = !!route?.params?.directInitiator;
-    
-    logger.info('[VideoCall] Creating new VideoCallSession', {
-      isDirectCall,
-      isDirectInitiator,
-      resume,
-      fromPiP
-    });
-    
+
     const resolvedMyUserId = route?.params?.myUserId || getCurrentUserId();
     const config: WebRTCSessionConfig = {
       myUserId: resolvedMyUserId,
@@ -1372,25 +1383,104 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         isInactiveStateRef.current = true;
       },
     };
-    
-    const session = new VideoCallSession(config);
-    sessionRef.current = session;
-    // Не вызываем setSessionTick здесь: эффект установки обработчиков запускается в том же цикле и уже видит sessionRef.current.
-    // Вызов setSessionTick(1) вызывал лишний ререндер и переустановку обработчиков (мерцание). Tick увеличивается только при смене сессии (PiP, onSessionConnecting).
-    // Помечаем, что эта сессия создана этим инстансом VideoCall (callbacks актуальны).
-    // Для "чужих" (восстановленных из global ref) будем подписываться на события stream.
-    try { createdSessionsRef.current.add(session as any); } catch {}
-    
-    // КРИТИЧНО: Устанавливаем глобальную ссылку на сессию сразу при создании
-    // Это нужно чтобы можно было остановить камеру даже когда VideoCall экран размонтирован (в PiP/фоне)
-    (global as any).__webrtcSessionRef.current = session;
-    logger.info('[VideoCall] ✅ Глобальная ссылка на сессию установлена при создании', {
-      hasSession: !!session,
-      sessionType: session.constructor.name
-    });
-    
+
+    const routeCallId = route?.params?.callId != null ? String(route.params.callId) : '';
+    const effectiveCallId = routeCallId || (pendingCallId ? String(pendingCallId) : '');
+    const globalSessRaw = (global as any).__webrtcSessionRef?.current;
+    const globalVideoSession =
+      globalSessRaw instanceof VideoCallSession ? globalSessRaw : null;
+
+    let reusedLiveSession = false;
+    let session!: VideoCallSession;
+
+    if (
+      globalVideoSession &&
+      typeof globalVideoSession.isEnded === 'function' &&
+      !globalVideoSession.isEnded() &&
+      effectiveCallId &&
+      String(globalVideoSession.getCallId?.() || '') === effectiveCallId
+    ) {
+      const paramRoom = route?.params?.roomId ? String(route.params.roomId) : '';
+      const sessRoom = String(globalVideoSession.getRoomId?.() || '');
+      const roomOk = !paramRoom || !sessRoom || paramRoom === sessRoom;
+      const roomState = (globalVideoSession as any).room?.state as string | undefined;
+      const lkAlive = roomState === 'connected' || roomState === 'connecting';
+      if (roomOk && lkAlive) {
+        reusedLiveSession = true;
+        session = globalVideoSession;
+        session.rebindVideoCallMount(config);
+        sessionRef.current = session;
+        (global as any).__webrtcSessionRef.current = session;
+        setSessionTick((t) => t + 1);
+        logger.info('[VideoCall] ♻️ Переиспользуем глобальную VideoCallSession (PiP/Home → снова экран), без второго LiveKit connect', {
+          callId: effectiveCallId,
+          roomId: sessRoom || paramRoom,
+          roomState,
+        });
+        try {
+          const rId = session.getRoomId?.();
+          if (rId) setRoomId(rId);
+          setCallId(effectiveCallId);
+          currentCallIdRef.current = effectiveCallId;
+          const pid = session.getPartnerId?.();
+          if (pid) setPartnerId(pid);
+          const puid = session.getPartnerUserId?.();
+          if (puid) setPartnerUserId(puid);
+          const loc = session.getLocalStream?.();
+          if (loc) {
+            localStreamRef.current = loc;
+            setLocalStream(loc);
+            setLocalRenderKey((k: number) => k + 1);
+          }
+          const rem = session.getRemoteStream?.();
+          if (rem) {
+            remoteStreamRef.current = rem;
+            setRemoteStream(rem);
+            remoteStreamReceivedAtRef.current = Date.now();
+          }
+          setStarted(true);
+          setLoading(false);
+          setIsInactiveState(false);
+          setWasFriendCallEnded(false);
+          setFriendCallAccepted(true);
+        } catch (e) {
+          logger.warn('[VideoCall] Ошибка синхронизации UI при переиспользовании сессии', e);
+        }
+        try {
+          if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
+        } catch {}
+      }
+    }
+
+    if (!reusedLiveSession) {
+      logger.info('[VideoCall] Creating new VideoCallSession', {
+        isDirectCall,
+        isDirectInitiator,
+        resume,
+        fromPiP,
+      });
+      session = new VideoCallSession(config);
+      sessionRef.current = session;
+      try {
+        createdSessionsRef.current.add(session as any);
+      } catch {}
+      (global as any).__webrtcSessionRef.current = session;
+      logger.info('[VideoCall] ✅ Глобальная ссылка на сессию установлена при создании', {
+        hasSession: !!session,
+        sessionType: session.constructor.name,
+      });
+    } else {
+      try {
+        createdSessionsRef.current.add(session as any);
+      } catch {}
+      logger.info('[VideoCall] ✅ Глобальная ссылка — переиспользованная сессия', {
+        hasSession: !!session,
+        sessionType: session.constructor.name,
+      });
+    }
+
     // Восстановление состояния звонка при возврате из PiP или при инициации
-    if (resume && fromPiP) {
+    if (!reusedLiveSession && resume && fromPiP) {
       // Восстанавливаем состояние из PiP
       const pipLocalStream = pip.localStream;
       const pipRemoteStream = pip.remoteStream;
@@ -1403,7 +1493,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
       
       session.resumeFromPiP?.();
-    } else if (isDirectCall && isDirectInitiator && route?.params?.peerUserId) {
+    } else if (!reusedLiveSession && isDirectCall && isDirectInitiator && route?.params?.peerUserId) {
       // Инициация звонка другу
       // КРИТИЧНО: Проверяем что сессия существует и не в процессе создания
       if (!session) {
@@ -1432,6 +1522,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         
         if (pendingCallId && pendingCallId === String(existingCallId)) {
           logger.info('[VideoCall] Pending call:accepted already queued, skipping connectAsInitiatorAfterAccepted', {
+            existingCallId,
+            friendId,
+          });
+          return;
+        }
+
+        if (session.didSchedulePendingCallAcceptedConnect()) {
+          logger.info('[VideoCall] Session ctor scheduled pending call:accepted, skipping connectAsInitiatorAfterAccepted', {
             existingCallId,
             friendId,
           });
@@ -1471,7 +1569,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         setStarted(false);
         setLoading(false);
       });
-    } else if (isDirectCall && route?.params?.isIncoming && route?.params?.callId && route?.params?.peerUserId) {
+    } else if (!reusedLiveSession && isDirectCall && route?.params?.isIncoming && route?.params?.callId && route?.params?.peerUserId) {
       // ПРИНЯТИЕ входящего звонка
       // КРИТИЧНО: acceptCall вызывается ЗДЕСЬ, после создания сессии и установки socket handlers
       // Это гарантирует, что call:accepted событие будет получено
@@ -1495,7 +1593,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           setLoading(false);
         });
       });
-    } else if (route?.params?.roomId || route?.params?.callId) {
+    } else if (!reusedLiveSession && (route?.params?.roomId || route?.params?.callId)) {
       // Восстановление активного звонка
       if (route.params.roomId) {
         setRoomId(route.params.roomId);
@@ -1743,7 +1841,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         if (sessionLocalStream && sessionLocalStream !== localStreamSnapshot) {
           stopStreamTracks(sessionLocalStream, 'callEnded/sessionLocalStream');
         }
-        if (pipRef.current.visible) {
+        if (pipRef.current.visible || isPipOverlayVisibleSync()) {
           pipRef.current.hidePiP();
           sessionRef.current?.exitPiP?.();
         }
@@ -2103,7 +2201,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       try {
         reportEndCallToCallKeep(idToReport);
 
-        if (pipRef.current.visible) {
+        if (pipRef.current.visible || isPipOverlayVisibleSync()) {
           pipRef.current.hidePiP();
           sessionRefForCleanup.exitPiP?.();
         }
@@ -2221,7 +2319,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useFocusEffect(
     useCallback(() => {
       if (!isInactiveState || !wasFriendCallEnded) return;
-      if (pipRef.current?.visible === true || pipRef.current?.inSystemPiPMode === true) return;
+      if (pipRef.current?.visible === true || isPipOverlayVisibleSync() || pipRef.current?.inSystemPiPMode === true) return;
       if ((global as any).__callEndedFromPiPNoOpenRef?.current === true) return;
       const rootNav = (global as any).__navRef;
       if (!rootNav?.isReady?.()) return;
@@ -2254,7 +2352,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   // Эффект с [] — cleanup выполняется один раз при unmount.
   useEffect(() => {
     return () => {
-      const pipVisible = (global as any).__pipVisibleRef?.current === true;
+      const pipVisible =
+        (global as any).__pipVisibleRef?.current === true ||
+        (global as any).__pipInSystemModeRef?.current === true;
       const returningFromSystemPiPUntil = (global as any).__returningFromSystemPiPUntilRef?.current;
       const returningFromSystemPiP =
         typeof returningFromSystemPiPUntil === 'number' &&
@@ -2512,7 +2612,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         logger.info('[VideoCall] Возврат из PiP - обрабатываем');
         
         // Прячем PiP только при возврате из PiP
-        if (pipRef.current.visible) {
+        if (pipRef.current.visible || isPipOverlayVisibleSync()) {
           logger.info('[VideoCall] Hiding PiP after return from PiP');
           pipRef.current.hidePiP();
           

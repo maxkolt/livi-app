@@ -116,6 +116,43 @@ export function emitCallEndedOnHome() {
   }
 }
 
+const CALL_ENDED_GLOBAL_REFS_DEDUP_MS = 3000;
+
+/**
+ * Сброс partner/active refs и вызов __onVideoCallEndedRef — один раз на волну call:ended.
+ * App, PiPContext и VideoCallSession все слушают один socket; без дедупа колбэк и сброс refs срабатывали 2–3 раза подряд.
+ */
+export function applyCallEndedGlobalRefsOnce(
+  callId?: string | null,
+  roomId?: string | null
+): boolean {
+  const g = global as any;
+  const c = String(callId ?? '').trim();
+  const r = String(roomId ?? '').trim();
+  const key = c && r ? `${c}|${r}` : c || r || 'unknown';
+  const now = Date.now();
+  g.__callEndedGlobalRefsDedupRef = g.__callEndedGlobalRefsDedupRef || { key: '', at: 0 };
+  const d = g.__callEndedGlobalRefsDedupRef;
+  if (d.key === key && now - d.at < CALL_ENDED_GLOBAL_REFS_DEDUP_MS) {
+    return false;
+  }
+  d.key = key;
+  d.at = now;
+  try {
+    g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
+    g.__videoCallPartnerUserIdRef.current = null;
+    g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
+    g.__videoCallActiveRef.current = false;
+    // Сразу снимаем флаги PiP/params, иначе один тик App оставляет hasAnyIds/sessionNotEnded в рассинхроне с реальностью.
+    g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+    g.__pipVisibleRef.current = false;
+    g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
+    g.__currentCallPiPParamsRef.current = null;
+    g.__onVideoCallEndedRef?.current?.();
+  } catch (_) {}
+  return true;
+}
+
 /** Закрыть модалки «Поддержать LiVi» и «Пригласи друга» на Home (чтобы экран видеозвонка был поверх при принятии вызова). */
 export function onCloseHomeModals(cb: () => void): () => void {
   const h = () => cb();

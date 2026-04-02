@@ -309,12 +309,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } catch (_: Exception) {}
 
     LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
-    val intent = Intent(ctx, IncomingCallActivity::class.java).apply {
-      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-      putExtra(IncomingCallActivity.EXTRA_CALL_ID, callId)
-      putExtra(IncomingCallActivity.EXTRA_FROM, from)
-      putExtra(IncomingCallActivity.EXTRA_FROM_NICK, fromNick ?: "")
-    }
+    // Те же флаги, что и в FCM (buildIncomingCallActivityIntent): иначе при активном процессе + заблокированном экране
+    // startActivity без SHOW_WHEN_LOCKED / TURN_SCREEN_ON часто не показывает входящий поверх блокировки.
+    val intent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: "")
     ctx.startActivity(intent)
   }
 
@@ -330,27 +327,37 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
     } catch (_: Exception) {}
 
+    // Как в LiviFirebaseMessagingService: сначала пробуем Activity сразу (сокет в фоне / экран выключен — иначе только FGS с «тихим»
+    // уведомлением без fullScreenIntent часто не пробивает BAL на блокировке).
+    try {
+      val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: "")
+      ctx.startActivity(launchIntent)
+      Log.d(NAME, "showIncomingCallSystemUI: immediate startActivity OK")
+    } catch (e: Exception) {
+      Log.w(NAME, "showIncomingCallSystemUI: immediate startActivity failed, relying on FGS", e)
+    }
+
     try {
       LiviFirebaseMessagingService.ensureCallChannel(ctx)
+      val keyguardLocked = try {
+        (ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
+      } catch (_: Exception) {
+        false
+      }
+      // Разблокирован: тихое уведомление в шторке (как FCM). Заблокирован: уведомление с fullScreenIntent — запасной путь к экрану.
       val serviceIntent = Intent(ctx, IncomingCallForegroundService::class.java).apply {
         putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
         putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
         putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick ?: "")
         putExtra(IncomingCallForegroundService.EXTRA_HEADS_UP_ONLY, false)
-        putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, true)
+        putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, !keyguardLocked)
       }
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(serviceIntent) else ctx.startService(serviceIntent)
-      Log.d(NAME, "showIncomingCallSystemUI: started IncomingCallForegroundService (shade-only notification)")
+      Log.d(NAME, "showIncomingCallSystemUI: started IncomingCallForegroundService (silentShade=${!keyguardLocked})")
     } catch (e: Exception) {
       Log.w(NAME, "showIncomingCallSystemUI: failed to start IncomingCallForegroundService", e)
       try {
-        val intent = Intent(ctx, IncomingCallActivity::class.java).apply {
-          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-          putExtra(IncomingCallActivity.EXTRA_CALL_ID, callId)
-          putExtra(IncomingCallActivity.EXTRA_FROM, from)
-          putExtra(IncomingCallActivity.EXTRA_FROM_NICK, fromNick ?: "")
-        }
-        ctx.startActivity(intent)
+        ctx.startActivity(LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: ""))
       } catch (_: Exception) {}
     }
   }
@@ -454,7 +461,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     try {
       val pattern = longArrayOf(0, 500, 200, 500)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        val effect = VibrationEffect.createWaveform(pattern, -1)
+        val effect = VibrationEffect.createWaveform(pattern, 0)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
           val attrs = VibrationAttributes.createForUsage(VibrationAttributes.USAGE_RINGTONE)
           vibrator.vibrate(effect, attrs)
@@ -1178,7 +1185,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         if (vibrator != null && vibrator.hasVibrator()) {
           val pattern = longArrayOf(0, 500, 200, 500)
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val effect = VibrationEffect.createWaveform(pattern, -1)
+            val effect = VibrationEffect.createWaveform(pattern, 0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
               val attrs = VibrationAttributes.createForUsage(VibrationAttributes.USAGE_RINGTONE)
               vibrator.vibrate(effect, attrs)
@@ -1193,6 +1200,15 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       } catch (e: Exception) {
         Log.w(NAME, "startIncomingCallRingtoneAndVibrationStatic failed", e)
       }
+    }
+
+    /** Только общий MediaPlayer CallKeep/FGS — без vibrator.cancel и без STOP broadcast (экран IncomingCallActivity сам ведёт рингтон до ответа). */
+    @JvmStatic
+    internal fun stopRingtonePlayerForCallKeepOnly() {
+      try {
+        ringtonePlayerForCallKeep?.apply { if (isPlaying) stop(); release() }
+        ringtonePlayerForCallKeep = null
+      } catch (_: Exception) {}
     }
 
     @JvmStatic

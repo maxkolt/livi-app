@@ -1,0 +1,17 @@
+{
+  "ignore_dirs": [
+    ".expo",
+    ".git",
+    ".gradle",
+    ".turbo",
+    "DerivedData",
+    "Pods",
+    "build",
+    "coverage",
+    "dist",
+    "livi-app",
+    "log-captures",
+    "tools",
+    "xcuserdata"
+  ]
+}

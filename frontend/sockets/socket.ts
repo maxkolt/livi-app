@@ -152,7 +152,7 @@ export const SOCKET_CONNECT_WAIT_MS = 25000;
 
 if (__DEV__) {
   const lk = (process.env.EXPO_PUBLIC_LIVEKIT_URL || '').trim();
-  console.log('[socket] API_BASE=', API_BASE, 'EXPO_PUBLIC_LIVEKIT_URL=', lk || '—');
+  logger.debug('[socket] API_BASE / LIVEKIT', { API_BASE, livekit: lk || '—' });
 }
 
 /* ========= helpers ========= */
@@ -162,8 +162,16 @@ const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(s);
 let currentUserId: string | undefined;
 let bootInProgress = false; // Защита от повторного вызова boot()
 let createUserPromise: Promise<string | null> | null = null; // Трекер параллельных createUser
+export type SocketReauthResponse = {
+  ok: boolean;
+  userId?: string;
+  error?: string;
+  missed?: { from: string; fromNick?: string }[];
+};
+
 let lastSuccessfulReauthAt = 0;
-let reauthInFlight: Promise<boolean> | null = null;
+/** Единый in-flight для reauth: иначе при reconnect срабатывают и `connect`, и `io.reconnect` — два параллельных emit и Ack timeout. */
+let reauthInFlight: Promise<SocketReauthResponse> | null = null;
 const REAUTH_FRESH_MS = 6000;
 
 // Notify UI when currentUserId changes (screens depend on it for profile/avatar).
@@ -187,6 +195,12 @@ export function onCurrentUserId(cb: CurrentUserIdListener): () => void {
 }
 
 /* ========= socket (singleton) ========= */
+const SOCKET_RECONNECT_DELAY_MS = 1000;
+const SOCKET_RECONNECT_DELAY_MAX_MS = 10000;
+/** После server:restarting (деплой) — быстрее цепляемся к поднявшемуся инстансу. */
+const SOCKET_RECONNECT_AFTER_SERVER_RESTART_DELAY_MS = 200;
+const SOCKET_RECONNECT_AFTER_SERVER_RESTART_DELAY_MAX_MS = 5000;
+
 let socketInstance: Socket | null = null;
 let reconnecting = false;
 let connectAttemptPromise: Promise<void> | null = null;
@@ -206,6 +220,8 @@ export const getSocket = (): Socket => {
       // @ts-ignore - available in newer engine.io, safe no-op on older versions.
       tryAllTransports: true,
       upgrade: true,
+      // After a successful WebSocket session, reconnect with WebSocket first (less polling→upgrade churn).
+      rememberUpgrade: true,
       forceNew: false, // не создаём новый, держим singleton
       // CRITICAL:
       // Do NOT auto-connect on module load. We must attach installId into handshake first,
@@ -215,8 +231,8 @@ export const getSocket = (): Socket => {
       autoConnect: false,
       reconnection: true,
       reconnectionAttempts: 25,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 10000,
+      reconnectionDelay: SOCKET_RECONNECT_DELAY_MS,
+      reconnectionDelayMax: SOCKET_RECONNECT_DELAY_MAX_MS,
       timeout: 25000,
     });
   }
@@ -225,9 +241,75 @@ export const getSocket = (): Socket => {
 
 export const socket: Socket = getSocket();
 
+/** Дедуп повторных presence:update с одним и тем же status/roomId (useEffect в VideoCall/PiP и т.д.). Сброс при connect. */
+let __lastPresenceUpdateKey: string | null = null;
+
+function __presenceUpdateKey(payload: { status?: string; roomId?: string | undefined }): string {
+  const st = String(payload?.status || '');
+  const rid =
+    payload?.roomId != null && String(payload.roomId).trim() !== ''
+      ? String(payload.roomId).trim()
+      : '';
+  return `${st}\0${rid}`;
+}
+
+/**
+ * Отправляет presence:update только если изменился статус или комната.
+ * После reconnect передавайте `{ force: true }`, чтобы сервер снова получил busy.
+ */
+export function emitPresenceUpdateIfChanged(
+  payload: { status: string; roomId?: string },
+  opts?: { force?: boolean }
+): void {
+  const key = __presenceUpdateKey(payload);
+  if (!opts?.force && key === __lastPresenceUpdateKey) return;
+  __lastPresenceUpdateKey = key;
+  const out: { status: string; roomId?: string } = { status: payload.status };
+  const rid = payload.roomId != null ? String(payload.roomId).trim() : '';
+  if (rid) out.roomId = rid;
+  try {
+    socket.emit('presence:update', out);
+  } catch {}
+}
+
 // Для первого подключения (VPN/медленный DNS) даём больший таймаут в waitForConnect
 let __hasConnectedEver = false;
-socket.on('connect', () => { __hasConnectedEver = true; });
+socket.on('connect', () => {
+  __hasConnectedEver = true;
+  __lastPresenceUpdateKey = null;
+});
+
+/** Совпадает с серверным списком «видимых» онлайн (в т.ч. ушёл в фон → нет в списке). */
+let __lastVisibleOnlineUserIds: Set<string> = new Set();
+let __visibleOnlinePresenceListKnown = false;
+
+function ingestVisibleOnlinePresenceList(data: unknown) {
+  if (!Array.isArray(data)) return;
+  __visibleOnlinePresenceListKnown = true;
+  const next = new Set<string>();
+  for (const it of data) {
+    if (it == null) continue;
+    const id = String((it as any)?._id ?? it);
+    if (id) next.add(id);
+  }
+  __lastVisibleOnlineUserIds = next;
+}
+
+socket.on('presence:update', (data: unknown) => ingestVisibleOnlinePresenceList(data));
+socket.on('presence_update', (data: unknown) => ingestVisibleOnlinePresenceList(data));
+
+/**
+ * Был ли хотя бы один полный presence-массив с сервера (не путать с «ещё не приходил»).
+ * Для шапки чата: при фокусе подставляем тот же статус, что и у списка друзей.
+ */
+export function hasVisibleOnlinePresenceSnapshot(): boolean {
+  return __visibleOnlinePresenceListKnown;
+}
+
+export function isPeerInVisibleOnlinePresence(peerId: string): boolean {
+  if (!peerId) return false;
+  return __lastVisibleOnlineUserIds.has(String(peerId));
+}
 
 // При подключении сервер шлёт пропущенные звонки (телефон был выключен / нет сети) — мержим в хранилище и обновляем UI
 socket.on('missed_calls:sync', (payload: { missed?: { from: string; fromNick?: string }[] }) => {
@@ -384,9 +466,7 @@ async function boot() {
       // Не пересоздаём пользователя на временных проблемах сети/авторизации — сначала пробуем reauth.
       try {
         if (socket.connected) {
-          const reauthRes = await emitAck<{ ok: boolean; userId?: string; error?: string; missed?: { from: string; fromNick?: string }[] }>('reauth', { userId: saved }, 6000, 1);
-          if (reauthRes?.ok) lastSuccessfulReauthAt = Date.now();
-          if (reauthRes?.missed?.length) applyMissedFromReauth(reauthRes).catch(() => {});
+          await emitReauthDeduped(saved, 6000, 1);
         }
       } catch (e) {
         // мягко игнорируем — может быть оффлайн, но userId локально сохраняем
@@ -436,17 +516,13 @@ async function boot() {
   if (!socket.connected) {
     await applyAuthAndConnect();
   } else if (currentUserId) {
-    // Если socket уже подключен, но у нас есть userId - отправляем reauth
     logger.debug('Socket connected, sending reauth with userId:', currentUserId);
     try {
-      const reauthResponse = await emitAck<{ ok: boolean; userId?: string; error?: string; missed?: { from: string; fromNick?: string }[] }>('reauth', { userId: currentUserId });
+      const reauthResponse = await emitReauthDeduped(currentUserId);
       if (reauthResponse?.ok) {
-        lastSuccessfulReauthAt = Date.now();
         logger.debug('Reauth successful');
-        if (reauthResponse?.missed?.length) applyMissedFromReauth(reauthResponse).catch(() => {});
       } else {
         logger.warn('Reauth failed:', reauthResponse?.error);
-        // Если пользователь не найден на сервере - очищаем локальный userId и создаем нового
         if (reauthResponse?.error === 'user_not_found') {
           logger.warn('User not found on server, clearing local userId and creating new user...');
           clearCurrentUserId();
@@ -460,7 +536,7 @@ async function boot() {
   
   // Сбрасываем флаг завершения boot процесса
   bootInProgress = false;
-  console.log('[boot] Boot process completed');
+  logger.debug('[boot] Boot process completed');
 }
 
 // КРИТИЧНО: Обертываем boot() в try-catch для предотвращения крашей
@@ -502,6 +578,12 @@ const __incomingCallScreenChangeListeners = new Set<(visible: boolean, fromUserI
 
 /** Пока активен видеозвонок (подключение к LiveKit или комната connected) — не отключать сокет при «background», чтобы избежать negotiation disconnected / m-line errors. */
 let __activeVideoCall = false;
+
+function emitAppVisibilityToServer(foreground: boolean) {
+  try {
+    if (socket?.connected) socket.emit('app:visibility', { foreground });
+  } catch {}
+}
 
 function shouldAttemptRealtimeConnection(): boolean {
   if (SOCKET_KEEP_ALIVE_IN_BACKGROUND) return true;
@@ -580,6 +662,7 @@ try {
       __lastAppState = nextState;
 
       if (wasForeground && !isForeground) {
+        emitAppVisibilityToServer(false);
         if (SOCKET_KEEP_ALIVE_IN_BACKGROUND) return;
         const inSystemPiP = typeof (global as any).__pipInSystemModeRef?.current === 'boolean' && (global as any).__pipInSystemModeRef?.current === true;
         if (__outgoingCallScreenVisible || __incomingCallScreenVisible || __activeVideoCall || inSystemPiP) return;
@@ -592,6 +675,7 @@ try {
       }
 
       if (!wasForeground && isForeground) {
+        emitAppVisibilityToServer(true);
         if (!SOCKET_KEEP_ALIVE_IN_BACKGROUND) __realtimePaused = false;
         __outgoingCallScreenVisible = false;
         __incomingCallScreenVisible = false;
@@ -606,9 +690,27 @@ try {
 } catch {}
 
 /* ========= logging ========= */
+socket.on('server:restarting', () => {
+  try {
+    const mgr = (socket as any).io;
+    if (mgr?.opts) {
+      mgr.opts.reconnectionDelay = SOCKET_RECONNECT_AFTER_SERVER_RESTART_DELAY_MS;
+      mgr.opts.reconnectionDelayMax = SOCKET_RECONNECT_AFTER_SERVER_RESTART_DELAY_MAX_MS;
+    }
+  } catch {}
+  logger.info('[socket] server restarting — accelerated reconnect backoff');
+});
+
 socket.on("connect", async () => {
   reconnecting = false;
-  console.log(`[socket] connected ${socket.id} (API: ${API_BASE})`);
+  try {
+    const mgr = (socket as any).io;
+    if (mgr?.opts) {
+      mgr.opts.reconnectionDelay = SOCKET_RECONNECT_DELAY_MS;
+      mgr.opts.reconnectionDelayMax = SOCKET_RECONNECT_DELAY_MAX_MS;
+    }
+  } catch {}
+  logger.debug(`[socket] connected ${socket.id} (API: ${API_BASE})`);
   // If we connected with installId in auth, handshake is considered valid.
   try {
     // @ts-ignore
@@ -616,44 +718,54 @@ socket.on("connect", async () => {
     if (auth?.installId) __handshakeHasInstallId = true;
   } catch {}
   
-  // КРИТИЧНО: Если у нас есть userId, но socket подключился без него - отправляем reauth
+  // КРИТИЧНО: Если у нас есть userId, но socket подключился без него - отправляем reauth (дедуп с boot / другими вызовами)
   if (currentUserId && !(socket as any).data?.userId) {
-    console.log('[socket] Connected without userId, sending reauth:', currentUserId);
+    logger.debug('[socket] post-connect reauth (no userId in socket data yet)', { userId: currentUserId });
     try {
-      const reauthResponse = await emitAck<{ ok: boolean; userId?: string; error?: string; missed?: { from: string; fromNick?: string }[] }>('reauth', { userId: currentUserId });
+      const reauthResponse = await emitReauthDeduped(currentUserId);
       if (reauthResponse?.ok) {
-        lastSuccessfulReauthAt = Date.now();
-        console.log('[socket] Reauth successful after connect');
-        if (reauthResponse?.missed?.length) applyMissedFromReauth(reauthResponse).catch(() => {});
+        logger.debug('[socket] Reauth successful after connect');
       } else {
-        console.warn('[socket] Reauth failed after connect:', reauthResponse?.error);
-        // Если пользователь не найден на сервере - очищаем локальный userId и создаем нового
+        logger.warn('[socket] Reauth failed after connect:', reauthResponse?.error);
         if (reauthResponse?.error === 'user_not_found') {
-          console.warn('[socket] User not found on server, clearing local userId and creating new user...');
+          logger.warn('[socket] User not found on server, clearing local userId and creating new user...');
           clearCurrentUserId();
           await createUser();
         }
       }
     } catch (e) {
-      console.warn('[socket] Reauth error after connect:', e);
+      logger.warn('[socket] Reauth error after connect:', e);
     }
   }
+  // После bind на сервере: для друзей «онлайн» только на переднем плане (сокет может оставаться в фоне).
+  const syncAppVisibilityAfterConnect = () => {
+    try {
+      const fg = __lastAppState === 'active' || __lastAppState === 'inactive';
+      if (socket.connected) emitAppVisibilityToServer(fg);
+    } catch {}
+  };
+  syncAppVisibilityAfterConnect();
+  setTimeout(syncAppVisibilityAfterConnect, 250);
 });
 socket.on("reconnect_attempt", () => { reconnecting = true; });
-socket.on("reconnect", () => { reconnecting = false; });
+// Manager `reconnect` не дублируем: после успешного переподключения снова срабатывает `connect` → один reauth через emitReauthDeduped.
+
 socket.on("disconnect", (r) => {
   // Временные отвалы: по ним считаем, что сокет в состоянии переподключения (для логов и isReconnecting()).
-  const transient = ["transport close", "ping timeout", "transport error"];
+  // io server disconnect: корректное закрытие при деплое/restart (см. server:restarting на бэкенде)
+  const transient = ["transport close", "ping timeout", "transport error", "io server disconnect"];
   reconnecting = transient.includes(r) || r === undefined;
-  // На следующем коннекте снова гарантируем наличие installId в handshake
-  __handshakeHasInstallId = false;
+  // При транзиентных разрывах auth на клиенте не теряется — не сбрасываем флаг (избегаем лишних reconnect/reauth веток).
   const reason = String(r || '');
+  if (!transient.includes(reason) && reason) {
+    __handshakeHasInstallId = false;
+  }
   const isExpectedUserBackgroundDisconnect = reason === 'io client disconnect';
   if (isExpectedUserBackgroundDisconnect) {
     const note = __realtimePaused ? 'app in background / screen locked' : 'user-initiated disconnect';
     logger.info(`[socket] temporary disconnect (${note}) reason=${reason || 'unknown'}`);
   } else if (transient.includes(reason)) {
-    logger.warn(`[socket] disconnected (${reason}) reconnecting=${reconnecting}`);
+    logger.debug(`[socket] disconnected (${reason}) reconnecting=${reconnecting} (transient; reauth after reconnect if needed)`);
   } else {
     logger.warn(`[socket] disconnected (${reason || 'unknown'}) reconnecting=${reconnecting}`);
   }
@@ -809,33 +921,44 @@ export async function emitAck<T = any>(
   throw lastErr;
 }
 
+/** Один reauth за раз на всех вызывающих (connect, boot, friends:fetch, …). */
+async function emitReauthDeduped(
+  userId: string,
+  timeoutMs = 6000,
+  retries = 1,
+): Promise<SocketReauthResponse> {
+  const uid = String(userId || '').trim();
+  if (!uid) return { ok: false, error: 'no_userId' };
+  if (reauthInFlight) return reauthInFlight;
+
+  const p = (async (): Promise<SocketReauthResponse> => {
+    try {
+      const res = await emitAck<SocketReauthResponse>('reauth', { userId: uid }, timeoutMs, retries);
+      if (res?.ok) {
+        lastSuccessfulReauthAt = Date.now();
+        if (res?.missed?.length) applyMissedFromReauth(res).catch(() => {});
+      }
+      return res && typeof res.ok === 'boolean' ? res : { ok: false, error: 'bad_response' };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e || 'reauth_failed') };
+    } finally {
+      reauthInFlight = null;
+    }
+  })();
+
+  reauthInFlight = p;
+  return p;
+}
+
+// После разрыва Manager шлёт `reconnect`, а namespace socket всегда шлёт `connect` — reauth делаем только в обработчике `connect` (через emitReauthDeduped), иначе двойной emit.
+
 async function ensureReauthBeforePrivilegedSocketOp(): Promise<boolean> {
   const uid = String(currentUserId || '').trim();
   if (!uid) return false;
   const now = Date.now();
   if (now - lastSuccessfulReauthAt < REAUTH_FRESH_MS) return true;
-  if (reauthInFlight) return reauthInFlight;
-  reauthInFlight = (async () => {
-    try {
-      const res = await emitAck<{ ok: boolean; userId?: string; error?: string; missed?: { from: string; fromNick?: string }[] }>(
-        'reauth',
-        { userId: uid },
-        6000,
-        1
-      );
-      if (res?.ok) {
-        lastSuccessfulReauthAt = Date.now();
-        if (res?.missed?.length) applyMissedFromReauth(res).catch(() => {});
-        return true;
-      }
-      return false;
-    } catch {
-      return false;
-    } finally {
-      reauthInFlight = null;
-    }
-  })();
-  return reauthInFlight;
+  const res = await emitReauthDeduped(uid);
+  return !!res.ok;
 }
 
 export function onConnected(cb: () => void): () => void {
@@ -2553,10 +2676,12 @@ export default socket;
 
 /* ========= Calls (direct video) ========= */
 export function startCall(toUserId: string) {
-  if (!isOid(toUserId)) return Promise.reject(new Error('invalid ObjectId'));
+  const raw = String(toUserId || '').trim();
+  if (!isOid(raw)) return Promise.reject(new Error('invalid ObjectId'));
+  const to = /^[a-f\d]{24}$/i.test(raw) ? raw.toLowerCase() : raw;
   return emitAck<{ ok: boolean; callId?: string; error?: string }>(
     'call:initiate',
-    { to: toUserId },
+    { to },
     20000,
   );
 }

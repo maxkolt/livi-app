@@ -7,6 +7,7 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
+        "NODE_ENV": "development",
         "EXPO_PUBLIC_SERVER_URL": "https://api.liviapp.com",
         "EXPO_PUBLIC_LIVEKIT_URL": "wss://livekit.liviapp.com",
         "EXPO_PUBLIC_LOG_LEVEL": "debug"
@@ -15,6 +16,7 @@
     "preview": {
       "distribution": "internal",
       "env": {
+        "NODE_ENV": "production",
         "EXPO_PUBLIC_SERVER_URL": "https://api.liviapp.com",
         "EXPO_PUBLIC_LIVEKIT_URL": "wss://livekit.liviapp.com",
         "EXPO_PUBLIC_LOG_LEVEL": "info"
@@ -25,6 +27,7 @@
     },
     "production": {
       "env": {
+        "NODE_ENV": "production",
         "EXPO_PUBLIC_SERVER_URL": "https://api.liviapp.com",
         "EXPO_PUBLIC_LIVEKIT_URL": "wss://livekit.liviapp.com",
         "EXPO_PUBLIC_LOG_LEVEL": "warn"

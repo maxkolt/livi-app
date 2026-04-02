@@ -78,3 +78,44 @@ if (fs.existsSync(devLauncherTsconfig)) {
     console.warn('[apply-patches] expo-dev-launcher tsconfig fix:', e.message);
   }
 }
+
+// engine.io-client: on React Native, global `offline` often fires at cold start and closes every socket
+// (disconnect "transport close" + reconnect loop). Skip that listener; real outages still surface via ping timeout.
+(() => {
+  const marker = 'navigator.product !== "ReactNative"';
+  const cjsPath = path.join(root, 'node_modules/engine.io-client/build/cjs/socket.js');
+  const esmPath = path.join(root, 'node_modules/engine.io-client/build/esm/socket.js');
+  try {
+    if (fs.existsSync(cjsPath)) {
+      let c = fs.readFileSync(cjsPath, 'utf8');
+      if (!c.includes(marker)) {
+        const from = '            if (this.hostname !== "localhost") {\n                debug("adding listener for the \'offline\' event");';
+        const to =
+          '            // RN: skip global `offline` (spurious at cold start → transport-close reconnect loops).\n' +
+          '            if (this.hostname !== "localhost" && (typeof navigator === "undefined" || navigator.product !== "ReactNative")) {\n' +
+          '                debug("adding listener for the \'offline\' event");';
+        if (c.includes(from)) {
+          fs.writeFileSync(cjsPath, c.replace(from, to), 'utf8');
+          console.log('[apply-patches] engine.io-client build/cjs/socket.js: skip offline listener on React Native');
+        }
+      }
+    }
+    if (fs.existsSync(esmPath)) {
+      let c = fs.readFileSync(esmPath, 'utf8');
+      if (!c.includes(marker)) {
+        const from =
+          '            if (this.hostname !== "localhost") {\n                this._offlineEventListener = () => {';
+        const to =
+          '            // RN: skip global `offline` (spurious at cold start → transport-close reconnect loops).\n' +
+          '            if (this.hostname !== "localhost" && (typeof navigator === "undefined" || navigator.product !== "ReactNative")) {\n' +
+          '                this._offlineEventListener = () => {';
+        if (c.includes(from)) {
+          fs.writeFileSync(esmPath, c.replace(from, to), 'utf8');
+          console.log('[apply-patches] engine.io-client build/esm/socket.js: skip offline listener on React Native');
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[apply-patches] engine.io-client RN offline fix:', e.message);
+  }
+})();

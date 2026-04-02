@@ -19,6 +19,7 @@ import {
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, WebRTCSessionCallbacks, CamSide } from '../types';
 import socket, { API_BASE, setActiveVideoCall } from '../../../sockets/socket';
+import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
 import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration } from '../../../utils/iceConfig';
@@ -95,6 +96,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private isDisconnecting = false;
   private disconnectPromise: Promise<void> | null = null;
   private connectingPromise: Promise<boolean> | null = null; // Защита от множественных одновременных подключений
+  /** Синхронная дедупликация: два входа (pending call:accepted + connectAsInitiatorAfterAccepted / reauth) не создают второй Room.connect */
+  private liveKitConnectByRoom = new Map<string, Promise<boolean>>();
   private callId: string | null = null;
   private roomId: string | null = null;
   private partnerId: string | null = null;
@@ -110,6 +113,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastSentPiPRoomId: string | null = null;
   /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и endCall повторно */
   private cleaned = false;
+  /** ctor запланировал handleCallAccepted из __pendingCallAcceptedRef — UI не должен дублировать connectAsInitiatorAfterAccepted */
+  private consumedPendingCallAcceptedAtConstruct = false;
 
   // LiveKit reconnect handling: during reconnect we must NOT treat transient disconnects as "call ended".
   private liveKitReconnecting = false;
@@ -177,6 +182,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       (global as any).__pendingCallAcceptedRef.current = null;
     } else if (usePending) {
+      this.consumedPendingCallAcceptedAtConstruct = true;
       logger.info('[VideoCallSession] 🔄 Found pending call:accepted event, will process after first frame', {
         callId: pendingCallAccepted.callId,
         roomId: pendingCallAccepted.roomId,
@@ -224,12 +230,20 @@ export class VideoCallSession extends SimpleEventEmitter {
     await this.ensureLocalTracks();
     
     try {
-      socket.emit('call:initiate', { to: friendUserId });
+      const to = /^[a-f\d]{24}$/i.test(String(friendUserId || '').trim())
+        ? String(friendUserId).trim().toLowerCase()
+        : String(friendUserId || '').trim();
+      socket.emit('call:initiate', { to });
     } catch (e) {
       logger.error('[VideoCallSession] Error initiating call', e);
       this.config.callbacks.onLoadingChange?.(false);
       this.config.onLoadingChange?.(false);
     }
+  }
+
+  /** ctor запланировал обработку __pendingCallAcceptedRef — не дублировать connectAsInitiatorAfterAccepted из VideoCall */
+  didSchedulePendingCallAcceptedConnect(): boolean {
+    return this.consumedPendingCallAcceptedAtConstruct;
   }
 
   async acceptCall(callId: string, fromUserId: string): Promise<void> {
@@ -402,6 +416,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       roomLock.session = null;
       logger.info('[VideoCallSession] 🔓 Сброшена блокировка __connectingToRoomRef в endCall');
     }
+    this.liveKitConnectByRoom.clear();
 
     // КРИТИЧНО: Используем переданные из UI callId/roomId как fallback (инициатор может не иметь их в сессии до завершения connectAsInitiatorAfterAccepted)
     const callIdToSend = overrideCallId ?? this.callId;
@@ -513,6 +528,56 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (callbacks.onPartnerIdChange) this.config.onPartnerIdChange = callbacks.onPartnerIdChange;
     if (callbacks.onRoomIdChange) this.config.onRoomIdChange = callbacks.onRoomIdChange;
     if (callbacks.onCallIdChange) this.config.onCallIdChange = callbacks.onCallIdChange;
+  }
+
+  /**
+   * Ремаунт VideoCall (PiP → Home → снова VideoCall по повторному call:accepted / reauth):
+   * подставляем актуальные колбэки и геттеры, иначе остаются замыкания от размонтированного экрана.
+   */
+  rebindVideoCallMount(config: WebRTCSessionConfig): void {
+    this.config.callbacks = config.callbacks;
+    if (config.myUserId != null) this.config.myUserId = config.myUserId;
+    if (config.initialCallId !== undefined) this.config.initialCallId = config.initialCallId;
+
+    const bridgeKeys: (keyof WebRTCSessionConfig)[] = [
+      'getIsInactiveState',
+      'getIsDirectCall',
+      'getInDirectCall',
+      'getFriendCallAccepted',
+      'getStarted',
+      'getWasFriendCallEnded',
+      'getIsDirectInitiator',
+      'getHasIncomingCall',
+      'setIsInactiveState',
+      'setWasFriendCallEnded',
+      'setFriendCallAccepted',
+      'setStarted',
+      'setInDirectCall',
+      'getDeclinedBlock',
+      'clearDeclinedBlock',
+      'getIncomingFriendCall',
+      'getPartnerDisplayName',
+      'getPipLocalStream',
+      'getPipRemoteStream',
+      'sendCameraState',
+      'onSwitchToConnectingSession',
+      'onCallEnding',
+      'onLocalStreamChange',
+      'onRemoteStreamChange',
+      'onMicStateChange',
+      'onCamStateChange',
+      'onRemoteCamStateChange',
+      'onLoadingChange',
+      'onPartnerIdChange',
+      'onRoomIdChange',
+      'onCallIdChange',
+      'onPcConnectedChange',
+    ];
+    for (const k of bridgeKeys) {
+      const v = (config as any)[k];
+      if (v !== undefined) (this.config as any)[k] = v;
+    }
+    logger.info('[VideoCallSession] 🔁 rebindVideoCallMount — мост к UI обновлён после ремаунта');
   }
 
   async toggleCam(): Promise<void> {
@@ -1182,7 +1247,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     const callEndedHandler = (data?: { callId?: string; roomId?: string; reason?: string; scope?: string }) => {
       if (!this.matchesCurrentCallEvent(data)) return;
-      this.handleCallEnded();
+      this.handleCallEnded(data);
     };
 
     const onCallEnded = (data?: { callId?: string; roomId?: string; reason?: string; scope?: string }) => {
@@ -1200,7 +1265,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         reason: data?.reason,
         currentCallId: this.callId,
       });
-      this.handleCallEnded();
+      this.handleCallEnded({ callId: data?.callId });
     };
 
     // call:declined = тот, кому звонили, отклонил; инициатор получает это и должен закрыть модалку «Ожидаем ответа»
@@ -1387,7 +1452,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.lastProcessedCallAccepted && 
         this.lastProcessedCallAccepted.callId === callId &&
         this.lastProcessedCallAccepted.roomName === targetRoomName &&
-        (Date.now() - this.lastProcessedCallAccepted.timestamp) < 5000) {
+        (Date.now() - this.lastProcessedCallAccepted.timestamp) < 60_000) {
       logger.info('[VideoCallSession] ⏭️ Already processed this call:accepted event, skipping', {
         callId,
         roomName: targetRoomName,
@@ -1502,8 +1567,12 @@ export class VideoCallSession extends SimpleEventEmitter {
         partnerUserId: partnerUserId,
       });
       
-      // КРИТИЧНО: Если уже идет подключение к той же комнате, ждем его завершения вместо создания нового запроса
-      if (this.connectingPromise && targetRoomName && this.currentRoomName === targetRoomName) {
+      // КРИТИЧНО: Если уже идёт подключение к целевой комнате — ждём (currentRoomName ещё null до успешного join)
+      if (
+        this.connectingPromise &&
+        targetRoomName &&
+        (!this.currentRoomName || this.currentRoomName === targetRoomName)
+      ) {
         logger.info('[VideoCallSession] ⏳ Connection to same room already in progress, waiting for completion', {
           targetRoomName,
           currentRoomName: this.currentRoomName,
@@ -1668,8 +1737,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     // Fallback: запрашиваем токен через API
     if (roomId) {
-      // КРИТИЧНО: Если уже идет подключение к той же комнате, ждем его завершения
-      if (this.connectingPromise && targetRoomName && this.currentRoomName === targetRoomName) {
+      // КРИТИЧНО: Если уже идёт подключение — ждём (currentRoomName до join ещё не выставлен)
+      if (
+        this.connectingPromise &&
+        targetRoomName &&
+        (!this.currentRoomName || this.currentRoomName === targetRoomName)
+      ) {
         logger.info('[VideoCallSession] ⏳ Connection to same room already in progress (fallback), waiting for completion', {
           targetRoomName,
           currentRoomName: this.currentRoomName,
@@ -1837,31 +1910,32 @@ export class VideoCallSession extends SimpleEventEmitter {
     return false;
   }
 
-  private handleCallEnded(): void {
-    // КРИТИЧНО: Сразу закрываем системный PiP при любом call:ended (до любых return). Иначе при раннем return PiP у собеседника не закрывается.
+  private handleCallEnded(endEvent?: { callId?: string; roomId?: string }): void {
+    // Повторный вход (echo call:ended, call:cancel+call:ended, LiveKit+socket): не дублируем PiP/globals/teardown.
+    if (this.ended || this.endCallInProgress) {
+      if (Platform.OS === 'android') {
+        try { (NativeModules as any)?.LiviAppModule?.requestExitSystemPiP?.(); } catch {}
+      }
+      return;
+    }
+
     if (Platform.OS === 'android') {
       try { (NativeModules as any)?.LiviAppModule?.requestExitSystemPiP?.(); } catch {}
     }
-    // Закрываем in-app PiP у собеседника (когда звонок завершил тот, кто в системном PiP — сокет у него мог быть отключён, call:ended не пришёл; мы сюда попали по ParticipantDisconnected).
     try {
       const hidePiP = (global as any).__pipHidePiPRef?.current;
       if (typeof hidePiP === 'function') hidePiP();
     } catch {}
-    // КРИТИЧНО: Сбрасываем refs и уведомляем HomeScreen при любом завершении (socket call:ended или ParticipantDisconnected). Иначе у того, кто в in-app PiP на вкладке «Друзья», кнопки видеозвонка остаются неактивными (сокет мог быть отключён, call:ended придёт позже; сюда попали по ParticipantDisconnected).
-    try {
-      const g = global as any;
-      g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
-      g.__videoCallPartnerUserIdRef.current = null;
-      g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
-      g.__videoCallActiveRef.current = false;
-      g.__onVideoCallEndedRef?.current?.();
-    } catch (_) {}
+
+    const evC = String(endEvent?.callId ?? '').trim();
+    const evR = String(endEvent?.roomId ?? '').trim();
+    const sidC = String(this.callId ?? '').trim();
+    const sidR = String(this.roomId ?? '').trim();
+    applyCallEndedGlobalRefsOnce(evC || sidC || undefined, evR || sidR || undefined);
+
     // Idempotency: server may deliver call:ended multiple times (e.g., room + direct).
     // Also, call:ended can arrive after local cleanup already cleared ids.
     // In those cases, ignore to avoid duplicate cleanup and "null callId" log noise.
-    if (this.ended || this.endCallInProgress) {
-      return;
-    }
 
     // Зомби-сессия (уже очищена cleanupFunction): не эмитить callEnded — иначе второй handleCallEnded в UI и мерцание при переходе на Home.
     if (!this.callId && !this.roomId) {
@@ -2843,7 +2917,42 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async connectToLiveKit(url: string, token: string, connectRequestId: number, targetRoomName?: string): Promise<boolean> {
-    // КРИТИЧНО: Если звонок уже завершён (call:ended), не подключаться — избегаем "подключения к пустой комнате"
+    if (this.ended) {
+      logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
+      return false;
+    }
+    const coalesceKey = (targetRoomName || '').trim();
+    if (coalesceKey) {
+      const inflight = this.liveKitConnectByRoom.get(coalesceKey);
+      if (inflight) {
+        logger.info('[VideoCallSession] ⏭️ Coalescing LiveKit connect (duplicate path / reauth)', {
+          room: coalesceKey,
+        });
+        return inflight;
+      }
+      let resolveGate!: (v: boolean) => void;
+      let rejectGate!: (e: unknown) => void;
+      const gate = new Promise<boolean>((res, rej) => {
+        resolveGate = res;
+        rejectGate = rej;
+      });
+      this.liveKitConnectByRoom.set(coalesceKey, gate);
+      void this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName)
+        .then(
+          (v) => resolveGate(v),
+          (e) => rejectGate(e)
+        )
+        .finally(() => {
+          if (this.liveKitConnectByRoom.get(coalesceKey) === gate) {
+            this.liveKitConnectByRoom.delete(coalesceKey);
+          }
+        });
+      return gate;
+    }
+    return this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName);
+  }
+
+  private async executeConnectToLiveKit(url: string, token: string, connectRequestId: number, targetRoomName?: string): Promise<boolean> {
     if (this.ended) {
       logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
       return false;
@@ -3390,12 +3499,18 @@ export class VideoCallSession extends SimpleEventEmitter {
                   trackSid: publication.trackSid,
                 });
               }
-              // Обрабатываем трек если он загружен (не проверяем !this.remoteAudioTrack, обрабатываем всегда)
+              // Обрабатываем трек если он загружен; пропуск если уже применён при первом subscribe
               if (publication.track) {
-                logger.info('[VideoCallSession] First delayed processing of audio track', {
-                  trackSid: publication.trackSid,
-                });
-                this.handleTrackSubscribed(publication.track, publication, participant);
+                if (this.shouldSkipRedundantDelayedTrackApply(publication.track, publication)) {
+                  logger.debug('[VideoCallSession] First delayed check skipped (audio already wired)', {
+                    trackSid: publication.trackSid,
+                  });
+                } else {
+                  logger.info('[VideoCallSession] First delayed processing of audio track', {
+                    trackSid: publication.trackSid,
+                  });
+                  this.handleTrackSubscribed(publication.track, publication, participant);
+                }
               } else {
                 const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
                 log('[VideoCallSession] First delayed check - audio track still not loaded', {
@@ -3413,12 +3528,17 @@ export class VideoCallSession extends SimpleEventEmitter {
                   trackSid: publication.trackSid,
                 });
               }
-              // Обрабатываем трек если он загружен (не проверяем !this.remoteVideoTrack, обрабатываем всегда)
               if (publication.track) {
-                logger.info('[VideoCallSession] First delayed processing of video track', {
-                  trackSid: publication.trackSid,
-                });
-                this.handleTrackSubscribed(publication.track, publication, participant);
+                if (this.shouldSkipRedundantDelayedTrackApply(publication.track, publication)) {
+                  logger.debug('[VideoCallSession] First delayed check skipped (video already wired)', {
+                    trackSid: publication.trackSid,
+                  });
+                } else {
+                  logger.info('[VideoCallSession] First delayed processing of video track', {
+                    trackSid: publication.trackSid,
+                  });
+                  this.handleTrackSubscribed(publication.track, publication, participant);
+                }
               } else {
                 const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
                 log('[VideoCallSession] First delayed check - video track still not loaded', {
@@ -3449,10 +3569,16 @@ export class VideoCallSession extends SimpleEventEmitter {
                 });
               }
               if (publication.track) {
-                logger.info('[VideoCallSession] Second delayed processing of audio track', {
-                  trackSid: publication.trackSid,
-                });
-                this.handleTrackSubscribed(publication.track, publication, participant);
+                if (this.shouldSkipRedundantDelayedTrackApply(publication.track, publication)) {
+                  logger.debug('[VideoCallSession] Second delayed check skipped (audio already wired)', {
+                    trackSid: publication.trackSid,
+                  });
+                } else {
+                  logger.info('[VideoCallSession] Second delayed processing of audio track', {
+                    trackSid: publication.trackSid,
+                  });
+                  this.handleTrackSubscribed(publication.track, publication, participant);
+                }
               } else {
                 const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
                 log('[VideoCallSession] Second delayed check - audio track still not loaded', {
@@ -3470,10 +3596,16 @@ export class VideoCallSession extends SimpleEventEmitter {
                 });
               }
               if (publication.track) {
-                logger.info('[VideoCallSession] Second delayed processing of video track', {
-                  trackSid: publication.trackSid,
-                });
-                this.handleTrackSubscribed(publication.track, publication, participant);
+                if (this.shouldSkipRedundantDelayedTrackApply(publication.track, publication)) {
+                  logger.debug('[VideoCallSession] Second delayed check skipped (video already wired)', {
+                    trackSid: publication.trackSid,
+                  });
+                } else {
+                  logger.info('[VideoCallSession] Second delayed processing of video track', {
+                    trackSid: publication.trackSid,
+                  });
+                  this.handleTrackSubscribed(publication.track, publication, participant);
+                }
               } else {
                 const log = shouldWarnAboutMissingTrack() ? logger.warn : logger.debug;
                 log('[VideoCallSession] Second delayed check - video track still not loaded', {
@@ -4374,11 +4506,62 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
+  /** Delayed 500/1000ms ретраи: не дергать handleTrackSubscribed, если тот же трек уже в remoteStream (меньше логов и лишних колбэков в UI). */
+  private shouldSkipRedundantDelayedTrackApply(track: RemoteTrack, publication: RemoteTrackPublication): boolean {
+    if (publication.kind === Track.Kind.Audio) {
+      return (
+        !!this.remoteAudioTrack &&
+        (this.remoteAudioTrack.sid === track.sid ||
+          this.remoteAudioTrack.mediaStreamTrack === track.mediaStreamTrack)
+      );
+    }
+    if (publication.kind === Track.Kind.Video) {
+      return (
+        !!this.remoteVideoTrack &&
+        (this.remoteVideoTrack.sid === track.sid ||
+          this.remoteVideoTrack.mediaStreamTrack === track.mediaStreamTrack) &&
+        this.remoteVideoTrack.isMuted === track.isMuted
+      );
+    }
+    return false;
+  }
+
   private handleTrackSubscribed(
     track: RemoteTrack,
     publication: RemoteTrackPublication,
     participant: RemoteParticipant
   ): void {
+    this.currentRemoteParticipant = participant;
+
+    const isVideoTrack = publication.kind === Track.Kind.Video;
+    const isAudioTrack = publication.kind === Track.Kind.Audio;
+    const oldVideoTrackSid = this.remoteVideoTrack?.sid;
+    const mediaTrack = track.mediaStreamTrack;
+
+    // ParticipantConnected (incl. delayed retries), TrackPublished, and TrackSubscribed often
+    // notify the same underlying MediaStreamTrack — skip duplicate work/emits (avoids extra
+    // remoteStream churn and RTCView flicker). Still run when video mute state diverges.
+    if (mediaTrack && this.remoteStream?.getTracks().includes(mediaTrack as any)) {
+      if (
+        isVideoTrack &&
+        this.remoteVideoTrack?.mediaStreamTrack === mediaTrack &&
+        this.remoteVideoTrack.isMuted === track.isMuted
+      ) {
+        logger.debug('[VideoCallSession] Track subscribed (already applied, skipping duplicate)', {
+          trackSid: track.sid,
+          streamId: this.remoteStream.id,
+        });
+        return;
+      }
+      if (isAudioTrack && this.remoteAudioTrack?.mediaStreamTrack === mediaTrack) {
+        logger.debug('[VideoCallSession] Track subscribed (already applied, skipping duplicate)', {
+          trackSid: track.sid,
+          streamId: this.remoteStream.id,
+        });
+        return;
+      }
+    }
+
     logger.info('[VideoCallSession] Track subscribed', {
       kind: publication.kind,
       trackId: track.sid,
@@ -4387,11 +4570,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       trackReady: track.mediaStreamTrack?.readyState,
     });
     
-    this.currentRemoteParticipant = participant;
-    
-    const isVideoTrack = publication.kind === Track.Kind.Video;
-    const oldVideoTrackSid = this.remoteVideoTrack?.sid;
-    const mediaTrack = track.mediaStreamTrack;
     // Учёт lastUnsubscribedRemoteVideoTrackSid: при перевороте камеры сначала приходит TrackUnsubscribed (remoteVideoTrack обнуляется),
     // потом TrackSubscribed — без сохранённого SID wasVideoTrackChanged был бы false и у собеседника не создавался бы новый MediaStream.
     const previousVideoSid = oldVideoTrackSid ?? this.lastUnsubscribedRemoteVideoTrackSid;

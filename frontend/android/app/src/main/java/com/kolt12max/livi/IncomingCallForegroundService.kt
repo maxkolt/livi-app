@@ -36,6 +36,8 @@ class IncomingCallForegroundService : Service() {
     private val pendingActivityLaunchRunnables = mutableListOf<Runnable>()
 
     private var answeredReceiver: BroadcastReceiver? = null
+    /** После detach FGS с оставлением уведомления (экран входящего живёт сам) — в onDestroy не вызывать полный stop (иначе рингтон/вибро обрываются через ~3 с). */
+    private var stopFullIncomingAudioOnDestroy = true
 
     private fun cancelPendingActivityLaunches() {
         for (r in pendingActivityLaunchRunnables) {
@@ -214,7 +216,13 @@ class IncomingCallForegroundService : Service() {
      */
     private fun cleanupAndStop(keepNotificationInShade: Boolean = false) {
         vl("[INCOMING_FGS] cleanupAndStop keepShade=$keepNotificationInShade")
-        LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
+        if (keepNotificationInShade) {
+            LiviAppModule.stopRingtonePlayerForCallKeepOnly()
+            stopFullIncomingAudioOnDestroy = false
+        } else {
+            LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
+            stopFullIncomingAudioOnDestroy = true
+        }
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
         cancelPendingActivityLaunches()
@@ -257,7 +265,12 @@ class IncomingCallForegroundService : Service() {
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
         cancelPendingActivityLaunches()
-        LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
+        if (stopFullIncomingAudioOnDestroy) {
+            LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
+        } else {
+            LiviAppModule.stopRingtonePlayerForCallKeepOnly()
+        }
+        stopFullIncomingAudioOnDestroy = true
         super.onDestroy()
     }
 

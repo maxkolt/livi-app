@@ -65,6 +65,8 @@ import {
   markMessagesAsRead,
   sendReadReceipt,
   onUserPresence,
+  hasVisibleOnlinePresenceSnapshot,
+  isPeerInVisibleOnlinePresence,
   getChatMessages,
   clearMessageCache,
   clearChatMessages,
@@ -1501,6 +1503,19 @@ export default function ChatScreen({ route, navigation }: Props) {
     
     return unsubscribePresence;
   }, [peerId]);
+
+  // Тот же источник, что список друзей: последний presence-массив с сервера (в т.ч. фон у собеседника).
+  useFocusEffect(
+    useCallback(() => {
+      if (!peerId) return;
+      if (!hasVisibleOnlinePresenceSnapshot()) return;
+      const isOn = isPeerInVisibleOnlinePresence(String(peerId));
+      setPeerOnline(isOn);
+      try {
+        navigation.setParams({ peerOnline: isOn } as any);
+      } catch {}
+    }, [peerId, navigation]),
+  );
 
   // Загрузка истории при открытии чата
   useEffect(() => {

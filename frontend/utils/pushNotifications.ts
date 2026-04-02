@@ -658,15 +658,32 @@ export async function ensureInitialNotificationPermissions(): Promise<void> {
 }
 
 export async function registerAndSendPushToken(userId?: string, options?: RegisterPushTokenOptions) {
+  if (!userId) return;
+  const force = options?.force === true;
+  const reason = options?.reason || 'manual';
+  const uid = String(userId);
+
+  // Не дергаем Expo Push API на каждом reconnect: токен за минуту не меняется, а 503 от Expo даёт шторм и тормозит UI.
+  if (!force && (reason === 'socket_reconnect' || reason === 'app_active')) {
+    const last = lastRegisteredPushToken;
+    if (last && last.userId === uid && Date.now() - last.atMs < PUSH_TOKEN_REGISTER_COOLDOWN_MS) {
+      logger.debug('[push] register skipped (cooldown, no Expo fetch)', { reason });
+      return;
+    }
+  }
+
   if (registerPushInFlight) {
-    // Avoid parallel duplicate registrations triggered by app-active + reconnect races.
     await registerPushInFlight;
-    return;
+    if (!force && (reason === 'socket_reconnect' || reason === 'app_active')) {
+      const last = lastRegisteredPushToken;
+      if (last && last.userId === uid && Date.now() - last.atMs < PUSH_TOKEN_REGISTER_COOLDOWN_MS) {
+        logger.debug('[push] register skipped (cooldown after in-flight)', { reason });
+        return;
+      }
+    }
   }
   registerPushInFlight = (async () => {
     try {
-      if (!userId) return;
-
       await ensureAndroidNotificationChannels();
 
       const settings = await Notifications.getPermissionsAsync();
@@ -693,7 +710,7 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
             tokenPrefix: fcmToken.slice(0, 18),
           });
           if (__DEV__) {
-            console.log('[push][DEV] DEVICE_PUSH_TOKEN (copy into Firebase Test on device):', fcmToken);
+            logger.debug('[push][DEV] DEVICE_PUSH_TOKEN (Firebase test)', { tokenPrefix: fcmToken.slice(0, 24) + '…' });
           }
         }
       } catch (e) {
@@ -803,6 +820,19 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
 
       if (__DEV__ && looksLikeFcmSetupError) {
         logger.debug('[push] В dev пуш-токен не зарегистрирован (FCM не настроен). Уведомления о звонках не придут. Собери с google-services.json или проверяй на релизной сборке.', {
+          message: msg.slice(0, 220),
+        });
+        return;
+      }
+
+      const transientPush =
+        msg.includes('503') ||
+        msg.includes('SERVICE_UNAVAILABLE') ||
+        msg.includes('temporarily unavailable') ||
+        msg.includes('no healthy upstream') ||
+        msg.includes('upstream connect error');
+      if (transientPush) {
+        logger.debug('[push] registerAndSendPushToken transient server/load — will retry on next register', {
           message: msg.slice(0, 220),
         });
         return;

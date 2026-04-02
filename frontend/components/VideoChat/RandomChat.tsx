@@ -37,8 +37,22 @@ import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
-import { fetchFriends, requestFriend, respondFriend, onFriendRequest, onFriendAdded, onFriendAccepted, onFriendDeclined, updateProfile, onCallIncoming, onCallCanceled, acceptCall, declineCall, getCurrentUserId } from '../../sockets/socket';
-import socket from '../../sockets/socket';
+import socket, {
+  fetchFriends,
+  requestFriend,
+  respondFriend,
+  onFriendRequest,
+  onFriendAdded,
+  onFriendAccepted,
+  onFriendDeclined,
+  updateProfile,
+  onCallIncoming,
+  onCallCanceled,
+  acceptCall,
+  declineCall,
+  getCurrentUserId,
+  emitPresenceUpdateIfChanged,
+} from '../../sockets/socket';
 import { syncMyStreamProfile } from '../../chat/cometchat';
 import { loadProfileFromStorage } from '../../utils/profileStorage';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -1243,14 +1257,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     if (hasActiveCall || isSearching) {
       // Отправляем статус "busy" когда есть активное общение или идет поиск
       try {
-        socket.emit('presence:update', { status: 'busy', roomId: roomId || undefined });
+        const rid = roomId ? String(roomId).trim() : '';
+        emitPresenceUpdateIfChanged({ status: 'busy', ...(rid ? { roomId: rid } : {}) });
       } catch (e) {
         logger.warn('[RandomChat] Error sending presence:update busy:', e);
       }
     } else {
       // Сбрасываем статус "busy" когда нет активного общения и не ищем
       try {
-        socket.emit('presence:update', { status: 'online' });
+        emitPresenceUpdateIfChanged({ status: 'online' });
       } catch (e) {
         logger.warn('[RandomChat] Error sending presence:update online:', e);
       }

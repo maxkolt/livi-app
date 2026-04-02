@@ -51,6 +51,7 @@ import { onSocketDisconnectWebRTC } from './sockets/webrtc';
 import {
   dissolveSocketIoRoom,
   evictExtraUserSocketsInDirectRoom,
+  sanitizeDirectCallSocketIoRoom,
   setOnCallSocketDetached,
 } from './sockets/directCallRoom';
 import {
@@ -1567,6 +1568,9 @@ io.on('connection', async (sock: AuthedSocket) => {
           evictExtraUserSocketsInDirectRoom(io, pendingRoom.roomId, String(bindUid), sock.id);
           sock.join(pendingRoom.roomId);
           activeCallBySocket.set(sock.id, pendingRoom.roomId);
+          try {
+            sanitizeDirectCallSocketIoRoom(io, pendingRoom.roomId, activeCallBySocket);
+          } catch {}
           (sock as any).data = (sock as any).data || {};
           (sock as any).data.busy = true;
           (sock as any).data.roomId = pendingRoom.roomId;
@@ -1641,6 +1645,12 @@ io.on('connection', async (sock: AuthedSocket) => {
           actionKey: `socket_end:${String(callId)}`,
           source: 'socket_end',
         });
+      }
+
+      try {
+        sanitizeDirectCallSocketIoRoom(io, id, activeCallBySocket);
+      } catch (e: any) {
+        logger.warn('[call:end] sanitizeDirectCallSocketIoRoom failed', { roomId: id, error: e?.message });
       }
       
       // Получаем участников комнаты
@@ -2241,6 +2251,9 @@ io.on('connection', async (sock: AuthedSocket) => {
         sock.join(roomId);
         logger.debug('Initiator joined room', { socketId: sock.id, roomId, callId });
       } catch {}
+      try {
+        sanitizeDirectCallSocketIoRoom(io, roomId, activeCallBySocket);
+      } catch {}
       
       // КРИТИЧНО: Устанавливаем busy только для инициатора при инициации (для проверки initiator_busy). Получатель станет busy только после принятия (call:accept).
       // Бейдж «Занято» не рассылаем друзьям до принятия: пока нативный экран входящего у одного и исходящего у другого — бейдж не показывается.
@@ -2492,6 +2505,10 @@ io.on('connection', async (sock: AuthedSocket) => {
       try { if (aSock) activeCallBySocket.set(aSock.id, roomId); } catch {}
       try { activeCallBySocket.set(bSock.id, roomId); } catch {}
 
+      try {
+        sanitizeDirectCallSocketIoRoom(io, roomId, activeCallBySocket);
+      } catch {}
+
       if (aSock) {
         (aSock as any).data = (aSock as any).data || {};
         (aSock as any).data.busy = true;
@@ -2682,6 +2699,9 @@ io.on('connection', async (sock: AuthedSocket) => {
       (sock as any).data.busy = true;
       (sock as any).data.roomId = pendingRoom.roomId;
       (sock as any).data.inCall = true;
+      try {
+        sanitizeDirectCallSocketIoRoom(io, pendingRoom.roomId, activeCallBySocket);
+      } catch {}
       sock.emit('call:accepted', {
         callId: pendingRoom.callId,
         from: null,
