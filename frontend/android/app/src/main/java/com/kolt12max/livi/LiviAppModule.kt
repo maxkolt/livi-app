@@ -1059,6 +1059,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     const val NAME = "LiviAppModule"
     /** Intent action: FCM входящий при разблокированном экране — показать через CallKeep (ConnectionService). MainActivity сохраняет extras в pending; JS вызовет displayIncomingCall. */
     const val ACTION_INCOMING_CALL_CALLKEEP = "com.kolt12max.livi.INCOMING_CALL_CALLKEEP"
+    /** Остановить рингтон/вибрацию на IncomingCallActivity (отдельный MediaPlayer), чтобы не накладывался на CallKeep. */
+    const val ACTION_STOP_INCOMING_ACTIVITY_RINGTONE = "com.kolt12max.livi.STOP_INCOMING_ACTIVITY_RINGTONE"
     const val PREFS_NAME = "LiviDeclinePrefs"
     @Volatile
     var ringtonePlayerForCallKeep: MediaPlayer? = null
@@ -1207,6 +1209,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
         vibrator?.cancel()
+      } catch (_: Exception) {}
+      try {
+        val i = Intent(ACTION_STOP_INCOMING_ACTIVITY_RINGTONE).setPackage(ctx.packageName)
+        ctx.sendBroadcast(i)
       } catch (_: Exception) {}
     }
     const val PREFS_CALL = "LiviCallPrefs"

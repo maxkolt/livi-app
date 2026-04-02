@@ -1610,7 +1610,106 @@ export default function ChatScreen({ route, navigation }: Props) {
     loadHistory();
   }, [peerId, currentUserId]);
 
+  // Догоняем сообщения с сервера после reconnect, пока чат в фокусе (закрывает окно без message:received).
+  const isFocusedRef = useRef(isChatScreenFocused);
+  isFocusedRef.current = isChatScreenFocused;
+  const historyReadyRef = useRef(false);
+  useEffect(() => {
+    historyReadyRef.current = historyReady;
+  }, [historyReady]);
+  const peerIdRef = useRef(peerId);
+  const currentUserIdRef = useRef(currentUserId);
+  useEffect(() => {
+    peerIdRef.current = peerId;
+  }, [peerId]);
+  useEffect(() => {
+    currentUserIdRef.current = currentUserId;
+  }, [currentUserId]);
 
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const run = () => {
+      if (!isFocusedRef.current || !historyReadyRef.current) return;
+      const pid = peerIdRef.current;
+      const uid = currentUserIdRef.current;
+      if (!pid || !uid) return;
+      if (t) clearTimeout(t);
+      t = setTimeout(() => {
+        if (!isFocusedRef.current || peerIdRef.current !== pid || currentUserIdRef.current !== uid) return;
+        (async () => {
+          try {
+            const serverMessages = await fetchMessages({ with: pid, limit: 50 });
+            if (!serverMessages?.ok || !Array.isArray(serverMessages.messages)) return;
+
+            const formattedMessages = serverMessages.messages.map((msg: any) => ({
+              id: msg.id,
+              text: msg.text,
+              type: msg.type,
+              uri: msg.uri,
+              name: (msg as any).name,
+              size: (msg as any).size,
+              duration: (msg as any).duration,
+              sender: msg.from === uid ? 'me' : 'peer',
+              from: msg.from,
+              to: msg.to,
+              timestamp: new Date(msg.timestamp),
+              read: !!msg.read,
+              reactions: Array.isArray((msg as any).reactions)
+                ? (msg as any).reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) }))
+                : [],
+              ...((msg as any).replyTo && (msg as any).replyTo.id
+                ? {
+                    replyTo: {
+                      id: (msg as any).replyTo.id,
+                      text: (msg as any).replyTo.text,
+                      from: (msg as any).replyTo.from,
+                      isOwn: (msg as any).replyTo.from === uid,
+                    },
+                  }
+                : {}),
+            }));
+
+            setMessages((prev) => {
+              const byId = new Map<string, any>();
+              for (const m of prev) byId.set(String(m.id), m);
+              for (const m of formattedMessages) byId.set(String(m.id), m);
+              return Array.from(byId.values()).sort((a, b) => {
+                const ta = a.timestamp instanceof Date ? a.timestamp.getTime() : new Date(a.timestamp).getTime();
+                const tb = b.timestamp instanceof Date ? b.timestamp.getTime() : new Date(b.timestamp).getTime();
+                return ta - tb;
+              });
+            });
+
+            try {
+              const serverStatuses: Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'> = {};
+              for (const m of formattedMessages) {
+                if (m.sender === 'me') serverStatuses[m.id] = m.read ? 'read' : 'sent';
+              }
+              if (Object.keys(serverStatuses).length) {
+                setReadStatuses((prev) => ({ ...prev, ...serverStatuses }));
+              }
+            } catch {}
+
+            await markMessagesAsRead(pid);
+            try {
+              await clearNotificationIndicators();
+            } catch {}
+            logger.debug('[ChatScreen] Merged messages after socket connect/reconnect', { n: formattedMessages.length, peerId: pid });
+          } catch (e) {
+            logger.warn('[ChatScreen] Post-reconnect message sync failed:', e);
+          }
+        })().catch(() => {});
+      }, 650);
+    };
+
+    socket.on('connect', run);
+    socket.on('reconnect', run);
+    return () => {
+      socket.off('connect', run);
+      socket.off('reconnect', run);
+      if (t) clearTimeout(t);
+    };
+  }, []);
 
   const headerH = 56;
   const headerTopPadding = 14;

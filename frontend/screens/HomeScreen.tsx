@@ -182,6 +182,11 @@ const LIVI = {
 const ANDROID_VIDEO_CALL_DISABLED_BG = '#1C1C1E';
 const ANDROID_VIDEO_CALL_DISABLED_ICON = '#48484A';
 
+/** Сервер шлёт полный список онлайн после ~2.5s grace при дисконнекте; чуть больше — не мигать «офлайн» при переподключении друга. */
+const PRESENCE_OFFLINE_DEBOUNCE_MS = 3500;
+/** friends:fetch/REST после звонка может застать друга без сокета; не затираем online:true сразу. */
+const LOADFRIENDS_STICKY_ONLINE_MS = 12_000;
+
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 const displayName = (name?: string) => (name && name.trim().length ? name : '—');
@@ -622,6 +627,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [refreshing, setRefreshing] = useState(false);
   const friendsRef = useRef<Friend[]>([]);
   useEffect(() => { friendsRef.current = friends; }, [friends]);
+
+  /** Последний момент, когда считали друга онлайн (массив presence или API online:true) — для «липкого» онлайна в loadFriends. */
+  const friendLastOnlineTrueAtRef = useRef<Map<string, number>>(new Map());
+  const pendingPresenceOfflineTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // Закрытие свайпа строки при нажатии «Видеозвонок», чтобы не видеть кнопку удаления друга до появления нативного экрана
   const openSwipeableRef = useRef<React.ElementRef<typeof Swipeable> | null>(null);
@@ -1672,6 +1681,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               } else {
                 finalAvatarThumbB64 = prevOne?.avatarThumbB64 || '';
               }
+
+              const prevOnlineCorr = !!prevOne?.online;
+              let mergedOnlineCorr: boolean;
+              if (f.online) {
+                friendLastOnlineTrueAtRef.current.set(f.id, Date.now());
+                mergedOnlineCorr = true;
+              } else {
+                const lastTrueCorr = friendLastOnlineTrueAtRef.current.get(f.id) || 0;
+                mergedOnlineCorr =
+                  prevOnlineCorr && Date.now() - lastTrueCorr < LOADFRIENDS_STICKY_ONLINE_MS;
+              }
               
               return {
                 ...f,
@@ -1679,7 +1699,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 avatar: f.avatar || prevOne?.avatar || '',
                 avatarVer: newAvatarVer,
                 avatarThumbB64: finalAvatarThumbB64,
-                online: f.online !== undefined ? !!f.online : !!prevOne?.online,
+                online: mergedOnlineCorr,
                 isBusy: f.isBusy !== undefined ? !!f.isBusy : !!prevOne?.isBusy,
                 isRandomBusy: !!prevOne?.isRandomBusy,
                 inCall: !!prevOne?.inCall,
@@ -1704,6 +1724,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               // Версия не изменилась и поле не пришло - сохраняем старое значение
               finalAvatarThumbB64 = prevOne?.avatarThumbB64 || '';
             }
+
+            const prevOnlineMain = !!prevOne?.online;
+            let mergedOnlineMain: boolean;
+            if (f.online) {
+              friendLastOnlineTrueAtRef.current.set(f.id, Date.now());
+              mergedOnlineMain = true;
+            } else {
+              const lastTrueMain = friendLastOnlineTrueAtRef.current.get(f.id) || 0;
+              mergedOnlineMain =
+                prevOnlineMain && Date.now() - lastTrueMain < LOADFRIENDS_STICKY_ONLINE_MS;
+            }
             
             return {
               ...f,
@@ -1711,7 +1742,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               avatar: f.avatar || prevOne?.avatar || '',
               avatarVer: newAvatarVer,
               avatarThumbB64: finalAvatarThumbB64,
-              online: f.online !== undefined ? !!f.online : !!prevOne?.online,
+              online: mergedOnlineMain,
               isBusy: f.isBusy !== undefined ? !!f.isBusy : !!prevOne?.isBusy,
               isRandomBusy: !!prevOne?.isRandomBusy,
               inCall: !!prevOne?.inCall,
@@ -2750,6 +2781,50 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return off;
   }, []);
 
+  // После восстановления сокета обновляем счётчики непрочитанных без ожидания focus Home (короткая задержка — reauth на сервере).
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const refreshUnread = () => {
+      const list = friendsRef.current;
+      if (!list.length) return;
+      (async () => {
+        try {
+          const entries: Record<string, number> = {};
+          await Promise.all(
+            list.map(async (f) => {
+              const friendIdStr = String(f.id);
+              try {
+                const result = await getUnreadCount(friendIdStr);
+                entries[friendIdStr] = result.ok ? (result.count || 0) : 0;
+              } catch {
+                entries[friendIdStr] = 0;
+              }
+            }),
+          );
+          setUnreadByUser((prev) => ({ ...prev, ...entries }));
+          logger.debug('[HomeScreen] Unread counts refreshed after socket connect/reconnect', {
+            n: Object.keys(entries).length,
+          });
+        } catch (e) {
+          logger.warn('[HomeScreen] Unread refresh after socket failed:', e);
+        }
+      })().catch(() => {});
+    };
+
+    const schedule = () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(refreshUnread, 700);
+    };
+
+    socket.on('connect', schedule);
+    socket.on('reconnect', schedule);
+    return () => {
+      socket.off('connect', schedule);
+      socket.off('reconnect', schedule);
+      if (t) clearTimeout(t);
+    };
+  }, []);
+
   // Регистрируем колбэк, чтобы при завершении видеозвонка (в т.ч. из PiP) принудительно обновить список друзей — снять бейдж «Занят» и disabled с кнопки.
   useEffect(() => {
     const g = global as any;
@@ -2827,19 +2902,43 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           }).filter((id: string | null): id is string => id !== null));
           
           setFriends((prev) => {
-            const updated = prev.map((f) => {
-              const wasOnline = f.online;
-              const isOnline = onlineSet.has(String(f.id));
-              if (wasOnline !== isOnline) {
-                logger.debug('[onPresenceUpdate] Friend online status updated', {
-                  userId: f.id,
-                  wasOnline,
-                  isOnline,
-                });
+            const now = Date.now();
+            return prev.map((f) => {
+              const id = String(f.id);
+              const inSet = onlineSet.has(id);
+              if (inSet) {
+                const pending = pendingPresenceOfflineTimersRef.current.get(id);
+                if (pending) {
+                  clearTimeout(pending);
+                  pendingPresenceOfflineTimersRef.current.delete(id);
+                }
+                friendLastOnlineTrueAtRef.current.set(id, now);
+                if (!f.online) {
+                  logger.debug('[onPresenceUpdate] Friend online status updated', {
+                    userId: id,
+                    wasOnline: f.online,
+                    isOnline: true,
+                  });
+                }
+                return { ...f, online: true };
               }
-              return { ...f, online: isOnline };
+              if (!f.online) {
+                return f;
+              }
+              if (!pendingPresenceOfflineTimersRef.current.has(id)) {
+                const t = setTimeout(() => {
+                  pendingPresenceOfflineTimersRef.current.delete(id);
+                  friendLastOnlineTrueAtRef.current.delete(id);
+                  setFriends((p) =>
+                    p.map((x) =>
+                      String(x.id) === id ? { ...x, online: false } : x,
+                    ),
+                  );
+                }, PRESENCE_OFFLINE_DEBOUNCE_MS);
+                pendingPresenceOfflineTimersRef.current.set(id, t);
+              }
+              return { ...f, online: true };
             });
-            return updated;
           });
         } catch (e) {
           console.warn('[onPresenceUpdate] Error processing array data:', e, { dataType: typeof data, isArray: Array.isArray(data) });
@@ -2996,6 +3095,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       offReq?.(); 
       offProfile?.(); 
       offReq2?.(); 
+      pendingPresenceOfflineTimersRef.current.forEach((tm) => clearTimeout(tm));
+      pendingPresenceOfflineTimersRef.current.clear();
     };
   }, [loadFriends]);
 

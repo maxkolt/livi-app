@@ -483,10 +483,15 @@ setTimeout(() => {
 }, 100); // Небольшая задержка для инициализации модулей
 
 /* ========= AppState -> presence ========= */
-// Требование: статус online только когда пользователь в приложении.
-// Самый надёжный способ без изменения сервера — отключать сокет при уходе в фон.
+/**
+ * Держать Socket.IO подключённым в фоне и не выключать reconnection при блокировке экрана.
+ * Внимание: сильнее батарея; iOS всё равно может приостановить JS-процесс без спец. background modes;
+ * Android при агрессивном Doze может рвать сеть — клиент переподключится при пробуждении.
+ */
+const SOCKET_KEEP_ALIVE_IN_BACKGROUND = true;
+
 let __lastAppState: AppStateStatus = AppState.currentState;
-let __realtimePaused = __lastAppState !== 'active';
+let __realtimePaused = SOCKET_KEEP_ALIVE_IN_BACKGROUND ? false : __lastAppState !== 'active';
 /** Пока на нативном экране исходящего (OutgoingCallActivity) — не отключать сокет при «background», чтобы инициатор получил call:accepted. */
 let __outgoingCallScreenVisible = false;
 /** Пока на нативном экране входящего (IncomingCallActivity) — не отключать сокет при «background», чтобы получатель мог принять/отклонить по сокету. */
@@ -499,6 +504,7 @@ const __incomingCallScreenChangeListeners = new Set<(visible: boolean, fromUserI
 let __activeVideoCall = false;
 
 function shouldAttemptRealtimeConnection(): boolean {
+  if (SOCKET_KEEP_ALIVE_IN_BACKGROUND) return true;
   const inSystemPiP =
     typeof (global as any).__pipInSystemModeRef?.current === 'boolean' &&
     (global as any).__pipInSystemModeRef?.current === true;
@@ -507,8 +513,12 @@ function shouldAttemptRealtimeConnection(): boolean {
 
 export function setOutgoingCallScreenVisible(visible: boolean): void {
   __outgoingCallScreenVisible = visible;
-  if (!visible && (__lastAppState !== 'active' && __lastAppState !== 'inactive')) {
-    // Экран исходящего закрыт, а приложение в фоне — отключаем сокет
+  if (
+    !SOCKET_KEEP_ALIVE_IN_BACKGROUND &&
+    !visible &&
+    __lastAppState !== 'active' &&
+    __lastAppState !== 'inactive'
+  ) {
     __realtimePaused = true;
     try { (socket as any).io.opts.reconnection = false; } catch {}
     if (socket?.connected) socket.disconnect();
@@ -521,7 +531,12 @@ export function setIncomingCallScreenVisible(visible: boolean, fromUserId?: stri
   __incomingCallScreenChangeListeners.forEach((cb) => {
     try { cb(__incomingCallScreenVisible, __incomingCallFromUserId); } catch {}
   });
-  if (!visible && (__lastAppState !== 'active' && __lastAppState !== 'inactive')) {
+  if (
+    !SOCKET_KEEP_ALIVE_IN_BACKGROUND &&
+    !visible &&
+    __lastAppState !== 'active' &&
+    __lastAppState !== 'inactive'
+  ) {
     __realtimePaused = true;
     try { (socket as any).io.opts.reconnection = false; } catch {}
     if (socket?.connected) socket.disconnect();
@@ -543,8 +558,12 @@ export function setActiveVideoCall(active: boolean, _partnerDisplayName?: string
   if (!active && Platform.OS === 'android') {
     try { NativeModules.LiviAppModule?.stopActiveCallForegroundService?.(); } catch (_) {}
   }
-  // Сокет не отключаем при уходе в фон — только за счёт проверки __activeVideoCall/inSystemPiP в AppState (без уведомлений).
-  if (!active && (__lastAppState !== 'active' && __lastAppState !== 'inactive')) {
+  if (
+    !SOCKET_KEEP_ALIVE_IN_BACKGROUND &&
+    !active &&
+    __lastAppState !== 'active' &&
+    __lastAppState !== 'inactive'
+  ) {
     __realtimePaused = true;
     try { (socket as any).io.opts.reconnection = false; } catch {}
     if (socket?.connected) socket.disconnect();
@@ -561,16 +580,11 @@ try {
       __lastAppState = nextState;
 
       if (wasForeground && !isForeground) {
-        // На нативном экране исходящего/входящего или во время видеозвонка не отключать сокет.
-        // В системном PiP сокет тоже не отключаем — иначе собеседник не получит call:ended.
+        if (SOCKET_KEEP_ALIVE_IN_BACKGROUND) return;
         const inSystemPiP = typeof (global as any).__pipInSystemModeRef?.current === 'boolean' && (global as any).__pipInSystemModeRef?.current === true;
         if (__outgoingCallScreenVisible || __incomingCallScreenVisible || __activeVideoCall || inSystemPiP) return;
-        // App -> background => offline
         __realtimePaused = true;
         try {
-          // IMPORTANT: prevent any auto-reconnect loops while app is in background.
-          // socket.disconnect() is "manual" and should stop reconnects, but some edge cases
-          // (race with reconnect attempt) are safer with reconnection=false.
           try { (socket as any).io.opts.reconnection = false; } catch {}
           if (socket?.connected) socket.disconnect();
         } catch {}
@@ -578,8 +592,7 @@ try {
       }
 
       if (!wasForeground && isForeground) {
-        // App -> foreground => online (reconnect)
-        __realtimePaused = false;
+        if (!SOCKET_KEEP_ALIVE_IN_BACKGROUND) __realtimePaused = false;
         __outgoingCallScreenVisible = false;
         __incomingCallScreenVisible = false;
         __incomingCallFromUserId = null;

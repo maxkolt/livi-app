@@ -38,6 +38,7 @@ class IncomingCallActivity : AppCompatActivity() {
     private var currentCallId: String = ""
     private var callCanceledReceiver: BroadcastReceiver? = null
     private var callAnsweredReceiver: BroadcastReceiver? = null
+    private var stopRemoteRingtoneReceiver: BroadcastReceiver? = null
     private var ringtonePlayer: MediaPlayer? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
@@ -88,6 +89,22 @@ class IncomingCallActivity : AppCompatActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         setContentView(R.layout.activity_incoming_call)
+
+        // До рингтона: слушатель «снять мелодию с Activity», когда стартует рингтон ConnectionService/CallKeep (иначе два MediaPlayer).
+        stopRemoteRingtoneReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                try {
+                    stopCallRingtone()
+                    stopRepeatingVibration()
+                } catch (_: Exception) {}
+            }
+        }
+        val filterStopRing = IntentFilter(LiviAppModule.ACTION_STOP_INCOMING_ACTIVITY_RINGTONE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(stopRemoteRingtoneReceiver, filterStopRing, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(stopRemoteRingtoneReceiver, filterStopRing)
+        }
 
         startCallRingtone()
         startRepeatingVibration()
@@ -214,6 +231,8 @@ class IncomingCallActivity : AppCompatActivity() {
         callCanceledReceiver = null
         callAnsweredReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         callAnsweredReceiver = null
+        stopRemoteRingtoneReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        stopRemoteRingtoneReceiver = null
         clearIncomingTimeout()
         stopCallRingtone()
         stopRepeatingVibration()
@@ -407,6 +426,9 @@ class IncomingCallActivity : AppCompatActivity() {
 
     /** Системная мелодия звонка (Настройки → Мелодия звонка), STREAM_RING, зациклена. */
     private fun startCallRingtone() {
+        try {
+            LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
+        } catch (_: Exception) {}
         val uri: Uri? = try {
             RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_RINGTONE)
         } catch (e: Exception) {

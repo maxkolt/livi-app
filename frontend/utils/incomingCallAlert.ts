@@ -7,24 +7,26 @@ let iosVibeTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Запускает системную мелодию звонка и вибрацию звонка для входящего (когда UI уже виден).
- * На Android: мелодия из Настройки → Мелодия звонка, вибрация из Настройки → Вибрация звонка (USAGE_RINGTONE).
- * В приложении, вне приложения и на заблокированном экране — одинаковое поведение.
+ * На Android: один путь с LiviAppModule (как CallKeep), без InCallManager — иначе две мелодии поверх IncomingCallActivity.
+ * На iOS: InCallManager + повторная вибрация.
  */
 export function startIncomingCallAlert() {
   if (started) return;
   started = true;
 
   try {
-    // Системная мелодия звонка (_DEFAULT_ = RingtoneManager.TYPE_RINGTONE). На Android — громкость «Звонок».
-    InCallManager.startRingtone('_DEFAULT_', [0, 800, 800], 'default', 25);
+    if (Platform.OS === 'android') {
+      NativeModules.LiviAppModule?.startIncomingCallRingtoneAndVibration?.();
+    } else {
+      InCallManager.startRingtone('_DEFAULT_', [0, 800, 800], 'default', 25);
+    }
   } catch (e) {
     logger.warn('[incomingCallAlert] startRingtone failed:', e);
   }
 
   try {
     if (Platform.OS === 'android') {
-      // Вибрация звонка (как в настройках «Вибрация звонка»), не уведомления.
-      NativeModules.LiviAppModule?.startIncomingCallVibration?.();
+      // Мелодия + вибрация уже в startIncomingCallRingtoneAndVibration
     } else {
       // iOS: повторяющийся пульс пока висит входящий.
       iosVibeTimer = setInterval(() => {
@@ -44,7 +46,7 @@ export function stopIncomingCallAlert() {
 
   try {
     if (Platform.OS === 'android') {
-      NativeModules.LiviAppModule?.stopIncomingCallVibration?.();
+      NativeModules.LiviAppModule?.stopIncomingCallRingtoneAndVibration?.();
     } else {
       Vibration.cancel();
     }
@@ -58,7 +60,9 @@ export function stopIncomingCallAlert() {
   } catch {}
 
   try {
-    InCallManager.stopRingtone();
+    if (Platform.OS !== 'android') {
+      InCallManager.stopRingtone();
+    }
   } catch (e) {
     logger.warn('[incomingCallAlert] stopRingtone failed:', e);
   }
