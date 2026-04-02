@@ -2,7 +2,9 @@
 import type { Server } from "socket.io";
 import type { AuthedSocket } from "./types";
 import { logger } from '../utils/logger';
+import { isShuttingDown } from '../utils/shutdownState';
 import User from '../models/User';
+import { evictExtraUserSocketsInDirectRoom, parseDirectCallRoomParticipants } from "./directCallRoom";
 
 /**
  * Оптимизированная отправка presence:update только друзьям пользователя
@@ -48,6 +50,11 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
    *  ========================= */
   socket.on("room:join:ack", ({ roomId }: { roomId: string }) => {
     if (!roomId) return;
+
+    const myUserId = (socket as any)?.data?.userId ? String((socket as any).data.userId) : '';
+    if (myUserId) {
+      evictExtraUserSocketsInDirectRoom(io, roomId, myUserId, socket.id);
+    }
     
     // Проверяем что пользователь еще не в этой комнате
     if (socket.rooms.has(roomId)) {
@@ -70,8 +77,24 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     
     logger.debug('Room join', { roomId, existingPeers: existingPeers.length });
     
-    // ОГРАНИЧЕНИЕ: Максимум 2 участника в комнате
-    if (existingPeers.length >= 2) {
+    const pair = parseDirectCallRoomParticipants(roomId);
+    if (pair && myUserId) {
+      if (myUserId !== pair.a && myUserId !== pair.b) {
+        logger.warn('room:join:ack: user not in room pair', { roomId, myUserId });
+        socket.emit("call:busy", { callId: roomId, reason: 'not_participant' });
+        return;
+      }
+      const otherUserIds = new Set<string>();
+      for (const p of existingPeers) {
+        if (p.userId) otherUserIds.add(p.userId);
+      }
+      if (!otherUserIds.has(myUserId) && otherUserIds.size >= 2) {
+        logger.warn('Room is full (two other users already)', { roomId });
+        socket.emit("call:busy", { callId: roomId, reason: 'room_full' });
+        return;
+      }
+    } else if (existingPeers.length >= 2) {
+      // Рандом / fallback: не больше двух других сокетов
       logger.warn('Room is full, rejecting join', { roomId });
       socket.emit("call:busy", { 
         callId: roomId, 
@@ -300,6 +323,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
  * busy снимается только при завершении звонка (call:end в index.ts).
  */
 export async function onSocketDisconnectWebRTC(io: Server, socket: AuthedSocket): Promise<void> {
+  if (isShuttingDown()) return;
   logger.debug('Socket disconnected (webrtc cleanup)', { socketId: socket.id });
   if (socket.data?.isNexting) {
     socket.data.isNexting = false;

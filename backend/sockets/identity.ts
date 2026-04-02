@@ -17,6 +17,12 @@ type AttachPayload = {
   profile?: { nick?: string; avatar?: string } | null;
 };
 
+const OID_HEX_24 = /^[a-f\d]{24}$/i;
+function canonicalMongoUserId(userId: string): string {
+  const raw = String(userId || '').trim();
+  return OID_HEX_24.test(raw) ? raw.toLowerCase() : raw;
+}
+
 /** ===== presence helpers ===== */
 function getOnlineList(io: Server): string[] {
   const set = new Set<string>();
@@ -27,19 +33,20 @@ function getOnlineList(io: Server): string[] {
   return Array.from(set);
 }
 export async function bindUser(io: Server, sock: any, userId: string) {
+  const canonical = canonicalMongoUserId(userId);
   // Проверяем, не подключен ли уже этот пользователь.
   // Не отключаем дубликат до bind нового сокета — иначе можно поймать кратковременный "offline" фликер.
   const duplicateSockets = Array.from(io.sockets.sockets.values())
-    .filter(s => (s as any)?.data?.userId === userId && s.id !== sock.id);
+    .filter(s => String((s as any)?.data?.userId || '') === canonical && s.id !== sock.id);
 
-  sock.data.userId = String(userId);
+  sock.data.userId = canonical;
 
   // Присоединяем к комнате пользователя
   try { 
-    sock.join(`u:${userId}`); 
+    sock.join(`u:${canonical}`); 
     // room join ok
   } catch (error) {
-    console.error(`❌ Failed to join room u:${userId}:`, error);
+    console.error(`❌ Failed to join room u:${canonical}:`, error);
   }
 
   const list = getOnlineList(io);
@@ -53,7 +60,7 @@ export async function bindUser(io: Server, sock: any, userId: string) {
       for (const oldSocket of duplicateSockets) {
         try {
           if ((oldSocket as any)?.connected) {
-            console.warn(`[user] duplicate connection ${userId} old=${oldSocket.id} -> disconnect`);
+            console.warn(`[user] duplicate connection ${canonical} old=${oldSocket.id} -> disconnect`);
             oldSocket.disconnect(true);
           }
         } catch {}
@@ -62,7 +69,7 @@ export async function bindUser(io: Server, sock: any, userId: string) {
   }
 
   // Доставляем офлайн сообщения после установки userId
-  const offlineMessages = await getAndClearOfflineMessages(userId);
+  const offlineMessages = await getAndClearOfflineMessages(canonical);
   if (offlineMessages.length) {}
 
   if (offlineMessages.length > 0) {
@@ -76,7 +83,7 @@ export async function bindUser(io: Server, sock: any, userId: string) {
   }
 
   // Доставляем офлайн уведомления об очистке чата
-  const offlineChatClearedNotifications = getAndClearOfflineChatClearedQueue(userId);
+  const offlineChatClearedNotifications = getAndClearOfflineChatClearedQueue(canonical);
 
   if (offlineChatClearedNotifications.length > 0) {
     offlineChatClearedNotifications.forEach((notification: any) => {
@@ -91,7 +98,7 @@ export async function bindUser(io: Server, sock: any, userId: string) {
   // Пропущенные звонки за время офлайна (телефон выключен / нет сети): отдаём при подключении, чтобы при включении телефона всё пришло сразу
   if (mongoose.connection.readyState === 1) {
     try {
-      const docs = await MissedCall.find({ calleeId: new mongoose.Types.ObjectId(userId) })
+      const docs = await MissedCall.find({ calleeId: new mongoose.Types.ObjectId(canonical) })
         .sort({ createdAt: -1 })
         .limit(50)
         .lean();

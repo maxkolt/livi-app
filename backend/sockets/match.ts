@@ -1,6 +1,7 @@
 import type { Server } from 'socket.io';
 import type { AuthedSocket } from './types';
 import { logger } from '../utils/logger';
+import { isShuttingDown } from '../utils/shutdownState';
 import { createToken, getLiveKitUrl } from '../routes/livekit';
 import * as queueStore from '../utils/queueStore';
 import User from '../models/User';
@@ -646,6 +647,26 @@ export function bindMatch(io: Server, socket: AuthedSocket) {
   socket.on('disconnect', async (reason) => {
     logger.debug('Socket disconnected', { socketId: socket.id, reason });
     clearDelayedRetry(socket.id);
+
+    if (isShuttingDown()) {
+      try {
+        await removeFromQueue(socket.id);
+        await queueStore.clearSocketData(socket.id);
+      } catch {}
+      socket.data.isNexting = false;
+      await clearPartner(io, socket, false, 'disconnect', {
+        nextTransitionId: socket.data.lastNextTransitionId ?? null,
+      });
+      socket.data.inCall = false;
+      socket.data.lastNextTransitionId = undefined;
+      try {
+        await markBusy(io, socket, false);
+      } catch {}
+      try {
+        await unlockPair(socket.id);
+      } catch {}
+      return;
+    }
 
     // Если пользователь нажал "Next" — не удаляем и не трогаем очередь
     if (socket.data?.isNexting) {

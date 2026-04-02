@@ -11,6 +11,8 @@ EnvironmentFile=/path/to/livi-app/backend/.env
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=10
+TimeoutStopSec=90
+KillMode=mixed
 StandardOutput=journal
 StandardError=journal
 
