@@ -38,6 +38,21 @@ class MainActivity : ReactActivity() {
   /** Закрыть системный PiP при пуше call_ended (endedFromActive): собеседник в PiP не получает call:ended по сокету — пуш доходит, закрываем окно сразу. */
   private var closePipCallEndedReceiver: BroadcastReceiver? = null
   private var backPressLoggingCallback: OnBackPressedCallback? = null
+  /** Был intent с EXTRA_PENDING_ANSWER_* — в onResume шлём LiviPendingAnswerCall (один раз на доставку). */
+  private var pendingAnswerFromIntent = false
+
+  private fun tryStashPendingAnswerFromIntent(i: Intent?): Boolean {
+    if (i == null) return false
+    val callId = i.getStringExtra(EXTRA_PENDING_ANSWER_CALL_ID) ?: return false
+    val from = i.getStringExtra(EXTRA_PENDING_ANSWER_FROM) ?: return false
+    if (callId.isBlank() || from.isBlank()) return false
+    val fromNick = i.getStringExtra(EXTRA_PENDING_ANSWER_FROM_NICK) ?: ""
+    LiviAppModule.setPendingAnswerCall(callId, from, fromNick)
+    i.removeExtra(EXTRA_PENDING_ANSWER_CALL_ID)
+    i.removeExtra(EXTRA_PENDING_ANSWER_FROM)
+    i.removeExtra(EXTRA_PENDING_ANSWER_FROM_NICK)
+    return true
+  }
 
   private fun buildSystemPiPSourceRect(): Rect? {
     return try {
@@ -87,6 +102,9 @@ class MainActivity : ReactActivity() {
       LiviAppModule.dismissAllMissedCallNotificationsFromContext(this)
       LiviAppModule.setPendingOpenTabFriends(this)
     }
+    if (tryStashPendingAnswerFromIntent(intent)) {
+      pendingAnswerFromIntent = true
+    }
   }
 
   override fun onResume() {
@@ -128,6 +146,10 @@ class MainActivity : ReactActivity() {
       }
       sendBroadcast(closeOutgoing)
       LiviAppModule.emitPendingCallAcceptedEvent()
+    }
+    if (pendingAnswerFromIntent && LiviAppModule.hasPendingAnswerCall()) {
+      pendingAnswerFromIntent = false
+      LiviAppModule.emitPendingAnswerCallEvent()
     }
   }
 
@@ -307,6 +329,9 @@ class MainActivity : ReactActivity() {
     if (intent?.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false) == true) {
       LiviAppModule.setPendingOpenTabFriends(this)
     }
+    if (tryStashPendingAnswerFromIntent(intent)) {
+      pendingAnswerFromIntent = true
+    }
     // Кнопка Домой свернула приложение во время звонка → при тапе по иконке снова показываем экран звонка, а не главный.
     if (isLaunchedFromLauncher(intent) && LiviOngoingCallHelper.launchOngoingCallActivityIfNeeded(this)) {
       finish()
@@ -395,6 +420,9 @@ class MainActivity : ReactActivity() {
 
   companion object {
     const val EXTRA_PENDING_CALL_ACCEPTED_CALL_ID = "pending_call_accepted_call_id"
+    const val EXTRA_PENDING_ANSWER_CALL_ID = "pending_answer_call_id"
+    const val EXTRA_PENDING_ANSWER_FROM = "pending_answer_from"
+    const val EXTRA_PENDING_ANSWER_FROM_NICK = "pending_answer_from_nick"
     const val EXTRA_OPEN_TAB_FRIENDS = "open_tab_friends"
 
     /** true когда приложение на переднем плане (в т.ч. во время видеозвонка) — тогда не показываем heads-up уведомление о звонке */

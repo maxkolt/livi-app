@@ -3085,22 +3085,13 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Дать клиентам шанс получить server:restarting до обрыва TCP.
   await new Promise((r) => setTimeout(r, GRACEFUL_SHUTDOWN_EMIT_FLUSH_MS));
 
-  // Полное закрытие Engine + всех сокетов; иначе server.close() может не завершиться.
-  await new Promise<void>((resolve) => {
-    try {
-      io.close(() => resolve());
-    } catch (e: any) {
-      logger.warn('io.close failed', { error: e?.message });
-      resolve();
-    }
-  });
-
-  await new Promise<void>((resolve) => {
-    server.close((err) => {
-      if (err) logger.warn('server.close error', { error: (err as any)?.message });
-      resolve();
-    });
-  });
+  // Socket.IO close() гасит Engine и вызывает httpServer.close() на том же server (см. socket.io dist/index.js).
+  // Повторный server.close() даёт ERR_SERVER_NOT_RUNNING — логировали как server.close error.
+  try {
+    await io.close();
+  } catch (e: any) {
+    logger.warn('io.close failed', { error: e?.message });
+  }
   try {
     await mongoose.connection.close();
   } catch (e: any) {

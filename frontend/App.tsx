@@ -329,6 +329,20 @@ function AppContent() {
     })();
   }, []);
 
+  const completeAndroidIncomingAnswer = React.useCallback(async (from: string, callId: string) => {
+    logger.info('[App] Completing incoming answer', { callId, from });
+    if (Platform.OS === 'android') {
+      try { stopIncomingCallRingtoneAndVibration(); } catch {}
+      try { stopIncomingCallAlert(); } catch {}
+      try { stopIncomingCallForegroundService(); } catch {}
+      try { sendCallAnsweredBroadcast(callId); } catch {}
+    }
+    await openAnswerCallScreen(from, callId);
+  }, []);
+
+  const completeAndroidIncomingAnswerRef = React.useRef(completeAndroidIncomingAnswer);
+  completeAndroidIncomingAnswerRef.current = completeAndroidIncomingAnswer;
+
   // События от нативных экранов: инициатор нажал X на исходящем / получатель нажал X на входящем — очищаем состояние
   React.useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
@@ -360,6 +374,17 @@ function AppContent() {
         if (callId) {
           logger.info('[App] LiviPendingCallAccepted: requesting call:accepted', { callId });
           try { requestCallAccepted(callId); } catch {}
+        }
+      });
+    });
+    const subAnswer = emitter.addListener('LiviPendingAnswerCall', () => {
+      const LiviAppModule = NativeModules.LiviAppModule;
+      LiviAppModule?.getAndClearPendingAnswerCallMap?.()?.then?.((m: { callId?: string; from?: string } | null) => {
+        const callId = m && typeof m === 'object' ? String(m.callId ?? '') : '';
+        const from = m && typeof m === 'object' ? String(m.from ?? '') : '';
+        if (callId && from) {
+          logger.info('[App] LiviPendingAnswerCall: opening call', { callId, from });
+          void completeAndroidIncomingAnswer(from, callId);
         }
       });
     });
@@ -437,11 +462,12 @@ function AppContent() {
       sub1.remove();
       sub2.remove();
       sub3.remove();
+      subAnswer.remove();
       sub4.remove();
       sub5.remove();
       sub7.remove();
     };
-  }, []);
+  }, [completeAndroidIncomingAnswer]);
 
   // События answer/end от нативного экрана звонка (Android) — регистрируем после возможного setup
   React.useEffect(() => {
@@ -874,15 +900,7 @@ function AppContent() {
         const from = params.get('from') || params.get('userId') || '';
         if (callId && from) {
           logger.info('[App] answer-call deep link: opening call', { callId, from });
-          // Android: сначала глушим рингтон/вибрацию (в т.ч. если JS не вызывал startIncomingCallAlert — флаг started),
-          // затем FGS и broadcast — порядок важен: onDestroy FGS иначе может дернуть полный stop с рассинхроном.
-          if (Platform.OS === 'android') {
-            try { stopIncomingCallRingtoneAndVibration(); } catch {}
-            try { stopIncomingCallAlert(); } catch {}
-            try { stopIncomingCallForegroundService(); } catch {}
-            try { sendCallAnsweredBroadcast(callId); } catch {}
-          }
-          await openAnswerCallScreen(from, callId);
+          await completeAndroidIncomingAnswer(from, callId);
           return true;
         }
       }
@@ -959,6 +977,20 @@ function AppContent() {
   React.useEffect(() => {
     const handleInitialUrl = async () => {
       try {
+        if (Platform.OS === 'android') {
+          await new Promise((r) => setTimeout(r, 400));
+          const Livi = NativeModules.LiviAppModule;
+          const raw = await Livi?.getAndClearPendingAnswerCallMap?.();
+          const callId =
+            raw && typeof raw === 'object' ? String((raw as { callId?: string }).callId ?? '') : '';
+          const from =
+            raw && typeof raw === 'object' ? String((raw as { from?: string }).from ?? '') : '';
+          if (callId && from) {
+            logger.info('[App] Native pending answer (initial poll): opening call', { callId, from });
+            await completeAndroidIncomingAnswerRef.current(from, callId);
+            return;
+          }
+        }
         const initialUrl = await Linking.getInitialURL();
         if (initialUrl) {
           const handled = await handleCallDeepLink(initialUrl);

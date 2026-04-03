@@ -25,13 +25,11 @@ import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import java.net.URL
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 
 /**
  * Полноэкранный экран входящего звонка (full-screen intent, как WhatsApp/Telegram).
  * Показывается поверх блокировки и других приложений при FCM-пуше о звонке.
- * Принять → открывает MainActivity с livi://answer-call → приложение подключается к звонку.
+ * Принять → MainActivity с extras (без livi:// — dev client не перехватывает) → JS открывает VideoCall.
  * Отклонить → по HTTP на сервер (без открытия приложения), иначе livi://decline-call.
  * При отмене инициатором приходит FCM call_canceled → broadcast → finish() без мельканий.
  */
@@ -131,8 +129,7 @@ class IncomingCallActivity : AppCompatActivity() {
             clearIncomingTimeout()
             stopCallRingtone()
             stopRepeatingVibration()
-            val answerUri = "livi://answer-call?callId=${Uri.encode(callId)}&from=${Uri.encode(from)}&fromNick=${URLEncoder.encode(fromNick, StandardCharsets.UTF_8.toString())}"
-            startMainWithDeepLink(answerUri)
+            startMainForAnswerCall(callId, from, fromNick)
             closeIncomingScreen()
         }
 
@@ -167,7 +164,7 @@ class IncomingCallActivity : AppCompatActivity() {
             registerReceiver(callCanceledReceiver, filter)
         }
 
-        // При ответе из уведомления (livi://answer-call) JS шлёт broadcast — закрываем экран.
+        // После ответа JS шлёт broadcast (deep link или pending extras) — закрываем экран.
         callAnsweredReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val answeredCallId = intent?.getStringExtra(EXTRA_CALL_ID) ?: return
@@ -402,6 +399,16 @@ class IncomingCallActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    private fun startMainForAnswerCall(callId: String, from: String, fromNick: String) {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            putExtra(MainActivity.EXTRA_PENDING_ANSWER_CALL_ID, callId)
+            putExtra(MainActivity.EXTRA_PENDING_ANSWER_FROM, from)
+            putExtra(MainActivity.EXTRA_PENDING_ANSWER_FROM_NICK, fromNick)
+        }
+        startActivity(intent)
     }
 
     private fun startMainWithDeepLink(deepLink: String) {

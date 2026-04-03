@@ -30,6 +30,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableMap
 import com.facebook.react.jstasks.HeadlessJsTaskConfig
 import com.facebook.react.jstasks.HeadlessJsTaskContext
 
@@ -270,6 +271,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun getAndClearPendingCallAcceptedCallId(promise: Promise) {
     promise.resolve(LiviAppModule.getAndClearPendingCallAcceptedCallId())
+  }
+
+  /** Accept с IncomingCallActivity: extras в MainActivity → JS (без livi:// — dev launcher не перехватывает). */
+  @ReactMethod
+  fun getAndClearPendingAnswerCallMap(promise: Promise) {
+    promise.resolve(LiviAppModule.getAndClearPendingAnswerCall())
   }
 
   /** Счётчики пропущенных по userId из нативного хранилища (JSON). Для синхронизации с JS при фокусе — один источник истины. */
@@ -1628,6 +1635,44 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun getAndClearPendingCallAcceptedCallId(): String? {
       return pendingCallAcceptedCallId.also { pendingCallAcceptedCallId = null }
+    }
+
+    @Volatile private var pendingAnswerCallId: String? = null
+    @Volatile private var pendingAnswerFrom: String? = null
+    @Volatile private var pendingAnswerFromNick: String? = null
+
+    @JvmStatic
+    fun setPendingAnswerCall(callId: String, from: String, fromNick: String) {
+      pendingAnswerCallId = callId
+      pendingAnswerFrom = from
+      pendingAnswerFromNick = fromNick
+    }
+
+    @JvmStatic
+    fun hasPendingAnswerCall(): Boolean {
+      return !pendingAnswerCallId.isNullOrBlank() && !pendingAnswerFrom.isNullOrBlank()
+    }
+
+    @JvmStatic
+    fun getAndClearPendingAnswerCall(): WritableMap? {
+      val c = pendingAnswerCallId ?: return null
+      val f = pendingAnswerFrom ?: return null
+      pendingAnswerCallId = null
+      pendingAnswerFrom = null
+      val nick = pendingAnswerFromNick ?: ""
+      pendingAnswerFromNick = null
+      val m = Arguments.createMap()
+      m.putString("callId", c)
+      m.putString("from", f)
+      m.putString("fromNick", nick)
+      return m
+    }
+
+    @JvmStatic
+    fun emitPendingAnswerCallEvent() {
+      reactContextRef?.runOnUiQueueThread {
+        reactContextRef?.emitDeviceEvent("LiviPendingAnswerCall", null)
+      }
     }
 
     /** Входящий для CallKeep (FCM при разблокированном экране): сохранить в pending; JS вызовет getAndClearPendingIncomingCallForCallKeep → displayIncomingCall. */
