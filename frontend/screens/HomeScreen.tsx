@@ -182,8 +182,8 @@ const LIVI = {
 const ANDROID_VIDEO_CALL_DISABLED_BG = '#1C1C1E';
 const ANDROID_VIDEO_CALL_DISABLED_ICON = '#48484A';
 
-/** Короткая задержка перед «офлайн» в списке друзей при выпадении из presence-массива (переподключение сокета у друга). Статус совпадает с шапкой чата и с серверным `online` в friends API. */
-const PRESENCE_OFFLINE_DEBOUNCE_MS = 1200;
+/** Короткая задержка перед «офлайн» при выпадении из presence-массива. Сервер держит «липкий» онлайн при кратком обрыве сокета — здесь только подстраховка от двойных emit. */
+const PRESENCE_OFFLINE_DEBOUNCE_MS = 400;
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 

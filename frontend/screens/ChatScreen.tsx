@@ -2078,17 +2078,40 @@ export default function ChatScreen({ route, navigation }: Props) {
         navigation.setParams({ peerAvatarVer: avatarVer });
       }
     });
+    let presenceOfflineDebounce: ReturnType<typeof setTimeout> | null = null;
+    const PRESENCE_OFFLINE_DEBOUNCE_MS = 400;
     const offPresence = onPresenceUpdate?.((data: any) => {
       // Обрабатываем только массив (для online статуса), игнорируем объекты {userId, busy}
       if (Array.isArray(data)) {
         const onlineSet = new Set((data || []).map((it: any) => String((it as any)?._id ?? it)));
-        const isOnline = onlineSet.has(String(peerId));
-        // КРИТИЧНО: Обновляем и локальное состояние, и navigation params для обновления в реальном времени
-        setPeerOnline(isOnline);
-        navigation.setParams({ peerOnline: isOnline });
+        const isOn = onlineSet.has(String(peerId));
+        if (isOn) {
+          if (presenceOfflineDebounce) {
+            clearTimeout(presenceOfflineDebounce);
+            presenceOfflineDebounce = null;
+          }
+          setPeerOnline(true);
+          try {
+            navigation.setParams({ peerOnline: true } as any);
+          } catch {}
+          return;
+        }
+        if (!presenceOfflineDebounce) {
+          presenceOfflineDebounce = setTimeout(() => {
+            presenceOfflineDebounce = null;
+            setPeerOnline(false);
+            try {
+              navigation.setParams({ peerOnline: false } as any);
+            } catch {}
+          }, PRESENCE_OFFLINE_DEBOUNCE_MS);
+        }
       }
     });
-    return () => { offProfile?.(); offPresence?.(); };
+    return () => {
+      if (presenceOfflineDebounce) clearTimeout(presenceOfflineDebounce);
+      offProfile?.();
+      offPresence?.();
+    };
   }, [peerId, navigation]);
 
   // Обработчик user.avatarUpdated для мгновенного обновления аватара

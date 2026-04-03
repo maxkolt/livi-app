@@ -215,16 +215,14 @@ class IncomingCallForegroundService : Service() {
     }
 
     /**
-     * IncomingCallActivity показала UI и сама ведёт системный рингтон + вибрацию звонка до ответа/отмены/20с.
-     * Раньше через 3с вызывали stopSelf() — на части устройств обрывалась мелодия Activity.
-     * Сейчас: глушим только дублирующий MediaPlayer FGS, отцепляем foreground (уведомление в шторке),
-     * сервис живёт до ответа / отклонения / call_canceled / 20с — таймер и ресиверы не трогаем.
+     * IncomingCallActivity показала UI и сама ведёт рингтон + вибрацию до ответа/отмены/20с.
+     * MediaPlayer FGS не останавливаем здесь: иначе на keyguard звук обрывается до успешного старта
+     * плеера в Activity — IncomingCallActivity вызывает [LiviAppModule.stopRingtonePlayerForCallKeepOnly] после play().
      */
     private fun detachForegroundAfterIncomingActivityVisible() {
         if (didDetachAfterActivityShown) return
         didDetachAfterActivityShown = true
-        vl("[INCOMING_FGS] detach after activity visible: FGS MediaPlayer off, DETACH, keep service")
-        LiviAppModule.stopRingtonePlayerForCallKeepOnly()
+        vl("[INCOMING_FGS] detach after activity visible: keep FGS ringtone until Activity play OK, DETACH, keep service")
         stopFullIncomingAudioOnDestroy = false
         activityShownReceiver?.let {
             try { unregisterReceiver(it) } catch (_: Exception) {}

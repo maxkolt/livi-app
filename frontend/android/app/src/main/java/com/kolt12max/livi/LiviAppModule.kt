@@ -1209,14 +1209,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
 
     /**
-     * Перед стартом локального рингтона на IncomingCallActivity: глушим MediaPlayer FGS и вибратор
-     * от FGS (без двойного звука/вибро). Без STOP broadcast: sendBroadcast асинхронный, иначе receiver
-     * на Activity срабатывает уже после MediaPlayer.start() и сразу глушит мелодию (в фоне «сразу тихо»,
-     * в приложении — нет ни звука, ни вибро).
+     * Перед стартом рингтона на IncomingCallActivity: только снимаем вибратор FGS (Activity ведёт свою).
+     * MediaPlayer FGS НЕ глушим здесь: detach приходит раньше post(play), и на заблокированном экране
+     * плеер Activity часто не стартует — иначе остаётся только вибрация. FGS глушим в Activity после
+     * успешного play() ([stopRingtonePlayerForCallKeepOnly]).
      */
     @JvmStatic
     internal fun stopFgsHandoffForIncomingCallActivity(ctx: Context) {
-      stopRingtonePlayerForCallKeepOnly()
       try {
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator

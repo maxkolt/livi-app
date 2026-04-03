@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
@@ -41,6 +42,8 @@ class IncomingCallActivity : AppCompatActivity() {
     private var callAnsweredReceiver: BroadcastReceiver? = null
     private var stopRemoteRingtoneReceiver: BroadcastReceiver? = null
     private var ringtonePlayer: MediaPlayer? = null
+    /** Системный Ringtone (API 28+ с loop) — на части OEM/Samsung лучше выходит на звонок при keyguard, чем сырой MediaPlayer. */
+    private var systemRingtone: Ringtone? = null
     private var ringtoneAudioManager: AudioManager? = null
     private var ringtoneAudioFocusRequest: AudioFocusRequest? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
@@ -91,6 +94,9 @@ class IncomingCallActivity : AppCompatActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         setContentView(R.layout.activity_incoming_call)
+        // Качелька громкости регулирует поток звонка, а не медиа.
+        @Suppress("DEPRECATION")
+        volumeControlStream = AudioManager.STREAM_RING
 
         // До рингтона: слушатель «снять мелодию с Activity», когда стартует рингтон ConnectionService/CallKeep (иначе два MediaPlayer).
         stopRemoteRingtoneReceiver = object : BroadcastReceiver() {
@@ -436,9 +442,53 @@ class IncomingCallActivity : AppCompatActivity() {
             android.util.Log.w(TAG, "startCallRingtone: getActualDefaultRingtoneUri failed", e)
             null
         }
-        if (uri == null) return
+        if (uri == null) {
+            android.util.Log.w(TAG, "startCallRingtone: default ringtone uri is null")
+            return
+        }
+        // После keyguard/full-screen intent аудиополитика иногда глушит старт в onCreate до готовности окна.
+        val start = Runnable { playIncomingRingtone(uri) }
+        val decor = window?.decorView
+        if (decor != null) {
+            decor.post(start)
+        } else {
+            timeoutHandler.post(start)
+        }
+    }
+
+    private fun playIncomingRingtone(uri: Uri) {
+        if (isFinishing) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) return
+
+        // API 28+: встроенный Ringtone с loop — тот же путь, что превью в настройках; на Samsung при блокировке надёжнее MediaPlayer.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                val rt = RingtoneManager.getRingtone(applicationContext, uri)
+                if (rt != null) {
+                    try {
+                        rt.stop()
+                    } catch (_: Exception) {}
+                    val usage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        AUDIO_USAGE_RINGTONE
+                    } else {
+                        android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+                    }
+                    rt.audioAttributes = android.media.AudioAttributes.Builder()
+                        .setUsage(usage)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                    rt.isLooping = true
+                    rt.play()
+                    systemRingtone = rt
+                    LiviAppModule.stopRingtonePlayerForCallKeepOnly()
+                    return
+                }
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "playIncomingRingtone: Ringtone failed, trying MediaPlayer", e)
+            }
+        }
+
         acquireRingtoneAudioFocus()
-        // USAGE_RINGTONE == 6 (API 29+); символ AudioAttributes.USAGE_RINGTONE в части toolchain не резолвится.
         val usage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             AUDIO_USAGE_RINGTONE
         } else {
@@ -458,8 +508,9 @@ class IncomingCallActivity : AppCompatActivity() {
                 start()
             }
             ringtonePlayer = player
+            LiviAppModule.stopRingtonePlayerForCallKeepOnly()
         } catch (e: Exception) {
-            android.util.Log.w(TAG, "startCallRingtone: play failed", e)
+            android.util.Log.w(TAG, "playIncomingRingtone: MediaPlayer failed", e)
             releaseRingtoneAudioFocus()
         }
     }
@@ -477,7 +528,8 @@ class IncomingCallActivity : AppCompatActivity() {
                 .setUsage(usage)
                 .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
-            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+            // TRANSIENT_EXCLUSIVE на части устройств с keyguard режет звук рингтона; для входящего достаточно TRANSIENT.
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                 .setAudioAttributes(attrs)
                 .setOnAudioFocusChangeListener { }
                 .build()
@@ -485,7 +537,7 @@ class IncomingCallActivity : AppCompatActivity() {
             am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         } else {
             @Suppress("DEPRECATION")
-            am.requestAudioFocus(null, AudioManager.STREAM_RING, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            am.requestAudioFocus(null, AudioManager.STREAM_RING, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         }
         if (!ok) {
             android.util.Log.w(TAG, "acquireRingtoneAudioFocus: not granted, still trying ringtone playback")
@@ -507,6 +559,12 @@ class IncomingCallActivity : AppCompatActivity() {
     }
 
     private fun stopCallRingtone() {
+        try {
+            systemRingtone?.stop()
+            systemRingtone = null
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "stopCallRingtone: system Ringtone", e)
+        }
         try {
             ringtonePlayer?.apply {
                 if (isPlaying) stop()

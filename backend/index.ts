@@ -70,7 +70,12 @@ import {
 } from './utils/callOrchestration';
 import { callProviderAdapter, callProviderMode } from './utils/callProvider';
 import { isShuttingDown, setShuttingDown } from './utils/shutdownState';
-import { getVisibleOnlineUserIds } from './utils/visibleOnline';
+import {
+  getVisibleOnlineUserIds,
+  touchStickyForegroundOnline,
+  clearStickyForegroundOnline,
+  STICKY_FOREGROUND_ONLINE_MS,
+} from './utils/visibleOnline';
 
 /* ========= Типы ========= */
 type LeanUser = {
@@ -714,6 +719,36 @@ function clearPendingPresenceOffline(userId?: string | null): void {
     clearTimeout(pending);
     pendingPresenceOfflineByUserId.delete(key);
   }
+}
+
+/** По истечении STICKY_FOREGROUND_ONLINE_MS снимаем «липкий» онлайн и шлём актуальный список. */
+const stickyForegroundPresenceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelStickyForegroundPresenceTimer(userId: string): void {
+  const key = String(userId || '').trim();
+  if (!key) return;
+  const t = stickyForegroundPresenceTimers.get(key);
+  if (t) clearTimeout(t);
+  stickyForegroundPresenceTimers.delete(key);
+}
+
+function armStickyForegroundPresenceResolution(io: Server, userId: string): void {
+  const key = String(userId || '').trim();
+  if (!key) return;
+  cancelStickyForegroundPresenceTimer(key);
+  const t = setTimeout(() => {
+    stickyForegroundPresenceTimers.delete(key);
+    clearStickyForegroundOnline(key);
+    emitPresence(io);
+  }, STICKY_FOREGROUND_ONLINE_MS);
+  stickyForegroundPresenceTimers.set(key, t);
+}
+
+function clearStickyPresenceStateForUser(userId: string): void {
+  const key = String(userId || '').trim();
+  if (!key) return;
+  clearStickyForegroundOnline(key);
+  cancelStickyForegroundPresenceTimer(key);
 }
 
 function hasAnyOnlineSocketForUser(io: Server, userId: string): boolean {
@@ -1464,6 +1499,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       clearPendingPresenceOffline(mappedUserId);
       void bindUserIdentity(io, sock, mappedUserId).then(() => {
+        clearStickyPresenceStateForUser(mappedUserId);
         replayIncomingToCalleeIfRinging(sock, mappedUserId);
       });
       emitPresence(io);
@@ -1555,6 +1591,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     clearPendingPresenceOffline(String(bindUid));
     const boundUid = String(bindUid);
     void bindUserIdentity(io, sock, boundUid).then(() => {
+      clearStickyPresenceStateForUser(boundUid);
       replayIncomingToCalleeIfRinging(sock, boundUid);
     });
     emitPresence(io);
@@ -1953,6 +1990,9 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (typeof payload?.foreground !== 'boolean') return;
       (sock as any).data = (sock as any).data || {};
       (sock as any).data.appForeground = payload.foreground;
+      if (!payload.foreground) {
+        clearStickyPresenceStateForUser(userId);
+      }
       emitPresence(io);
     } catch (e) {
       logger.error('❌ [app:visibility] Error', { error: (e as any)?.message || String(e) });
@@ -2930,6 +2970,19 @@ io.on('connection', async (sock: AuthedSocket) => {
         });
       }
     }
+    try {
+      const uidStr = userId ? String(userId) : '';
+      if (uidStr) {
+        const appFg = (sock as any)?.data?.appForeground;
+        const otherSocketsSameUser = Array.from(io.sockets.sockets.values()).filter(
+          (s) => s.id !== sock.id && String((s as any)?.data?.userId || '') === uidStr
+        );
+        if (otherSocketsSameUser.length === 0 && appFg !== false) {
+          touchStickyForegroundOnline(uidStr);
+          armStickyForegroundPresenceResolution(io, uidStr);
+        }
+      }
+    } catch {}
     unbindUser(sock);
     schedulePresenceEmitAfterDisconnect(io, userId ? String(userId) : null);
     // Удаляем из очереди random
