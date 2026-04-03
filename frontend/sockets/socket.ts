@@ -677,10 +677,9 @@ try {
       if (!wasForeground && isForeground) {
         emitAppVisibilityToServer(true);
         if (!SOCKET_KEEP_ALIVE_IN_BACKGROUND) __realtimePaused = false;
-        __outgoingCallScreenVisible = false;
-        __incomingCallScreenVisible = false;
-        __incomingCallFromUserId = null;
-        __activeVideoCall = false;
+        // Не сбрасываем __incomingCallScreenVisible / __outgoingCallScreenVisible / __activeVideoCall здесь:
+        // нативные экраны звонка и видеозвонок могут оставаться активными при возврате из фона; сброс давал
+        // ложный «офлайн», обрыв сокета во время входящего/исходящего и рассинхрон presence.
         try { (socket as any).io.opts.reconnection = true; } catch {}
         // applyAuthAndConnect already sets installId/userId and connects with timeouts.
         applyAuthAndConnect().catch(() => {});

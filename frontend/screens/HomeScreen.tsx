@@ -1684,6 +1684,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               if (f.online) {
                 friendLastOnlineTrueAtRef.current.set(f.id, Date.now());
                 mergedOnlineCorr = true;
+              } else if (prevOne?.online) {
+                // Не гасим online из одного ответа loadFriends (гонка REST vs socket после call:end).
+                // Офлайн — только из presence:update (массив видимых онлайн) с debounce.
+                mergedOnlineCorr = true;
               } else {
                 friendLastOnlineTrueAtRef.current.delete(f.id);
                 mergedOnlineCorr = false;
@@ -1724,6 +1728,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             let mergedOnlineMain: boolean;
             if (f.online) {
               friendLastOnlineTrueAtRef.current.set(f.id, Date.now());
+              mergedOnlineMain = true;
+            } else if (prevOne?.online) {
               mergedOnlineMain = true;
             } else {
               friendLastOnlineTrueAtRef.current.delete(f.id);

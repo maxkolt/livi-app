@@ -646,12 +646,13 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
             android: {
               priority: 'high',
               ttl: CALL_PUSH_NOTIFICATION_TTL_SECONDS * 1000,
+              // Тот же тихий канал, что в приложении (CHANNEL_ID_CALLS_SILENT): без heads-up/системного звука —
+              // мелодию ведёт FGS/IncomingCallActivity, иначе второй сигнал даёт всплывашку и наложение звука.
               notification: {
-                channelId: 'livi_incoming_call_v4',
+                channelId: 'livi_incoming_call_silent_v1',
                 tag: `incoming_call_${data.callId}`,
                 title,
                 body,
-                sound: 'default',
                 visibility: 'public',
               },
             },
@@ -767,11 +768,10 @@ export async function sendCallEscalationPushToRecipient(
             priority: 'high',
             ttl: CALL_PUSH_ESCALATION_TTL_SECONDS * 1000,
             notification: {
-              channelId: 'calls',
+              channelId: 'livi_incoming_call_silent_v1',
               tag: `incoming_call_${data.callId}`,
               title,
               body,
-              sound: 'default',
               visibility: 'public',
             },
           },

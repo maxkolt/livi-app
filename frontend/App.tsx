@@ -32,7 +32,7 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, notifyCallCanceled } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, notifyCallCanceled } from './utils/callKeep';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
@@ -316,7 +316,7 @@ function AppContent() {
         const ready = await setupCallKeep({ requestPermission: false });
         if (ready) {
           displayIncomingCall(pending.callId, pending.from, pending.fromNick ?? '', true);
-          startIncomingCallRingtoneAndVibration();
+          // Не дублируем LiviAppModule-рингтон: ConnectionService/CallKeep уже ведёт системный звук входящего.
           logger.info('[App] Pending CallKeep incoming shown', { callId: pending.callId });
         } else {
           await launchIncomingCallActivityScreen(pending.callId, pending.from, pending.fromNick ?? '', true);
@@ -327,6 +327,31 @@ function AppContent() {
         logger.warn('[App] Pending CallKeep incoming failed', e);
       }
     })();
+  }, []);
+
+  // Нативный входящий (FCM + IncomingCallActivity) пишет prefs до/без JS — подтягиваем в сокет-слой для списка друзей (занято, без второго звонка поверх).
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const sync = () => {
+      const mod = NativeModules.LiviAppModule;
+      const p = mod?.peekOngoingIncomingCallForUi?.();
+      if (p && typeof (p as Promise<unknown>).then === 'function') {
+        (p as Promise<{ fromUserId?: string } | null>)
+          .then((m) => {
+            if (m && typeof m === 'object' && m.fromUserId) {
+              try {
+                setIncomingCallScreenVisible(true, m.fromUserId);
+              } catch {}
+            }
+          })
+          .catch(() => {});
+      }
+    };
+    sync();
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') sync();
+    });
+    return () => sub.remove();
   }, []);
 
   const completeAndroidIncomingAnswer = React.useCallback(async (from: string, callId: string) => {

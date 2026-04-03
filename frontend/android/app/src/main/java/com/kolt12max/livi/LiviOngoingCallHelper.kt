@@ -50,6 +50,17 @@ object LiviOngoingCallHelper {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
     }
 
+    /** Не очищает prefs: для JS presence — пока висит нативный входящий, синхронизировать setIncomingCallScreenVisible. */
+    @JvmStatic
+    fun peekIncomingCall(context: Context): Triple<String, String, String>? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getString(KEY_TYPE, null) != "incoming") return null
+        val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
+        val from = prefs.getString(KEY_FROM, null) ?: return null
+        val fromNick = prefs.getString(KEY_FROM_NICK, "") ?: ""
+        return Triple(callId, from, fromNick)
+    }
+
     /**
      * Если есть активный экран звонка (исходящий/входящий), запускает его и возвращает true.
      * Нужно при открытии приложения из лаунчера (кнопка Домой → иконка LiVi): показываем экран звонка, а не главный.

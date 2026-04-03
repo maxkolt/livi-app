@@ -7,7 +7,7 @@ import './utils/pushNotifications';
 import { Alert, AppRegistry, Platform } from 'react-native';
 import { registerRootComponent } from 'expo';
 import App from './App';
-import { isEndedCallId, setupCallKeep, displayIncomingCall, stopIncomingCallForegroundService, startIncomingCallRingtoneAndVibration, showIncomingCallSystemUI } from './utils/callKeep';
+import { isEndedCallId, setupCallKeep, displayIncomingCall, stopIncomingCallForegroundService, showIncomingCallSystemUI } from './utils/callKeep';
 import * as Notifications from 'expo-notifications';
 
 // Headless: при входящем пуше показываем баннер через ConnectionService/CallKeep (как в Telegram) — он не исчезает через 5–7 сек.
@@ -25,7 +25,7 @@ AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (dat
     const ready = await setupCallKeep({ requestPermission: false });
     if (ready) {
       displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
-      startIncomingCallRingtoneAndVibration();
+      // Без второго MediaPlayer: CallKeep/ConnectionService уже играет рингтон.
     } else {
       showIncomingCallSystemUI(data.callId, data.from, data.fromNick ?? '');
     }

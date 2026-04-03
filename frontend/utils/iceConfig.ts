@@ -245,15 +245,15 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
   }
 
   // Используем fallback конфигурацию
-  // КРИТИЧНО: При VPN на iOS может быть полезно использовать relay-only режим
-  // (только TURN, без прямых P2P соединений)
+  // При медленной сети / VPN: таймаут fetch кредов или обрыв TCP — relay-only через TURN
+  // стабильнее прямого P2P (одинаково на iOS и Android).
   const fallbackConfig = getEnvFallbackConfiguration({ forceRelayOnly: forceRelayOnly || relayActive });
-  
-  // Если на iOS и есть проблемы с сетью — принудительно relay-only (обход VPN блокировки UDP)
-  if (Platform.OS === 'ios' && lastError) {
-    const isNetworkIssue = lastError?.message?.includes('Network request failed') ||
-                          lastError?.message?.includes('Failed to fetch') ||
-                          lastError?.name === 'AbortError';
+
+  if (lastError) {
+    const isNetworkIssue =
+      lastError?.message?.includes('Network request failed') ||
+      lastError?.message?.includes('Failed to fetch') ||
+      lastError?.name === 'AbortError';
     if (isNetworkIssue) {
       const hasTurn = (fallbackConfig.iceServers as any[])?.some?.((s: any) => {
         const u = s?.urls;
@@ -262,7 +262,9 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
       });
       if (hasTurn) {
         (fallbackConfig as any).iceTransportPolicy = 'relay';
-        console.warn('[ICE Config] iOS + network issues: using relay-only for VPN compatibility.');
+        console.warn(
+          `[ICE Config] ${Platform.OS} + network/timeout after TURN fetch failure: relay-only for VPN / bad path compatibility.`,
+        );
       }
     }
   }

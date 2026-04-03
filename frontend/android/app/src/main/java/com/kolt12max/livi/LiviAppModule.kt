@@ -381,6 +381,28 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /**
+   * Пока нативный IncomingCallActivity записал входящий в prefs — подтянуть в JS `setIncomingCallScreenVisible`,
+   * чтобы список друзей (занято / второй звонок) совпадал с нативом при блокировке/фоне без сокета.
+   */
+  @ReactMethod
+  fun peekOngoingIncomingCallForUi(promise: Promise) {
+    try {
+      val t = LiviOngoingCallHelper.peekIncomingCall(reactApplicationContext) ?: run {
+        promise.resolve(null)
+        return
+      }
+      val map = Arguments.createMap().apply {
+        putString("callId", t.first)
+        putString("fromUserId", t.second)
+        putString("fromNick", t.third)
+      }
+      promise.resolve(map)
+    } catch (_: Exception) {
+      promise.resolve(null)
+    }
+  }
+
   /** Прочитать и сбросить входящий звонок, переданный из FCM для показа через CallKeep (ConnectionService). JS вызовет displayIncomingCall и stopIncomingCallForegroundService. */
   @ReactMethod
   fun getAndClearPendingIncomingCallForCallKeep(promise: Promise) {

@@ -46,6 +46,7 @@ class IncomingCallActivity : AppCompatActivity() {
     private var ringtoneAudioFocusRequest: AudioFocusRequest? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
+    private var ringtoneVerifyRunnable: Runnable? = null
     private var closeHandled = false
     private var incomingShownReported = false
     private var incomingShownInFlight = false
@@ -451,8 +452,12 @@ class IncomingCallActivity : AppCompatActivity() {
         }
         if (uri == null) {
             android.util.Log.w(TAG, "startCallRingtone: default ringtone uri is null")
+            // Оставляем рингтон FGS/CallKeep — не глушим общий плеер.
             return
         }
+        // НЕ вызываем stopRingtonePlayerForCallKeepOnly() до успешного play() в Activity:
+        // на заблокированном экране post(play) срабатывает с задержкой; преждевременная остановка FGS
+        // оставляет тишину до второго звонка. Дубль снимаем в playIncomingRingtone после старта.
         // После keyguard/full-screen intent аудиополитика иногда глушит старт в onCreate до готовности окна.
         val start = Runnable { playIncomingRingtone(uri) }
         val decor = window?.decorView
@@ -461,6 +466,28 @@ class IncomingCallActivity : AppCompatActivity() {
         } else {
             timeoutHandler.post(start)
         }
+        // Повтор, если OEM/ключ экрана «съели» первый старт рингтона.
+        ringtoneVerifyRunnable?.let { timeoutHandler.removeCallbacks(it) }
+        ringtoneVerifyRunnable = Runnable {
+            ringtoneVerifyRunnable = null
+            if (isFinishing) return@Runnable
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) return@Runnable
+            val playing = try {
+                when {
+                    systemRingtone != null -> systemRingtone!!.isPlaying
+                    ringtonePlayer != null -> ringtonePlayer!!.isPlaying
+                    else -> false
+                }
+            } catch (_: Exception) {
+                false
+            }
+            if (!playing) {
+                android.util.Log.w(TAG, "startCallRingtone: verify not playing, retry playIncomingRingtone")
+                stopCallRingtone()
+                playIncomingRingtone(uri)
+            }
+        }
+        timeoutHandler.postDelayed(ringtoneVerifyRunnable!!, 900)
     }
 
     private fun playIncomingRingtone(uri: Uri) {
@@ -614,6 +641,8 @@ class IncomingCallActivity : AppCompatActivity() {
     private fun clearIncomingTimeout() {
         timeoutRunnable?.let { timeoutHandler.removeCallbacks(it) }
         timeoutRunnable = null
+        ringtoneVerifyRunnable?.let { timeoutHandler.removeCallbacks(it) }
+        ringtoneVerifyRunnable = null
     }
 
     private fun closeIncomingScreen(callIdToEnd: String? = null) {

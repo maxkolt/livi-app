@@ -191,6 +191,8 @@ export function showIncomingCallSystemUI(callId: string, from: string, fromNick?
   if (Platform.OS !== 'android') return;
   try {
     NativeModules.LiviAppModule?.showIncomingCallSystemUI?.(callId, from, fromNick ?? '');
+    // Как у launchIncomingCallActivityScreen: держим сокет/presence в согласовании с нативным входящим в фоне.
+    setIncomingCallScreenVisible(true, from);
   } catch {}
 }
 
