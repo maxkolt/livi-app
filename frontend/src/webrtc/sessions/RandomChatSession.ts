@@ -859,6 +859,17 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.camToggleInProgress = true;
     this.suppressLocalVideoEndedRecovery('toggleCam');
     this.isCamOn = !this.isCamOn;
+    // Сразу сообщаем партнёру (как в VideoCallSession), чтобы «Отошёл» не ждал setCameraEnabled / сеть.
+    const signalRoomId = this.matchRoomId || undefined;
+    if (this.started && !this.isDisconnecting && !this.disconnectHandled && signalRoomId) {
+      try {
+        socket.emit('cam-toggle', {
+          enabled: this.isCamOn,
+          from: socket.id,
+          roomId: signalRoomId,
+        });
+      } catch {}
+    }
     const needsRecovery =
       !this.localVideoTrack ||
       !this.localVideoTrack.mediaStreamTrack ||
@@ -881,14 +892,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         } else {
           await this.room.localParticipant.setCameraEnabled(false);
         }
-        // RandomChat UX: explicitly signal camera state to the partner.
-        // This is the ONLY thing that should drive the "Отошел" placeholder in random chat.
-        try {
-          const roomId = this.matchRoomId || undefined;
-          if (roomId) {
-            socket.emit('cam-toggle', { enabled: this.isCamOn, from: socket.id, roomId });
-          }
-        } catch {}
+        // cam-toggle уже отправлен в начале toggleCam() — см. комментарий выше.
       } catch (e) {
         logger.warn('[RandomChatSession] Failed to toggle camera', e);
         // Fallback: try setCameraEnabled only

@@ -2055,9 +2055,11 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
 
-    // Сохраняем состояние камеры/микрофона перед очисткой треков
-    const savedCamState = this.isCamOn;
-    const savedMicState = this.isMicOn;
+    // Не копируем isCamOn/isMicOn в локальные переменные до await: пока идёт createLocalTracks,
+    // пользователь может выключить камеру/мик — восстановление из старого снимка затирает UI
+    // (чёрный блок «Вы» без подписи после коннекта).
+    const camStateBeforeAwait = this.isCamOn;
+    const micStateBeforeAwait = this.isMicOn;
 
     if (force) {
       this.stopLocalTracksWithoutStateReset();
@@ -2102,14 +2104,14 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     });
     this.localStream = stream;
-    
-    // Восстанавливаем сохранённое состояние камеры/микрофона
-    this.isCamOn = savedCamState;
-    this.isMicOn = savedMicState;
-    logger.info('[MIC_TRACE session] ensureLocalTracks restored cam/mic flags', {
+
+    // После await оставляем актуальные this.isCamOn / this.isMicOn (учитывают toggle во время create).
+    logger.info('[MIC_TRACE session] ensureLocalTracks applied cam/mic flags', {
       ts: Date.now(),
-      savedMicState,
-      savedCamState,
+      camBeforeAwait: camStateBeforeAwait,
+      micBeforeAwait: micStateBeforeAwait,
+      camNow: this.isCamOn,
+      micNow: this.isMicOn,
     });
 
     // КРИТИЧНО: Применяем сохранённые состояния к трекам сразу после создания.
@@ -2283,7 +2285,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private async recreateLocalVideoTrack(context: string): Promise<void> {
     // IMPORTANT: Do not touch localAudioTrack here. Recreating audio during camera recovery
     // is a common root cause of one-way / unstable audio on Android.
-    const savedCamState = this.isCamOn;
+    const camStateBeforeAwait = this.isCamOn;
 
     const facingMode = this.camSide === 'front' ? 'user' : 'environment';
     const preferred = getPreferredVideoCaptureOptions(facingMode);
@@ -2355,14 +2357,22 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     } catch {}
 
-    // Apply saved camera state immediately.
+    // Актуальное состояние после await (пользователь мог выключить камеру во время recreate).
+    const camNow = this.isCamOn;
     try {
       if (this.localVideoTrack?.mediaStreamTrack) {
-        this.localVideoTrack.mediaStreamTrack.enabled = savedCamState;
-        if (savedCamState) await this.localVideoTrack.unmute().catch(() => {});
+        this.localVideoTrack.mediaStreamTrack.enabled = camNow;
+        if (camNow) await this.localVideoTrack.unmute().catch(() => {});
         else await this.localVideoTrack.mute().catch(() => {});
       }
     } catch {}
+    if (__DEV__ && camStateBeforeAwait !== camNow) {
+      logger.debug('[VideoCallSession] recreateLocalVideoTrack: cam intent changed during await', {
+        context,
+        camStateBeforeAwait,
+        camNow,
+      });
+    }
 
     // Создаём новый MediaStream с новым видео-треком и тем же аудио-треком.
     // Важно: новая ссылка и новый stream.id, чтобы UI (VideoCall) увидел изменение

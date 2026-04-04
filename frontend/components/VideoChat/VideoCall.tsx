@@ -341,10 +341,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setIsInactiveState(false);
       setWasFriendCallEnded(false);
       setStarted(true);
-      setCamOn(true);
+      const camOnAccept = sessionRef.current?.getIsCamOn?.() ?? true;
+      setCamOn(camOnAccept);
       logMicTraceRef.current('incoming useIncomingCall onAccept → setMicOn(true)', {
         callId,
         fromUserId,
+        camOnAccept,
       });
       setMicOn(true);
     },
@@ -1911,13 +1913,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setStarted(true);
       setLoading(true);
       incomingCallHook.setIncomingOverlay(false);
-      setCamOn(true);
+      const camFromSession = sessionRef.current?.getIsCamOn?.() ?? true;
+      setCamOn(camFromSession);
       const micFromSession = sessionRef.current?.getIsMicOn?.() ?? true;
-      logMicTraceRef.current('handleCallAnswered (socket) → setMicOn from session', {
+      logMicTraceRef.current('handleCallAnswered (socket) → setMicOn/setCamOn from session', {
         roomId,
         callId,
         partnerId,
         micFromSession,
+        camFromSession,
       });
       setMicOn(micFromSession);
       
@@ -1925,9 +1929,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (currentLocalStream) {
         const videoTrack = (currentLocalStream as any)?.getVideoTracks?.()?.[0];
         if (videoTrack && videoTrack.readyState === 'live') {
-          videoTrack.enabled = true;
+          videoTrack.enabled = camFromSession;
           try {
-            sessionRef.current?.sendCameraState?.(undefined, true);
+            sessionRef.current?.sendCameraState?.(undefined, camFromSession);
           } catch (e) {
             logger.warn('[VideoCall] Error sending camera state:', e);
           }

@@ -247,7 +247,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     })();
   }, []);
   
-  // cam-toggle для рандомного чата на LiveKit не используем (состояние камеры определяется по трекам)
+  // Заглушка «Отошёл» у партнёра в рандоме ведётся по socket `cam-toggle` из RandomChatSession.toggleCam (мгновенно, до LiveKit).
   
   const L = useCallback((key: string) => t(key, lang), [lang]);
   
