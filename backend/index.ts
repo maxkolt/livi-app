@@ -1076,6 +1076,45 @@ function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'cancele
   }
 }
 
+/**
+ * Найти ключ callsById по тому, что прислал клиент в call:end: сам callId, или roomId вида room_A_B.
+ * Раньше call:end не вызывал cleanupCall — callsById/callOfUser оставались до таймаута, из‑за чего следующий call:initiate давал error: busy и пуш не уходил.
+ */
+function resolveCallIdFromEndIdentifier(roomOrCallId: string, explicitCallId?: string): string | null {
+  const ex = explicitCallId ? String(explicitCallId).trim() : '';
+  if (ex && callsById.has(ex)) return ex;
+  const id = String(roomOrCallId || '').trim();
+  if (!id) return null;
+  if (callsById.has(id)) return id;
+  const rm = id.match(/^room_([a-f\d]{24})_([a-f\d]{24})$/i);
+  if (!rm) return null;
+  const u1 = normalizeMongoObjectId(rm[1]);
+  const u2 = normalizeMongoObjectId(rm[2]);
+  if (!isOid(u1) || !isOid(u2)) return null;
+  for (const uid of [u1, u2]) {
+    const entry = callOfUser.get(uid);
+    if (!entry?.callId) continue;
+    const link = callsById.get(entry.callId);
+    if (!link) continue;
+    const pair = new Set([normalizeMongoObjectId(link.a), normalizeMongoObjectId(link.b)]);
+    if (pair.has(u1) && pair.has(u2)) return entry.callId;
+  }
+  return null;
+}
+
+/** Снять залипший callOfUser, если звонка уже нет в callsById (после сбоя или старого бага). */
+function pruneOrphanCallOfUserEntry(userId: string): void {
+  const uid = normalizeMongoObjectId(String(userId || ''));
+  if (!isOid(uid)) return;
+  const entry = callOfUser.get(uid);
+  if (!entry?.callId) return;
+  if (callsById.has(entry.callId)) return;
+  const other = entry.with ? normalizeMongoObjectId(String(entry.with)) : '';
+  logger.warn('[call:initiate] pruning orphan callOfUser (no callsById)', { userId: uid, staleCallId: entry.callId });
+  callOfUser.delete(uid);
+  if (other && isOid(other)) callOfUser.delete(other);
+}
+
 const CALL_DELIVERY_ACK_WAIT_MS = 3_000;
 const CALL_DELIVERY_RETRY_EVERY_MS = 4_000;
 const CALL_DELIVERY_ESCALATE_AFTER_RETRY = 1;
@@ -1842,6 +1881,11 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       } catch {}
 
+      const cidToCleanup = resolveCallIdFromEndIdentifier(id, callId);
+      if (cidToCleanup) {
+        cleanupCall(cidToCleanup, 'canceled');
+      }
+
       // Пуш второму участнику (если приложение в фоне/убито) — снять уведомление о звонке и закрыть UI при открытии
       const senderUserId = (sock as any)?.data?.userId;
       if (senderUserId) {
@@ -2255,6 +2299,9 @@ io.on('connection', async (sock: AuthedSocket) => {
       const peerRaw = String(to || '').trim();
       if (!peerRaw || !peerRaw.match(/^[a-f\d]{24}$/i)) return ack?.({ ok: false, error: 'bad_peer' });
       const peerId = normalizeMongoObjectId(peerRaw);
+
+      pruneOrphanCallOfUserEntry(me);
+      pruneOrphanCallOfUserEntry(peerId);
 
       // Проверяем busy флаг инициатора
       const initiatorSocket = io.sockets.sockets.get(sock.id);
