@@ -279,7 +279,7 @@ export function emitPresenceUpdateIfChanged(
 let __hasConnectedEver = false;
 
 /** Единый debounce офлайн в списке друзей и шапке чата (см. HomeScreen / ChatScreen). */
-export const PRESENCE_OFFLINE_DEBOUNCE_MS = 450;
+export const PRESENCE_OFFLINE_DEBOUNCE_MS = 350;
 
 /**
  * Сразу после connect пустой массив presence часто приходит при гонке reauth / комнаты — не затираем

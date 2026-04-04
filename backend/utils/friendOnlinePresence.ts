@@ -6,9 +6,12 @@ import type { Server } from 'socket.io';
  *   либо все сокеты в фоне, но не дольше IN_APP_OFFLINE_DEBOUNCE_MS (гистерезис, без мерцания).
  * - Офлайн: нет сокетов (см. disconnect grace в index) или устойчивый фон дольше гистерезиса без звонка.
  */
-export const IN_APP_OFFLINE_DEBOUNCE_MS = 2_500;
+export const IN_APP_OFFLINE_DEBOUNCE_MS = 2_000;
 
 const userAllBackgroundSince = new Map<string, number>();
+
+/** Когда все сокеты в фоне, список друзьям должен обновиться ровно по истечении гистерезиса — иначе один emit сразу после app:visibility остаётся «ещё онлайн», а следующего события может не быть долго. */
+const inAppOfflinePresenceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** Не сбрасываем «отсчёт фона» на каждый краткий foreground — только после устойчивого true. */
 const FOREGROUND_ACK_CLEAR_BACKGROUND_MS = 480;
@@ -71,7 +74,7 @@ function socketForegroundTriState(s: { data?: Record<string, unknown> }): FgTri 
  * Обновляет момент «все сокеты ушли в фон».
  * Не удаляем отсчёт при каждом кратком appForeground:true — это делает scheduleDebouncedClearBackgroundOnForeground.
  */
-function syncInAppTrackingForAllConnectedUsers(io: Server): void {
+export function syncInAppTrackingForAllConnectedUsers(io: Server): void {
   const active = new Set<string>();
   for (const s of io.sockets.sockets.values()) {
     const u = normalizeUid(String((s as any)?.data?.userId || ''));
@@ -125,6 +128,38 @@ function syncInAppTrackingForAllConnectedUsers(io: Server): void {
       foregroundAckTimers.delete(k);
     }
   }
+  for (const k of [...inAppOfflinePresenceTimers.keys()]) {
+    if (!active.has(k)) {
+      const t = inAppOfflinePresenceTimers.get(k);
+      if (t) clearTimeout(t);
+      inAppOfflinePresenceTimers.delete(k);
+    }
+  }
+}
+
+export function cancelInAppOfflinePresenceEmit(userId: string): void {
+  const key = normalizeUid(userId);
+  if (!key) return;
+  const t = inAppOfflinePresenceTimers.get(key);
+  if (t) clearTimeout(t);
+  inAppOfflinePresenceTimers.delete(key);
+}
+
+/** После ухода в фон: один раз переслать глобальный список, когда гистерезис «в приложении» истечёт. */
+export function armInAppOfflinePresenceEmit(io: Server, userId: string): void {
+  const key = normalizeUid(userId);
+  if (!key) return;
+  cancelInAppOfflinePresenceEmit(key);
+  syncInAppTrackingForAllConnectedUsers(io);
+  const since = userAllBackgroundSince.get(key);
+  if (since == null) return;
+  const elapsed = Date.now() - since;
+  const wait = Math.max(0, IN_APP_OFFLINE_DEBOUNCE_MS - elapsed + 15);
+  const t = setTimeout(() => {
+    inAppOfflinePresenceTimers.delete(key);
+    scheduleGlobalFriendPresenceEmit(io);
+  }, wait);
+  inAppOfflinePresenceTimers.set(key, t);
 }
 
 /**
@@ -140,7 +175,9 @@ export function applyFastOfflineAfterCallIfAllSocketsBackground(io: Server, user
     if (String((s as any)?.data?.userId || '') !== key) continue;
     if ((s as any).data?.appForeground !== false) return;
   }
+  cancelInAppOfflinePresenceEmit(key);
   userAllBackgroundSince.set(key, Date.now() - IN_APP_OFFLINE_DEBOUNCE_MS - 1);
+  scheduleGlobalFriendPresenceEmit(io);
 }
 
 /** После syncInAppTrackingForAllConnectedUsers: онлайн ли пользователь «в приложении». */
@@ -195,6 +232,7 @@ export function scheduleGlobalFriendPresenceEmit(io: Server): void {
 export function scheduleDebouncedClearBackgroundOnForeground(io: Server, userId: string): void {
   const key = normalizeUid(userId);
   if (!key) return;
+  cancelInAppOfflinePresenceEmit(key);
   cancelForegroundAckForUser(key);
   const t = setTimeout(() => {
     foregroundAckTimers.delete(key);

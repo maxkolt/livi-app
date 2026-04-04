@@ -82,6 +82,8 @@ import {
   applyFastOfflineAfterCallIfAllSocketsBackground,
   scheduleDebouncedClearBackgroundOnForeground,
   cancelDebouncedForegroundAck,
+  armInAppOfflinePresenceEmit,
+  cancelInAppOfflinePresenceEmit,
 } from './utils/friendOnlinePresence';
 
 /* ========= Типы ========= */
@@ -2007,6 +2009,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       } else {
         cancelDebouncedForegroundAck(userId);
         clearStickyPresenceStateForUser(userId);
+        armInAppOfflinePresenceEmit(io, userId);
       }
       scheduleGlobalFriendPresenceEmit(io);
     } catch (e) {
@@ -3000,6 +3003,13 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
     } catch {}
     unbindUser(sock);
+    try {
+      const uidStr = userId ? String(userId) : '';
+      if (uidStr) {
+        cancelInAppOfflinePresenceEmit(uidStr);
+        armInAppOfflinePresenceEmit(io, uidStr);
+      }
+    } catch {}
     schedulePresenceEmitAfterDisconnect(io, userId ? String(userId) : null);
     // Удаляем из очереди random
     await removeFromWaitingQueue(sock.id);
