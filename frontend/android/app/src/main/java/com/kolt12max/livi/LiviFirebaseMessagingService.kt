@@ -121,7 +121,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 return
             }
             Log.i(TAG, "[INCOMING_CALL] proceed callId=$callId keyguardLocked=$keyguardLocked isInteractive=$isInteractive")
-            vLog("[INCOMING_CALL] proceeding: dismissMessageNotifications → startActivity → FGS")
+            vLog("[INCOMING_CALL] proceeding: main thread → dismiss → startActivity → FGS")
             // Всегда показываем входящий из FCM: без условий по foreground/фоне/блокировке. Пуши — единственный надёжный канал; сокет может быть отключён, приложение убито, экран выключен.
             // Wake lock: даём процессу время запустить FGS и показать full-screen intent (особенно при убитом приложении).
             val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -131,39 +131,40 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             Handler(Looper.getMainLooper()).postDelayed({
                 try { wakeLock?.release() } catch (_: Exception) {}
             }, 8000L)
-            try {
-                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
-                dismissMessageNotificationsForIncomingCall(nm)
-                vLog("[INCOMING_CALL] dismissMessageNotificationsForIncomingCall done")
-            } catch (e: Exception) {
-                Log.w(TAG, "[INCOMING_CALL] dismissMessageNotificationsForIncomingCall failed", e)
-            }
-            ensureCallChannel(this)
-            // Как в Telegram: сразу пробуем показать экран входящего из контекста FCM (до FGS), чтобы сработало даже после только что пришедшего сообщения.
-            try {
-                val launchIntent = buildIncomingCallActivityIntent(this, callId, from, fromNick).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // onMessageReceived — worker thread: startActivity/startForegroundService и показ уведомлений только с main looper (иначе экран/FGS и мелодия нестабильны в фоне).
+            Handler(Looper.getMainLooper()).post {
+                try {
+                    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
+                    dismissMessageNotificationsForIncomingCall(nm)
+                    vLog("[INCOMING_CALL] dismissMessageNotificationsForIncomingCall done")
+                } catch (e: Exception) {
+                    Log.w(TAG, "[INCOMING_CALL] dismissMessageNotificationsForIncomingCall failed", e)
                 }
-                startActivity(launchIntent)
-                Log.i(TAG, "[INCOMING_CALL] startActivity OK callId=$callId")
-                vLog("[INCOMING_CALL] startActivity(IncomingCallActivity) immediate OK callId=$callId")
-            } catch (e: Exception) {
-                Log.w(
-                    TAG,
-                    "[INCOMING_CALL] startActivity FAILED callId=$callId msg=${e.message} (FGS will retry)",
-                    e
+                ensureCallChannel(this@LiviFirebaseMessagingService)
+                try {
+                    val launchIntent = buildIncomingCallActivityIntent(this@LiviFirebaseMessagingService, callId, from, fromNick).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(launchIntent)
+                    Log.i(TAG, "[INCOMING_CALL] startActivity OK callId=$callId")
+                    vLog("[INCOMING_CALL] startActivity(IncomingCallActivity) on main OK callId=$callId")
+                } catch (e: Exception) {
+                    Log.w(
+                        TAG,
+                        "[INCOMING_CALL] startActivity FAILED callId=$callId msg=${e.message} (FGS will retry)",
+                        e
+                    )
+                }
+                startIncomingCallForegroundService(
+                    callId,
+                    from,
+                    fromNick,
+                    headsUpOnly = false,
+                    silentNotification = true
                 )
+                vLog("[INCOMING_CALL] startIncomingCallForegroundService returned callId=$callId")
             }
-            // FGS: рингтон/вибрация + уведомление только в шторке (без heads-up): экран входящего даёт основной UX; сообщения — отдельный канал с HIGH.
-            startIncomingCallForegroundService(
-                callId,
-                from,
-                fromNick,
-                headsUpOnly = false,
-                silentNotification = true
-            )
-            vLog("[INCOMING_CALL] startIncomingCallForegroundService returned callId=$callId")
             return
         }
         if (typeNorm == "call_canceled" && callId != null) {

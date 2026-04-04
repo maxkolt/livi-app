@@ -10,6 +10,7 @@ import android.content.Intent
 import android.app.KeyguardManager
 import android.graphics.Rect
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
@@ -293,18 +294,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun launchIncomingCallActivity(callId: String, from: String, fromNick: String?) {
     val ctx = reactApplicationContext
-    // Не cancel уведомление до broadcast: иначе срываем foreground FGS до detach. Не stopService(FGS): onDestroy
-    // вызывал полный stop и глушил IncomingCallActivity (один вибросигнал, без мелодии).
-    try {
-      val shown = Intent(IncomingCallForegroundService.ACTION_INCOMING_CALL_ACTIVITY_SHOWN).apply {
-        setPackage(ctx.packageName)
-        putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
-      }
-      ctx.sendBroadcast(shown)
-      Handler(Looper.getMainLooper()).postDelayed({
-        try { ctx.sendBroadcast(shown) } catch (_: Exception) {}
-      }, 250)
-    } catch (_: Exception) {}
+    // НЕ шлём ACTION_INCOMING_CALL_ACTIVITY_SHOWN до реального onCreate IncomingCallActivity:
+    // иначе FGS делает detach до старта рингтона на экране — на keyguard/фоне плеер Activity часто
+    // не успевает, а FGS уже заглушён через stopRingtonePlayerForCallKeepOnly → тишина.
 
     LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
     // Те же флаги, что и в FCM (buildIncomingCallActivityIntent): иначе при активном процессе + заблокированном экране
@@ -1092,6 +1084,37 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @Volatile
     var ringtonePlayerForCallKeep: MediaPlayer? = null
       internal set
+
+    /** После видеозвонка часто остаётся MODE_IN_COMMUNICATION — без MODE_RINGTONE мелодия входящего на части OEM не слышна. */
+    @Volatile
+    private var incomingRingtoneAudioModeSaved: Int? = null
+
+    @JvmStatic
+    internal fun ensureIncomingRingtoneAudioMode(ctx: Context) {
+      val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+      synchronized(LiviAppModule::class.java) {
+        try {
+          if (incomingRingtoneAudioModeSaved == null) {
+            incomingRingtoneAudioModeSaved = am.mode
+          }
+          // Всегда форсируем RINGTONE: после предыдущего звонка saved мог остаться без clear (crash/OEM),
+          // старый код делал return и мелодия не шла в фоне.
+          am.mode = AudioManager.MODE_RINGTONE
+        } catch (_: Exception) {}
+      }
+    }
+
+    @JvmStatic
+    internal fun clearIncomingRingtoneAudioMode(ctx: Context) {
+      val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+      synchronized(LiviAppModule::class.java) {
+        val saved = incomingRingtoneAudioModeSaved ?: return
+        incomingRingtoneAudioModeSaved = null
+        try {
+          am.mode = saved
+        } catch (_: Exception) {}
+      }
+    }
     /** Включить системный PiP при нажатии Home во время видеозвонка (окно поверх лаунчера). JS выставляет true при активном звонке или при показе in-app PiP. */
     @Volatile
     @JvmField
@@ -1173,14 +1196,34 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
     /** Запуск мелодии звонка и вибрации звонка из нативного кода (FGS, без React).
      * Системная мелодия звонка и вибрация звонка (не уведомления) — и при заблокированном, и при разблокированном экране. */
+    /**
+     * Остановить только FGS MediaPlayer и вибратор перед новым стартом рингтона.
+     * Не слать STOP на IncomingCallActivity и не сбрасывать audio mode — иначе гонка с Activity.post(play)
+     * при FCM+FGS и тихий входящий на заблокированном экране.
+     */
+    @JvmStatic
+    internal fun stopFgsRingtoneAndVibratorOnly(ctx: Context) {
+      stopRingtonePlayerForCallKeepOnly()
+      try {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+        } else {
+          @Suppress("DEPRECATION")
+          ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+        vibrator?.cancel()
+      } catch (_: Exception) {}
+    }
+
     @JvmStatic
     internal fun startIncomingCallRingtoneAndVibrationStatic(ctx: Context) {
       try {
-        stopIncomingCallRingtoneAndVibrationStatic(ctx)
+        stopFgsRingtoneAndVibratorOnly(ctx)
         val uri: Uri? = try {
           RingtoneManager.getActualDefaultRingtoneUri(ctx, RingtoneManager.TYPE_RINGTONE)
         } catch (_: Exception) { null }
         if (uri != null) {
+          ensureIncomingRingtoneAudioMode(ctx)
           val player = MediaPlayer().apply {
             setDataSource(ctx, uri)
             setAudioAttributes(
@@ -1270,6 +1313,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
         vibrator?.cancel()
+      } catch (_: Exception) {}
+      try {
+        clearIncomingRingtoneAudioMode(ctx)
       } catch (_: Exception) {}
       try {
         val i = Intent(ACTION_STOP_INCOMING_ACTIVITY_RINGTONE).setPackage(ctx.packageName)

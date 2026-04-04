@@ -9,6 +9,7 @@ import {
   parseDirectCallRoomParticipants,
   sanitizeDirectCallSocketIoRoom,
 } from "./directCallRoom";
+import { scheduleGlobalFriendPresenceEmit } from "../utils/friendOnlinePresence";
 
 /**
  * Оптимизированная отправка presence:update только друзьям пользователя
@@ -154,6 +155,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     const myUserId = (socket as any)?.data?.userId;
     if (myUserId) {
       await emitPresenceUpdateToFriends(io, myUserId, true);
+      scheduleGlobalFriendPresenceEmit(io);
       logger.debug('Set busy for user', { userId: myUserId });
     }
   });
@@ -301,6 +303,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
         const peerUserId = (peerSocket as any)?.data?.userId;
         if (peerUserId) {
           await emitPresenceUpdateToFriends(io, peerUserId, false);
+          scheduleGlobalFriendPresenceEmit(io);
         }
       }
     }
@@ -308,6 +311,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     // Отправляем presence:update для уходящего (только друзьям)
     if (leavingUserId) {
       await emitPresenceUpdateToFriends(io, leavingUserId, false);
+      scheduleGlobalFriendPresenceEmit(io);
     }
     
     socket.leave(roomId);

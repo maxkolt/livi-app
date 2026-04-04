@@ -71,11 +71,15 @@ import {
 import { callProviderAdapter, callProviderMode } from './utils/callProvider';
 import { isShuttingDown, setShuttingDown } from './utils/shutdownState';
 import {
-  getVisibleOnlineUserIds,
   touchStickyForegroundOnline,
   clearStickyForegroundOnline,
   STICKY_FOREGROUND_ONLINE_MS,
 } from './utils/visibleOnline';
+import {
+  getFriendVisibleOnlineUserIds,
+  emitGlobalFriendPresence,
+  scheduleGlobalFriendPresenceEmit,
+} from './utils/friendOnlinePresence';
 
 /* ========= Типы ========= */
 type LeanUser = {
@@ -683,7 +687,7 @@ mongoose
 
 /* ========= Presence helpers ========= */
 function getOnlineListFromIo(io: Server): string[] {
-  return getVisibleOnlineUserIds(io);
+  return getFriendVisibleOnlineUserIds(io);
 }
 function bindUser(sock: AuthedSocket, userId: string) {
   const uid = normalizeMongoObjectId(String(userId));
@@ -702,9 +706,7 @@ function unbindUser(sock: AuthedSocket) {
   }
 }
 function emitPresence(io: Server) {
-  const list = getOnlineListFromIo(io);
-  io.emit('presence_update', list);
-  io.emit('presence:update', list);
+  emitGlobalFriendPresence(io);
 }
 
 const PRESENCE_DISCONNECT_GRACE_MS = 2500;
@@ -814,6 +816,8 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
     try {
       io.to(`u:${userId}`).emit('presence:update', { userId, busy });
     } catch {}
+  } finally {
+    scheduleGlobalFriendPresenceEmit(io);
   }
 }
 
@@ -1993,7 +1997,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (!payload.foreground) {
         clearStickyPresenceStateForUser(userId);
       }
-      emitPresence(io);
+      scheduleGlobalFriendPresenceEmit(io);
     } catch (e) {
       logger.error('❌ [app:visibility] Error', { error: (e as any)?.message || String(e) });
     }
@@ -2752,6 +2756,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         livekitUrl: getLiveKitUrl() || null,
       });
       logger.info('[call:getAccepted] Sent call:accepted to caller', { userId, callId: id });
+      scheduleGlobalFriendPresenceEmit(io);
     } catch (e: any) {
       logger.warn('[call:getAccepted] Failed to send call:accepted', { userId, callId: id, error: e?.message });
     }

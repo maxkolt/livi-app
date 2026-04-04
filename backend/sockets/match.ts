@@ -5,6 +5,7 @@ import { isShuttingDown } from '../utils/shutdownState';
 import { createToken, getLiveKitUrl } from '../routes/livekit';
 import * as queueStore from '../utils/queueStore';
 import User from '../models/User';
+import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
 
 const MODERATION_BAN_MS = 60 * 60 * 1000; // 1 час
 
@@ -112,7 +113,10 @@ async function markBusy(io: Server, s: AuthedSocket, busy: boolean) {
   s.data = s.data || {};
   s.data.busy = busy;
   const userId = String(s.data.userId || '');
-  if (userId) await emitPresenceUpdateToFriends(io, userId, busy);
+  if (userId) {
+    await emitPresenceUpdateToFriends(io, userId, busy);
+    scheduleGlobalFriendPresenceEmit(io);
+  }
 }
 async function lockPair(a: AuthedSocket, b: AuthedSocket) {
   await Promise.all([

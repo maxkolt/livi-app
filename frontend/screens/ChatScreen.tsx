@@ -47,7 +47,12 @@ import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { API_BASE, getMyProfile } from '../sockets/socket';
 import { logger } from '../utils/logger';
 import { toAvatarThumb } from '../utils/uploadAvatar';
-import { onFriendProfile, onPresenceUpdate } from '../sockets/socket';
+import {
+  onFriendProfile,
+  onPresenceUpdate,
+  PRESENCE_OFFLINE_DEBOUNCE_MS,
+  isReconnecting,
+} from '../sockets/socket';
 import { uploadMediaToServer } from '../utils/mediaUpload';
 import MediaViewer from '../components/MediaViewer';
 import * as ImagePicker from 'expo-image-picker';
@@ -1497,6 +1502,13 @@ export default function ChatScreen({ route, navigation }: Props) {
     
     const unsubscribePresence = onUserPresence((userId, online) => {
       if (userId === peerId) {
+        logger.info('[presence:online:trace] ChatScreen onUserPresence (дифф массива)', {
+          appState: AppState.currentState,
+          socketConnected: socket.connected,
+          reconnecting: isReconnecting(),
+          peerId: String(peerId),
+          online,
+        });
         setPeerOnline(online);
       }
     });
@@ -1510,6 +1522,13 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (!peerId) return;
       if (!hasVisibleOnlinePresenceSnapshot()) return;
       const isOn = isPeerInVisibleOnlinePresence(String(peerId));
+      logger.info('[presence:online:trace] ChatScreen focus → статус из глобального снимка', {
+        appState: AppState.currentState,
+        socketConnected: socket.connected,
+        reconnecting: isReconnecting(),
+        peerId: String(peerId),
+        isOn,
+      });
       setPeerOnline(isOn);
       try {
         navigation.setParams({ peerOnline: isOn } as any);
@@ -2079,16 +2098,29 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
     });
     let presenceOfflineDebounce: ReturnType<typeof setTimeout> | null = null;
-    const PRESENCE_OFFLINE_DEBOUNCE_MS = 400;
     const offPresence = onPresenceUpdate?.((data: any) => {
       // Обрабатываем только массив (для online статуса), игнорируем объекты {userId, busy}
       if (Array.isArray(data)) {
         const onlineSet = new Set((data || []).map((it: any) => String((it as any)?._id ?? it)));
         const isOn = onlineSet.has(String(peerId));
+        logger.info('[presence:online:trace] ChatScreen onPresenceUpdate массив', {
+          appState: AppState.currentState,
+          socketConnected: socket.connected,
+          reconnecting: isReconnecting(),
+          peerId: String(peerId),
+          payloadLen: data.length,
+          payloadOnlineCount: onlineSet.size,
+          peerInPayload: isOn,
+          debounceMs: PRESENCE_OFFLINE_DEBOUNCE_MS,
+        });
         if (isOn) {
           if (presenceOfflineDebounce) {
             clearTimeout(presenceOfflineDebounce);
             presenceOfflineDebounce = null;
+            logger.info('[presence:online:trace] ChatScreen отменён debounce офлайн шапки', {
+              appState: AppState.currentState,
+              peerId: String(peerId),
+            });
           }
           setPeerOnline(true);
           try {
@@ -2097,8 +2129,16 @@ export default function ChatScreen({ route, navigation }: Props) {
           return;
         }
         if (!presenceOfflineDebounce) {
+          logger.info('[presence:online:trace] ChatScreen запланирован офлайн шапки после debounce', {
+            appState: AppState.currentState,
+            peerId: String(peerId),
+          });
           presenceOfflineDebounce = setTimeout(() => {
             presenceOfflineDebounce = null;
+            logger.info('[presence:online:trace] ChatScreen debounce: шапка → офлайн', {
+              appState: AppState.currentState,
+              peerId: String(peerId),
+            });
             setPeerOnline(false);
             try {
               navigation.setParams({ peerOnline: false } as any);

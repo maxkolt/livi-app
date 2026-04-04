@@ -96,6 +96,7 @@ import socket, {
   removeFriend,
   updateProfile,
   onFriendProfile,
+  PRESENCE_OFFLINE_DEBOUNCE_MS,
   emitAck,
   attachIdentity,
   getCurrentUserId,
@@ -116,6 +117,7 @@ import socket, {
   onCallTimeout,
   onCallRoomFull,
   onDisconnected,
+  isReconnecting,
   waitForCreateUserCompletion,
   checkInviteLink,
   requestFriend,
@@ -181,9 +183,6 @@ const LIVI = {
 /** Android: неактивная кнопка видео в списке друзей — тёмный «чип» и приглушённая иконка (единый вид на всех девайсах). */
 const ANDROID_VIDEO_CALL_DISABLED_BG = '#1C1C1E';
 const ANDROID_VIDEO_CALL_DISABLED_ICON = '#48484A';
-
-/** Короткая задержка перед «офлайн» при выпадении из presence-массива. Сервер держит «липкий» онлайн при кратком обрыве сокета — здесь только подстраховка от двойных emit. */
-const PRESENCE_OFFLINE_DEBOUNCE_MS = 400;
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -2903,6 +2902,28 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           
           setFriends((prev) => {
             const now = Date.now();
+            const missingFromPayloadButOnlineInUi = prev
+              .filter((f) => f.online && !onlineSet.has(String(f.id)))
+              .map((f) => String(f.id));
+            const offlineInUiButNowInPayload = prev
+              .filter((f) => !f.online && onlineSet.has(String(f.id)))
+              .map((f) => String(f.id));
+            if (
+              missingFromPayloadButOnlineInUi.length ||
+              offlineInUiButNowInPayload.length ||
+              (Array.isArray(data) && data.length === 0)
+            ) {
+              logger.info('[presence:online:trace] HomeScreen массив → сверка с UI до debounce', {
+                appState: AppState.currentState,
+                socketConnected: socket.connected,
+                reconnecting: isReconnecting(),
+                payloadOnlineCount: onlineSet.size,
+                payloadArrayLen: data.length,
+                missingFromPayloadButOnlineInUi,
+                offlineInUiButNowInPayload,
+                debounceMs: PRESENCE_OFFLINE_DEBOUNCE_MS,
+              });
+            }
             return prev.map((f) => {
               const id = String(f.id);
               const inSet = onlineSet.has(id);
@@ -2911,13 +2932,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 if (pending) {
                   clearTimeout(pending);
                   pendingPresenceOfflineTimersRef.current.delete(id);
+                  logger.info('[presence:online:trace] HomeScreen отменён таймер «офлайн» (друг снова в payload)', {
+                    appState: AppState.currentState,
+                    friendId: id,
+                  });
                 }
                 friendLastOnlineTrueAtRef.current.set(id, now);
                 if (!f.online) {
-                  logger.debug('[onPresenceUpdate] Friend online status updated', {
-                    userId: id,
-                    wasOnline: f.online,
-                    isOnline: true,
+                  logger.info('[presence:online:trace] HomeScreen друг → онлайн в UI', {
+                    appState: AppState.currentState,
+                    friendId: id,
                   });
                 }
                 return { ...f, online: true };
@@ -2926,9 +2950,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 return f;
               }
               if (!pendingPresenceOfflineTimersRef.current.has(id)) {
+                logger.info('[presence:online:trace] HomeScreen запланирован «офлайн» после debounce', {
+                  appState: AppState.currentState,
+                  friendId: id,
+                  debounceMs: PRESENCE_OFFLINE_DEBOUNCE_MS,
+                });
                 const t = setTimeout(() => {
                   pendingPresenceOfflineTimersRef.current.delete(id);
                   friendLastOnlineTrueAtRef.current.delete(id);
+                  logger.info('[presence:online:trace] HomeScreen таймер: выставляем офлайн в UI', {
+                    appState: AppState.currentState,
+                    friendId: id,
+                  });
                   setFriends((p) =>
                     p.map((x) =>
                       String(x.id) === id ? { ...x, online: false } : x,
@@ -2948,7 +2981,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const userId = String(data.userId);
         const busy = data.busy !== undefined ? !!data.busy : undefined;
         // Лог: откуда приходит бейдж «Занято» — если busy=true приходит до принятия вызова, источник на сервере или у звонящего
-        logger.info('[presence:update] busy от друга', { userId, busy, myUserId: getCurrentUserId?.() ?? '' });
+        logger.info('[presence:update] busy от друга', {
+          presenceOnlineTrace: true,
+          appState: AppState.currentState,
+          userId,
+          busy,
+          myUserId: getCurrentUserId?.() ?? '',
+        });
         if (busy !== undefined) {
           setFriends((prev) => {
             const updated = prev.map((f) => {

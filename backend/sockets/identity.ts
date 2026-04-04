@@ -11,6 +11,7 @@ import MissedCall from '../models/MissedCall';
 // Cloudinary удален, используем только MongoDB
 import { getAndClearOfflineMessages, getAndClearOfflineChatClearedQueue } from './messagesReliable';
 import { auditNickChange } from '../utils/profileNickAudit';
+import { emitGlobalFriendPresence } from '../utils/friendOnlinePresence';
 
 type AttachPayload = {
   installId?: string | null;
@@ -23,15 +24,6 @@ function canonicalMongoUserId(userId: string): string {
   return OID_HEX_24.test(raw) ? raw.toLowerCase() : raw;
 }
 
-/** ===== presence helpers ===== */
-function getOnlineList(io: Server): string[] {
-  const set = new Set<string>();
-  for (const s of io.sockets.sockets.values()) {
-    const uid = (s as any)?.data?.userId;
-    if (uid) set.add(String(uid));
-  }
-  return Array.from(set);
-}
 export async function bindUser(io: Server, sock: any, userId: string) {
   const canonical = canonicalMongoUserId(userId);
   // Проверяем, не подключен ли уже этот пользователь.
@@ -49,9 +41,7 @@ export async function bindUser(io: Server, sock: any, userId: string) {
     console.error(`❌ Failed to join room u:${canonical}:`, error);
   }
 
-  const list = getOnlineList(io);
-  io.emit('presence_update', list);
-  io.emit('presence:update', list);
+  emitGlobalFriendPresence(io);
 
   // Отключаем старые сокеты уже после успешного bind нового.
   // Так статус пользователя остаётся online без кратковременного провала.
@@ -468,9 +458,7 @@ export default function registerIdentitySockets(io: Server) {
         // отвязываем сокет и обновляем presence
         (sock as any).data.userId = undefined;
         try { sock.leave(`u:${userId}`); } catch {}
-        const list = getOnlineList(io);
-        io.emit('presence_update', list);
-        io.emit('presence:update', list);
+        emitGlobalFriendPresence(io);
 
         ack?.({ ok: true });
       } catch (e: any) {

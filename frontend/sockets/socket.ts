@@ -234,6 +234,9 @@ export const getSocket = (): Socket => {
       reconnectionDelay: SOCKET_RECONNECT_DELAY_MS,
       reconnectionDelayMax: SOCKET_RECONNECT_DELAY_MAX_MS,
       timeout: 25000,
+      // With SOCKET_KEEP_ALIVE_IN_BACKGROUND, longer pong wait reduces spurious disconnects on Doze / lock screen.
+      pingInterval: 25000,
+      pingTimeout: 45000,
     });
   }
   return socketInstance;
@@ -274,17 +277,30 @@ export function emitPresenceUpdateIfChanged(
 
 // Для первого подключения (VPN/медленный DNS) даём больший таймаут в waitForConnect
 let __hasConnectedEver = false;
-socket.on('connect', () => {
-  __hasConnectedEver = true;
-  __lastPresenceUpdateKey = null;
-});
+
+/** Единый debounce офлайн в списке друзей и шапке чата (см. HomeScreen / ChatScreen). */
+export const PRESENCE_OFFLINE_DEBOUNCE_MS = 2500;
+
+/**
+ * Сразу после connect пустой массив presence часто приходит при гонке reauth / комнаты — не затираем
+ * последний непустой снимок (иначе мерцание «онлайн → офлайн → онлайн»).
+ */
+const PRESENCE_EMPTY_ONLINE_LIST_GRACE_MS = 5000;
 
 /** Совпадает с серверным списком «видимых» онлайн (в т.ч. ушёл в фон → нет в списке). */
 let __lastVisibleOnlineUserIds: Set<string> = new Set();
 let __visibleOnlinePresenceListKnown = false;
+let __lastSocketConnectAt = 0;
+
+socket.on('connect', () => {
+  __hasConnectedEver = true;
+  __lastPresenceUpdateKey = null;
+  __lastSocketConnectAt = Date.now();
+});
 
 function ingestVisibleOnlinePresenceList(data: unknown) {
   if (!Array.isArray(data)) return;
+  const prev = new Set(__lastVisibleOnlineUserIds);
   __visibleOnlinePresenceListKnown = true;
   const next = new Set<string>();
   for (const it of data) {
@@ -292,11 +308,81 @@ function ingestVisibleOnlinePresenceList(data: unknown) {
     const id = String((it as any)?._id ?? it);
     if (id) next.add(id);
   }
+  const removed = [...prev].filter((id) => !next.has(id));
+  const added = [...next].filter((id) => !prev.has(id));
+  if (removed.length || added.length || (data.length === 0 && prev.size > 0)) {
+    logger.info('[presence:online:trace] snapshot ingest → глобальный кэш видимых онлайн', {
+      appState: AppState.currentState,
+      socketConnected: socket.connected,
+      reconnecting,
+      incomingLen: data.length,
+      nextSize: next.size,
+      prevSize: prev.size,
+      removedIds: removed.slice(0, 20),
+      addedIds: added.slice(0, 20),
+    });
+  }
   __lastVisibleOnlineUserIds = next;
 }
 
-socket.on('presence:update', (data: unknown) => ingestVisibleOnlinePresenceList(data));
-socket.on('presence_update', (data: unknown) => ingestVisibleOnlinePresenceList(data));
+const __presenceUpdateSubscribers = new Set<(data: any) => void>();
+
+function __normalizePresenceUpdatePayload(raw: unknown): unknown {
+  if (!Array.isArray(raw)) return raw;
+  if (
+    raw.length === 0 &&
+    __lastVisibleOnlineUserIds.size > 0 &&
+    Date.now() - __lastSocketConnectAt < PRESENCE_EMPTY_ONLINE_LIST_GRACE_MS
+  ) {
+    const msSinceConnect = Date.now() - __lastSocketConnectAt;
+    logger.info('[presence:online:trace] пустой массив заменён предыдущим снимком (grace после connect)', {
+      appState: AppState.currentState,
+      socketConnected: socket.connected,
+      reconnecting,
+      preservedCount: __lastVisibleOnlineUserIds.size,
+      msSinceConnect,
+      graceMs: PRESENCE_EMPTY_ONLINE_LIST_GRACE_MS,
+    });
+    logger.debug('[socket] presence: skip empty online list during post-connect grace', {
+      preservedCount: __lastVisibleOnlineUserIds.size,
+      msSinceConnect,
+    });
+    return Array.from(__lastVisibleOnlineUserIds);
+  }
+  return raw;
+}
+
+function __dispatchPresenceUpdate(raw: unknown): void {
+  const payload = __normalizePresenceUpdatePayload(raw);
+  if (Array.isArray(raw)) {
+    const normalizedArr = Array.isArray(payload) ? payload : [];
+    const replacedEmpty =
+      raw.length === 0 && normalizedArr.length > 0 && __lastVisibleOnlineUserIds.size > 0;
+    logger.info('[presence:online:trace] socket presence массив (до ingest)', {
+      appState: AppState.currentState,
+      socketConnected: socket.connected,
+      reconnecting,
+      rawLen: raw.length,
+      normalizedLen: normalizedArr.length,
+      replacedEmptyWithPrevious: replacedEmpty,
+      msSinceConnect: Date.now() - __lastSocketConnectAt,
+      debounceMs: PRESENCE_OFFLINE_DEBOUNCE_MS,
+    });
+  }
+  if (Array.isArray(payload)) {
+    ingestVisibleOnlinePresenceList(payload);
+  }
+  for (const cb of __presenceUpdateSubscribers) {
+    try {
+      cb(payload);
+    } catch (e) {
+      logger.warn('[socket] onPresenceUpdate subscriber error', e as any);
+    }
+  }
+}
+
+socket.on('presence:update', __dispatchPresenceUpdate);
+socket.on('presence_update', __dispatchPresenceUpdate);
 
 /**
  * Был ли хотя бы один полный presence-массив с сервера (не путать с «ещё не приходил»).
@@ -1391,15 +1477,12 @@ export function checkFriendship(userId: string) {
 export function onPresenceUpdate(
   cb: (data: Array<{ _id: string; online: boolean }> | string[] | { userId: string; busy: boolean }) => void,
 ): () => void {
-  const h = (data: any) => {
-    // Передаем все данные как есть - HomeScreen сам разберет формат
+  const wrapped = (data: any) => {
     cb(data);
   };
-  socket.on("presence_update", h);
-  socket.on("presence:update", h);
+  __presenceUpdateSubscribers.add(wrapped);
   return () => {
-    socket.off("presence_update", h);
-    socket.off("presence:update", h);
+    __presenceUpdateSubscribers.delete(wrapped);
   };
 }
 

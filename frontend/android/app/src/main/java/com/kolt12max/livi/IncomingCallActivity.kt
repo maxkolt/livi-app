@@ -47,6 +47,8 @@ class IncomingCallActivity : AppCompatActivity() {
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
     private var ringtoneVerifyRunnable: Runnable? = null
+    /** Проверки «Activity реально играет» перед заглушением FGS — иначе на keyguard глушим единственный живой плеер. */
+    private val pendingStopFgsAudibleChecks = mutableListOf<Runnable>()
     private var closeHandled = false
     private var incomingShownReported = false
     private var incomingShownInFlight = false
@@ -485,6 +487,12 @@ class IncomingCallActivity : AppCompatActivity() {
                 android.util.Log.w(TAG, "startCallRingtone: verify not playing, retry playIncomingRingtone")
                 stopCallRingtone()
                 playIncomingRingtone(uri)
+            } else {
+                LiviAppModule.stopRingtonePlayerForCallKeepOnly()
+                for (r in pendingStopFgsAudibleChecks) {
+                    timeoutHandler.removeCallbacks(r)
+                }
+                pendingStopFgsAudibleChecks.clear()
             }
         }
         timeoutHandler.postDelayed(ringtoneVerifyRunnable!!, 900)
@@ -493,6 +501,8 @@ class IncomingCallActivity : AppCompatActivity() {
     private fun playIncomingRingtone(uri: Uri) {
         if (isFinishing) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) return
+
+        LiviAppModule.ensureIncomingRingtoneAudioMode(applicationContext)
 
         // API 28+: встроенный Ringtone с loop — тот же путь, что превью в настройках; на Samsung при блокировке надёжнее MediaPlayer.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -514,7 +524,7 @@ class IncomingCallActivity : AppCompatActivity() {
                     rt.isLooping = true
                     rt.play()
                     systemRingtone = rt
-                    LiviAppModule.stopRingtonePlayerForCallKeepOnly()
+                    scheduleStopFgsWhenActivityAudible()
                     return
                 }
             } catch (e: Exception) {
@@ -542,10 +552,13 @@ class IncomingCallActivity : AppCompatActivity() {
                 start()
             }
             ringtonePlayer = player
-            LiviAppModule.stopRingtonePlayerForCallKeepOnly()
+            scheduleStopFgsWhenActivityAudible()
         } catch (e: Exception) {
             android.util.Log.w(TAG, "playIncomingRingtone: MediaPlayer failed", e)
             releaseRingtoneAudioFocus()
+            try {
+                LiviAppModule.clearIncomingRingtoneAudioMode(applicationContext)
+            } catch (_: Exception) {}
         }
     }
 
@@ -609,6 +622,8 @@ class IncomingCallActivity : AppCompatActivity() {
             android.util.Log.w(TAG, "stopCallRingtone failed", e)
         }
         releaseRingtoneAudioFocus()
+        // Режим AudioManager сбрасываем в LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic (ответ/отклонение/FGS cleanup),
+        // чтобы не глушить рингтон FGS, если Activity не смогла взять звук на себя (uri == null / сбой OEM).
     }
 
     /**
@@ -643,6 +658,48 @@ class IncomingCallActivity : AppCompatActivity() {
         timeoutRunnable = null
         ringtoneVerifyRunnable?.let { timeoutHandler.removeCallbacks(it) }
         ringtoneVerifyRunnable = null
+        for (r in pendingStopFgsAudibleChecks) {
+            timeoutHandler.removeCallbacks(r)
+        }
+        pendingStopFgsAudibleChecks.clear()
+    }
+
+    private fun isActivityRingtoneAudible(): Boolean {
+        return try {
+            when {
+                systemRingtone != null -> systemRingtone!!.isPlaying
+                ringtonePlayer != null -> ringtonePlayer!!.isPlaying
+                else -> false
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Глушим FGS-плеер только когда рингтон Activity реально идёт; иначе оставляем звук FGS. */
+    private fun tryStopFgsIfActivityRinging() {
+        if (isFinishing) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) return
+        if (isActivityRingtoneAudible()) {
+            LiviAppModule.stopRingtonePlayerForCallKeepOnly()
+            for (r in pendingStopFgsAudibleChecks) {
+                timeoutHandler.removeCallbacks(r)
+            }
+            pendingStopFgsAudibleChecks.clear()
+        }
+    }
+
+    private fun scheduleStopFgsWhenActivityAudible() {
+        for (r in pendingStopFgsAudibleChecks) {
+            timeoutHandler.removeCallbacks(r)
+        }
+        pendingStopFgsAudibleChecks.clear()
+        val delays = longArrayOf(220L, 500L, 950L)
+        for (d in delays) {
+            val r = Runnable { tryStopFgsIfActivityRinging() }
+            pendingStopFgsAudibleChecks.add(r)
+            timeoutHandler.postDelayed(r, d)
+        }
     }
 
     private fun closeIncomingScreen(callIdToEnd: String? = null) {
