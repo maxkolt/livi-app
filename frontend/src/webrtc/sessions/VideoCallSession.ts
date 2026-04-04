@@ -3326,6 +3326,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         // КРИТИЧНО: Новая комната всегда в состоянии 'disconnected' до connect()
         // Проверяем состояние только после попытки подключения
         logger.info('[VideoCallSession] Attempting to connect to LiveKit', {
+          myUserId: this.config.myUserId,
+          connectRequestId,
           url,
           urlHost: url ? new URL(url).hostname : 'unknown',
           tokenLength: token?.length || 0,

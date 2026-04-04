@@ -195,16 +195,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
-  /** Синхронно с state для логов MIC_TRACE (без отставания на один кадр). */
+  /** Зеркало `micOn` после рендера; в колбэках сессии лог может быть до следующего рендера — см. micMatchesUiYet. */
   const micOnRef = useRef(micOn);
   micOnRef.current = micOn;
   const micTraceSeqRef = useRef(0);
   const logMicTraceRef = useRef<(where: string, details?: Record<string, unknown>) => void>(() => {});
   logMicTraceRef.current = (where: string, details?: Record<string, unknown>) => {
     const seq = ++micTraceSeqRef.current;
+    const enabledFromSession =
+      details && typeof details.enabled === 'boolean' ? details.enabled : undefined;
     logger.info(`[MIC_TRACE #${seq}] ${where}`, {
       ts: Date.now(),
       uiMicOn: micOnRef.current,
+      ...(enabledFromSession !== undefined
+        ? { micMatchesUiYet: micOnRef.current === enabledFromSession }
+        : {}),
       ...details,
     });
   };
@@ -1345,7 +1350,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           logger.info('[VideoCall] onRemoteCamStateChange вызван', {
             enabled,
             previousRemoteCamOn: remoteCamOn,
-            partnerInPiP
+            partnerInPiP: partnerInPiPRef.current,
           });
           remoteCamStateKnownRef.current = true;
           setRemoteCamOn(enabled);
