@@ -6,7 +6,7 @@ import type { Server } from 'socket.io';
  *   либо все сокеты в фоне, но не дольше IN_APP_OFFLINE_DEBOUNCE_MS (гистерезис, без мерцания).
  * - Офлайн: нет сокетов (см. disconnect grace в index) или устойчивый фон дольше гистерезиса без звонка.
  */
-export const IN_APP_OFFLINE_DEBOUNCE_MS = 4_000;
+export const IN_APP_OFFLINE_DEBOUNCE_MS = 2_500;
 
 const userAllBackgroundSince = new Map<string, number>();
 
@@ -181,7 +181,7 @@ export function emitGlobalFriendPresence(io: Server): void {
 }
 
 let presenceBroadcastDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-const PRESENCE_BROADCAST_DEBOUNCE_MS = 120;
+const PRESENCE_BROADCAST_DEBOUNCE_MS = 80;
 
 export function scheduleGlobalFriendPresenceEmit(io: Server): void {
   if (presenceBroadcastDebounceTimer) clearTimeout(presenceBroadcastDebounceTimer);
