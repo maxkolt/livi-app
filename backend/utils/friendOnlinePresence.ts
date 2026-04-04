@@ -70,6 +70,22 @@ function syncInAppTrackingForAllConnectedUsers(io: Server): void {
   }
 }
 
+/**
+ * После call:end звонок больше не удерживает «в приложении».
+ * Если у пользователя на всех сокетах явно фон (appForeground === false), сразу считаем
+ * гистерезис исчерпанным — иначе он остаётся в списке онлайн ещё до IN_APP_OFFLINE_DEBOUNCE_MS.
+ * Сокеты с appForeground === undefined не трогаем (клиент не шлёт видимость — считаем в приложении).
+ */
+export function applyFastOfflineAfterCallIfAllSocketsBackground(io: Server, userId: string): void {
+  const key = normalizeUid(userId);
+  if (!key || !hasAnySocketForUser(io, key)) return;
+  for (const s of io.sockets.sockets.values()) {
+    if (String((s as any)?.data?.userId || '') !== key) continue;
+    if ((s as any).data?.appForeground !== false) return;
+  }
+  userAllBackgroundSince.set(key, Date.now() - IN_APP_OFFLINE_DEBOUNCE_MS - 1);
+}
+
 /** После syncInAppTrackingForAllConnectedUsers: онлайн ли пользователь «в приложении». */
 function isUserOnlineInApplicationAfterSync(io: Server, uid: string): boolean {
   const key = normalizeUid(uid);

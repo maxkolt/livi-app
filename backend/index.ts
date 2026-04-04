@@ -79,6 +79,7 @@ import {
   getFriendVisibleOnlineUserIds,
   emitGlobalFriendPresence,
   scheduleGlobalFriendPresenceEmit,
+  applyFastOfflineAfterCallIfAllSocketsBackground,
 } from './utils/friendOnlinePresence';
 
 /* ========= Типы ========= */
@@ -1766,6 +1767,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       });
 
       // Снимаем busy со всех участников и очищаем состояние
+      const callEndedParticipantUserIds = new Set<string>();
       for (const sid of socketsToNotify) {
         const peerSocket = io.sockets.sockets.get(sid);
         if (peerSocket) {
@@ -1785,12 +1787,16 @@ io.on('connection', async (sock: AuthedSocket) => {
           
           // Снимаем presence (только друзьям)
           if (peerUserId) {
+            callEndedParticipantUserIds.add(String(peerUserId));
             await emitPresenceUpdateToFriends(io, peerUserId, false);
           }
         }
         
         // Очищаем activeCallBySocket
         try { activeCallBySocket.delete(sid); } catch {}
+      }
+      for (const uid of callEndedParticipantUserIds) {
+        applyFastOfflineAfterCallIfAllSocketsBackground(io, uid);
       }
       
       // Отправляем call:ended всем участникам
