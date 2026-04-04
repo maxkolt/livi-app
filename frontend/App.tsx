@@ -16,6 +16,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
 import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, wasAppliedFromReauth, recordAppliedFromPending, reportIncomingCallShown, emitPresenceUpdateIfChanged } from "./sockets/socket";
 import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce } from './utils/globalEvents';
+import { buildCallEndSocketPayload } from './utils/callEndPayload';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
@@ -2671,10 +2672,7 @@ export default function App() {
           session.endCall(callId || undefined, roomId || undefined);
         } else {
           console.log('[App] Завершение из PiP: отправляем call:end на сервер (fallback)');
-          socket.emit('call:end', {
-            callId: callId || undefined,
-            roomId: roomId || undefined,
-          });
+          socket.emit('call:end', buildCallEndSocketPayload(callId, roomId));
         }
       } catch (e) {
         console.warn('[App] Error ending call from PiP:', e);
@@ -2697,10 +2695,7 @@ export default function App() {
           session.endCall();
         } else {
           console.log('[App] Отправляем call:end напрямую на сервер (fallback)');
-          socket.emit('call:end', {
-            callId: callId || undefined,
-            roomId: roomId || undefined,
-          });
+          socket.emit('call:end', buildCallEndSocketPayload(callId, roomId));
         }
       }
     } catch (e) {

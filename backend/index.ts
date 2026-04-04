@@ -1687,10 +1687,25 @@ io.on('connection', async (sock: AuthedSocket) => {
         receivedCallId: callId,
         userId: (sock as any)?.data?.userId
       });
+
+      /** 1:1 друг-друг: только room_<24hex>_<24hex>. Иначе клиент иногда дублировал callId в поле roomId — Socket.IO room не находилась. */
+      const isCanonicalFriendRoomId = (s: unknown): boolean =>
+        /^room_[a-f\d]{24}_[a-f\d]{24}$/i.test(String(s ?? '').trim());
+
+      let clientRoomParam = roomId ? String(roomId).trim() : '';
+      const cidTrim = callId ? String(callId).trim() : '';
+      if (clientRoomParam && !isCanonicalFriendRoomId(clientRoomParam)) {
+        if (cidTrim && clientRoomParam === cidTrim) {
+          logger.debug('[call:end] Dropping client roomId (same as callId, not a canonical room)', { callId: cidTrim });
+        } else {
+          logger.debug('[call:end] Dropping non-canonical client roomId', { roomId: clientRoomParam });
+        }
+        clientRoomParam = '';
+      }
       
       // КРИТИЧНО: Приоритетно берем roomId из параметров, сокет-данных, activeCallBySocket; если передан только callId — смотрим callIdToRoomId (принятие из пуша)
       const resolvedRoomId =
-        roomId ||
+        clientRoomParam ||
         (sock as any)?.data?.roomId ||
         activeCallBySocket.get(sock.id) ||
         (callId ? callIdToRoomId.get(String(callId)) : undefined);

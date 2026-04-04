@@ -24,6 +24,7 @@ import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
+import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
 
@@ -107,7 +108,12 @@ export class VideoCallSession extends SimpleEventEmitter {
   private inPiP = false;
   private partnerInPiP = false; // Состояние партнера в PiP
   private currentRoomName: string | null = null; // Имя текущей подключенной комнаты LiveKit
-  private lastProcessedCallAccepted: { callId: string | null; roomName: string | null; timestamp: number } | null = null; // Защита от повторной обработки
+  private lastProcessedCallAccepted: {
+    callId: string | null;
+    roomName: string | null;
+    tokenFp: string;
+    timestamp: number;
+  } | null = null; // Защита от повторной обработки (учёт префикса токена — повторный reauth с новым JWT не режем)
   private endCallInProgress = false;
   private ended = false;
   private lastCallEndSentKey: string | null = null;
@@ -440,19 +446,23 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
       } else {
         if (callEndDedupKey) this.lastCallEndSentKey = callEndDedupKey;
-      try {
-        const payload = { 
-          callId: callIdToSend || roomIdToSend, 
-          roomId: roomIdToSend || callIdToSend 
-        };
-        socket.emit('call:end', payload);
-        logger.info('[VideoCallSession] ✅ Отправлено call:end на сервер', {
-          payload,
-          willNotifyBothParticipants: true,
-        });
-      } catch (e) {
-        logger.warn('[VideoCallSession] Ошибка отправки call:end', e);
-      }
+        try {
+          const payload = buildCallEndSocketPayload(callIdToSend, roomIdToSend);
+          if (!payload.callId && !payload.roomId) {
+            logger.warn('[VideoCallSession] call:end пропущен: нет ни callId, ни канонического roomId', {
+              callIdToSend,
+              roomIdToSend,
+            });
+          } else {
+            socket.emit('call:end', payload);
+            logger.info('[VideoCallSession] ✅ Отправлено call:end на сервер', {
+              payload,
+              willNotifyBothParticipants: true,
+            });
+          }
+        } catch (e) {
+          logger.warn('[VideoCallSession] Ошибка отправки call:end', e);
+        }
       }
     }
     
@@ -1400,43 +1410,42 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     const camToggleHandler = (data: { enabled: boolean; from: string; roomId?: string }) => {
       const currentRoomId = this.getRoomId();
-      logger.info('[VideoCallSession] 📡 Socket event cam-toggle received', {
+      const incoming = data.roomId;
+
+      if (!currentRoomId) {
+        logger.debug('[VideoCallSession] cam-toggle ignored (no active friend-call room)', {
+          enabled: data.enabled,
+          partnerRoomId: incoming,
+        });
+        return;
+      }
+      if (!incoming || incoming !== currentRoomId) {
+        logger.debug('[VideoCallSession] cam-toggle ignored (room mismatch)', {
+          receivedRoomId: incoming,
+          currentRoomId,
+        });
+        return;
+      }
+
+      logger.info('[VideoCallSession] 📡 cam-toggle applied', {
         enabled: data.enabled,
         from: data.from,
-        roomId: data.roomId,
-        currentRoomId: currentRoomId,
-        roomIdsMatch: data.roomId === currentRoomId,
+        roomId: incoming,
       });
-      
-      // Проверяем что это событие для нашей комнаты
-      if (data.roomId && currentRoomId && data.roomId === currentRoomId) {
-        logger.info('[VideoCallSession] ✅ Обновлено состояние камеры партнера через cam-toggle', {
-          enabled: data.enabled,
-          roomId: data.roomId,
-        });
-        
-        // Обновляем состояние камеры партнера
-        this.remotePartnerDeclaredCamOff = !data.enabled;
-        this.remoteCamEnabled = data.enabled;
-        this.clearRemoteCamOffTimeout();
-        
-        // КРИТИЧНО: Обновляем remoteViewKey для принудительного обновления UI
-        this.remoteViewKey = Date.now();
-        this.emit('remoteViewKeyChanged', this.remoteViewKey);
-        
-        // Уведомляем компонент об изменении состояния камеры
-        this.notifyRemoteCamStateChange(data.enabled);
-        try {
-          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-          if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: data.enabled });
-        } catch (_) {}
-        logger.info('[VideoCallSession] ✅ Вызван onRemoteCamStateChange через cam-toggle', { enabled: data.enabled });
-      } else {
-        logger.debug('[VideoCallSession] cam-toggle событие проигнорировано - не совпадает roomId', {
-          receivedRoomId: data.roomId,
-          currentRoomId: currentRoomId,
-        });
-      }
+
+      this.remotePartnerDeclaredCamOff = !data.enabled;
+      this.remoteCamEnabled = data.enabled;
+      this.clearRemoteCamOffTimeout();
+
+      this.remoteViewKey = Date.now();
+      this.emit('remoteViewKeyChanged', this.remoteViewKey);
+
+      this.notifyRemoteCamStateChange(data.enabled);
+      try {
+        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+        if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: data.enabled });
+      } catch (_) {}
+      logger.info('[VideoCallSession] ✅ onRemoteCamStateChange via cam-toggle', { enabled: data.enabled });
     };
 
     // Сохраняем ссылки на обработчики для возможности их удаления
@@ -1496,12 +1505,16 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     
-    // КРИТИЧНО: Защита от повторной обработки одного и того же события
-    // Проверяем, не обрабатывали ли мы уже это событие
-    if (this.lastProcessedCallAccepted && 
-        this.lastProcessedCallAccepted.callId === callId &&
-        this.lastProcessedCallAccepted.roomName === targetRoomName &&
-        (Date.now() - this.lastProcessedCallAccepted.timestamp) < 60_000) {
+    // КРИТИЧНО: Защита от повторной обработки одного и того же события (socket + FCM + reauth).
+    // Учитываем префикс JWT: повтор с тем же callId/room, но новым токеном — обрабатываем снова.
+    const tokenFp = (data.livekitToken || '').slice(0, 48);
+    if (
+      this.lastProcessedCallAccepted &&
+      this.lastProcessedCallAccepted.callId === callId &&
+      this.lastProcessedCallAccepted.roomName === targetRoomName &&
+      this.lastProcessedCallAccepted.tokenFp === tokenFp &&
+      Date.now() - this.lastProcessedCallAccepted.timestamp < 60_000
+    ) {
       logger.info('[VideoCallSession] ⏭️ Already processed this call:accepted event, skipping', {
         callId,
         roomName: targetRoomName,
@@ -1510,9 +1523,14 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       return;
     }
-    
-    // Сразу помечаем событие как обрабатываемое, чтобы параллельные вызовы (дубликаты/другие подписки) не стартовали второе подключение
-    this.lastProcessedCallAccepted = { callId, roomName: targetRoomName, timestamp: Date.now() };
+
+    // Сразу помечаем событие как обрабатываемое, чтобы параллельные вызовы не стартовали второй Room.connect
+    this.lastProcessedCallAccepted = {
+      callId,
+      roomName: targetRoomName,
+      tokenFp,
+      timestamp: Date.now(),
+    };
     
     logger.info('[VideoCallSession] 📥 Received call:accepted event', {
       callId: data.callId,
@@ -1565,7 +1583,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.config.setIsInactiveState?.(false);
       this.config.setFriendCallAccepted?.(true);
       // Сохраняем информацию о том, что событие обработано
-      this.lastProcessedCallAccepted = { callId, roomName: targetRoomName, timestamp: Date.now() };
+      this.lastProcessedCallAccepted = {
+        callId,
+        roomName: targetRoomName,
+        tokenFp: (data.livekitToken || '').slice(0, 48),
+        timestamp: Date.now(),
+      };
       return;
     }
     

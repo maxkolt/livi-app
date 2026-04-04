@@ -1905,6 +1905,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     };
     
     const handleCallAnswered = () => {
+      if (isEndingCallRef.current || isInactiveStateRef.current) {
+        logger.info('[VideoCall] handleCallAnswered ignored (call ending or inactive)');
+        return;
+      }
+      const srEarly = sessionRef.current;
+      if (srEarly && typeof (srEarly as any).isEnded === 'function' && (srEarly as any).isEnded()) {
+        logger.info('[VideoCall] handleCallAnswered ignored (session already ended)');
+        return;
+      }
       callEndedTransitionDoneRef.current = false;
       acceptCallTimeRef.current = Date.now();
       setFriendCallAccepted(true);
@@ -2195,6 +2204,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // (onRemoteCamStateChange, onPartnerIdChange, onRoomIdChange, onCallIdChange, handlePartnerPiPStateChanged) не вызывали setState и не давали ререндеров.
     isEndingCallRef.current = true;
     isInactiveStateRef.current = true;
+
+    setMicOn(false);
+    setCamOn(false);
+    try {
+      if (pipRef.current.visible) {
+        pipRef.current.updatePiPState({ isMuted: true, localCamOn: false });
+      }
+    } catch (_) {}
 
     // Очищаем сохранённый call:accepted, чтобы следующий звонок не подхватил старый payload.
     try {

@@ -6,6 +6,7 @@ import InCallManager from 'react-native-incall-manager';
 import { CommonActions } from '@react-navigation/native';
 import socket, { onConnected, emitPresenceUpdateIfChanged } from '../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
+import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
 
@@ -736,7 +737,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         session.endCall(callId ?? undefined, roomId ?? undefined);
       } else if (callId || roomId) {
         try {
-          socket.emit('call:end', { callId: callId ?? undefined, roomId: roomId ?? undefined });
+          socket.emit('call:end', buildCallEndSocketPayload(callId, roomId));
           console.log('[PiPContext] Отправлен call:end на сервер (fallback)');
         } catch (e) {
           console.warn('[PiPContext] Session not available and onEndCall not set', e);
