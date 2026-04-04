@@ -6,7 +6,7 @@ import type { Server } from 'socket.io';
  *   либо все сокеты в фоне, но не дольше IN_APP_OFFLINE_DEBOUNCE_MS (гистерезис, без мерцания).
  * - Офлайн: нет сокетов (см. disconnect grace в index) или устойчивый фон дольше гистерезиса без звонка.
  */
-export const IN_APP_OFFLINE_DEBOUNCE_MS = 12_000;
+export const IN_APP_OFFLINE_DEBOUNCE_MS = 5_000;
 
 const userAllBackgroundSince = new Map<string, number>();
 
