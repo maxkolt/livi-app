@@ -80,6 +80,8 @@ import {
   emitGlobalFriendPresence,
   scheduleGlobalFriendPresenceEmit,
   applyFastOfflineAfterCallIfAllSocketsBackground,
+  scheduleDebouncedClearBackgroundOnForeground,
+  cancelDebouncedForegroundAck,
 } from './utils/friendOnlinePresence';
 
 /* ========= Типы ========= */
@@ -2000,7 +2002,10 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (typeof payload?.foreground !== 'boolean') return;
       (sock as any).data = (sock as any).data || {};
       (sock as any).data.appForeground = payload.foreground;
-      if (!payload.foreground) {
+      if (payload.foreground) {
+        scheduleDebouncedClearBackgroundOnForeground(io, userId);
+      } else {
+        cancelDebouncedForegroundAck(userId);
         clearStickyPresenceStateForUser(userId);
       }
       scheduleGlobalFriendPresenceEmit(io);

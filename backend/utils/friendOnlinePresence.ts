@@ -6,9 +6,21 @@ import type { Server } from 'socket.io';
  *   либо все сокеты в фоне, но не дольше IN_APP_OFFLINE_DEBOUNCE_MS (гистерезис, без мерцания).
  * - Офлайн: нет сокетов (см. disconnect grace в index) или устойчивый фон дольше гистерезиса без звонка.
  */
-export const IN_APP_OFFLINE_DEBOUNCE_MS = 5_000;
+export const IN_APP_OFFLINE_DEBOUNCE_MS = 4_000;
 
 const userAllBackgroundSince = new Map<string, number>();
+
+/** Не сбрасываем «отсчёт фона» на каждый краткий foreground — только после устойчивого true. */
+const FOREGROUND_ACK_CLEAR_BACKGROUND_MS = 480;
+const foregroundAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelForegroundAckForUser(userId: string): void {
+  const key = normalizeUid(userId);
+  if (!key) return;
+  const t = foregroundAckTimers.get(key);
+  if (t) clearTimeout(t);
+  foregroundAckTimers.delete(key);
+}
 
 function normalizeUid(userId: string): string {
   return String(userId || '').trim();
@@ -46,9 +58,18 @@ function userHasBusyCallSocket(io: Server, uid: string): boolean {
   return false;
 }
 
+type FgTri = 'legacy' | 'true' | 'false';
+
+function socketForegroundTriState(s: { data?: Record<string, unknown> }): FgTri {
+  const v = (s as any).data?.appForeground;
+  if (v === false) return 'false';
+  if (v === true) return 'true';
+  return 'legacy';
+}
+
 /**
- * Обновляет момент «все сокеты ушли в фон» для каждого подключённого пользователя.
- * Вызывается перед расчётом списка, чтобы не пропускать события и не копить мёртвые ключи.
+ * Обновляет момент «все сокеты ушли в фон».
+ * Не удаляем отсчёт при каждом кратком appForeground:true — это делает scheduleDebouncedClearBackgroundOnForeground.
  */
 function syncInAppTrackingForAllConnectedUsers(io: Server): void {
   const active = new Set<string>();
@@ -57,16 +78,52 @@ function syncInAppTrackingForAllConnectedUsers(io: Server): void {
     if (u) active.add(u);
   }
   for (const uid of active) {
-    if (anySocketForegroundOrLegacy(io, uid) || userHasBusyCallSocket(io, uid)) {
+    if (userHasBusyCallSocket(io, uid)) {
       userAllBackgroundSince.delete(uid);
-    } else {
+      cancelForegroundAckForUser(uid);
+      continue;
+    }
+
+    let hasLegacy = false;
+    let allExplicitFalse = true;
+    let sawSocket = false;
+    for (const s of io.sockets.sockets.values()) {
+      if (String((s as any)?.data?.userId || '') !== uid) continue;
+      sawSocket = true;
+      const tri = socketForegroundTriState(s);
+      if (tri === 'legacy') {
+        hasLegacy = true;
+        allExplicitFalse = false;
+      } else if (tri === 'true') {
+        allExplicitFalse = false;
+      }
+    }
+    if (!sawSocket) continue;
+
+    if (hasLegacy) {
+      userAllBackgroundSince.delete(uid);
+      cancelForegroundAckForUser(uid);
+      continue;
+    }
+    if (allExplicitFalse) {
+      cancelForegroundAckForUser(uid);
       if (!userAllBackgroundSince.has(uid)) {
         userAllBackgroundSince.set(uid, Date.now());
       }
+      continue;
     }
+    // Есть хотя бы один явный foreground:true — онлайн; таймер фона не трогаем здесь
   }
+
   for (const k of [...userAllBackgroundSince.keys()]) {
     if (!active.has(k)) userAllBackgroundSince.delete(k);
+  }
+  for (const k of [...foregroundAckTimers.keys()]) {
+    if (!active.has(k)) {
+      const t = foregroundAckTimers.get(k);
+      if (t) clearTimeout(t);
+      foregroundAckTimers.delete(k);
+    }
   }
 }
 
@@ -132,4 +189,21 @@ export function scheduleGlobalFriendPresenceEmit(io: Server): void {
     presenceBroadcastDebounceTimer = null;
     emitGlobalFriendPresence(io);
   }, PRESENCE_BROADCAST_DEBOUNCE_MS);
+}
+
+/** app:visibility foreground:true — сброс отсчёта «фон» только если true удержался ~FOREGROUND_ACK_CLEAR_BACKGROUND_MS. */
+export function scheduleDebouncedClearBackgroundOnForeground(io: Server, userId: string): void {
+  const key = normalizeUid(userId);
+  if (!key) return;
+  cancelForegroundAckForUser(key);
+  const t = setTimeout(() => {
+    foregroundAckTimers.delete(key);
+    userAllBackgroundSince.delete(key);
+    scheduleGlobalFriendPresenceEmit(io);
+  }, FOREGROUND_ACK_CLEAR_BACKGROUND_MS);
+  foregroundAckTimers.set(key, t);
+}
+
+export function cancelDebouncedForegroundAck(userId: string): void {
+  cancelForegroundAckForUser(userId);
 }
