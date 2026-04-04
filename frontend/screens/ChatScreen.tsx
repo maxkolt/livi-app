@@ -41,6 +41,7 @@ import * as Clipboard from 'expo-clipboard';
 import { Audio } from 'expo-av';
 import { getFull, putFull, putThumb } from '../utils/avatarCache';
 import { BlurView } from 'expo-blur';
+import Svg, { Circle as SvgCircle, Defs, LinearGradient, Stop, G } from 'react-native-svg';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 
@@ -4290,6 +4291,22 @@ export default function ChatScreen({ route, navigation }: Props) {
               : fullMs;
           const durLabel = (isPlaying ? remainingMs : fullMs) > 0 ? formatDurationDot(isPlaying ? remainingMs : fullMs) : '';
 
+          const voiceRingSize = 42;
+          const voiceRingCx = voiceRingSize / 2;
+          const voiceRingR = 19;
+          const voiceRingCirc = 2 * Math.PI * voiceRingR;
+          const voiceDurMs =
+            isPlaying && playingAudioState?.id === String(item.id || '')
+              ? Math.max(0, Number(playingAudioState.durationMs || 0))
+              : 0;
+          const voicePosMs =
+            isPlaying && playingAudioState?.id === String(item.id || '')
+              ? Math.max(0, Number(playingAudioState.positionMs || 0))
+              : 0;
+          const voiceProgress =
+            isPlaying && voiceDurMs > 0 ? Math.min(1, voicePosMs / voiceDurMs) : 0;
+          const voiceGradId = `voicePearl-${String(item.id || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+
           return (
             <View
               style={{
@@ -4299,23 +4316,69 @@ export default function ChatScreen({ route, navigation }: Props) {
                 gap: 10,
               }}
             >
-              <Pressable
-                onPress={() => {
-                  try { onPressAudio?.(item); } catch {}
-                }}
+              <View
                 style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 18,
+                  width: voiceRingSize,
+                  height: voiceRingSize,
                   alignItems: 'center',
                   justifyContent: 'center',
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)',
-                  borderWidth: 1,
-                  borderColor: BORDER_COLOR,
                 }}
               >
-                <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color={LIVI.white} />
-              </Pressable>
+                <Svg
+                  width={voiceRingSize}
+                  height={voiceRingSize}
+                  style={{ position: 'absolute' }}
+                  pointerEvents="none"
+                >
+                  <Defs>
+                    <LinearGradient id={voiceGradId} x1="0%" y1="0%" x2="100%" y2="100%">
+                      <Stop offset="0%" stopColor={isDark ? '#C8FFF4' : '#EDE4FF'} stopOpacity={1} />
+                      <Stop offset={isDark ? '45%' : '40%'} stopColor={isDark ? '#5ED4C8' : '#A894D8'} stopOpacity={1} />
+                      <Stop offset="100%" stopColor={isDark ? '#A8E8E0' : '#D4C4F0'} stopOpacity={1} />
+                    </LinearGradient>
+                  </Defs>
+                  <SvgCircle
+                    cx={voiceRingCx}
+                    cy={voiceRingCx}
+                    r={voiceRingR}
+                    fill="none"
+                    stroke={isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.10)'}
+                    strokeWidth={2.5}
+                  />
+                  {isPlaying ? (
+                    <G rotation="-90" origin={`${voiceRingCx}, ${voiceRingCx}`}>
+                      <SvgCircle
+                        cx={voiceRingCx}
+                        cy={voiceRingCx}
+                        r={voiceRingR}
+                        fill="none"
+                        stroke={`url(#${voiceGradId})`}
+                        strokeWidth={2.5}
+                        strokeLinecap="round"
+                        strokeDasharray={`${voiceRingCirc} ${voiceRingCirc}`}
+                        strokeDashoffset={voiceRingCirc * (1 - voiceProgress)}
+                      />
+                    </G>
+                  ) : null}
+                </Svg>
+                <Pressable
+                  onPress={() => {
+                    try { onPressAudio?.(item); } catch {}
+                  }}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)',
+                    borderWidth: 1,
+                    borderColor: BORDER_COLOR,
+                  }}
+                >
+                  <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color={LIVI.white} />
+                </Pressable>
+              </View>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: LIVI.white, fontSize: 14, fontWeight: '600' }}>{t('chatVoiceMessage', lang)}</Text>
                 <Text style={{ marginTop: 2, color: LIVI.titan, fontSize: 12, fontWeight: '500' }}>
