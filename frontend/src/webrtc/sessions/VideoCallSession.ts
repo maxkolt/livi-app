@@ -225,8 +225,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: partnerId еще нет (будет установлен при получении call:accepted)
     // Но partnerUserId уже есть, и компонент должен его получить через setPartnerUserId в VideoCall.tsx
     // Здесь мы только устанавливаем внутреннее состояние, компонент сам устанавливает partnerUserId
-    this.config.callbacks.onLoadingChange?.(true);
-    this.config.onLoadingChange?.(true);
+    this.notifyLoadingChange(true);
     await this.ensureLocalTracks();
     
     try {
@@ -236,8 +235,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       socket.emit('call:initiate', { to });
     } catch (e) {
       logger.error('[VideoCallSession] Error initiating call', e);
-      this.config.callbacks.onLoadingChange?.(false);
-      this.config.onLoadingChange?.(false);
+      this.notifyLoadingChange(false);
     }
   }
 
@@ -266,16 +264,14 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     this.callId = callId;
     this.partnerUserId = fromUserId;
-    this.config.callbacks.onLoadingChange?.(true);
-    this.config.onLoadingChange?.(true);
+    this.notifyLoadingChange(true);
     await this.ensureLocalTracks();
     
     try {
       socket.emit('call:accept', { callId });
     } catch (e) {
       logger.error('[VideoCallSession] Error accepting call', e);
-      this.config.callbacks.onLoadingChange?.(false);
-      this.config.onLoadingChange?.(false);
+      this.notifyLoadingChange(false);
     }
   }
 
@@ -302,8 +298,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     this.callId = callId;
     this.partnerUserId = peerUserId;
-    this.config.callbacks.onLoadingChange?.(true);
-    this.config.onLoadingChange?.(true);
+    this.notifyLoadingChange(true);
     await this.ensureLocalTracks();
     
     // Генерируем roomId по тому же алгоритму что и backend
@@ -317,8 +312,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     });
     
     this.roomId = roomId;
-    this.config.callbacks.onRoomIdChange?.(roomId);
-    this.config.onRoomIdChange?.(roomId);
+    this.notifyRoomIdChange(roomId);
     
     const envLivekitUrl = process.env.EXPO_PUBLIC_LIVEKIT_URL;
     
@@ -353,8 +347,7 @@ export class VideoCallSession extends SimpleEventEmitter {
             tokenHasUrl: !!tokenData.url,
             roomId,
           });
-          this.config.callbacks.onLoadingChange?.(false);
-          this.config.onLoadingChange?.(false);
+          this.notifyLoadingChange(false);
           return;
         }
         logger.debug('[VideoCallSession] Connecting to LiveKit', { 
@@ -368,8 +361,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           logger.debug('[VideoCallSession] connectAsInitiatorAfterAccepted aborted (stale request)');
           return;
         }
-        this.config.callbacks.onLoadingChange?.(false);
-        this.config.onLoadingChange?.(false);
+        this.notifyLoadingChange(false);
         this.config.setIsInactiveState?.(false);
         this.config.setFriendCallAccepted?.(true);
         this.emit('callAnswered');
@@ -379,8 +371,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           roomId,
           livekitUrl: envLivekitUrl || LIVEKIT_URL,
         });
-        this.config.callbacks.onLoadingChange?.(false);
-        this.config.onLoadingChange?.(false);
+        this.notifyLoadingChange(false);
       }
     } catch (e) {
       logger.error('[VideoCallSession] Error in connectAsInitiatorAfterAccepted', {
@@ -388,8 +379,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         roomId,
         livekitUrl: envLivekitUrl || LIVEKIT_URL,
       });
-      this.config.callbacks.onLoadingChange?.(false);
-      this.config.onLoadingChange?.(false);
+      this.notifyLoadingChange(false);
     }
   }
 
@@ -471,13 +461,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.lastSentPiPRoomId = null;
     this.partnerId = null;
     this.partnerUserId = null;
-    this.config.callbacks.onPartnerIdChange?.(null);
-    this.config.onPartnerIdChange?.(null);
-    this.config.callbacks.onRoomIdChange?.(null);
-    this.config.onRoomIdChange?.(null);
-    this.config.callbacks.onCallIdChange?.(null);
-    this.config.callbacks.onLoadingChange?.(false);
-    this.config.onLoadingChange?.(false);
+    this.notifyPartnerIdChange(null);
+    this.notifyRoomIdChange(null);
+    this.notifyCallIdChange(null);
+    this.notifyLoadingChange(false);
     this.config.setFriendCallAccepted?.(false);
     this.config.setIsInactiveState?.(true);
     this.config.setWasFriendCallEnded?.(true);
@@ -487,10 +474,22 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   toggleMic(): void {
+    const prev = this.isMicOn;
     this.isMicOn = !this.isMicOn;
+    logger.info('[MIC_TRACE session] toggleMic()', {
+      ts: Date.now(),
+      prev,
+      next: this.isMicOn,
+      hasRoom: !!this.room,
+      roomState: this.room?.state,
+    });
     if (this.room) {
       this.room.localParticipant.setMicrophoneEnabled(this.isMicOn).catch((e) => {
         logger.warn('[VideoCallSession] Failed to toggle microphone', e);
+        logger.info('[MIC_TRACE session] setMicrophoneEnabled rejected after toggleMic', {
+          wanted: this.isMicOn,
+          error: (e as any)?.message || String(e),
+        });
       });
     } else if (this.localAudioTrack) {
       try {
@@ -508,8 +507,11 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       } catch {}
     }
-    this.config.callbacks.onMicStateChange?.(this.isMicOn);
-    this.config.onMicStateChange?.(this.isMicOn);
+    logger.info('[MIC_TRACE session] toggleMic → onMicStateChange(UI)', {
+      ts: Date.now(),
+      enabled: this.isMicOn,
+    });
+    this.notifyMicStateChange(this.isMicOn);
   }
 
   /**
@@ -578,6 +580,46 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (v !== undefined) (this.config as any)[k] = v;
     }
     logger.info('[VideoCallSession] 🔁 rebindVideoCallMount — мост к UI обновлён после ремаунта');
+  }
+
+  /**
+   * Раньше многие места вызывали и `config.callbacks.*`, и дублирующий корневой `config.*`
+   * (одна и та же функция) — UI получал двойной setState. Оставляем один вызов с fallback.
+   */
+  private notifyMicStateChange(enabled: boolean): void {
+    (this.config.callbacks.onMicStateChange ?? this.config.onMicStateChange)?.(enabled);
+  }
+
+  private notifyCamStateChange(enabled: boolean): void {
+    (this.config.callbacks.onCamStateChange ?? this.config.onCamStateChange)?.(enabled);
+  }
+
+  private notifyLocalStreamChange(stream: MediaStream | null): void {
+    (this.config.callbacks.onLocalStreamChange ?? this.config.onLocalStreamChange)?.(stream);
+  }
+
+  private notifyRemoteStreamChange(stream: MediaStream | null): void {
+    (this.config.callbacks.onRemoteStreamChange ?? this.config.onRemoteStreamChange)?.(stream);
+  }
+
+  private notifyRemoteCamStateChange(enabled: boolean): void {
+    (this.config.callbacks.onRemoteCamStateChange ?? this.config.onRemoteCamStateChange)?.(enabled);
+  }
+
+  private notifyLoadingChange(loading: boolean): void {
+    (this.config.callbacks.onLoadingChange ?? this.config.onLoadingChange)?.(loading);
+  }
+
+  private notifyPartnerIdChange(partnerId: string | null): void {
+    (this.config.callbacks.onPartnerIdChange ?? this.config.onPartnerIdChange)?.(partnerId);
+  }
+
+  private notifyRoomIdChange(roomId: string | null): void {
+    (this.config.callbacks.onRoomIdChange ?? this.config.onRoomIdChange)?.(roomId);
+  }
+
+  private notifyCallIdChange(callId: string | null): void {
+    (this.config.callbacks.onCallIdChange ?? this.config.onCallIdChange)?.(callId);
   }
 
   async toggleCam(): Promise<void> {
@@ -708,12 +750,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Эмитим обновления
     if (this.localStream) {
       this.emit('localStream', this.localStream);
-      this.config.callbacks.onLocalStreamChange?.(this.localStream);
-      this.config.onLocalStreamChange?.(this.localStream);
+      this.notifyLocalStreamChange(this.localStream);
     }
     
-    this.config.callbacks.onCamStateChange?.(this.isCamOn);
-    this.config.onCamStateChange?.(this.isCamOn);
+    this.notifyCamStateChange(this.isCamOn);
     // cam-toggle уже отправлен в начале toggleCam() для мгновенного отображения «Отошел» у партнёра
   }
 
@@ -863,8 +903,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         } catch {}
         this.localStream = stream;
         this.emit('localStream', stream);
-        this.config.callbacks.onLocalStreamChange?.(stream);
-        this.config.onLocalStreamChange?.(stream);
+        this.notifyLocalStreamChange(stream);
 
         logger.info('[VideoCallSession] Camera restarted in place via LocalVideoTrack.restartTrack', {
           trackId: this.localVideoTrack?.sid || this.localVideoTrack?.mediaStreamTrack?.id,
@@ -977,15 +1016,13 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.partnerUserId = params.partnerUserId;
     
     if (params.roomId) {
-      this.config.callbacks.onRoomIdChange?.(params.roomId);
-      this.config.onRoomIdChange?.(params.roomId);
+      this.notifyRoomIdChange(params.roomId);
     }
     if (params.partnerId) {
-      this.config.callbacks.onPartnerIdChange?.(params.partnerId);
-      this.config.onPartnerIdChange?.(params.partnerId);
+      this.notifyPartnerIdChange(params.partnerId);
     }
     if (params.callId) {
-      this.config.callbacks.onCallIdChange?.(params.callId);
+      this.notifyCallIdChange(params.callId);
     }
     
     // Если нужно восстановить активный звонок, запрашиваем токен
@@ -1081,6 +1118,16 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** Текущее состояние камеры собеседника (синхронно обновляется при cam-toggle/LiveKit). Используется в showPiP, чтобы заглушка «Отошел» показывалась сразу при входе в PiP без гонки с React state. */
   getRemoteCamEnabled(): boolean {
     return this.remoteCamEnabled;
+  }
+
+  /** Намерение пользователя по микрофону (совпадает с UI после синхронизации). */
+  getIsMicOn(): boolean {
+    return this.isMicOn;
+  }
+
+  /** Намерение пользователя по камере. */
+  getIsCamOn(): boolean {
+    return this.isCamOn;
   }
 
   /** Звонок уже завершён (endCall вызван или получен call:ended). Используется в App, чтобы не показывать PiP с пустыми данными. */
@@ -1375,8 +1422,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.emit('remoteViewKeyChanged', this.remoteViewKey);
         
         // Уведомляем компонент об изменении состояния камеры
-        this.config.callbacks.onRemoteCamStateChange?.(data.enabled);
-        this.config.onRemoteCamStateChange?.(data.enabled);
+        this.notifyRemoteCamStateChange(data.enabled);
         try {
           const pipUpdate = (global as any).__pipUpdateStateRef?.current;
           if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: data.enabled });
@@ -1499,22 +1545,19 @@ export class VideoCallSession extends SimpleEventEmitter {
       // Обновляем данные о партнере, если они изменились
       if (partnerUserId && partnerUserId !== this.partnerUserId) {
         this.partnerUserId = partnerUserId;
-        this.config.callbacks.onPartnerIdChange?.(partnerId);
-        this.config.onPartnerIdChange?.(partnerId);
+        this.notifyPartnerIdChange(partnerId);
       }
       if (partnerId && partnerId !== this.partnerId) {
         this.partnerId = partnerId;
-        this.config.callbacks.onPartnerIdChange?.(partnerId);
-        this.config.onPartnerIdChange?.(partnerId);
+        this.notifyPartnerIdChange(partnerId);
       }
       if (callId && callId !== this.callId) {
         this.callId = callId;
-        this.config.callbacks.onCallIdChange?.(callId);
+        this.notifyCallIdChange(callId);
       }
       if (roomId && roomId !== this.roomId) {
         this.roomId = roomId;
-        this.config.callbacks.onRoomIdChange?.(roomId);
-        this.config.onRoomIdChange?.(roomId);
+        this.notifyRoomIdChange(roomId);
       }
       this.config.setIsInactiveState?.(false);
       this.config.setFriendCallAccepted?.(true);
@@ -1530,12 +1573,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.partnerId = partnerId;
     this.partnerUserId = partnerUserId;
 
-    this.config.callbacks.onRoomIdChange?.(roomId);
-    this.config.onRoomIdChange?.(roomId);
-    this.config.callbacks.onPartnerIdChange?.(partnerId);
-    this.config.onPartnerIdChange?.(partnerId);
+    this.notifyRoomIdChange(roomId);
+    this.notifyPartnerIdChange(partnerId);
     if (callId) {
-      this.config.callbacks.onCallIdChange?.(callId);
+      this.notifyCallIdChange(callId);
     }
     
     // КРИТИЧНО: Уведомляем компонент об изменении partnerUserId для отображения бейджа друга
@@ -1553,8 +1594,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         payloadUrl: data.livekitUrl,
         roomId: data.livekitRoomName,
       });
-      this.config.callbacks.onLoadingChange?.(false);
-      this.config.onLoadingChange?.(false);
+      this.notifyLoadingChange(false);
       return;
     }
     
@@ -1706,8 +1746,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           this.emit('callAnswered');
           return;
         }
-        this.config.callbacks.onLoadingChange?.(false);
-        this.config.onLoadingChange?.(false);
+        this.notifyLoadingChange(false);
         return;
       }
       
@@ -1851,8 +1890,7 @@ export class VideoCallSession extends SimpleEventEmitter {
               this.emit('callAnswered');
               return;
             }
-            this.config.callbacks.onLoadingChange?.(false);
-            this.config.onLoadingChange?.(false);
+            this.notifyLoadingChange(false);
             return;
           }
           
@@ -1871,12 +1909,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       } catch (e) {
         logger.error('[VideoCallSession] Error fetching LiveKit token', e);
-        this.config.callbacks.onLoadingChange?.(false);
-        this.config.onLoadingChange?.(false);
+        this.notifyLoadingChange(false);
       }
     } else {
-      this.config.callbacks.onLoadingChange?.(false);
-      this.config.onLoadingChange?.(false);
+      this.notifyLoadingChange(false);
     }
   }
 
@@ -1982,13 +2018,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.lastSentPiPRoomId = null;
     this.partnerId = null;
     this.partnerUserId = null;
-    this.config.callbacks.onPartnerIdChange?.(null);
-    this.config.onPartnerIdChange?.(null);
-    this.config.callbacks.onRoomIdChange?.(null);
-    this.config.onRoomIdChange?.(null);
-    this.config.callbacks.onCallIdChange?.(null);
-    this.config.callbacks.onLoadingChange?.(false);
-    this.config.onLoadingChange?.(false);
+    this.notifyPartnerIdChange(null);
+    this.notifyRoomIdChange(null);
+    this.notifyCallIdChange(null);
+    this.notifyLoadingChange(false);
     this.config.setFriendCallAccepted?.(false);
     this.config.setIsInactiveState?.(true);
     this.config.setWasFriendCallEnded?.(true);
@@ -2014,8 +2047,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private async ensureLocalTracks(force = false): Promise<void> {
     if (this.localVideoTrack && this.localAudioTrack && !force) {
       this.emit('localStream', this.localStream);
-      this.config.callbacks.onLocalStreamChange?.(this.localStream);
-      this.config.onLocalStreamChange?.(this.localStream);
+      this.notifyLocalStreamChange(this.localStream);
       // Эквалайзер отключен: мониторинг микрофона не запускаем
       return;
     }
@@ -2071,6 +2103,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Восстанавливаем сохранённое состояние камеры/микрофона
     this.isCamOn = savedCamState;
     this.isMicOn = savedMicState;
+    logger.info('[MIC_TRACE session] ensureLocalTracks restored cam/mic flags', {
+      ts: Date.now(),
+      savedMicState,
+      savedCamState,
+    });
 
     // КРИТИЧНО: Применяем сохранённые состояния к трекам сразу после создания.
     // Иначе можно получить ситуацию "UI показывает mic/cam off, но треки реально включены".
@@ -2091,8 +2128,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     } catch {}
     
-    this.config.callbacks.onLocalStreamChange?.(stream);
-    this.config.onLocalStreamChange?.(stream);
+    this.notifyLocalStreamChange(stream);
     this.emit('localStream', stream);
     // НЕ отправляем onCamStateChange здесь - это делается в toggleCam после завершения
 
@@ -2186,8 +2222,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     } catch {}
     this.localStream = stream;
     this.emit('localStream', stream);
-    this.config.callbacks.onLocalStreamChange?.(stream);
-    this.config.onLocalStreamChange?.(stream);
+    this.notifyLocalStreamChange(stream);
 
     logger.info('[VideoCallSession] Local video track swapped', {
       prevTrackId,
@@ -2340,8 +2375,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     } catch {}
     this.localStream = stream;
     this.emit('localStream', stream);
-    this.config.callbacks.onLocalStreamChange?.(stream);
-    this.config.onLocalStreamChange?.(stream);
+    this.notifyLocalStreamChange(stream);
   }
 
   private stopLocalTracksWithoutStateReset(): void {
@@ -2372,15 +2406,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   private stopLocalTracks(): void {
     this.stopMicLevelMonitoring();
     this.stopLocalTracksWithoutStateReset();
-    this.config.callbacks.onLocalStreamChange?.(null);
-    this.config.onLocalStreamChange?.(null);
+    this.notifyLocalStreamChange(null);
     this.emit('localStream', null);
     this.isCamOn = false;
     this.isMicOn = false;
-    this.config.callbacks.onCamStateChange?.(false);
-    this.config.onCamStateChange?.(false);
-    this.config.callbacks.onMicStateChange?.(false);
-    this.config.onMicStateChange?.(false);
+    this.notifyCamStateChange(false);
+    logger.info('[MIC_TRACE session] stopLocalTracks → onMicStateChange(false)', { ts: Date.now() });
+    this.notifyMicStateChange(false);
   }
 
   /* ========= Mic monitoring implementation (copied from RandomChatSession) ========= */
@@ -2902,14 +2934,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.emit('partnerPiPStateChanged', { inPiP: false });
     }
     this.emit('remoteStream', null);
-    this.config.callbacks.onRemoteStreamChange?.(null);
-    this.config.onRemoteStreamChange?.(null);
+    this.notifyRemoteStreamChange(null);
     try {
       const pipUpdate = (global as any).__pipUpdateStateRef?.current;
       if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: null, remoteCamOn: false });
     } catch (_) {}
-    this.config.callbacks.onRemoteCamStateChange?.(false);
-    this.config.onRemoteCamStateChange?.(false);
+    this.notifyRemoteCamStateChange(false);
     this.remoteAudioMuted = false;
     this.emit('remoteState', { muted: false });
     this.remoteViewKey = Date.now();
@@ -3631,11 +3661,15 @@ export class VideoCallSession extends SimpleEventEmitter {
           state: room.state,
           hasLocalParticipant: !!room.localParticipant
         });
-        // КРИТИЧНО: Уведомляем компонент о том, что микрофон и камера включены
-        this.config.callbacks.onMicStateChange?.(true);
-        this.config.onMicStateChange?.(true);
-        this.config.callbacks.onCamStateChange?.(true);
-        this.config.onCamStateChange?.(true);
+        // Синхронизируем UI с флагами сессии (пользователь мог выключить мик/камеру до конца connect).
+        logger.info('[MIC_TRACE session] connectToLiveKit skip publish → onMicStateChange (session flags)', {
+          ts: Date.now(),
+          sessionIsMicOn: this.isMicOn,
+          sessionIsCamOn: this.isCamOn,
+          roomState: room.state,
+        });
+        this.notifyMicStateChange(this.isMicOn);
+        this.notifyCamStateChange(this.isCamOn);
         return true; // Возвращаем true, так как подключение успешно, просто треки не опубликованы
       }
 
@@ -3698,11 +3732,22 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       }
 
-      // КРИТИЧНО: Уведомляем компонент о том, что микрофон и камера включены
-      this.config.callbacks.onMicStateChange?.(true);
-      this.config.onMicStateChange?.(true);
-      this.config.callbacks.onCamStateChange?.(true);
-      this.config.onCamStateChange?.(true);
+      // Пользователь мог выключить мик во время connecting — publish не меняет желаемое состояние в комнате.
+      if (room.state === 'connected' && room.localParticipant) {
+        await room.localParticipant.setMicrophoneEnabled(this.isMicOn).catch((e) => {
+          logger.warn('[VideoCallSession] setMicrophoneEnabled after publish failed', e);
+        });
+      }
+
+      // Синхронизируем UI с флагами сессии (не предполагаем «всё включено»).
+      logger.info('[MIC_TRACE session] connectToLiveKit post-publish → onMicStateChange (session flags)', {
+        ts: Date.now(),
+        sessionIsMicOn: this.isMicOn,
+        sessionIsCamOn: this.isCamOn,
+        roomState: room.state,
+      });
+      this.notifyMicStateChange(this.isMicOn);
+      this.notifyCamStateChange(this.isCamOn);
 
       // КРИТИЧНО: После подключения к комнате на iOS может "останавливаться" нативный аудио-рекордер.
       // Перезапускаем мониторинг микрофона, чтобы эквалайзер продолжал работать как в RandomChat.
@@ -4374,8 +4419,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (!participant.isLocal && pub.kind === Track.Kind.Video) {
           this.remoteCamEnabled = true;
           this.clearRemoteCamOffTimeout();
-          this.config.callbacks.onRemoteCamStateChange?.(true);
-          this.config.onRemoteCamStateChange?.(true);
+          this.notifyRemoteCamStateChange(true);
           try {
             const pipUpdate = (global as any).__pipUpdateStateRef?.current;
             if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: true });
@@ -4479,6 +4523,11 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
 
       // Re-apply mic enabled state (some devices flip enabled=false transiently).
+      logger.info('[MIC_TRACE session] recoverLocalTracksAfterReconnect reapply mic to tracks', {
+        ts: Date.now(),
+        context,
+        isMicOn: this.isMicOn,
+      });
       try {
         const mt = this.localAudioTrack?.mediaStreamTrack as any;
         if (mt && typeof mt.enabled === 'boolean') mt.enabled = this.isMicOn;
@@ -4678,8 +4727,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       
       if (!track.isMuted) {
-        this.config.callbacks.onRemoteCamStateChange?.(true);
-        this.config.onRemoteCamStateChange?.(true);
+        this.notifyRemoteCamStateChange(true);
         try {
           const pipUpdate = (global as any).__pipUpdateStateRef?.current;
           if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: true });
@@ -4708,8 +4756,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Это гарантирует, что UI получит стрим и сможет отобразить его когда трек станет готовым
     this.emit('remoteViewKeyChanged', this.remoteViewKey);
     this.emit('remoteStream', this.remoteStream);
-    this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
-    this.config.onRemoteStreamChange?.(this.remoteStream);
+    this.notifyRemoteStreamChange(this.remoteStream);
     // КРИТИЧНО: Обновляем PiP (в т.ч. системный) при смене удалённого стрима — иначе при включении камеры партнёром из app PiP видео не восстановится у пользователя в системном PiP
     try {
       const pipUpdate = (global as any).__pipUpdateStateRef?.current;
@@ -4719,8 +4766,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Устанавливаем loading=false только когда приходит remoteStream с треками
     // Это предотвращает черный экран при принятии звонка
     if (this.remoteStream && (this.remoteVideoTrack || this.remoteAudioTrack)) {
-      this.config.callbacks.onLoadingChange?.(false);
-      this.config.onLoadingChange?.(false);
+      this.notifyLoadingChange(false);
     }
     
     logger.info('[VideoCallSession] Remote stream updated after track subscription', {
@@ -4771,8 +4817,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (!isRoomReconnecting && !recentlyReconnecting && !duringLocalCameraFlip && !recentlyAfterCameraFlip) {
         this.remoteStream = null;
         this.emit('remoteStream', null);
-        this.config.callbacks.onRemoteStreamChange?.(null);
-        this.config.onRemoteStreamChange?.(null);
+        this.notifyRemoteStreamChange(null);
         try {
           const pipUpdate = (global as any).__pipUpdateStateRef?.current;
           if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: null });
@@ -4814,8 +4859,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         return;
       }
       this.remoteCamEnabled = false;
-      this.config.callbacks.onRemoteCamStateChange?.(false);
-      this.config.onRemoteCamStateChange?.(false);
+      this.notifyRemoteCamStateChange(false);
       try {
         const pipUpdate = (global as any).__pipUpdateStateRef?.current;
         if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: false });

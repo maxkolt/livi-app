@@ -134,6 +134,47 @@ export class RandomChatSession extends SimpleEventEmitter {
   private cleaned = false;
   private stopRequested = false;
 
+  /** Один вызов вместо дубля `callbacks.*` и корневого `config.*` (одна функция вызывалась дважды). */
+  private notifyMicStateChange(enabled: boolean): void {
+    (this.config.callbacks.onMicStateChange ?? this.config.onMicStateChange)?.(enabled);
+  }
+
+  private notifyCamStateChange(enabled: boolean): void {
+    (this.config.callbacks.onCamStateChange ?? this.config.onCamStateChange)?.(enabled);
+  }
+
+  private notifyLocalStreamChange(stream: MediaStream | null): void {
+    (this.config.callbacks.onLocalStreamChange ?? this.config.onLocalStreamChange)?.(stream);
+  }
+
+  private notifyRemoteStreamChange(stream: MediaStream | null): void {
+    (this.config.callbacks.onRemoteStreamChange ?? this.config.onRemoteStreamChange)?.(stream);
+  }
+
+  private notifyRemoteCamStateChange(enabled: boolean): void {
+    (this.config.callbacks.onRemoteCamStateChange ?? this.config.onRemoteCamStateChange)?.(enabled);
+  }
+
+  private notifyLoadingChange(loading: boolean): void {
+    (this.config.callbacks.onLoadingChange ?? this.config.onLoadingChange)?.(loading);
+  }
+
+  private notifyPartnerIdChange(partnerId: string | null): void {
+    (this.config.callbacks.onPartnerIdChange ?? this.config.onPartnerIdChange)?.(partnerId);
+  }
+
+  private notifyRoomIdChange(roomId: string | null): void {
+    (this.config.callbacks.onRoomIdChange ?? this.config.onRoomIdChange)?.(roomId);
+  }
+
+  private notifyMicLevelChange(level: number): void {
+    (this.config.callbacks.onMicLevelChange ?? this.config.onMicLevelChange)?.(level);
+  }
+
+  private notifyMicFrequencyLevelsChange(levels: number[]): void {
+    (this.config.callbacks.onMicFrequencyLevelsChange ?? this.config.onMicFrequencyLevelsChange)?.(levels);
+  }
+
   private resolveMyUserId(): string | null {
     const configured = String(this.config.myUserId ?? '').trim();
     if (configured) return configured;
@@ -247,8 +288,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       if (this.remoteVideoTrack) return;
       if (this.remoteCamEnabled) return;
       if (this.remoteParticipantHasAnyVideoPublication(this.currentRemoteParticipant)) return;
-      this.config.callbacks.onRemoteCamStateChange?.(false);
-      this.config.onRemoteCamStateChange?.(false);
+      this.notifyRemoteCamStateChange(false);
       logger.debug('[RandomChatSession] Implicit remote cam off (no video publication after debounce)', {
         reason,
       });
@@ -446,8 +486,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.isMicOn = true;
     this.config.setIsInactiveState?.(false);
     this.config.setStarted?.(true);
-    this.config.callbacks.onLoadingChange?.(true);
-    this.config.onLoadingChange?.(true);
+    this.notifyLoadingChange(true);
     this.emit('searching');
     await this.ensureLocalTracks();
     this.autoNext('initial_start');
@@ -470,18 +509,14 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.pendingMatchFound = null;
     this.clearPartnerGoneFallbackTimer();
     this.config.setStarted?.(false);
-    this.config.callbacks.onLoadingChange?.(false);
-    this.config.onLoadingChange?.(false);
+    this.notifyLoadingChange(false);
     this.matchRoomId = null;
     void this.disconnectRoom('user', 'stopRandomChat');
     this.stopLocalTracks();
     this.resetRemoteState();
-    this.config.callbacks.onPartnerIdChange?.(null);
-    this.config.onPartnerIdChange?.(null);
-    this.config.callbacks.onRoomIdChange?.(null);
-    this.config.onRoomIdChange?.(null);
-    this.config.callbacks.onMicLevelChange?.(0);
-    this.config.onMicLevelChange?.(0);
+    this.notifyPartnerIdChange(null);
+    this.notifyRoomIdChange(null);
+    this.notifyMicLevelChange(0);
     try {
       socket.emit('stop');
     } catch (e) {
@@ -657,16 +692,13 @@ export class RandomChatSession extends SimpleEventEmitter {
       
       // КРИТИЧНО: Сбрасываем partnerId и roomId сразу, чтобы скрыть кнопку "Добавить в друзья"
       // Это должно быть сделано до эмита remoteStream, чтобы UI обновился правильно
-      this.config.callbacks.onPartnerIdChange?.(null);
-      this.config.onPartnerIdChange?.(null);
-      this.config.callbacks.onRoomIdChange?.(null);
-      this.config.onRoomIdChange?.(null);
+      this.notifyPartnerIdChange(null);
+      this.notifyRoomIdChange(null);
       
       // КРИТИЧНО: Эмитим null для remoteStream ТОЛЬКО после полного отключения
       // Это предотвращает черный экран во время перехода к следующему собеседнику
       this.emit('remoteStream', null);
-      this.config.callbacks.onRemoteStreamChange?.(null);
-      this.config.onRemoteStreamChange?.(null);
+      this.notifyRemoteStreamChange(null);
       this.remoteViewKey = Date.now();
       this.emit('remoteViewKeyChanged', this.remoteViewKey);
       
@@ -677,8 +709,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         setTimeout(() => {
           if (this.started && !this.isDisconnecting && !this.room) {
             this.emit('searching');
-            this.config.callbacks.onLoadingChange?.(true);
-            this.config.onLoadingChange?.(true);
+            this.notifyLoadingChange(true);
           }
         }, 120);
         
@@ -777,8 +808,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     try {
       socket.emit('start', nextTransitionId ? { transitionId: nextTransitionId } : undefined);
       this.emit('searching');
-      this.config.callbacks.onLoadingChange?.(true);
-      this.config.onLoadingChange?.(true);
+      this.notifyLoadingChange(true);
       logger.debug('[RandomChatSession] autoNext: emitted start', { reason, nextTransitionId });
       this.logReconnectTrace('auto_next_emitted_start', {
         reason: reason || 'unspecified',
@@ -818,8 +848,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         }
       } catch {}
     }
-    this.config.callbacks.onMicStateChange?.(this.isMicOn);
-    this.config.onMicStateChange?.(this.isMicOn);
+    this.notifyMicStateChange(this.isMicOn);
     setTimeout(() => {
       this.micToggleInProgress = false;
     }, 200);
@@ -908,14 +937,12 @@ export class RandomChatSession extends SimpleEventEmitter {
     // КРИТИЧНО: НЕ эмитим remoteStream, так как локальное состояние камеры не влияет на удаленное видео
     if (this.localStream) {
       this.emit('localStream', this.localStream);
-      this.config.callbacks.onLocalStreamChange?.(this.localStream);
-      this.config.onLocalStreamChange?.(this.localStream);
+      this.notifyLocalStreamChange(this.localStream);
     }
     
     // КРИТИЧНО: Обновляем только локальное состояние камеры
     // Удаленное видео не должно быть затронуто
-    this.config.callbacks.onCamStateChange?.(this.isCamOn);
-    this.config.onCamStateChange?.(this.isCamOn);
+    this.notifyCamStateChange(this.isCamOn);
     setTimeout(() => {
       this.camToggleInProgress = false;
     }, 200);
@@ -1004,8 +1031,7 @@ export class RandomChatSession extends SimpleEventEmitter {
 
     try {
       this.emit('searching');
-      this.config.callbacks.onLoadingChange?.(true);
-      this.config.onLoadingChange?.(true);
+      this.notifyLoadingChange(true);
     } catch {}
 
     void (async () => {
@@ -1152,8 +1178,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         this.remoteViewKey = Date.now();
         this.emit('remoteViewKeyChanged', this.remoteViewKey);
         this.clearRemoteCamImplicitOffTimer('cam_toggle');
-        this.config.callbacks.onRemoteCamStateChange?.(nextEnabled);
-        this.config.onRemoteCamStateChange?.(nextEnabled);
+        this.notifyRemoteCamStateChange(nextEnabled);
       } catch (e) {
         logger.debug('[RandomChatSession] cam-toggle handler error', e);
       }
@@ -1277,11 +1302,9 @@ export class RandomChatSession extends SimpleEventEmitter {
 
     this.resetRemoteState();
     this.emit('matchFound', { partnerId, roomId, userId });
-    this.config.callbacks.onPartnerIdChange?.(partnerId);
-    this.config.onPartnerIdChange?.(partnerId);
+    this.notifyPartnerIdChange(partnerId);
     if (roomId) {
-      this.config.callbacks.onRoomIdChange?.(roomId);
-      this.config.onRoomIdChange?.(roomId);
+      this.notifyRoomIdChange(roomId);
     }
 
     const connectRequestId = ++this.connectRequestId;
@@ -1327,8 +1350,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         targetRoomName: data.livekitRoomName ?? null,
         nextTransitionId,
       });
-      this.config.callbacks.onLoadingChange?.(false);
-      this.config.onLoadingChange?.(false);
+      this.notifyLoadingChange(false);
       this.config.setIsInactiveState?.(false);
     } finally {
       // Сбрасываем pending request только если это был наш запрос
@@ -1350,8 +1372,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     
     if (videoActive && audioActive && !force) {
       this.emit('localStream', this.localStream);
-      this.config.callbacks.onLocalStreamChange?.(this.localStream);
-      this.config.onLocalStreamChange?.(this.localStream);
+      this.notifyLocalStreamChange(this.localStream);
       return;
     }
 
@@ -1399,8 +1420,7 @@ export class RandomChatSession extends SimpleEventEmitter {
             isDevice: Device.isDevice,
           });
           this.isCamOn = false;
-          this.config.callbacks.onCamStateChange?.(this.isCamOn);
-          this.config.onCamStateChange?.(this.isCamOn);
+          this.notifyCamStateChange(this.isCamOn);
           tracks = await createLocalTracks({ audio: true, video: false });
         }
       } else {
@@ -1427,16 +1447,13 @@ export class RandomChatSession extends SimpleEventEmitter {
       }
     });
     this.localStream = stream;
-    this.config.callbacks.onLocalStreamChange?.(stream);
-    this.config.onLocalStreamChange?.(stream);
+    this.notifyLocalStreamChange(stream);
     this.emit('localStream', stream);
     // Возвращаем состояние камеры/мика к целевому после пересоздания треков
     this.isCamOn = targetCamState;
     this.isMicOn = targetMicState;
-    this.config.callbacks.onCamStateChange?.(this.isCamOn);
-    this.config.onCamStateChange?.(this.isCamOn);
-    this.config.callbacks.onMicStateChange?.(this.isMicOn);
-    this.config.onMicStateChange?.(this.isMicOn);
+    this.notifyCamStateChange(this.isCamOn);
+    this.notifyMicStateChange(this.isMicOn);
 
     // Применяем состояния к трекам после восстановления
     try {
@@ -1493,17 +1510,14 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.localStream = null;
     this.lastAudioEnergy = 0;
     this.lastAudioDuration = 0;
-    this.config.callbacks.onLocalStreamChange?.(null);
-    this.config.onLocalStreamChange?.(null);
+    this.notifyLocalStreamChange(null);
     this.emit('localStream', null);
 
     if (resetStates) {
       this.isCamOn = false;
       this.isMicOn = false;
-      this.config.callbacks.onCamStateChange?.(false);
-      this.config.onCamStateChange?.(false);
-      this.config.callbacks.onMicStateChange?.(false);
-      this.config.onMicStateChange?.(false);
+      this.notifyCamStateChange(false);
+      this.notifyMicStateChange(false);
     }
   }
   
@@ -1595,10 +1609,8 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.eqPhase = 0;
 
     const emptyLevels = new Array(this.micBarsCount).fill(0);
-    this.config.callbacks.onMicLevelChange?.(0);
-    this.config.onMicLevelChange?.(0);
-    this.config.callbacks.onMicFrequencyLevelsChange?.(emptyLevels);
-    this.config.onMicFrequencyLevelsChange?.(emptyLevels);
+    this.notifyMicLevelChange(0);
+    this.notifyMicFrequencyLevelsChange(emptyLevels);
   }
   
   private cleanupAudioContext(): void {
@@ -1868,10 +1880,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   }
 
   private emitMicLevels(audioLevel: number, frequencyLevels: number[]): void {
-    this.config.callbacks.onMicLevelChange?.(audioLevel);
-    this.config.onMicLevelChange?.(audioLevel);
-    this.config.callbacks.onMicFrequencyLevelsChange?.(frequencyLevels);
-    this.config.onMicFrequencyLevelsChange?.(frequencyLevels);
+    this.notifyMicLevelChange(audioLevel);
+    this.notifyMicFrequencyLevelsChange(frequencyLevels);
   }
 
   private generateFrequencyFromLevel(audioLevel: number, barsCount: number): number[] {
@@ -2091,8 +2101,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.currentRemoteParticipant = null;
     this.remoteCamEnabled = false;
     this.emit('remoteStream', null);
-    this.config.callbacks.onRemoteStreamChange?.(null);
-    this.config.onRemoteStreamChange?.(null);
+    this.notifyRemoteStreamChange(null);
     this.remoteAudioMuted = false;
     this.remoteMediaFirstSeenAt = 0;
     this.roomConnectedAt = 0;
@@ -2182,8 +2191,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (Platform.OS === 'ios' && !Device.isDevice) {
       logger.warn('[RandomChatSession] iOS Simulator: skipping video track recreation (camera unavailable)', { reason });
       this.isCamOn = false;
-      this.config.callbacks.onCamStateChange?.(this.isCamOn);
-      this.config.onCamStateChange?.(this.isCamOn);
+      this.notifyCamStateChange(this.isCamOn);
       return;
     }
     const prevTrackId = this.localVideoTrack?.mediaStreamTrack?.id;
@@ -2270,11 +2278,9 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
 
     // Обновляем состояние UI
-    this.config.callbacks.onLocalStreamChange?.(this.localStream);
-    this.config.onLocalStreamChange?.(this.localStream);
+    this.notifyLocalStreamChange(this.localStream);
     this.emit('localStream', this.localStream);
-    this.config.callbacks.onCamStateChange?.(this.isCamOn);
-    this.config.onCamStateChange?.(this.isCamOn);
+    this.notifyCamStateChange(this.isCamOn);
     
     logger.info('[RandomChatSession] Local video track recreated', {
       reason,
@@ -2288,8 +2294,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (Platform.OS === 'ios' && !Device.isDevice) {
       logger.warn('[RandomChatSession] iOS Simulator: skipping video track creation (camera unavailable)', { reason });
       this.isCamOn = false;
-      this.config.callbacks.onCamStateChange?.(this.isCamOn);
-      this.config.onCamStateChange?.(this.isCamOn);
+      this.notifyCamStateChange(this.isCamOn);
       throw new Error('Camera unavailable on iOS Simulator');
     }
 
@@ -2395,11 +2400,9 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
 
     // Обновляем состояние UI
-    this.config.callbacks.onLocalStreamChange?.(this.localStream);
-    this.config.onLocalStreamChange?.(this.localStream);
+    this.notifyLocalStreamChange(this.localStream);
     this.emit('localStream', this.localStream);
-    this.config.callbacks.onCamStateChange?.(this.isCamOn);
-    this.config.onCamStateChange?.(this.isCamOn);
+    this.notifyCamStateChange(this.isCamOn);
 
     logger.info('[RandomChatSession] Local video track swapped', {
       reason,
@@ -3170,8 +3173,7 @@ export class RandomChatSession extends SimpleEventEmitter {
           this.localStream.getTracks().length > 0;
         if (prevStream && (!newStreamValid)) {
           this.emit('localStream', prevStream);
-          this.config.callbacks.onLocalStreamChange?.(prevStream);
-          this.config.onLocalStreamChange?.(prevStream);
+          this.notifyLocalStreamChange(prevStream);
         }
       } else {
         if (rawVideoEnded && !videoEnded) {
@@ -3203,8 +3205,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         // КРИТИЧНО: Эмитим ДО публикации треков для мгновенного отображения камеры
         if (this.localStream) {
           this.emit('localStream', this.localStream);
-          this.config.callbacks.onLocalStreamChange?.(this.localStream);
-          this.config.onLocalStreamChange?.(this.localStream);
+          this.notifyLocalStreamChange(this.localStream);
         }
       }
     }
@@ -3213,8 +3214,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     // Это убирает задержку и зависание камеры при подключении
     if (this.localStream) {
       this.emit('localStream', this.localStream);
-      this.config.callbacks.onLocalStreamChange?.(this.localStream);
-      this.config.onLocalStreamChange?.(this.localStream);
+      this.notifyLocalStreamChange(this.localStream);
     }
     
     // КРИТИЧНО: Проверяем еще раз перед созданием новой комнаты
@@ -3505,8 +3505,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     // Это убирает задержку и зависание камеры при подключении
     if (this.localStream) {
       this.emit('localStream', this.localStream);
-      this.config.callbacks.onLocalStreamChange?.(this.localStream);
-      this.config.onLocalStreamChange?.(this.localStream);
+      this.notifyLocalStreamChange(this.localStream);
     }
 
     // КРИТИЧНО: Ждем полного подключения участника перед публикацией треков
@@ -3589,14 +3588,11 @@ export class RandomChatSession extends SimpleEventEmitter {
      */
 
     // Обновляем состояние камеры и микрофона
-    this.config.callbacks.onMicStateChange?.(this.isMicOn);
-    this.config.onMicStateChange?.(this.isMicOn);
-    this.config.callbacks.onCamStateChange?.(this.isCamOn);
-    this.config.onCamStateChange?.(this.isCamOn);
+    this.notifyMicStateChange(this.isMicOn);
+    this.notifyCamStateChange(this.isCamOn);
     
     // КРИТИЧНО: Скрываем лоадер после успешного подключения и публикации треков
-    this.config.callbacks.onLoadingChange?.(false);
-    this.config.onLoadingChange?.(false);
+    this.notifyLoadingChange(false);
     this.config.setIsInactiveState?.(false);
     
     return true;
@@ -4250,8 +4246,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       if (isInitialVideoTrack) {
         const enabledFromTrack = !track.isMuted;
         this.remoteCamEnabled = enabledFromTrack;
-        this.config.callbacks.onRemoteCamStateChange?.(enabledFromTrack);
-        this.config.onRemoteCamStateChange?.(enabledFromTrack);
+        this.notifyRemoteCamStateChange(enabledFromTrack);
         logger.debug('[RandomChatSession] Initial remote cam state from video track', {
           isMuted: track.isMuted,
           remoteCamEnabled: this.remoteCamEnabled,
@@ -4304,8 +4299,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       this.emit('remoteViewKeyChanged', this.remoteViewKey);
     }
     this.emit('remoteStream', this.remoteStream);
-    this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
-    this.config.onRemoteStreamChange?.(this.remoteStream);
+    this.notifyRemoteStreamChange(this.remoteStream);
     
     logger.info('[RandomChatSession] Remote stream updated after track subscription', {
       streamId: this.remoteStream.id,
@@ -4368,12 +4362,10 @@ export class RandomChatSession extends SimpleEventEmitter {
         if (this.remoteStream && tracksCount === 0) {
           this.remoteStream = null;
           this.emit('remoteStream', null);
-          this.config.callbacks.onRemoteStreamChange?.(null);
-          this.config.onRemoteStreamChange?.(null);
+          this.notifyRemoteStreamChange(null);
         } else if (this.remoteStream) {
           this.emit('remoteStream', this.remoteStream);
-          this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
-          this.config.onRemoteStreamChange?.(this.remoteStream);
+          this.notifyRemoteStreamChange(this.remoteStream);
         }
 
         const shouldDelayRemoteVideoReset =
@@ -4411,12 +4403,10 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (this.remoteStream && tracksCount === 0) {
       this.remoteStream = null;
       this.emit('remoteStream', null);
-      this.config.callbacks.onRemoteStreamChange?.(null);
-      this.config.onRemoteStreamChange?.(null);
+      this.notifyRemoteStreamChange(null);
     } else if (this.remoteStream) {
       this.emit('remoteStream', this.remoteStream);
-      this.config.callbacks.onRemoteStreamChange?.(this.remoteStream);
-      this.config.onRemoteStreamChange?.(this.remoteStream);
+      this.notifyRemoteStreamChange(this.remoteStream);
     }
 
     this.clearPendingRemoteVideoReset('non_video_unsubscribe');

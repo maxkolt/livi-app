@@ -2902,28 +2902,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           
           setFriends((prev) => {
             const now = Date.now();
-            const missingFromPayloadButOnlineInUi = prev
-              .filter((f) => f.online && !onlineSet.has(String(f.id)))
-              .map((f) => String(f.id));
-            const offlineInUiButNowInPayload = prev
-              .filter((f) => !f.online && onlineSet.has(String(f.id)))
-              .map((f) => String(f.id));
-            if (
-              missingFromPayloadButOnlineInUi.length ||
-              offlineInUiButNowInPayload.length ||
-              (Array.isArray(data) && data.length === 0)
-            ) {
-              logger.info('[presence:online:trace] HomeScreen массив → сверка с UI до debounce', {
-                appState: AppState.currentState,
-                socketConnected: socket.connected,
-                reconnecting: isReconnecting(),
-                payloadOnlineCount: onlineSet.size,
-                payloadArrayLen: data.length,
-                missingFromPayloadButOnlineInUi,
-                offlineInUiButNowInPayload,
-                debounceMs: PRESENCE_OFFLINE_DEBOUNCE_MS,
-              });
-            }
             return prev.map((f) => {
               const id = String(f.id);
               const inSet = onlineSet.has(id);
@@ -2932,36 +2910,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 if (pending) {
                   clearTimeout(pending);
                   pendingPresenceOfflineTimersRef.current.delete(id);
-                  logger.info('[presence:online:trace] HomeScreen отменён таймер «офлайн» (друг снова в payload)', {
-                    appState: AppState.currentState,
-                    friendId: id,
-                  });
                 }
                 friendLastOnlineTrueAtRef.current.set(id, now);
-                if (!f.online) {
-                  logger.info('[presence:online:trace] HomeScreen друг → онлайн в UI', {
-                    appState: AppState.currentState,
-                    friendId: id,
-                  });
-                }
                 return { ...f, online: true };
               }
               if (!f.online) {
                 return f;
               }
               if (!pendingPresenceOfflineTimersRef.current.has(id)) {
-                logger.info('[presence:online:trace] HomeScreen запланирован «офлайн» после debounce', {
-                  appState: AppState.currentState,
-                  friendId: id,
-                  debounceMs: PRESENCE_OFFLINE_DEBOUNCE_MS,
-                });
                 const t = setTimeout(() => {
                   pendingPresenceOfflineTimersRef.current.delete(id);
                   friendLastOnlineTrueAtRef.current.delete(id);
-                  logger.info('[presence:online:trace] HomeScreen таймер: выставляем офлайн в UI', {
-                    appState: AppState.currentState,
-                    friendId: id,
-                  });
                   setFriends((p) =>
                     p.map((x) =>
                       String(x.id) === id ? { ...x, online: false } : x,

@@ -233,10 +233,8 @@ export const getSocket = (): Socket => {
       reconnectionAttempts: 25,
       reconnectionDelay: SOCKET_RECONNECT_DELAY_MS,
       reconnectionDelayMax: SOCKET_RECONNECT_DELAY_MAX_MS,
+      // Connection attempt timeout. Heartbeat pingInterval/pingTimeout are negotiated in the Engine.IO handshake (server-side).
       timeout: 25000,
-      // With SOCKET_KEEP_ALIVE_IN_BACKGROUND, longer pong wait reduces spurious disconnects on Doze / lock screen.
-      pingInterval: 25000,
-      pingTimeout: 45000,
     });
   }
   return socketInstance;
@@ -300,27 +298,12 @@ socket.on('connect', () => {
 
 function ingestVisibleOnlinePresenceList(data: unknown) {
   if (!Array.isArray(data)) return;
-  const prev = new Set(__lastVisibleOnlineUserIds);
   __visibleOnlinePresenceListKnown = true;
   const next = new Set<string>();
   for (const it of data) {
     if (it == null) continue;
     const id = String((it as any)?._id ?? it);
     if (id) next.add(id);
-  }
-  const removed = [...prev].filter((id) => !next.has(id));
-  const added = [...next].filter((id) => !prev.has(id));
-  if (removed.length || added.length || (data.length === 0 && prev.size > 0)) {
-    logger.info('[presence:online:trace] snapshot ingest → глобальный кэш видимых онлайн', {
-      appState: AppState.currentState,
-      socketConnected: socket.connected,
-      reconnecting,
-      incomingLen: data.length,
-      nextSize: next.size,
-      prevSize: prev.size,
-      removedIds: removed.slice(0, 20),
-      addedIds: added.slice(0, 20),
-    });
   }
   __lastVisibleOnlineUserIds = next;
 }
@@ -335,14 +318,6 @@ function __normalizePresenceUpdatePayload(raw: unknown): unknown {
     Date.now() - __lastSocketConnectAt < PRESENCE_EMPTY_ONLINE_LIST_GRACE_MS
   ) {
     const msSinceConnect = Date.now() - __lastSocketConnectAt;
-    logger.info('[presence:online:trace] пустой массив заменён предыдущим снимком (grace после connect)', {
-      appState: AppState.currentState,
-      socketConnected: socket.connected,
-      reconnecting,
-      preservedCount: __lastVisibleOnlineUserIds.size,
-      msSinceConnect,
-      graceMs: PRESENCE_EMPTY_ONLINE_LIST_GRACE_MS,
-    });
     logger.debug('[socket] presence: skip empty online list during post-connect grace', {
       preservedCount: __lastVisibleOnlineUserIds.size,
       msSinceConnect,
@@ -354,21 +329,6 @@ function __normalizePresenceUpdatePayload(raw: unknown): unknown {
 
 function __dispatchPresenceUpdate(raw: unknown): void {
   const payload = __normalizePresenceUpdatePayload(raw);
-  if (Array.isArray(raw)) {
-    const normalizedArr = Array.isArray(payload) ? payload : [];
-    const replacedEmpty =
-      raw.length === 0 && normalizedArr.length > 0 && __lastVisibleOnlineUserIds.size > 0;
-    logger.info('[presence:online:trace] socket presence массив (до ingest)', {
-      appState: AppState.currentState,
-      socketConnected: socket.connected,
-      reconnecting,
-      rawLen: raw.length,
-      normalizedLen: normalizedArr.length,
-      replacedEmptyWithPrevious: replacedEmpty,
-      msSinceConnect: Date.now() - __lastSocketConnectAt,
-      debounceMs: PRESENCE_OFFLINE_DEBOUNCE_MS,
-    });
-  }
   if (Array.isArray(payload)) {
     ingestVisibleOnlinePresenceList(payload);
   }

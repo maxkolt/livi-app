@@ -195,6 +195,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
+  /** Синхронно с state для логов MIC_TRACE (без отставания на один кадр). */
+  const micOnRef = useRef(micOn);
+  micOnRef.current = micOn;
+  const micTraceSeqRef = useRef(0);
+  const logMicTraceRef = useRef<(where: string, details?: Record<string, unknown>) => void>(() => {});
+  logMicTraceRef.current = (where: string, details?: Record<string, unknown>) => {
+    const seq = ++micTraceSeqRef.current;
+    logger.info(`[MIC_TRACE #${seq}] ${where}`, {
+      ts: Date.now(),
+      uiMicOn: micOnRef.current,
+      ...details,
+    });
+  };
+
   const [remoteCamOn, setRemoteCamOn] = useState(true);
   const remoteCamStateKnownRef = useRef(false);
   const [remoteMuted, setRemoteMuted] = useState(false);
@@ -326,6 +340,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setWasFriendCallEnded(false);
       setStarted(true);
       setCamOn(true);
+      logMicTraceRef.current('incoming useIncomingCall onAccept → setMicOn(true)', {
+        callId,
+        fromUserId,
+      });
       setMicOn(true);
     },
     onDecline: () => {},
@@ -1082,6 +1100,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         setRemoteStream(pip.remoteStream);
       }
       // Восстанавливаем состояние микрофона из PiP (isMuted = true → мик выключен → micOn = false)
+      logMicTraceRef.current('PiP resume effect → setMicOn from pip.isMuted', {
+        pipIsMuted: pip.isMuted,
+        nextMicOn: !pip.isMuted,
+      });
       setMicOn(!pip.isMuted);
       if (session.exitPiP) {
         session.exitPiP();
@@ -1137,6 +1159,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           });
         }
         // Восстанавливаем состояние микрофона из PiP сразу при подстановке сессии (надёжно, до любого другого эффекта)
+        logMicTraceRef.current('fromPiP global session restore → setMicOn from pip.isMuted', {
+          pipIsMuted: pip.isMuted,
+          nextMicOn: !pip.isMuted,
+        });
         setMicOn(!pip.isMuted);
         // КРИТИЧНО: НЕ возвращаемся здесь - нужно установить обработчики событий
         // Обработчики будут установлены ниже в этом же useEffect
@@ -1263,6 +1289,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           setCallId(id);
         },
         onMicStateChange: (enabled) => {
+          logMicTraceRef.current('onMicStateChange ← VideoCall initial session config', {
+            enabled,
+            triggersSetMicOn: true,
+          });
           setMicOn(enabled);
           
           // КРИТИЧНО: Обновляем состояние PiP при изменении состояния микрофона (как в эталонном файле)
@@ -1725,6 +1755,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     if (typeof (session as any).updateCallbacks === 'function') {
       (session as any).updateCallbacks({
         onMicStateChange: (enabled: boolean) => {
+          logMicTraceRef.current('onMicStateChange ← session.updateCallbacks', {
+            enabled,
+            triggersSetMicOn: true,
+          });
           setMicOn(enabled);
           if (pip.visible) pip.updatePiPState({ isMuted: !enabled });
         },
@@ -1767,6 +1801,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       isEndingCallRef.current = true;
       isInactiveStateRef.current = true;
       logger.info('[VideoCall] [end] refs установлены, закрываем экран');
+      logMicTraceRef.current('handleCallEnded — завершение звонка (далее deferred cleanup → session.cleanup / stopLocalTracks)', {
+        uiMicOn: micOnRef.current,
+        callId: callId ?? currentCallIdRef.current,
+      });
 
       // Нативно блокируем вход в системный PiP при завершении (иначе пользователь улетает на главный экран с PiP).
       if (Platform.OS === 'android') {
@@ -1872,7 +1910,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setLoading(true);
       incomingCallHook.setIncomingOverlay(false);
       setCamOn(true);
-      setMicOn(true);
+      const micFromSession = sessionRef.current?.getIsMicOn?.() ?? true;
+      logMicTraceRef.current('handleCallAnswered (socket) → setMicOn from session', {
+        roomId,
+        callId,
+        partnerId,
+        micFromSession,
+      });
+      setMicOn(micFromSession);
       
       const currentLocalStream = sessionRef.current?.getLocalStream?.() || localStreamRef.current;
       if (currentLocalStream) {
@@ -1928,6 +1973,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
         setLocalStream(null);
         setCamOn(false);
+        logMicTraceRef.current('handleCallDeclined directInitiator → setMicOn(false)', { callId });
         setMicOn(false);
         if (navigation?.canGoBack?.()) {
           navigation.goBack();
@@ -2399,6 +2445,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   const toggleMic = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+    logMicTraceRef.current('toggleMic control invoked (экран или PiP)', {
+      hasSession: !!session,
+      friendCallAccepted,
+      roomId,
+      callId,
+      partnerId,
+      loading,
+      hasRemoteStream: !!remoteStreamRef.current,
+      uiMicOnBefore: micOnRef.current,
+    });
     if (session && typeof session.toggleMic === 'function') {
       session.toggleMic();
       // КРИТИЧНО: Состояние PiP обновится через onMicStateChange callback
@@ -2406,7 +2462,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     } else {
       logger.warn('[VideoCall] Session не найдена для toggleMic');
     }
-  }, [clearSessionRefs]);
+  }, [clearSessionRefs, friendCallAccepted, roomId, callId, partnerId, loading]);
   
   const toggleCam = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
