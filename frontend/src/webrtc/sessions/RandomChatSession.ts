@@ -155,6 +155,33 @@ export class RandomChatSession extends SimpleEventEmitter {
     (this.config.callbacks.onRemoteCamStateChange ?? this.config.onRemoteCamStateChange)?.(enabled);
   }
 
+  /** Socket relay so partner can show «Отошёл» before LiveKit video subscribes; safe to call multiple times. */
+  private emitCamToggleRelay(reason: string): void {
+    try {
+      const roomId = this.matchRoomId || undefined;
+      if (
+        !this.started ||
+        this.isDisconnecting ||
+        this.disconnectHandled ||
+        !roomId
+      ) {
+        return;
+      }
+      socket.emit('cam-toggle', {
+        enabled: this.isCamOn,
+        from: socket.id,
+        roomId,
+      });
+      logger.debug('[RandomChatSession] cam-toggle relay', {
+        reason,
+        roomId,
+        enabled: this.isCamOn,
+      });
+    } catch (e) {
+      logger.debug('[RandomChatSession] emitCamToggleRelay failed', { reason, error: e });
+    }
+  }
+
   private notifyLoadingChange(loading: boolean): void {
     (this.config.callbacks.onLoadingChange ?? this.config.onLoadingChange)?.(loading);
   }
@@ -860,16 +887,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     this.suppressLocalVideoEndedRecovery('toggleCam');
     this.isCamOn = !this.isCamOn;
     // Сразу сообщаем партнёру (как в VideoCallSession), чтобы «Отошёл» не ждал setCameraEnabled / сеть.
-    const signalRoomId = this.matchRoomId || undefined;
-    if (this.started && !this.isDisconnecting && !this.disconnectHandled && signalRoomId) {
-      try {
-        socket.emit('cam-toggle', {
-          enabled: this.isCamOn,
-          from: socket.id,
-          roomId: signalRoomId,
-        });
-      } catch {}
-    }
+    this.emitCamToggleRelay('toggle_cam');
     const needsRecovery =
       !this.localVideoTrack ||
       !this.localVideoTrack.mediaStreamTrack ||
@@ -1175,6 +1193,11 @@ export class RandomChatSession extends SimpleEventEmitter {
         // Dedup: if camera state didn't actually change, do NOT bump remoteViewKey.
         // Bumping remoteViewKey remounts RTCView and can cause black flickers on Android.
         if (this.remoteCamEnabled === nextEnabled) {
+          // Still notify UI: after a new match, session.remoteCamEnabled may already be false
+          // (resetRemoteState) while RandomChat cleared remoteCamStateKnownRef — without this,
+          // a cam-toggle(false) replay would be dropped and the partner sees black until video subscribes.
+          this.clearRemoteCamImplicitOffTimer('cam_toggle');
+          this.notifyRemoteCamStateChange(nextEnabled);
           return;
         }
 
@@ -1310,6 +1333,9 @@ export class RandomChatSession extends SimpleEventEmitter {
     if (roomId) {
       this.notifyRoomIdChange(roomId);
     }
+
+    // Partner may not have had matchRoomId yet when our LiveKit connect fired — resync early + on ParticipantConnected.
+    this.emitCamToggleRelay('match_found');
 
     const connectRequestId = ++this.connectRequestId;
     this.pendingConnectRequestId = connectRequestId;
@@ -3415,12 +3441,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       // RandomChat UX: send initial camera state to partner via socket relay.
       // This makes "Отошел" depend only on explicit UI camera toggles (and the current state),
       // not on LiveKit TrackMuted/Unmuted which can be noisy during churn.
-      try {
-        const roomId = this.matchRoomId || undefined;
-        if (roomId) {
-          socket.emit('cam-toggle', { enabled: this.isCamOn, from: socket.id, roomId });
-        }
-      } catch {}
+      this.emitCamToggleRelay('livekit_connected');
     } catch (e: any) {
       const errorMessage = e?.message || String(e);
       const isInvalidApiKey = errorMessage.includes('invalid API key') || 
@@ -3998,6 +4019,12 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   private registerRoomEvents(room: Room): void {
     room
+      .on(RoomEvent.ParticipantConnected, (participant) => {
+        if (participant.isLocal) return;
+        // When the peer finishes joining, they always have matchRoomId — replay our cam state so
+        // «Отошёл» is instant even if earlier cam-toggle was dropped during the match handshake.
+        this.emitCamToggleRelay('participant_connected');
+      })
       .on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         // КРИТИЧНО: Игнорируем подписки на локальные треки
         // LiveKit может отправлять события подписки на локальные треки, но они не должны обрабатываться
