@@ -1906,9 +1906,11 @@ io.on('connection', async (sock: AuthedSocket) => {
       
       const status = payload?.status;
       const busy = status === 'busy';
-      // Если у пользователя есть хотя бы один сокет в активном звонке, не даём ему перейти в "online",
-      // даже если другой сокет прислал presence:update status=online.
+      // Другие сокеты того же userId: пока хоть один в звонке/рандоме — не даём сбросить «занят» для друзей.
+      // Текущий сокет сюда не включаем: иначе его же устаревшие busy/roomId (гонка со stop после рандома)
+      // не дают перейти в online и оставляют initiator_busy на call:initiate.
       const hasAnotherBusySocket = Array.from(io.sockets.sockets.values()).some((s) => {
+        if (s.id === sock.id) return false;
         const suid = String((s as any)?.data?.userId || '');
         if (suid !== userId) return false;
         const sdata = (s as any)?.data || {};

@@ -77,6 +77,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private isCamOn = true;
   private remoteAudioMuted = false;
   private remoteCamEnabled = false;
+  /** Партнёр прислал cam-toggle: камера выкл — не поднимать remoteCam по первому «живому» видеотреку (гонка с публикацией). */
+  private remotePartnerDeclaredCamOff = false;
   private remoteCamOffTimeout: ReturnType<typeof setTimeout> | null = null;
   /** SID последнего отписанного удалённого видео-трека (переворот камеры). Нужен, т.к. TrackSubscribed приходит после TrackUnsubscribed и remoteVideoTrack уже null. */
   private lastUnsubscribedRemoteVideoTrackSid: string | null = null;
@@ -1414,6 +1416,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
         
         // Обновляем состояние камеры партнера
+        this.remotePartnerDeclaredCamOff = !data.enabled;
         this.remoteCamEnabled = data.enabled;
         this.clearRemoteCamOffTimeout();
         
@@ -2929,6 +2932,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.lastUnsubscribedRemoteVideoTrackSid = null;
     this.currentRemoteParticipant = null;
     this.remoteCamEnabled = false;
+    this.remotePartnerDeclaredCamOff = false;
     if (this.partnerInPiP) {
       this.partnerInPiP = false;
       this.emit('partnerPiPStateChanged', { inPiP: false });
@@ -3673,7 +3677,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         return true; // Возвращаем true, так как подключение успешно, просто треки не опубликованы
       }
 
-      if (this.localVideoTrack) {
+      if (this.localVideoTrack && this.isCamOn) {
         // КРИТИЧНО: Дополнительная проверка состояния перед публикацией
         if (room.state !== 'connected' || !room.localParticipant) {
           logger.debug('[VideoCallSession] Room disconnected before video track publish, skipping');
@@ -3701,6 +3705,10 @@ export class VideoCallSession extends SimpleEventEmitter {
             });
           }
         }
+      } else if (this.localVideoTrack && !this.isCamOn) {
+        logger.debug('[VideoCallSession] Skipping video publish in connectToLiveKit — camera off', {
+          trackId: this.localVideoTrack?.sid || this.localVideoTrack?.mediaStreamTrack?.id,
+        });
       }
       if (this.localAudioTrack) {
         // КРИТИЧНО: Дополнительная проверка состояния перед публикацией
@@ -3737,6 +3745,13 @@ export class VideoCallSession extends SimpleEventEmitter {
         await room.localParticipant.setMicrophoneEnabled(this.isMicOn).catch((e) => {
           logger.warn('[VideoCallSession] setMicrophoneEnabled after publish failed', e);
         });
+        // Только выкл: видео публикуем вручную через publishTrack; при isCamOn=true не дёргаем setCameraEnabled(true),
+        // чтобы не плодить вторую публикацию на части девайсов.
+        if (!this.isCamOn) {
+          await room.localParticipant.setCameraEnabled(false).catch((e) => {
+            logger.warn('[VideoCallSession] setCameraEnabled(false) after publish failed', e);
+          });
+        }
       }
 
       // Синхронизируем UI с флагами сессии (не предполагаем «всё включено»).
@@ -4417,6 +4432,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       })
       .on(RoomEvent.TrackUnmuted, (pub, participant) => {
         if (!participant.isLocal && pub.kind === Track.Kind.Video) {
+          this.remotePartnerDeclaredCamOff = false;
           this.remoteCamEnabled = true;
           this.clearRemoteCamOffTimeout();
           this.notifyRemoteCamStateChange(true);
@@ -4709,9 +4725,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.lastUnsubscribedRemoteVideoTrackSid = null;
       // A new video track arriving usually means "camera is on".
       // But during re-subscribe it can briefly be muted; avoid flashing "away" by debouncing OFF.
+      // Если партнёр уже прислал cam-toggle(false), не перетираем заглушку «Отошёл» первым кадром трека.
       if (!track.isMuted) {
-        this.remoteCamEnabled = true;
-        this.clearRemoteCamOffTimeout();
+        if (!this.remotePartnerDeclaredCamOff) {
+          this.remoteCamEnabled = true;
+          this.clearRemoteCamOffTimeout();
+        }
       } else {
         // Keep the previous value for a short grace period; if it stays muted, we'll mark OFF.
         this.scheduleRemoteCamOff('TrackSubscribedMuted');
@@ -4726,7 +4745,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         shouldRemountRemoteView = true;
       }
       
-      if (!track.isMuted) {
+      if (!track.isMuted && !this.remotePartnerDeclaredCamOff) {
         this.notifyRemoteCamStateChange(true);
         try {
           const pipUpdate = (global as any).__pipUpdateStateRef?.current;

@@ -273,9 +273,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     if (isInactiveStateRef.current || isEndingCallRef.current) return;
     if (!remoteStream) {
       // Не сбрасываем remoteCamStateKnownRef: состояние камеры уже известно из cam-toggle.
-      // Иначе при возврате стрима (смена трека/ренегоциация) эффект перезапишет remoteCamOn из трека,
-      // и заглушка «Отошел» перестанет показываться у одного из пользователей (застывший кадр).
-      setRemoteCamOn(true);
+      // Пока стрима нет, не затираем remoteCamOn в true — иначе после cam-toggle(false) до прихода
+      // remoteStream заглушка «Отошёл» исчезает (тот же класс багов, что был с микрофоном).
+      if (!remoteCamStateKnownRef.current) {
+        setRemoteCamOn(true);
+      }
       return;
     }
 

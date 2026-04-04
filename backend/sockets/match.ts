@@ -163,6 +163,7 @@ async function clearPartner(
   // Это важно для случаев, когда партнер уже отключился или очистил свое состояние
   me.data.partnerSid = undefined;
   me.data.inCall = false;
+  me.data.roomId = undefined;
   await unlockPair(me.id);
 
   // Если партнер существует, очищаем и его состояние
@@ -171,6 +172,7 @@ async function clearPartner(
     if (other) {
       other.data.partnerSid = undefined;
       other.data.inCall = false;
+      other.data.roomId = undefined;
       if (notifyOther) {
         if (reason === 'disconnect') other.emit('disconnected', signalData);
         else other.emit('peer:stopped', signalData);
