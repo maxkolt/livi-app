@@ -10,6 +10,7 @@ import {
   View,
   FlatList,
   Dimensions,
+  useWindowDimensions,
   Platform,
   KeyboardAvoidingView,
   ActionSheetIOS,
@@ -337,7 +338,7 @@ const useLiviNotice = () => {
     Animated.timing(opacity, { toValue: 0, duration: 160, useNativeDriver: true }).start(() => setNotice(null));
   }, [opacity]);
 
-  const show = useCallback((text: string, kind: NoticeKind = 'info', ms = 1700) => {
+  const show = useCallback((text: string, kind: NoticeKind = 'info', ms = 3000) => {
     if (!text) return;
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     setNotice({ text, kind });
@@ -613,6 +614,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
 let homeScreenAlreadyBooted = false;
 
 export default function HomeScreen({ navigation, route }: Props & { route?: { params?: HomeRouteParams } }) {
+  const { width: layoutWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const pip = usePiP();
   const { preference, setPreference, theme, isDark } = useAppTheme();
@@ -759,7 +761,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     };
   }, []);
 
-  // Баннер сверху: в dev при updateAvailable; в релизе updateAvailable уже с учётом кулдауна, shouldShowUpdateBadge — лишняя сеть/дубль
+  // Баннер обновления в слоте уведомлений (между подзаголовком и «Начать поиск»): в dev при updateAvailable; в релизе updateAvailable уже с учётом кулдауна, shouldShowUpdateBadge — лишняя сеть/дубль
   useEffect(() => {
     if (!updateAvailable) return;
     let cancelled = false;
@@ -803,14 +805,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [dataLoaded, setDataLoaded] = useState(homeScreenAlreadyBooted);
   // Сплеш поверх уже отрисованного Home: при уходе сплеша видна страница приветствия с актуальными данными
   const [splashDismissed, setSplashDismissed] = useState(homeScreenAlreadyBooted);
-  // Автоскрытие бейджа «Скачайте обновление» через 5 сек — только когда оверлей сплеша уже скрыт (пользователь видит страницу приветствия).
+  // Автоскрытие бейджа «Обновить» через 3 сек — только когда оверлей сплеша уже скрыт (пользователь видит страницу приветствия).
   // Раньше таймер был привязан к splashVisible (data/profile) и стартовал под оверлеем — бейдж исчезал через 1–2 сек после появления.
   useEffect(() => {
     if (!showUpdateBadge || !splashDismissed) return;
     const t = setTimeout(() => {
       setShowUpdateBadgeState(false);
       markUpdateBadgeShown();
-    }, 5000);
+    }, 3000);
     return () => clearTimeout(t);
   }, [showUpdateBadge, splashDismissed]);
   const [nick, setNick] = useState('');
@@ -985,7 +987,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // ===== Notice (toast) =====
   // ВАЖНО: держим showNotice выше по файлу, потому что он используется в колбэках ниже.
   const { showNotice: baseShowNotice, NoticeView } = useLiviNotice();
-  const showNotice = useCallback((text: string, kind: NoticeKind = 'info', ms = 1700) => {
+  const showNotice = useCallback((text: string, kind: NoticeKind = 'info', ms = 3000) => {
     const normalized = (text ?? '').trim().toLowerCase();
     if (normalized === t('saved', lang).toLowerCase() || normalized === `${t('saved', lang).toLowerCase()}!`) {
       setSavedToast(true);
@@ -1066,7 +1068,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     try {
       const userId = getCurrentUserId();
       if (!userId) {
-        showNotice(t('unauthorizedError', lang), 'error', 2000);
+        showNotice(t('unauthorizedError', lang), 'error', 3000);
         return;
       }
       // Используем веб-ссылку, которая автоматически редиректит на приложение
@@ -1095,7 +1097,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       await incrCounter('invite_link_generated');
     } catch (e) {
       logger.error('Failed to generate invite link:', e);
-      showNotice(t('inviteLinkCreateFailed', lang), 'error', 2000);
+      showNotice(t('inviteLinkCreateFailed', lang), 'error', 3000);
     }
   }, [showNotice, incrCounter]);
   
@@ -1128,19 +1130,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const result = await checkInviteLink(inviteCode);
         
         if (!result.ok) {
-          showNotice(t('inviteLinkInvalid', lang), 'error', 2000);
+          showNotice(t('inviteLinkInvalid', lang), 'error', 3000);
           return;
         }
 
         if (result.areFriends) {
           // Пользователи уже друзья
-          showNotice(t('inviteAlreadyFriendsWithUser', lang), 'info', 2000);
+          showNotice(t('inviteAlreadyFriendsWithUser', lang), 'info', 3000);
           return;
         }
 
         if (result.hasPendingRequest) {
           // Заявка уже отправлена
-          showNotice(t('inviteRequestAlreadySent', lang), 'info', 2000);
+          showNotice(t('inviteRequestAlreadySent', lang), 'info', 3000);
           return;
         }
 
@@ -1156,7 +1158,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
       } catch (e) {
         logger.error('Failed to check invite from route:', e);
-        showNotice(t('inviteLinkProcessFailed', lang), 'error', 2000);
+        showNotice(t('inviteLinkProcessFailed', lang), 'error', 3000);
         // Сбрасываем флаг обработки при ошибке, чтобы можно было повторить
         processedInviteRef.current = null;
       }
@@ -1183,18 +1185,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       
       if (result?.ok) {
         if (result.status === 'already') {
-          showNotice(t('already_friends', lang), 'info', 2000);
+          showNotice(t('already_friends', lang), 'info', 3000);
         } else if (result.status === 'accepted') {
-          showNotice(t('inviteUserAdded', lang), 'success', 2000);
+          showNotice(t('inviteUserAdded', lang), 'success', 3000);
           // Обновляем список друзей
           loadFriendsFnRef.current();
         } else {
-          showNotice(t('inviteUserAdded', lang), 'success', 2000);
+          showNotice(t('inviteUserAdded', lang), 'success', 3000);
           // Обновляем список друзей
           loadFriendsFnRef.current();
         }
       } else {
-        showNotice(result?.error || t('friendAddFailed', lang), 'error', 2000);
+        showNotice(result?.error || t('friendAddFailed', lang), 'error', 3000);
       }
       
       setInviteRequestVisible(false);
@@ -1205,7 +1207,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
     } catch (e) {
       logger.error('Failed to accept invite:', e);
-      showNotice(t('friendAddFailed', lang), 'error', 2000);
+      showNotice(t('friendAddFailed', lang), 'error', 3000);
       setInviteRequestVisible(false);
       setInviteRequestData(null);
       // Сбрасываем флаг обработки при ошибке
@@ -1501,7 +1503,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         callingVisibleRef.current = false;
         setCalling({ visible: false, friend: null, callId: null });
         stopWaves();
-        showNotice(t('callDeclined', lang), 'error', 1800);
+        showNotice(t('callDeclined', lang), 'error', 3000);
       });
       const offTimeout = onCallTimeout?.(() => {
         if (cleaned) return; cleaned = true;
@@ -1541,7 +1543,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           callingVisibleRef.current = false;
           setCalling({ visible: false, friend: null, callId: null });
           stopWaves();
-          showNotice(t('noAnswer', lang), 'error', 1800);
+          showNotice(t('noAnswer', lang), 'error', 3000);
         }
       }, OUTGOING_CALL_TIMEOUT_MS);
 
@@ -1553,7 +1555,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       callingVisibleRef.current = false;
       setCalling({ visible: false, friend: null, callId: null });
       stopWaves();
-      showNotice(t('callStartFailed', lang), 'error', 2000);
+      showNotice(t('callStartFailed', lang), 'error', 3000);
     }
   }, [navigation, showNotice, startWaves, stopWaves, lang]);
 
@@ -3596,10 +3598,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
 
       shouldToast = true;
-      showNotice(t('saved', lang), 'success', 1200);
+      showNotice(t('saved', lang), 'success', 3000);
     } catch (e) {
       console.error('[handleSaveProfile] ❌ Save profile error:', e);
-      showNotice(t('saveFailed', lang), 'error', 2200);
+      showNotice(t('saveFailed', lang), 'error', 3000);
       shouldToast = false; // Не показываем тост при ошибке
     } finally {
       await ensureMinSpinner();
@@ -3634,7 +3636,7 @@ const handleClearNick = useCallback(async () => {
     try {
       // Проверяем подключение к серверу
       if (!(socket as any)?.connected) {
-        showNotice(t('noServer', lang), 'error', 2200);
+        showNotice(t('noServer', lang), 'error', 3000);
         return;
       }
 
@@ -3832,7 +3834,7 @@ const handleClearNick = useCallback(async () => {
 
     try {
       if (!(socket as any)?.connected) { 
-        showNotice(t('noServer', lang), 'error', 2200);
+        showNotice(t('noServer', lang), 'error', 3000);
         setWiping(false);
         return;
       }
@@ -3889,7 +3891,7 @@ const handleClearNick = useCallback(async () => {
         showNotice(t('accountWiped', lang), 'success', 3000);
       }, 300);
     } catch (e: any) {
-      showNotice(`${t('wipeFailed', lang)}: ${e?.message || e}`, 'error', 2600);
+      showNotice(`${t('wipeFailed', lang)}: ${e?.message || e}`, 'error', 3000);
       // При ошибке также устанавливаем флаги, чтобы не зависнуть на SplashLoader
       setProfileLoaded(true);
       setDataLoaded(true);
@@ -4002,10 +4004,10 @@ const handleClearNick = useCallback(async () => {
       try {
         const res = await removeFriend(peerId);
         if (!res?.ok) throw new Error(res?.error || 'remove failed');
-        showNotice(L('friendRemoved'), 'success', 1400);
+        showNotice(L('friendRemoved'), 'success', 3000);
       } catch (e: any) {
         setFriends(prevFriends);
-        showNotice(`${L('friendRemoveFailed')}: ${e?.message || 'error'}`, 'error', 2200);
+        showNotice(`${L('friendRemoveFailed')}: ${e?.message || 'error'}`, 'error', 3000);
       }
     },
     [showNotice, L],
@@ -4481,7 +4483,8 @@ const handleClearNick = useCallback(async () => {
     const wrapperStyle: StyleProp<ViewStyle> = {
       alignItems: "center",
       marginTop: Platform.OS === "android" ? 20 : (12 + 20), // чуть ниже на Android (аватар + ник)
-      marginBottom: -65,
+      // При максимальном «масштабе экрана» ширина в dp мала — сильный отрицательный отступ даёт наложение на приветствие
+      marginBottom: layoutWidth < 400 ? -40 : -65,
     };
 
     // Используем новую систему кеширования или локальный файл для превью
@@ -4711,144 +4714,11 @@ const handleClearNick = useCallback(async () => {
       />
 
       <View style={[styles.topBar, { backgroundColor: 'transparent' }] }>
-        <Text style={[styles.brand, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>LiVi</Text>
+        <Text style={[styles.brand, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>
+          LiVi
+        </Text>
 
-        {/* Бейдж «Скачайте обновление»: между LiVi и меню, градиент в рамке (тёмная 0.2 / светлая 0.4), скруглённые углы, 5 сек автоскрытие, X закрыть, тап — Google Play */}
-        {showUpdateBadge && (
-          <View
-            style={{
-              padding: isDark ? 0.2 : 0.4,
-              borderRadius: 18,
-              marginHorizontal: 8,
-              position: 'relative',
-              overflow: 'hidden',
-              alignSelf: 'center',
-              minWidth: 180,
-              maxHeight: Platform.OS === 'ios' ? 42 : 34,
-            }}
-          >
-            <LinearGradient
-              colors={
-                isDark
-                  ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf']
-                  : ['#8B82C8', '#9A8FC9', '#A8A0B8', '#ADA9B0']
-              }
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[StyleSheet.absoluteFillObject, { borderRadius: 18 }]}
-            />
-            {/* Верхняя линия рамки — бирюза → голубой → белый → синий (слева направо); в тёмной теме чуть посветлее */}
-            <View
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                right: 0,
-                height: isDark ? 0.2 : 0.4,
-                borderTopLeftRadius: 18,
-                borderTopRightRadius: 18,
-                overflow: 'hidden',
-                zIndex: 2,
-              }}
-            >
-              <LinearGradient
-                colors={
-                  isDark
-                    ? ['#2dd4bf', '#38bdf8', '#FFF8F0', '#60a5fa']
-                    : ['#8B82C8', '#7468B0', '#9A92A8', '#A09AAE']
-                }
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={[StyleSheet.absoluteFillObject, { borderTopLeftRadius: 18, borderTopRightRadius: 18 }]}
-              />
-            </View>
-            {/* Нижняя линия рамки — другая гамма и направление; в тёмной теме без фиолетового, чуть посветлее */}
-            <View
-              style={{
-                position: 'absolute',
-                bottom: 0,
-                left: 0,
-                right: 0,
-                height: isDark ? 0.2 : 0.4,
-                borderBottomLeftRadius: 18,
-                borderBottomRightRadius: 18,
-                overflow: 'hidden',
-                zIndex: 2,
-              }}
-            >
-              <LinearGradient
-                colors={
-                  isDark
-                    ? ['#60a5fa', '#38bdf8', '#2dd4bf', '#F0EEEC']
-                    : ['#B0A8C4', '#A39BB8', '#8B82C8', '#8B82C8']
-                }
-                start={{ x: 1, y: 0 }}
-                end={{ x: 0, y: 0 }}
-                style={[StyleSheet.absoluteFillObject, { borderBottomLeftRadius: 18, borderBottomRightRadius: 18 }]}
-              />
-            </View>
-            {/* Только рамка в градиенте; середина — сплошной фон страницы */}
-            <View
-              style={{
-                margin: isDark ? 0.2 : 0.4,
-                borderRadius: isDark ? 17.8 : 17.6,
-                flexDirection: 'row',
-                alignItems: 'center',
-                paddingLeft: 10,
-                paddingRight: 10,
-                backgroundColor: theme.colors.background,
-                flex: 1,
-                paddingTop: 0,
-                paddingBottom: 0,
-                zIndex: 1,
-              }}
-            >
-              {/* Вся зона от внутреннего края бейджа до разделителя | — одна кликабельная кнопка «Обновить» */}
-              <Pressable
-                style={({ pressed }) => [
-                  { flex: 1, justifyContent: 'center', alignItems: 'center', borderRadius: 14, marginLeft: 4, marginRight: 4, paddingVertical: 10, minHeight: 32 },
-                  pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
-                ]}
-                onPress={() => {
-                  setShowUpdateBadgeState(false);
-                  markUpdateBadgeShown();
-                  Linking.openURL(PLAY_STORE_UPDATE_URL);
-                }}
-                android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: false, radius: 14 }}
-              >
-                <Text style={{ color: isDark ? LIVI.text : '#2F3742', fontSize: 14, fontWeight: '400', lineHeight: 12, ...(Platform.OS === 'android' && { includeFontPadding: false }) }} numberOfLines={1}>{L('updateBtn')}</Text>
-              </Pressable>
-              <View style={{ width: 1, alignSelf: 'stretch', marginVertical: 6, marginLeft: 8, marginRight: 4, overflow: 'hidden', borderRadius: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.22)' }}>
-                <LinearGradient
-                  colors={
-                    isDark
-                      ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0']
-                      : ['#9A8FC9', '#D2D8E0', '#8D96A4']
-                  }
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 0, y: 1 }}
-                  style={{ flex: 1, width: 1 }}
-                />
-              </View>
-              <Pressable
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                onPress={() => {
-                  setShowUpdateBadgeState(false);
-                  markUpdateBadgeShown();
-                }}
-                style={({ pressed }) => [
-                  { paddingVertical: 6, paddingHorizontal: 6, borderRadius: 12, marginRight: 0 },
-                  pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
-                ]}
-                android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: true }}
-              >
-                <Ionicons name="close" size={16} color={isDark ? LIVI.text : '#2F3742'} />
-              </Pressable>
-            </View>
-          </View>
-        )}
-
-        <View style={{ position: 'relative' }}>
+        <View style={{ position: 'relative', flexShrink: 0 }}>
           {/* Рамка через обёртку: одинаковая толщина на прямых и скруглениях (borderWidth на скруглениях рендерится тоньше) */}
           <View
             style={[
@@ -4921,7 +4791,16 @@ const handleClearNick = useCallback(async () => {
 
       <View style={[styles.welcomeBlock, Platform.OS === 'android' && { marginTop: 50 }]}>
         <View style={styles.welcomeTextBlock}>
-          <Text style={[styles.title, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>{L('welcomeTitle')}</Text>
+          <Text
+            style={[styles.title, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}
+            allowFontScaling={false}
+            maxFontSizeMultiplier={1}
+            numberOfLines={2}
+            adjustsFontSizeToFit
+            minimumFontScale={0.55}
+          >
+            {L('welcomeTitle')}
+          </Text>
           <Text
             style={[styles.subtitle, { color: isDark ? LIVI.text2 : LIVI.textThemeWhite, maxWidth: '92%' }]}
             numberOfLines={1}
@@ -4933,6 +4812,156 @@ const handleClearNick = useCallback(async () => {
         </View>
         <View style={styles.noticeSlot}>
           {NoticeView}
+          {/* Бейдж «Обновить»: тот же слот, что и «Вызов отменён» — между подзаголовком и «Начать поиск», 3 с автоскрытие, X, тап — магазин */}
+          {showUpdateBadge && (
+            <View
+              style={{
+                padding: isDark ? 0.2 : 0.4,
+                borderRadius: 14,
+                position: 'relative',
+                overflow: 'hidden',
+                alignSelf: 'center',
+                maxWidth: Math.min(320, layoutWidth - 40),
+              }}
+            >
+              <LinearGradient
+                colors={
+                  isDark
+                    ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0', '#2dd4bf']
+                    : ['#8B82C8', '#9A8FC9', '#A8A0B8', '#ADA9B0']
+                }
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={[StyleSheet.absoluteFillObject, { borderRadius: 14 }]}
+              />
+              <View
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: isDark ? 0.2 : 0.4,
+                  borderTopLeftRadius: 14,
+                  borderTopRightRadius: 14,
+                  overflow: 'hidden',
+                  zIndex: 2,
+                }}
+              >
+                <LinearGradient
+                  colors={
+                    isDark
+                      ? ['#2dd4bf', '#38bdf8', '#FFF8F0', '#60a5fa']
+                      : ['#8B82C8', '#7468B0', '#9A92A8', '#A09AAE']
+                  }
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={[StyleSheet.absoluteFillObject, { borderTopLeftRadius: 14, borderTopRightRadius: 14 }]}
+                />
+              </View>
+              <View
+                style={{
+                  position: 'absolute',
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  height: isDark ? 0.2 : 0.4,
+                  borderBottomLeftRadius: 14,
+                  borderBottomRightRadius: 14,
+                  overflow: 'hidden',
+                  zIndex: 2,
+                }}
+              >
+                <LinearGradient
+                  colors={
+                    isDark
+                      ? ['#60a5fa', '#38bdf8', '#2dd4bf', '#F0EEEC']
+                      : ['#B0A8C4', '#A39BB8', '#8B82C8', '#8B82C8']
+                  }
+                  start={{ x: 1, y: 0 }}
+                  end={{ x: 0, y: 0 }}
+                  style={[StyleSheet.absoluteFillObject, { borderBottomLeftRadius: 14, borderBottomRightRadius: 14 }]}
+                />
+              </View>
+              <View
+                style={{
+                  margin: isDark ? 0.2 : 0.4,
+                  borderRadius: isDark ? 13.8 : 13.6,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  paddingLeft: 4,
+                  paddingRight: 4,
+                  backgroundColor: theme.colors.background,
+                  paddingTop: 0,
+                  paddingBottom: 0,
+                  zIndex: 1,
+                }}
+              >
+                <Pressable
+                  style={({ pressed }) => [
+                    {
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      borderRadius: 10,
+                      paddingVertical: Platform.OS === 'ios' ? 8 : 6,
+                      paddingHorizontal: 14,
+                    },
+                    pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
+                  ]}
+                  onPress={() => {
+                    setShowUpdateBadgeState(false);
+                    markUpdateBadgeShown();
+                    Linking.openURL(PLAY_STORE_UPDATE_URL);
+                  }}
+                  android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: false, radius: 10 }}
+                >
+                  <Text
+                    style={{
+                      color: isDark ? LIVI.text : '#2F3742',
+                      fontSize: 12,
+                      fontWeight: '500',
+                      ...(Platform.OS === 'android' && { includeFontPadding: false }),
+                    }}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    allowFontScaling={false}
+                  >
+                    {L('updateBtn')}
+                  </Text>
+                </Pressable>
+                <View style={{ width: 1, alignSelf: 'stretch', marginVertical: 6, marginLeft: 2, marginRight: 0, overflow: 'hidden', borderRadius: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.22)' }}>
+                  <LinearGradient
+                    colors={
+                      isDark
+                        ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0']
+                        : ['#9A8FC9', '#D2D8E0', '#8D96A4']
+                    }
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 0, y: 1 }}
+                    style={{ flex: 1, width: 1 }}
+                  />
+                </View>
+                <Pressable
+                  hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+                  onPress={() => {
+                    setShowUpdateBadgeState(false);
+                    markUpdateBadgeShown();
+                  }}
+                  style={({ pressed }) => [
+                    {
+                      paddingVertical: Platform.OS === 'ios' ? 6 : 5,
+                      paddingHorizontal: 8,
+                      borderRadius: 10,
+                      marginRight: 2,
+                    },
+                    pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
+                  ]}
+                  android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: true }}
+                >
+                  <Ionicons name="close" size={13} color={isDark ? LIVI.text : '#2F3742'} />
+                </Pressable>
+              </View>
+            </View>
+          )}
         </View>
         <AnimatedBorderButton
           isDark={isDark}
@@ -5390,11 +5419,11 @@ const handleClearNick = useCallback(async () => {
                     onPress={async () => {
                       try {
                         await Clipboard.setStringAsync(inviteLink);
-                        showNotice(t('linkCopied', lang), 'success', 1500);
+                        showNotice(t('linkCopied', lang), 'success', 3000);
                         await incrCounter('invite_link_copied');
                       } catch (e) {
                         logger.error('Failed to copy link:', e);
-                        showNotice(t('copyFailed', lang), 'error', 1500);
+                        showNotice(t('copyFailed', lang), 'error', 3000);
                       }
                     }}
                     activeOpacity={0.7}
@@ -5440,9 +5469,9 @@ const handleClearNick = useCallback(async () => {
                       // Fallback на копирование при ошибке
                       try {
                         await Clipboard.setStringAsync(inviteLink);
-                        showNotice(t('linkCopied', lang), 'success', 1500);
+                        showNotice(t('linkCopied', lang), 'success', 3000);
                       } catch (copyError) {
-                        showNotice(t('shareFailed', lang), 'error', 1500);
+                        showNotice(t('shareFailed', lang), 'error', 3000);
                       }
                     }
                   }}
@@ -5708,7 +5737,15 @@ const styles = StyleSheet.create({
   },
   
   centerAvatarImg: { width: '100%', height: '100%' },
-  title: { color: LIVI.text, fontSize: Platform.OS === "android" ? 26 : 28, fontWeight: '700', letterSpacing: 0.3, textAlign: 'center' },
+  title: {
+    color: LIVI.text,
+    fontSize: Platform.OS === "android" ? 26 : 28,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textAlign: 'center',
+    lineHeight: Platform.OS === 'android' ? 30 : 32,
+    maxWidth: '100%',
+  },
   subtitle: { color: LIVI.text2, fontSize: Platform.OS === "android" ? 14 : 16, lineHeight: 16, textAlign: 'center', paddingHorizontal: 8, marginTop: 2 },
   subtitleNik: { color: LIVI.text2, fontSize: 18, textAlign: 'center' },
 
@@ -5899,13 +5936,23 @@ const styles = StyleSheet.create({
 
   // Блок приветствия: заголовок по центру (как раньше), слот для бейджа между подзаголовком и кнопкой, кнопка «Начать поиск»
   welcomeBlock: { flex: 1, alignItems: 'center' },
-  welcomeTextBlock: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 35 },
+  welcomeTextBlock: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    marginTop: 35,
+    minHeight: 0,
+    width: '100%',
+    paddingHorizontal: 4,
+  },
   noticeSlot: {
     minHeight: 72,
     justifyContent: 'flex-start',
     alignItems: 'center',
     width: '100%',
     marginBottom: 24,
+    gap: 10,
   },
   // notice (бейдж «Вызов завершён» и др.): по центру между подзаголовком и кнопкой
   notice: {

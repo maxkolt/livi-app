@@ -4,7 +4,12 @@ import 'react-native-reanimated';
 // Ранняя загрузка модуля пуша, чтобы захватить getLastNotificationResponseAsync до монтирования App (важно для входящего звонка из фона/убитого приложения)
 import './utils/pushNotifications';
 
-import { Alert, AppRegistry, Platform } from 'react-native';
+import { Alert, AppRegistry, Platform, Text, TextInput } from 'react-native';
+
+// Не следовать системной настройке «Размер шрифта» (Android/iOS). Масштаб экрана системы на dp всё равно влияет.
+const noFontScaling = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
+(Text as any).defaultProps = { ...(Text as any).defaultProps, ...noFontScaling };
+(TextInput as any).defaultProps = { ...(TextInput as any).defaultProps, ...noFontScaling };
 import { registerRootComponent } from 'expo';
 import App from './App';
 import { isEndedCallId, setupCallKeep, displayIncomingCall, stopIncomingCallForegroundService, showIncomingCallSystemUI } from './utils/callKeep';

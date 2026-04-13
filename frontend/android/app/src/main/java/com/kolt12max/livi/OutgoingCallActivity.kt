@@ -22,6 +22,10 @@ import androidx.appcompat.app.AppCompatActivity
  */
 class OutgoingCallActivity : AppCompatActivity() {
 
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(FontScaleContextHelper.wrap(newBase))
+    }
+
     private var closeReceiver: BroadcastReceiver? = null
     private var callIdReadyReceiver: BroadcastReceiver? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())

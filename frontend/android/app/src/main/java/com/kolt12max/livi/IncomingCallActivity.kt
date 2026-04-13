@@ -35,6 +35,10 @@ import java.net.URL
  */
 class IncomingCallActivity : AppCompatActivity() {
 
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(FontScaleContextHelper.wrap(newBase))
+    }
+
     private var currentCallId: String = ""
     private var callCanceledReceiver: BroadcastReceiver? = null
     private var callAnsweredReceiver: BroadcastReceiver? = null

@@ -23,6 +23,14 @@ import expo.modules.ReactNativeHostWrapper
 
 class MainApplication : Application(), ReactApplication {
 
+  /**
+   * Базовый масштаб UI: фиксируем fontScale и (API 24+) densityDpi = DENSITY_DEVICE_STABLE —
+   * игнор «Размер шрифта» и «Масштаб экрана» в настройках Android.
+   */
+  override fun attachBaseContext(base: Context) {
+    super.attachBaseContext(FontScaleContextHelper.wrap(base))
+  }
+
   override val reactNativeHost: ReactNativeHost = ReactNativeHostWrapper(
         this,
         object : DefaultReactNativeHost(this) {
