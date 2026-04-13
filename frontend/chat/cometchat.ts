@@ -1,6 +1,7 @@
 // cometchat.ts
 import { CometChat } from "@cometchat/chat-sdk-react-native";
 import { CometChatUIKit } from "@cometchat/chat-uikit-react-native";
+import { getCurrentUserId } from "../sockets/socket";
 
 const appID = process.env.EXPO_PUBLIC_COMETCHAT_APP_ID || '';
 const region = process.env.EXPO_PUBLIC_COMETCHAT_REGION || '';
@@ -56,6 +57,47 @@ export async function createCometChatUser(uid: string, name?: string, avatar?: s
   }
 }
 
+/** CometChat SDK отдаёт ошибки по-разному: code на корне, вложенный объект, message-строка или JSON-строка. */
+function isCometChatUserMissingError(err: any): boolean {
+  if (err == null) return false;
+  const code = err.code ?? err.errorCode ?? err?.error?.code;
+  const codeStr = code != null ? String(code) : "";
+  const msg =
+    typeof err.message === "string"
+      ? err.message
+      : err.message != null
+        ? String(err.message)
+        : "";
+  let blob = `${codeStr} ${msg}`;
+  try {
+    blob += JSON.stringify(err);
+  } catch {
+    blob += String(err);
+  }
+  const lower = blob.toLowerCase();
+  return (
+    codeStr === "NOT_FOUND" ||
+    lower.includes("not_found") ||
+    lower.includes("not found") ||
+    lower.includes("login user not found") ||
+    lower.includes("user not found")
+  );
+}
+
+function cometChatErrorSummary(err: any): string {
+  if (err == null) return "unknown";
+  const code = err.code ?? err.errorCode ?? err?.error?.code;
+  const msg = typeof err.message === "string" ? err.message : err.message != null ? String(err.message) : "";
+  if (code != null && msg) return `${code}: ${msg}`;
+  if (msg) return msg;
+  if (code != null) return String(code);
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
 /** ====== Login ====== */
 export async function loginCometChat(uid: string, name?: string, avatar?: string, authToken?: string): Promise<CometChat.User> {
   await ensureCometChatReady();
@@ -71,7 +113,7 @@ export async function loginCometChat(uid: string, name?: string, avatar?: string
       return user;
     }
   } catch (error: any) {
-    if (error?.code === 'NOT_FOUND') {
+    if (isCometChatUserMissingError(error)) {
       await createCometChatUser(uid, name, avatar);
       // Повторная попытка логина после создания
       const user = await CometChat.login(uid, authKey);
@@ -90,42 +132,69 @@ export async function logoutCometChat(): Promise<void> {
   }
 }
 
+async function cometChatUpdateUserPayload(
+  uid: string,
+  name: string | undefined,
+  avatar: string | undefined
+): Promise<CometChat.User> {
+  return CometChat.updateUser({ uid, name, avatar }, authKey);
+}
+
 /** ====== Обновление профиля ====== */
 export async function updateMyProfile(nick?: string, avatarUrl?: string) {
   try {
-    const user = await CometChatUIKit.getLoggedInUser(); // CometChat.User | null
-    if (!user) return;
+    if (!authKey) return;
 
-    const uid = user.getUid();
-    if (!uid) return;
+    let user = await CometChatUIKit.getLoggedInUser();
+    const uidFromSocket = getCurrentUserId();
 
-    try {
-      const updated = await CometChat.updateUser(
-        {
-          uid,
-          name: nick || user.getName() || undefined,
-          avatar: avatarUrl || user.getAvatar() || undefined,
-        },
-        authKey
-      );
-      return updated;
-    } catch (updateError: any) {
-      // Если пользователь не найден, попробуем создать его
-      if (updateError?.code === 'NOT_FOUND' || updateError?.message?.includes('not found')) {
-        try {
-          const newUser = await createCometChatUser(uid, nick || user.getName(), avatarUrl || user.getAvatar());
-          return newUser;
-        } catch (createError: any) {
-          // Если создание тоже не удалось, логируем как информационное сообщение
-          console.log("ℹ️ CometChat user not found, skipping profile sync");
-        }
-      } else {
-        // Для других ошибок логируем как информационное сообщение
-        console.log("ℹ️ CometChat profile update skipped:", updateError?.message || 'Unknown error');
+    if (!user && uidFromSocket) {
+      try {
+        await loginCometChat(uidFromSocket, nick, avatarUrl);
+        user = await CometChatUIKit.getLoggedInUser();
+      } catch {
+        return;
       }
     }
-  } catch (e) {
-    console.log("ℹ️ CometChat profile update skipped:", e);
+
+    if (!user) return;
+
+    const uid = user.getUid() || uidFromSocket;
+    if (!uid) return;
+
+    const name = nick || user.getName() || undefined;
+    const avatar = avatarUrl || user.getAvatar() || undefined;
+
+    try {
+      return await cometChatUpdateUserPayload(uid, name, avatar);
+    } catch (updateError: any) {
+      if (!isCometChatUserMissingError(updateError)) {
+        console.log("ℹ️ CometChat profile update skipped:", cometChatErrorSummary(updateError));
+        return;
+      }
+
+      try {
+        await createCometChatUser(uid, name, avatar);
+        return await cometChatUpdateUserPayload(uid, name, avatar);
+      } catch (afterCreate: any) {
+        if (afterCreate?.code === "ERR_UID_ALREADY_EXISTS") {
+          try {
+            return await cometChatUpdateUserPayload(uid, name, avatar);
+          } catch (e2: any) {
+            console.log("ℹ️ CometChat profile update after existing uid:", cometChatErrorSummary(e2));
+          }
+        } else {
+          try {
+            await loginCometChat(uid, name, avatar);
+            return await cometChatUpdateUserPayload(uid, name, avatar);
+          } catch (e3: any) {
+            console.log("ℹ️ CometChat profile sync failed:", cometChatErrorSummary(e3));
+          }
+        }
+      }
+    }
+  } catch (e: any) {
+    console.log("ℹ️ CometChat profile update skipped:", cometChatErrorSummary(e));
   }
 }
 
@@ -210,11 +279,15 @@ export async function openDmWith(userId: string): Promise<void> {
 /** ====== Синхронизировать профиль ====== */
 export async function syncMyStreamProfile(nick?: string, avatarUrl?: string): Promise<void> {
   try {
+    const uid = getCurrentUserId();
+    if (uid) {
+      await connectStreamIfNeeded(uid, { nick, avatarUrl });
+    }
     await updateMyProfile(nick, avatarUrl);
   } catch (error) {
     // Не прерываем работу при ошибке синхронизации профиля
     // CometChat может быть не настроен, это не критично
-    console.log('ℹ️ CometChat profile sync skipped (not configured)');
+    console.log("ℹ️ CometChat profile sync skipped (not configured)");
   }
 }
 

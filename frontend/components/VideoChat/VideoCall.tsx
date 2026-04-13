@@ -154,6 +154,20 @@ const stopStreamTracks = (stream: MediaStream | null | undefined, context: strin
   }
 };
 
+/** Снимает блокировку кнопок видеозвонка на Home (__videoCallActiveRef / partner) и дергает сброс busy у друзей. */
+function clearVideoCallHomeScreenLocks(reason: string) {
+  try {
+    const g = global as any;
+    if (!g.__videoCallPartnerUserIdRef) g.__videoCallPartnerUserIdRef = { current: null };
+    else g.__videoCallPartnerUserIdRef.current = null;
+    if (!g.__videoCallActiveRef) g.__videoCallActiveRef = { current: false };
+    else g.__videoCallActiveRef.current = false;
+    g.__onVideoCallEndedRef?.current?.();
+  } catch (e) {
+    logger.warn('[VideoCall] clearVideoCallHomeScreenLocks failed', { reason, e });
+  }
+}
+
 const VideoCall: React.FC<Props> = ({ route }) => {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
@@ -1666,13 +1680,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       
       // КРИТИЧНО: Всегда сбрасываем refs и уведомляем HomeScreen сразу, чтобы кнопки видеозвонка и бейдж «Занят»
       // обновились сразу после завершения из in-app PiP (даже при раннем return ниже).
-      try {
-        (global as any).__videoCallPartnerUserIdRef = (global as any).__videoCallPartnerUserIdRef || { current: null };
-        (global as any).__videoCallPartnerUserIdRef.current = null;
-        (global as any).__videoCallActiveRef = (global as any).__videoCallActiveRef || { current: false };
-        (global as any).__videoCallActiveRef.current = false;
-        (global as any).__onVideoCallEndedRef?.current?.();
-      } catch (_) {}
+      clearVideoCallHomeScreenLocks('cleanupFunction');
 
       // КРИТИЧНО: Защита от повторных вызовов - если звонок уже завершён/в процессе завершения, не трогаем сессию.
       // Это важно для сценария: пришёл call:ended → handleCallEnded сделал cleanup → затем компонент размонтировался и unmount-cleanup попытался вызвать cleanupFunction ещё раз.
@@ -1797,8 +1805,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (rootNav?.isReady?.()) {
         const route = rootNav.getCurrentRoute();
         if (route?.name === 'Home') {
-          logger.info('[VideoCall] [end] уже на Home - игнорируем');
+          logger.info('[VideoCall] [end] уже на Home — снимаем блокировки списка друзей');
           callEndedTransitionDoneRef.current = true;
+          clearVideoCallHomeScreenLocks('handleCallEnded-already-home');
           return;
         }
       }
@@ -1880,11 +1889,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           sessionSnapshot.cleanup();
         }
         clearSessionRefs();
-        try {
-          (global as any).__videoCallPartnerUserIdRef = { current: null };
-          (global as any).__videoCallActiveRef = { current: false };
-          (global as any).__onVideoCallEndedRef?.current?.();
-        } catch (_) {}
+        clearVideoCallHomeScreenLocks('handleCallEnded-deferred');
         const localStreamSnapshot = localStreamRef.current;
         stopStreamTracks(localStreamSnapshot, 'callEnded/localStreamState');
         const sessionLocalStream = sessionSnapshot?.getLocalStream?.();
@@ -1962,12 +1967,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         timestamp: Date.now()
       });
       
-      // КРИТИЧНО: Сбрасываем глобальные refs, чтобы кнопки видеозвонка у инициатора снова стали активными
-      try {
-        (global as any).__videoCallPartnerUserIdRef = { current: null };
-        (global as any).__videoCallActiveRef = { current: false };
-        (global as any).__onVideoCallEndedRef?.current?.();
-      } catch (_) {}
+      clearVideoCallHomeScreenLocks('handleCallDeclined');
       
       // КРИТИЧНО: Очищаем состояние звонка при отклонении
       incomingCallHook.setIncomingFriendCall(null);
@@ -2186,13 +2186,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       logger.info('[VideoCall] [end] onAbortCall повторно — пропускаем');
       return;
     }
-    isEndingCallRef.current = true;
-    setIsEndingCall(true);
 
-    const session = sessionRef.current;
-    if (!session) return;
-
-    // КРИТИЧНО: Используем ref вместо state для синхронной проверки (важно для iOS)
+    // КРИТИЧНО: Проверяем до выставления isEndingCallRef — иначе при раннем return залипают кнопки на Home.
     if (isInactiveStateRef.current) {
       logger.info('[VideoCall] onAbortCall вызван в неактивном состоянии - игнорируем', {
         isInactiveStateRef: isInactiveStateRef.current,
@@ -2200,6 +2195,50 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       });
       return;
     }
+
+    const session = sessionRef.current;
+
+    if (!session) {
+      logger.warn('[VideoCall] [end] onAbortCall: нет session (сбой до инициализации) — снимаем блокировки Home');
+      isEndingCallRef.current = true;
+      setIsEndingCall(true);
+      isInactiveStateRef.current = true;
+      try {
+        setWasFriendCallEnded(true);
+      } catch (_) {}
+      clearVideoCallHomeScreenLocks('onAbortCall-no-session');
+      setMicOn(false);
+      setCamOn(false);
+      try {
+        const rootNav = (global as any).__navRef;
+        if (rootNav?.isReady?.()) {
+          const currentRoute = rootNav.getCurrentRoute();
+          if (currentRoute?.name === 'VideoCall') {
+            const state = rootNav.getState();
+            const routes = state?.routes ?? [];
+            if (routes.length > 1) {
+              rootNav.dispatch(CommonActions.goBack());
+              try { emitCallEndedOnHome(); } catch (_) {}
+            } else {
+              rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
+              try { emitCallEndedOnHome(); } catch (_) {}
+            }
+          }
+        }
+      } catch (e) {
+        logger.warn('[VideoCall] onAbortCall no-session navigation failed', e);
+      }
+      setTimeout(() => {
+        isEndingCallRef.current = false;
+        setIsEndingCall(false);
+        logger.debug('[VideoCall] isEndingCallRef reset (onAbortCall no-session)');
+      }, 1000);
+      return;
+    }
+
+    isEndingCallRef.current = true;
+    setIsEndingCall(true);
+
     const g = global as any;
     const wasInPiP = g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
 
@@ -2207,7 +2246,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
     // КРИТИЧНО: Сразу выставляем refs завершения (до навигации и session.endCall), чтобы колбэки сессии
     // (onRemoteCamStateChange, onPartnerIdChange, onRoomIdChange, onCallIdChange, handlePartnerPiPStateChanged) не вызывали setState и не давали ререндеров.
-    isEndingCallRef.current = true;
     isInactiveStateRef.current = true;
 
     setMicOn(false);
@@ -2305,14 +2343,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           sessionRefForCleanup.cleanup();
         }
         clearSessionRefs();
-        try {
-          (global as any).__videoCallPartnerUserIdRef = { current: null };
-          (global as any).__videoCallActiveRef = { current: false };
-          (global as any).__onVideoCallEndedRef?.current?.();
-        } catch (_) {}
+        clearVideoCallHomeScreenLocks('onAbortCall-deferred');
         clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
       } catch (e) {
         logger.warn('[VideoCall] onAbortCall deferred cleanup failed', e);
+        clearVideoCallHomeScreenLocks('onAbortCall-deferred-failed');
       }
 
       setTimeout(() => {

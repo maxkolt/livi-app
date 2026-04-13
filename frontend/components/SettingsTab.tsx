@@ -368,17 +368,11 @@ export default function SettingsTab({
         {(busy || savedToast) && (
           <View pointerEvents="none" style={savedToast ? overlayStyles.overlayBottom : overlayStyles.overlayLoading}>
             {busy ? (
-              <>
-                {console.log('[SettingsTab] Showing busy spinner')}
-                <ActivityIndicator size="large" />
-              </>
+              <ActivityIndicator size="large" />
             ) : (
-              <>
-                {console.log('[SettingsTab] Showing savedToast')}
-                <View style={overlayStyles.toast}>
-                  <PaperText style={overlayStyles.toastText}>{t('saved', lang)}</PaperText>
-                </View>
-              </>
+              <View style={overlayStyles.toast}>
+                <PaperText style={overlayStyles.toastText}>{t('saved', lang)}</PaperText>
+              </View>
             )}
           </View>
         )}
