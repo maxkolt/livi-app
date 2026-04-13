@@ -4801,18 +4801,34 @@ const handleClearNick = useCallback(async () => {
           >
             {L('welcomeTitle')}
           </Text>
-          <Text
-            style={[styles.subtitle, { color: isDark ? LIVI.text2 : LIVI.textThemeWhite, maxWidth: '92%' }]}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.5}
+          <View
+            style={{
+              width: Math.max(0, layoutWidth - 36),
+              alignSelf: 'center',
+              paddingHorizontal: 2,
+            }}
           >
-            {L('welcomeSubtitle')}
-          </Text>
+            <Text
+              style={[
+                styles.subtitle,
+                {
+                  color: isDark ? LIVI.text2 : LIVI.textThemeWhite,
+                  width: '100%',
+                  ...(Platform.OS === 'android' && { includeFontPadding: false }),
+                },
+              ]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.18}
+              allowFontScaling={false}
+            >
+              {L('welcomeSubtitle')}
+            </Text>
+          </View>
         </View>
         <View style={styles.noticeSlot}>
           {NoticeView}
-          {/* Бейдж «Обновить»: тот же слот, что и «Вызов отменён» — между подзаголовком и «Начать поиск», 3 с автоскрытие, X, тап — магазин */}
+          {/* Бейдж «Обновить»: тот же слот, что и «Вызов отменён» — между подзаголовком и «Начать поиск», автоскрытие, тап — магазин */}
           {showUpdateBadge && (
             <View
               style={{
@@ -4882,84 +4898,43 @@ const handleClearNick = useCallback(async () => {
                   style={[StyleSheet.absoluteFillObject, { borderBottomLeftRadius: 14, borderBottomRightRadius: 14 }]}
                 />
               </View>
-              <View
-                style={{
-                  margin: isDark ? 0.2 : 0.4,
-                  borderRadius: isDark ? 13.8 : 13.6,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  paddingLeft: 4,
-                  paddingRight: 4,
-                  backgroundColor: theme.colors.background,
-                  paddingTop: 0,
-                  paddingBottom: 0,
-                  zIndex: 1,
+              <Pressable
+                style={({ pressed }) => [
+                  {
+                    margin: isDark ? 0.2 : 0.4,
+                    borderRadius: isDark ? 13.8 : 13.6,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    alignSelf: 'stretch',
+                    backgroundColor: theme.colors.background,
+                    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+                    paddingHorizontal: 20,
+                    zIndex: 1,
+                  },
+                  pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
+                ]}
+                onPress={() => {
+                  setShowUpdateBadgeState(false);
+                  markUpdateBadgeShown();
+                  Linking.openURL(PLAY_STORE_UPDATE_URL);
                 }}
+                android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: false }}
               >
-                <Pressable
-                  style={({ pressed }) => [
-                    {
-                      justifyContent: 'center',
-                      alignItems: 'center',
-                      borderRadius: 10,
-                      paddingVertical: Platform.OS === 'ios' ? 8 : 6,
-                      paddingHorizontal: 14,
-                    },
-                    pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
-                  ]}
-                  onPress={() => {
-                    setShowUpdateBadgeState(false);
-                    markUpdateBadgeShown();
-                    Linking.openURL(PLAY_STORE_UPDATE_URL);
+                <Text
+                  style={{
+                    color: isDark ? LIVI.text : '#2F3742',
+                    fontSize: 12,
+                    fontWeight: '500',
+                    textAlign: 'center',
+                    ...(Platform.OS === 'android' && { includeFontPadding: false }),
                   }}
-                  android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: false, radius: 10 }}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                  allowFontScaling={false}
                 >
-                  <Text
-                    style={{
-                      color: isDark ? LIVI.text : '#2F3742',
-                      fontSize: 12,
-                      fontWeight: '500',
-                      ...(Platform.OS === 'android' && { includeFontPadding: false }),
-                    }}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                    allowFontScaling={false}
-                  >
-                    {L('updateBtn')}
-                  </Text>
-                </Pressable>
-                <View style={{ width: 1, alignSelf: 'stretch', marginVertical: 6, marginLeft: 2, marginRight: 0, overflow: 'hidden', borderRadius: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.22)' }}>
-                  <LinearGradient
-                    colors={
-                      isDark
-                        ? ['#2dd4bf', '#60a5fa', '#38bdf8', '#FFF8F0']
-                        : ['#9A8FC9', '#D2D8E0', '#8D96A4']
-                    }
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 0, y: 1 }}
-                    style={{ flex: 1, width: 1 }}
-                  />
-                </View>
-                <Pressable
-                  hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
-                  onPress={() => {
-                    setShowUpdateBadgeState(false);
-                    markUpdateBadgeShown();
-                  }}
-                  style={({ pressed }) => [
-                    {
-                      paddingVertical: Platform.OS === 'ios' ? 6 : 5,
-                      paddingHorizontal: 8,
-                      borderRadius: 10,
-                      marginRight: 2,
-                    },
-                    pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' },
-                  ]}
-                  android_ripple={{ color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', borderless: true }}
-                >
-                  <Ionicons name="close" size={13} color={isDark ? LIVI.text : '#2F3742'} />
-                </Pressable>
-              </View>
+                  {L('updateBtn')}
+                </Text>
+              </Pressable>
             </View>
           )}
         </View>
@@ -5746,7 +5721,13 @@ const styles = StyleSheet.create({
     lineHeight: Platform.OS === 'android' ? 30 : 32,
     maxWidth: '100%',
   },
-  subtitle: { color: LIVI.text2, fontSize: Platform.OS === "android" ? 14 : 16, lineHeight: 16, textAlign: 'center', paddingHorizontal: 8, marginTop: 2 },
+  // Без фиксированного lineHeight: на Android иначе adjustsFontSizeToFit часто не сжимает шрифт и обрезает хвост строки.
+  subtitle: {
+    color: LIVI.text2,
+    fontSize: Platform.OS === 'android' ? 14 : 16,
+    textAlign: 'center',
+    marginTop: 2,
+  },
   subtitleNik: { color: LIVI.text2, fontSize: 18, textAlign: 'center' },
 
   button: {
