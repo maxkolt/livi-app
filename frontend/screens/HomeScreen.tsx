@@ -35,9 +35,9 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Sharing from 'expo-sharing';
 import SplashLoader from '../components/SplashLoader';
-import { Swipeable, PinchGestureHandler, State } from 'react-native-gesture-handler';
+import { Swipeable, PinchGestureHandler, State, RectButton } from 'react-native-gesture-handler';
 import { Avatar, Divider, IconButton, List, Surface, Portal, Dialog, Button, Icon } from 'react-native-paper';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { getAvatarImageProps, getAvatarKey, forceImageRefresh } from '../utils/imageOptimization';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
@@ -3988,6 +3988,11 @@ const handleClearNick = useCallback(async () => {
       /^ph:\/\//i.test(s);
   
     const handlePress = React.useCallback(() => {
+      try {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      } catch {
+        Vibration.vibrate(8);
+      }
       // КРИТИЧНО: Передаем полный никнейм, не обрезаем до первой буквы
       const fullNickname = (friend.name && friend.name.trim()) || '—';
       logger.info('[ChatButton] Открываем чат', {
@@ -3996,7 +4001,6 @@ const handleClearNick = useCallback(async () => {
         fullNickname,
         nameLength: friend.name?.length || 0
       });
-      // Просто открываем чат с CometChat
       navigation.navigate('Chat', {
         peerId: friend.id,
         peerName: fullNickname,
@@ -4004,14 +4008,11 @@ const handleClearNick = useCallback(async () => {
         peerAvatarThumbB64: friend.avatarThumbB64 || '',
         peerOnline: friend.online,
       });
-    }, [friend, savedNick]);
+    }, [navigation, friend.id, friend.name, friend.avatarVer, friend.avatarThumbB64, friend.online]);
   
     return (
       <View style={{ position: 'relative' }}>
-        <IconButton
-          icon="chat-processing"
-          size={23}
-          iconColor={LIVI.white}
+        <RectButton
           style={[
             styles.actionBtnGap,
             styles.friendActionBtnSize,
@@ -4019,8 +4020,15 @@ const handleClearNick = useCallback(async () => {
               backgroundColor: '#2B2B2B',
               borderWidth: 1,
               borderColor: 'rgba(255,255,255,0.12)',
+              justifyContent: 'center',
+              alignItems: 'center',
             },
           ]}
+          rippleColor="rgba(255,255,255,0.28)"
+          underlayColor="rgba(255,255,255,0.14)"
+          activeOpacity={0.82}
+          delayLongPress={280}
+          onPress={handlePress}
           onLongPress={
             count > 0
               ? () => {
@@ -4029,8 +4037,9 @@ const handleClearNick = useCallback(async () => {
                 }
               : undefined
           }
-          onPress={handlePress}
-        />
+        >
+          <MaterialCommunityIcons name="chat-processing" size={23} color={LIVI.white} />
+        </RectButton>
         {count > 0 && (
           <View style={styles.badgeBubble}>
             <Text style={{ color: '#fff', fontSize: 8, fontWeight: '800' }}>{count > 99 ? '99+' : count}</Text>
@@ -4184,18 +4193,15 @@ const handleClearNick = useCallback(async () => {
           style={{ position: 'relative' }}
           pointerEvents={Platform.OS === 'android' && videoDisabled ? 'none' : 'auto'}
         >
-          <IconButton
-            icon="video"
-            size={23}
-            iconColor={
-              Platform.OS === 'android' && videoDisabled
-                ? ANDROID_VIDEO_CALL_DISABLED_BG
-                : useBusyButtonStyle
-                  ? '#ddd'
-                  : LIVI.white
-            }
+          <RectButton
+            enabled={!videoDisabled}
+            accessibilityState={{ disabled: !!videoDisabled }}
             style={[
               styles.friendActionBtnSize,
+              {
+                justifyContent: 'center',
+                alignItems: 'center',
+              },
               Platform.OS === 'android' && videoDisabled
                 ? styles.androidVideoCallBtnDisabled
                 : {
@@ -4205,23 +4211,42 @@ const handleClearNick = useCallback(async () => {
                   },
               useBusyButtonStyle && Platform.OS !== 'android' ? styles.inviteBtnDisabled : null,
             ]}
-            disabled={Platform.OS === 'android' ? false : videoDisabled}
-            accessibilityState={{ disabled: !!videoDisabled }}
+            rippleColor="rgba(255,255,255,0.28)"
+            underlayColor="rgba(255,255,255,0.14)"
+            activeOpacity={0.82}
+            delayLongPress={280}
             onLongPress={
-            missedCount > 0 && !videoDisabled
-              ? () => {
-                  try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(15); }
-                  setMarkReadMenu({ friendId: friendIdStr, type: 'video' });
-                }
-              : undefined
-          }
+              missedCount > 0 && !videoDisabled
+                ? () => {
+                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(15); }
+                    setMarkReadMenu({ friendId: friendIdStr, type: 'video' });
+                  }
+                : undefined
+            }
             onPress={() => {
               if (videoDisabled) return;
+              try {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              } catch {
+                Vibration.vibrate(8);
+              }
               const fid = String(friend.id);
               clearMissedCallsForFriend(fid);
               handleStartVideoCall(friend);
             }}
-          />
+          >
+            <MaterialCommunityIcons
+              name="video"
+              size={23}
+              color={
+                Platform.OS === 'android' && videoDisabled
+                  ? ANDROID_VIDEO_CALL_DISABLED_BG
+                  : useBusyButtonStyle
+                    ? '#ddd'
+                    : LIVI.white
+              }
+            />
+          </RectButton>
           {Platform.OS === 'android' && videoDisabled && (
             <View style={styles.videoIconOverlay}>
               <MaterialIcons name="videocam" size={23} color={ANDROID_VIDEO_CALL_DISABLED_ICON} />
@@ -4257,6 +4282,8 @@ const handleClearNick = useCallback(async () => {
           onSwipeableOpen={() => { openSwipeableRef.current = swipeableRefsMap.current[item.id] ?? null; }}
           onSwipeableClose={() => { if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) openSwipeableRef.current = null; }}
           renderRightActions={() => renderRightActions(item.id)}
+          dragOffsetFromRightEdge={40}
+          dragOffsetFromLeftEdge={24}
         >
           <View
             style={styles.listRowWrap}
@@ -5850,7 +5877,7 @@ const styles = StyleSheet.create({
 
   actionBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
   friendActionBtnSize: { width: 40, height: 40, borderRadius: 12 },
-  actionBtnGap: { marginLeft: 12 },
+  actionBtnGap: { marginLeft: 14 },
 
   segmentBottomArc: { position: 'absolute', left: 18, right: 18, bottom: 0, height: 44, borderRadius: 114, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: LIVI.border },
 
@@ -5913,7 +5940,7 @@ const styles = StyleSheet.create({
     marginLeft: 14,
   },
 
-  rightWrap: { width: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
+  rightWrap: { width: 80, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
   inviteBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
   inviteBtnDisabled: { 
     backgroundColor: LIVI.glass,
@@ -5939,7 +5966,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingVertical: 2,
     paddingHorizontal: 6,
-    marginRight: 6,
+    marginRight: 12,
     justifyContent: 'center',
     alignItems: 'center',
     alignSelf: 'center',

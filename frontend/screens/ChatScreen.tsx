@@ -560,6 +560,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const voiceRecordTimerRef = useRef<any>(null);
   const voiceStopInProgressRef = useRef(false);
   const voiceCancelTriggeredRef = useRef(false);
+  /** Сразу true в onPanResponderGrant — жест «к мусорке» работает до setState(voiceIsRecording). */
+  const voiceDragEnabledRef = useRef(false);
   const [voiceIsRecording, setVoiceIsRecording] = useState(false);
   const [voiceRecordMs, setVoiceRecordMs] = useState(0);
 
@@ -2113,8 +2115,8 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(recordViz, { toValue: 1, duration: 520, useNativeDriver: true }),
-        Animated.timing(recordViz, { toValue: 0, duration: 520, useNativeDriver: true }),
+        Animated.timing(recordViz, { toValue: 1, duration: 340, useNativeDriver: true }),
+        Animated.timing(recordViz, { toValue: 0, duration: 340, useNativeDriver: true }),
       ])
     );
     recordVizLoopRef.current = loop;
@@ -3362,7 +3364,15 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [currentUserId, peerId]);
 
   const sendMessage = async () => {
-    if (!messageText.trim() || !currentUserId) return;
+    if (!currentUserId) return;
+
+    // Во время записи голоса «Отправить» сразу завершает запись и уходит в чат (как отпускание микрофона)
+    if (voiceIsRecording) {
+      await stopVoiceRecording(false, false);
+      return;
+    }
+
+    if (!messageText.trim()) return;
 
     // Редактирование существующего сообщения
     if (editingMessageId) {
@@ -3388,7 +3398,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     textSendGuardRef.current = true;
     setTimeout(() => {
       textSendGuardRef.current = false;
-    }, 200);
+    }, 90);
 
     const messageToSend = messageText.trim();
     const replyTo = replyingToMessage ? { id: replyingToMessage.id, text: replyingToMessage.text, from: replyingToMessage.from, isOwn: replyingToMessage.isOwn } : undefined;
@@ -3520,10 +3530,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   };
 
   const VOICE_MAX_MS = 60_000;
-  // Swipe-left cancel with hysteresis (more stable on Android)
-  const VOICE_CANCEL_ARM_DX = -22;     // more sensitive
-  const VOICE_CANCEL_DISARM_DX = -10;  // keeps it armed unless user clearly returns
-  const VOICE_TRASH_PAD = 18;          // hit zone padding around trash icon (px)
+  // Swipe-left cancel: чувствительнее и шире зона корзины — меньше «промахов»
+  const VOICE_CANCEL_ARM_DX = -12;
+  const VOICE_CANCEL_DISARM_DX = -4;
+  const VOICE_TRASH_PAD = 34;
 
   const updateTrashZone = React.useCallback(() => {
     try {
@@ -3546,32 +3556,27 @@ export default function ChatScreen({ route, navigation }: Props) {
     );
   }, []);
 
-  const resetVoiceGesture = React.useCallback(() => {
+  const resetVoiceGesture = React.useCallback((opts?: { keepVoiceDrag?: boolean }) => {
     cancelArmedRef.current = false;
     voiceCancelTriggeredRef.current = false;
+    if (!opts?.keepVoiceDrag) voiceDragEnabledRef.current = false;
     try { voiceDragX.setValue(0); } catch {}
     try { trashLid.setValue(0); } catch {}
     try { trashFlash.setValue(0); } catch {}
-    Animated.timing(micScale, { toValue: 1, duration: 90, useNativeDriver: true }).start();
+    Animated.timing(micScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
   }, [voiceDragX, trashLid, trashFlash, micScale]);
 
   const armCancelUI = React.useCallback(() => {
     if (cancelArmedRef.current) return;
     cancelArmedRef.current = true;
-    Animated.parallel([
-      Animated.timing(trashLid, { toValue: 1, duration: 140, useNativeDriver: true }),
-      Animated.sequence([
-        Animated.timing(trashFlash, { toValue: 1, duration: 90, useNativeDriver: true }),
-        Animated.timing(trashFlash, { toValue: 0, duration: 180, useNativeDriver: true }),
-      ]),
-    ]).start();
+    try { trashLid.setValue(1); } catch {}
     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
-  }, [trashLid, trashFlash]);
+  }, [trashLid]);
 
   const disarmCancelUI = React.useCallback(() => {
     if (!cancelArmedRef.current) return;
     cancelArmedRef.current = false;
-    Animated.timing(trashLid, { toValue: 0, duration: 120, useNativeDriver: true }).start();
+    try { trashLid.setValue(0); } catch {}
   }, [trashLid]);
 
   const sendVoiceMessageFromLocal = React.useCallback(async (localUri: string, durationMs: number, size?: number) => {
@@ -3658,14 +3663,21 @@ export default function ChatScreen({ route, navigation }: Props) {
   const startVoiceRecording = React.useCallback(async () => {
     try {
       if (voiceIsRecording) return;
-      if (!currentUserId || !peerId) return;
-      if (selectionMode) return; // avoid accidental recording in select mode
-      resetVoiceGesture();
+      if (!currentUserId || !peerId) {
+        resetVoiceGesture();
+        return;
+      }
+      if (selectionMode) {
+        resetVoiceGesture();
+        return;
+      }
+      resetVoiceGesture({ keepVoiceDrag: true });
 
       const perm = await Audio.requestPermissionsAsync();
       if (!perm.granted) {
         // If we already signaled recording on press-in, stop it on permission denial.
         try { stopLocalRecordingSignal(); } catch {}
+        resetVoiceGesture();
         showNotice('error', t('errorTitle', lang), t('needMicPermission', lang));
         return;
       }
@@ -3709,7 +3721,6 @@ export default function ChatScreen({ route, navigation }: Props) {
       } as any);
 
       await recording.startAsync();
-      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
 
       if (voiceRecordTimerRef.current) clearInterval(voiceRecordTimerRef.current);
       voiceRecordTimerRef.current = setInterval(async () => {
@@ -3723,11 +3734,12 @@ export default function ChatScreen({ route, navigation }: Props) {
             void stopVoiceRecording(false, true);
           }
         } catch {}
-      }, 160);
+      }, 100);
     } catch {
       setVoiceIsRecording(false);
       voiceRecordingRef.current = null;
       try { stopLocalRecordingSignal(); } catch {}
+      resetVoiceGesture();
     }
   }, [voiceIsRecording, currentUserId, peerId, selectionMode, resetVoiceGesture, showNotice, lang, stopLocalRecordingSignal]);
 
@@ -3754,34 +3766,33 @@ export default function ChatScreen({ route, navigation }: Props) {
       // Very short taps shouldn't create a voice message
       if (!uri || durationMs < 600) {
         if (uri) {
-          try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+          try { void FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
         }
         setVoiceRecordMs(0);
         return;
       }
 
-      const info = await FileSystem.getInfoAsync(uri).catch(() => null as any);
-      const size = typeof info?.size === 'number' ? Number(info.size) : undefined;
       if (cancelled || voiceCancelTriggeredRef.current) {
-        // cancel: throw away the recording
-        try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+        try { void FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
         setVoiceRecordMs(0);
         return;
       }
 
       if (autoStopped) {
-        try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch {}
+        try { void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch {}
       } else {
-        try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
+        try { void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
       }
 
-      // release -> send immediately
-      await sendVoiceMessageFromLocal(uri, durationMs, size);
+      // Размер не блокирует старт отправки (upload и так знает файл)
+      void sendVoiceMessageFromLocal(uri, durationMs, undefined).catch(() => {});
     } catch {
       // ignore
     } finally {
+      voiceStopInProgressRef.current = false;
+      resetVoiceGesture();
       try {
-        await Audio.setAudioModeAsync({
+        void Audio.setAudioModeAsync({
           playsInSilentModeIOS: true,
           // Back to normal playback mode after recording (prevents voice playback going through earpiece).
           allowsRecordingIOS: false,
@@ -3790,8 +3801,6 @@ export default function ChatScreen({ route, navigation }: Props) {
           playThroughEarpieceAndroid: false,
         });
       } catch {}
-      voiceStopInProgressRef.current = false;
-      resetVoiceGesture();
     }
   }, [voiceRecordMs, sendVoiceMessageFromLocal, resetVoiceGesture]);
 
@@ -3799,22 +3808,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (voiceCancelTriggeredRef.current) return;
     voiceCancelTriggeredRef.current = true;
 
-    // Open lid and "throw" to left
-    Animated.parallel([
-      Animated.timing(trashLid, { toValue: 1, duration: 120, useNativeDriver: true }),
-      Animated.timing(voiceDragX, { toValue: -120, duration: 140, useNativeDriver: true }),
-      Animated.sequence([
-        Animated.timing(trashFlash, { toValue: 1, duration: 90, useNativeDriver: true }),
-        Animated.timing(trashFlash, { toValue: 0, duration: 220, useNativeDriver: true }),
-      ]),
-    ]).start(() => {
-      Animated.timing(trashLid, { toValue: 0, duration: 180, useNativeDriver: true }).start();
-    });
-
-    try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch {}
+    try { void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch {}
     await stopVoiceRecording(true, false);
     showForwardToastBadge(false, t('chatDeleted', lang));
-  }, [trashLid, trashFlash, voiceDragX, stopVoiceRecording, showForwardToastBadge, lang]);
+  }, [stopVoiceRecording, showForwardToastBadge, lang]);
 
   const micPanResponder = React.useMemo(() => {
     return PanResponder.create({
@@ -3824,14 +3821,18 @@ export default function ChatScreen({ route, navigation }: Props) {
       onMoveShouldSetPanResponderCapture: (_evt, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: () => {
-        Animated.timing(micScale, { toValue: 0.92, duration: 90, useNativeDriver: true }).start();
+        voiceDragEnabledRef.current = true;
+        try {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        } catch {}
+        Animated.timing(micScale, { toValue: 0.9, duration: 40, useNativeDriver: true }).start();
         // snapshot start point (helps debug / stability)
         try {
           voiceStartXRef.current = 0;
           voiceStartYRef.current = 0;
         } catch {}
         // measure trash zone after it renders
-        setTimeout(() => updateTrashZone(), 0);
+        requestAnimationFrame(() => updateTrashZone());
         // IMPORTANT: show "Записывает..." to peer immediately on press-in.
         // This avoids a 3-5s delay on Android while permissions/audio mode/recorder are initializing.
         try {
@@ -3842,7 +3843,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         void startVoiceRecording();
       },
       onPanResponderMove: (_evt, gestureState) => {
-        if (!voiceIsRecording) return;
+        if (!voiceDragEnabledRef.current) return;
         const dx = Math.min(0, Math.max(-120, gestureState.dx));
         voiceDragX.setValue(dx);
         const inZone = isInTrashZone(Number(gestureState.moveX || 0), Number(gestureState.moveY || 0));
@@ -3858,8 +3859,8 @@ export default function ChatScreen({ route, navigation }: Props) {
         }
       },
       onPanResponderRelease: async (_evt, gestureState) => {
-        Animated.timing(micScale, { toValue: 1, duration: 90, useNativeDriver: true }).start();
-        if (!voiceIsRecording) {
+        Animated.timing(micScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
+        if (!voiceRecordingRef.current) {
           resetVoiceGesture();
           return;
         }
@@ -3872,8 +3873,8 @@ export default function ChatScreen({ route, navigation }: Props) {
         await stopVoiceRecording(false, false);
       },
       onPanResponderTerminate: async () => {
-        Animated.timing(micScale, { toValue: 1, duration: 90, useNativeDriver: true }).start();
-        if (voiceIsRecording) {
+        Animated.timing(micScale, { toValue: 1, duration: 44, useNativeDriver: true }).start();
+        if (voiceRecordingRef.current) {
           await stopVoiceRecording(true, false);
         }
         resetVoiceGesture();
@@ -4927,36 +4928,20 @@ export default function ChatScreen({ route, navigation }: Props) {
     setInputHeight(h);
   }, [inputHeight]);
 
+  // Только высота: индикатор «пишет…» вынесен в absolute-overlay ниже, чтобы ListHeaderComponent
+  // не пересоздавался каждые ~420ms (анимация точек) — иначе FlatList перелayout и тапы по отправке теряются.
   const androidListHeader = React.useMemo(() => {
     if (isEmpty) return null;
     return (
       <View
+        pointerEvents="box-none"
         style={{
           // Spacer so the last message doesn't hide under the input bar (and the keyboard on devices without resize).
           height: Math.max(inputHeight, estimatedInputHeight) + TYPING_GAP_H + keyboardLift,
         }}
-      >
-        {/* ВАЖНО: сам spacer живёт "под" инпутом (его цель — добавить padding),
-            поэтому текст нужно рисовать в верхней (видимой) части spacer-а. */}
-        {GapCenterIndicator ? (
-          <View
-            pointerEvents="none"
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              height: TYPING_GAP_H,
-              justifyContent: 'center',
-              alignItems: 'center',
-            }}
-          >
-            {GapCenterIndicator}
-          </View>
-        ) : null}
-      </View>
+      />
     );
-  }, [isEmpty, inputHeight, estimatedInputHeight, keyboardLift, GapCenterIndicator]);
+  }, [isEmpty, inputHeight, estimatedInputHeight, keyboardLift]);
 
   const renderMessageRow = React.useCallback(({ item }: any) => (
     <MessageItem
@@ -5045,6 +5030,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   {GapCenterIndicator}
                 </View>
               ) : null}
+              keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
               inverted={false}
               onScrollToIndexFailed={handleScrollToIndexFailed}
@@ -5193,21 +5179,29 @@ export default function ChatScreen({ route, navigation }: Props) {
               >
                 {/* Кнопка очистки убрана по требованию */}
                 {voiceIsRecording ? (
-                  <Animated.View
-                    ref={(r) => { trashMeasureRef.current = r as any; }}
-                    onLayout={() => updateTrashZone()}
-                    style={{
-                      padding: 2,
-                      marginRight: 12,
-                      transform: [
-                        { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
-                        { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
-                      ],
-                      opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
+                  <Pressable
+                    hitSlop={10}
+                    accessibilityRole="button"
+                    onPress={() => {
+                      void cancelVoiceRecordingWithAnimation();
                     }}
+                    style={{ marginRight: 12 }}
                   >
-                    <Ionicons name="trash-outline" size={28} color="#FF5A67" />
-                  </Animated.View>
+                    <Animated.View
+                      ref={(r) => { trashMeasureRef.current = r as any; }}
+                      onLayout={() => updateTrashZone()}
+                      style={{
+                        padding: 2,
+                        transform: [
+                          { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
+                          { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
+                        ],
+                        opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
+                      }}
+                    >
+                      <Ionicons name="trash-outline" size={28} color="#FF5A67" />
+                    </Animated.View>
+                  </Pressable>
                 ) : (
                   <TouchableOpacity
                     onPress={handleAttachments}
@@ -5220,7 +5214,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </TouchableOpacity>
                 )}
 
-                <View style={{ flex: 1, justifyContent: 'center' }}>
+                {/* minWidth:0 — иначе Android multiline TextInput раздувает hit-box и перекрывает микрофон/отправку */}
+                <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
                   <TextInput
                     style={{
                       flex: 1,
@@ -5272,15 +5267,22 @@ export default function ChatScreen({ route, navigation }: Props) {
 
                 <Animated.View
                   {...micPanResponder.panHandlers}
+                  collapsable={false}
                   style={{
-                    marginLeft: 6,
+                    marginLeft: 4,
+                    marginRight: 0,
                     transform: [{ scale: micScale }],
+                    backgroundColor: voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',
+                    borderRadius: 14,
+                    borderWidth: 1,
+                    borderColor: BORDER_COLOR,
+                    padding: 6,
                   }}
                 >
-                  <View pointerEvents="none" style={{ padding: 8 }}>
+                  <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
                     <Ionicons
                       name={voiceIsRecording ? 'mic' : 'mic-outline'}
-                      size={22}
+                      size={20}
                       color={voiceIsRecording ? '#FF5A67' : LIVI.titan}
                     />
                   </View>
@@ -5289,21 +5291,22 @@ export default function ChatScreen({ route, navigation }: Props) {
                 <TouchableOpacity
                   onPress={sendMessage}
                   style={{
-                    backgroundColor: messageText.trim()
-                      ? LIVI.titan
-                      : "rgba(255,255,255,0.2)",
+                    backgroundColor:
+                      messageText.trim() || voiceIsRecording
+                        ? LIVI.titan
+                        : "rgba(255,255,255,0.2)",
                     borderRadius: 14,
                     padding: 6,
-                    marginLeft: 6,
+                    marginLeft: 12,
                     borderWidth: 1,
                     borderColor: BORDER_COLOR,
                   }}
-                  disabled={!messageText.trim()}
+                  disabled={!messageText.trim() && !voiceIsRecording}
                 >
                   <Ionicons
                     name="send"
                     size={20}
-                    color={messageText.trim() ? LIVI.white : LIVI.titan}
+                    color={messageText.trim() || voiceIsRecording ? LIVI.white : LIVI.titan}
                   />
                 </TouchableOpacity>
               </View>
@@ -5384,9 +5387,31 @@ export default function ChatScreen({ route, navigation }: Props) {
                   right: 0,
                   bottom: keyboardLift + (inputHeight > 0 ? inputHeight : 96) + 8,
                   alignItems: 'center',
+                  zIndex: 8,
+                  elevation: 8,
                 }}
               >
                 {DeleteToastInline}
+              </View>
+            ) : null}
+
+            {!isEmpty && GapCenterIndicator ? (
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom:
+                    keyboardLift +
+                    Math.max(inputHeight > 0 ? inputHeight : estimatedInputHeight, 72) +
+                    4,
+                  alignItems: 'center',
+                  zIndex: 8,
+                  elevation: 8,
+                }}
+              >
+                {GapCenterIndicator}
               </View>
             ) : null}
 
@@ -5397,6 +5422,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                 left: 0,
                 right: 0,
                 bottom: keyboardLift,
+                zIndex: 20,
+                elevation: 20,
                 borderTopWidth: BORDER_WIDTH,
                 borderTopColor: BORDER_COLOR,
                 backgroundColor: INPUT_BAR_BG,
@@ -5485,21 +5512,29 @@ export default function ChatScreen({ route, navigation }: Props) {
                 }}
               >
                 {voiceIsRecording ? (
-                  <Animated.View
-                    ref={(r) => { trashMeasureRef.current = r as any; }}
-                    onLayout={() => updateTrashZone()}
-                    style={{
-                      padding: 2,
-                      marginRight: 12,
-                      transform: [
-                        { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
-                        { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
-                      ],
-                      opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
+                  <Pressable
+                    hitSlop={10}
+                    accessibilityRole="button"
+                    onPress={() => {
+                      void cancelVoiceRecordingWithAnimation();
                     }}
+                    style={{ marginRight: 12 }}
                   >
-                    <Ionicons name="trash-outline" size={28} color="#FF5A67" />
-                  </Animated.View>
+                    <Animated.View
+                      ref={(r) => { trashMeasureRef.current = r as any; }}
+                      onLayout={() => updateTrashZone()}
+                      style={{
+                        padding: 2,
+                        transform: [
+                          { scale: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
+                          { rotate: trashLid.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-14deg'] }) },
+                        ],
+                        opacity: trashFlash.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }),
+                      }}
+                    >
+                      <Ionicons name="trash-outline" size={28} color="#FF5A67" />
+                    </Animated.View>
+                  </Pressable>
                 ) : (
                   <TouchableOpacity
                     onPress={handleAttachments}
@@ -5512,7 +5547,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </TouchableOpacity>
                 )}
 
-                <View style={{ flex: 1, justifyContent: 'center' }}>
+                <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
                   <TextInput
                     style={{ flex: 1, color: voiceIsRecording ? 'transparent' : LIVI.white, fontSize: 16, maxHeight: 100 }}
                     placeholder={t('chatMessagePlaceholder', lang)}
@@ -5559,15 +5594,22 @@ export default function ChatScreen({ route, navigation }: Props) {
 
                 <Animated.View
                   {...micPanResponder.panHandlers}
+                  collapsable={false}
                   style={{
-                    marginLeft: 6,
+                    marginLeft: 4,
+                    marginRight: 0,
                     transform: [{ scale: micScale }],
+                    backgroundColor: voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',
+                    borderRadius: 14,
+                    borderWidth: 1,
+                    borderColor: BORDER_COLOR,
+                    padding: 6,
                   }}
                 >
-                  <View pointerEvents="none" style={{ padding: 8 }}>
+                  <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
                     <Ionicons
                       name={voiceIsRecording ? 'mic' : 'mic-outline'}
-                      size={22}
+                      size={20}
                       color={voiceIsRecording ? '#FF5A67' : LIVI.titan}
                     />
                   </View>
@@ -5576,19 +5618,20 @@ export default function ChatScreen({ route, navigation }: Props) {
                 <TouchableOpacity
                   onPress={sendMessage}
                   style={{
-                    backgroundColor: messageText.trim() ? LIVI.titan : 'rgba(255,255,255,0.2)',
+                    backgroundColor:
+                      messageText.trim() || voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',
                     borderRadius: 14,
                     padding: 6,
-                    marginLeft: 6,
+                    marginLeft: 12,
                     borderWidth: 1,
                     borderColor: BORDER_COLOR,
                   }}
-                  disabled={!messageText.trim()}
+                  disabled={!messageText.trim() && !voiceIsRecording}
                 >
                   <Ionicons
                     name="send"
                     size={20}
-                    color={messageText.trim() ? LIVI.white : LIVI.titan}
+                    color={messageText.trim() || voiceIsRecording ? LIVI.white : LIVI.titan}
                   />
                 </TouchableOpacity>
               </View>
