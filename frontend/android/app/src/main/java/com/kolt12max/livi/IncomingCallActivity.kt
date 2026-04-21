@@ -19,6 +19,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.os.VibrationAttributes
+import android.content.res.Configuration
 import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.TextView
@@ -37,6 +38,18 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(FontScaleContextHelper.wrap(newBase))
+    }
+
+    override fun applyOverrideConfiguration(overrideConfiguration: Configuration?) {
+        if (overrideConfiguration != null) {
+            super.applyOverrideConfiguration(FontScaleContextHelper.copyPatched(overrideConfiguration))
+        } else {
+            super.applyOverrideConfiguration(null)
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(FontScaleContextHelper.copyPatched(newConfig))
     }
 
     private var currentCallId: String = ""

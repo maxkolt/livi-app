@@ -6,7 +6,7 @@ import './utils/pushNotifications';
 
 import { Alert, AppRegistry, Platform, Text, TextInput } from 'react-native';
 
-// Не следовать системной настройке «Размер шрифта» (Android/iOS). Масштаб экрана системы на dp всё равно влияет.
+// Не следовать системной настройке «Размер шрифта» (iOS/Android JS). На Android плотность dp и fontScale дополнительно фиксируются в MainApplication/MainActivity (FontScaleContextHelper).
 const noFontScaling = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
 (Text as any).defaultProps = { ...(Text as any).defaultProps, ...noFontScaling };
 (TextInput as any).defaultProps = { ...(TextInput as any).defaultProps, ...noFontScaling };

@@ -80,7 +80,8 @@ class MainApplication : Application(), ReactApplication {
   }
 
   override fun onConfigurationChanged(newConfig: Configuration) {
-    super.onConfigurationChanged(newConfig)
-    ApplicationLifecycleDispatcher.onConfigurationChanged(this, newConfig)
+    val patched = FontScaleContextHelper.copyPatched(newConfig)
+    super.onConfigurationChanged(patched)
+    ApplicationLifecycleDispatcher.onConfigurationChanged(this, patched)
   }
 }

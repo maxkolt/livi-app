@@ -1,9 +1,9 @@
 /**
  * Set up `adb reverse` for a local Metro/Expo server.
  *
- * - Prefers an authorized USB device (serial without ':').
- * - If ANDROID_SERIAL is set, uses it.
- * - Prints a clear message if the USB device is unauthorized.
+ * - If ANDROID_SERIAL is set, uses that device only.
+ * - Otherwise runs `adb reverse` on every authorized USB device (serial without ':').
+ * - Warns if some devices are still `unauthorized` (unlock phone → Allow USB debugging).
  *
  * Usage:
  *   node ./scripts/adb-reverse-usb.js 8081
@@ -71,9 +71,16 @@ function main() {
   const usbUnauthorized = devices.filter((d) => d.state === "unauthorized" && !isTcpSerial(d.serial));
 
   if (usbAuthorized.length) {
-    const chosen = usbAuthorized[0];
-    runAdb(["-s", chosen.serial, "reverse", `tcp:${port}`, `tcp:${port}`]);
-    console.log(`adb reverse set for ${chosen.serial} tcp:${port} -> tcp:${port}`);
+    for (const { serial } of usbAuthorized) {
+      runAdb(["-s", serial, "reverse", `tcp:${port}`, `tcp:${port}`]);
+      console.log(`adb reverse set for ${serial} tcp:${port} -> tcp:${port}`);
+    }
+    if (usbUnauthorized.length) {
+      console.warn(
+        "Some USB device(s) are still unauthorized (no reverse until you allow debugging):\n" +
+          usbUnauthorized.map((u) => `  - ${u.serial}`).join("\n")
+      );
+    }
     return;
   }
 

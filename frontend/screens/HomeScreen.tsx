@@ -599,7 +599,13 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
                 paddingHorizontal: 32,
               }}
             >
-              <Text style={[styles.buttonLabel, { color: isDark ? LIVI.text : LIVI.textThemeWhite, textAlign: 'center' }]}>{label}</Text>
+              <Text
+                style={[styles.buttonLabel, { color: isDark ? LIVI.text : LIVI.textThemeWhite, textAlign: 'center' }]}
+                allowFontScaling={false}
+                maxFontSizeMultiplier={1}
+              >
+                {label}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1438,105 +1444,168 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       logger.info('[outgoing] displayOutgoingCallImmediate returned', { friendId });
 
       logger.info('[outgoing] calling startCall', { friendId });
-      const r: any = await startCall(friend.id);
+
+      // Подписки ДО await startCall: иначе call:declined может прийти раньше регистрации → calling остаётся true → кнопки видео глобально disabled.
+      const socketUnsubs: Array<() => void> = [];
+      let outgoingFinished = false;
+      let safeguardTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const removeAllSocketSubs = () => {
+        for (const u of socketUnsubs) {
+          try {
+            u();
+          } catch {}
+        }
+        socketUnsubs.length = 0;
+        if (safeguardTimer != null) {
+          clearTimeout(safeguardTimer);
+          safeguardTimer = null;
+        }
+      };
+
+      const finishOutgoing = (body: () => void) => {
+        if (outgoingFinished) return;
+        outgoingFinished = true;
+        removeAllSocketSubs();
+        body();
+      };
+
+      const sub = (off: (() => void) | undefined) => {
+        if (off) socketUnsubs.push(off);
+      };
+
+      sub(
+        onCallAccepted?.(({ callId }) => {
+          finishOutgoing(() => {
+            logger.debug('Call accepted', { callId });
+            if (callId) try { reportEndCallToCallKeep(callId); } catch {}
+            try { setOutgoingCallScreenVisible(false); } catch {}
+            try {
+              const friendIdStr = String(friend.id);
+              if (Platform.OS === 'android') {
+                try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(friendIdStr); } catch (_) {}
+              }
+              setMissedByUser((prev) => {
+                const next = { ...prev };
+                if (next[friendIdStr] !== undefined) {
+                  delete next[friendIdStr];
+                }
+                AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(() => {});
+                logger.debug('[HomeScreen] Reset missed calls for accepted call (removed key)', { friendId: friendIdStr });
+                return next;
+              });
+            } catch (e) {
+              logger.warn('[HomeScreen] Error resetting missed calls for accepted call:', e);
+            }
+            callingVisibleRef.current = false;
+            setCalling({ visible: false, friend: null, callId: null });
+            stopWaves();
+          });
+        }),
+      );
+
+      sub(
+        onCallDeclined?.(() => {
+          finishOutgoing(() => {
+            logger.info('[decline/инициатор] HomeScreen offDeclined: setCalling(false), stopWaves, showNotice');
+            callingVisibleRef.current = false;
+            setCalling({ visible: false, friend: null, callId: null });
+            stopWaves();
+            showNotice(t('callDeclined', lang), 'error', 3000);
+          });
+        }),
+      );
+
+      sub(
+        onCallTimeout?.(() => {
+          finishOutgoing(() => {
+            try { setOutgoingCallScreenVisible(false); } catch {}
+            try { closeOutgoingCallActivity(); } catch {}
+            callingVisibleRef.current = false;
+            setCalling({ visible: false, friend: null, callId: null });
+            stopWaves();
+          });
+        }),
+      );
+
+      sub(
+        onCallRoomFull?.(() => {
+          finishOutgoing(() => {
+            callingVisibleRef.current = false;
+            setCalling({ visible: false, friend: null, callId: null });
+            stopWaves();
+            setRoomFull({ visible: true, name: friend.name || '' });
+            setTimeout(() => setRoomFull({ visible: false, name: '' }), 2000);
+          });
+        }),
+      );
+
+      sub(
+        onCallCanceled?.(() => {
+          finishOutgoing(() => {
+            try { setOutgoingCallScreenVisible(false); } catch {}
+            try { closeOutgoingCallActivity(); } catch {}
+            callingVisibleRef.current = false;
+            setCalling({ visible: false, friend: null, callId: null });
+            stopWaves();
+          });
+        }),
+      );
+
+      let r: any;
+      try {
+        r = await startCall(friend.id);
+      } catch (startErr) {
+        if (!outgoingFinished) {
+          outgoingFinished = true;
+          removeAllSocketSubs();
+        }
+        throw startErr;
+      }
+
       logger.info('[outgoing] startCall result', { ok: r?.ok, callId: r?.callId, error: r?.error });
-      if (!r?.ok) throw new Error(r?.error || 'call_failed');
+      if (!r?.ok) {
+        if (!outgoingFinished) {
+          outgoingFinished = true;
+          removeAllSocketSubs();
+        }
+        throw new Error(r?.error || 'call_failed');
+      }
+
+      // Отклонение/таймаут пришли по сокету до ack startCall — UI уже сброшен; синхронизируем сервер.
+      if (outgoingFinished) {
+        if (r.callId) {
+          try { cancelCall(r.callId); } catch {}
+        }
+        logger.info('[outgoing] startCall ack after outgoing already finished (socket race)');
+        return;
+      }
+
       setCalling((c) => ({ ...c, callId: r.callId || null }));
 
-      // Передаём callId уже открытому нативному экрану (запускает звук и таймаут 20с)
       if (r.callId) {
         logger.info('[outgoing] notifying native with callId', { callId: r.callId });
         notifyOutgoingCallId(r.callId);
       }
 
-      // Если пользователь успел нажать «Отменить» (в приложении или X на нативном экране) до прихода callId — отменяем на сервере
       const canceledByNative = (global as any).__outgoingCanceledByNativeRef?.current === true;
       if ((pendingCancelRef.current || canceledByNative) && r.callId) {
         if (canceledByNative) (global as any).__outgoingCanceledByNativeRef.current = false;
         try { cancelCall(r.callId); } catch {}
         pendingCancelRef.current = false;
-        try { setOutgoingCallScreenVisible(false); } catch {}
-        try { closeOutgoingCallActivity(); } catch {}
-        callingVisibleRef.current = false;
-        setCalling({ visible: false, friend: null, callId: null });
-        stopWaves();
+        finishOutgoing(() => {
+          try { setOutgoingCallScreenVisible(false); } catch {}
+          try { closeOutgoingCallActivity(); } catch {}
+          callingVisibleRef.current = false;
+          setCalling({ visible: false, friend: null, callId: null });
+          stopWaves();
+        });
         return;
       }
 
-      let cleaned = false;
-      const offAccepted = onCallAccepted?.(({ callId }) => {
-        if (cleaned) return; cleaned = true;
-        logger.debug('Call accepted', { callId });
-        if (callId) try { reportEndCallToCallKeep(callId); } catch {}
-        try { setOutgoingCallScreenVisible(false); } catch {}
-        // Закрытие нативного экрана исходящего — только в App.tsx (onCallAccepted), чтобы не закрывать дважды
-        // Приняли прямой звонок — сбрасываем бейдж пропущенных для этого друга
-        // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) и УДАЛЯЕМ ключ вместо установки в 0
-        try {
-          const friendIdStr = String(friend.id);
-          if (Platform.OS === 'android') {
-            try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(friendIdStr); } catch (_) {}
-          }
-          setMissedByUser((prev) => {
-            const next = { ...prev };
-            // Удаляем ключ вместо установки в 0, чтобы не было нулевых значений в объекте
-            if (next[friendIdStr] !== undefined) {
-              delete next[friendIdStr];
-            }
-            // Сохраняем очищенный объект (без нулевых значений)
-            AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(next)).catch(() => {});
-            logger.debug('[HomeScreen] Reset missed calls for accepted call (removed key)', { friendId: friendIdStr });
-            return next;
-          });
-        } catch (e) {
-          logger.warn('[HomeScreen] Error resetting missed calls for accepted call:', e);
-        }
-        callingVisibleRef.current = false;
-        setCalling({ visible: false, friend: null, callId: null });
-        stopWaves();
-        // Навигация на VideoCall — единая точка входа в App.tsx (onCallAccepted)
-      });
-      const offDeclined = onCallDeclined?.(() => {
-        if (cleaned) return; cleaned = true;
-        logger.info('[decline/инициатор] HomeScreen offDeclined: setCalling(false), stopWaves, showNotice');
-        // Закрытие нативного окна исходящего — только в App.tsx (onCallDeclined), чтобы не было двойного мерцания
-        callingVisibleRef.current = false;
-        setCalling({ visible: false, friend: null, callId: null });
-        stopWaves();
-        showNotice(t('callDeclined', lang), 'error', 3000);
-      });
-      const offTimeout = onCallTimeout?.(() => {
-        if (cleaned) return; cleaned = true;
-        try { setOutgoingCallScreenVisible(false); } catch {}
-        try { closeOutgoingCallActivity(); } catch {}
-        // Таймаут: у инициатора счётчик не увеличиваем; бейдж «Вызов отменен» покажет App при переходе на Home с callCancelled
-        callingVisibleRef.current = false;
-        setCalling({ visible: false, friend: null, callId: null });
-        stopWaves();
-      });
-      const offRoomFull = onCallRoomFull?.(() => {
-        if (cleaned) return; cleaned = true;
-        callingVisibleRef.current = false;
-        setCalling({ visible: false, friend: null, callId: null });
-        stopWaves();
-        setRoomFull({ visible: true, name: friend.name || '' });
-        setTimeout(() => setRoomFull({ visible: false, name: '' }), 2000);
-      });
-      const offCancel = onCallCanceled?.(() => {
-        if (cleaned) return; cleaned = true;
-        try { setOutgoingCallScreenVisible(false); } catch {}
-        try { closeOutgoingCallActivity(); } catch {}
-        callingVisibleRef.current = false;
-        setCalling({ visible: false, friend: null, callId: null });
-        stopWaves();
-        // Бейдж «Вызов отменен» покажет App при переходе на Home с callCancelled
-      });
-
-      // Таймаут на клиенте (единый с нативом OUTGOING_CALL_TIMEOUT_MS) как safeguard
       const callIdForTimeout = r.callId;
-      setTimeout(() => {
-        if (!cleaned) {
-          cleaned = true;
+      safeguardTimer = setTimeout(() => {
+        finishOutgoing(() => {
           try { setOutgoingCallScreenVisible(false); } catch {}
           try { closeOutgoingCallActivity(); } catch {}
           if (callIdForTimeout) try { reportEndCallToCallKeep(callIdForTimeout); } catch {}
@@ -1544,11 +1613,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           setCalling({ visible: false, friend: null, callId: null });
           stopWaves();
           showNotice(t('noAnswer', lang), 'error', 3000);
-        }
+        });
       }, OUTGOING_CALL_TIMEOUT_MS);
-
-      // Очистка будет при срабатывании одного из событий или таймаута
-      return () => { offAccepted?.(); offDeclined?.(); offTimeout?.(); offRoomFull?.(); offCancel?.(); };
     } catch (e: any) {
       logger.warn('[outgoing] handleStartVideoCall failed', { error: e?.message ?? String(e) });
       try { setOutgoingCallScreenVisible(false); } catch {}

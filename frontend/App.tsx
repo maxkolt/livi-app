@@ -37,7 +37,7 @@ import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystem
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
-// Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale — в MainActivity/MainApplication.
+// Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
 const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
 (Text as any).defaultProps = { ...(Text as any).defaultProps, ...__noAccessibilityFontScale };
 (TextInput as any).defaultProps = { ...(TextInput as any).defaultProps, ...__noAccessibilityFontScale };

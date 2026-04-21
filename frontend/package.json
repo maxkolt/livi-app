@@ -18,6 +18,7 @@
     "android:build-install-device": "cd android && NODE_ENV=development ./gradlew assembleDebug -q && cd .. && node ./scripts/install-apk-one-device.js",
     "android:install-device": "node ./scripts/install-apk-one-device.js",
     "android:install-all": "cd android && NODE_ENV=development ./gradlew assembleDebug -q && cd .. && node ./scripts/install-apk-all-devices.js",
+    "android:reverse-all": "node ./scripts/adb-reverse-usb.js 8081",
     "android:build-aab": "cd android && rm -f app/build/outputs/bundle/release/app-release.aab && NODE_ENV=production ./gradlew clean bundleRelease && cd .. && echo '\n✅ AAB собран: android/app/build/outputs/bundle/release/app-release.aab\n📤 Загрузи его в Google Play Console → Production → Создать выпуск → Добавить из библиотеки → Вывести на production (100%).\n📱 Обновление придёт пользователям через Play Store автоматически.'",
     "app:set-version": "node ./scripts/set-latest-app-version.js",
     "android:dev": "NODE_ENV=development LIVI_APP_VARIANT=dev expo run:android",

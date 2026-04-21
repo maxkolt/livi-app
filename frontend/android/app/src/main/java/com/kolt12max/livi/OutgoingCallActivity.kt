@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -24,6 +25,18 @@ class OutgoingCallActivity : AppCompatActivity() {
 
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(FontScaleContextHelper.wrap(newBase))
+    }
+
+    override fun applyOverrideConfiguration(overrideConfiguration: Configuration?) {
+        if (overrideConfiguration != null) {
+            super.applyOverrideConfiguration(FontScaleContextHelper.copyPatched(overrideConfiguration))
+        } else {
+            super.applyOverrideConfiguration(null)
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(FontScaleContextHelper.copyPatched(newConfig))
     }
 
     private var closeReceiver: BroadcastReceiver? = null

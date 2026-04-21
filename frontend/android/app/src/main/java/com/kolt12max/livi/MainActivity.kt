@@ -29,6 +29,18 @@ class MainActivity : ReactActivity() {
     super.attachBaseContext(FontScaleContextHelper.wrap(newBase))
   }
 
+  override fun applyOverrideConfiguration(overrideConfiguration: Configuration?) {
+    if (overrideConfiguration != null) {
+      super.applyOverrideConfiguration(FontScaleContextHelper.copyPatched(overrideConfiguration))
+    } else {
+      super.applyOverrideConfiguration(null)
+    }
+  }
+
+  override fun onConfigurationChanged(newConfig: Configuration) {
+    super.onConfigurationChanged(FontScaleContextHelper.copyPatched(newConfig))
+  }
+
   // Выход из системного PiP: «развернуть» (стрелки) даёт onResume, «закрыть X» — нет. Ставим таймер (pipExitDecideMs):
   // если за это время придёт onResume — шлём SystemPiPExpanded (JS открывает экран звонка), иначе EndCallFromPiP.
   // expandedEmittedForPipExit нужен, чтобы таймер не слал EndCallFromPiP, если мы уже отправили expand.
