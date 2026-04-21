@@ -386,6 +386,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const BORDER_WIDTH = 1;
 
   const peerId = String(route?.params?.peerId || "");
+  const peerIdForPersistRef = useRef(peerId);
+  peerIdForPersistRef.current = peerId;
   const peerNameParam = route?.params?.peerName || "—";
   const peerAvatarVer = route?.params?.peerAvatarVer || 0;
   const peerAvatarThumbB64Param = route?.params?.peerAvatarThumbB64 || '';
@@ -429,6 +431,11 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
+  /** Always points at latest `messages` for background/unmount persistence (avoid stale closures). */
+  const latestMessagesForPersistRef = useRef(messages);
+  latestMessagesForPersistRef.current = messages;
+  /** Для каких id уже слали `message:read` — без этого при каждом своём сообщении шли read по всей истории peer и забивали сокет. */
+  const readReceiptSentIdsRef = useRef<Set<string>>(new Set());
   // Чтобы не показывать "пустую заглушку" до загрузки истории (иначе она мелькает на входе в чат)
   const [historyReady, setHistoryReady] = useState(false);
   // Кастомное подтверждение удаления сообщения (вместо системного Alert)
@@ -590,6 +597,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     });
   };
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const currentUserIdForPersistRef = useRef<string | null>(null);
+  currentUserIdForPersistRef.current = currentUserId;
 
   // Refs для автоскролла
   const flatListRef = useRef<FlatList>(null);
@@ -1104,15 +1113,64 @@ export default function ChatScreen({ route, navigation }: Props) {
     return `chat_statuses_${sortedIds[0]}_${sortedIds[1]}`;
   };
 
-  const saveMessages = async (messages: any[]) => {
+  /**
+   * Одна очередь на запись чата в AsyncStorage: параллельные setItem давали multi-second spikes (см. логи setItemMs).
+   * Снимок всегда из ref в момент выполнения — быстрые пачки обновлений схлопываются в одну запись.
+   */
+  const persistWriteTailRef = useRef<Promise<void>>(Promise.resolve());
+
+  const flushMessagesPersist = React.useCallback(async (_reason: string) => {
+    const uid = String(currentUserIdForPersistRef.current || '').trim();
+    const pid = String(peerIdForPersistRef.current || '').trim();
+    const msgs = latestMessagesForPersistRef.current;
+    if (!uid || !pid || !Array.isArray(msgs)) return;
+    const sortedIds = [uid, pid].sort();
+    const key = `chat_messages_${sortedIds[0]}_${sortedIds[1]}`;
     try {
-      if (!currentUserId || !peerId) return;
-      const key = getMessagesKey(currentUserId, peerId);
-      await AsyncStorage.setItem(key, JSON.stringify(messages));
+      await AsyncStorage.setItem(key, JSON.stringify(msgs));
     } catch (error) {
       console.warn('💾 Failed to save messages to AsyncStorage:', error);
     }
-  };
+  }, []);
+
+  const enqueueMessagesPersist = React.useCallback((reason: string) => {
+    persistWriteTailRef.current = persistWriteTailRef.current
+      .then(() => flushMessagesPersist(reason))
+      .catch(() => {});
+  }, [flushMessagesPersist]);
+
+  const persistDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistDebounceGenRef = useRef(0);
+
+  // Debounced persist: keeps UI responsive during rapid send/receive (no JSON.stringify in setState updaters).
+  useEffect(() => {
+    if (!currentUserId || !peerId) return;
+    // Avoid writing previous chat's messages under the new peer's storage key while history reloads.
+    if (!historyReady) return;
+    persistDebounceGenRef.current += 1;
+    const gen = persistDebounceGenRef.current;
+    if (persistDebounceTimerRef.current) {
+      clearTimeout(persistDebounceTimerRef.current);
+      persistDebounceTimerRef.current = null;
+    }
+    persistDebounceTimerRef.current = setTimeout(() => {
+      persistDebounceTimerRef.current = null;
+      if (gen !== persistDebounceGenRef.current) return;
+      enqueueMessagesPersist('debounced_effect');
+    }, 400);
+    return () => {
+      if (persistDebounceTimerRef.current) {
+        clearTimeout(persistDebounceTimerRef.current);
+        persistDebounceTimerRef.current = null;
+      }
+    };
+  }, [messages, currentUserId, peerId, enqueueMessagesPersist, historyReady]);
+
+  useEffect(() => {
+    return () => {
+      enqueueMessagesPersist('unmount_flush');
+    };
+  }, [enqueueMessagesPersist]);
 
   const saveStatuses = async (statuses: Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>) => {
     try {
@@ -1245,7 +1303,6 @@ export default function ChatScreen({ route, navigation }: Props) {
           }
           
           const updated = [...prev, newMessage];
-          saveMessages(updated);
           return updated;
         });
 
@@ -1322,7 +1379,6 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (!mid) return;
       setMessages((prev) => {
         const updated = prev.filter((msg) => String(msg?.id || '') !== mid);
-        void saveMessages(updated);
         return updated;
       });
       // cleanup local maps (prevents stale statuses for deleted ids)
@@ -1358,7 +1414,6 @@ export default function ChatScreen({ route, navigation }: Props) {
         const updated = prev.map((msg) =>
           String(msg?.id || '') === mid ? { ...msg, text } : msg
         );
-        void saveMessages(updated);
         return updated;
       });
     });
@@ -1383,7 +1438,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   useEffect(() => {
     messagesLenRef.current = messages.length;
     messagesRef.current = messages;
-  }, [messages.length]);
+  }, [messages]);
   const quietSyncChat = React.useCallback(async () => {
     try {
       if (!currentUserId || !peerId) return;
@@ -1456,20 +1511,34 @@ export default function ChatScreen({ route, navigation }: Props) {
           const tb = +new Date(b?.timestamp || 0);
           return ta - tb;
         });
-        void saveMessages(merged);
         return merged;
       });
     } catch {}
     finally {
       quietSyncInFlightRef.current = false;
     }
-  }, [currentUserId, peerId, uploadStatus, saveMessages]);
+  }, [currentUserId, peerId, uploadStatus]);
 
+  const lastAppStatePersistAtRef = useRef(0);
   useEffect(() => {
     const appStateRef = { current: AppState.currentState };
     const sub = AppState.addEventListener('change', (state) => {
-      const wasBg = /inactive|background/.test(String(appStateRef.current || ''));
+      const prev = appStateRef.current;
+      const wasBg = /inactive|background/.test(String(prev || ''));
       appStateRef.current = state;
+      if (state === 'background' || state === 'inactive') {
+        const now = Date.now();
+        // Android часто шлёт inactive + background подряд — двойной setItem конкурировал с debounce и давал multi-second блокировки.
+        if (now - lastAppStatePersistAtRef.current < 900) return;
+        lastAppStatePersistAtRef.current = now;
+        if (
+          currentUserIdForPersistRef.current &&
+          peerIdForPersistRef.current &&
+          Array.isArray(latestMessagesForPersistRef.current)
+        ) {
+          enqueueMessagesPersist('appstate_background');
+        }
+      }
       if (wasBg && state === 'active') {
         void quietSyncChat();
       }
@@ -1477,7 +1546,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     return () => {
       try { sub.remove(); } catch {}
     };
-  }, [quietSyncChat]);
+  }, [quietSyncChat, enqueueMessagesPersist]);
 
   useEffect(() => {
     const unsub = navigation?.addListener?.('focus', () => {
@@ -1487,13 +1556,23 @@ export default function ChatScreen({ route, navigation }: Props) {
     return () => { try { unsub?.(); } catch {} };
   }, [navigation, quietSyncChat]);
 
-  // Отправляем read receipt для всех сообщений peer при открытии чата
   useEffect(() => {
-    if (messages.length && peerId && currentUserId) {
-      const peerMessages = messages.filter(m => m.sender === "peer");
-      peerMessages.forEach(m => {
-        sendReadReceipt(m.id, peerId);
-      });
+    readReceiptSentIdsRef.current = new Set();
+  }, [peerId, currentUserId]);
+
+  // Read receipt только для новых входящих id (не при каждом изменении списка — иначе O(N) emit'ов на каждую свою отправку).
+  useEffect(() => {
+    if (!peerId || !currentUserId) return;
+    if (!messages.length) {
+      readReceiptSentIdsRef.current.clear();
+      return;
+    }
+    for (const m of messages) {
+      if (m?.sender !== 'peer') continue;
+      const id = String(m?.id || '').trim();
+      if (!id || readReceiptSentIdsRef.current.has(id)) continue;
+      readReceiptSentIdsRef.current.add(id);
+      sendReadReceipt(id, peerId);
     }
   }, [messages, peerId, currentUserId]);
 
@@ -1523,10 +1602,18 @@ export default function ChatScreen({ route, navigation }: Props) {
     }, [peerId, navigation]),
   );
 
+  /** Очищаем ленту только при смене peerId (не при первом появлении currentUserId для того же чата — меньше лишних миганий). */
+  const prevPeerIdForHistoryRef = useRef<string | null>(null);
+
   // Загрузка истории при открытии чата
   useEffect(() => {
     if (!currentUserId || !peerId) return;
-    
+    const prevPeer = prevPeerIdForHistoryRef.current;
+    if (prevPeer !== peerId) {
+      prevPeerIdForHistoryRef.current = peerId;
+      setMessages([]);
+    }
+
     const loadHistory = async () => {
       try {
         // На входе в чат не показываем "пусто", пока не загрузили историю
@@ -1840,7 +1927,6 @@ export default function ChatScreen({ route, navigation }: Props) {
                 ? { ...msg, id: newId, uri: resolveMediaUri(remoteUrl), from: currentUserId, to: peerId }
                 : msg
             );
-            saveMessages(updated);
             return updated;
           });
 
@@ -1902,7 +1988,6 @@ export default function ChatScreen({ route, navigation }: Props) {
                 ? { ...msg, id: newId, uri: resolveMediaUri(remoteUrl), from: currentUserId, to: peerId }
                 : msg
             );
-            saveMessages(updated);
             return updated;
           });
 
@@ -1940,7 +2025,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         }
       } catch {}
     }
-  }, [currentUserId, peerId, resolveMediaUri, updateReadStatuses, saveMessages]);
+  }, [currentUserId, peerId, resolveMediaUri, updateReadStatuses]);
 
   const [playingAudioState, setPlayingAudioState] = useState<{
     id: string;
@@ -2266,7 +2351,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (!isServerId) {
       setMessages((prev) => {
         const updated = prev.filter((msg) => String(msg?.id || '') !== mid);
-        void saveMessages(updated);
         return updated;
       });
       // cleanup local status maps
@@ -2288,7 +2372,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (success) {
       setMessages((prev) => {
         const updated = prev.filter((msg) => String(msg?.id || '') !== mid);
-        void saveMessages(updated);
         return updated;
       });
       // cleanup status maps (server will also emit message:deleted, but keep local maps tidy)
@@ -2869,7 +2952,6 @@ export default function ChatScreen({ route, navigation }: Props) {
           next.push(mm);
         }
       }
-      void saveMessages(next);
       return next;
     });
 
@@ -2925,7 +3007,6 @@ export default function ChatScreen({ route, navigation }: Props) {
         const tb = +new Date(b?.timestamp || 0);
         return ta - tb;
       });
-      void saveMessages(merged);
       return merged;
     });
 
@@ -2943,7 +3024,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     showNotice,
     lang,
     deleteMessage,
-    saveMessages,
     updateReadStatuses,
     setUploadStatus,
   ]);
@@ -3295,7 +3375,6 @@ export default function ChatScreen({ route, navigation }: Props) {
           const updated = prev.map((m) =>
             m.id === editingMessageId ? { ...m, text: newText } : m
           );
-          saveMessages(updated);
           return updated;
         });
       } else {
@@ -3333,7 +3412,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     
     setMessages((prev) => {
       const updatedMessages = [...prev, newMessage];
-      saveMessages(updatedMessages);
       return updatedMessages;
     });
     
@@ -3377,7 +3455,6 @@ export default function ChatScreen({ route, navigation }: Props) {
                     ? { ...msg, id: result.messageId!, from: currentUserId, to: peerId }
                     : msg
                 );
-                saveMessages(updated);
                 return updated;
               });
               
@@ -3546,7 +3623,6 @@ export default function ChatScreen({ route, navigation }: Props) {
               ? { ...msg, id: socketResult.messageId!, uri: resolveMediaUri(uploadResult.url), from: currentUserId, to: peerId }
               : msg
           );
-          saveMessages(updated);
           return updated;
         });
 
@@ -3577,7 +3653,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     } finally {
       setVoiceRecordMs(0);
     }
-  }, [currentUserId, peerId, resolveMediaUri, updateReadStatuses, saveMessages]);
+  }, [currentUserId, peerId, resolveMediaUri, updateReadStatuses]);
 
   const startVoiceRecording = React.useCallback(async () => {
     try {
@@ -3859,7 +3935,6 @@ export default function ChatScreen({ route, navigation }: Props) {
           const updated = prev.map((msg) =>
             msg.id === messageId ? { ...msg, id: socketResult.messageId!, uri: resolveMediaUri(uploadResult.url), from: currentUserId, to: peerId } : msg
           );
-          saveMessages(updated);
           return updated;
         });
 
@@ -3887,7 +3962,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
       setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
     }
-  }, [currentUserId, peerId, updateReadStatuses, saveMessages, resolveMediaUri]);
+  }, [currentUserId, peerId, updateReadStatuses, resolveMediaUri]);
 
   const openComposeViewer = React.useCallback((asset: any) => {
     setComposeAsset(asset);
