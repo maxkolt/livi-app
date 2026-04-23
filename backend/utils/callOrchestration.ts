@@ -44,7 +44,6 @@ export const callFeatureFlags = {
 };
 
 const terminalStates: ReadonlySet<CallLifecycleState> = new Set([
-  'accepted',
   'declined',
   'canceled',
   'timeout',
@@ -194,6 +193,7 @@ export function transitionCall(
   if (snapshot.processedActions.has(actionKey)) return false;
   snapshot.processedActions.add(actionKey);
   if (terminalStates.has(snapshot.state)) return false;
+  if (snapshot.state === 'accepted' && nextState !== 'ended') return false;
 
   snapshot.state = nextState;
   if (nextState === 'accepted' || nextState === 'declined' || nextState === 'canceled' || nextState === 'timeout') {

@@ -990,6 +990,7 @@ function replayIncomingToCalleeIfRinging(sock: AuthedSocket, userId: string) {
   try {
     const uid = normalizeMongoObjectId(String(userId || ''));
     if (!isOid(uid)) return;
+    if (activeRoomByUserId.has(uid)) return;
     const entry = callOfUser.get(uid);
     if (!entry) return;
     const link = callsById.get(entry.callId);
@@ -2474,7 +2475,9 @@ io.on('connection', async (sock: AuthedSocket) => {
         const tNick = callDeliveryById.get(callId);
         if (tNick) tNick.callerNick = fromNick ?? '';
 
-        // Всегда шлём в комнату u:peerId (получатель получает после reauth); при наличии сокета — дублируем напрямую
+        // Шлём либо напрямую в уже связанные сокеты пользователя, либо в user-room fallback.
+        // Одновременная отправка обоими путями давала дубль одного и того же call:incoming.
+        const room = io.sockets.adapter.rooms.get(`u:${peerId}`);
         const recipientSockets = Array.from(io.sockets.sockets.values()).filter(
           (s) => normalizeMongoObjectId(String((s as any)?.data?.userId || '')) === peerId
         );
@@ -2484,11 +2487,12 @@ io.on('connection', async (sock: AuthedSocket) => {
             (recipientSocket as any).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
           } catch {}
         }
-        const room = io.sockets.adapter.rooms.get(`u:${peerId}`);
         const roomSize = room ? room.size : 0;
         logger.info('[call:initiate] emitting call:incoming to recipient', { peerId, callId, recipientSocketsCount: recipientSockets.length, roomUSize: roomSize });
-        io.to(`u:${peerId}`).emit('call:incoming', { callId, from: me, fromNick });
-        io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
+        if (recipientSockets.length === 0 && roomSize > 0) {
+          io.to(`u:${peerId}`).emit('call:incoming', { callId, from: me, fromNick });
+          io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
+        }
       } catch {}
 
       // КРИТИЧНО: пуш всегда отправляем в отдельном шаге, чтобы исключение в блоке с Mongo/сокетами не пропустило доставку в глубоком сне
@@ -2599,6 +2603,14 @@ io.on('connection', async (sock: AuthedSocket) => {
       source: 'socket_accept',
     });
     if (!shouldProcess) return;
+    if (link.timer) {
+      try { clearTimeout(link.timer); } catch {}
+      link.timer = undefined;
+    }
+    if (link.retryPushTimer) {
+      try { clearTimeout(link.retryPushTimer); } catch {}
+      link.retryPushTimer = undefined;
+    }
     
     {
       // КРИТИЧНО: Используем user IDs для имени комнаты, чтобы совпадало с LiveKit
@@ -2702,6 +2714,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         logger.warn('[call:accept] Not sending call:accepted — token creation failed', { callId: id });
         try { callIdToRoomId.delete(id); } catch {}
         try { activeRoomByUserId.delete(link.a); } catch {}
+        try { activeRoomByUserId.delete(link.b); } catch {}
         if (aSock) {
           try { aSock.leave(roomId); } catch {}
           try { activeCallBySocket.delete(aSock.id); } catch {}
@@ -2778,9 +2791,11 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       }
       
-      // Всегда сохраняем pending room для инициатора (для reauth и для call:getAccepted, когда инициатор на нативном экране и событие по сокету не обработалось)
+      // Сохраняем pending room для обоих участников, чтобы reconnect/reauth могли
+      // восстановить call:accepted и подключение к LiveKit без повторного входящего.
       try {
         activeRoomByUserId.set(link.a, { callId: id, roomId, livekitRoomName, peerUserId: link.b });
+        activeRoomByUserId.set(link.b, { callId: id, roomId, livekitRoomName, peerUserId: link.a });
         if (!aSock) logger.info('[call:accept] Caller offline, stored pending call for reauth', { userId: link.a, roomId, callId: id });
       } catch {}
       // Всегда шлём FCM инициатору: при экране исходящего сокет может быть отключён или событие не доходит — FCM выведет приложение, по getAccepted получим call:accepted
@@ -2801,8 +2816,6 @@ io.on('connection', async (sock: AuthedSocket) => {
       
       logger.debug('Direct call room established', { roomId, callId: id, aConnected: !!aSock, bConnected: !!bSock });
     }
-    
-    cleanupCall(id, 'accepted');
   });
 
   // Инициатор получил FCM call_accepted и вывел приложение — запрашивает payload call:accepted (сокет мог не доставить событие с нативного экрана исходящего)
