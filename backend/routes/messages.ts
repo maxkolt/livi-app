@@ -25,6 +25,62 @@ async function purgeMessageFromFriendship(friendshipId: mongoose.Types.ObjectId 
   ).exec();
 }
 
+async function deleteMessageForBothUsers(me: string, messageId: string): Promise<{
+  ok: boolean;
+  fromUserId?: string;
+  toUserId?: string;
+  error?: string;
+}> {
+  let fromUserId = '';
+  let toUserId = '';
+  let friendshipId: mongoose.Types.ObjectId | null = null;
+
+  const doc = await FriendshipMessageItem.findOne({ id: messageId }).select('from to friendshipId type').lean();
+  if (doc) {
+    fromUserId = String((doc as any).from);
+    toUserId = String((doc as any).to);
+    friendshipId = (doc as any).friendshipId;
+    if (fromUserId !== me && toUserId !== me) return { ok: false, error: 'not_found' };
+    await FriendshipMessageItem.deleteOne({ id: messageId }).exec();
+    await purgeMessageFromFriendship(friendshipId, messageId);
+  } else {
+    const list = await FriendshipMessages.find({
+      $and: [
+        { $or: [{ user1: me }, { user2: me }] },
+        { $or: [{ 'textMessages.id': messageId }, { 'imageMessages.id': messageId }, { 'audioMessages.id': messageId }] },
+      ],
+    }).lean();
+    const fd = list.find((f: any) => {
+      const arr = [...(f.textMessages || []), ...(f.imageMessages || []), ...(f.audioMessages || [])];
+      const m = arr.find((x: any) => x.id === messageId);
+      if (m) {
+        fromUserId = String(m.from);
+        toUserId = String(m.to);
+        friendshipId = f._id;
+        return true;
+      }
+      return false;
+    });
+    if (!fd) return { ok: false, error: 'not_found' };
+    const friendship = await FriendshipMessages.findOne({ _id: (fd as any)._id });
+    if (friendship) await (friendship as any).removeMessage(messageId);
+    await purgeMessageFromFriendship(friendshipId, messageId);
+  }
+
+  try {
+    if (toUserId && fromUserId) {
+      removeUnreadMessage(toUserId, fromUserId, messageId);
+      await OfflineMessage.deleteMany({
+        recipientId: new mongoose.Types.ObjectId(toUserId),
+        messageId,
+      });
+      invalidateFriendshipCache(fromUserId, toUserId);
+    }
+  } catch {}
+
+  return { ok: true, fromUserId, toUserId };
+}
+
 /**
  * POST /api/messages/send
  * Body: { to, type: 'text'|'image'|'audio', text?, uri?, name?, size?, duration? }
@@ -357,68 +413,67 @@ router.post('/messages/delete', async (req, res) => {
 
     const messageId = String(req.body?.messageId || '').trim();
     if (!messageId) return res.status(400).json({ ok: false, error: 'bad_message_id' });
-
-    let fromUserId = '';
-    let toUserId = '';
-    let friendshipId: mongoose.Types.ObjectId | null = null;
-    let msgType: 'text' | 'image' | 'audio' = 'text';
-
-    const doc = await FriendshipMessageItem.findOne({ id: messageId }).select('from to friendshipId type').lean();
-    if (doc) {
-      fromUserId = String((doc as any).from);
-      toUserId = String((doc as any).to);
-      friendshipId = (doc as any).friendshipId;
-      msgType = (doc as any).type;
-      if (fromUserId !== me && toUserId !== me) return res.json({ ok: false, error: 'not_found' });
-      await FriendshipMessageItem.deleteOne({ id: messageId }).exec();
-      await purgeMessageFromFriendship(friendshipId, messageId);
-    } else {
-      const list = await FriendshipMessages.find({
-        $and: [
-          { $or: [{ user1: me }, { user2: me }] },
-          { $or: [{ 'textMessages.id': messageId }, { 'imageMessages.id': messageId }, { 'audioMessages.id': messageId }] },
-        ],
-      }).lean();
-      const fd = list.find((f: any) => {
-        const arr = [...(f.textMessages || []), ...(f.imageMessages || []), ...(f.audioMessages || [])];
-        const m = arr.find((x: any) => x.id === messageId);
-        if (m) {
-          fromUserId = String(m.from);
-          toUserId = String(m.to);
-          friendshipId = f._id;
-          msgType = (m.type || 'text');
-          return true;
-        }
-        return false;
-      });
-      if (!fd) return res.json({ ok: false, error: 'not_found' });
-      const friendship = await FriendshipMessages.findOne({ _id: (fd as any)._id });
-      if (friendship) await (friendship as any).removeMessage(messageId);
-      await purgeMessageFromFriendship(friendshipId, messageId);
-    }
-
-    try {
-      if (toUserId && fromUserId) {
-        removeUnreadMessage(toUserId, fromUserId, messageId);
-        await OfflineMessage.deleteMany({
-          recipientId: new mongoose.Types.ObjectId(toUserId),
-          messageId,
-        });
-      }
-    } catch {}
+    const result = await deleteMessageForBothUsers(me, messageId);
+    if (!result.ok) return res.json({ ok: false, error: result.error || 'not_found' });
 
     try {
       const io = (req as any).io as any | undefined;
-      if (io && (fromUserId || toUserId)) {
+      if (io && (result.fromUserId || result.toUserId)) {
         const payload = { messageId, deletedBy: me };
-        if (fromUserId) io.to(`u:${fromUserId}`).emit('message:deleted', payload);
-        if (toUserId) io.to(`u:${toUserId}`).emit('message:deleted', payload);
+        if (result.fromUserId) io.to(`u:${result.fromUserId}`).emit('message:deleted', payload);
+        if (result.toUserId) io.to(`u:${result.toUserId}`).emit('message:deleted', payload);
       }
     } catch {}
 
     return res.json({ ok: true });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
+
+router.post('/messages/delete_many', async (req, res) => {
+  try {
+    const me = String((req as any)?.userId || '').trim();
+    if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
+
+    const messageIds = Array.from(new Set(
+      (Array.isArray(req.body?.messageIds) ? req.body.messageIds : [])
+        .map((id: any) => String(id || '').trim())
+        .filter(Boolean)
+    ));
+    if (messageIds.length === 0) return res.status(400).json({ ok: false, error: 'bad_message_ids' });
+
+    const deletedIds: string[] = [];
+    const failedIds: string[] = [];
+    const recipients = new Set<string>();
+    for (const messageId of messageIds) {
+      try {
+        const result = await deleteMessageForBothUsers(me, messageId);
+        if (!result.ok) {
+          failedIds.push(messageId);
+          continue;
+        }
+        deletedIds.push(messageId);
+        if (result.fromUserId) recipients.add(String(result.fromUserId));
+        if (result.toUserId) recipients.add(String(result.toUserId));
+      } catch {
+        failedIds.push(messageId);
+      }
+    }
+
+    try {
+      const io = (req as any).io as any | undefined;
+      if (io && deletedIds.length > 0) {
+        const payload = { messageIds: deletedIds, deletedBy: me };
+        for (const uid of recipients) {
+          io.to(`u:${uid}`).emit('messages:deleted', payload);
+        }
+      }
+    } catch {}
+
+    return res.json({ ok: deletedIds.length > 0, deletedIds, failedIds });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error', deletedIds: [], failedIds: [] });
   }
 });
 

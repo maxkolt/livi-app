@@ -25,6 +25,67 @@ async function purgeMessageFromFriendship(friendshipId: mongoose.Types.ObjectId 
   ).exec();
 }
 
+async function deleteMessageForBothUsers(me: string, messageId: string): Promise<{
+  ok: boolean;
+  fromUserId?: string;
+  toUserId?: string;
+  error?: string;
+}> {
+  let fromUserId = '';
+  let toUserId = '';
+  let friendshipId: mongoose.Types.ObjectId | null = null;
+
+  const doc = await FriendshipMessageItem.findOne({ id: messageId }).select('from to friendshipId type').lean();
+  if (doc) {
+    fromUserId = String((doc as any).from);
+    toUserId = String((doc as any).to);
+    friendshipId = (doc as any).friendshipId;
+    if (fromUserId !== me && toUserId !== me) return { ok: false, error: 'not_found' };
+    await FriendshipMessageItem.deleteOne({ id: messageId });
+    await purgeMessageFromFriendship(friendshipId, messageId);
+  } else {
+    const list = await FriendshipMessages.find({
+      $and: [
+        { $or: [{ user1: me }, { user2: me }] },
+        { $or: [{ 'textMessages.id': messageId }, { 'imageMessages.id': messageId }, { 'audioMessages.id': messageId }] },
+      ],
+    }).lean();
+    const fd = list.find((f: any) => {
+      const arr = [...(f.textMessages || []), ...(f.imageMessages || []), ...(f.audioMessages || [])];
+      const m = arr.find((x: any) => x.id === messageId);
+      if (m) {
+        fromUserId = String(m.from);
+        toUserId = String(m.to);
+        friendshipId = f._id;
+        return true;
+      }
+      return false;
+    });
+    if (!fd) return { ok: false, error: 'not_found' };
+    const friendship = await FriendshipMessages.findOne({
+      _id: friendshipId,
+      $or: [{ user1: me }, { user2: me }],
+    });
+    if (friendship) await (friendship as any).removeMessage(messageId);
+    await purgeMessageFromFriendship(friendshipId, messageId);
+  }
+
+  try {
+    if (toUserId && fromUserId) {
+      removeUnreadMessage(toUserId, fromUserId, messageId);
+      await OfflineMessage.deleteMany({
+        recipientId: new mongoose.Types.ObjectId(toUserId),
+        messageId,
+      });
+      invalidateFriendshipCache(fromUserId, toUserId);
+    }
+  } catch (cleanupError) {
+    console.warn('[message:delete] unread cleanup failed:', cleanupError);
+  }
+
+  return { ok: true, fromUserId, toUserId };
+}
+
 // Простое хранение непрочитанных сообщений в памяти (для быстрого доступа)
 const unreadMessages = new Map<string, Array<{ id: string; from: string; timestamp: string }>>();
 
@@ -786,67 +847,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       const messageId = String(payload?.messageId || '').trim();
       if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
       if (!messageId) return ack?.({ ok: false, error: 'bad_message_id' });
+      const result = await deleteMessageForBothUsers(me, messageId);
+      if (!result.ok) return ack?.({ ok: false, error: result.error || 'not_found' });
 
-      let fromUserId = '';
-      let toUserId = '';
-      let friendshipId: mongoose.Types.ObjectId | null = null;
-      let msgType: 'text' | 'image' | 'audio' = 'text';
-
-      const doc = await FriendshipMessageItem.findOne({ id: messageId }).select('from to friendshipId type').lean();
-      if (doc) {
-        fromUserId = String((doc as any).from);
-        toUserId = String((doc as any).to);
-        friendshipId = (doc as any).friendshipId;
-        msgType = (doc as any).type;
-        if (fromUserId !== me && toUserId !== me) return ack?.({ ok: false, error: 'not_found' });
-      } else {
-        const list = await FriendshipMessages.find({
-          $and: [
-            { $or: [{ user1: me }, { user2: me }] },
-            { $or: [{ 'textMessages.id': messageId }, { 'imageMessages.id': messageId }, { 'audioMessages.id': messageId }] },
-          ],
-        }).lean();
-        const fd = list.find((f: any) => {
-          const arr = [...(f.textMessages || []), ...(f.imageMessages || []), ...(f.audioMessages || [])];
-          const m = arr.find((x: any) => x.id === messageId);
-          if (m) {
-            fromUserId = String(m.from);
-            toUserId = String(m.to);
-            friendshipId = f._id;
-            msgType = m.type || 'text';
-            return true;
-          }
-          return false;
-        });
-        if (!fd) return ack?.({ ok: false, error: 'not_found' });
-      }
-
-      if (doc) {
-        await FriendshipMessageItem.deleteOne({ id: messageId });
-        await purgeMessageFromFriendship(friendshipId, messageId);
-      } else {
-        const friendship = await FriendshipMessages.findOne({
-          _id: friendshipId,
-          $or: [{ user1: me }, { user2: me }],
-        });
-        if (friendship) await (friendship as any).removeMessage(messageId);
-        await purgeMessageFromFriendship(friendshipId, messageId);
-      }
-
-      try {
-        if (toUserId && fromUserId) {
-          removeUnreadMessage(toUserId, fromUserId, messageId);
-          await OfflineMessage.deleteMany({
-            recipientId: new mongoose.Types.ObjectId(toUserId),
-            messageId,
-          });
-          invalidateFriendshipCache(fromUserId, toUserId);
-        }
-      } catch (cleanupError) {
-        console.warn('[message:delete] unread cleanup failed:', cleanupError);
-      }
-
-      const recipients = [fromUserId, toUserId].filter(Boolean);
+      const recipients = [result.fromUserId, result.toUserId].filter(Boolean);
       for (const s of io.sockets.sockets.values()) {
         const uid = (s as any).data?.userId;
         if (uid && recipients.includes(String(uid))) {
@@ -858,6 +862,54 @@ function registerMessageHandlers(io: Server, sock: Socket) {
     } catch (e: any) {
       console.error('[message:delete] error:', e?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
+    }
+  });
+
+  sock.on('messages:delete', async (payload: { messageIds: string[] }, ack?: Function) => {
+    try {
+      const me = meId();
+      if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized', deletedIds: [], failedIds: [] });
+      const messageIds = Array.from(new Set(
+        (Array.isArray(payload?.messageIds) ? payload.messageIds : [])
+          .map((id: any) => String(id || '').trim())
+          .filter(Boolean)
+      ));
+      if (messageIds.length === 0) {
+        return ack?.({ ok: false, error: 'bad_message_ids', deletedIds: [], failedIds: [] });
+      }
+
+      const deletedIds: string[] = [];
+      const failedIds: string[] = [];
+      const recipients = new Set<string>();
+      for (const messageId of messageIds) {
+        try {
+          const result = await deleteMessageForBothUsers(me, messageId);
+          if (!result.ok) {
+            failedIds.push(messageId);
+            continue;
+          }
+          deletedIds.push(messageId);
+          if (result.fromUserId) recipients.add(String(result.fromUserId));
+          if (result.toUserId) recipients.add(String(result.toUserId));
+        } catch {
+          failedIds.push(messageId);
+        }
+      }
+
+      if (deletedIds.length > 0) {
+        const eventPayload = { messageIds: deletedIds, deletedBy: me };
+        for (const s of io.sockets.sockets.values()) {
+          const uid = String((s as any).data?.userId || '');
+          if (uid && recipients.has(uid)) {
+            s.emit('messages:deleted', eventPayload);
+          }
+        }
+      }
+
+      return ack?.({ ok: deletedIds.length > 0, deletedIds, failedIds });
+    } catch (e: any) {
+      console.error('[messages:delete] error:', e?.message || e);
+      return ack?.({ ok: false, error: 'server_error', deletedIds: [], failedIds: [] });
     }
   });
 
