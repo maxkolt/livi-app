@@ -436,7 +436,7 @@ router.post('/messages/delete_many', async (req, res) => {
     const me = String((req as any)?.userId || '').trim();
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
-    const messageIds = Array.from(new Set(
+    const messageIds: string[] = Array.from(new Set(
       (Array.isArray(req.body?.messageIds) ? req.body.messageIds : [])
         .map((id: any) => String(id || '').trim())
         .filter(Boolean)
@@ -467,6 +467,9 @@ router.post('/messages/delete_many', async (req, res) => {
         const payload = { messageIds: deletedIds, deletedBy: me };
         for (const uid of recipients) {
           io.to(`u:${uid}`).emit('messages:deleted', payload);
+          for (const messageId of deletedIds) {
+            io.to(`u:${uid}`).emit('message:deleted', { messageId, deletedBy: me });
+          }
         }
       }
     } catch {}

@@ -902,6 +902,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           const uid = String((s as any).data?.userId || '');
           if (uid && recipients.has(uid)) {
             s.emit('messages:deleted', eventPayload);
+            for (const messageId of deletedIds) {
+              s.emit('message:deleted', { messageId, deletedBy: me });
+            }
           }
         }
       }
