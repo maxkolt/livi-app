@@ -74,7 +74,7 @@ const LinearGradient: any = (() => {
 import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { usePiP } from '../src/pip/PiPContext';
-import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, getUnreadCount, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
+import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, onMessagesDeleted, getUnreadCount, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
 import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
@@ -3462,12 +3462,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const offDeleted = onMessageDeleted(() => {
       scheduleRecalcAll();
     });
+    const offDeletedBatch = onMessagesDeleted(() => {
+      scheduleRecalcAll();
+    });
 
     return () => { 
       disposed = true; 
       offReceived?.(); 
       offReadReceipt?.();
       offDeleted?.();
+      offDeletedBatch?.();
       if (allTimer) { 
         clearTimeout(allTimer); 
         allTimer = null; 
@@ -3977,30 +3981,24 @@ const handleClearNick = useCallback(async () => {
   };
 
   const ChatButton = ({ friend }: { friend: Friend }) => {
-    // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) для корректной работы с счетчиками
     const friendIdStr = String(friend.id);
     const count = unreadByUser[friendIdStr] || 0;
-  
-    const isLocalUri = (s: string) =>
-      /^file:\/\//i.test(s) ||
-      /^content:\/\//i.test(s) ||
-      /^assets-library:\/\//i.test(s) ||
-      /^ph:\/\//i.test(s);
-  
+
     const handlePress = React.useCallback(() => {
       try {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       } catch {
         Vibration.vibrate(8);
       }
-      // КРИТИЧНО: Передаем полный никнейм, не обрезаем до первой буквы
+
       const fullNickname = (friend.name && friend.name.trim()) || '—';
       logger.info('[ChatButton] Открываем чат', {
         friendId: friend.id,
         friendName: friend.name,
         fullNickname,
-        nameLength: friend.name?.length || 0
+        nameLength: friend.name?.length || 0,
       });
+
       navigation.navigate('Chat', {
         peerId: friend.id,
         peerName: fullNickname,
@@ -4009,42 +4007,43 @@ const handleClearNick = useCallback(async () => {
         peerOnline: friend.online,
       });
     }, [navigation, friend.id, friend.name, friend.avatarVer, friend.avatarThumbB64, friend.online]);
-  
+
     return (
-      <View style={{ position: 'relative' }}>
-        <RectButton
-          style={[
-            styles.actionBtnGap,
-            styles.friendActionBtnSize,
-            {
-              backgroundColor: '#2B2B2B',
-              borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.12)',
-              justifyContent: 'center',
-              alignItems: 'center',
-            },
-          ]}
-          rippleColor="rgba(255,255,255,0.28)"
-          underlayColor="rgba(255,255,255,0.14)"
-          activeOpacity={0.82}
-          delayLongPress={280}
-          onPress={handlePress}
-          onLongPress={
-            count > 0
-              ? () => {
-                  try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(15); }
-                  setMarkReadMenu({ friendId: friendIdStr, type: 'chat' });
-                }
-              : undefined
-          }
-        >
-          <MaterialCommunityIcons name="chat-processing" size={23} color={LIVI.white} />
-        </RectButton>
-        {count > 0 && (
-          <View style={styles.badgeBubble}>
-            <Text style={{ color: '#fff', fontSize: 8, fontWeight: '800' }}>{count > 99 ? '99+' : count}</Text>
-          </View>
-        )}
+      <View style={styles.chatBtnOuter}>
+        <View style={styles.friendActionBadgeAnchor}>
+          <RectButton
+            style={[
+              styles.friendActionBtnSize,
+              {
+                backgroundColor: '#2B2B2B',
+                borderWidth: 1,
+                borderColor: 'rgba(255,255,255,0.12)',
+                justifyContent: 'center',
+                alignItems: 'center',
+              },
+            ]}
+            rippleColor="rgba(255,255,255,0.28)"
+            underlayColor="rgba(255,255,255,0.14)"
+            activeOpacity={0.82}
+            delayLongPress={280}
+            onPress={handlePress}
+            onLongPress={
+              count > 0
+                ? () => {
+                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(15); }
+                    setMarkReadMenu({ friendId: friendIdStr, type: 'chat' });
+                  }
+                : undefined
+            }
+          >
+            <MaterialCommunityIcons name="chat-processing" size={23} color={LIVI.white} />
+          </RectButton>
+          {count > 0 && (
+            <View style={styles.badgeBubble} pointerEvents="none">
+              <Text style={styles.badgeBubbleText}>{count > 99 ? '99+' : count}</Text>
+            </View>
+          )}
+        </View>
       </View>
     );
   };
@@ -4147,12 +4146,26 @@ const handleClearNick = useCallback(async () => {
     const missedCount = missedByUser[friendIdStr] || 0;
 
     // Кнопка видеозвонка показывается всегда; дизейблится и бейдж «Занят» только когда друг занят в видеочате.
-    // КРИТИЧНО: Учитываем и глобальные refs из VideoCall — пока мы в активном звонке с этим другом, кнопка задизейблена,
-    // даже при рассинхроне presence или при возврате из PiP (refs сбрасываются только по успешному завершению звонка).
+    // КРИТИЧНО: Учитываем и глобальные refs из VideoCall, но не доверяем им слепо:
+    // при потере call:ended ref мог остаться true уже после падения LiveKit-комнаты.
     const isFriendBusy = friend.isBusy || false; // Флаг от сервера через presence:update (только когда вызов принят и оба в видеосвязи)
-    const videoCallActive = (global as any).__videoCallActiveRef?.current;
-    const videoCallPartner = (global as any).__videoCallPartnerUserIdRef?.current;
-    const busy = isFriendBusy || (!!videoCallActive && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
+    const g = global as any;
+    const videoCallActive = g.__videoCallActiveRef?.current;
+    const videoCallPartner = g.__videoCallPartnerUserIdRef?.current;
+    const session = g.__webrtcSessionRef?.current;
+    const sessionNotEnded =
+      !!session &&
+      (typeof session.isEnded === 'function'
+        ? !session.isEnded()
+        : session?.room?.state !== 'disconnected');
+    const params = g.__currentCallPiPParamsRef?.current;
+    const hasAnyCallIds =
+      !!params?.callId ||
+      !!params?.roomId ||
+      (!!session && typeof session.getRoomId === 'function' && !!session.getRoomId()) ||
+      (!!session && typeof session.getCallId === 'function' && !!session.getCallId());
+    const activeCallInProgress = !!videoCallActive && (sessionNotEnded || hasAnyCallIds || !session);
+    const busy = isFriendBusy || (activeCallInProgress && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
     // Исходящий вызов в процессе (инициатор свернул нативный экран в шторку): у того, кому звоним — стиль «занято» без бейджа; у остальных — просто неактивная кнопка
     const outgoingInProgress = calling.visible;
     const isOutgoingToThisFriend = outgoingInProgress && !!calling.friend && String(calling.friend.id) === friendIdStr;
@@ -4161,7 +4174,6 @@ const handleClearNick = useCallback(async () => {
     const isIncomingFromThisFriend = incomingInProgress && incomingCallScreen.fromUserId != null && String(incomingCallScreen.fromUserId) === friendIdStr;
     // Бейдж «Занято» только когда друг реально в звонке (принят вызов). Не показывать: (1) при входящем от этого друга — защита от старого busy и от незадеплоенного бэкенда; (2) при исходящем к этому другу уже учтено (showBusyBadge не использует isOutgoingToThisFriend).
     const showBusyBadge = isFriendBusy && !isIncomingFromThisFriend;
-    const activeCallInProgress = !!videoCallActive;
     // Стиль «занято» (серая кнопка) только у участника звонка или при дозвоне. У остальных друзей кнопка как обычно, просто не кликабельна.
     const useBusyButtonStyle = busy || isOutgoingToThisFriend || isIncomingFromThisFriend;
     const videoDisabled = busy || outgoingInProgress || incomingInProgress || activeCallInProgress;
@@ -4190,7 +4202,7 @@ const handleClearNick = useCallback(async () => {
           </Animated.View>
         )}
         <View
-          style={{ position: 'relative' }}
+          style={styles.friendActionBadgeAnchor}
           pointerEvents={Platform.OS === 'android' && videoDisabled ? 'none' : 'auto'}
         >
           <RectButton
@@ -4252,14 +4264,14 @@ const handleClearNick = useCallback(async () => {
               <MaterialIcons name="videocam" size={23} color={ANDROID_VIDEO_CALL_DISABLED_ICON} />
             </View>
           )}
+          {missedCount > 0 && (
+            <View style={styles.badgeBubble} pointerEvents="none">
+              <Text style={styles.badgeBubbleText}>
+                {missedCount > 99 ? '99+' : missedCount}
+              </Text>
+            </View>
+          )}
         </View>
-        {missedCount > 0 && (
-          <View style={styles.badgeBubble}>
-            <Text style={{ color: '#fff', fontSize: 8, fontWeight: '800' }}>
-              {missedCount > 99 ? '99+' : missedCount}
-            </Text>
-          </View>
-        )}
       </View>
     );
   };
@@ -4270,6 +4282,7 @@ const handleClearNick = useCallback(async () => {
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
       overScrollMode="never"
+      removeClippedSubviews={false}
       data={friends}
       keyExtractor={(item) => item.id}
       ItemSeparatorComponent={() => <View style={styles.friendSeparator} />}
@@ -4290,7 +4303,8 @@ const handleClearNick = useCallback(async () => {
             ref={markReadMenu?.friendId === item.id ? rowRefForMarkReadMenu : undefined}
           >
             <List.Item
-              style={[styles.listRow, styles.listRowAligned]}
+              style={[styles.listRow, styles.listRowAligned, styles.listRowOverflowVisible]}
+              containerStyle={styles.listRowContainerOverflowVisible}
               contentStyle={{ marginLeft: 0 }}
               rippleColor="transparent"
               left={() => {
@@ -5779,9 +5793,12 @@ const styles = StyleSheet.create({
   // Симметричные отступы: левый край -> аватар = правый край -> иконка чата.
   // Горизонтальные отступы задаются contentContainerStyle у FlatList (paddingHorizontal: 16),
   // поэтому не добавляем дополнительный paddingRight на уровне строки.
-  listRowWrap: { position: 'relative' },
+  listRowWrap: { position: 'relative', overflow: 'visible' as const },
   listRow: { backgroundColor: 'transparent', paddingVertical: 10, paddingRight: 0 },
   listRowAligned: { alignItems: 'center', paddingLeft: 0, paddingRight: 0, minHeight: 72 },
+  /** Чтобы бейджи на углу кнопок (translate 50%/-50%) не обрезались TouchableRipple / строкой */
+  listRowOverflowVisible: { overflow: 'visible' as const },
+  listRowContainerOverflowVisible: { overflow: 'visible' as const },
   nameCol: { marginLeft: 0, justifyContent: 'center' },
   friendName: {
     color: LIVI.white,
@@ -5867,7 +5884,7 @@ const styles = StyleSheet.create({
   segActiveBg: { backgroundColor: 'rgba(157, 161, 169, 0.11)' },
   segTopShadow: { position: 'absolute', top: 0, left: 0, right: 0, height: 0 },
 
-  rowRightActions: { height: 48, flexDirection: 'row', alignItems: 'center', paddingRight: 0 },
+  rowRightActions: { height: 48, flexDirection: 'row', alignItems: 'center', paddingRight: 6, overflow: 'visible' as const },
   friendSeparator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.10)',
@@ -5877,18 +5894,37 @@ const styles = StyleSheet.create({
 
   actionBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
   friendActionBtnSize: { width: 40, height: 40, borderRadius: 12 },
-  actionBtnGap: { marginLeft: 14 },
+  /** Отступ между видео и чатом — снаружи якоря 40×40, чтобы бейдж считался от угла кнопки */
+  chatBtnOuter: { marginLeft: 14 },
+  friendActionBadgeAnchor: {
+    width: 40,
+    height: 40,
+    position: 'relative' as const,
+    overflow: 'visible' as const,
+  },
 
   segmentBottomArc: { position: 'absolute', left: 18, right: 18, bottom: 0, height: 44, borderRadius: 114, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: LIVI.border },
 
   menuDot: { position: 'absolute', top: 0, right: 0, width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(255,90,103,0.95)' },
 
+  // Центр круга на вершине правого верхнего угла кнопки (половина снаружи кнопки) — как в макете.
   badgeBubble: {
-    // IMPORTANT: не используем отрицательные right/top, иначе на Android (List.Item часто с overflow: 'hidden')
-    // бейдж может обрезаться у правого края на разных девайсах/скейлах.
-    position: 'absolute', top: 2, right: 2, minWidth: 12, height: 12, paddingHorizontal: 2,
-    borderRadius: 6, backgroundColor: 'rgba(255,90,103,0.9)', alignItems: 'center', justifyContent: 'center',
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    zIndex: 20,
+    minWidth: 11,
+    minHeight: 11,
+    height: 11,
+    paddingHorizontal: 2,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,90,103,0.95)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...(Platform.OS === 'android' ? { elevation: 10 } : {}),
+    transform: [{ translateX: 4.5 }, { translateY: -3.5 }],
   },
+  badgeBubbleText: { color: '#fff', fontSize: 8, fontWeight: '800', lineHeight: 8 },
 
   // left задаётся инлайн по measureLayout аватара + GAP_AFTER_AVATAR, чтобы отступ был одинаков на всех устройствах
   markReadMenuOverlay: {
@@ -5940,7 +5976,7 @@ const styles = StyleSheet.create({
     marginLeft: 14,
   },
 
-  rightWrap: { width: 80, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
+  rightWrap: { width: 80, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' as const },
   inviteBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
   inviteBtnDisabled: { 
     backgroundColor: LIVI.glass,

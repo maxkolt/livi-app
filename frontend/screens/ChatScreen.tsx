@@ -78,8 +78,10 @@ import {
   clearChatMessages,
   onChatCleared,
   deleteMessage,
+  deleteMessages,
   editMessage,
   onMessageDeleted,
+  onMessagesDeleted,
   onMessageEdited,
   globalMessageStorage,
   fetchMessages,
@@ -118,6 +120,15 @@ function parseTextWithUrls(text: string): { type: 'text' | 'url'; value: string 
 function openMessageUrl(raw: string): void {
   const url = raw.startsWith('http://') || raw.startsWith('https://') ? raw : `https://${raw}`;
   Linking.openURL(url).catch(() => {});
+}
+
+/** Стабильное имя файла в cacheDirectory для кэша голосового по удалённому URL. */
+function voiceCacheFileNameForRemoteUrl(remoteUri: string): string {
+  let h = 0;
+  for (let i = 0; i < remoteUri.length; i++) {
+    h = (Math.imul(31, h) + remoteUri.charCodeAt(i)) | 0;
+  }
+  return `livi_voice_${(h >>> 0).toString(16)}_${remoteUri.length}.m4a`;
 }
 
 const REACTION_EMOJIS_PAGE_1 = ['👍', '😊', '❤️', '😮', '😢', '👎'];
@@ -405,6 +416,14 @@ export default function ChatScreen({ route, navigation }: Props) {
         sendChatViewing(peerId);
         dismissMessageNotificationForUser(peerId).catch(() => {});
       }
+      // Голос: режим аудио поднимаем при входе в чат — первый тап не ждёт setAudioModeAsync
+      void Audio.setAudioModeAsync({
+        playsInSilentModeIOS: true,
+        allowsRecordingIOS: false,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false,
+      }).catch(() => {});
       return () => {
         setCurrentChatPeerId(null);
         sendChatViewing(null);
@@ -579,7 +598,12 @@ export default function ChatScreen({ route, navigation }: Props) {
   const voiceStartYRef = useRef(0);
 
   const audioSoundRef = useRef<Audio.Sound | null>(null);
+  /** Инкремент при новом запуске воспроизведения — отмена устаревшего createAsync при быстром переключении */
+  const audioPlayGenerationRef = useRef(0);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+  /** Удалённый resolveMediaUri(uri) → локальный file:// после downloadAsync — быстрый старт play */
+  const voiceAudioCacheRef = useRef<Map<string, string>>(new Map());
+  const voiceAudioDownloadRef = useRef<Map<string, Promise<string>>>(new Map());
 
   // Состояние для предпросмотра выбранного фото перед отправкой (без лишних Alert/ActionSheet)
   const [composeViewerVisible, setComposeViewerVisible] = useState(false);
@@ -1375,37 +1399,79 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
     });
 
-    // Слушатель удаления сообщений
-    const unsubscribeMessageDeleted = onMessageDeleted((data) => {
-      const mid = String((data as any)?.messageId || '').trim();
-      if (!mid) return;
-      setMessages((prev) => {
-        const updated = prev.filter((msg) => String(msg?.id || '') !== mid);
-        return updated;
-      });
-      // cleanup local maps (prevents stale statuses for deleted ids)
+    // Слушатель удаления сообщений.
+    // Коротко буферизуем входящие delete-события, чтобы массовое удаление у собеседника
+    // визуально схлопывалось одной пачкой, а не по одному сообщению.
+    const pendingDeletedIds = new Set<string>();
+    let pendingDeletedTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushPendingDeleted = () => {
+      if (pendingDeletedIds.size === 0) return;
+      const deletedIds = new Set(Array.from(pendingDeletedIds));
+      pendingDeletedIds.clear();
+      pendingDeletedTimer = null;
+      setMessages((prev) => prev.filter((msg) => !deletedIds.has(String(msg?.id || '').trim())));
       try {
         updateReadStatuses((prev) => {
           const next: any = { ...prev };
-          delete next[mid];
+          for (const id of deletedIds) delete next[id];
           return next;
         });
       } catch {}
       try {
         setUploadStatus((prev) => {
           const next: any = { ...prev };
-          delete next[mid];
+          for (const id of deletedIds) delete next[id];
           return next;
         });
       } catch {}
-      // If user had it selected, unselect it
       try {
         setSelectedMessageIds((prev) => {
           const next = new Set(prev);
-          next.delete(mid);
+          for (const id of deletedIds) next.delete(id);
           return next;
         });
       } catch {}
+    };
+    const applyDeletedIds = (ids: string[]) => {
+      const deletedIds = new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean));
+      if (deletedIds.size === 0) return;
+      setMessages((prev) => prev.filter((msg) => !deletedIds.has(String(msg?.id || '').trim())));
+      try {
+        updateReadStatuses((prev) => {
+          const next: any = { ...prev };
+          for (const id of deletedIds) delete next[id];
+          return next;
+        });
+      } catch {}
+      try {
+        setUploadStatus((prev) => {
+          const next: any = { ...prev };
+          for (const id of deletedIds) delete next[id];
+          return next;
+        });
+      } catch {}
+      try {
+        setSelectedMessageIds((prev) => {
+          const next = new Set(prev);
+          for (const id of deletedIds) next.delete(id);
+          return next;
+        });
+      } catch {}
+    };
+    const unsubscribeMessageDeleted = onMessageDeleted((data) => {
+      const mid = String((data as any)?.messageId || '').trim();
+      if (!mid) return;
+      pendingDeletedIds.add(mid);
+      if (pendingDeletedTimer) clearTimeout(pendingDeletedTimer);
+      pendingDeletedTimer = setTimeout(flushPendingDeleted, 120);
+    });
+    const unsubscribeMessagesDeleted = onMessagesDeleted((data) => {
+      if (pendingDeletedTimer) {
+        clearTimeout(pendingDeletedTimer);
+        pendingDeletedTimer = null;
+      }
+      pendingDeletedIds.clear();
+      applyDeletedIds(Array.isArray((data as any)?.messageIds) ? (data as any).messageIds : []);
     });
 
     const unsubscribeMessageEdited = onMessageEdited((data) => {
@@ -1421,11 +1487,17 @@ export default function ChatScreen({ route, navigation }: Props) {
     });
 
     return () => {
+      if (pendingDeletedTimer) {
+        clearTimeout(pendingDeletedTimer);
+        pendingDeletedTimer = null;
+      }
+      flushPendingDeleted();
       unsubscribeReceived();
       unsubscribeReadReceipt();
       unsubscribeReaction();
       unsubscribeChatCleared();
       unsubscribeMessageDeleted();
+      unsubscribeMessagesDeleted();
       unsubscribeMessageEdited();
       unsubscribeDelivered();
     };
@@ -1853,6 +1925,39 @@ export default function ChatScreen({ route, navigation }: Props) {
     return s;
   }, []);
 
+  const ensureVoiceCachedToLocalFile = React.useCallback(async (resolvedUri: string): Promise<string> => {
+    const u = String(resolvedUri || '').trim();
+    if (!u || !/^https?:\/\//i.test(u)) return u;
+    const baseDir = FileSystem.cacheDirectory;
+    if (!baseDir) return u;
+
+    const cachedPath = voiceAudioCacheRef.current.get(u);
+    if (cachedPath) {
+      try {
+        const info = await FileSystem.getInfoAsync(cachedPath);
+        if (info.exists) return cachedPath;
+      } catch {}
+      voiceAudioCacheRef.current.delete(u);
+    }
+
+    const inflight = voiceAudioDownloadRef.current.get(u);
+    if (inflight) return inflight;
+
+    const task = (async () => {
+      try {
+        const dest = `${baseDir}${voiceCacheFileNameForRemoteUrl(u)}`;
+        const { uri: localUri } = await FileSystem.downloadAsync(u, dest);
+        voiceAudioCacheRef.current.set(u, localUri);
+        return localUri;
+      } finally {
+        voiceAudioDownloadRef.current.delete(u);
+      }
+    })();
+
+    voiceAudioDownloadRef.current.set(u, task);
+    return task;
+  }, []);
+
   const formatDuration = React.useCallback((ms: number) => {
     const totalSec = Math.max(0, Math.floor(ms / 1000));
     const m = Math.floor(totalSec / 60);
@@ -1869,15 +1974,15 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, []);
 
   const stopAudioPlayback = React.useCallback(async () => {
-    try {
-      if (audioSoundRef.current) {
-        await audioSoundRef.current.stopAsync().catch(() => {});
-        await audioSoundRef.current.unloadAsync().catch(() => {});
-      }
-    } finally {
-      audioSoundRef.current = null;
-      setPlayingAudioId(null);
-      setPlayingAudioState(null);
+    audioPlayGenerationRef.current += 1;
+    const prev = audioSoundRef.current;
+    audioSoundRef.current = null;
+    setPlayingAudioId(null);
+    setPlayingAudioState(null);
+    if (prev) {
+      await prev.stopAsync().catch(() => {});
+      // unload часто сотни мс — не блокируем следующий play
+      void prev.unloadAsync().catch(() => {});
     }
   }, []);
 
@@ -2036,6 +2141,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   } | null>(null);
 
   const togglePlayAudioMessage = React.useCallback(async (m: any) => {
+    let playGen = 0;
     try {
       const mid = String(m?.id || '').trim();
       const rawUri = String(m?.uri || '').trim();
@@ -2049,23 +2155,32 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       await stopAudioPlayback();
 
+      playGen = ++audioPlayGenerationRef.current;
       const fallbackDurationMs = Math.max(0, Number(m?.duration || 0) * 1000);
+      // UI сразу «играет» — не ждём decode/createAsync
       setPlayingAudioState({ id: mid, durationMs: fallbackDurationMs, positionMs: 0 });
+      setPlayingAudioId(mid);
 
-      // 🔊 Ensure stable, loud voice playback (avoid receiver/earpiece routing and recording categories).
-      // This prevents volume/route "jumping" when notifications or other OS sounds steal audio focus.
-      try {
-        await Audio.setAudioModeAsync({
-          playsInSilentModeIOS: true,
-          allowsRecordingIOS: false,
-          staysActiveInBackground: false,
-          shouldDuckAndroid: false,
-          playThroughEarpieceAndroid: false,
-        });
-      } catch {}
+      // Режим уже поднимается в useFocusEffect; здесь не блокируем старт
+      void Audio.setAudioModeAsync({
+        playsInSilentModeIOS: true,
+        allowsRecordingIOS: false,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false,
+      }).catch(() => {});
+
+      let playUri = uri;
+      if (/^https?:\/\//i.test(uri)) {
+        try {
+          playUri = await ensureVoiceCachedToLocalFile(uri);
+        } catch {
+          playUri = uri;
+        }
+      }
 
       const { sound } = await Audio.Sound.createAsync(
-        { uri },
+        { uri: playUri },
         { shouldPlay: true },
         (status) => {
           const s: any = status as any;
@@ -2084,12 +2199,32 @@ export default function ChatScreen({ route, navigation }: Props) {
           }
         }
       );
+      if (playGen !== audioPlayGenerationRef.current) {
+        await sound.unloadAsync().catch(() => {});
+        return;
+      }
       audioSoundRef.current = sound;
-      setPlayingAudioId(mid);
     } catch {
-      // ignore
+      if (playGen !== 0 && playGen === audioPlayGenerationRef.current) {
+        setPlayingAudioId(null);
+        setPlayingAudioState(null);
+      }
     }
-  }, [resolveMediaUri, playingAudioId, stopAudioPlayback]);
+  }, [resolveMediaUri, playingAudioId, stopAudioPlayback, ensureVoiceCachedToLocalFile]);
+
+  useEffect(() => {
+    const baseDir = FileSystem.cacheDirectory;
+    if (!baseDir) return;
+    const tail = messages.length > 30 ? messages.slice(-30) : messages;
+    for (const m of tail) {
+      if (String(m?.type || '') !== 'audio') continue;
+      const raw = String(m?.uri || '').trim();
+      if (!raw) continue;
+      const resolved = resolveMediaUri(raw);
+      if (!resolved || !/^https?:\/\//i.test(resolved)) continue;
+      void ensureVoiceCachedToLocalFile(resolved).catch(() => {});
+    }
+  }, [messages, resolveMediaUri, ensureVoiceCachedToLocalFile]);
 
   useEffect(() => {
     return () => {
@@ -2420,22 +2555,17 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
     const open = () => {
       setShowMessageActions(true);
-      if (Platform.OS === 'ios') {
-        try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(5); }
-      } else {
-        Vibration.vibrate(30);
-      }
       messageActionsOpacity.setValue(0);
       messageActionsTranslateY.setValue(30);
       Animated.parallel([
         Animated.timing(messageActionsOpacity, {
           toValue: 1,
-          duration: 180,
+          duration: 120,
           useNativeDriver: true,
         }),
         Animated.timing(messageActionsTranslateY, {
           toValue: 0,
-          duration: 180,
+          duration: 120,
           useNativeDriver: true,
         }),
       ]).start();
@@ -2766,6 +2896,34 @@ export default function ChatScreen({ route, navigation }: Props) {
     });
   }, []);
 
+  useEffect(() => {
+    if (!selectionMode) return;
+    if (selectedMessageIds.size === 0) {
+      exitSelectionMode();
+      return;
+    }
+    let hasSelectedMessagesLeft = false;
+    for (const msg of messages) {
+      const mid = String(msg?.id || '').trim();
+      if (mid && selectedMessageIds.has(mid)) {
+        hasSelectedMessagesLeft = true;
+        break;
+      }
+    }
+    if (!hasSelectedMessagesLeft) exitSelectionMode();
+  }, [selectionMode, selectedMessageIds, messages, exitSelectionMode]);
+
+  useEffect(() => {
+    const selectedId = String(selectedMessage?.id || '').trim();
+    if (!selectedId) return;
+    const stillExists = messages.some((msg) => String(msg?.id || '').trim() === selectedId);
+    if (stillExists) return;
+    if (showMessageActions) {
+      try { hideMessageActions(); } catch {}
+    }
+    setSelectedMessage(null);
+  }, [selectedMessage, messages, showMessageActions, hideMessageActions]);
+
   const enterSelectionModeFromMessage = React.useCallback((m: any) => {
     const mid = String(m?.id || '').trim();
     setSelectionMode(true);
@@ -2956,19 +3114,15 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
       return next;
     });
+    // UI уже очистили оптимистично, поэтому режим выбора закрываем сразу.
+    try { hideMessageActions(); } catch {}
+    setSelectedMessage(null);
+    exitSelectionMode();
 
     // IMPORTANT: delete requests sequentially (emitAck/socket acks are not guaranteed to be concurrency-safe).
     // UI is already updated optimistically above, so user still sees "all deleted at once".
-    const failedServer: string[] = [];
-    for (const id of serverIds) {
-      try {
-        const mid = String(id);
-        const ok = await deleteMessage(mid);
-        if (!ok) failedServer.push(mid);
-      } catch {
-        failedServer.push(String(id));
-      }
-    }
+    const batchResult = await deleteMessages(serverIds);
+    const failedServer = Array.isArray(batchResult?.failedIds) ? batchResult.failedIds.map(String) : serverIds;
 
     // local-only deletions are always considered successful (client-side only)
     const successServerIds = serverIds.filter((id) => !failedServer.includes(String(id)));
@@ -2989,7 +3143,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
 
     if (failedServer.length === 0) {
-      exitSelectionMode();
       showForwardToastBadge(false, t('chatDeleted', lang));
       return;
     }
@@ -3013,6 +3166,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     });
 
     // Оставляем выделенными только те, что не удалились (можно повторить)
+    setSelectionMode(true);
     setSelectedMessageIds(new Set(failedServer));
     showNotice(
       'error',
@@ -3025,9 +3179,10 @@ export default function ChatScreen({ route, navigation }: Props) {
     showForwardToastBadge,
     showNotice,
     lang,
-    deleteMessage,
+    deleteMessages,
     updateReadStatuses,
     setUploadStatus,
+    hideMessageActions,
   ]);
 
   const confirmDeleteSelected = React.useCallback(() => {
@@ -3302,6 +3457,37 @@ export default function ChatScreen({ route, navigation }: Props) {
     (messageId: string, callback?: () => void, options?: { immediate?: boolean }) => {
       const animation = getMessageAnimation(messageId);
 
+      // Long press: тактиль и лёгкое сжатие облака здесь, а не при показе меню.
+      if (options?.immediate) {
+        if (Platform.OS === 'ios') {
+          try {
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          } catch {
+            Vibration.vibrate(5);
+          }
+        } else {
+          try {
+            Vibration.vibrate(10);
+          } catch {}
+        }
+        animation.stopAnimation();
+        animation.setValue(1);
+        Animated.sequence([
+          Animated.timing(animation, {
+            toValue: 0.96,
+            duration: 55,
+            useNativeDriver: true,
+          }),
+          Animated.timing(animation, {
+            toValue: 1,
+            duration: 130,
+            useNativeDriver: true,
+          }),
+        ]).start();
+        callback?.();
+        return;
+      }
+
       if (Platform.OS === 'ios') {
         try {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -3310,12 +3496,6 @@ export default function ChatScreen({ route, navigation }: Props) {
         }
       } else {
         Vibration.vibrate(25);
-      }
-
-      // Long press: меню сразу после системного long-press, без ожидания scale-анимации (+200ms)
-      if (options?.immediate) {
-        callback?.();
-        return;
       }
 
       Animated.sequence([
@@ -4044,6 +4224,9 @@ export default function ChatScreen({ route, navigation }: Props) {
         measure();
       }
     }, [item, onLongPressMessage]);
+    const openMessageActionsFromBubble = React.useCallback(() => {
+      animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
+    }, [item.id, animateMessagePress, fireLongPressWithLayout]);
     const effectiveReadStatus = readStatus; // 'sending' | 'delivered' | 'read' | 'failed' | 'sent'
     // Fallback логика для определения отправителя если поле sender отсутствует
     let isMyMessage = item.sender === 'me';
@@ -4155,7 +4338,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     onPressImage('image', imageUri, item.name);
                   });
                 }}
-                delayLongPress={400}
+                delayLongPress={280}
                 onLongPress={() => {
                   animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
                 }}
@@ -4195,7 +4378,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   onPressImage('image', imageUri, item.name);
                 });
               }}
-              delayLongPress={400}
+              delayLongPress={280}
               onLongPress={() => {
                 animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
               }}
@@ -4370,7 +4553,10 @@ export default function ChatScreen({ route, navigation }: Props) {
           const voiceRingSize = 42;
           const voiceRingCx = voiceRingSize / 2;
           const voiceRingR = 19;
+          /** Внутренний диск (тот же центр, что и у окружностей кольца) */
+          const voiceDiscR = 17;
           const voiceRingCirc = 2 * Math.PI * voiceRingR;
+          const voiceDiscFill = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)';
           const voiceDurMs =
             isPlaying && playingAudioState?.id === String(item.id || '')
               ? Math.max(0, Number(playingAudioState.durationMs || 0))
@@ -4379,8 +4565,12 @@ export default function ChatScreen({ route, navigation }: Props) {
             isPlaying && playingAudioState?.id === String(item.id || '')
               ? Math.max(0, Number(playingAudioState.positionMs || 0))
               : 0;
-          const voiceProgress =
-            isPlaying && voiceDurMs > 0 ? Math.min(1, voicePosMs / voiceDurMs) : 0;
+          const voiceProgressRaw =
+            isPlaying && voiceDurMs > 0 ? Math.min(1, voicePosMs / Math.max(voiceDurMs, 1)) : 0;
+          // expo-av часто не доводит position до duration до didJustFinish; хвост считаем «концом» без ломания коротких клипов
+          const tailMs = Math.min(220, Math.max(16, Math.floor(voiceDurMs * 0.08)));
+          const nearEnd = voiceDurMs > 0 && voicePosMs >= voiceDurMs - tailMs;
+          const voiceProgress = Math.min(1, nearEnd ? 1 : voiceProgressRaw);
           const voiceGradId = `voicePearl-${String(item.id || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
 
           return (
@@ -4396,14 +4586,18 @@ export default function ChatScreen({ route, navigation }: Props) {
                 style={{
                   width: voiceRingSize,
                   height: voiceRingSize,
-                  alignItems: 'center',
-                  justifyContent: 'center',
+                  position: 'relative',
                 }}
               >
+                {/*
+                  Кольцо + заливка только в SVG с одним центром (cx/cy) — иначе View/Svg/иконка
+                  на разных движках визуально «плывут». Сверху — только прозрачный hit-target и иконка.
+                */}
                 <Svg
                   width={voiceRingSize}
                   height={voiceRingSize}
-                  style={{ position: 'absolute' }}
+                  viewBox={`0 0 ${voiceRingSize} ${voiceRingSize}`}
+                  style={StyleSheet.absoluteFillObject}
                   pointerEvents="none"
                 >
                   <Defs>
@@ -4413,6 +4607,12 @@ export default function ChatScreen({ route, navigation }: Props) {
                       <Stop offset="100%" stopColor={isDark ? '#A8E8E0' : '#D4C4F0'} stopOpacity={1} />
                     </LinearGradient>
                   </Defs>
+                  <SvgCircle
+                    cx={voiceRingCx}
+                    cy={voiceRingCx}
+                    r={voiceDiscR}
+                    fill={voiceDiscFill}
+                  />
                   <SvgCircle
                     cx={voiceRingCx}
                     cy={voiceRingCx}
@@ -4430,7 +4630,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         fill="none"
                         stroke={`url(#${voiceGradId})`}
                         strokeWidth={2.5}
-                        strokeLinecap="round"
+                        strokeLinecap="butt"
                         strokeDasharray={`${voiceRingCirc} ${voiceRingCirc}`}
                         strokeDashoffset={voiceRingCirc * (1 - voiceProgress)}
                       />
@@ -4441,16 +4641,15 @@ export default function ChatScreen({ route, navigation }: Props) {
                   onPress={() => {
                     try { onPressAudio?.(item); } catch {}
                   }}
-                  style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)',
-                    borderWidth: 1,
-                    borderColor: BORDER_COLOR,
-                  }}
+                  onLongPress={openMessageActionsFromBubble}
+                  delayLongPress={280}
+                  style={[
+                    StyleSheet.absoluteFillObject,
+                    {
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    },
+                  ]}
                 >
                   <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color={LIVI.white} />
                 </Pressable>
@@ -4501,6 +4700,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                   onPress={() => {
                     try { onRetryFailed?.(item); } catch {}
                   }}
+                  onLongPress={openMessageActionsFromBubble}
+                  delayLongPress={280}
                   style={{
                     flexDirection: 'row',
                     alignItems: 'center',
@@ -4521,6 +4722,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                 onPress={() => {
                   try { onToggleRetryUi?.(String(item?.id || '')); } catch {}
                 }}
+                onLongPress={openMessageActionsFromBubble}
+                delayLongPress={280}
                 hitSlop={8}
                 style={{ flexDirection: 'row', alignItems: 'center' }}
               >
@@ -4594,6 +4797,17 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     const messageAnimation = getMessageAnimation(item.id);
     const canToggle = !!selectionMode;
+    const handleBubblePress = React.useCallback(() => {
+      if (canToggle) {
+        onToggleSelect?.(String(item.id));
+        return;
+      }
+      if (String(item?.type || '') === 'audio') {
+        onMessagePress?.(item);
+        return;
+      }
+      onMessagePress?.(item);
+    }, [canToggle, item, onToggleSelect, onMessagePress]);
     const isQuotedTargetHighlighted =
       highlightedMessageId != null && String(highlightedMessageId) === String(item.id);
 
@@ -4643,60 +4857,11 @@ export default function ChatScreen({ route, navigation }: Props) {
           </Pressable>
         )}
 
-        <View ref={bubbleRef} style={{ alignSelf: isMyMessage ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
+        <View style={{ alignSelf: isMyMessage ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
           {(() => {
             const bubbleFill = isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN;
-            const bubbleInner = (
-              <>
-          {/* Цитата ответа — вне TouchableOpacity, чтобы тап вёл к исходному сообщению */}
-          {item.replyTo && (
-            <Pressable
-              disabled={!!selectionMode}
-              onPress={() => onPressReplyQuote?.(String(item.replyTo.id))}
-              style={({ pressed }) => ({
-                flexDirection: 'row',
-                alignItems: 'flex-start',
-                marginBottom: 8,
-                paddingLeft: 8,
-                paddingVertical: 4,
-                marginHorizontal: -4,
-                marginTop: -2,
-                borderRadius: 8,
-                borderLeftWidth: replyQuoteBarWidth,
-                borderLeftColor: replyQuoteAccent,
-                opacity: selectionMode ? 0.5 : pressed ? 0.85 : 1,
-                backgroundColor: pressed && !selectionMode ? replyQuotePressBg : 'transparent',
-              })}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                  {item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—')}
-                </Text>
-                <Text style={{ color: LIVI.white, fontSize: 13, opacity: 0.85 }} numberOfLines={2}>
-                  {item.replyTo.text || '—'}
-                </Text>
-              </View>
-            </Pressable>
-          )}
-          <TouchableOpacity
-            onPress={() => {
-              if (canToggle) {
-                onToggleSelect?.(String(item.id));
-                return;
-              }
-              if (String(item?.type || '') === 'audio') {
-                onMessagePress?.(item);
-                return;
-              }
-              onMessagePress?.(item);
-            }}
-            delayLongPress={400}
-            onLongPress={() => {
-              animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
-            }}
-            activeOpacity={0.7}
-            style={{ maxWidth: '100%' }}
-          >
+            const bubbleBody = (
+              <View style={{ maxWidth: '100%' }}>
           {/* Основной контент */}
           {renderContent()}
           
@@ -4722,6 +4887,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                     <Text
                       key={idx}
                       onPress={() => openMessageUrl(seg.value)}
+                      onLongPress={openMessageActionsFromBubble}
+                      delayLongPress={280}
                       style={linkStyle}
                     >
                       {seg.value}
@@ -4758,6 +4925,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                       <Pressable
                         key={emoji}
                         onPress={() => onReactionPress?.(item.id, emoji)}
+                        onLongPress={openMessageActionsFromBubble}
+                        delayLongPress={280}
                         style={({ pressed }) => [
                           {
                             flexDirection: 'row',
@@ -4795,9 +4964,46 @@ export default function ChatScreen({ route, navigation }: Props) {
               </View>
             );
           })()}
-          </TouchableOpacity>
+              </View>
+            );
+
+            const bubbleWithReply = (
+              <>
+                {item.replyTo && (
+                  <Pressable
+                    disabled={!!selectionMode}
+                    onPress={() => onPressReplyQuote?.(String(item.replyTo.id))}
+                    onLongPress={openMessageActionsFromBubble}
+                    delayLongPress={280}
+                    style={({ pressed }) => ({
+                      flexDirection: 'row',
+                      alignItems: 'flex-start',
+                      marginBottom: 8,
+                      paddingLeft: 8,
+                      paddingVertical: 4,
+                      marginHorizontal: -4,
+                      marginTop: -2,
+                      borderRadius: 8,
+                      borderLeftWidth: replyQuoteBarWidth,
+                      borderLeftColor: replyQuoteAccent,
+                      opacity: selectionMode ? 0.5 : pressed ? 0.85 : 1,
+                      backgroundColor: pressed && !selectionMode ? replyQuotePressBg : 'transparent',
+                    })}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
+                        {item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—')}
+                      </Text>
+                      <Text style={{ color: LIVI.white, fontSize: 13, opacity: 0.85 }} numberOfLines={2}>
+                        {item.replyTo.text || '—'}
+                      </Text>
+                    </View>
+                  </Pressable>
+                )}
+                {bubbleBody}
               </>
             );
+
             if (androidHighlightRing) {
               return (
                 <View
@@ -4821,32 +5027,46 @@ export default function ChatScreen({ route, navigation }: Props) {
                       maxWidth: '100%',
                     }}
                   >
-                    <View
-                      style={{
-                        padding: 12,
-                        backgroundColor: bubbleFill,
-                        maxWidth: '100%',
-                      }}
+                    <Pressable
+                      ref={bubbleRef}
+                      onPress={handleBubblePress}
+                      onLongPress={openMessageActionsFromBubble}
+                      delayLongPress={280}
+                      style={({ pressed }) => [
+                        {
+                          padding: 12,
+                          backgroundColor: bubbleFill,
+                          maxWidth: '100%',
+                        },
+                        pressed && !selectionMode ? { opacity: 0.94 } : null,
+                      ]}
                     >
-                      {bubbleInner}
-                    </View>
+                      {bubbleWithReply}
+                    </Pressable>
                   </View>
                 </View>
               );
             }
             return (
-              <View
-                style={{
-                  padding: 12,
-                  backgroundColor: bubbleFill,
-                  borderRadius: BUBBLE_RADIUS,
-                  borderWidth: 1,
-                  borderColor: isQuotedTargetHighlighted ? highlightAccentColor : BORDER_COLOR,
-                  maxWidth: '100%',
-                }}
+              <Pressable
+                ref={bubbleRef}
+                onPress={handleBubblePress}
+                onLongPress={openMessageActionsFromBubble}
+                delayLongPress={280}
+                style={({ pressed }) => [
+                  {
+                    padding: 12,
+                    backgroundColor: bubbleFill,
+                    borderRadius: BUBBLE_RADIUS,
+                    borderWidth: 1,
+                    borderColor: isQuotedTargetHighlighted ? highlightAccentColor : BORDER_COLOR,
+                    maxWidth: '100%',
+                  },
+                  pressed && !selectionMode ? { opacity: 0.94 } : null,
+                ]}
               >
-                {bubbleInner}
-              </View>
+                {bubbleWithReply}
+              </Pressable>
             );
           })()}
         </View>

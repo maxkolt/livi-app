@@ -2357,6 +2357,14 @@ export function onMessageDeleted(
   return () => { socket.off("message:deleted", h); };
 }
 
+export function onMessagesDeleted(
+  cb: (data: { messageIds: string[]; deletedBy: string }) => void
+): () => void {
+  const h = (data: any) => cb(data);
+  socket.on("messages:deleted", h);
+  return () => { socket.off("messages:deleted", h); };
+}
+
 export function onMessageReadReceipt(
   cb: (receipt: {
     messageId: string;
@@ -2588,6 +2596,65 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
   } catch (error) {
     console.error('Failed to delete message:', error);
     return false;
+  }
+}
+
+export async function deleteMessages(messageIds: string[]): Promise<{ deletedIds: string[]; failedIds: string[] }> {
+  try {
+    const normalized = Array.from(new Set((messageIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+    if (normalized.length === 0) return { deletedIds: [], failedIds: [] };
+
+    const viaSocket = async () => {
+      return await emitAck<{ ok: boolean; deletedIds?: string[]; failedIds?: string[] }>('messages:delete', {
+        messageIds: normalized,
+      });
+    };
+
+    const viaHttp = async () => {
+      const installId = await getInstallId().catch(() => '');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (installId) headers['x-install-id'] = String(installId);
+      if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+      const url = `${API_BASE}/api/messages/delete_many`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ messageIds: normalized }),
+          signal: controller.signal,
+        });
+        if (!res.ok) return { deletedIds: [], failedIds: normalized };
+        const data = await res.json().catch(() => null);
+        return {
+          deletedIds: Array.isArray(data?.deletedIds) ? data.deletedIds.map(String) : [],
+          failedIds: Array.isArray(data?.failedIds) ? data.failedIds.map(String) : normalized,
+        };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    try {
+      const r: any = await viaSocket();
+      if (r?.ok === true) {
+        return {
+          deletedIds: Array.isArray(r?.deletedIds) ? r.deletedIds.map(String) : [],
+          failedIds: Array.isArray(r?.failedIds) ? r.failedIds.map(String) : [],
+        };
+      }
+      return await viaHttp();
+    } catch {
+      return await viaHttp();
+    }
+  } catch (error) {
+    console.error('Failed to delete messages:', error);
+    return {
+      deletedIds: [],
+      failedIds: Array.from(new Set((messageIds || []).map((id) => String(id || '').trim()).filter(Boolean))),
+    };
   }
 }
 
