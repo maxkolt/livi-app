@@ -1825,6 +1825,37 @@ io.on('connection', async (sock: AuthedSocket) => {
         socketIds: Array.from(socketsToNotify)
       });
 
+      // КРИТИЧНО: Сначала мгновенно уведомляем обоих клиентов о завершении звонка,
+      // а уже потом делаем более тяжёлую серверную очистку (presence, room cleanup, push).
+      // Иначе второй участник ждёт server-side await и экран VideoCall закрывается заметно позже.
+      logger.info('📤 [call:end] Sending call:ended to all participants', {
+        roomId: id,
+        participantCount: socketsToNotify.size,
+        socketIds: Array.from(socketsToNotify)
+      });
+
+      // Отправляем call:ended каждому участнику один раз (напрямую сокету), чтобы клиент не получал дубли и не мерцал при переходе на Home.
+      const notifiedSockets: string[] = [];
+      for (const sid of socketsToNotify) {
+        const socket = io.sockets.sockets.get(sid);
+        if (socket) {
+          socket.emit('call:ended', {
+            callId: callId || undefined,
+            roomId: id,
+            reason: 'ended',
+            scope: 'direct',
+            resolvedRoomId: id,
+          });
+          notifiedSockets.push(sid);
+          logger.info('📤 [call:end] ✅ Отправлено call:ended сокету', {
+            socketId: sid,
+            userId: (socket as any)?.data?.userId,
+            roomId: id,
+            callId: callId || id,
+          });
+        }
+      }
+
       // Снимаем busy со всех участников и очищаем состояние
       const callEndedParticipantUserIds = new Set<string>();
       for (const sid of socketsToNotify) {
@@ -1856,35 +1887,6 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
       for (const uid of callEndedParticipantUserIds) {
         applyFastOfflineAfterCallIfAllSocketsBackground(io, uid);
-      }
-      
-      // Отправляем call:ended всем участникам
-      logger.info('📤 [call:end] Sending call:ended to all participants', {
-        roomId: id,
-        participantCount: socketsToNotify.size,
-        socketIds: Array.from(socketsToNotify)
-      });
-      
-      // Отправляем call:ended каждому участнику один раз (напрямую сокету), чтобы клиент не получал дубли и не мерцал при переходе на Home.
-      const notifiedSockets: string[] = [];
-      for (const sid of socketsToNotify) {
-        const socket = io.sockets.sockets.get(sid);
-        if (socket) {
-          socket.emit('call:ended', {
-            callId: callId || undefined,
-            roomId: id,
-            reason: 'ended',
-            scope: 'direct',
-            resolvedRoomId: id,
-          });
-          notifiedSockets.push(sid);
-          logger.info('📤 [call:end] ✅ Отправлено call:ended сокету', {
-            socketId: sid,
-            userId: (socket as any)?.data?.userId,
-            roomId: id,
-            callId: callId || id,
-          });
-        }
       }
       
       if (callId) callIdToRoomId.delete(String(callId));
