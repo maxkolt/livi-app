@@ -10,6 +10,21 @@ const router = Router();
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
+async function purgeMessageFromFriendship(friendshipId: mongoose.Types.ObjectId | null, messageId: string) {
+  if (!friendshipId || !messageId) return;
+  await FriendshipMessages.updateOne(
+    { _id: friendshipId },
+    {
+      $pull: {
+        textMessages: { id: messageId },
+        imageMessages: { id: messageId },
+        audioMessages: { id: messageId },
+      },
+      $set: { lastActivity: new Date() },
+    }
+  ).exec();
+}
+
 /**
  * POST /api/messages/send
  * Body: { to, type: 'text'|'image'|'audio', text?, uri?, name?, size?, duration? }
@@ -356,11 +371,7 @@ router.post('/messages/delete', async (req, res) => {
       msgType = (doc as any).type;
       if (fromUserId !== me && toUserId !== me) return res.json({ ok: false, error: 'not_found' });
       await FriendshipMessageItem.deleteOne({ id: messageId }).exec();
-      const path = msgType === 'text' ? 'textMessages' : msgType === 'image' ? 'imageMessages' : 'audioMessages';
-      await FriendshipMessages.updateOne(
-        { _id: friendshipId },
-        { $pull: { [path]: { id: messageId } }, $set: { lastActivity: new Date() } }
-      ).exec();
+      await purgeMessageFromFriendship(friendshipId, messageId);
     } else {
       const list = await FriendshipMessages.find({
         $and: [
@@ -383,6 +394,7 @@ router.post('/messages/delete', async (req, res) => {
       if (!fd) return res.json({ ok: false, error: 'not_found' });
       const friendship = await FriendshipMessages.findOne({ _id: (fd as any)._id });
       if (friendship) await (friendship as any).removeMessage(messageId);
+      await purgeMessageFromFriendship(friendshipId, messageId);
     }
 
     try {

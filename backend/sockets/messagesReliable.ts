@@ -10,6 +10,21 @@ import { sendMessagePushToUser } from '../utils/push';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
+async function purgeMessageFromFriendship(friendshipId: mongoose.Types.ObjectId | null, messageId: string) {
+  if (!friendshipId || !messageId) return;
+  await FriendshipMessages.updateOne(
+    { _id: friendshipId },
+    {
+      $pull: {
+        textMessages: { id: messageId },
+        imageMessages: { id: messageId },
+        audioMessages: { id: messageId },
+      },
+      $set: { lastActivity: new Date() },
+    }
+  ).exec();
+}
+
 // Простое хранение непрочитанных сообщений в памяти (для быстрого доступа)
 const unreadMessages = new Map<string, Array<{ id: string; from: string; timestamp: string }>>();
 
@@ -808,17 +823,14 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
       if (doc) {
         await FriendshipMessageItem.deleteOne({ id: messageId });
-        const path = msgType === 'text' ? 'textMessages' : msgType === 'image' ? 'imageMessages' : 'audioMessages';
-        await FriendshipMessages.updateOne(
-          { _id: friendshipId },
-          { $pull: { [path]: { id: messageId } }, $set: { lastActivity: new Date() } }
-        ).exec();
+        await purgeMessageFromFriendship(friendshipId, messageId);
       } else {
         const friendship = await FriendshipMessages.findOne({
           _id: friendshipId,
           $or: [{ user1: me }, { user2: me }],
         });
         if (friendship) await (friendship as any).removeMessage(messageId);
+        await purgeMessageFromFriendship(friendshipId, messageId);
       }
 
       try {
