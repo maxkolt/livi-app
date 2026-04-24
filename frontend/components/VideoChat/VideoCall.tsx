@@ -330,6 +330,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const currentCallIdRef = useRef<string | null>(route?.params?.callId || null);
   const acceptCallTimeRef = useRef<number>(0);
   const sessionRef = useRef<VideoCallSession | null>(null);
+  const screenInstanceIdRef = useRef(`video-call-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   
   // Используем хуки
   const pip = usePiP();
@@ -337,6 +338,42 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     pipRef.current = pip;
   }, [pip]);
+  const getTrackEnabled = useCallback((stream: MediaStream | null | undefined, kind: 'audio' | 'video') => {
+    try {
+      const track =
+        kind === 'audio'
+          ? (stream as any)?.getAudioTracks?.()?.[0]
+          : (stream as any)?.getVideoTracks?.()?.[0];
+      return typeof track?.enabled === 'boolean' ? track.enabled : undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
+  const getDesiredLocalMediaStateForPiPReturn = useCallback((stream?: MediaStream | null) => {
+    const effectiveStream =
+      stream ||
+      sessionRef.current?.getLocalStream?.() ||
+      pip.localStream ||
+      localStreamRef.current ||
+      null;
+    const trackMicOn = getTrackEnabled(effectiveStream, 'audio');
+    const trackCamOn = getTrackEnabled(effectiveStream, 'video');
+    return {
+      micOn: typeof trackMicOn === 'boolean' ? trackMicOn : !pip.isMuted,
+      camOn:
+        typeof trackCamOn === 'boolean'
+          ? trackCamOn
+          : (typeof pip.localCamOn === 'boolean' ? pip.localCamOn : camOn),
+    };
+  }, [camOn, getTrackEnabled, pip.isMuted, pip.localCamOn, pip.localStream]);
+  const getDesiredRemoteMutedForPiPReturn = useCallback(() => {
+    const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+    const fromSession =
+      session && typeof session.getRemoteAudioMuted === 'function'
+        ? session.getRemoteAudioMuted()
+        : undefined;
+    return typeof fromSession === 'boolean' ? fromSession : !!pip.isRemoteMuted;
+  }, [pip.isRemoteMuted]);
 
   // Хук для входящих звонков (игнорируем входящий от текущего собеседника при активном звонке)
   const incomingCallHook = useIncomingCall({
@@ -533,6 +570,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const isEndingCallRef = useRef(false); // КРИТИЧНО: Флаг для предотвращения повторных вызовов handleCallEnded
   const [isEndingCall, setIsEndingCall] = useState(false); // Синхронно с ref: скрываем бейдж/активный звонок при завершении, чтобы не мигало
   const callEndedTransitionDoneRef = useRef(false); // Один переход в UI «завершён» — защита от многократных setState при disconnect + call:ended
+  const deferredTeardownScheduledRef = useRef<{ key: string; source: string } | null>(null);
   // КРИТИЧНО: изменения sessionRef.current сами по себе НЕ триггерят ререндер.
   // В dev это может маскироваться (StrictMode), но в release приводит к тому, что эффекты
   // установки хендлеров/бриджа стримов не срабатывают. Поэтому используем tick.
@@ -715,7 +753,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       partnerAvatarUrl: avatarUrl,
       localStream: localStream || null,
       remoteStream: remoteStream || null,
-      localCamOn: camOn,
+      localCamOn: getTrackEnabled(localStream, 'video') ?? camOn,
+      muteLocal: !(getTrackEnabled(localStream, 'audio') ?? micOn),
+      muteRemote: getDesiredRemoteMutedForPiPReturn(),
       remoteCamOn,
       navParams: { ...route?.params, peerUserId: partnerUserId, partnerId } as any,
     };
@@ -739,7 +779,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
     };
-  }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, remoteCamOn, route?.params, isFocused, appState]);
+  }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, micOn, remoteMuted, remoteCamOn, route?.params, isFocused, appState, getTrackEnabled, getDesiredRemoteMutedForPiPReturn]);
 
   // КРИТИЧНО: Выставляем «активный видеозвонок» при показе экрана VideoCall (а не только после connectToLiveKit),
   // чтобы сокет не отключался при уходе в фон до создания комнаты (например, ответ на звонок с блокировки).
@@ -1004,13 +1044,187 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   const clearSessionRefs = useCallback(() => {
     sessionRef.current = null;
-    (global as any).__webrtcSessionRef.current = null;
-    if ((global as any).__endCallCleanupRef) {
-      (global as any).__endCallCleanupRef.current = null;
+    const g = global as any;
+    const cleanupOwner = g.__endCallCleanupOwnerRef?.current;
+    if (g.__webrtcSessionRef && cleanupOwner === screenInstanceIdRef.current) {
+      g.__webrtcSessionRef.current = null;
+    }
+    if (g.__endCallCleanupRef && cleanupOwner === screenInstanceIdRef.current) {
+      g.__endCallCleanupRef.current = null;
+    }
+    if (g.__endCallCleanupOwnerRef && cleanupOwner === screenInstanceIdRef.current) {
+      g.__endCallCleanupOwnerRef.current = null;
     }
     // НЕ очищаем __pendingCallAcceptedRef здесь: при ремаунте (двойная навигация) новая сессия должна прочитать payload и подключиться. Очищает только VideoCallSession после использования.
     currentCallIdRef.current = null;
   }, []);
+
+  const getGlobalCleanupKey = useCallback((cid?: string | null, rid?: string | null) => {
+    const c = String(cid ?? '').trim();
+    const r = String(rid ?? '').trim();
+    return c && r ? `${c}|${r}` : c || r || '';
+  }, []);
+
+  const wasGlobalCleanupDone = useCallback((cid?: string | null, rid?: string | null) => {
+    const key = getGlobalCleanupKey(cid, rid);
+    if (!key) return false;
+    const marker = (global as any).__videoCallCleanupDoneRef?.current;
+    return marker?.key === key;
+  }, [getGlobalCleanupKey]);
+
+  const markGlobalCleanupDone = useCallback((reason: string, cid?: string | null, rid?: string | null) => {
+    const key = getGlobalCleanupKey(cid, rid);
+    if (!key) return;
+    const g = global as any;
+    g.__videoCallCleanupDoneRef = g.__videoCallCleanupDoneRef || { current: null };
+    g.__videoCallCleanupDoneRef.current = { key, at: Date.now(), reason };
+  }, [getGlobalCleanupKey]);
+
+  const wasGlobalTeardownScheduled = useCallback((cid?: string | null, rid?: string | null) => {
+    const key = getGlobalCleanupKey(cid, rid);
+    if (!key) return false;
+    const marker = (global as any).__videoCallTeardownScheduledRef?.current;
+    return marker?.key === key;
+  }, [getGlobalCleanupKey]);
+
+  const markGlobalTeardownScheduled = useCallback((reason: string, cid?: string | null, rid?: string | null) => {
+    const key = getGlobalCleanupKey(cid, rid);
+    if (!key) return;
+    const g = global as any;
+    g.__videoCallTeardownScheduledRef = g.__videoCallTeardownScheduledRef || { current: null };
+    g.__videoCallTeardownScheduledRef.current = { key, at: Date.now(), reason };
+  }, [getGlobalCleanupKey]);
+
+  const isCleanupOwner = useCallback(() => {
+    return (global as any).__endCallCleanupOwnerRef?.current === screenInstanceIdRef.current;
+  }, []);
+
+  const scheduleDeferredTeardown = useCallback((params: {
+    source: string;
+    callId?: string | null;
+    roomId?: string | null;
+    sessionSnapshot?: any;
+    localStreamSnapshot?: MediaStream | null;
+    shouldReportEndCall?: boolean;
+    shouldEndSession?: boolean;
+  }) => {
+    const {
+      source,
+      callId: rawCallId,
+      roomId: rawRoomId,
+      sessionSnapshot,
+      localStreamSnapshot,
+      shouldReportEndCall = true,
+      shouldEndSession = false,
+    } = params;
+    const finalCallId = rawCallId ?? null;
+    const finalRoomId = rawRoomId ?? null;
+    const key = getGlobalCleanupKey(finalCallId, finalRoomId) || source;
+    if (wasGlobalTeardownScheduled(finalCallId, finalRoomId)) {
+      logger.info('[VideoCall] [end] deferred teardown already scheduled globally - skipping duplicate', {
+        source,
+        key,
+      });
+      return false;
+    }
+    const alreadyScheduled = deferredTeardownScheduledRef.current;
+    if (alreadyScheduled) {
+      logger.info('[VideoCall] [end] deferred teardown already scheduled - skipping duplicate', {
+        source,
+        scheduledBy: alreadyScheduled.source,
+        key,
+      });
+      return false;
+    }
+    deferredTeardownScheduledRef.current = { key, source };
+    markGlobalTeardownScheduled(source, finalCallId, finalRoomId);
+    setTimeout(() => {
+      logger.info('[VideoCall] [end] deferred teardown tick', {
+        source,
+        key,
+      });
+      if (callEndedTransitionDoneRef.current && wasGlobalCleanupDone(finalCallId, finalRoomId)) {
+        logger.info('[VideoCall] [end] deferred teardown skipped - already finalized', {
+          source,
+          callId: finalCallId,
+          roomId: finalRoomId,
+        });
+        return;
+      }
+      callEndedTransitionDoneRef.current = true;
+      markGlobalCleanupDone(source, finalCallId, finalRoomId);
+
+      if (shouldReportEndCall) {
+        const doReportEndCall = () => {
+          reportEndCallToCallKeep(finalCallId);
+          if (Platform.OS === 'android') {
+            setTimeout(() => {
+              try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(false); } catch (_) {}
+            }, 600);
+          }
+        };
+        if (Platform.OS === 'android') {
+          setTimeout(doReportEndCall, 120);
+        } else {
+          doReportEndCall();
+        }
+      }
+
+      if (pipRef.current.visible || isPipOverlayVisibleSync()) {
+        pipRef.current.hidePiP();
+        const syncPiPState = (global as any).__pipSyncSessionStateRef?.current;
+        if (typeof syncPiPState === 'function') {
+          syncPiPState(false, `VideoCall.${source}`);
+        }
+      }
+      const inSystemNow = (global as any).__pipInSystemModeRef?.current === true;
+      if (inSystemNow && Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+      }
+
+      let stoppedStream: MediaStream | null = null;
+      try {
+        const sessionLocalStream = sessionSnapshot?.getLocalStream?.();
+        stopStreamTracks(sessionLocalStream, `${source}/sessionLocalStream`);
+        stoppedStream = sessionLocalStream || null;
+      } catch (e) {
+        logger.warn('[VideoCall] Error stopping session local stream during deferred teardown', {
+          source,
+          error: e,
+        });
+      }
+      if (localStreamSnapshot && localStreamSnapshot !== stoppedStream) {
+        stopStreamTracks(localStreamSnapshot, `${source}/localStreamState`);
+      }
+
+      const sessionAlreadyEnded =
+        typeof sessionSnapshot?.isEnded === 'function' && sessionSnapshot.isEnded();
+      if (shouldEndSession && !sessionAlreadyEnded && typeof sessionSnapshot?.endCall === 'function') {
+        sessionSnapshot.endCall(finalCallId ?? undefined, finalRoomId ?? undefined);
+      } else if (shouldEndSession && sessionAlreadyEnded) {
+        logger.info('[VideoCall] deferred teardown: session already ended, skipping session.endCall', {
+          source,
+        });
+      }
+
+      if (typeof sessionSnapshot?.cleanup === 'function') {
+        sessionSnapshot.cleanup();
+      }
+      clearSessionRefs();
+      clearVideoCallHomeScreenLocks(`${source}-deferred`);
+      remoteStreamRef.current = null;
+      remoteStreamReceivedAtRef.current = null;
+      currentCallIdRef.current = null;
+      clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
+
+      setTimeout(() => {
+        isEndingCallRef.current = false;
+        setIsEndingCall(false);
+        logger.debug('[VideoCall] isEndingCallRef reset after deferred teardown', { source });
+      }, 1000);
+    }, 0);
+    return true;
+  }, [clearSessionRefs, getGlobalCleanupKey, isPipOverlayVisibleSync, markGlobalCleanupDone, markGlobalTeardownScheduled, wasGlobalCleanupDone, wasGlobalTeardownScheduled]);
 
   // Guard: эффект восстановления из PiP должен срабатывать один раз на возврат,
   // иначе он может откатывать camOn после ручного нажатия кнопки камеры.
@@ -1029,16 +1243,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
     if (resume && fromPiP && session && !resumeFromPiPEffectRanRef.current) {
       resumeFromPiPEffectRanRef.current = true;
+      const { camOn: desiredCamOn, micOn: desiredMicOn } = getDesiredLocalMediaStateForPiPReturn(pip.localStream);
       if (pip.localStream) {
         setLocalStream(pip.localStream);
         setLocalRenderKey((k: number) => k + 1);
-        // ВАЖНО: НЕ включаем камеру автоматически. Восстанавливаем ровно то состояние,
-        // которое было на момент входа в PiP (сохраняется в PiPContext).
-        const desiredCamOn =
-          typeof pip.localCamOn === 'boolean'
-            ? pip.localCamOn
-            : ((pip.localStream as any)?.getVideoTracks?.()?.[0]?.enabled ?? false);
-
         try {
           const videoTrack = (pip.localStream as any)?.getVideoTracks?.()?.[0];
           if (videoTrack) {
@@ -1050,19 +1258,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (pip.remoteStream) {
         setRemoteStream(pip.remoteStream);
       }
-      // Восстанавливаем состояние микрофона из PiP (isMuted = true → мик выключен → micOn = false)
-      logMicTraceRef.current('PiP resume effect → setMicOn from pip.isMuted', {
+      setRemoteMuted(getDesiredRemoteMutedForPiPReturn());
+      logMicTraceRef.current('PiP resume effect → setMicOn from local media snapshot', {
         pipIsMuted: pip.isMuted,
-        nextMicOn: !pip.isMuted,
+        nextMicOn: desiredMicOn,
       });
-      setMicOn(!pip.isMuted);
-      if (session.exitPiP) {
-        session.exitPiP();
-      }
+      setMicOn(!!desiredMicOn);
     }
     // sessionTick нужен: при возврате из PiP сессия подставляется в другом эффекте (sessionRef = global);
     // без sessionTick эффект восстановления запускается до этого и видит session = null, поэтому setMicOn не вызывается.
-  }, [route?.params?.resume, route?.params?.fromPiP, pip.localStream, pip.remoteStream, pip.localCamOn, pip.isMuted, sessionTick]);
+  }, [route?.params?.resume, route?.params?.fromPiP, pip.localStream, pip.remoteStream, pip.localCamOn, pip.isMuted, pip.isRemoteMuted, sessionTick, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn]);
 
   // При возврате из фона во время видеозвонка — переподключить камеру, если система её закрыла
   useEffect(() => {
@@ -1085,6 +1290,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       return;
     }
     callEndedTransitionDoneRef.current = false; // новый звонок — разрешаем один переход в «завершён»
+    deferredTeardownScheduledRef.current = null;
+    try {
+      const marker = (global as any).__videoCallCleanupDoneRef?.current;
+      const teardownMarker = (global as any).__videoCallTeardownScheduledRef?.current;
+      const routeCallId = route?.params?.callId ?? null;
+      const routeRoomId = route?.params?.roomId ?? null;
+      const currentKey = getGlobalCleanupKey(routeCallId, routeRoomId);
+      if (marker?.key && marker.key !== currentKey) {
+        (global as any).__videoCallCleanupDoneRef.current = null;
+      }
+      if (teardownMarker?.key && teardownMarker.key !== currentKey) {
+        (global as any).__videoCallTeardownScheduledRef.current = null;
+      }
+    } catch (_) {}
     // КРИТИЧНО: При возврате из PiP используем существующую сессию из глобальной ссылки
     // Это гарантирует, что видеопоток восстановится у обоих участников
     const fromPiP = !!route?.params?.fromPiP;
@@ -1109,12 +1328,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             streamId: sessionRemoteStream.id,
           });
         }
-        // Восстанавливаем состояние микрофона из PiP сразу при подстановке сессии (надёжно, до любого другого эффекта)
-        logMicTraceRef.current('fromPiP global session restore → setMicOn from pip.isMuted', {
+        const { micOn: desiredMicOn } = getDesiredLocalMediaStateForPiPReturn(globalSession.getLocalStream?.());
+        logMicTraceRef.current('fromPiP global session restore → setMicOn from local media snapshot', {
           pipIsMuted: pip.isMuted,
-          nextMicOn: !pip.isMuted,
+          nextMicOn: desiredMicOn,
         });
-        setMicOn(!pip.isMuted);
+        setMicOn(!!desiredMicOn);
+        setRemoteMuted(getDesiredRemoteMutedForPiPReturn());
         // КРИТИЧНО: НЕ возвращаемся здесь - нужно установить обработчики событий
         // Обработчики будут установлены ниже в этом же useEffect
       }
@@ -1599,6 +1819,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Функция должна работать даже когда VideoCall экран размонтирован (в PiP/фоне)
     const cleanupFunction = () => {
       logger.info('[VideoCall] 🔥 cleanupFunction вызвана из глобальной ссылки (PiP/фон)');
+      if (!isCleanupOwner()) {
+        logger.info('[VideoCall] cleanupFunction skipped - cleanup owner changed', {
+          instanceId: screenInstanceIdRef.current,
+          cleanupOwner: (global as any).__endCallCleanupOwnerRef?.current ?? null,
+        });
+        return;
+      }
+      const currentSession = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+      const cleanupCallId = currentSession?.getCallId?.() ?? callId ?? currentCallIdRef.current ?? null;
+      const cleanupRoomId = currentSession?.getRoomId?.() ?? roomId ?? null;
       
       // КРИТИЧНО: Всегда сбрасываем refs и уведомляем HomeScreen сразу, чтобы кнопки видеозвонка и бейдж «Занят»
       // обновились сразу после завершения из in-app PiP (даже при раннем return ниже).
@@ -1614,13 +1844,26 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         });
         return;
       }
+      if (wasGlobalCleanupDone(cleanupCallId, cleanupRoomId)) {
+        logger.info('[VideoCall] cleanupFunction skipped - global cleanup already completed', {
+          cleanupCallId,
+          cleanupRoomId,
+        });
+        return;
+      }
+      if (wasGlobalTeardownScheduled(cleanupCallId, cleanupRoomId)) {
+        logger.info('[VideoCall] cleanupFunction skipped - deferred teardown already scheduled globally', {
+          cleanupCallId,
+          cleanupRoomId,
+        });
+        return;
+      }
       
       // КРИТИЧНО: Устанавливаем флаги СИНХРОННО перед вызовом session.endCall()
       // Это предотвратит повторные вызовы handleCallEnded (особенно важно на iOS)
       isEndingCallRef.current = true;
       isInactiveStateRef.current = true;
-      
-      const currentSession = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+      markGlobalCleanupDone('cleanupFunction', cleanupCallId, cleanupRoomId);
       
       if (currentSession) {
         try {
@@ -1687,16 +1930,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // КРИТИЧНО: Устанавливаем глобальную ссылку на функцию очистки сразу после создания сессии
     // Это нужно чтобы можно было вызвать очистку даже когда VideoCall экран размонтирован (в PiP/фоне)
     (global as any).__endCallCleanupRef.current = cleanupFunction;
+    (global as any).__endCallCleanupOwnerRef = (global as any).__endCallCleanupOwnerRef || { current: null };
+    (global as any).__endCallCleanupOwnerRef.current = screenInstanceIdRef.current;
     logger.info('[VideoCall] ✅ Глобальная ссылка на функцию очистки установлена при создании сессии', {
       hasCleanupFn: typeof cleanupFunction === 'function',
-      hasSession: !!session
+      hasSession: !!session,
+      owner: screenInstanceIdRef.current,
     });
     
     // КРИТИЧНО: Обработчики событий устанавливаются в отдельном useEffect ниже
     // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
     // КРИТИЧНО: Убрали зависимости roomId, callId, partnerId чтобы не пересоздавать сессию
     // Сессия создается один раз при монтировании компонента
-  }, [route?.params?.directCall, route?.params?.resume, pip.visible, clearSessionRefs, isInactiveState, wasFriendCallEnded]);
+  }, [route?.params?.directCall, route?.params?.resume, pip.visible, pip.isRemoteMuted, clearSessionRefs, isInactiveState, wasFriendCallEnded, isCleanupOwner, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn]);
   
   // КРИТИЧНО: Отдельный useEffect для установки обработчиков событий
   // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
@@ -1740,7 +1986,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       logger.info('[VideoCall] [end] handleCallEnded вызван', {
         callEndedTransitionDoneRef: callEndedTransitionDoneRef.current,
         isEndingCallRef: isEndingCallRef.current,
+        deferredTeardownScheduledBy: deferredTeardownScheduledRef.current?.source ?? null,
       });
+      if (deferredTeardownScheduledRef.current) {
+        logger.info('[VideoCall] [end] handleCallEnded skipped - deferred teardown already scheduled', {
+          scheduledBy: deferredTeardownScheduledRef.current.source,
+        });
+        return;
+      }
       if (callEndedTransitionDoneRef.current) {
         logger.info('[VideoCall] [end] переход уже применён - игнорируем');
         return;
@@ -1821,53 +2074,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
       // Только очистка в фоне — без setState, чтобы не было ререндеров и мерцания (экран уже закрывается).
       const idToReport = callId ?? currentCallIdRef.current ?? null;
-      setTimeout(() => {
-        logger.info('[VideoCall] [end] handleCallEnded deferred cleanup tick');
-        if (callEndedTransitionDoneRef.current) return;
-        callEndedTransitionDoneRef.current = true;
-
-        const doReportEndCall = () => {
-          reportEndCallToCallKeep(idToReport);
-          if (Platform.OS === 'android') {
-            setTimeout(() => {
-              try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(false); } catch (_) {}
-            }, 600);
-          }
-        };
-        if (Platform.OS === 'android') {
-          setTimeout(doReportEndCall, 120);
-        } else {
-          doReportEndCall();
-        }
-
-        const sessionSnapshot = sessionRef.current;
-        if (typeof sessionSnapshot?.cleanup === 'function') {
-          sessionSnapshot.cleanup();
-        }
-        clearSessionRefs();
-        clearVideoCallHomeScreenLocks('handleCallEnded-deferred');
-        const localStreamSnapshot = localStreamRef.current;
-        stopStreamTracks(localStreamSnapshot, 'callEnded/localStreamState');
-        const sessionLocalStream = sessionSnapshot?.getLocalStream?.();
-        if (sessionLocalStream && sessionLocalStream !== localStreamSnapshot) {
-          stopStreamTracks(sessionLocalStream, 'callEnded/sessionLocalStream');
-        }
-        if (pipRef.current.visible || isPipOverlayVisibleSync()) {
-          pipRef.current.hidePiP();
-          sessionRef.current?.exitPiP?.();
-        }
-        const inSystemNow = (global as any).__pipInSystemModeRef?.current === true;
-        if (inSystemNow && Platform.OS === 'android') {
-          try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
-        }
-        remoteStreamRef.current = null;
-        remoteStreamReceivedAtRef.current = null;
-        clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
-        setTimeout(() => {
-          isEndingCallRef.current = false;
-          setIsEndingCall(false);
-        }, 1000);
-      }, 0);
+      const roomIdToCleanup = roomId ?? sessionRef.current?.getRoomId?.() ?? null;
+      scheduleDeferredTeardown({
+        source: 'handleCallEnded',
+        callId: idToReport,
+        roomId: roomIdToCleanup,
+        sessionSnapshot: sessionRef.current,
+        localStreamSnapshot: localStreamRef.current,
+        shouldReportEndCall: true,
+        shouldEndSession: false,
+      });
     };
     
     const handleCallAnswered = () => {
@@ -2142,6 +2358,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       logger.info('[VideoCall] [end] onAbortCall повторно — пропускаем');
       return;
     }
+    if (deferredTeardownScheduledRef.current) {
+      logger.info('[VideoCall] [end] onAbortCall skipped - deferred teardown already scheduled', {
+        scheduledBy: deferredTeardownScheduledRef.current.source,
+      });
+      return;
+    }
 
     // КРИТИЧНО: Проверяем до выставления isEndingCallRef — иначе при раннем return залипают кнопки на Home.
     if (isInactiveStateRef.current) {
@@ -2159,6 +2381,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       isEndingCallRef.current = true;
       setIsEndingCall(true);
       isInactiveStateRef.current = true;
+      markGlobalCleanupDone('onAbortCall-no-session', callId ?? currentCallIdRef.current ?? null, roomId ?? null);
       try {
         setWasFriendCallEnded(true);
       } catch (_) {}
@@ -2278,66 +2501,25 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const sessionRefForCleanup = session;
     const localStreamForCleanup = localStream;
 
+    scheduleDeferredTeardown({
+      source: 'onAbortCall',
+      callId: idToSend ?? idToReport ?? null,
+      roomId: roomToSend ?? null,
+      sessionSnapshot: sessionRefForCleanup,
+      localStreamSnapshot: localStreamForCleanup,
+      shouldReportEndCall: true,
+      shouldEndSession: true,
+    });
+
     setTimeout(() => {
-      logger.info('[VideoCall] [end] onAbortCall deferred cleanup tick');
       try {
-        reportEndCallToCallKeep(idToReport);
-
-        if (pipRef.current.visible || isPipOverlayVisibleSync()) {
-          pipRef.current.hidePiP();
-          sessionRefForCleanup.exitPiP?.();
-        }
-
-        let stoppedStream: MediaStream | null = null;
-        try {
-          const sessionLocalStream = sessionRefForCleanup.getLocalStream?.();
-          stopStreamTracks(sessionLocalStream, 'onAbortCall/sessionLocalStream');
-          stoppedStream = sessionLocalStream || null;
-        } catch (e) {
-          logger.warn('[VideoCall] Error stopping session local stream:', e);
-        }
-        if (localStreamForCleanup && localStreamForCleanup !== stoppedStream) {
-          stopStreamTracks(localStreamForCleanup, 'onAbortCall/localStreamState');
-        }
-
-        const sessionAlreadyEnded =
-          typeof sessionRefForCleanup.isEnded === 'function' && sessionRefForCleanup.isEnded();
-        if (!sessionAlreadyEnded && typeof sessionRefForCleanup.endCall === 'function') {
-          sessionRefForCleanup.endCall(idToSend ?? undefined, roomToSend ?? undefined);
-        } else if (sessionAlreadyEnded) {
-          logger.info('[VideoCall] onAbortCall deferred cleanup: session already ended, skipping session.endCall');
-        } else {
-          logger.warn('[VideoCall] onAbortCall deferred cleanup: session.endCall unavailable');
-        }
-
-        remoteStreamRef.current = null;
-        remoteStreamReceivedAtRef.current = null;
-        currentCallIdRef.current = null;
-
-        if (typeof sessionRefForCleanup.cleanup === 'function') {
-          sessionRefForCleanup.cleanup();
-        }
-        clearSessionRefs();
-        clearVideoCallHomeScreenLocks('onAbortCall-deferred');
-        clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
-      } catch (e) {
-        logger.warn('[VideoCall] onAbortCall deferred cleanup failed', e);
-        clearVideoCallHomeScreenLocks('onAbortCall-deferred-failed');
+        const gr = (global as any).__endingCallInProgressRef;
+        if (gr && typeof gr.current !== 'undefined') gr.current = false;
+      } catch (_) {}
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(false); } catch (_) {}
       }
 
-      setTimeout(() => {
-        isEndingCallRef.current = false;
-        setIsEndingCall(false);
-        try {
-          const gr = (global as any).__endingCallInProgressRef;
-          if (gr && typeof gr.current !== 'undefined') gr.current = false;
-        } catch (_) {}
-        if (Platform.OS === 'android') {
-          try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(false); } catch (_) {}
-        }
-        logger.debug('[VideoCall] isEndingCallRef reset in onAbortCall');
-      }, 1000);
-      
       // КРИТИЧНО: Дополнительная проверка через небольшую задержку
       // Убеждаемся, что камера действительно остановлена
       setTimeout(() => {
@@ -2364,7 +2546,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           }
         }
       }, 100);
-    }, 0);
+    }, 1000);
   }, [isInactiveState, roomId, callId, localStream]);
   
   // КРИТИЧНО: Обновляем глобальные ссылки при изменении сессии или функции очистки
@@ -2391,6 +2573,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     if (typeof onAbortCall === 'function' && !(global as any).__endCallCleanupRef?.current) {
       // Если cleanupFunction еще не установлена, используем onAbortCall
       (global as any).__endCallCleanupRef.current = onAbortCall;
+      (global as any).__endCallCleanupOwnerRef = (global as any).__endCallCleanupOwnerRef || { current: null };
+      (global as any).__endCallCleanupOwnerRef.current = screenInstanceIdRef.current;
       logger.info('[VideoCall] Установлена cleanup функция из onAbortCall (fallback)');
     }
 
@@ -2398,7 +2582,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       hasSession: !!session,
       hasCleanupFn: typeof onAbortCall === 'function',
       __webrtcSessionRef: !!(global as any).__webrtcSessionRef?.current,
-      __endCallCleanupRef: !!(global as any).__endCallCleanupRef?.current
+      __endCallCleanupRef: !!(global as any).__endCallCleanupRef?.current,
+      cleanupOwner: (global as any).__endCallCleanupOwnerRef?.current ?? null,
     });
   }, [onAbortCall]);
 
@@ -2446,6 +2631,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   // Эффект с [] — cleanup выполняется один раз при unmount.
   useEffect(() => {
     return () => {
+      const rootNav = (global as any).__navRef;
+      const currentRouteName = rootNav?.isReady?.() ? rootNav.getCurrentRoute()?.name : null;
+      const replacedByAnotherVideoCall = currentRouteName === 'VideoCall';
       const pipVisible =
         (global as any).__pipVisibleRef?.current === true ||
         (global as any).__pipInSystemModeRef?.current === true;
@@ -2459,9 +2647,37 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         isInactiveStateRef.current ||
         isEndingCallRef.current ||
         callEndedTransitionDoneRef.current;
+      const cleanupAlreadyDone = wasGlobalCleanupDone(
+        currentCallIdRef.current ?? route?.params?.callId ?? null,
+        roomId ?? route?.params?.roomId ?? null
+      );
+      const teardownAlreadyScheduled = wasGlobalTeardownScheduled(
+        currentCallIdRef.current ?? route?.params?.callId ?? null,
+        roomId ?? route?.params?.roomId ?? null
+      );
       if (returningFromSystemPiP) {
         logger.info('[VideoCall] cleanup при размонтировании пропущен (возврат из system PiP)', {
           returningFromSystemPiPUntil,
+        });
+      } else if (replacedByAnotherVideoCall) {
+        logger.info('[VideoCall] cleanup при размонтировании пропущен (replaced by another VideoCall)', {
+          instanceId: screenInstanceIdRef.current,
+          currentRouteName,
+        });
+      } else if (cleanupAlreadyDone) {
+        logger.info('[VideoCall] cleanup при размонтировании пропущен (global cleanup already done)', {
+          callId: currentCallIdRef.current ?? route?.params?.callId ?? null,
+          roomId: roomId ?? route?.params?.roomId ?? null,
+        });
+      } else if (teardownAlreadyScheduled) {
+        logger.info('[VideoCall] cleanup при размонтировании пропущен (global teardown already scheduled)', {
+          callId: currentCallIdRef.current ?? route?.params?.callId ?? null,
+          roomId: roomId ?? route?.params?.roomId ?? null,
+        });
+      } else if (!isCleanupOwner()) {
+        logger.info('[VideoCall] cleanup при размонтировании пропущен (cleanup owner changed)', {
+          instanceId: screenInstanceIdRef.current,
+          cleanupOwner: (global as any).__endCallCleanupOwnerRef?.current ?? null,
         });
       } else if (!pipVisible && !alreadyEndedOrEnding) {
         const cleanupFn = (global as any).__endCallCleanupRef?.current;
@@ -2480,13 +2696,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           callEndedTransitionDoneRef: callEndedTransitionDoneRef.current,
         });
       }
-      if (!sessionRef.current) {
+      if (!sessionRef.current && isCleanupOwner()) {
         (global as any).__webrtcSessionRef.current = null;
         (global as any).__endCallCleanupRef.current = null;
+        if ((global as any).__endCallCleanupOwnerRef) {
+          (global as any).__endCallCleanupOwnerRef.current = null;
+        }
         logger.info('[VideoCall] Глобальные ссылки очищены (сессия удалена)');
       }
     };
-  }, []);
+  }, [roomId, route?.params?.callId, route?.params?.roomId, wasGlobalCleanupDone, isCleanupOwner]);
   
   const toggleMic = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
@@ -2664,6 +2883,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             partnerAvatarUrl: params?.partnerAvatarUrl,
             localStream: params?.localStream ?? (typeof session?.getLocalStream === 'function' ? session.getLocalStream() : null),
             remoteStream: params?.remoteStream ?? (typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null),
+            muteLocal: params?.muteLocal,
+            muteRemote: params?.muteRemote,
             localCamOn: params?.localCamOn,
             remoteCamOn: params?.remoteCamOn,
             navParams: params?.navParams,
@@ -2714,49 +2935,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         focusEffectGuardRef.current = true;
         
         logger.info('[VideoCall] Возврат из PiP - обрабатываем');
-        
-        // Прячем PiP только при возврате из PiP
+
+        const syncPiPState = (global as any).__pipSyncSessionStateRef?.current;
+        if (typeof syncPiPState === 'function') {
+          syncPiPState(false, 'VideoCall.focusReturn');
+        }
         if (pipRef.current.visible || isPipOverlayVisibleSync()) {
           logger.info('[VideoCall] Hiding PiP after return from PiP');
           pipRef.current.hidePiP();
-          
-          // Получаем roomId из route.params или session
-          const routeRoomId = route?.params?.roomId;
-          const session = sessionRef.current;
-          const currentRoomId = roomId || routeRoomId || session?.getRoomId?.() || null;
-          
-          // КРИТИЧНО: Вызываем exitPiP для отправки pip:state=false партнеру
-          if (session && session.exitPiP && typeof session.exitPiP === 'function') {
-            session.exitPiP();
-            logger.info('[VideoCall] ✅ Вызван session.exitPiP() - отправлено pip:state=false партнеру');
-          } else {
-            // Fallback: отправляем pip:state напрямую если метод недоступен
-            const hasActiveCall = !!currentRoomId || !!callId || !!partnerId;
-            if (hasActiveCall && currentRoomId) {
-              try {
-                const payload: any = { 
-                  inPiP: false, 
-                  from: socket.id,
-                  roomId: currentRoomId
-                };
-                if (partnerId) payload.to = partnerId;
-                socket.emit('pip:state', payload);
-                logger.info('[VideoCall] ✅ Sent pip:state=false to partner (returned from PiP, fallback):', { payload });
-                
-                // Отправляем повторно через 300мс (гарантия при гонке состояний)
-                setTimeout(() => {
-                  try {
-                    socket.emit('pip:state', payload);
-                    logger.info('[VideoCall] ✅ Re-sent pip:state=false (300ms retry)');
-                  } catch (e) {
-                    logger.warn('[VideoCall] ❌ Error re-sending pip:state:', e);
-                  }
-                }, 300);
-              } catch (e) {
-                logger.warn('[VideoCall] ❌ Error sending pip:state:', e);
-              }
-            }
-          }
         }
         
         // Если у нас есть удалённый поток из PiP-контекста — подставим его в state
@@ -2776,7 +2962,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           // ВАЖНО: НЕ форсим включение камеры. Состояние камеры после возврата должно
           // быть ровно таким, каким было до ухода в PiP (pip.localCamOn).
           const sessionLocalStream = session.getLocalStream?.();
-          const desiredCamOn = typeof pip.localCamOn === 'boolean' ? pip.localCamOn : camOn;
+          const effectiveLocalStream = sessionLocalStream || pipLocalStream || localStream || localStreamRef.current;
+          const { camOn: desiredCamOn, micOn: desiredMicOn } = getDesiredLocalMediaStateForPiPReturn(effectiveLocalStream);
           if (sessionLocalStream) {
             setLocalStream(sessionLocalStream);
             localStreamRef.current = sessionLocalStream as any;
@@ -2791,6 +2978,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               }
             } catch {}
             setCamOn(!!desiredCamOn);
+            setRemoteMuted(getDesiredRemoteMutedForPiPReturn());
+            logMicTraceRef.current('focus return from PiP → setMicOn from local media snapshot', {
+              pipIsMuted: pip.isMuted,
+              nextMicOn: desiredMicOn,
+            });
+            setMicOn(!!desiredMicOn);
             
             logger.info('[VideoCall] ✅ Локальный стрим восстановлен из сессии при возврате из PiP', {
               streamId: sessionLocalStream.id,
@@ -2810,6 +3003,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               }
             } catch {}
             setCamOn(!!desiredCamOn);
+            setRemoteMuted(getDesiredRemoteMutedForPiPReturn());
+            logMicTraceRef.current('focus return from PiP → setMicOn from local media snapshot', {
+              pipIsMuted: pip.isMuted,
+              nextMicOn: desiredMicOn,
+            });
+            setMicOn(!!desiredMicOn);
             
             logger.info('[VideoCall] Локальный стрим восстановлен из PiP контекста при возврате', {
               desiredCamOn,
@@ -2869,8 +3068,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             logger.warn('[VideoCall] Error enabling video tracks:', e);
           }
           
-          session.exitPiP?.();
-          
           // Обновляем remoteViewKey через session с защитой от повторного обновления
           requestAnimationFrame(() => {
             if (!pipReturnUpdateRef.current) {
@@ -2926,7 +3123,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         // Закрываем PiP если звонок завершен
         if ((isInactiveState || wasFriendCallEnded) && currentPip.visible) {
           currentPip.hidePiP();
-          sessionRef.current?.exitPiP?.();
+          const syncPiPState = (global as any).__pipSyncSessionStateRef?.current;
+          if (typeof syncPiPState === 'function') {
+            syncPiPState(false, 'VideoCall.focusCleanupEndedCall');
+          }
         }
         
         // КРИТИЧНО: Полностью запрещаем автоматический PiP при принятии звонка
@@ -3042,7 +3242,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       micOn,
       remoteMuted,
       localStream,
-      remoteStream
+      remoteStream,
+      getDesiredLocalMediaStateForPiPReturn
+      ,getDesiredRemoteMutedForPiPReturn
     ])
   );
   

@@ -422,8 +422,19 @@ function AppContent() {
     const sub4 = emitter.addListener('EndCallFromPiP', () => {
       console.log('[App] [PiP] 📵 EndCallFromPiP получен от натива (нажата кнопка «Завершить» в системном PiP)');
       try {
-        (global as any).__endingFromPiPButtonRef = (global as any).__endingFromPiPButtonRef || { current: false };
-        (global as any).__endingFromPiPButtonRef.current = true;
+        const g = (global as any);
+        g.__endingFromPiPButtonRef = g.__endingFromPiPButtonRef || { current: false };
+        g.__endingFromPiPButtonRef.current = true;
+        g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
+        g.__endingCallInProgressRef.current = true;
+        g.__callEndedFromPiPNoOpenRef = g.__callEndedFromPiPNoOpenRef || { current: false };
+        g.__callEndedFromPiPNoOpenRef.current = true;
+        g.__ignoreSystemPiPExpandedUntilRef = g.__ignoreSystemPiPExpandedUntilRef || { current: 0 };
+        g.__ignoreSystemPiPExpandedUntilRef.current = Date.now() + 5000;
+        g.__pipForceHiddenRef = g.__pipForceHiddenRef || { current: false };
+        g.__pipForceHiddenRef.current = true;
+        g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+        g.__pipVisibleRef.current = false;
       } catch (_) {}
       NativeModules.LiviAppModule?.getPiPEndCallParams?.()?.then?.((params: { callId?: string | null; roomId?: string | null }) => {
         console.log('[App] [PiP] getPiPEndCallParams результат', { callId: params?.callId ?? null, roomId: params?.roomId ?? null });
@@ -452,9 +463,22 @@ function AppContent() {
       console.log('[App] SystemPiPExpanded received');
       try {
         const g = (global as any);
+        const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
+        const ignoreExpandedUntil = Number(g.__ignoreSystemPiPExpandedUntilRef?.current || 0);
+        const returnToCallInFlight = g.__pipReturnToCallInFlightRef?.current === true;
+        const endingCall =
+          g.__endingCallInProgressRef?.current === true ||
+          g.__callEndedFromPiPNoOpenRef?.current === true ||
+          g.__endingFromPiPButtonRef?.current === true;
         g.__lastSystemPiPExpandedAtRef = g.__lastSystemPiPExpandedAtRef || { current: 0 };
         const now = Date.now();
-        if (now - Number(g.__lastSystemPiPExpandedAtRef.current || 0) < 1200) {
+        if (
+          returnToCallInFlight ||
+          endingCall ||
+          now < returningUntil ||
+          now < ignoreExpandedUntil ||
+          now - Number(g.__lastSystemPiPExpandedAtRef.current || 0) < 1200
+        ) {
           return;
         }
         g.__lastSystemPiPExpandedAtRef.current = now;
@@ -464,6 +488,7 @@ function AppContent() {
         g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
         g.__disableSystemPiPUntilRef.current = Date.now() + 6000;
         NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+        NativeModules.LiviAppModule?.requestExitSystemPiP?.();
       } catch (_) {}
       const fn = (global as any).__pipReturnToCallRef?.current;
       if (typeof fn === 'function') {
@@ -637,7 +662,8 @@ function AppContent() {
           currentRoute = routeName;
         }
         // КРИТИЧНО: Если PiP видим, нельзя останавливать InCallManager — иначе пропадет звук в PiP.
-        const pipVisible = !!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current;
+        const pipForceHidden = !!(global as any).__pipForceHiddenRef?.current;
+        const pipVisible = !pipForceHidden && (!!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current);
         if (!isVideoSessionRoute(currentRoute) && !pipVisible) {
           (InCallManager as any).setKeepScreenOn?.(false);
           InCallManager.stop();
@@ -1216,7 +1242,8 @@ function AppContent() {
     } catch {
       currentRoute = routeName;
     }
-    const pipVisible = !!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current;
+    const pipForceHidden = !!(global as any).__pipForceHiddenRef?.current;
+    const pipVisible = !pipForceHidden && (!!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current);
     const shouldKeepOn = isVideoSessionRoute(currentRoute) || !!incoming || pipVisible;
 
     const onVideoSessionRoute = isVideoSessionRoute(currentRoute);
@@ -1254,10 +1281,14 @@ function AppContent() {
         const systemPiPEntryUntil = g.__systemPiPEntryInProgressUntilRef?.current;
         const systemPiPEntryInProgress =
           typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
-        const session = g.__webrtcSessionRef?.current;
-        const sessionNotEnded =
-          !!session && (typeof session.isEnded === 'function' ? !session.isEnded() : true);
         const videoCallInactiveByRef = g.__videoCallActiveRef?.current === false;
+        const endingFromPiPNoOpen = g.__callEndedFromPiPNoOpenRef?.current === true;
+        const endingCallInProgress = g.__endingCallInProgressRef?.current === true;
+        const callTeardownInProgress = endingFromPiPNoOpen || endingCallInProgress || videoCallInactiveByRef;
+        const session = g.__webrtcSessionRef?.current;
+        const rawSessionNotEnded =
+          !!session && (typeof session.isEnded === 'function' ? !session.isEnded() : true);
+        const sessionNotEnded = !callTeardownInProgress && rawSessionNotEnded;
         const params = g.__currentCallPiPParamsRef?.current;
         const hasAnyIds =
           !!params?.callId ||
@@ -1488,7 +1519,13 @@ function AppContent() {
           const systemPiPEntryUntil = g?.__systemPiPEntryInProgressUntilRef?.current;
           const enteringSystemPiP = typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
           const session = g?.__webrtcSessionRef?.current;
+          const videoCallInactiveByRef = g?.__videoCallActiveRef?.current === false;
+          const callTeardownInProgress =
+            g?.__endingCallInProgressRef?.current === true ||
+            g?.__callEndedFromPiPNoOpenRef?.current === true ||
+            videoCallInactiveByRef;
           const sessionNotEnded =
+            !callTeardownInProgress &&
             !!session && (typeof session.isEnded === 'function' ? !session.isEnded() : true);
           const activeVideoRouteOwnsLeaveHint =
             isVideoSessionRoute(currentRoute) &&
@@ -2112,7 +2149,8 @@ function AppContent() {
           skipRef.current = true;
         } catch (_) {}
         try {
-          const pipVisible = !!(pip as any)?.visible || !!(g?.__pipVisibleRef?.current);
+          const pipForceHidden = !!g?.__pipForceHiddenRef?.current;
+          const pipVisible = !pipForceHidden && (!!(pip as any)?.visible || !!(g?.__pipVisibleRef?.current));
           if (!isVideoSessionRoute(routeName) && !pipVisible && Platform.OS === 'android') {
             try { (InCallManager as any).setKeepScreenOn?.(false); } catch (_) {}
             InCallManager.stop();
@@ -2580,10 +2618,21 @@ export default function App() {
       try {
         g.__lastEndCallSourceRef = g.__lastEndCallSourceRef || { current: null };
         g.__lastEndCallSourceRef.current = 'pip_close';
+        g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
+        g.__endingCallInProgressRef.current = true;
         g.__callEndedFromPiPNoOpenRef = g.__callEndedFromPiPNoOpenRef || { current: false };
         g.__callEndedFromPiPNoOpenRef.current = true;
+        g.__pipForceHiddenRef = g.__pipForceHiddenRef || { current: false };
+        g.__pipForceHiddenRef.current = true;
+        g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+        g.__pipVisibleRef.current = false;
+        g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
+        g.__pipInSystemModeRef.current = false;
+        g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
+        g.__currentCallPiPParamsRef.current = null;
         setTimeout(() => {
           try { (global as any).__callEndedFromPiPNoOpenRef.current = false; } catch (_) {}
+          try { (global as any).__endingCallInProgressRef.current = false; } catch (_) {}
         }, 6000);
       } catch (_) {}
       // При завершении из системного PiP cleanupFunction не выполнит InCallManager.stop() (guard по isInactiveStateRef).
@@ -2818,6 +2867,8 @@ export default function App() {
               partnerAvatarUrl: params?.partnerAvatarUrl,
               localStream: params?.localStream ?? null,
               remoteStream: remoteStream ?? null,
+              muteLocal: params?.muteLocal,
+              muteRemote: params?.muteRemote,
               localCamOn: params?.localCamOn,
               remoteCamOn: params?.remoteCamOn,
               navParams: params?.navParams,

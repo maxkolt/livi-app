@@ -1148,6 +1148,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.remoteCamEnabled;
   }
 
+  /** Локальный mute для аудио собеседника. Должен переживать PiP/временный reattach remote stream. */
+  getRemoteAudioMuted(): boolean {
+    return this.remoteAudioMuted;
+  }
+
   /** Намерение пользователя по микрофону (совпадает с UI после синхронизации). */
   getIsMicOn(): boolean {
     return this.isMicOn;
@@ -3101,8 +3106,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: null, remoteCamOn: false });
     } catch (_) {}
     this.notifyRemoteCamStateChange(false);
-    this.remoteAudioMuted = false;
-    this.emit('remoteState', { muted: false });
+    // Локальный mute собеседника — пользовательское предпочтение, не сбрасываем
+    // при временном исчезновении remote stream (PiP/reconnect/reattach).
+    this.emit('remoteState', { muted: this.remoteAudioMuted });
     this.remoteViewKey = Date.now();
     this.emit('remoteViewKeyChanged', this.remoteViewKey);
   }
