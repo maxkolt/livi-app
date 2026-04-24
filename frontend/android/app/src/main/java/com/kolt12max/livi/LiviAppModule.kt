@@ -586,6 +586,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     // поэтому полагаемся на onUserLeaveHint() в MainActivity и/или явный requestEnterPictureInPicture() в обработчиках Back на корне.
   }
 
+  /** JS выставляет true, когда виден маленький in-app PiP. Home из этого состояния требует задержки перед system PiP, чтобы не захватить zoomed cover-кадр. */
+  @ReactMethod
+  fun setInAppPiPVisibleForSystemPiP(visible: Boolean) {
+    LiviAppModule.setInAppPiPVisibleForSystemPiPStatic(visible)
+  }
+
   /** Флаг «идёт завершение звонка»: при true не входить в системный PiP в onUserLeaveHint (чтобы не выкидывать на главный экран при принятии с блокировки). */
   @ReactMethod
   fun setEndingCallInProgress(inProgress: Boolean) {
@@ -1124,6 +1130,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     internal fun setPiPOnLeaveHintEnabled(value: Boolean) {
       shouldEnterPiPOnLeaveHint = value
+    }
+
+    /** true только для маленького in-app PiP; помогает MainActivity выбрать задержанный вход в system PiP без zoomed capture. */
+    @Volatile
+    @JvmField
+    var inAppPiPVisibleForSystemPiP = false
+    @JvmStatic
+    fun getInAppPiPVisibleForSystemPiP(): Boolean = inAppPiPVisibleForSystemPiP
+    @JvmStatic
+    internal fun setInAppPiPVisibleForSystemPiPStatic(value: Boolean) {
+      inAppPiPVisibleForSystemPiP = value
     }
 
     /** Пока true — не входить в системный PiP в onUserLeaveHint (JS ставит при завершении звонка, сбрасывает после). */

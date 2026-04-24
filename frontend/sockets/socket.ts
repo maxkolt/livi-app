@@ -259,15 +259,16 @@ function __presenceUpdateKey(payload: { status?: string; roomId?: string | undef
  * После reconnect передавайте `{ force: true }`, чтобы сервер снова получил busy.
  */
 export function emitPresenceUpdateIfChanged(
-  payload: { status: string; roomId?: string },
+  payload: { status: string; roomId?: string; idle?: boolean },
   opts?: { force?: boolean }
 ): void {
   const key = __presenceUpdateKey(payload);
   if (!opts?.force && key === __lastPresenceUpdateKey) return;
   __lastPresenceUpdateKey = key;
-  const out: { status: string; roomId?: string } = { status: payload.status };
+  const out: { status: string; roomId?: string; idle?: boolean } = { status: payload.status };
   const rid = payload.roomId != null ? String(payload.roomId).trim() : '';
   if (rid) out.roomId = rid;
+  if (payload.idle === true) out.idle = true;
   try {
     socket.emit('presence:update', out);
   } catch {}

@@ -126,6 +126,7 @@ import socket, {
   setOutgoingCallScreenVisible,
   onIncomingCallScreenChange,
   getIncomingCallScreenState,
+  emitPresenceUpdateIfChanged,
 } from '../sockets/socket';
 import {
   isUpdateAvailable,
@@ -2720,6 +2721,41 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // — presence:update({ userId, busy: false }). Обновление isBusy приходит в onPresenceUpdate выше.
   // Отдельно не вешаем inCall на всех друзей — только два участника звонка помечаются busy через сокет.
 
+  const syncSelfPresenceOnlineIfIdle = useCallback((reason: string) => {
+    try {
+      const g = global as any;
+      const session = g.__webrtcSessionRef?.current;
+      const sessionNotEnded =
+        !!session &&
+        (typeof session.isEnded === 'function'
+          ? !session.isEnded()
+          : session?.room?.state !== 'disconnected');
+      const hasAnyCallIds =
+        !!g.__currentCallPiPParamsRef?.current?.callId ||
+        !!g.__currentCallPiPParamsRef?.current?.roomId ||
+        (!!session && typeof session.getCallId === 'function' && !!session.getCallId()) ||
+        (!!session && typeof session.getRoomId === 'function' && !!session.getRoomId());
+      const hasActiveLocalCall =
+        g.__videoCallActiveRef?.current === true ||
+        g.__pipVisibleRef?.current === true ||
+        g.__pipInSystemModeRef?.current === true ||
+        sessionNotEnded ||
+        hasAnyCallIds ||
+        calling.visible ||
+        incomingCallScreen.visible;
+      if (hasActiveLocalCall) return;
+      emitPresenceUpdateIfChanged({ status: 'online', idle: true }, { force: true });
+      logger.info('[HomeScreen] Synced self presence online while idle', { reason });
+    } catch (e) {
+      logger.warn('[HomeScreen] Failed to sync idle presence online', { reason, error: (e as Error)?.message });
+    }
+  }, [calling.visible, incomingCallScreen.visible]);
+
+  useEffect(() => {
+    if (tab !== 'friends') return;
+    syncSelfPresenceOnlineIfIdle('friends-tab');
+  }, [tab, syncSelfPresenceOnlineIfIdle]);
+
   /* ===== app resume ===== */
   const appStateRef = useRef(AppState.currentState);
   const lastResumeSyncAtRef = useRef(0);
@@ -2746,12 +2782,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             await ensureIdentity();
             getCurrentUserId();
           }
+          syncSelfPresenceOnlineIfIdle('app-resume');
           await loadFriends();
         } catch (e) { console.warn('resume error', e); }
       }
     });
     return () => sub.remove();
-  }, [syncUserData, ensureIdentity, loadFriends]);
+  }, [syncUserData, ensureIdentity, loadFriends, syncSelfPresenceOnlineIfIdle]);
 
 
 
@@ -2766,6 +2803,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if ((global as any).__skipAppStateActiveSetAppIsActiveRef?.current === true) {
           return;
         }
+        syncSelfPresenceOnlineIfIdle('home-focus');
         const onFriendsTab = tabRef.current === 'friends';
         if (onFriendsTab) {
           await setMissedBadgeCleared();
@@ -2824,7 +2862,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
     });
     return () => { try { unsub?.(); } catch {} };
-  }, [navigation, friends]);
+  }, [navigation, friends, syncSelfPresenceOnlineIfIdle]);
 
   // После восстановления сети reauth приносит пропущенные с сервера — перечитываем из AsyncStorage и обновляем UI
   useEffect(() => {

@@ -204,9 +204,10 @@ class MainActivity : ReactActivity() {
     super.onUserLeaveHint()
     val endingCallInProgress = LiviAppModule.getEndingCallInProgress()
     val shouldEnterPiP = LiviAppModule.getShouldEnterPiPOnLeaveHint()
+    val inAppPiPVisible = LiviAppModule.getInAppPiPVisibleForSystemPiP()
     android.util.Log.i(
       "MainActivity",
-      "onUserLeaveHint: sdk=${Build.VERSION.SDK_INT} endingCallInProgress=$endingCallInProgress shouldEnterPiP=$shouldEnterPiP isInPiP=$isInPictureInPictureMode hasFocus=${window?.decorView?.hasWindowFocus() == true}"
+      "onUserLeaveHint: sdk=${Build.VERSION.SDK_INT} endingCallInProgress=$endingCallInProgress shouldEnterPiP=$shouldEnterPiP inAppPiPVisible=$inAppPiPVisible isInPiP=$isInPictureInPictureMode hasFocus=${window?.decorView?.hasWindowFocus() == true}"
     )
     if (endingCallInProgress) {
       android.util.Log.i("MainActivity", "onUserLeaveHint: skip system PiP because endingCallInProgress=true")
@@ -247,13 +248,23 @@ class MainActivity : ReactActivity() {
             android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode failed", e2)
           }
         }
-        // КРИТИЧНО: первый вызов синхронно — в logcat событие AboutToEnterSystemPiP приходит в JS с задержкой 0.7–1.7s,
-        // к моменту post()/postDelayed активность уже не resumed, enterPictureInPictureMode() бросает или возвращает false.
-        // Синхронный вызов гарантирует вход в PiP; кадр может быть старым при повторном входе (митируем через setPendingSystemPiP в JS при получении события).
-        tryEnterPiP.run()
+        // Если пользователь уже ушёл с экрана звонка в маленький in-app PiP, мгновенный вход
+        // захватывает этот cover-кадр и в system PiP получается визуальный зум. Даём JS
+        // один-два кадра на fullscreen 9:16 layout, как в requestEnterPictureInPicture().
+        if (!inAppPiPVisible) {
+          // КРИТИЧНО: первый вызов синхронно — в logcat событие AboutToEnterSystemPiP приходит в JS с задержкой 0.7–1.7s,
+          // к моменту post()/postDelayed активность уже не resumed, enterPictureInPictureMode() бросает или возвращает false.
+          // Синхронный вызов гарантирует вход в PiP; кадр может быть старым при повторном входе (митируем через setPendingSystemPiP в JS при получении события).
+          tryEnterPiP.run()
+        }
         if (!isInPictureInPictureMode) {
-          handler.post(tryEnterPiP)
-          handler.postDelayed(tryEnterPiP, 80)
+          if (!inAppPiPVisible) {
+            handler.post(tryEnterPiP)
+            handler.postDelayed(tryEnterPiP, 80)
+          }
+          if (inAppPiPVisible) {
+            handler.postDelayed(tryEnterPiP, 120)
+          }
           handler.postDelayed(tryEnterPiP, 180)
           handler.postDelayed(tryEnterPiP, 320)
           handler.postDelayed(tryEnterPiP, 450)

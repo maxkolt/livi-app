@@ -335,6 +335,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       (global as any).__pipForceHiddenRef.current = false;
       (global as any).__pipVisibleRef = (global as any).__pipVisibleRef || { current: false };
       (global as any).__pipVisibleRef.current = true;
+      if (Platform.OS === 'android') {
+        NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(true);
+      }
     } catch {}
     
     setCallId(p.callId);
@@ -465,6 +468,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       g.__pipVisibleRef.current = false;
       g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
       g.__pipInSystemModeRef.current = false;
+      if (Platform.OS === 'android') {
+        NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
+      }
     } catch {}
     setVisible(false);
   }, []);
@@ -989,6 +995,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       try { (global as any).__pipUpdateStateRef.current = null; } catch {}
     };
   }, [updatePiPState, visible]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return () => {};
+    const inAppPiPVisible = visible && !inSystemPiPMode && !pendingSystemPiP;
+    try {
+      NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(inAppPiPVisible);
+    } catch (_) {}
+    return () => {
+      try {
+        NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
+      } catch (_) {}
+    };
+  }, [visible, inSystemPiPMode, pendingSystemPiP]);
 
   // Сбрасываем __pipVisibleRef только при размонтировании провайдера, а не на каждом re-run эффекта.
   useEffect(() => {

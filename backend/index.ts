@@ -2077,6 +2077,48 @@ io.on('connection', async (sock: AuthedSocket) => {
       
       const status = payload?.status;
       const busy = status === 'busy';
+      const idleOnline = !busy && payload?.idle === true;
+
+      if (idleOnline) {
+        const hasLiveSameUserCallSocket = Array.from(io.sockets.sockets.values()).some((s) => {
+          if (s.id === sock.id) return false;
+          if (String((s as any)?.data?.userId || '') !== userId) return false;
+          const sdata = (s as any)?.data || {};
+          if (!sdata.inCall && !sdata.roomId && !sdata.partnerSid) return false;
+          const rid = String(sdata.roomId || activeCallBySocket.get(s.id) || '');
+          const room = rid ? io.sockets.adapter.rooms.get(rid) : null;
+          return !!room && room.size > 1;
+        });
+
+        if (!hasLiveSameUserCallSocket) {
+          const staleCallId =
+            callOfUser.get(userId)?.callId ||
+            activeRoomByUserId.get(userId)?.callId ||
+            null;
+
+          callOfUser.delete(userId);
+          activeRoomByUserId.delete(userId);
+          if (staleCallId) {
+            callAcceptedDeliveryByKey.delete(getCallAcceptedDeliveryKey(staleCallId, userId));
+          }
+
+          for (const s of io.sockets.sockets.values()) {
+            if (String((s as any)?.data?.userId || '') !== userId) continue;
+            (s as any).data = (s as any).data || {};
+            (s as any).data.busy = false;
+            delete (s as any).data.roomId;
+            delete (s as any).data.partnerSid;
+            delete (s as any).data.inCall;
+            try { activeCallBySocket.delete(s.id); } catch {}
+          }
+
+          logger.info('📍 [presence:update] idle online cleared stale busy state', {
+            userId,
+            staleCallId,
+            socketId: sock.id,
+          });
+        }
+      }
       // Другие сокеты того же userId: пока хоть один в звонке/рандоме — не даём сбросить «занят» для друзей.
       // Текущий сокет сюда не включаем: иначе его же устаревшие busy/roomId (гонка со stop после рандома)
       // не дают перейти в online и оставляют initiator_busy на call:initiate.
