@@ -581,12 +581,6 @@ function AppContent() {
   // Убрали постоянные логи для уменьшения шума
   const [routeName, setRouteName] = React.useState<string | undefined>(undefined);
   const lastLoggedRouteRef = React.useRef<string | undefined>(undefined);
-  // Grace period после перехода на VideoCall/RandomChat: не разрешаем системный PiP по onUserLeaveHint
-  // первые 1 с (должен совпадать с таймером в VideoCall), чтобы избежать ложного сворачивания при закрытии IncomingCallActivity.
-  // Короткий grace — чтобы на обоих устройствах leaveHint успевал включиться до нажатия Home.
-  const VIDEO_SESSION_PIP_GRACE_MS = 1000;
-  const videoSessionRouteEnteredAtRef = React.useRef<number>(0);
-  const videoSessionRouteLastRef = React.useRef<string | undefined>(undefined);
   const systemPiPDecisionLogRef = React.useRef<string>('');
   /** Форсирует пересчёт Android leaveHint/PiP guard после call:end/call:ended (refs меняются без смены route/pip). */
   const [androidPipGuardTick, setAndroidPipGuardTick] = React.useState(0);
@@ -1225,17 +1219,7 @@ function AppContent() {
     const pipVisible = !!(pip as any)?.visible || !!(global as any).__pipVisibleRef?.current;
     const shouldKeepOn = isVideoSessionRoute(currentRoute) || !!incoming || pipVisible;
 
-    // Отслеживание перехода на экран видеозвонка/рандомчата для grace period
     const onVideoSessionRoute = isVideoSessionRoute(currentRoute);
-    const lastRoute = videoSessionRouteLastRef.current;
-    if (onVideoSessionRoute) {
-      if (!isVideoSessionRoute(lastRoute)) {
-        videoSessionRouteEnteredAtRef.current = Date.now();
-      }
-      videoSessionRouteLastRef.current = currentRoute;
-    } else {
-      videoSessionRouteLastRef.current = currentRoute;
-    }
 
     // Android: системный PiP разрешаем ТОЛЬКО при реально активном звонке/входящем/видимом PiP,
     // а не просто потому что текущий экран = VideoCall (иначе при call:ended может произойти автозаход в PiP).
@@ -1284,21 +1268,17 @@ function AppContent() {
           !videoCallInactiveByRef && sessionNotEnded && hasAnyIds;
         const onVideoCallWithActiveSession =
           !videoCallInactiveByRef && isVideoSessionRoute(currentRoute) && sessionNotEnded;
-        // Grace period: первые VIDEO_SESSION_PIP_GRACE_MS мс после перехода на VideoCall/RandomChat
-        // не разрешаем системный PiP по onUserLeaveHint (ложный hint при закрытии IncomingCallActivity).
-        const onVideoCallRecently = onVideoSessionRoute && (Date.now() - videoSessionRouteEnteredAtRef.current) < VIDEO_SESSION_PIP_GRACE_MS;
         const allowSystemPiP =
           (systemPiPEntryInProgress && hasActiveCallForPiP) ||
           pipVisible ||
           !!incoming ||
-          ((hasActiveCallForPiP || onVideoCallWithActiveSession) && !onVideoCallRecently);
-        // На экране VideoCall во время grace не трогаем leaveHint — управляет только VideoCall.
-        // Иначе эффект App перезаписывает флаг в false и на одном устройстве системный PiP не открывается по Home.
+          (hasActiveCallForPiP || onVideoCallWithActiveSession);
+        // Пока активен экран VideoCall/RandomChat, App не должен перетирать leaveHint.
+        // Иначе вокруг onUserLeaveHint(Home) получается гонка true -> false.
         const skipSetLeaveHint =
           onVideoSessionRoute &&
           sessionNotEnded &&
-          !videoCallInactiveByRef &&
-          onVideoCallRecently;
+          !videoCallInactiveByRef;
         const logKey = JSON.stringify({
           currentRoute,
           allowSystemPiP: !!allowSystemPiP,
@@ -1306,7 +1286,6 @@ function AppContent() {
           hasIncoming: !!incoming,
           hasActiveCallForPiP: !!hasActiveCallForPiP,
           onVideoCallWithActiveSession: !!onVideoCallWithActiveSession,
-          onVideoCallRecently: !!onVideoCallRecently,
           hasParamsCallId: !!params?.callId,
           hasParamsRoomId: !!params?.roomId,
           sessionNotEnded: !!sessionNotEnded,
@@ -1323,9 +1302,7 @@ function AppContent() {
             hasIncoming: !!incoming,
             hasActiveCallForPiP: !!hasActiveCallForPiP,
             onVideoCallWithActiveSession: !!onVideoCallWithActiveSession,
-            onVideoCallRecently: !!onVideoCallRecently,
             skipSetLeaveHint: !!skipSetLeaveHint,
-            timeSinceVideoRouteMs: onVideoSessionRoute ? Date.now() - videoSessionRouteEnteredAtRef.current : null,
             hasParamsCallId: !!params?.callId,
             hasParamsRoomId: !!params?.roomId,
             sessionNotEnded: !!sessionNotEnded,
@@ -1506,10 +1483,18 @@ function AppContent() {
         try {
           // Не выключать leaveHint во время входа в системный PiP (Home во время звонка):
           // иначе повторный запуск эффекта (из-за pip.visible/route) гасит флаг до срабатывания onUserLeaveHint.
+          // Пока активен экран звонка, leaveHint принадлежит VideoCall и cleanup App не должен его сбрасывать.
           const g = (global as any);
           const systemPiPEntryUntil = g?.__systemPiPEntryInProgressUntilRef?.current;
           const enteringSystemPiP = typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
-          if (!enteringSystemPiP) {
+          const session = g?.__webrtcSessionRef?.current;
+          const sessionNotEnded =
+            !!session && (typeof session.isEnded === 'function' ? !session.isEnded() : true);
+          const activeVideoRouteOwnsLeaveHint =
+            isVideoSessionRoute(currentRoute) &&
+            sessionNotEnded &&
+            g?.__videoCallActiveRef?.current !== false;
+          if (!enteringSystemPiP && !activeVideoRouteOwnsLeaveHint) {
             NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
           }
         } catch (_) {}
@@ -1651,10 +1636,6 @@ function AppContent() {
     }
   };
 
-  // КРИТИЧНО: Общий прямой обработчик для перерегистрации при переподключении
-  // Используем одну функцию для всех случаев чтобы избежать конфликтов
-  const sharedDirectHandlerRef = React.useRef<((d: any) => void) | null>(null);
-
   React.useEffect(() => {
     // Закрытие по внешнему запросу (например, из ChatScreen)
     const offReq = onRequestCloseIncoming?.(() => { try { setIncomingCallScreenVisible(false); } catch {} stopIncomingCallAlert(); setIncoming(null); stopAnim(); });
@@ -1671,37 +1652,11 @@ function AppContent() {
     };
   }, [handleIncomingCall, stopAnim]);
 
-  // КРИТИЧНО: Перерегистрация обработчика при переподключении socket
-  // Это гарантирует что обработчик всегда работает после пробуждения телефона
+  // После reconnect здесь обрабатываем только pending call_accepted / push-token flow.
+  // Сам listener call:incoming регистрируется один раз через onCallIncoming выше.
   React.useEffect(() => {
-    // Создаем общий обработчик
-    const directHandler = (d: any) => {
-      // Используем обработчик из ref чтобы всегда был актуальный
-      if (incomingCallHandlerRef.current) {
-        incomingCallHandlerRef.current(d);
-      }
-    };
-    sharedDirectHandlerRef.current = directHandler;
-
-    const registerHandler = () => {
-      try {
-        // Убираем старый если есть (защита от дублирования)
-        if (sharedDirectHandlerRef.current) {
-          socket.off('call:incoming', sharedDirectHandlerRef.current);
-        }
-        socket.on('call:incoming', directHandler);
-        logger.debug('[call:incoming] socket handler registered');
-      } catch (e) {
-        logger.warn('Failed to register call:incoming handler:', e);
-      }
-    };
-
     const onConnect = () => {
-      logger.debug('Socket connected/reconnected - ensuring call:incoming handler is registered');
-      // Небольшая задержка чтобы socket точно был готов и reauth завершился
-      setTimeout(() => {
-        registerHandler();
-      }, 200);
+      logger.debug('Socket connected/reconnected - processing pending call recovery');
       // FCM call_accepted вывел приложение — запросить call:accepted (инициатор перейдёт на VideoCall). Fallback: ref от HomeScreen, если нативный pending не сработал.
       if (Platform.OS === 'android') {
         setTimeout(() => {
@@ -1729,9 +1684,6 @@ function AppContent() {
         if (uid) registerAndSendPushToken(uid, { reason: 'socket_reconnect' }).catch(() => {});
       }, 3500);
     };
-
-    // Регистрируем сразу при монтировании
-    registerHandler();
     
     socket.on('connect', onConnect);
     socket.on('reconnect', onConnect);
@@ -1742,11 +1694,6 @@ function AppContent() {
       if (pushReconnectDebounceRef.current) {
         clearTimeout(pushReconnectDebounceRef.current);
         pushReconnectDebounceRef.current = null;
-      }
-      if (sharedDirectHandlerRef.current) {
-        try {
-          socket.off('call:incoming', sharedDirectHandlerRef.current);
-        } catch {}
       }
     };
   }, []);
@@ -1861,11 +1808,18 @@ function AppContent() {
         if (routeName === 'Home') return;
         // Только если сейчас на VideoCall — закрываем экран (goBack или reset). Иначе пользователь уже на другом экране — не трогаем.
         if (routeName === 'VideoCall') {
+          const returnTo = (route as any)?.params?.returnTo;
           const state = navRef.getState();
           const routes = state?.routes ?? [];
-          if (routes.length > 1) {
+          const canGoBack = typeof navRef.canGoBack === 'function' ? navRef.canGoBack() : routes.length > 1;
+          if (canGoBack) {
             navRef.dispatch(CommonActions.goBack());
             try { emitCallEndedOnHome(); } catch (_) {}
+          } else if (returnTo?.name) {
+            navRef.dispatch(CommonActions.reset({
+              index: 0,
+              routes: [{ name: returnTo.name as any, params: { ...(returnTo.params || {}), callEnded: true } }],
+            }));
           } else {
             navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
           }
@@ -2059,19 +2013,8 @@ function AppContent() {
           }
         } catch (_) {}
 
-        // Приложение вернулось из спящего режима - перерегистрируем обработчик
-        logger.debug('App returned from sleep - re-registering call:incoming handler');
-        setTimeout(() => {
-          try {
-            if (sharedDirectHandlerRef.current) {
-              socket.off('call:incoming', sharedDirectHandlerRef.current);
-              socket.on('call:incoming', sharedDirectHandlerRef.current);
-              logger.debug('Re-registered call:incoming handler after app resume');
-            }
-          } catch (e) {
-            logger.warn('Failed to re-register call:incoming handler after app resume:', e);
-          }
-        }, 300); // Задержка для завершения reauth и присоединения к комнате
+        // На resume не перерегистрируем call:incoming вручную:
+        // singleton-listener уже живёт через onCallIncoming, а ручная перерегистрация порождала дубли.
       }
       appStateRef = nextAppState;
     };
@@ -2669,15 +2612,18 @@ export default function App() {
     // КРИТИЧНО: Завершение видеозвонка из PiP (кнопка X) завершает звонок у обоих: отправка call:end на сервер,
     // иначе у собеседника звонок продолжается. Сначала завершаем звонок на сервере, потом локальный cleanup.
     const hasPiPIds = (callId && roomId) || pipVisible || inSystem;
+    let endedViaPiPPrimaryPath = false;
     if (hasPiPIds && (callId || roomId)) {
       try {
         const session = g.__webrtcSessionRef?.current;
         if (session && typeof session.endCall === 'function') {
           console.log('[App] Завершение из PiP: вызываем session.endCall(callId, roomId)');
           session.endCall(callId || undefined, roomId || undefined);
+          endedViaPiPPrimaryPath = true;
         } else {
           console.log('[App] Завершение из PiP: отправляем call:end на сервер (fallback)');
           socket.emit('call:end', buildCallEndSocketPayload(callId, roomId));
+          endedViaPiPPrimaryPath = true;
         }
       } catch (e) {
         console.warn('[App] Error ending call from PiP:', e);
@@ -2687,12 +2633,16 @@ export default function App() {
     try {
       const cleanupFn = g.__endCallCleanupRef?.current;
       if (cleanupFn && typeof cleanupFn === 'function') {
-        if (!endingFromSystemPiP) {
+        if (endedViaPiPPrimaryPath) {
+          console.log('[App] Пропускаем немедленный cleanupFunction: PiP end уже запущен через primary path');
+        } else if (!endingFromSystemPiP) {
           g.__lastEndCallSourceRef = g.__lastEndCallSourceRef || { current: null };
           g.__lastEndCallSourceRef.current = 'pip_close';
+          console.log('[App] Вызываем cleanupFunction из __endCallCleanupRef');
+          cleanupFn();
+        } else {
+          console.log('[App] Пропускаем cleanupFunction: системный PiP завершение уже обработано выше');
         }
-        console.log('[App] Вызываем cleanupFunction из __endCallCleanupRef');
-        cleanupFn();
       } else if (!hasPiPIds) {
         const session = g.__webrtcSessionRef?.current;
         if (session && typeof session.endCall === 'function') {

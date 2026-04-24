@@ -14,6 +14,7 @@ export type VideoCapturePreset = {
 
 const HIGH_PRESET: VideoCapturePreset = { name: 'high', width: 1280, height: 720, frameRate: 30 };
 const LOW_PRESET: VideoCapturePreset = { name: 'low', width: 640, height: 480, frameRate: 15 };
+const FAST_START_WIDE_PRESET = { width: 640, height: 360, frameRate: 15 };
 
 function normalizeLower(s: unknown): string {
   return String(s || '').trim().toLowerCase();
@@ -125,6 +126,34 @@ export function getPreferredVideoCaptureOptions(facingMode: FacingMode): Preferr
       totalMemory,
       brand,
       modelName,
+    },
+  };
+}
+
+/**
+ * Fast-start profile for call bootstrap:
+ * start with a lighter capture preset to get the first local/remote frames sooner,
+ * then upgrade to the regular preferred profile after the room stabilizes.
+ */
+export function getFastStartVideoCaptureOptions(facingMode: FacingMode): PreferredVideoCapture {
+  const preferred = getPreferredVideoCaptureOptions(facingMode);
+  if (preferred.meta.preset === 'low') {
+    return preferred;
+  }
+
+  return {
+    primary: {
+      facingMode,
+      // Keep the same 16:9 aspect ratio as the steady profile to avoid visible "zoom"
+      // when we upgrade capture quality after the call stabilizes.
+      resolution: { width: FAST_START_WIDE_PRESET.width, height: FAST_START_WIDE_PRESET.height },
+      frameRate: FAST_START_WIDE_PRESET.frameRate,
+    },
+    fallback: preferred.primary,
+    meta: {
+      ...preferred.meta,
+      preset: LOW_PRESET.name,
+      reason: `fast-start:${preferred.meta.reason}`,
     },
   };
 }

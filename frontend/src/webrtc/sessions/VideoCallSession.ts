@@ -1,7 +1,7 @@
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { Buffer } from 'buffer';
 import AudioRecord from 'react-native-audio-record';
-import { InteractionManager, Platform, NativeModules } from 'react-native';
+import { Platform, NativeModules } from 'react-native';
 import * as Device from 'expo-device';
 import {
   Room,
@@ -23,7 +23,7 @@ import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
 import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration } from '../../../utils/iceConfig';
-import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
+import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
@@ -32,6 +32,10 @@ const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined)
 // We should not treat that as "partner turned camera off" (otherwise UI flashes "Отошел").
 // Slightly longer to cover renegotiation bursts during camera flip/restart on Android.
 const REMOTE_CAM_OFF_GRACE_MS = 1400;
+// Remote participant can briefly disappear during LiveKit renegotiation/reconnect.
+// Keep this guard short: a long window makes real remote hangup wait for delayed socket call:ended.
+const RECENT_RECONNECT_DISCONNECT_GUARD_MS = 2000;
+const REMOTE_PARTICIPANT_DISCONNECT_CONFIRM_MS = 250;
 
 function parsePublicFlag(value: string | undefined, fallback: boolean): boolean {
   const v = String(value ?? '').trim().toLowerCase();
@@ -130,6 +134,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   private pendingRemoteDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSocketDisconnectLogAt = 0;
   private cameraSwitchInProgress = false;
+  private ensureLocalTracksPromise: Promise<void> | null = null;
+  private fastStartVideoProfileActive = false;
+  private fastStartVideoUpgradeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Set when camera flip ends; used to ignore late TrackUnsubscribed for ~2s and avoid black remote view. */
   private lastCameraFlipEndedAt = 0;
 
@@ -198,15 +205,16 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       // Очищаем сохраненное событие
       (global as any).__pendingCallAcceptedRef.current = null;
-      // Откладываем подключение до после первого кадра — снижает ANR при переходе на VideoCall
-      InteractionManager.runAfterInteractions(() => {
+      // Не ждём долгого InteractionManager idle: запускаем сразу после текущего тика,
+      // чтобы pending call:accepted начинал поднимать комнату заметно быстрее.
+      setTimeout(() => {
         this.handleCallAccepted(pendingCallAccepted).catch((e) => {
           logger.error('[VideoCallSession] ❌ Failed to handle pending call:accepted', {
             error: e,
             callId: pendingCallAccepted.callId,
           });
         });
-      });
+      }, 0);
     }
   }
 
@@ -273,10 +281,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.callId = callId;
     this.partnerUserId = fromUserId;
     this.notifyLoadingChange(true);
-    await this.ensureLocalTracks();
+    const localTracksPromise = this.ensureLocalTracks();
     
     try {
       socket.emit('call:accept', { callId });
+      await localTracksPromise;
     } catch (e) {
       logger.error('[VideoCallSession] Error accepting call', e);
       this.notifyLoadingChange(false);
@@ -307,7 +316,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.callId = callId;
     this.partnerUserId = peerUserId;
     this.notifyLoadingChange(true);
-    await this.ensureLocalTracks();
+    const localTracksPromise = this.ensureLocalTracks();
     
     // Генерируем roomId по тому же алгоритму что и backend
     const sortedUserIds = [this.config.myUserId, peerUserId].sort();
@@ -363,6 +372,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           url: resolvedLivekitUrl,
           tokenLength: tokenData.token.length,
         });
+        await localTracksPromise;
         const connectRequestId = ++this.connectRequestId;
         const connected = await this.connectToLiveKit(resolvedLivekitUrl, tokenData.token, connectRequestId, roomId);
         if (!connected) {
@@ -1075,7 +1085,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   cleanup(): void {
     if (this.cleaned) return;
     this.cleaned = true;
-    this.endCall();
+    this.clearPendingRemoteDisconnectTimer();
+    this.clearFastStartVideoUpgradeTimer();
+    this.cleanupAudioRecorder();
+    this.liveKitConnectByRoom.clear();
+    void this.disconnectRoom('user');
+    this.resetRemoteState();
+    this.stopLocalTracks();
     this.socketOffs.forEach((off) => off());
     this.socketOffs = [];
   }
@@ -2070,7 +2086,94 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
+  private clearFastStartVideoUpgradeTimer(): void {
+    if (this.fastStartVideoUpgradeTimer) {
+      clearTimeout(this.fastStartVideoUpgradeTimer);
+      this.fastStartVideoUpgradeTimer = null;
+    }
+  }
+
+  private shouldUseFastStartVideoProfile(force: boolean): boolean {
+    if (force) return false;
+    if (this.localVideoTrack || this.localAudioTrack) return false;
+    if (this.room || this.currentRoomName) return false;
+    return true;
+  }
+
+  private maybeScheduleFastStartVideoUpgrade(reason: string): void {
+    if (!this.fastStartVideoProfileActive) return;
+    if (this.fastStartVideoUpgradeTimer) return;
+    if (this.ended || !this.isCamOn || this.cameraSwitchInProgress) return;
+    if (!this.room || this.room.state !== 'connected' || !this.localVideoTrack) return;
+
+    this.fastStartVideoUpgradeTimer = setTimeout(() => {
+      this.fastStartVideoUpgradeTimer = null;
+      if (!this.fastStartVideoProfileActive) return;
+      if (this.ended || !this.isCamOn || this.cameraSwitchInProgress) return;
+      if (!this.room || this.room.state !== 'connected' || !this.localVideoTrack) return;
+
+      this.upgradeFastStartVideoProfileInPlace()
+        .then(() => {
+          this.fastStartVideoProfileActive = false;
+          logger.info('[VideoCallSession] Fast-start video upgraded to preferred profile', { reason });
+        })
+        .catch((e) => {
+          logger.warn('[VideoCallSession] Fast-start video upgrade failed', {
+            reason,
+            error: (e as any)?.message || String(e || ''),
+          });
+        });
+    }, 2500);
+  }
+
+  private async upgradeFastStartVideoProfileInPlace(): Promise<void> {
+    if (!this.localVideoTrack) return;
+    const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+    const preferred = getPreferredVideoCaptureOptions(facingMode);
+    logger.info('[VideoCallSession] Upgrading fast-start video profile in place', {
+      camSide: this.camSide,
+      preferred: preferred.meta,
+    });
+
+    try {
+      await this.localVideoTrack.restartTrack(preferred.primary as any);
+    } catch (e1) {
+      if (!preferred.fallback) throw e1;
+      logger.warn('[VideoCallSession] In-place fast-start upgrade failed on preferred preset; retrying with fallback', {
+        error: (e1 as any)?.message || String(e1 || ''),
+        preferred: preferred.meta,
+      });
+      await this.localVideoTrack.restartTrack(preferred.fallback as any);
+    }
+
+    try {
+      if (this.localVideoTrack.mediaStreamTrack) {
+        this.localVideoTrack.mediaStreamTrack.enabled = this.isCamOn;
+        if (this.isCamOn) await this.localVideoTrack.unmute().catch(() => {});
+        else await this.localVideoTrack.mute().catch(() => {});
+      }
+    } catch {}
+
+    const stream = new MediaStream();
+    try {
+      const mt = this.localVideoTrack.mediaStreamTrack;
+      if (mt) stream.addTrack(mt as any);
+    } catch {}
+    try {
+      const at = this.localAudioTrack?.mediaStreamTrack;
+      if (at) stream.addTrack(at as any);
+    } catch {}
+    this.localStream = stream;
+    this.emit('localStream', stream);
+    this.notifyLocalStreamChange(stream);
+  }
+
   private async ensureLocalTracks(force = false): Promise<void> {
+    if (!force && this.ensureLocalTracksPromise) {
+      await this.ensureLocalTracksPromise;
+      return;
+    }
+    const run = async () => {
     if (this.localVideoTrack && this.localAudioTrack && !force) {
       this.emit('localStream', this.localStream);
       this.notifyLocalStreamChange(this.localStream);
@@ -2085,11 +2188,20 @@ export class VideoCallSession extends SimpleEventEmitter {
     const micStateBeforeAwait = this.isMicOn;
 
     if (force) {
+      this.clearFastStartVideoUpgradeTimer();
+      this.fastStartVideoProfileActive = false;
       this.stopLocalTracksWithoutStateReset();
     }
 
     const facingMode = this.camSide === 'front' ? 'user' : 'environment';
-    const preferred = getPreferredVideoCaptureOptions(facingMode);
+    const steadyPreferred = getPreferredVideoCaptureOptions(facingMode);
+    const useFastStart = this.shouldUseFastStartVideoProfile(force);
+    const preferred = useFastStart ? getFastStartVideoCaptureOptions(facingMode) : steadyPreferred;
+    if (useFastStart) {
+      this.fastStartVideoProfileActive =
+        steadyPreferred.meta.preset !== preferred.meta.preset && preferred.meta.preset === 'low';
+      this.clearFastStartVideoUpgradeTimer();
+    }
     logger.info('[VideoCallSession] Video capture preset', preferred.meta);
 
     let tracks: LocalTrack[] = [];
@@ -2162,6 +2274,18 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     // КРИТИЧНО: Эквалайзер должен работать в видеозвонке так же, как в RandomChat.
     // Эквалайзер отключен: мониторинг микрофона не запускаем
+    };
+    const promise = run();
+    if (!force) {
+      this.ensureLocalTracksPromise = promise;
+    }
+    try {
+      await promise;
+    } finally {
+      if (!force && this.ensureLocalTracksPromise === promise) {
+        this.ensureLocalTracksPromise = null;
+      }
+    }
   }
 
   private stopLocalVideoTrackWithoutStateReset(): void {
@@ -3400,6 +3524,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         partnerUserId: this.partnerUserId,
         expectedPartnerIdentity: this.partnerUserId,
       });
+      // Временный guard: автоматический fast-start upgrade через ~2.5s давал
+      // заметное мерцание локального блока "Вы" у обоих участников после соединения.
+      // Оставляем fast-start только для быстрого старта звонка, без пост-апгрейда качества.
+      this.fastStartVideoProfileActive = false;
       const joinTimeMs = Date.now() - connectStartTime;
       const shouldWarnAboutMissingTrack = () => {
         // В первые секунды после join LiveKit может еще не успеть довезти remote tracks.
@@ -4483,7 +4611,8 @@ export class VideoCallSession extends SimpleEventEmitter {
             // LiveKit can emit ParticipantDisconnected transiently during reconnect/negotiation.
             // We must NOT end the call immediately in that case, otherwise UI shows "error" and then "connects".
             const isRoomReconnecting = this.liveKitReconnecting || room.state === 'reconnecting';
-            const recentlyReconnecting = Date.now() - this.lastLiveKitReconnectingAt < 10_000;
+            const recentlyReconnecting =
+              Date.now() - this.lastLiveKitReconnectingAt < RECENT_RECONNECT_DISCONNECT_GUARD_MS;
             if (isRoomReconnecting || recentlyReconnecting) {
               logger.warn('[VideoCallSession] Remote participant disconnected during reconnect (ignored)', {
                 participantIdentity: participant.identity,
@@ -4524,7 +4653,7 @@ export class VideoCallSession extends SimpleEventEmitter {
                 roomState: room.state,
               });
               this.handleCallEnded();
-            }, 500);
+            }, REMOTE_PARTICIPANT_DISCONNECT_CONFIRM_MS);
           }
         }
       })

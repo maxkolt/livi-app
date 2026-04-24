@@ -1917,7 +1917,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                       {...localRtcViewProps}
                       style={styles.rtc}
                       objectFit="cover"
-                      mirror
+                      mirror={false}
                     />
                   );
                 } else {

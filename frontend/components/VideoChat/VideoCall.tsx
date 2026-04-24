@@ -15,7 +15,6 @@ import {
   Animated,
   BackHandler,
   Easing,
-  InteractionManager,
   NativeModules,
   AppState,
 } from 'react-native';
@@ -563,11 +562,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     return () => sub.remove();
   }, []);
 
-  // Задержка перед включением системного PiP после принятия/подключения (избегаем ложного onUserLeaveHint при закрытии IncomingCallActivity).
-  const systemPiPGraceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Логируем решения по системному PiP, чтобы ловить гонки между VideoCall/App/MainActivity.
   const systemPiPLeaveHintLogRef = useRef<string>('');
-  const systemPiPGraceKeyRef = useRef<string>('');
-  const systemPiPGraceCompletedRef = useRef(false);
 
   // __currentCallPiPParamsRef — callId/roomId/navParams для системного PiP и для returnToCall. Читается в PiPContext
   // при AboutToEnterSystemPiP и в App при SystemPiPExpanded fallback. Не обнуляем при !canEnableSystemPiP, только
@@ -575,15 +571,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     const g = (global as any);
     g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
-    const systemPiPKey = `${roomId || ''}:${callId || ''}`;
-    if (systemPiPGraceKeyRef.current !== systemPiPKey) {
-      if (systemPiPGraceTimerRef.current) {
-        clearTimeout(systemPiPGraceTimerRef.current);
-        systemPiPGraceTimerRef.current = null;
-      }
-      systemPiPGraceKeyRef.current = systemPiPKey;
-      systemPiPGraceCompletedRef.current = false;
-    }
     // ВАЖНО: Включаем системный PiP только когда звонок уже "стабилен" (есть roomId),
     // экран VideoCall в фокусе и приложение активно. Иначе на части устройств возможен
     // ложный onUserLeaveHint во время переходов (accept/закрытие нативных экранов),
@@ -617,10 +604,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Не очищаем ref при !canEnableSystemPiP — иначе при возврате из системного PiP returnToCall получит null.
     // Очищаем только в cleanup эффекта, когда сессия реально завершена (stillActive === false).
     if (!hasStableSystemPiPContext) {
-      if (systemPiPGraceTimerRef.current) {
-        clearTimeout(systemPiPGraceTimerRef.current);
-        systemPiPGraceTimerRef.current = null;
-      }
       const logKey = JSON.stringify({
         state: 'blocked',
         appState,
@@ -644,10 +627,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
       return;
     }
-    // После первого успешного grace оставляем leaveHint включённым на весь текущий звонок.
-    // Иначе при Home/background effect успевает выключить флаг раньше onUserLeaveHint,
-    // и системный PiP открывается нестабильно.
-    if (systemPiPGraceCompletedRef.current) {
+    if (canEnableSystemPiP) {
       const readyLogKey = JSON.stringify({
         state: 'ready',
         appState,
@@ -669,12 +649,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
       }
-    } else if (!canEnableSystemPiP) {
-      if (systemPiPGraceTimerRef.current) {
-        clearTimeout(systemPiPGraceTimerRef.current);
-        systemPiPGraceTimerRef.current = null;
-      }
-      const state = systemPiPEntryInProgress ? 'preserved-during-entry' : 'waiting-for-grace';
+    } else {
+      const state = systemPiPEntryInProgress ? 'preserved-during-entry' : 'waiting-for-active-focus';
       const logKey = JSON.stringify({
         state,
         appState,
@@ -688,7 +664,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         logger.info(
           systemPiPEntryInProgress
             ? '[VideoCall] system PiP leaveHint preserved while native PiP entry is in progress'
-            : '[VideoCall] system PiP leaveHint waiting for active/focused state before grace completes',
+            : '[VideoCall] system PiP leaveHint waiting for active/focused state',
           {
             appState,
             isFocused,
@@ -716,48 +692,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (isBackgroundWithActiveCall && Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
       }
-    } else {
-    // После принятия вызова возможен ложный onUserLeaveHint при закрытии нативного экрана входящего/исходящего.
-    // Включаем PiP по LeaveHint через 1 с после стабилизации (короткий grace — чтобы на обоих устройствах
-    // leaveHint успевал включиться до нажатия Home и звонок не обрывался).
-    const SYSTEM_PIP_GRACE_MS = 1000;
-    if (Platform.OS === 'android' && !systemPiPGraceTimerRef.current) {
-      if (systemPiPGraceTimerRef.current) {
-        clearTimeout(systemPiPGraceTimerRef.current);
-        systemPiPGraceTimerRef.current = null;
-      }
-      const scheduleLogKey = JSON.stringify({
-        state: 'scheduled',
-        roomId: !!roomId,
-        appState,
-        isFocused,
-        isInactiveState,
-      });
-      if (systemPiPLeaveHintLogRef.current !== scheduleLogKey) {
-        systemPiPLeaveHintLogRef.current = scheduleLogKey;
-        logger.info('[VideoCall] system PiP leaveHint grace timer scheduled', {
-          delayMs: SYSTEM_PIP_GRACE_MS,
-          appState,
-          isFocused,
-          hasRoomId: !!roomId,
-          isInactiveState,
-          hasSession: !!sessionRef.current,
-        });
-      }
-      systemPiPGraceTimerRef.current = setTimeout(() => {
-        systemPiPGraceTimerRef.current = null;
-        systemPiPGraceCompletedRef.current = true;
-        logger.info('[VideoCall] system PiP leaveHint enabled after grace timer', {
-          delayMs: SYSTEM_PIP_GRACE_MS,
-          hasRoomId: !!roomId,
-          appState,
-          isFocused,
-          isInactiveState,
-          hasSession: !!sessionRef.current,
-        });
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
-      }, SYSTEM_PIP_GRACE_MS);
-    }
     }
     const partner = partnerUserId
       ? friendsRef.current?.find((f: any) => String(f._id) === String(partnerUserId))
@@ -786,10 +720,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       navParams: { ...route?.params, peerUserId: partnerUserId, partnerId } as any,
     };
     return () => {
-      if (systemPiPGraceTimerRef.current) {
-        clearTimeout(systemPiPGraceTimerRef.current);
-        systemPiPGraceTimerRef.current = null;
-      }
       // При уходе по «Назад» (in-app PiP) или по «Домой» (системный PiP) не сбрасываем params и hint.
       const leavingByBack = g.__leavingVideoCallByBackRef?.current === true;
       const leavingByHome = g.__leavingVideoCallByHomeRef?.current === true;
@@ -805,8 +735,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       const stillActive = session && (typeof session.isEnded !== 'function' || !session.isEnded());
       if (stillActive) return;
       g.__currentCallPiPParamsRef.current = null;
-      systemPiPGraceCompletedRef.current = false;
-      systemPiPGraceKeyRef.current = '';
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
@@ -1592,13 +1520,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           return;
         }
 
-        // Откладываем подключение до после первого кадра — меньше ANR у инициатора
-        InteractionManager.runAfterInteractions(() => {
-          session.connectAsInitiatorAfterAccepted(existingCallId, friendId).catch((e) => {
-            logger.error('[VideoCall] Error connecting as initiator after accepted:', e);
-            setStarted(false);
-            setLoading(false);
-          });
+        session.connectAsInitiatorAfterAccepted(existingCallId, friendId).catch((e) => {
+          logger.error('[VideoCall] Error connecting as initiator after accepted:', e);
+          setStarted(false);
+          setLoading(false);
         });
         return;
       }
@@ -1641,13 +1566,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       currentCallIdRef.current = incomingCallId;
       setStarted(true);
       setLoading(true);
-      // Откладываем старт камеры/подключения до после первого кадра — меньше ANR при принятии из чата
-      InteractionManager.runAfterInteractions(() => {
-        session.acceptCall(incomingCallId, fromUserId).catch((e) => {
-          logger.error('[VideoCall] Error accepting incoming call:', e);
-          setStarted(false);
-          setLoading(false);
-        });
+      session.acceptCall(incomingCallId, fromUserId).catch((e) => {
+        logger.error('[VideoCall] Error accepting incoming call:', e);
+        setStarted(false);
+        setLoading(false);
       });
     } else if (!reusedLiveSession && (route?.params?.roomId || route?.params?.callId)) {
       // Восстановление активного звонка
@@ -1702,26 +1624,49 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       
       if (currentSession) {
         try {
-          if (typeof currentSession.isEnded === 'function' && currentSession.isEnded()) {
-            clearSessionRefs();
-            return;
-          }
           // КРИТИЧНО: Сначала останавливаем локальные стримы напрямую
           // Это гарантирует, что камера остановится даже если компонент размонтирован
           const localStream = currentSession.getLocalStream?.();
           stopStreamTracks(localStream, 'cleanupFunction/sessionLocalStream');
-          
-          // КРИТИЧНО: Вызываем session.endCall() для полной очистки
+
+          const sessionAlreadyEnded =
+            typeof currentSession.isEnded === 'function' && currentSession.isEnded();
+          const callIdForEnd = currentSession.getCallId?.() ?? undefined;
+          const roomIdForEnd = currentSession.getRoomId?.() ?? undefined;
+          const lastHandledCallEnded = (global as any).__lastHandledCallEndedRef;
+          const recentSocketEndedKey = String(lastHandledCallEnded?.key || '');
+          const recentSocketEndedAt = Number(lastHandledCallEnded?.at || 0);
+          const currentCallEndKey =
+            callIdForEnd && roomIdForEnd ? `${callIdForEnd}|${roomIdForEnd}` : callIdForEnd || roomIdForEnd || '';
+          const recentSocketEndedForThisCall =
+            !!currentCallEndKey &&
+            recentSocketEndedKey === currentCallEndKey &&
+            Date.now() - recentSocketEndedAt < 5000;
+
+          // cleanupFunction может вызываться и после локального endCall (например, из PiP/App).
+          // После серверного call:ended делаем только локальный cleanup, иначе unmount экрана
+          // может отправить лишний второй call:end, который backend потом дедупит.
+          if (recentSocketEndedForThisCall) {
+            logger.info('[VideoCall] cleanupFunction: recent socket call:ended detected, skipping session.endCall', {
+              currentCallEndKey,
+              elapsedMs: Date.now() - recentSocketEndedAt,
+            });
+          } else if (!sessionAlreadyEnded && typeof currentSession.endCall === 'function') {
+            logger.info('[VideoCall] Вызываем session.endCall() из cleanupFunction');
+            currentSession.endCall(callIdForEnd, roomIdForEnd);
+          } else if (sessionAlreadyEnded) {
+            logger.info('[VideoCall] cleanupFunction: session уже завершена, пропускаем session.endCall');
+          } else {
+            logger.warn('[VideoCall] session.endCall недоступен в cleanupFunction');
+          }
+
           if (typeof currentSession.cleanup === 'function') {
             logger.info('[VideoCall] Вызываем session.cleanup() из cleanupFunction');
             currentSession.cleanup();
             clearSessionRefs();
-          } else if (typeof currentSession.endCall === 'function') {
-            logger.info('[VideoCall] Вызываем session.endCall() из cleanupFunction');
-            currentSession.endCall();
-            clearSessionRefs();
           } else {
-            logger.warn('[VideoCall] session.endCall недоступен в cleanupFunction');
+            logger.warn('[VideoCall] session.cleanup недоступен в cleanupFunction');
+            clearSessionRefs();
           }
           // Refs и __onVideoCallEndedRef уже вызваны в начале cleanupFunction.
 
@@ -1842,12 +1787,23 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           const route = rootNav.getCurrentRoute();
           if (route?.name === 'Home') return;
           if (route?.name !== 'VideoCall') return;
+          const returnTo = (route as any)?.params?.returnTo;
           const state = rootNav.getState();
           const routes = state?.routes ?? [];
-          logger.info('[VideoCall] [end] closeVideoCallScreen: dispatch goBack/reset', { routesLength: routes.length });
-          if (routes.length > 1) {
+          const canGoBack = typeof rootNav.canGoBack === 'function' ? rootNav.canGoBack() : routes.length > 1;
+          logger.info('[VideoCall] [end] closeVideoCallScreen: dispatch goBack/reset', {
+            routesLength: routes.length,
+            canGoBack,
+            hasReturnTo: !!returnTo?.name,
+          });
+          if (canGoBack) {
             rootNav.dispatch(CommonActions.goBack());
             try { emitCallEndedOnHome(); } catch (_) {}
+          } else if (returnTo?.name) {
+            rootNav.dispatch(CommonActions.reset({
+              index: 0,
+              routes: [{ name: returnTo.name as any, params: { ...(returnTo.params || {}), callEnded: true } }],
+            }));
           } else {
             rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
           }
@@ -2281,11 +2237,22 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           const state = rootNav.getState();
           const routes = state?.routes ?? [];
           const currentRoute = rootNav.getCurrentRoute();
+          const returnTo = (currentRoute as any)?.params?.returnTo;
           if (currentRoute?.name === 'VideoCall') {
-            logger.info('[VideoCall] [end] onAbortCall: goBack (вернём на экран под VideoCall)', { routesLength: routes.length });
-            if (routes.length > 1) {
+            const canGoBack = typeof rootNav.canGoBack === 'function' ? rootNav.canGoBack() : routes.length > 1;
+            logger.info('[VideoCall] [end] onAbortCall: goBack (вернём на экран под VideoCall)', {
+              routesLength: routes.length,
+              canGoBack,
+              hasReturnTo: !!returnTo?.name,
+            });
+            if (canGoBack) {
               rootNav.dispatch(CommonActions.goBack());
               try { emitCallEndedOnHome(); } catch (_) {}
+            } else if (returnTo?.name) {
+              rootNav.dispatch(CommonActions.reset({
+                index: 0,
+                routes: [{ name: returnTo.name as any, params: { ...(returnTo.params || {}), callEnded: true } }],
+              }));
             } else {
               rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
               try { emitCallEndedOnHome(); } catch (_) {}
@@ -2333,7 +2300,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           stopStreamTracks(localStreamForCleanup, 'onAbortCall/localStreamState');
         }
 
-        sessionRefForCleanup.endCall(idToSend ?? undefined, roomToSend ?? undefined);
+        const sessionAlreadyEnded =
+          typeof sessionRefForCleanup.isEnded === 'function' && sessionRefForCleanup.isEnded();
+        if (!sessionAlreadyEnded && typeof sessionRefForCleanup.endCall === 'function') {
+          sessionRefForCleanup.endCall(idToSend ?? undefined, roomToSend ?? undefined);
+        } else if (sessionAlreadyEnded) {
+          logger.info('[VideoCall] onAbortCall deferred cleanup: session already ended, skipping session.endCall');
+        } else {
+          logger.warn('[VideoCall] onAbortCall deferred cleanup: session.endCall unavailable');
+        }
 
         remoteStreamRef.current = null;
         remoteStreamReceivedAtRef.current = null;
@@ -2437,11 +2412,18 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (!rootNav?.isReady?.()) return;
       const route = rootNav.getCurrentRoute();
       if (route?.name !== 'VideoCall') return;
+      const returnTo = (route as any)?.params?.returnTo;
       const state = rootNav.getState();
       const routes = state?.routes ?? [];
-      if (routes.length > 1) {
+      const canGoBack = typeof rootNav.canGoBack === 'function' ? rootNav.canGoBack() : routes.length > 1;
+      if (canGoBack) {
         rootNav.dispatch(CommonActions.goBack());
         try { emitCallEndedOnHome(); } catch (_) {}
+      } else if (returnTo?.name) {
+        rootNav.dispatch(CommonActions.reset({
+          index: 0,
+          routes: [{ name: returnTo.name as any, params: { ...(returnTo.params || {}), callEnded: true } }],
+        }));
       } else {
         rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
       }

@@ -183,7 +183,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
         {...(rtcViewProps as any)}
         style={styles.rtc}
         objectFit="cover"
-        mirror
+        mirror={false}
         // Не поднимаем Surface "наверх": на старых Android это прячет RN-кнопки.
         zOrder={0}
       />

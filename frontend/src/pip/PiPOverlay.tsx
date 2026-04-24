@@ -144,12 +144,19 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
 
   const onVideoCallScreen = isVideoCallScreen(currentRouteName);
   const isSystemPiPLayout = pendingSystemPiP || inSystemPiPMode;
-  // На экране VideoCall обычный in-app PiP не показываем. Но при входе в системный PiP по Back
-  // нужно показать оверлей с блоком 9:16, иначе в кадр попадёт экран звонка (чёрные/синие полосы).
+  // При Android Back со страницы звонка разрешаем показать in-app PiP сразу, ещё до завершения goBack(),
+  // иначе окно ждёт смены route и выглядит "задержанным".
+  const showingInAppPiPDuringBackTransition =
+    !isSystemPiPLayout &&
+    onVideoCallScreen &&
+    (global as any).__leavingVideoCallByBackRef?.current === true;
+  // На экране VideoCall обычный in-app PiP не показываем. Исключение — явный уход по Back,
+  // где маленькое окно нужно показать сразу. Для системного PiP по Back/leaveHint тоже оставляем
+  // рендер оверлея с блоком 9:16, иначе в кадр попадёт экран звонка (чёрные/синие полосы).
   const shouldShowOverlay =
     visible &&
     !suppressOverlayForReturn &&
-    (!onVideoCallScreen || isSystemPiPLayout);
+    (!onVideoCallScreen || isSystemPiPLayout || showingInAppPiPDuringBackTransition);
 
   const translate = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const dragStartPos = useRef({ x: 0, y: 0 });
