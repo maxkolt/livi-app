@@ -1026,8 +1026,65 @@ const callIdToRoomId = new Map<string, string>();
 /** roomId/callId, для которых call:end уже обработан недавно (защита от дублирующих call:end). */
 const recentlyEndedCalls = new Map<string, ReturnType<typeof setTimeout>>();
 /** Участник не был подключён в момент call:accept — при reauth отправим ему call:accepted и он подключится в комнату */
-const activeRoomByUserId = new Map<string, { callId: string; roomId: string; livekitRoomName: string; peerUserId: string }>();
+type PendingAcceptedRoom = {
+  callId: string;
+  roomId: string;
+  livekitRoomName: string;
+  peerUserId: string;
+};
+const activeRoomByUserId = new Map<string, PendingAcceptedRoom>();
 // Пользователь занят рандом-видеочатом (по userId) — используется также для findRandom
+
+function socketAlreadyAttachedToPendingRoom(sock: AuthedSocket, pendingRoom: PendingAcceptedRoom): boolean {
+  const currentRoomId = String(
+    (sock as any)?.data?.roomId ||
+    activeCallBySocket.get(sock.id) ||
+    ''
+  ).trim();
+  const inCall = (sock as any)?.data?.inCall === true;
+  return inCall && currentRoomId === pendingRoom.roomId;
+}
+
+async function emitPendingCallAcceptedToSocket(
+  io: Server,
+  sock: AuthedSocket,
+  userId: string,
+  pendingRoom: PendingAcceptedRoom,
+  source: 'reauth' | 'call:getAccepted',
+): Promise<boolean> {
+  if (socketAlreadyAttachedToPendingRoom(sock, pendingRoom)) {
+    logger.info(`[${source}] Skipping duplicate call:accepted (socket already attached to room)`, {
+      userId,
+      socketId: sock.id,
+      roomId: pendingRoom.roomId,
+      callId: pendingRoom.callId,
+    });
+    return false;
+  }
+
+  const token = await createToken({ identity: userId, roomName: pendingRoom.livekitRoomName });
+  evictExtraUserSocketsInDirectRoom(io, pendingRoom.roomId, userId, sock.id);
+  sock.join(pendingRoom.roomId);
+  activeCallBySocket.set(sock.id, pendingRoom.roomId);
+  (sock as any).data = (sock as any).data || {};
+  (sock as any).data.busy = true;
+  (sock as any).data.roomId = pendingRoom.roomId;
+  (sock as any).data.partnerSid = null;
+  (sock as any).data.inCall = true;
+  try {
+    sanitizeDirectCallSocketIoRoom(io, pendingRoom.roomId, activeCallBySocket);
+  } catch {}
+  sock.emit('call:accepted', {
+    callId: pendingRoom.callId,
+    from: null,
+    fromUserId: pendingRoom.peerUserId,
+    roomId: pendingRoom.roomId,
+    livekitToken: token,
+    livekitRoomName: pendingRoom.livekitRoomName,
+    livekitUrl: getLiveKitUrl() || null,
+  });
+  return true;
+}
 
 function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'canceled' | 'timeout') {
   const link = callsById.get(callId);
@@ -1557,26 +1614,14 @@ io.on('connection', async (sock: AuthedSocket) => {
       const pendingRoom = activeRoomByUserId.get(mappedUserId);
       if (pendingRoom) {
         try {
-          activeRoomByUserId.delete(mappedUserId);
-          const token = await createToken({ identity: mappedUserId, roomName: pendingRoom.livekitRoomName });
-          evictExtraUserSocketsInDirectRoom(io, pendingRoom.roomId, mappedUserId, sock.id);
-          sock.join(pendingRoom.roomId);
-          activeCallBySocket.set(sock.id, pendingRoom.roomId);
-          (sock as any).data = (sock as any).data || {};
-          (sock as any).data.busy = true;
-          (sock as any).data.roomId = pendingRoom.roomId;
-          (sock as any).data.partnerSid = null;
-          (sock as any).data.inCall = true;
-          sock.emit('call:accepted', {
-            callId: pendingRoom.callId,
-            from: null,
-            fromUserId: pendingRoom.peerUserId,
-            roomId: pendingRoom.roomId,
-            livekitToken: token,
-            livekitRoomName: pendingRoom.livekitRoomName,
-            livekitUrl: getLiveKitUrl() || null,
-          });
-          logger.info('[reauth] Sent call:accepted to reconnected participant', { userId: mappedUserId, roomId: pendingRoom.roomId, callId: pendingRoom.callId });
+          const emitted = await emitPendingCallAcceptedToSocket(io, sock, mappedUserId, pendingRoom, 'reauth');
+          if (emitted) {
+            logger.info('[reauth] Sent call:accepted to reconnected participant', {
+              userId: mappedUserId,
+              roomId: pendingRoom.roomId,
+              callId: pendingRoom.callId,
+            });
+          }
         } catch (e: any) {
           logger.warn('[reauth] Failed to send pending call:accepted', { userId: mappedUserId, error: e?.message });
         }
@@ -1644,39 +1689,8 @@ io.on('connection', async (sock: AuthedSocket) => {
       replayIncomingToCalleeIfRinging(sock, boundUid);
     });
     emitPresence(io);
-    // Участник переподключился — если был принятый звонок без него, отправляем call:accepted
-    const pendingRoom = activeRoomByUserId.get(String(bindUid));
-    if (pendingRoom) {
-      (async () => {
-        try {
-          activeRoomByUserId.delete(String(bindUid));
-          const token = await createToken({ identity: String(bindUid), roomName: pendingRoom.livekitRoomName });
-          evictExtraUserSocketsInDirectRoom(io, pendingRoom.roomId, String(bindUid), sock.id);
-          sock.join(pendingRoom.roomId);
-          activeCallBySocket.set(sock.id, pendingRoom.roomId);
-          try {
-            sanitizeDirectCallSocketIoRoom(io, pendingRoom.roomId, activeCallBySocket);
-          } catch {}
-          (sock as any).data = (sock as any).data || {};
-          (sock as any).data.busy = true;
-          (sock as any).data.roomId = pendingRoom.roomId;
-          (sock as any).data.partnerSid = null;
-          (sock as any).data.inCall = true;
-          sock.emit('call:accepted', {
-            callId: pendingRoom.callId,
-            from: null,
-            fromUserId: pendingRoom.peerUserId,
-            roomId: pendingRoom.roomId,
-            livekitToken: token,
-            livekitRoomName: pendingRoom.livekitRoomName,
-            livekitUrl: getLiveKitUrl() || null,
-          });
-          logger.info('[connect] Sent call:accepted to reconnected participant (initial bind)', { userId: bindUid, roomId: pendingRoom.roomId });
-        } catch (e: any) {
-          logger.warn('[connect] Failed to send pending call:accepted', { userId: bindUid, error: e?.message });
-        }
-      })();
-    }
+    // Replay call:accepted здесь не делаем: после connect клиент всегда шлёт reauth,
+    // и duplicate source (connect + reauth + call:getAccepted) порождал лишние accepted.
   }
 
   // === call:end → транслируем call:ended обоим участникам (УПРОЩЕНО для 1-на-1) ===
@@ -2828,28 +2842,11 @@ io.on('connection', async (sock: AuthedSocket) => {
     const pendingRoom = activeRoomByUserId.get(userId);
     if (!pendingRoom || pendingRoom.callId !== id) return;
     try {
-      const token = await createToken({ identity: userId, roomName: pendingRoom.livekitRoomName });
-      evictExtraUserSocketsInDirectRoom(io, pendingRoom.roomId, String(userId), sock.id);
-      sock.join(pendingRoom.roomId);
-      activeCallBySocket.set(sock.id, pendingRoom.roomId);
-      (sock as any).data = (sock as any).data || {};
-      (sock as any).data.busy = true;
-      (sock as any).data.roomId = pendingRoom.roomId;
-      (sock as any).data.inCall = true;
-      try {
-        sanitizeDirectCallSocketIoRoom(io, pendingRoom.roomId, activeCallBySocket);
-      } catch {}
-      sock.emit('call:accepted', {
-        callId: pendingRoom.callId,
-        from: null,
-        fromUserId: pendingRoom.peerUserId,
-        roomId: pendingRoom.roomId,
-        livekitToken: token,
-        livekitRoomName: pendingRoom.livekitRoomName,
-        livekitUrl: getLiveKitUrl() || null,
-      });
-      logger.info('[call:getAccepted] Sent call:accepted to caller', { userId, callId: id });
-      scheduleGlobalFriendPresenceEmit(io);
+      const emitted = await emitPendingCallAcceptedToSocket(io, sock, String(userId), pendingRoom, 'call:getAccepted');
+      if (emitted) {
+        logger.info('[call:getAccepted] Sent call:accepted to caller', { userId, callId: id });
+        scheduleGlobalFriendPresenceEmit(io);
+      }
     } catch (e: any) {
       logger.warn('[call:getAccepted] Failed to send call:accepted', { userId, callId: id, error: e?.message });
     }
