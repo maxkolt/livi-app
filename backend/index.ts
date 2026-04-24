@@ -1033,7 +1033,55 @@ type PendingAcceptedRoom = {
   peerUserId: string;
 };
 const activeRoomByUserId = new Map<string, PendingAcceptedRoom>();
+type CallAcceptedDeliverySource = 'call:accept' | 'reauth' | 'call:getAccepted';
+type CallAcceptedDeliveryState = PendingAcceptedRoom & {
+  deliveredAtMs?: number;
+  deliveredSource?: CallAcceptedDeliverySource;
+  deliveredSocketId?: string;
+};
+const callAcceptedDeliveryByKey = new Map<string, CallAcceptedDeliveryState>();
 // Пользователь занят рандом-видеочатом (по userId) — используется также для findRandom
+
+function getCallAcceptedDeliveryKey(callId: string, userId: string): string {
+  return `${String(callId)}:${String(userId)}`;
+}
+
+function getCallAcceptedDeliveryState(callId: string, userId: string): CallAcceptedDeliveryState | undefined {
+  return callAcceptedDeliveryByKey.get(getCallAcceptedDeliveryKey(callId, userId));
+}
+
+function rememberCallAcceptedDelivery(
+  callId: string,
+  userId: string,
+  pendingRoom: PendingAcceptedRoom,
+  meta?: {
+    source?: CallAcceptedDeliverySource;
+    socketId?: string | null;
+  },
+): CallAcceptedDeliveryState {
+  const key = getCallAcceptedDeliveryKey(callId, userId);
+  const prev = callAcceptedDeliveryByKey.get(key);
+  const next: CallAcceptedDeliveryState = {
+    ...(prev || {}),
+    ...pendingRoom,
+  };
+  if (meta?.source) next.deliveredSource = meta.source;
+  if (meta?.socketId) next.deliveredSocketId = meta.socketId;
+  if (meta?.source && meta?.socketId) next.deliveredAtMs = Date.now();
+  callAcceptedDeliveryByKey.set(key, next);
+  return next;
+}
+
+function hasLiveAcceptedDeliverySocket(
+  io: Server,
+  state?: CallAcceptedDeliveryState,
+  excludeSocketId?: string,
+): boolean {
+  const deliveredSocketId = String(state?.deliveredSocketId || '').trim();
+  if (!deliveredSocketId) return false;
+  if (excludeSocketId && deliveredSocketId === excludeSocketId) return false;
+  return io.sockets.sockets.has(deliveredSocketId);
+}
 
 function socketAlreadyAttachedToPendingRoom(sock: AuthedSocket, pendingRoom: PendingAcceptedRoom): boolean {
   const currentRoomId = String(
@@ -1068,12 +1116,25 @@ async function emitPendingCallAcceptedToSocket(
   sock: AuthedSocket,
   userId: string,
   pendingRoom: PendingAcceptedRoom,
-  source: 'reauth' | 'call:getAccepted',
+  source: CallAcceptedDeliverySource,
 ): Promise<boolean> {
+  const deliveryState = rememberCallAcceptedDelivery(pendingRoom.callId, userId, pendingRoom);
   if (socketAlreadyAttachedToPendingRoom(sock, pendingRoom)) {
     logger.info(`[${source}] Skipping duplicate call:accepted (socket already attached to room)`, {
       userId,
       socketId: sock.id,
+      roomId: pendingRoom.roomId,
+      callId: pendingRoom.callId,
+    });
+    return false;
+  }
+
+  if (hasLiveAcceptedDeliverySocket(io, deliveryState, sock.id)) {
+    logger.info(`[${source}] Skipping duplicate call:accepted (already delivered to live socket)`, {
+      userId,
+      socketId: sock.id,
+      deliveredSocketId: deliveryState.deliveredSocketId,
+      deliveredSource: deliveryState.deliveredSource || null,
       roomId: pendingRoom.roomId,
       callId: pendingRoom.callId,
     });
@@ -1111,6 +1172,10 @@ async function emitPendingCallAcceptedToSocket(
     livekitRoomName: pendingRoom.livekitRoomName,
     livekitUrl: getLiveKitUrl() || null,
   });
+  rememberCallAcceptedDelivery(pendingRoom.callId, userId, pendingRoom, {
+    source,
+    socketId: sock.id,
+  });
   return true;
 }
 
@@ -1122,6 +1187,8 @@ function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'cancele
   callsById.delete(callId);
   callOfUser.delete(link.a);
   callOfUser.delete(link.b);
+  callAcceptedDeliveryByKey.delete(getCallAcceptedDeliveryKey(callId, link.a));
+  callAcceptedDeliveryByKey.delete(getCallAcceptedDeliveryKey(callId, link.b));
   const telemetry = callDeliveryById.get(callId);
   if (reason) finalizeCall(callId, reason);
   if (telemetry) {
@@ -2804,6 +2871,15 @@ io.on('connection', async (sock: AuthedSocket) => {
             livekitRoomName,
             livekitUrl: getLiveKitUrl() || null,
           });
+          rememberCallAcceptedDelivery(id, link.a, {
+            callId: id,
+            roomId,
+            livekitRoomName,
+            peerUserId: link.b,
+          }, {
+            source: 'call:accept',
+            socketId: aSock.id,
+          });
           console.log('[call:accept] ✅ call:accepted sent to participant A');
         } catch (e) {
           console.error('[call:accept] ❌ Error sending call:accepted to participant A:', e);
@@ -2829,6 +2905,15 @@ io.on('connection', async (sock: AuthedSocket) => {
             livekitRoomName,
             livekitUrl: getLiveKitUrl() || null,
           });
+          rememberCallAcceptedDelivery(id, link.b, {
+            callId: id,
+            roomId,
+            livekitRoomName,
+            peerUserId: link.a,
+          }, {
+            source: 'call:accept',
+            socketId: bSock.id,
+          });
           console.log('[call:accept] ✅ call:accepted sent to participant B');
         } catch (e) {
           console.error('[call:accept] ❌ Error sending call:accepted to participant B:', e);
@@ -2837,9 +2922,13 @@ io.on('connection', async (sock: AuthedSocket) => {
       
       // Сохраняем pending room для обоих участников, чтобы reconnect/reauth могли
       // восстановить call:accepted и подключение к LiveKit без повторного входящего.
+      const pendingRoomForA: PendingAcceptedRoom = { callId: id, roomId, livekitRoomName, peerUserId: link.b };
+      const pendingRoomForB: PendingAcceptedRoom = { callId: id, roomId, livekitRoomName, peerUserId: link.a };
       try {
-        activeRoomByUserId.set(link.a, { callId: id, roomId, livekitRoomName, peerUserId: link.b });
-        activeRoomByUserId.set(link.b, { callId: id, roomId, livekitRoomName, peerUserId: link.a });
+        activeRoomByUserId.set(link.a, pendingRoomForA);
+        activeRoomByUserId.set(link.b, pendingRoomForB);
+        rememberCallAcceptedDelivery(id, link.a, pendingRoomForA);
+        rememberCallAcceptedDelivery(id, link.b, pendingRoomForB);
         if (!aSock) logger.info('[call:accept] Caller offline, stored pending call for reauth', { userId: link.a, roomId, callId: id });
       } catch {}
       // Всегда шлём FCM инициатору: при экране исходящего сокет может быть отключён или событие не доходит — FCM выведет приложение, по getAccepted получим call:accepted
