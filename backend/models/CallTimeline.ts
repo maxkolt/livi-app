@@ -35,7 +35,7 @@ export interface ICallTimeline {
   callerId: string;
   calleeId: string;
   state: CallLifecycleState;
-  closeReason?: 'accepted' | 'declined' | 'canceled' | 'timeout';
+  closeReason?: 'accepted' | 'declined' | 'canceled' | 'timeout' | 'ended';
   providerPrimary: boolean;
   pushFallbackEnabled: boolean;
   createdAtMs: number;
@@ -84,7 +84,7 @@ const CallTimelineSchema = new Schema<ICallTimeline>(
     },
     closeReason: {
       type: String,
-      enum: ['accepted', 'declined', 'canceled', 'timeout'],
+      enum: ['accepted', 'declined', 'canceled', 'timeout', 'ended'],
       default: undefined,
       index: true,
     },

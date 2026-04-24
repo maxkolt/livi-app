@@ -6,7 +6,7 @@ import CallTimelineModel, {
 import { logger } from './logger';
 import { callProviderMode } from './callProvider';
 
-type CloseReason = 'accepted' | 'declined' | 'canceled' | 'timeout';
+type CloseReason = 'accepted' | 'declined' | 'canceled' | 'timeout' | 'ended';
 type IncomingShownSource = 'socket' | 'native_http' | 'provider';
 
 type TimelineEvent = {
@@ -196,7 +196,7 @@ export function transitionCall(
   if (snapshot.state === 'accepted' && nextState !== 'ended') return false;
 
   snapshot.state = nextState;
-  if (nextState === 'accepted' || nextState === 'declined' || nextState === 'canceled' || nextState === 'timeout') {
+  if (nextState === 'accepted' || nextState === 'declined' || nextState === 'canceled' || nextState === 'timeout' || nextState === 'ended') {
     snapshot.closeReason = nextState;
   }
   const eventName =

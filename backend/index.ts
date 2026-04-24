@@ -978,7 +978,7 @@ type CallDeliveryTelemetry = {
   incomingShownBy?: 'socket' | 'native_http';
   retryPushCount?: number;
   escalationPushCount?: number;
-  closeReason?: 'accepted' | 'declined' | 'canceled' | 'timeout';
+  closeReason?: 'accepted' | 'declined' | 'canceled' | 'timeout' | 'ended';
   purgeTimer?: NodeJS.Timeout;
 };
 const callDeliveryById = new Map<string, CallDeliveryTelemetry>();
@@ -1179,7 +1179,7 @@ async function emitPendingCallAcceptedToSocket(
   return true;
 }
 
-function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'canceled' | 'timeout') {
+function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'canceled' | 'timeout' | 'ended') {
   const link = callsById.get(callId);
   if (!link) return;
   if (link.timer) { try { clearTimeout(link.timer); } catch {} }
@@ -2010,7 +2010,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       const cidToCleanup = resolveCallIdFromEndIdentifier(id, callId);
       if (cidToCleanup) {
-        cleanupCall(cidToCleanup, 'canceled');
+        cleanupCall(cidToCleanup, 'ended');
       }
 
       // Пуш второму участнику (если приложение в фоне/убито) — снять уведомление о звонке и закрыть UI при открытии
