@@ -1216,20 +1216,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.lastSentPiPState = false;
       this.lastSentPiPRoomId = currentRoomId;
       logger.info('[VideoCallSession] ✅ Отправлено pip:state=false партнеру', { roomId: currentRoomId });
-      // КРИТИЧНО: При возврате из PiP сообщаем партнеру ТЕКУЩЕЕ состояние нашей камеры
-      try {
-        socket.emit('cam-toggle', {
-          enabled: !!this.isCamOn,
-          from: socket.id,
-          roomId: currentRoomId,
-        });
-        logger.info('[VideoCallSession] ✅ Отправлено cam-toggle(enabled) партнеру при возврате из PiP', {
-          roomId: currentRoomId,
-          enabled: !!this.isCamOn,
-        });
-      } catch (e) {
-        logger.warn('[VideoCallSession] Ошибка отправки cam-toggle при возврате из PiP:', e);
-      }
     } catch (e) {
       logger.warn('[VideoCallSession] Ошибка отправки pip:state:', e);
     }

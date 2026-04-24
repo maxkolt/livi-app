@@ -571,6 +571,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const [isEndingCall, setIsEndingCall] = useState(false); // Синхронно с ref: скрываем бейдж/активный звонок при завершении, чтобы не мигало
   const callEndedTransitionDoneRef = useRef(false); // Один переход в UI «завершён» — защита от многократных setState при disconnect + call:ended
   const deferredTeardownScheduledRef = useRef<{ key: string; source: string } | null>(null);
+  const skipAbortAfterPiPReturnUntilRef = useRef(0);
+  const extendPiPReturnAbortGuard = useCallback((reason: string, durationMs = 12000) => {
+    const until = Date.now() + durationMs;
+    skipAbortAfterPiPReturnUntilRef.current = Math.max(skipAbortAfterPiPReturnUntilRef.current, until);
+    try {
+      const g = global as any;
+      g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
+      g.__returningFromSystemPiPUntilRef.current = Math.max(Number(g.__returningFromSystemPiPUntilRef.current || 0), until);
+    } catch (_) {}
+    logger.info('[VideoCall] Extended PiP return abort guard', {
+      reason,
+      until,
+    });
+  }, []);
   // КРИТИЧНО: изменения sessionRef.current сами по себе НЕ триггерят ререндер.
   // В dev это может маскироваться (StrictMode), но в release приводит к тому, что эффекты
   // установки хендлеров/бриджа стримов не срабатывают. Поэтому используем tick.
@@ -878,6 +892,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       return;
     }
     g.__enterSystemPiPAfterVideoCallRef.current = null;
+    g.__suppressInAppPiPUntilRef = g.__suppressInAppPiPUntilRef || { current: 0 };
+    g.__suppressInAppPiPUntilRef.current = Date.now() + 5000;
+    g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+    g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 5000;
     try {
       if (pipRef.current.visible || isPipOverlayVisibleSync()) pipRef.current.hidePiP();
     } catch (_) {}
@@ -1241,6 +1259,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       return;
     }
 
+    extendPiPReturnAbortGuard('resume-effect');
+
     if (resume && fromPiP && session && !resumeFromPiPEffectRanRef.current) {
       resumeFromPiPEffectRanRef.current = true;
       const { camOn: desiredCamOn, micOn: desiredMicOn } = getDesiredLocalMediaStateForPiPReturn(pip.localStream);
@@ -1267,7 +1287,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }
     // sessionTick нужен: при возврате из PiP сессия подставляется в другом эффекте (sessionRef = global);
     // без sessionTick эффект восстановления запускается до этого и видит session = null, поэтому setMicOn не вызывается.
-  }, [route?.params?.resume, route?.params?.fromPiP, pip.localStream, pip.remoteStream, pip.localCamOn, pip.isMuted, pip.isRemoteMuted, sessionTick, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn]);
+  }, [route?.params?.resume, route?.params?.fromPiP, pip.localStream, pip.remoteStream, pip.localCamOn, pip.isMuted, pip.isRemoteMuted, sessionTick, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn, extendPiPReturnAbortGuard]);
 
   // При возврате из фона во время видеозвонка — переподключить камеру, если система её закрыла
   useEffect(() => {
@@ -1310,6 +1330,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const resume = !!route?.params?.resume;
     
     if (fromPiP && resume) {
+      extendPiPReturnAbortGuard('session-restore-effect');
       const globalSession = (global as any).__webrtcSessionRef?.current;
       if (globalSession && !sessionRef.current) {
         logger.info('[VideoCall] Возврат из PiP - используем существующую сессию из глобальной ссылки', {
@@ -1942,7 +1963,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
     // КРИТИЧНО: Убрали зависимости roomId, callId, partnerId чтобы не пересоздавать сессию
     // Сессия создается один раз при монтировании компонента
-  }, [route?.params?.directCall, route?.params?.resume, pip.visible, pip.isRemoteMuted, clearSessionRefs, isInactiveState, wasFriendCallEnded, isCleanupOwner, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn]);
+  }, [route?.params?.directCall, route?.params?.resume, pip.visible, pip.isRemoteMuted, clearSessionRefs, isInactiveState, wasFriendCallEnded, isCleanupOwner, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn, extendPiPReturnAbortGuard]);
   
   // КРИТИЧНО: Отдельный useEffect для установки обработчиков событий
   // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
@@ -2370,6 +2391,27 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       logger.info('[VideoCall] onAbortCall вызван в неактивном состоянии - игнорируем', {
         isInactiveStateRef: isInactiveStateRef.current,
         isInactiveState
+      });
+      return;
+    }
+
+    const returningFromSystemPiPUntil = (global as any).__returningFromSystemPiPUntilRef?.current;
+    const isReturningFromSystemPiP =
+      typeof returningFromSystemPiPUntil === 'number' &&
+      Date.now() < returningFromSystemPiPUntil;
+    if (isReturningFromSystemPiP) {
+      logger.info('[VideoCall] [end] onAbortCall skipped - returning from system PiP', {
+        returningFromSystemPiPUntil,
+        callId: callId ?? currentCallIdRef.current ?? null,
+        roomId,
+      });
+      return;
+    }
+    if (Date.now() < skipAbortAfterPiPReturnUntilRef.current) {
+      logger.info('[VideoCall] [end] onAbortCall skipped - recent PiP return screen restore', {
+        skipAbortAfterPiPReturnUntil: skipAbortAfterPiPReturnUntilRef.current,
+        callId: callId ?? currentCallIdRef.current ?? null,
+        roomId,
       });
       return;
     }
@@ -2933,6 +2975,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (isReturningFromPiP) {
         fromPiPProcessedRef.current = true;
         focusEffectGuardRef.current = true;
+        extendPiPReturnAbortGuard('focus-return');
         
         logger.info('[VideoCall] Возврат из PiP - обрабатываем');
 
@@ -3243,8 +3286,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       remoteMuted,
       localStream,
       remoteStream,
-      getDesiredLocalMediaStateForPiPReturn
-      ,getDesiredRemoteMutedForPiPReturn
+      getDesiredLocalMediaStateForPiPReturn,
+      getDesiredRemoteMutedForPiPReturn,
+      extendPiPReturnAbortGuard
     ])
   );
   

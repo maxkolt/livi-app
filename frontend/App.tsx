@@ -309,6 +309,57 @@ function AppContent() {
 
   // Ref для различения в onEnd: мы принимающий (отклонили входящий) или звонящий (отменили исходящий)
   const incomingCallIdRef = React.useRef<string | null>(null);
+  const expectedCallAcceptedRef = React.useRef<{ callId: string; reason: string; expiresAt: number } | null>(null);
+  const rememberExpectedCallAccepted = React.useCallback((callId: string, reason: string, ttlMs = 15000) => {
+    const normalizedCallId = String(callId || '').trim();
+    if (!normalizedCallId) return;
+    expectedCallAcceptedRef.current = {
+      callId: normalizedCallId,
+      reason,
+      expiresAt: Date.now() + ttlMs,
+    };
+  }, []);
+  const readExpectedCallAccepted = React.useCallback((callId?: string | null, consume = false) => {
+    const expected = expectedCallAcceptedRef.current;
+    if (!expected) return null;
+    if (expected.expiresAt <= Date.now()) {
+      expectedCallAcceptedRef.current = null;
+      return null;
+    }
+    const normalizedCallId = String(callId || '').trim();
+    if (!normalizedCallId || expected.callId !== normalizedCallId) {
+      return null;
+    }
+    if (consume) {
+      expectedCallAcceptedRef.current = null;
+    }
+    return expected;
+  }, []);
+  const shouldRequestPendingCallAccepted = React.useCallback((callId?: string | null, source?: string) => {
+    const normalizedCallId = String(callId || '').trim();
+    if (!normalizedCallId) return false;
+    const currentRouteName = navRef.getCurrentRoute()?.name;
+    const session = (global as any).__webrtcSessionRef?.current;
+    const sessionNotEnded =
+      !!session && (typeof session.isEnded === 'function' ? !session.isEnded() : true);
+    const hasMatchingOutgoing =
+      (global as any).__outgoingCallIdRef?.current != null &&
+      String((global as any).__outgoingCallIdRef.current) === normalizedCallId;
+    const hasIncomingContext = incomingCallIdRef.current === normalizedCallId;
+    const hasExpectedAcceptedContext = !!readExpectedCallAccepted(normalizedCallId);
+    const onActiveVideoCall =
+      currentRouteName === 'VideoCall' ||
+      ((global as any).__videoCallActiveRef?.current === true && sessionNotEnded);
+    if (onActiveVideoCall && !hasMatchingOutgoing && !hasIncomingContext && !hasExpectedAcceptedContext) {
+      logger.info('[App] ⏭️ pending call:accepted ignored - active call already owns UI', {
+        callId: normalizedCallId,
+        currentRouteName,
+        source,
+      });
+      return false;
+    }
+    return true;
+  }, [readExpectedCallAccepted]);
   /** Схлопываем серию socket connect/reconnect в одну попытку register push после затишья. */
   const pushReconnectDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -362,6 +413,7 @@ function AppContent() {
 
   const completeAndroidIncomingAnswer = React.useCallback(async (from: string, callId: string) => {
     logger.info('[App] Completing incoming answer', { callId, from });
+    rememberExpectedCallAccepted(callId, 'incoming-answer');
     if (Platform.OS === 'android') {
       try { stopIncomingCallRingtoneAndVibration(); } catch {}
       try { stopIncomingCallAlert(); } catch {}
@@ -369,7 +421,7 @@ function AppContent() {
       try { sendCallAnsweredBroadcast(callId); } catch {}
     }
     await openAnswerCallScreen(from, callId);
-  }, []);
+  }, [rememberExpectedCallAccepted]);
 
   const completeAndroidIncomingAnswerRef = React.useRef(completeAndroidIncomingAnswer);
   completeAndroidIncomingAnswerRef.current = completeAndroidIncomingAnswer;
@@ -402,8 +454,9 @@ function AppContent() {
     const sub3 = emitter.addListener('LiviPendingCallAccepted', () => {
       const LiviAppModule = NativeModules.LiviAppModule;
       LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
-        if (callId) {
+        if (callId && shouldRequestPendingCallAccepted(callId, 'native-event')) {
           logger.info('[App] LiviPendingCallAccepted: requesting call:accepted', { callId });
+          rememberExpectedCallAccepted(callId, 'native-pending-call-accepted-event');
           try { requestCallAccepted(callId); } catch {}
         }
       });
@@ -523,7 +576,7 @@ function AppContent() {
       sub5.remove();
       sub7.remove();
     };
-  }, [completeAndroidIncomingAnswer]);
+  }, [completeAndroidIncomingAnswer, rememberExpectedCallAccepted, shouldRequestPendingCallAccepted]);
 
   // События answer/end от нативного экрана звонка (Android) — регистрируем после возможного setup
   React.useEffect(() => {
@@ -541,6 +594,7 @@ function AppContent() {
           setIncoming(null);
           try {
             await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
+            rememberExpectedCallAccepted(callId, 'callkeep-answer');
             acceptCall(callId);
           } catch {}
           reportAnswerIncomingCall(callId);
@@ -1699,14 +1753,16 @@ function AppContent() {
         setTimeout(() => {
           const LiviAppModule = NativeModules.LiviAppModule;
           LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
-            if (callId) {
+            if (callId && shouldRequestPendingCallAccepted(callId, 'socket-connect-native-pending')) {
               logger.info('[App] Socket connected with pending call_accepted, requesting call:accepted', { callId });
+              rememberExpectedCallAccepted(callId, 'socket-connect-native-pending-call-accepted');
               try { requestCallAccepted(callId); } catch {}
               return;
             }
             const refCallId = (global as any).__outgoingCallIdRef?.current;
-            if (refCallId) {
+            if (refCallId && shouldRequestPendingCallAccepted(refCallId, 'socket-connect-outgoing-fallback')) {
               logger.info('[App] Socket connected with outgoing callId ref (FCM fallback), requesting call:accepted', { callId: refCallId });
+              rememberExpectedCallAccepted(refCallId, 'socket-connect-outgoing-fallback');
               (global as any).__outgoingCallIdRef.current = null;
               try { requestCallAccepted(refCallId); } catch {}
             }
@@ -1733,7 +1789,7 @@ function AppContent() {
         pushReconnectDebounceRef.current = null;
       }
     };
-  }, []);
+  }, [rememberExpectedCallAccepted, shouldRequestPendingCallAccepted]);
 
   // При получении call:ended (второй участник завершил) — закрываем модалки, PiP по контексту: только reset на Home если были на полноэкранном видеозвонке.
   React.useEffect(() => {
@@ -1783,6 +1839,7 @@ function AppContent() {
       setAndroidPipGuardTick((n) => n + 1);
       // Очищаем сохранённый call:accepted, чтобы следующий звонок не подхватил старый payload (логи: «Found pending call:accepted» со старым callId).
       if (g.__pendingCallAcceptedRef) g.__pendingCallAcceptedRef.current = null;
+      expectedCallAcceptedRef.current = null;
       // Сразу закрываем системный PiP у собеседника (до любых очисток), иначе окно успевает показать лоадер.
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
@@ -1953,15 +2010,16 @@ function AppContent() {
     const tryPending = () => {
       const LiviAppModule = NativeModules.LiviAppModule;
       LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
-        if (callId) {
+        if (callId && shouldRequestPendingCallAccepted(callId, 'launch-pending')) {
           logger.info('[App] Launch with pending call_accepted, requesting call:accepted', { callId });
+          rememberExpectedCallAccepted(callId, 'launch-pending-call-accepted');
           try { requestCallAccepted(callId); } catch {}
         }
       });
     };
     delays.forEach((ms) => timers.push(setTimeout(tryPending, ms)));
     return () => timers.forEach((t) => clearTimeout(t));
-  }, []);
+  }, [rememberExpectedCallAccepted, shouldRequestPendingCallAccepted]);
 
 
   // КРИТИЧНО: Перерегистрация обработчика при возврате из спящего режима (AppState change)
@@ -1984,8 +2042,9 @@ function AppContent() {
           });
           // FCM call_accepted вывел приложение — запросить call:accepted у сервера → переход на VideoCall
           LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
-            if (callId) {
+            if (callId && shouldRequestPendingCallAccepted(callId, 'app-active-pending')) {
               logger.info('[App] Pending call_accepted from FCM, requesting call:accepted', { callId });
+              rememberExpectedCallAccepted(callId, 'app-active-pending-call-accepted');
               try { requestCallAccepted(callId); } catch {}
             }
           });
@@ -2215,6 +2274,12 @@ function AppContent() {
         currentRoute: navRef.getCurrentRoute()?.name,
       });
       const callId = data?.callId ? String(data.callId) : '';
+      const currentRouteName = navRef.getCurrentRoute()?.name;
+      const currentOutgoing = (global as any).__outgoingCallIdRef?.current;
+      const hasMatchingOutgoing = !!callId && currentOutgoing != null && String(currentOutgoing) === callId;
+      const hasIncomingContext = !!callId && incomingCallIdRef.current === callId;
+      const hasExpectedAcceptedContext = !!readExpectedCallAccepted(callId);
+      const alreadyOnVideoCall = currentRouteName === 'VideoCall';
       // Не переходить на VideoCall, если по сокету уже пришло call:ended (звонок уже завершён) — избегаем мелькания и лишних сессий
       if (callId && endedCallIdsFromSocket.has(callId)) {
         logger.info('[App] ⏭️ call:accepted ignored (call already ended)', { callId });
@@ -2230,6 +2295,33 @@ function AppContent() {
         clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
         return;
       }
+
+      const fromUserId = (data as any)?.fromUserId ?? (data as any)?.from;
+      const myUserId = getCurrentUserId();
+      const isCaller = myUserId && fromUserId && myUserId !== fromUserId;
+      const hasAcceptedContext =
+        alreadyOnVideoCall ||
+        hasMatchingOutgoing ||
+        hasIncomingContext ||
+        hasExpectedAcceptedContext;
+      if (!hasAcceptedContext) {
+        logger.info('[App] ⏭️ call:accepted ignored (no active call context)', {
+          callId,
+          currentRouteName,
+          currentOutgoing: currentOutgoing ?? null,
+          incomingCallId: incomingCallIdRef.current,
+          isCaller,
+        });
+        if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
+        return;
+      }
+      // Инициатор: закрывать нативный экран исходящего только если принят именно текущий звонок
+      if (isCaller && callId && currentOutgoing != null && String(currentOutgoing) !== String(callId)) {
+        logger.info('[App] ⏭️ call:accepted ignored (callId not current outgoing)', { callId, currentOutgoing });
+        if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
+        return;
+      }
+      readExpectedCallAccepted(callId, true);
       // КРИТИЧНО: Сохраняем событие call:accepted в глобальный ref на случай, если VideoCallSession еще не создан
       // Это решает проблему, когда call:accepted приходит до того, как VideoCallSession создан
       if (!(global as any).__pendingCallAcceptedRef) {
@@ -2241,18 +2333,6 @@ function AppContent() {
         hasLivekitToken: !!(data as any)?.livekitToken,
         hasLivekitRoomName: !!(data as any)?.livekitRoomName,
       });
-
-      const fromUserId = (data as any)?.fromUserId ?? (data as any)?.from;
-      const myUserId = getCurrentUserId();
-      const isCaller = myUserId && fromUserId && myUserId !== fromUserId;
-      // Инициатор: закрывать нативный экран исходящего только если принят именно текущий звонок (не устаревший call:accepted при переподключении сокета)
-      if (isCaller && callId) {
-        const currentOutgoing = (global as any).__outgoingCallIdRef?.current;
-        if (currentOutgoing != null && String(currentOutgoing) !== String(callId)) {
-          logger.info('[App] ⏭️ call:accepted ignored (callId not current outgoing)', { callId, currentOutgoing });
-          return;
-        }
-      }
       
       try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
@@ -2843,6 +2923,8 @@ export default function App() {
             source: 'back-root',
             requestedAt: Date.now(),
           };
+          g.__suppressInAppPiPUntilRef = g.__suppressInAppPiPUntilRef || { current: 0 };
+          g.__suppressInAppPiPUntilRef.current = Date.now() + 5000;
           try {
             const hidePiP = g.__pipHidePiPRef?.current;
             if (typeof hidePiP === 'function') hidePiP();

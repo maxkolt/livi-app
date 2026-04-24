@@ -97,6 +97,16 @@ export const usePiP = ({
   // Функция для входа в PiP
   const enterPiPMode = useCallback((opts?: { deferVisible?: boolean }) => {
     const now = Date.now();
+    const g = global as any;
+    const suppressInAppPiPUntil = Number(g.__suppressInAppPiPUntilRef?.current || 0);
+    const systemPiPEntryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
+    if (now < suppressInAppPiPUntil || now < systemPiPEntryUntil) {
+      logger.info('[usePiP] enterPiPMode skipped - system PiP transition in progress', {
+        suppressInAppPiPUntil,
+        systemPiPEntryUntil,
+      });
+      return;
+    }
     if (now < pipTransitionUntilRef.current) {
       return;
     }
@@ -309,6 +319,20 @@ export const usePiP = ({
     }
     
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      try {
+        const g = global as any;
+        const now = Date.now();
+        const suppressInAppPiPUntil = Number(g.__suppressInAppPiPUntilRef?.current || 0);
+        const systemPiPEntryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
+        if (now < suppressInAppPiPUntil || now < systemPiPEntryUntil) {
+          logger.info('[usePiP] Android Back skipped - system PiP transition in progress', {
+            suppressInAppPiPUntil,
+            systemPiPEntryUntil,
+          });
+          return true;
+        }
+      } catch {}
+
       // КРИТИЧНО: Проверяем актуальное состояние звонка через ref
       // Если звонок завершён — сами делаем шаг назад (goBack/navigate Home) и потребляем событие.
       // Иначе при return false на части устройств Back доходит до Activity и вызывает finish() → при следующем открытии приложения показывается заглушка (холодный старт).
