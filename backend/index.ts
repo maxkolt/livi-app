@@ -1042,6 +1042,44 @@ type CallAcceptedDeliveryState = PendingAcceptedRoom & {
 const callAcceptedDeliveryByKey = new Map<string, CallAcceptedDeliveryState>();
 // Пользователь занят рандом-видеочатом (по userId) — используется также для findRandom
 
+function clearAcceptedCallStateForUser(userId: string, reason: string): string | null {
+  const uid = normalizeMongoObjectId(String(userId || ''));
+  if (!isOid(uid)) return null;
+  const pending = activeRoomByUserId.get(uid);
+  const entry = callOfUser.get(uid);
+  const callId = pending?.callId || entry?.callId || null;
+  const roomId = pending?.roomId || (callId ? callIdToRoomId.get(callId) : null) || null;
+  const peerId = pending?.peerUserId || entry?.with || null;
+  const ids = [uid, peerId ? normalizeMongoObjectId(String(peerId)) : ''].filter((id) => isOid(id));
+
+  for (const id of ids) {
+    callOfUser.delete(id);
+    activeRoomByUserId.delete(id);
+    if (callId) callAcceptedDeliveryByKey.delete(getCallAcceptedDeliveryKey(callId, id));
+  }
+  if (callId) {
+    callsById.delete(callId);
+    callIdToRoomId.delete(callId);
+  }
+  if (roomId) {
+    for (const [sid, activeRoom] of activeCallBySocket.entries()) {
+      if (activeRoom === roomId) activeCallBySocket.delete(sid);
+    }
+  }
+  for (const s of io.sockets.sockets.values()) {
+    const suid = normalizeMongoObjectId(String((s as any)?.data?.userId || ''));
+    if (!ids.includes(suid)) continue;
+    (s as any).data = (s as any).data || {};
+    (s as any).data.busy = false;
+    delete (s as any).data.roomId;
+    delete (s as any).data.partnerSid;
+    delete (s as any).data.inCall;
+    try { activeCallBySocket.delete(s.id); } catch {}
+  }
+  logger.info('[call:accepted] cleared stale accepted call state', { userId: uid, peerId, callId, roomId, reason });
+  return callId;
+}
+
 function getCallAcceptedDeliveryKey(callId: string, userId: string): string {
   return `${String(callId)}:${String(userId)}`;
 }
@@ -1709,13 +1747,21 @@ io.on('connection', async (sock: AuthedSocket) => {
       const pendingRoom = activeRoomByUserId.get(mappedUserId);
       if (pendingRoom) {
         try {
-          const emitted = await emitPendingCallAcceptedToSocket(io, sock, mappedUserId, pendingRoom, 'reauth');
-          if (emitted) {
-            logger.info('[reauth] Sent call:accepted to reconnected participant', {
-              userId: mappedUserId,
-              roomId: pendingRoom.roomId,
-              callId: pendingRoom.callId,
-            });
+          const callStillTracked = callsById.has(pendingRoom.callId);
+          const recentlyEnded =
+            recentlyEndedCalls.has(pendingRoom.callId) ||
+            recentlyEndedCalls.has(pendingRoom.roomId);
+          if (!callStillTracked || recentlyEnded) {
+            clearAcceptedCallStateForUser(mappedUserId, `reauth-stale:${callStillTracked ? 'recently-ended' : 'missing-call'}`);
+          } else {
+            const emitted = await emitPendingCallAcceptedToSocket(io, sock, mappedUserId, pendingRoom, 'reauth');
+            if (emitted) {
+              logger.info('[reauth] Sent call:accepted to reconnected participant', {
+                userId: mappedUserId,
+                roomId: pendingRoom.roomId,
+                callId: pendingRoom.callId,
+              });
+            }
           }
         } catch (e: any) {
           logger.warn('[reauth] Failed to send pending call:accepted', { userId: mappedUserId, error: e?.message });
@@ -2091,29 +2137,21 @@ io.on('connection', async (sock: AuthedSocket) => {
         });
 
         if (!hasLiveSameUserCallSocket) {
-          const staleCallId =
-            callOfUser.get(userId)?.callId ||
-            activeRoomByUserId.get(userId)?.callId ||
-            null;
+          const pending = activeRoomByUserId.get(userId);
+          const entry = callOfUser.get(userId);
+          const peerId = pending?.peerUserId || entry?.with || null;
+          const staleCallId = clearAcceptedCallStateForUser(userId, 'presence-idle-online');
 
-          callOfUser.delete(userId);
-          activeRoomByUserId.delete(userId);
-          if (staleCallId) {
-            callAcceptedDeliveryByKey.delete(getCallAcceptedDeliveryKey(staleCallId, userId));
-          }
-
-          for (const s of io.sockets.sockets.values()) {
-            if (String((s as any)?.data?.userId || '') !== userId) continue;
-            (s as any).data = (s as any).data || {};
-            (s as any).data.busy = false;
-            delete (s as any).data.roomId;
-            delete (s as any).data.partnerSid;
-            delete (s as any).data.inCall;
-            try { activeCallBySocket.delete(s.id); } catch {}
+          lastBroadcastBusyByUserId.set(userId, false);
+          await emitPresenceUpdateToFriends(io, userId, false);
+          if (peerId && peerId !== userId) {
+            lastBroadcastBusyByUserId.set(String(peerId), false);
+            await emitPresenceUpdateToFriends(io, String(peerId), false);
           }
 
           logger.info('📍 [presence:update] idle online cleared stale busy state', {
             userId,
+            peerId,
             staleCallId,
             socketId: sock.id,
           });
