@@ -1042,7 +1042,25 @@ function socketAlreadyAttachedToPendingRoom(sock: AuthedSocket, pendingRoom: Pen
     ''
   ).trim();
   const inCall = (sock as any)?.data?.inCall === true;
-  return inCall && currentRoomId === pendingRoom.roomId;
+  const joinedSocketIoRoom = !!(sock as any)?.rooms?.has?.(pendingRoom.roomId);
+  return (inCall && currentRoomId === pendingRoom.roomId) || joinedSocketIoRoom;
+}
+
+function userAlreadyHasSocketAttachedToPendingRoom(
+  io: Server,
+  userId: string,
+  pendingRoom: PendingAcceptedRoom,
+  excludeSocketId?: string,
+): boolean {
+  for (const candidate of io.sockets.sockets.values()) {
+    const sameUser = String((candidate as any)?.data?.userId || '') === String(userId);
+    if (!sameUser) continue;
+    if (excludeSocketId && candidate.id === excludeSocketId) continue;
+    if (socketAlreadyAttachedToPendingRoom(candidate as AuthedSocket, pendingRoom)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function emitPendingCallAcceptedToSocket(
@@ -1054,6 +1072,16 @@ async function emitPendingCallAcceptedToSocket(
 ): Promise<boolean> {
   if (socketAlreadyAttachedToPendingRoom(sock, pendingRoom)) {
     logger.info(`[${source}] Skipping duplicate call:accepted (socket already attached to room)`, {
+      userId,
+      socketId: sock.id,
+      roomId: pendingRoom.roomId,
+      callId: pendingRoom.callId,
+    });
+    return false;
+  }
+
+  if (userAlreadyHasSocketAttachedToPendingRoom(io, userId, pendingRoom, sock.id)) {
+    logger.info(`[${source}] Skipping duplicate call:accepted (another user socket already attached to room)`, {
       userId,
       socketId: sock.id,
       roomId: pendingRoom.roomId,
