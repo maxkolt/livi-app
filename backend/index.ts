@@ -1076,7 +1076,6 @@ function clearAcceptedCallStateForUser(userId: string, reason: string): string |
     delete (s as any).data.inCall;
     try { activeCallBySocket.delete(s.id); } catch {}
   }
-  logger.info('[call:accepted] cleared stale accepted call state', { userId: uid, peerId, callId, roomId, reason });
   return callId;
 }
 
@@ -1158,34 +1157,14 @@ async function emitPendingCallAcceptedToSocket(
 ): Promise<boolean> {
   const deliveryState = rememberCallAcceptedDelivery(pendingRoom.callId, userId, pendingRoom);
   if (socketAlreadyAttachedToPendingRoom(sock, pendingRoom)) {
-    logger.info(`[${source}] Skipping duplicate call:accepted (socket already attached to room)`, {
-      userId,
-      socketId: sock.id,
-      roomId: pendingRoom.roomId,
-      callId: pendingRoom.callId,
-    });
     return false;
   }
 
   if (hasLiveAcceptedDeliverySocket(io, deliveryState, sock.id)) {
-    logger.info(`[${source}] Skipping duplicate call:accepted (already delivered to live socket)`, {
-      userId,
-      socketId: sock.id,
-      deliveredSocketId: deliveryState.deliveredSocketId,
-      deliveredSource: deliveryState.deliveredSource || null,
-      roomId: pendingRoom.roomId,
-      callId: pendingRoom.callId,
-    });
     return false;
   }
 
   if (userAlreadyHasSocketAttachedToPendingRoom(io, userId, pendingRoom, sock.id)) {
-    logger.info(`[${source}] Skipping duplicate call:accepted (another user socket already attached to room)`, {
-      userId,
-      socketId: sock.id,
-      roomId: pendingRoom.roomId,
-      callId: pendingRoom.callId,
-    });
     return false;
   }
 
@@ -1912,12 +1891,6 @@ io.on('connection', async (sock: AuthedSocket) => {
       // Получаем участников комнаты
       const room = io.sockets.adapter.rooms.get(id);
       const participantCount = room ? room.size : 0;
-      logger.info('📥 [call:end] Room info', {
-        roomId: id,
-        participants: participantCount,
-        socketIds: room ? Array.from(room) : [],
-        roomExists: !!room
-      });
       
       // КРИТИЧНО: Если комната не найдена, все равно отправляем call:ended всем сокетам
       // которые могут быть в звонке (через activeCallBySocket или socket.data.roomId)
@@ -1974,21 +1947,9 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       }
       
-      logger.info('📥 [call:end] Sockets to notify', {
-        roomId: id,
-        totalSockets: socketsToNotify.size,
-        socketIds: Array.from(socketsToNotify)
-      });
-
       // КРИТИЧНО: Сначала мгновенно уведомляем обоих клиентов о завершении звонка,
       // а уже потом делаем более тяжёлую серверную очистку (presence, room cleanup, push).
       // Иначе второй участник ждёт server-side await и экран VideoCall закрывается заметно позже.
-      logger.info('📤 [call:end] Sending call:ended to all participants', {
-        roomId: id,
-        participantCount: socketsToNotify.size,
-        socketIds: Array.from(socketsToNotify)
-      });
-
       // Отправляем call:ended каждому участнику один раз (напрямую сокету), чтобы клиент не получал дубли и не мерцал при переходе на Home.
       const notifiedSockets: string[] = [];
       for (const sid of socketsToNotify) {
@@ -2002,12 +1963,6 @@ io.on('connection', async (sock: AuthedSocket) => {
             resolvedRoomId: id,
           });
           notifiedSockets.push(sid);
-          logger.info('📤 [call:end] ✅ Отправлено call:ended сокету', {
-            socketId: sid,
-            userId: (socket as any)?.data?.userId,
-            roomId: id,
-            callId: callId || id,
-          });
         }
       }
 
@@ -2149,12 +2104,6 @@ io.on('connection', async (sock: AuthedSocket) => {
             await emitPresenceUpdateToFriends(io, String(peerId), false);
           }
 
-          logger.info('📍 [presence:update] idle online cleared stale busy state', {
-            userId,
-            peerId,
-            staleCallId,
-            socketId: sock.id,
-          });
         }
       }
       // Другие сокеты того же userId: пока хоть один в звонке/рандоме — не даём сбросить «занят» для друзей.
@@ -2275,9 +2224,7 @@ io.on('connection', async (sock: AuthedSocket) => {
   // ВОТ ЗДЕСЬ: читаем профиль (ник + нормализованный https-аватар)
   sock.on('profile:me', async (_: any, ack?: Function) => {
     const me = String((sock as any).data?.userId || '');
-    console.log('[profile:me] Request received (index.ts)', { userId: me || 'guest' });
     if (!me) {
-      console.log('[profile:me] No userId, returning empty profile for guest');
       return ack?.({ ok: true, profile: {} }); // гость
     }
     const u = (await User.findById(me).select('nick avatar avatarVer avatarB64 avatarThumbB64').lean()) as any;
@@ -2286,13 +2233,6 @@ io.on('connection', async (sock: AuthedSocket) => {
     const avatarB64 = u?.avatarB64 || '';
     const avatarThumbB64 = u?.avatarThumbB64 || '';
     const profile = u ? { nick: u.nick || '', avatar: rawAvatar, avatarVer, avatarB64, avatarThumbB64 } : {};
-    console.log('[profile:me] Profile found (index.ts)', { 
-      userId: me, 
-      hasUser: !!u, 
-      nick: profile.nick || '', 
-      hasAvatar: !!(avatarB64 || avatarThumbB64),
-      avatarVer 
-    });
     ack?.({ ok: true, profile });
   });
 
@@ -2933,15 +2873,6 @@ io.on('connection', async (sock: AuthedSocket) => {
       // Отправляем call:accepted с LiveKit credentials
       if (aSock) {
         try {
-          console.log('[call:accept] 📤 Sending call:accepted to participant A', {
-            callId: id,
-            socketId: aSock.id,
-            userId: link.a,
-            hasToken: !!livekitTokenA,
-            roomName: livekitRoomName,
-            tokenLength: livekitTokenA?.length || 0,
-            identity: livekitIdentityA,
-          });
           aSock.emit('call:accepted', { 
             callId: id, 
             from: bSock?.id, 
@@ -2960,22 +2891,12 @@ io.on('connection', async (sock: AuthedSocket) => {
             source: 'call:accept',
             socketId: aSock.id,
           });
-          console.log('[call:accept] ✅ call:accepted sent to participant A');
         } catch (e) {
           console.error('[call:accept] ❌ Error sending call:accepted to participant A:', e);
         }
       }
       if (bSock) {
         try {
-          console.log('[call:accept] 📤 Sending call:accepted to participant B', {
-            callId: id,
-            socketId: bSock.id,
-            userId: link.b,
-            hasToken: !!livekitTokenB,
-            roomName: livekitRoomName,
-            tokenLength: livekitTokenB?.length || 0,
-            identity: livekitIdentityB,
-          });
           bSock.emit('call:accepted', { 
             callId: id, 
             from: aSock?.id, 
@@ -2994,7 +2915,6 @@ io.on('connection', async (sock: AuthedSocket) => {
             source: 'call:accept',
             socketId: bSock.id,
           });
-          console.log('[call:accept] ✅ call:accepted sent to participant B');
         } catch (e) {
           console.error('[call:accept] ❌ Error sending call:accepted to participant B:', e);
         }

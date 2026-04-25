@@ -297,13 +297,6 @@ router.post('/push-token', async (req, res) => {
 
     const fcm = typeof fcmToken === 'string' && fcmToken.length > 0 ? fcmToken : undefined;
     await upsertExpoPushToken({ userId, installId, platform, token, fcmToken: fcm });
-    logger.info('[push] token registered', {
-      userId: String(userId),
-      platform,
-      installId: String(installId || ''),
-      tokenPrefix: String(token).slice(0, 18),
-      hasFcmToken: !!fcm,
-    });
     pushLog('token_registered', {
       userId: String(userId),
       platform,

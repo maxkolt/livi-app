@@ -150,7 +150,6 @@ async function sendCallPushViaFcmWithRetry(
         },
       });
       if (attempt > 1) {
-        logger.info('[push] call push sent via FCM after retry', { userId, attempt });
         pushLog('call_push_sent_via_FCM_after_retry', { userId, attempt });
       }
       return;
@@ -609,7 +608,6 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
           Object.fromEntries(Object.entries(fcmDataPayload).map(([k, v]) => [k, String(v)])),
           userId
         );
-        logger.info('[push] call push sent via FCM (data-only, high priority)', { userId });
         pushLog('call_push_sent_via_FCM', { userId });
         androidDataSignalSent += 1;
       } catch (e) {
@@ -658,7 +656,6 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
             },
           });
           androidNotificationSignalSent += 1;
-          logger.info('[push] call push sent via FCM (notification signal)', { userId, callId: data.callId });
           pushLog('call_push_sent_via_FCM_notification_signal', { userId, callId: data.callId });
         } catch (e) {
           const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
