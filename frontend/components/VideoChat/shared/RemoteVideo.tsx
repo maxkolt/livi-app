@@ -49,6 +49,15 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   objectFit: objectFitProp = 'cover',
 }) => {
   const L = (key: string) => t(key, lang);
+  const sessionRemoteCamDeclaredOff =
+    session && typeof session.getRemoteCamDeclaredOff === 'function'
+      ? session.getRemoteCamDeclaredOff()
+      : false;
+  // Trust session only for the explicit "camera off" signal from cam-toggle.
+  // During initial call setup session.remoteCamEnabled starts as false until the
+  // first remote video arrives, and using it directly would show AwayPlaceholder
+  // instead of the loader.
+  const effectiveRemoteCamOn = sessionRemoteCamDeclaredOff ? false : remoteCamOn;
   // На Android 8.1 и старше (API <= 27) SurfaceView overlay/z-order часто ломает отображение (особенно на OPPO/ColorOS).
   // Для таких устройств отключаем zOrderMediaOverlay, чтобы Surface корректно композировался в окне.
   const isLegacyAndroidSurface = Platform.OS === 'android' && Number(Platform.Version) <= 27;
@@ -156,12 +165,12 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     logger.debug('[RemoteVideo] partnerInPiP prop changed', { 
       partnerInPiP,
       hasStream: !!remoteStream,
-      remoteCamOn,
+      remoteCamOn: effectiveRemoteCamOn,
       started,
       loading,
       willShowAwayPlaceholder: partnerInPiP === true
     });
-  }, [partnerInPiP, remoteStream, remoteCamOn, started, loading]);
+  }, [partnerInPiP, remoteStream, effectiveRemoteCamOn, started, loading]);
   
   // КРИТИЧНО: Логируем каждый рендер для отладки отображения заглушки
   useEffect(() => {
@@ -170,14 +179,14 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
         partnerInPiP,
         hasStream: !!remoteStream,
         streamId: remoteStream?.id,
-        remoteCamOn,
+        remoteCamOn: effectiveRemoteCamOn,
         started,
         loading,
         isInactiveState,
         wasFriendCallEnded
       });
     }
-  }, [partnerInPiP, remoteStream, remoteCamOn, started, loading, isInactiveState, wasFriendCallEnded]);
+  }, [partnerInPiP, remoteStream, effectiveRemoteCamOn, started, loading, isInactiveState, wasFriendCallEnded]);
 
   // Берём актуальный стрим только из пропсов.
   // Fallback на session часто приводит к рендеру "старого" MediaStream после next/переподключений.
@@ -206,7 +215,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     lastGoodStreamRef.current = null;
   }
   // Когда партнер выключил камеру (cam-toggle) — не показывать застывший последний кадр, сбрасываем last good frame.
-  if (started && !wasFriendCallEnded && !isInactiveState && !remoteCamOn && !shouldSuppressTransientRemoteUi) {
+  if (started && !wasFriendCallEnded && !isInactiveState && !effectiveRemoteCamOn && !shouldSuppressTransientRemoteUi) {
     lastGoodStreamRef.current = null;
     lastGoodAtRef.current = 0;
   }
@@ -337,10 +346,10 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // КРИТИЧНО: Если партнер в PiP и камера выключена — показываем заглушку "Отошел".
   // Если партнер в PiP, но камера включена — видеопоток продолжает идти (показываем видео ниже).
-  if (partnerInPiP && !remoteCamOn) {
+  if (partnerInPiP && !effectiveRemoteCamOn) {
     logger.debug('[RemoteVideo] Show away placeholder (partnerInPiP=true, camera off)', {
       partnerInPiP,
-      remoteCamOn,
+      remoteCamOn: effectiveRemoteCamOn,
       streamId: streamToUse?.id,
       hasStream: !!streamToUse,
       started,
@@ -368,15 +377,15 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }
 
   // Звонок активен, партнер выключил камеру кнопкой в блоке «Вы» — у собеседника в блоке «Собеседник» показываем заглушку «Отошел».
-  if (started && !isInactiveState && !wasFriendCallEnded && !remoteCamOn) {
+  if (started && !isInactiveState && !wasFriendCallEnded && !effectiveRemoteCamOn) {
     if (shouldSuppressTransientRemoteUi) {
       const held = renderHeldRemoteFrame('suppress-remote-cam-off-during-local-flip', {
         streamId: streamToUse?.id,
-        remoteCamOn,
+        remoteCamOn: effectiveRemoteCamOn,
       });
       if (held) return held;
     }
-    logRenderState('remote-cam-off-active-call', { remoteCamOn, started, streamId: streamToUse?.id });
+    logRenderState('remote-cam-off-active-call', { remoteCamOn: effectiveRemoteCamOn, started, streamId: streamToUse?.id });
     return (
       <View style={styles.videoContainer}>
         <AwayPlaceholder />
@@ -394,8 +403,8 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // КРИТИЧНО: Если партнер уже выключил камеру (remoteCamOn=false), показываем заглушку "Отошел", а не лоадер.
   // Иначе при первом нажатии "выключить камеру" у собеседника стрим может временно пропасть (removeTrack) и показывался лоадер.
   if (!streamToUse) {
-    if (started && !wasFriendCallEnded && !isInactiveState && !remoteCamOn && !partnerInPiP) {
-      logRenderState('no-stream-but-cam-off', { remoteCamOn });
+    if (started && !wasFriendCallEnded && !isInactiveState && !effectiveRemoteCamOn && !partnerInPiP) {
+      logRenderState('no-stream-but-cam-off', { remoteCamOn: effectiveRemoteCamOn });
       return (
         <View style={styles.videoContainer}>
           <AwayPlaceholder />
@@ -519,7 +528,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // В системном PiP (forceTextureView): показываем RTCView даже если трек ещё не "live", чтобы не крутить лоадер.
   const canRenderVideo =
     (hasRenderableVideo || (forceTextureView && !!streamToUse && hasVideoTrack)) &&
-    (!partnerInPiP || remoteCamOn);
+    (!partnerInPiP || effectiveRemoteCamOn);
   if (canRenderVideo) {
     // Партнер выключил камеру (трек disabled) — RTCView покажет застывший кадр; показываем заглушку
     if (hasVideoTrack && !videoTrackEnabled && started && !wasFriendCallEnded && !isInactiveState) {
@@ -620,7 +629,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   // КРИТИЧНО: Если камера явно выключена (remoteCamOn === false), всегда показываем заглушку "Отошел",
   // а не лоадер, даже если стрим только что получен. Это означает, что пользователь явно выключил камеру.
   // НО: НЕ показываем заглушку если партнер в PiP (это уже обработано выше)
-  if (!remoteCamOn && !hasRenderableVideo && !partnerInPiP) {
+  if (!effectiveRemoteCamOn && !hasRenderableVideo && !partnerInPiP) {
     if (shouldSuppressTransientRemoteUi) {
       const held = renderHeldRemoteFrame('suppress-no-renderable-video-during-local-flip', {
         streamId: streamToUse.id,
@@ -654,7 +663,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // Стрим есть, но видеотрек не готов/замьючен — показываем лоадер (камера не "явно выключена")
   // При партнере в PiP с включенной камерой тоже показываем лоадер, пока трек не станет готов
-  if (streamToUse && hasVideoTrack && (!partnerInPiP || remoteCamOn)) {
+  if (streamToUse && hasVideoTrack && (!partnerInPiP || effectiveRemoteCamOn)) {
     // Трек есть, но отключён (партнер выключил камеру) — не показывать застывший кадр, показать "Отошел"
     if (!videoTrackEnabled && started && !wasFriendCallEnded && !isInactiveState) {
       if (shouldSuppressTransientRemoteUi) {
@@ -739,7 +748,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   }
 
   // Нет видеотрека (например, только аудио) — показываем заглушку, если камера "выключена" по состоянию
-  if (!remoteCamOn) {
+  if (!effectiveRemoteCamOn) {
     if (shouldSuppressTransientRemoteUi) {
       const held = renderHeldRemoteFrame('suppress-fallback-remote-cam-off-during-local-flip', {
         streamId: streamToUse?.id,

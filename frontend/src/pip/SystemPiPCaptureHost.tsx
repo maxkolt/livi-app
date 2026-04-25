@@ -25,29 +25,10 @@ export default function SystemPiPCaptureHost() {
   const shouldRenderVideoForCapture = active && !!remoteStream && (live ? !shouldShowAway : true);
 
   useEffect(() => {
-    console.log('[SystemPiPCaptureHost] state', {
-      active,
-      pipVisible,
-      layoutReady,
-      requestId,
-      hasRemoteStream: !!remoteStream,
-      remoteCamOn,
-      shouldShowAway,
-      firedRequestId: firedRequestIdRef.current,
-    });
-  }, [active, pipVisible, layoutReady, requestId, remoteStream, remoteCamOn, shouldShowAway]);
-
-  useEffect(() => {
     if (!active || !layoutReady || requestId <= 0) {
-      console.log('[SystemPiPCaptureHost] skip requestEnterPictureInPicture', {
-        active,
-        layoutReady,
-        requestId,
-      });
       return;
     }
     if (firedRequestIdRef.current === requestId) {
-      console.log('[SystemPiPCaptureHost] duplicate request suppressed', { requestId });
       return;
     }
     firedRequestIdRef.current = requestId;
@@ -55,16 +36,11 @@ export default function SystemPiPCaptureHost() {
     // захватить "старый" frame UI (кнопки/оверлеи) вместо выделенного fullscreen video.
     // Ретраи native остаются как страховка для медленных устройств.
     const ENTER_DELAY_MS = 260;
-    console.log('[SystemPiPCaptureHost] calling native requestEnterPictureInPicture immediately', {
-      requestId,
-      hasRemoteStream: !!remoteStream,
-      shouldShowAway,
-    });
     const t = setTimeout(() => {
       try {
         NativeModules.LiviAppModule?.requestEnterPictureInPicture?.();
       } catch (error) {
-        console.log('[SystemPiPCaptureHost] native requestEnterPictureInPicture threw', {
+        console.warn('[SystemPiPCaptureHost] native requestEnterPictureInPicture threw', {
           requestId,
           error: String(error),
         });
@@ -90,7 +66,6 @@ export default function SystemPiPCaptureHost() {
       ]}
       onLayout={() => {
         if (!layoutReady) {
-          console.log('[SystemPiPCaptureHost] layout ready');
           setLayoutReady(true);
         }
       }}

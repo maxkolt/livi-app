@@ -5,13 +5,7 @@ import { usePiP as usePiPContext, isPipOverlayVisibleSync } from '../../../src/p
 import { logger } from '../../../utils/logger';
 import socket from '../../../sockets/socket';
 
-// КРИТИЧНО: Логирование переходов между состояниями для отладки
-const logStateTransition = (from: string, to: string, details?: any) => {
-  logger.info(`[usePiP] 🔄 Переход состояния: ${from} → ${to}`, {
-    timestamp: Date.now(),
-    ...details
-  });
-};
+const logStateTransition = () => {};
 
 interface UsePiPProps {
   roomId: string | null;
@@ -101,10 +95,6 @@ export const usePiP = ({
     const suppressInAppPiPUntil = Number(g.__suppressInAppPiPUntilRef?.current || 0);
     const systemPiPEntryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
     if (now < suppressInAppPiPUntil || now < systemPiPEntryUntil) {
-      logger.info('[usePiP] enterPiPMode skipped - system PiP transition in progress', {
-        suppressInAppPiPUntil,
-        systemPiPEntryUntil,
-      });
       return;
     }
     if (now < pipTransitionUntilRef.current) {
@@ -116,15 +106,9 @@ export const usePiP = ({
     // не показывать PiP, если звонок успел завершиться. Пропы могут быть устаревшими в замыкании.
     const inactive = isInactiveStateRef.current || wasFriendCallEndedRef.current;
     if (inactive || isInactiveState || wasFriendCallEnded) {
-      logger.info('[usePiP] enterPiPMode - звонок завершен, НЕ показываем PiP', {
-        inactive,
-        isInactiveState,
-        wasFriendCallEnded
-      });
       // Не сбрасываем __pipVisibleRef по pip.visible — после showPiP он ещё false до ре-рендера.
       // Закрываем PiP если оверлей реально показан (React и/или синхронный флаг).
       if (pip.visible || isPipOverlayVisibleSync()) {
-        logger.info('[usePiP] Закрываем PiP - звонок завершен');
         pip.hidePiP();
         pipRef.current = { ...pip, visible: false };
         pipVisibleRef.current = false;
@@ -144,31 +128,12 @@ export const usePiP = ({
     const actualCallId = callId || currentSession?.getCallId?.() || null;
     const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
     
-    logger.info('[usePiP] enterPiPMode вызван', {
-      roomId,
-      callId,
-      partnerId,
-      actualRoomId,
-      actualCallId,
-      actualPartnerId,
-      isInactiveState,
-      wasFriendCallEnded,
-      pipVisible: pip.visible
-    });
-
     // Не показываем PiP если звонок завершен (refs — актуальное состояние при отложенном вызове)
     const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current && !isInactiveState && !wasFriendCallEnded;
-
-    logger.info('[usePiP] enterPiPMode - hasActiveCall:', hasActiveCall);
 
     // КРИТИЧНО: Показываем PiP если есть активный звонок, даже если он уже видим
     // Это позволяет показывать PiP повторно при свайпе назад после возврата из PiP
     if (hasActiveCall) {
-      logger.info('[usePiP] Показываем PiP', {
-        pipVisibleBefore: pip.visible,
-        willUpdate: true
-      });
-      
       // НЕ отключаем локальный видеотрек при входе в in-app PiP: иначе собеседник перестаёт
       // получать кадры и видео у него зависает. Поток должен продолжать идти (камера была включена).
       
@@ -202,34 +167,9 @@ export const usePiP = ({
           : `${serverUrl}${partner.avatar.startsWith('/') ? '' : '/'}${partner.avatar}`;
       }
       
-      logger.info('[usePiP] Аватар для PiP', {
-        hasPartner: !!partner,
-        hasAvatarThumbB64: !!(partner?.avatarThumbB64),
-        hasAvatarB64: !!(partner?.avatarB64),
-        hasAvatar: !!(partner?.avatar),
-        hasAvatarUrl: !!avatarUrl,
-        partnerId: partner?._id
-      });
-
       // КРИТИЧНО: Используем актуальные значения из session
       const finalCallId = actualCallId || callId || '';
       const finalRoomId = actualRoomId || roomId || '';
-      
-      logger.info('[usePiP] Показываем PiP с актуальными значениями', {
-        finalCallId,
-        finalRoomId,
-        actualPartnerId,
-        partnerName: partner?.nick || ''
-      });
-      
-      logger.info('[usePiP] Вызываем pip.showPiP', {
-        finalCallId,
-        finalRoomId,
-        partnerName: partner?.nick || '',
-        hasLocalStream: !!localStream,
-        hasRemoteStream: !!remoteStream,
-        pipVisibleBefore: pip.visible
-      });
       
       pip.showPiP({
         callId: finalCallId,
@@ -253,14 +193,6 @@ export const usePiP = ({
       pipRef.current = { ...pip, visible: true };
       pipVisibleRef.current = true;
 
-      logger.info('[usePiP] pip.showPiP вызван, проверяем результат', {
-        pipVisibleFromRender: pip.visible,
-        pipVisibleAfterSync: true,
-        effectiveSync: isPipOverlayVisibleSync(),
-        pipRefVisible: pipRef.current?.visible,
-        globalPipVisible: (global as any).__pipVisibleRef?.current,
-      });
-
       // КРИТИЧНО: Вызываем session.enterPiP() для отправки pip:state партнеру
       const currentSession = session || (global as any).__webrtcSessionRef?.current;
       if (currentSession) {
@@ -268,7 +200,6 @@ export const usePiP = ({
         // Вызываем enterPiP если метод доступен (может быть опциональным)
         if (currentSession.enterPiP && typeof currentSession.enterPiP === 'function') {
           currentSession.enterPiP();
-          logger.info('[usePiP] ✅ Вызван session.enterPiP() - отправлено pip:state=true партнеру');
         } else {
           // Fallback: отправляем pip:state напрямую если метод недоступен
           const currentRoomId = finalRoomId || currentSession.getRoomId?.() || null;
@@ -279,7 +210,6 @@ export const usePiP = ({
                 from: socket.id,
                 roomId: currentRoomId,
               });
-              logger.info('[usePiP] ✅ Отправлено pip:state=true напрямую (fallback)', { roomId: currentRoomId });
             } catch (e) {
               logger.warn('[usePiP] Ошибка отправки pip:state:', e);
             }
@@ -292,12 +222,7 @@ export const usePiP = ({
         });
       }
 
-      logger.info('[usePiP] ✅ Вход в PiP через Swipe Left to Right или BackHandler - УСПЕШНО');
     } else {
-      logger.info('[usePiP] enterPiPMode - НЕ показываем PiP', {
-        hasActiveCall,
-        pipVisible: pip.visible
-      });
       // Префетч Android Back: __pipVisibleRef=true до goBack(), но PiP не показываем — убираем «висящий» флаг.
       try {
         const g = global as any;
@@ -325,10 +250,6 @@ export const usePiP = ({
         const suppressInAppPiPUntil = Number(g.__suppressInAppPiPUntilRef?.current || 0);
         const systemPiPEntryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
         if (now < suppressInAppPiPUntil || now < systemPiPEntryUntil) {
-          logger.info('[usePiP] Android Back skipped - system PiP transition in progress', {
-            suppressInAppPiPUntil,
-            systemPiPEntryUntil,
-          });
           return true;
         }
       } catch {}
@@ -397,16 +318,7 @@ export const usePiP = ({
           const actualCallId = callId || currentSession?.getCallId?.() || null;
           const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
           const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current;
-          
           if (hasActiveCall && startXRef.current !== null && startXRef.current <= edgeCaptureWidth) {
-            logger.info('[usePiP] PanResponder: onStartShouldSetPanResponderCapture - захватываем жест в capture фазе (iOS)', {
-              actualRoomId,
-              actualCallId,
-              hasActiveCall,
-              isInactiveState: isInactiveStateRef.current,
-              wasFriendCallEnded: wasFriendCallEndedRef.current,
-              startX: startXRef.current
-            });
             return true; // Захватываем жест в capture фазе на iOS
           }
         }
@@ -423,23 +335,12 @@ export const usePiP = ({
             Math.abs(dx) > minDx &&
             dx > 0 &&
             Math.abs(dx) > Math.abs(dy);
-          if (shouldCapture) {
-            logger.info('[usePiP] PanResponder: onMoveShouldSetPanResponderCapture - захватываем жест свайпа в capture фазе', {
-              dx,
-              dy,
-              minDx,
-              platform: Platform.OS
-            });
-          }
           return shouldCapture;
         }
         return false;
       },
       onMoveShouldSetPanResponder: () => false, // Не используем обычную фазу, только capture
         onPanResponderGrant: () => {
-        logger.info('[usePiP] PanResponder: onPanResponderGrant - получили контроль над жестом', {
-          platform: Platform.OS
-        });
         pipShownDuringSwipeRef.current = false;
         // На iOS PiP показываем только в Release с deferVisible, чтобы экран звонка успел размонтироваться (один RTCView).
       },
@@ -449,25 +350,12 @@ export const usePiP = ({
       onPanResponderRelease: (_, gestureState) => {
         const { dx, vx } = gestureState;
         const shouldTrigger = dx > swipeThreshold || vx > velocityThreshold;
-        
-        logger.info('[usePiP] PanResponder: onPanResponderRelease', {
-          dx,
-          vx,
-          swipeThreshold,
-          velocityThreshold,
-          shouldTrigger,
-          platform: Platform.OS
-        });
         startXRef.current = null;
         
         if (shouldTrigger) {
           // КРИТИЧНО: Проверяем актуальное состояние звонка через ref
           // Это предотвращает показ PiP после завершения звонка
           if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
-            logger.info('[usePiP] PanResponder: звонок завершен, возвращаемся назад без PiP', {
-              isInactiveState: isInactiveStateRef.current,
-              wasFriendCallEnded: wasFriendCallEndedRef.current
-            });
             // Звонок завершен - просто возвращаемся назад без PiP
             requestAnimationFrame(() => {
               if (navigation.canGoBack && navigation.canGoBack()) {
@@ -485,18 +373,6 @@ export const usePiP = ({
           const actualCallId = callId || currentSession?.getCallId?.() || null;
           const actualPartnerId = partnerId || currentSession?.getPartnerId?.() || null;
           const hasActiveCall = (!!actualRoomId || !!actualCallId || !!actualPartnerId) && !isInactiveStateRef.current && !wasFriendCallEndedRef.current;
-
-          // Простая логика: показываем PiP и возвращаемся назад
-          logger.info('[usePiP] PanResponder: проверяем условия для PiP', {
-            hasActiveCall,
-            pipVisible: pip.visible,
-            actualRoomId,
-            actualCallId,
-            actualPartnerId,
-            isInactiveState: isInactiveStateRef.current,
-            wasFriendCallEnded: wasFriendCallEndedRef.current,
-            platform: Platform.OS
-          });
           
           // КРИТИЧНО: Показываем PiP если есть активный звонок
           // Флаг pipShownDuringSwipeRef предотвращает повторный показ только в onPanResponderMove
@@ -515,12 +391,6 @@ export const usePiP = ({
             } else {
               // iOS: системный PiP для текущего сценария недоступен, сохраняем in-app PiP.
               if (!pipShownDuringSwipeRef.current) {
-                logger.info('[usePiP] PanResponder: показываем PiP перед навигацией', {
-                  actualRoomId,
-                  actualCallId,
-                  platform: Platform.OS,
-                  useDeferVisible: true
-                });
                 enterPiPMode({ deferVisible: true });
                 pipShownDuringSwipeRef.current = true;
               }
@@ -544,12 +414,6 @@ export const usePiP = ({
         }
       },
       onPanResponderTerminate: (_, gestureState) => {
-        logger.info('[usePiP] PanResponder: onPanResponderTerminate - жест прерван', {
-          dx: gestureState.dx,
-          vx: gestureState.vx,
-          pipShown: pipShownDuringSwipeRef.current,
-          platform: Platform.OS
-        });
         if (!isInactiveStateRef.current && !wasFriendCallEndedRef.current) {
           const currentSession = session || (global as any).__webrtcSessionRef?.current;
           const actualRoomId = roomId || currentSession?.getRoomId?.() || null;

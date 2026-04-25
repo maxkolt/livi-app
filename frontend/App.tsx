@@ -513,18 +513,12 @@ function AppContent() {
       });
     });
     const sub4 = emitter.addListener('EndCallFromPiP', () => {
-      console.log('[App] [PiP] 📵 EndCallFromPiP получен от натива (нажата кнопка «Завершить» в системном PiP)');
       try {
         const g = (global as any);
         const now = Date.now();
         const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
         const returnToCallInFlight = g.__pipReturnToCallInFlightRef?.current === true;
         if (returnToCallInFlight || now < returningUntil) {
-          console.log('[App] [PiP] ignoring EndCallFromPiP during system PiP return window', {
-            returnToCallInFlight,
-            returningUntil,
-            now,
-          });
           return;
         }
       } catch (_) {}
@@ -544,10 +538,8 @@ function AppContent() {
         g.__pipVisibleRef.current = false;
       } catch (_) {}
       NativeModules.LiviAppModule?.getPiPEndCallParams?.()?.then?.((params: { callId?: string | null; roomId?: string | null }) => {
-        console.log('[App] [PiP] getPiPEndCallParams результат', { callId: params?.callId ?? null, roomId: params?.roomId ?? null });
         const fn = (global as any).__endCallFromNativeRef?.current;
         if (typeof fn === 'function') {
-          console.log('[App] [PiP] вызываем endCallImpl(callId, roomId)');
           fn(params?.callId ?? null, params?.roomId ?? null);
         } else {
           console.warn('[App] [PiP] __endCallFromNativeRef.current не функция, endCallImpl не вызван');
@@ -567,7 +559,6 @@ function AppContent() {
     // Мы вызываем __pipReturnToCallRef.current() → навигация на VideoCall. __disableSystemPiPUntilRef + 6 с
     // запрещает вход в PiP по onUserLeaveHint, иначе на части устройств при переходе приложение снова уходит в PiP.
     const sub7 = emitter.addListener('SystemPiPExpanded', () => {
-      console.log('[App] SystemPiPExpanded received');
       try {
         const g = (global as any);
         const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
@@ -589,6 +580,21 @@ function AppContent() {
           return;
         }
         g.__lastSystemPiPExpandedAtRef.current = now;
+        g.__systemPiPReturnTokenRef = g.__systemPiPReturnTokenRef || { current: 0 };
+        g.__systemPiPReturnTokenRef.current = now;
+        g.__systemPiPReturnStateRef = g.__systemPiPReturnStateRef || { current: null };
+        g.__systemPiPReturnStateRef.current = {
+          token: now,
+          owner: null,
+          restoredAt: 0,
+          settledUntil: 0,
+        };
+        g.__suppressAbortDuringSystemPiPReturnUntilRef =
+          g.__suppressAbortDuringSystemPiPReturnUntilRef || { current: 0 };
+        g.__suppressAbortDuringSystemPiPReturnUntilRef.current = Math.max(
+          Number(g.__suppressAbortDuringSystemPiPReturnUntilRef.current || 0),
+          now + 12000
+        );
       } catch (_) {}
       try {
         const g = (global as any);
@@ -601,7 +607,6 @@ function AppContent() {
       } catch (_) {}
       const fn = (global as any).__pipReturnToCallRef?.current;
       if (typeof fn === 'function') {
-        console.log('[App] Calling __pipReturnToCallRef.current()');
         fn();
         return;
       }
@@ -610,12 +615,24 @@ function AppContent() {
       const nav = (global as any).__navRef;
       console.log('[App] SystemPiPExpanded fallback', { hasParams: !!params, callId: params?.callId, roomId: params?.roomId, navReady: nav?.isReady?.() });
       if (params?.callId && params?.roomId && nav?.isReady?.()) {
+        const g = global as any;
+        const returnToken = Number(g.__systemPiPReturnTokenRef?.current || Date.now());
         nav.dispatch(
           CommonActions.reset({
             index: 1,
             routes: [
               { name: 'Home' as const },
-              { name: 'VideoCall' as const, params: { resume: true, fromPiP: true, callId: params.callId, roomId: params.roomId, directCall: true } },
+              {
+                name: 'VideoCall' as const,
+                params: {
+                  resume: true,
+                  fromPiP: true,
+                  systemPiPReturnToken: returnToken,
+                  callId: params.callId,
+                  roomId: params.roomId,
+                  directCall: true,
+                },
+              },
             ],
           })
         );
@@ -1380,12 +1397,6 @@ function AppContent() {
           const logKey = `guard:disableUntil:${currentRoute}:${disableUntil}:${allowWhileGuardActive}`;
           if (systemPiPDecisionLogRef.current !== logKey) {
             systemPiPDecisionLogRef.current = logKey;
-            logger.info('[App] system PiP leaveHint disabled by global guard', {
-              currentRoute,
-              disableUntil,
-              remainingMs: disableUntil - Date.now(),
-              allowWhileGuardActive,
-            });
           }
           NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
         } else {
@@ -1436,21 +1447,6 @@ function AppContent() {
         });
         if (systemPiPDecisionLogRef.current !== logKey) {
           systemPiPDecisionLogRef.current = logKey;
-          logger.info('[App] system PiP leaveHint recalculated', {
-            currentRoute,
-            allowSystemPiP: !!allowSystemPiP,
-            allowWhileGuardActive,
-            pipVisible: !!pipVisible,
-            hasIncoming: !!incoming,
-            hasActiveCallForPiP: !!hasActiveCallForPiP,
-            onVideoCallWithActiveSession: !!onVideoCallWithActiveSession,
-            skipSetLeaveHint: !!skipSetLeaveHint,
-            hasParamsCallId: !!params?.callId,
-            hasParamsRoomId: !!params?.roomId,
-            sessionNotEnded: !!sessionNotEnded,
-            videoCallInactiveByRef: !!videoCallInactiveByRef,
-            systemPiPEntryInProgress: !!systemPiPEntryInProgress,
-          });
         }
         if (!skipSetLeaveHint) {
           NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!allowSystemPiP);
@@ -1865,7 +1861,6 @@ function AppContent() {
           try {
             emitPresenceUpdateIfChanged({ status: 'online' }, { force: true });
           } catch (_) {}
-          console.log('[App] [call:ended] locally-ended echo ignored', { callId: eventCallId, elapsedMs: Date.now() - localAt });
           return;
         }
       } catch (_) {}
@@ -1877,13 +1872,11 @@ function AppContent() {
         const lastKey = String(g.__lastHandledCallEndedRef.key || '');
         const lastAt = Number(g.__lastHandledCallEndedRef.at || 0);
         if (lastKey === eventKey && now - lastAt < 3000) {
-          console.log('[App] [call:ended] duplicate ignored', { callId: eventKey, elapsedMs: now - lastAt });
           return;
         }
         g.__lastHandledCallEndedRef.key = eventKey;
         g.__lastHandledCallEndedRef.at = now;
       } catch (_) {}
-      console.log('[App] [call:ended] 📩 onCallEnded вызван', { callId: data?.callId, inSystem: g.__pipInSystemModeRef?.current, __callEndedFromPiPNoOpen: g.__callEndedFromPiPNoOpenRef?.current });
       // КРИТИЧНО: Сразу сбрасываем refs и уведомляем HomeScreen (идемпотентно — те же refs трогает PiPContext и VideoCallSession).
       applyCallEndedGlobalRefsOnce(eventCallId || undefined, eventRoomId || undefined);
       // Сразу фиксируем online на сервере (force), чтобы не было гонки с повторным busy от VideoCall после сброса remoteStream.
@@ -2570,7 +2563,6 @@ function AppContent() {
               if (navRef.isReady()) {
                 const currentRoute = navRef.getCurrentRoute()?.name;
                 if (currentRoute && currentRoute !== lastLoggedRouteRef.current) {
-                  console.log('[App] Navigation ready, current route:', currentRoute);
                   lastLoggedRouteRef.current = currentRoute;
                 }
                 // После отмены входящего на Home не дергаем setRouteName — иначе ре-рендер App и двойная отрисовка Home
@@ -2587,7 +2579,6 @@ function AppContent() {
               if (navRef.isReady()) {
                 const currentRoute = navRef.getCurrentRoute()?.name;
                 if (currentRoute && currentRoute !== lastLoggedRouteRef.current) {
-                  console.log('[App] Navigation state changed, current route:', currentRoute);
                   lastLoggedRouteRef.current = currentRoute;
                 }
                 // После отмены входящего на Home не дергаем setRouteName — иначе ре-рендер App и двойная отрисовка Home
@@ -2749,8 +2740,6 @@ export default function App() {
     const inSystem = g.__pipInSystemModeRef?.current === true;
     const pipVisible = g.__pipVisibleRef?.current === true;
     const endingFromSystemPiP = inSystem || fromPiPButton;
-    console.log('[App] 🔥 endCallImpl вызван', { callId, roomId, inSystem, pipVisible, fromPiPButton, endingFromSystemPiP, __callEndedFromPiPNoOpen: g.__callEndedFromPiPNoOpenRef?.current });
-
     // Сразу выставляем флаги «завершили из PiP», чтобы handleCallEnded (вызовется из session.endCall) и onCallEnded (call:ended) не открывали приложение.
     // SystemPiPModeChanged(true) может прийти позже, поэтому inSystem часто false при нажатии X в PiP.
     if (endingFromSystemPiP) {
@@ -2805,11 +2794,9 @@ export default function App() {
       try {
         const session = g.__webrtcSessionRef?.current;
         if (session && typeof session.endCall === 'function') {
-          console.log('[App] Завершение из PiP: вызываем session.endCall(callId, roomId)');
           session.endCall(callId || undefined, roomId || undefined);
           endedViaPiPPrimaryPath = true;
         } else {
-          console.log('[App] Завершение из PiP: отправляем call:end на сервер (fallback)');
           socket.emit('call:end', buildCallEndSocketPayload(callId, roomId));
           endedViaPiPPrimaryPath = true;
         }
@@ -2821,23 +2808,16 @@ export default function App() {
     try {
       const cleanupFn = g.__endCallCleanupRef?.current;
       if (cleanupFn && typeof cleanupFn === 'function') {
-        if (endedViaPiPPrimaryPath) {
-          console.log('[App] Пропускаем немедленный cleanupFunction: PiP end уже запущен через primary path');
-        } else if (!endingFromSystemPiP) {
+        if (!endedViaPiPPrimaryPath && !endingFromSystemPiP) {
           g.__lastEndCallSourceRef = g.__lastEndCallSourceRef || { current: null };
           g.__lastEndCallSourceRef.current = 'pip_close';
-          console.log('[App] Вызываем cleanupFunction из __endCallCleanupRef');
           cleanupFn();
-        } else {
-          console.log('[App] Пропускаем cleanupFunction: системный PiP завершение уже обработано выше');
         }
       } else if (!hasPiPIds) {
         const session = g.__webrtcSessionRef?.current;
         if (session && typeof session.endCall === 'function') {
-          console.log('[App] Вызываем session.endCall() напрямую (cleanupFunction не установлена)');
           session.endCall();
         } else {
-          console.log('[App] Отправляем call:end напрямую на сервер (fallback)');
           socket.emit('call:end', buildCallEndSocketPayload(callId, roomId));
         }
       }
@@ -2979,8 +2959,10 @@ export default function App() {
         const now = Date.now();
         const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
         const disableUntil = Number(g.__disableSystemPiPUntilRef?.current || 0);
+        const returnState = g.__systemPiPReturnStateRef?.current;
+        const settledUntil = Number(returnState?.settledUntil || 0);
         if (currentRoute !== 'VideoCall' && callId && roomId) {
-          if (now < returningUntil || now < disableUntil) {
+          if (now < returningUntil || now < disableUntil || now < settledUntil) {
             return true;
           }
           g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };

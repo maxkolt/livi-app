@@ -243,12 +243,18 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         const now = Date.now();
         const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
         const disableUntil = Number(g.__disableSystemPiPUntilRef?.current || 0);
+        const returnState = g.__systemPiPReturnStateRef?.current;
+        const settledUntil =
+          returnState && Number(returnState.token || 0) === Number(g.__systemPiPReturnTokenRef?.current || 0)
+            ? Number(returnState.settledUntil || 0)
+            : 0;
         const shouldIgnoreLateEnter =
           inPiP &&
           (
             returnToCallInFlightRef.current ||
             now < returningUntil ||
             now < disableUntil ||
+            now < settledUntil ||
             g.__pipReturnToCallJustPressedRef?.current === true
           );
         if (shouldIgnoreLateEnter) {
@@ -261,11 +267,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
             g.__pipInSystemModeRef.current = false;
           } catch (_) {}
-          logger.info('[PiPContext] Ignore stale SystemPiPModeChanged(true) after return', {
-            returningUntil,
-            disableUntil,
-            returnToCallInFlight: returnToCallInFlightRef.current,
-          });
           return;
         }
         setInSystemPiPMode(inPiP);
@@ -279,7 +280,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         try {
           g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
           g.__pipInSystemModeRef.current = inPiP;
-          console.log('[PiPContext] SystemPiPModeChanged: __pipInSystemModeRef.current =', inPiP);
         } catch (_) {}
         if (inPiP) {
           setPendingSystemPiP(false);
@@ -330,16 +330,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     navParams?: any; // ← кто нас вызвал (для корректного возврата)
     deferVisible?: boolean;
   }) => {
-    console.log('[PiPContext] 🔥 showPiP вызван', {
-      callId: p.callId,
-      roomId: p.roomId,
-      partnerName: p.partnerName,
-      hasLocalStream: !!p.localStream,
-      hasRemoteStream: !!p.remoteStream,
-      muteLocal: p.muteLocal,
-      muteRemote: p.muteRemote
-    });
-
     // КРИТИЧНО: Ставим флаг PiP синхронно (до setState), чтобы teardown логика (например, stopSpeaker в хуках)
     // могла увидеть, что PiP уже включен, даже если React effect еще не успел пробежать.
     try {
@@ -437,7 +427,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setAllowVideoRender(true);
         }
         setVisible(true);
-        console.log('[PiPContext] ✅ PiP состояние установлено (deferred), visible=true');
       } else {
         try {
           const g = global as any;
@@ -459,12 +448,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             setAllowVideoRender(true);
           }
           setVisible(true);
-          console.log('[PiPContext] ✅ PiP состояние установлено (deferred), visible=true');
         });
       }
     } else {
       setVisible(true);
-      console.log('[PiPContext] ✅ PiP состояние установлено, visible=true');
     }
   }, []);
 
@@ -593,18 +580,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       // Включаем отдельный fullscreen-host для system PiP capture. Native войдёт в PiP
       // только после подтверждения готовности этого host, чтобы не захватить маленький in-app PiP.
       const requestId = g.__pipVisibleRef?.current === true ? Date.now() : 0;
-      console.log('[PiPContext] AboutToEnterSystemPiP received', {
-        payload,
-        pipVisibleSync: g.__pipVisibleRef?.current === true,
-        requestId,
-        hasSession: !!session,
-        hasRemoteStream: !!remoteStreamRef.current,
-      });
       setPendingSystemPiP(true);
       setSystemPiPCaptureActive(true);
       setSystemPiPCaptureRequestId(requestId);
       const apply = (decorSize: { width: number; height: number } | null) => {
-        console.log('[PiPContext] AboutToEnterSystemPiP apply', { decorSize });
         // Не применять размер окна PiP (типично ~334x594) — иначе при повторном входе layout/зум ломается.
         if (decorSize && decorSize.width > 400 && decorSize.height > 400) setDecorSizeForPiP(decorSize);
       };
@@ -622,21 +601,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           const inPiP = g.__pipInSystemModeRef?.current === true;
           const until = g.__systemPiPEntryInProgressUntilRef?.current;
           if (inPiP) {
-            console.log('[PiPContext] keep system PiP capture state: already in PiP');
             return;
           }
           if (typeof until === 'number' && until > Date.now()) {
-            console.log('[PiPContext] keep system PiP capture state: entry window still active', {
-              until,
-              now: Date.now(),
-            });
             return;
           }
-          console.log('[PiPContext] reset system PiP capture state after timeout', {
-            requestId,
-            inPiP,
-            until,
-          });
           setPendingSystemPiP(false);
           setSystemPiPCaptureActive(false);
           setSystemPiPCaptureRequestId(0);
@@ -754,19 +723,32 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     } catch (_) {}
     try {
       const g = global as any;
+      const returnToken = Number(g.__systemPiPReturnTokenRef?.current || Date.now());
+      g.__systemPiPReturnTokenRef = g.__systemPiPReturnTokenRef || { current: 0 };
+      g.__systemPiPReturnTokenRef.current = returnToken;
+      g.__systemPiPReturnStateRef = g.__systemPiPReturnStateRef || { current: null };
+      g.__systemPiPReturnStateRef.current = {
+        token: returnToken,
+        owner: null,
+        restoredAt: 0,
+        settledUntil: 0,
+      };
       g.__returningFromSystemPiPUntilRef = g.__returningFromSystemPiPUntilRef || { current: 0 };
       g.__returningFromSystemPiPUntilRef.current = Date.now() + 4000;
       g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
       g.__systemPiPEntryInProgressUntilRef.current = 0;
       g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
       g.__enterSystemPiPAfterVideoCallRef.current = null;
+      g.__suppressAbortDuringSystemPiPReturnUntilRef =
+        g.__suppressAbortDuringSystemPiPReturnUntilRef || { current: 0 };
+      g.__suppressAbortDuringSystemPiPReturnUntilRef.current = Math.max(
+        Number(g.__suppressAbortDuringSystemPiPReturnUntilRef.current || 0),
+        Date.now() + 12000
+      );
     } catch (_) {}
-    console.log('🔥🔥🔥 [PiPContext] returnToCall вызван', { callId, roomId, lastNavParams });
-
     // Если звонок уже завершён (партнёр положил трубку), не переходим на экран звонка — только скрываем PiP
     const session = (global as any).__webrtcSessionRef?.current;
     if (session && typeof session.isEnded === 'function' && session.isEnded()) {
-      console.log('[PiPContext] returnToCall: call already ended, closing PiP only');
       hidePiP();
       clearSuppressLater();
       return;
@@ -802,7 +784,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     
     // Guard от двойной навигации
     if (navigatingRef.current) {
-      console.log('[PiPContext] returnToCall blocked - already navigating');
       clearSuppressLater();
       return;
     }
@@ -825,6 +806,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         ...(navParams ?? {}),
         resume: true,
         fromPiP: true,
+        systemPiPReturnToken: Number(g.__systemPiPReturnTokenRef?.current || Date.now()),
         directCall: true,
         directInitiator: undefined,
         callId: cid,
@@ -837,10 +819,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             routes: [{ name: 'Home' as any }, { name: 'VideoCall' as any, params }],
           })
         );
-        console.log('[PiPContext] ✅ Navigated to VideoCall with resume params', {
-          currentRouteName,
-          params,
-        });
       } catch (e) {
         console.error('[PiPContext] Navigation error:', e);
         onReturnToCall?.(cid, rid);
@@ -865,7 +843,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
               const cid = p?.callId ? String(p.callId) : '';
               const rid = p?.roomId ? String(p.roomId) : '';
               if (!cid || !rid) {
-                console.log('[PiPContext] returnToCall: native params missing', { cid, rid });
                 clearSuppressLater();
                 return;
               }
@@ -894,8 +871,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   }, [returnToCall]);
 
   const endCall = useCallback(() => {
-    console.log('🔥🔥🔥 [PiPContext] endCall вызван', { callId, roomId });
-    
     // КРИТИЧНО: Вызываем onEndCall (который вызовет session.endCall() через __endCallCleanupRef)
     // Это гарантирует правильное завершение звонка через WebRTC session
     // и отправку call:end на сервер, чтобы завершить звонок у обоих участников
@@ -906,12 +881,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       // Fallback: если onEndCall не установлен, вызываем session.endCall(callId, roomId) напрямую (завершение у обоих)
       const session = (global as any).__webrtcSessionRef?.current;
       if (session && typeof session.endCall === 'function') {
-        console.log('🔥 [PiPContext] Вызываем session.endCall(callId, roomId) напрямую (onEndCall не установлен)');
         session.endCall(callId ?? undefined, roomId ?? undefined);
       } else if (callId || roomId) {
         try {
           socket.emit('call:end', buildCallEndSocketPayload(callId, roomId));
-          console.log('[PiPContext] Отправлен call:end на сервер (fallback)');
         } catch (e) {
           console.warn('[PiPContext] Session not available and onEndCall not set', e);
         }
@@ -955,17 +928,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       // Идемпотентно с App и VideoCallSession (один socket — несколько слушателей call:ended).
       applyCallEndedGlobalRefsOnce(receivedCallId || undefined, receivedRoomId || undefined);
       if (!shouldClosePiP) return;
-
-      console.log('[PiPContext] Call ended event received, closing PiP:', {
-        data,
-        currentCallId,
-        currentRoomId,
-        matchedByCallId,
-        matchedByRoomId,
-        receivedCallId: data?.callId,
-        receivedRoomId: data?.roomId,
-        inSystemPiPMode,
-      });
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
@@ -992,12 +954,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   }, [visible, callId, roomId, onEndCall, endCall, hidePiP, inSystemPiPMode]);
 
   const updatePiPState = useCallback((patch: Partial<PiPState>) => {
-    if (patch.pendingSystemPiP !== undefined || patch.decorSizeForPiP !== undefined) {
-      console.log('[PiPContext] updatePiPState pip', {
-        pendingSystemPiP: patch.pendingSystemPiP,
-        decorSizeForPiP: patch.decorSizeForPiP ?? null,
-      });
-    }
     if (patch.callId !== undefined) setCallId(patch.callId);
     if (patch.roomId !== undefined) setRoomId(patch.roomId);
     if (patch.partnerName !== undefined) setPartnerName(patch.partnerName);

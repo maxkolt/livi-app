@@ -498,20 +498,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   toggleMic(): void {
     const prev = this.isMicOn;
     this.isMicOn = !this.isMicOn;
-    logger.info('[MIC_TRACE session] toggleMic()', {
-      ts: Date.now(),
-      prev,
-      next: this.isMicOn,
-      hasRoom: !!this.room,
-      roomState: this.room?.state,
-    });
     if (this.room) {
       this.room.localParticipant.setMicrophoneEnabled(this.isMicOn).catch((e) => {
         logger.warn('[VideoCallSession] Failed to toggle microphone', e);
-        logger.info('[MIC_TRACE session] setMicrophoneEnabled rejected after toggleMic', {
-          wanted: this.isMicOn,
-          error: (e as any)?.message || String(e),
-        });
       });
     } else if (this.localAudioTrack) {
       try {
@@ -529,10 +518,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       } catch {}
     }
-    logger.info('[MIC_TRACE session] toggleMic → onMicStateChange(UI)', {
-      ts: Date.now(),
-      enabled: this.isMicOn,
-    });
     this.notifyMicStateChange(this.isMicOn);
   }
 
@@ -1146,6 +1131,11 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** Текущее состояние камеры собеседника (синхронно обновляется при cam-toggle/LiveKit). Используется в showPiP, чтобы заглушка «Отошел» показывалась сразу при входе в PiP без гонки с React state. */
   getRemoteCamEnabled(): boolean {
     return this.remoteCamEnabled;
+  }
+
+  /** True only when the peer explicitly reported camera OFF via cam-toggle. */
+  getRemoteCamDeclaredOff(): boolean {
+    return this.remotePartnerDeclaredCamOff;
   }
 
   /** Локальный mute для аудио собеседника. Должен переживать PiP/временный reattach remote stream. */
@@ -2232,14 +2222,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.localStream = stream;
 
     // После await оставляем актуальные this.isCamOn / this.isMicOn (учитывают toggle во время create).
-    logger.info('[MIC_TRACE session] ensureLocalTracks applied cam/mic flags', {
-      ts: Date.now(),
-      camBeforeAwait: camStateBeforeAwait,
-      micBeforeAwait: micStateBeforeAwait,
-      camNow: this.isCamOn,
-      micNow: this.isMicOn,
-    });
-
     // КРИТИЧНО: Применяем сохранённые состояния к трекам сразу после создания.
     // Иначе можно получить ситуацию "UI показывает mic/cam off, но треки реально включены".
     try {
@@ -2562,7 +2544,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.isCamOn = false;
     this.isMicOn = false;
     this.notifyCamStateChange(false);
-    logger.info('[MIC_TRACE session] stopLocalTracks → onMicStateChange(false)', { ts: Date.now() });
     this.notifyMicStateChange(false);
   }
 
@@ -3821,12 +3802,6 @@ export class VideoCallSession extends SimpleEventEmitter {
           hasLocalParticipant: !!room.localParticipant
         });
         // Синхронизируем UI с флагами сессии (пользователь мог выключить мик/камеру до конца connect).
-        logger.info('[MIC_TRACE session] connectToLiveKit skip publish → onMicStateChange (session flags)', {
-          ts: Date.now(),
-          sessionIsMicOn: this.isMicOn,
-          sessionIsCamOn: this.isCamOn,
-          roomState: room.state,
-        });
         this.notifyMicStateChange(this.isMicOn);
         this.notifyCamStateChange(this.isCamOn);
         return true; // Возвращаем true, так как подключение успешно, просто треки не опубликованы
@@ -3910,12 +3885,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
 
       // Синхронизируем UI с флагами сессии (не предполагаем «всё включено»).
-      logger.info('[MIC_TRACE session] connectToLiveKit post-publish → onMicStateChange (session flags)', {
-        ts: Date.now(),
-        sessionIsMicOn: this.isMicOn,
-        sessionIsCamOn: this.isCamOn,
-        roomState: room.state,
-      });
       this.notifyMicStateChange(this.isMicOn);
       this.notifyCamStateChange(this.isCamOn);
 
@@ -4695,11 +4664,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
 
       // Re-apply mic enabled state (some devices flip enabled=false transiently).
-      logger.info('[MIC_TRACE session] recoverLocalTracksAfterReconnect reapply mic to tracks', {
-        ts: Date.now(),
-        context,
-        isMicOn: this.isMicOn,
-      });
       try {
         const mt = this.localAudioTrack?.mediaStreamTrack as any;
         if (mt && typeof mt.enabled === 'boolean') mt.enabled = this.isMicOn;

@@ -132,7 +132,6 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
       const pipVisible = !!(global as any).__pipVisibleRef?.current;
       const inSystemPiP = (global as any).__pipInSystemModeRef?.current === true;
       if (pipVisible || inSystemPiP) {
-        logger.info('[useAudioRouting] Skip stopSpeaker (keep call audio) — PiP active', { pipVisible, inSystemPiP });
         return;
       }
     } catch {}
@@ -152,13 +151,6 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
       stopSpeaker();
       return;
     }
-
-    logger.info('[useAudioRouting] ✅ Starting call audio routing (pre-remoteStream)', {
-      enabled,
-      hasRemoteStream: !!remoteStream,
-      streamId: remoteStream?.id,
-      platform: Platform.OS,
-    });
 
     const parseList = (raw: any): string[] => {
       if (Array.isArray(raw)) return raw.map((s) => String(s));
@@ -223,7 +215,6 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
       try {
         const res = await PermissionsAndroid.request(perm);
         const ok = res === PermissionsAndroid.RESULTS.GRANTED;
-        logger.info('[useAudioRouting] BLUETOOTH_CONNECT permission result', { ok, res });
         return ok;
       } catch (e) {
         logger.warn('[useAudioRouting] BLUETOOTH_CONNECT permission request failed', { e });

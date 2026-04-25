@@ -699,6 +699,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showUpdateBadge, setShowUpdateBadgeState] = useState(false);
   const updateBadgeShownRef = useRef(false);
+  const suppressUpdateBadgeUntilRef = useRef(0);
   /** Результат последней isUpdateAvailable() в check() — для shouldShowUpdateBadge без повторного запроса */
   const serverSaysUpdateRef = useRef(false);
   const updateSpinAnim = useRef(new Animated.Value(0)).current;
@@ -727,6 +728,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   // На Android обработка выхода на корне (Back → системный PiP) централизована в App.tsx,
   // чтобы избежать конфликтов порядка BackHandler'ов (и неожиданного системного PiP на VideoCall).
+
+  const suppressUpdateBadgeForCallNotice = useCallback((durationMs = 4000) => {
+    suppressUpdateBadgeUntilRef.current = Math.max(
+      suppressUpdateBadgeUntilRef.current,
+      Date.now() + durationMs
+    );
+    setShowUpdateBadgeState(false);
+  }, []);
 
   // Проверка доступности обновления (при старте и при возврате в приложение)
   // Дебаунс при resume: не чаще раза в 60 сек, чтобы избежать мерцания при частых AppState active (два устройства, блокировка экрана)
@@ -775,7 +784,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     (async () => {
       try {
         const should = await shouldShowUpdateBadge(__DEV__ ? undefined : serverSaysUpdateRef.current);
-        if (!cancelled && should) {
+        if (!cancelled && should && Date.now() >= suppressUpdateBadgeUntilRef.current) {
           if (__DEV__) updateBadgeShownRef.current = true;
           setShowUpdateBadgeState(true);
         }
@@ -1423,9 +1432,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [calling.visible]);
 
   const handleStartVideoCall = useCallback(async (friend: Friend) => {
-    const friendId = String(friend.id);
     const friendName = friend.name ?? '';
-    logger.info('[outgoing] handleStartVideoCall started', { friendId, friendName });
     setSwipeActionsHiddenForCall(friend.id);
     openSwipeableRef.current?.close?.();
     clearOutgoingDeclineHandled();
@@ -1440,11 +1447,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         await setupCallKeep({ requestPermission: true });
       }
       // Нативный экран исходящего — только после завершения запроса разрешений
-      logger.info('[outgoing] about to displayOutgoingCallImmediate', { friendId });
       displayOutgoingCallImmediate(friend.id, friendName);
-      logger.info('[outgoing] displayOutgoingCallImmediate returned', { friendId });
-
-      logger.info('[outgoing] calling startCall', { friendId });
 
       // Подписки ДО await startCall: иначе call:declined может прийти раньше регистрации → calling остаётся true → кнопки видео глобально disabled.
       const socketUnsubs: Array<() => void> = [];
@@ -1564,7 +1567,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         throw startErr;
       }
 
-      logger.info('[outgoing] startCall result', { ok: r?.ok, callId: r?.callId, error: r?.error });
       if (!r?.ok) {
         if (!outgoingFinished) {
           outgoingFinished = true;
@@ -1578,14 +1580,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (r.callId) {
           try { cancelCall(r.callId); } catch {}
         }
-        logger.info('[outgoing] startCall ack after outgoing already finished (socket race)');
         return;
       }
 
       setCalling((c) => ({ ...c, callId: r.callId || null }));
 
       if (r.callId) {
-        logger.info('[outgoing] notifying native with callId', { callId: r.callId });
         notifyOutgoingCallId(r.callId);
       }
 
@@ -2750,7 +2750,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         incomingCallScreen.visible;
       if (hasActiveLocalCall) return;
       emitPresenceUpdateIfChanged({ status: 'online', idle: true }, { force: true });
-      logger.info('[HomeScreen] Synced self presence online while idle', { reason });
     } catch (e) {
       logger.warn('[HomeScreen] Failed to sync idle presence online', { reason, error: (e as Error)?.message });
     }
@@ -2860,11 +2859,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(merged));
         setMissedByUser(merged);
         setMissedLoaded(true);
-        logger.info('[HomeScreen] Reloaded missed calls on focus (synced with native)', { 
-          count: Object.keys(merged).length,
-          merged,
-          fromNative: Object.keys(nativeMissed || {}).length,
-        });
         // Не пересоздаём уведомления в шторке при фокусе, если пользователь уже «увидел» (вкладка Друзья) или cleared
         const badgeCleared = await AsyncStorage.getItem('missed_calls_badge_cleared_v1');
         if (badgeCleared !== 'true' && !onFriendsTab) {
@@ -3079,14 +3073,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         // Формат объекта: обновление busy статуса
         const userId = String(data.userId);
         const busy = data.busy !== undefined ? !!data.busy : undefined;
-        // Лог: откуда приходит бейдж «Занято» — если busy=true приходит до принятия вызова, источник на сервере или у звонящего
-        logger.info('[presence:update] busy от друга', {
-          presenceOnlineTrace: true,
-          appState: AppState.currentState,
-          userId,
-          busy,
-          myUserId: getCurrentUserId?.() ?? '',
-        });
         if (busy !== undefined) {
           setFriends((prev) => {
             const updated = prev.map((f) => {
@@ -4236,7 +4222,7 @@ const handleClearNick = useCallback(async () => {
       !!params?.roomId ||
       (!!session && typeof session.getRoomId === 'function' && !!session.getRoomId()) ||
       (!!session && typeof session.getCallId === 'function' && !!session.getCallId());
-    const activeCallInProgress = !!videoCallActive && (sessionNotEnded || hasAnyCallIds || !session);
+    const activeCallInProgress = !!videoCallActive && (sessionNotEnded || hasAnyCallIds);
     const busy = isFriendBusy || (activeCallInProgress && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
     // Исходящий вызов в процессе (инициатор свернул нативный экран в шторку): у того, кому звоним — стиль «занято» без бейджа; у остальных — просто неактивная кнопка
     const outgoingInProgress = calling.visible;
@@ -4750,9 +4736,11 @@ const handleClearNick = useCallback(async () => {
     const openFriendsMenu = (route as any)?.params?.openFriendsMenu;
     const openFriendsTab = (route as any)?.params?.openFriendsTab;
     if (ended) {
+      suppressUpdateBadgeForCallNotice();
       showNotice(t('callEnded', lang), 'success', 3000);
     }
     if (cancelled) {
+      suppressUpdateBadgeForCallNotice();
       showNotice(t('callCancelled', lang), 'success', 3000);
     }
     if (openFriendsMenu) {
@@ -4791,23 +4779,25 @@ const handleClearNick = useCallback(async () => {
         });
       } catch {}
     }
-  }, [route, navigation, showNotice]);
+  }, [route, navigation, showNotice, suppressUpdateBadgeForCallNotice]);
 
   // Отмена входящего, когда пользователь уже на Home: бейдж «Вызов отменён» на 3 сек через событие, без setParams — без лишних ре-рендеров
   useEffect(() => {
     const off = onCallCancelledOnHome(() => {
+      suppressUpdateBadgeForCallNotice();
       showNotice(t('callCancelled', lang), 'success', 3000);
     });
     return off;
-  }, [showNotice, lang]);
+  }, [showNotice, lang, suppressUpdateBadgeForCallNotice]);
 
   // Завершение звонка (закрытие экрана через goBack): тост «Звонок завершён» при фокусе на Home, без setParams — без лишних ре-рендеров
   useEffect(() => {
     const off = onCallEndedOnHome(() => {
+      suppressUpdateBadgeForCallNotice();
       showNotice(t('callEnded', lang), 'success', 3000);
     });
     return off;
-  }, [showNotice, lang]);
+  }, [showNotice, lang, suppressUpdateBadgeForCallNotice]);
 
   // Обработка «занято» от друга
   useEffect(() => {
