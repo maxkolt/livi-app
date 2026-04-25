@@ -19,6 +19,8 @@ import { t } from '../utils/i18n';
 import { getPrivacyPolicyUrl } from '../utils/privacyPolicyUrl';
 
 const { width, height } = Dimensions.get('window');
+const MIN_SPLASH_DURATION_MS = 3000;
+const SPLASH_FADE_DURATION_MS = 620;
 
 interface SplashLoaderProps {
   dataLoaded: boolean;
@@ -35,10 +37,11 @@ interface SplashLoaderProps {
 
 export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvatar, hasAvatarReady, overlayMode }: SplashLoaderProps) {
   const [showSplash, setShowSplash] = useState(true);
-  const [minTimeElapsed, setMinTimeElapsed] = useState(!!overlayMode);
   const { theme } = useAppTheme();
   const lang = useLang((s) => s.lang);
   const insets = useSafeAreaInsets();
+  const startedAtRef = useRef(Date.now());
+  const finishScheduledRef = useRef(false);
 
   // Анимации для логотипа
   const logoScale = useRef(new Animated.Value(1)).current;
@@ -51,35 +54,55 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
   const shadowOpacity = useRef(new Animated.Value(0.3)).current;
   
 
-  // Минимальное время показа: в overlayMode не ждём, иначе 5 секунд
-  useEffect(() => {
-    if (overlayMode) return;
-    const timer = setTimeout(() => {
-      setMinTimeElapsed(true);
-    }, 5000);
-    return () => clearTimeout(timer);
-  }, [overlayMode]);
-
-  // Скрываем заглушку когда прошло минимум времени и данные загружены.
-  // Наличие ника/аватара не обязательно: для нового пользователя после первого запуска
-  // нужно показать экран заполнения профиля, а не держать вечный сплеш.
-  useEffect(() => {
-    let dataReady = true;
-    if (hasAvatarReady !== undefined) dataReady = hasAvatarReady;
-    
-    if (minTimeElapsed && dataLoaded && dataReady) {
-      // Плавное исчезновение (чуть дольше — мягче переход к странице приветствия)
-      Animated.timing(logoOpacity, {
-        toValue: 0,
-        duration: 620,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }).start(() => {
-        setShowSplash(false);
-        onComplete?.();
-      });
+  const finishSplash = React.useCallback((durationMs: number) => {
+    if (finishScheduledRef.current) return;
+    finishScheduledRef.current = true;
+    const duration = Math.max(0, durationMs);
+    if (duration === 0) {
+      logoOpacity.setValue(0);
+      setShowSplash(false);
+      onComplete?.();
+      return;
     }
-  }, [minTimeElapsed, dataLoaded, hasAvatarReady, overlayMode]);
+    Animated.timing(logoOpacity, {
+      toValue: 0,
+      duration,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start(() => {
+      setShowSplash(false);
+      onComplete?.();
+    });
+  }, [logoOpacity, onComplete]);
+
+  // Ждём сервер только до общего дедлайна 2.5с. Fade должен уложиться в это же окно.
+  useEffect(() => {
+    if (overlayMode) {
+      finishSplash(SPLASH_FADE_DURATION_MS);
+      return;
+    }
+
+    const now = Date.now();
+    const elapsedMs = now - startedAtRef.current;
+    const remainingTotalMs = Math.max(0, MIN_SPLASH_DURATION_MS - elapsedMs);
+
+    if (dataLoaded) {
+      if (remainingTotalMs > SPLASH_FADE_DURATION_MS) {
+        const fadeTimer = setTimeout(() => {
+          finishSplash(SPLASH_FADE_DURATION_MS);
+        }, remainingTotalMs - SPLASH_FADE_DURATION_MS);
+        return () => clearTimeout(fadeTimer);
+      }
+
+      finishSplash(remainingTotalMs);
+      return;
+    }
+
+    const hardStopTimer = setTimeout(() => {
+      finishSplash(0);
+    }, remainingTotalMs);
+    return () => clearTimeout(hardStopTimer);
+  }, [dataLoaded, finishSplash, overlayMode]);
 
   // Анимация 3D парения логотипа
   useEffect(() => {

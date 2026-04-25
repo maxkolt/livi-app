@@ -2514,12 +2514,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
   }, [loadProfileSync, profileKey, resolvedUserId, profileLoaded]); // Перезагружаем при изменении profileKey или currentUserId
 
-  // Запоминаем, что домашний экран уже показывал контент — при возврате из VideoCall/PiP не показывать SplashLoader
+  // Запоминаем, что сплеш уже был скрыт в этой сессии — при возврате из VideoCall/PiP не показывать его снова.
   useEffect(() => {
-    if (dataLoaded && profileLoaded) {
+    if (splashDismissed) {
       homeScreenAlreadyBooted = true;
     }
-  }, [dataLoaded, profileLoaded]);
+  }, [splashDismissed]);
 
   // При возврате на Home (remount) с уже загруженным экраном — один раз подставляем профиль из хранилища (ник, аватар)
   const didRestoreProfileRef = useRef(false);
@@ -4830,40 +4830,10 @@ const handleClearNick = useCallback(async () => {
   const currentNick = savedNick || nick || '';
   const currentAvatar = avatarUri || savedAvatarUrl || '';
   const hasRealData = (currentNick && currentNick.trim()) || (currentAvatar && currentAvatar.trim());
-  // На Android не скрываем сплеш пока аватар (data:) не разрешён в file: — убираем мерцание и ошибку Glide
-  const hasCachedAvatarForSplash = !!(resolvedUserId && myAvatarVer > 0);
-  const hasDirectAvatarUriForSplash = !!(avatarUri && (/^data:image\//i.test(avatarUri) || /^https?:\/\//i.test(avatarUri)));
-  const avatarReadyForHome = Platform.OS !== 'android'
-    ? true
-    : (!hasCachedAvatarForSplash && !hasDirectAvatarUriForSplash)
-      ? true
-      : hasCachedAvatarForSplash
-        ? myFullAvatarResolvedReady
-        : resolvedAvatarReady;
-  // Фаза «только сплеш»: данные ещё грузятся — показываем только SplashLoader
-  const onlySplashPhase = !dataLoaded || (dataLoaded && !profileLoaded);
-  // Сплеш поверх Home: когда данные готовы, рисуем Home под сплешем и только сплеш потом исчезает
-  const showSplashOverlay = onlySplashPhase || !splashDismissed;
+  // Home всегда монтируется под сплешем.
+  // Сам сплеш ждёт server/dataLoaded только в пределах окна 2.5с, после чего исчезает принудительно.
+  const showSplashOverlay = !splashDismissed;
 
-  if (onlySplashPhase) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#0D0E10' }}>
-        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        <SplashLoader 
-          dataLoaded={dataLoaded} 
-          hasNick={!!(currentNick && currentNick.trim())}
-          hasAvatar={!!(currentAvatar && currentAvatar.trim())}
-          hasAvatarReady={avatarReadyForHome}
-          onComplete={() => {
-            if (dataLoaded) setProfileLoaded(true);
-            setSplashDismissed(true);
-          }} 
-        />
-      </View>
-    );
-  }
-
-  // Данные готовы: рисуем Home (уже с актуальной инфой), сверху — сплеш-оверлей, который только исчезает
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
     <SafeAreaView
@@ -5788,11 +5758,9 @@ const handleClearNick = useCallback(async () => {
     {showSplashOverlay && (
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
         <SplashLoader
-          dataLoaded={true}
+          dataLoaded={dataLoaded}
           hasNick={!!(currentNick && currentNick.trim())}
           hasAvatar={!!(currentAvatar && currentAvatar.trim())}
-          hasAvatarReady={avatarReadyForHome}
-          overlayMode
           onComplete={() => setSplashDismissed(true)}
         />
       </View>
