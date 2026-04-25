@@ -21,6 +21,8 @@ import android.os.VibratorManager
 import android.os.VibrationAttributes
 import android.content.res.Configuration
 import android.view.WindowManager
+import android.view.MotionEvent
+import android.view.View
 import android.widget.ImageButton
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
@@ -145,7 +147,12 @@ class IncomingCallActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.caller_name).text = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_unknown)
         findViewById<TextView>(R.id.call_subtitle).text = getString(R.string.incoming_call_title)
 
-        findViewById<ImageButton>(R.id.btn_accept).setOnClickListener {
+        val acceptButton = findViewById<ImageButton>(R.id.btn_accept)
+        val declineButton = findViewById<ImageButton>(R.id.btn_decline)
+        installPressFeedback(acceptButton)
+        installPressFeedback(declineButton)
+
+        acceptButton.setOnClickListener {
             clearIncomingTimeout()
             stopCallRingtone()
             stopRepeatingVibration()
@@ -153,7 +160,7 @@ class IncomingCallActivity : AppCompatActivity() {
             closeIncomingScreen()
         }
 
-        findViewById<ImageButton>(R.id.btn_decline).setOnClickListener {
+        declineButton.setOnClickListener {
             clearIncomingTimeout()
             stopCallRingtone()
             stopRepeatingVibration()
@@ -730,6 +737,28 @@ class IncomingCallActivity : AppCompatActivity() {
         isInForeground = false
         android.util.Log.e(TAG, "IncomingCallActivity closeIncomingScreen: setting isInForeground=false, calling finish()")
         finish()
+    }
+
+    private fun installPressFeedback(button: ImageButton) {
+        button.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> animateButtonPress(view, pressed = true)
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> animateButtonPress(view, pressed = false)
+            }
+            false
+        }
+    }
+
+    private fun animateButtonPress(view: View, pressed: Boolean) {
+        val scale = if (pressed) 0.86f else 1f
+        val alpha = if (pressed) 0.78f else 1f
+        view.animate()
+            .scaleX(scale)
+            .scaleY(scale)
+            .alpha(alpha)
+            .setDuration(if (pressed) 90L else 140L)
+            .start()
     }
 
     companion object {

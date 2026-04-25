@@ -13,6 +13,10 @@
   <!-- Круглые кнопки IncomingCallActivity: тёмный фон с прозрачностью + светлая рамка -->
   <color name="incoming_btn_accept_bg">#CC2F5C2F</color>
   <color name="incoming_btn_accept_border">#4CAF50</color>
+  <color name="incoming_btn_accept_bg_pressed">#F0427E42</color>
+  <color name="incoming_btn_accept_border_pressed">#7CFF8A</color>
   <color name="incoming_btn_decline_bg">#CC5C2F2F</color>
   <color name="incoming_btn_decline_border">#E57373</color>
+  <color name="incoming_btn_decline_bg_pressed">#F06E3636</color>
+  <color name="incoming_btn_decline_border_pressed">#FF9F9F</color>
 </resources>

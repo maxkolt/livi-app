@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
 import android.widget.ImageButton
@@ -111,8 +113,11 @@ class OutgoingCallActivity : AppCompatActivity() {
             timeoutHandler.postDelayed(callIdEmptyTimeoutRunnable!!, 20000L)
         }
 
-        findViewById<ImageButton>(R.id.btn_cancel).setOnClickListener {
-            LiviAppModule.emitOutgoingCallCanceledByUser()
+        val cancelButton = findViewById<ImageButton>(R.id.btn_cancel)
+        installPressFeedback(cancelButton)
+
+        cancelButton.setOnClickListener {
+            LiviAppModule.emitOutgoingCallCanceledByUser(callId)
             if (callId.isNotEmpty()) {
                 LiviOutgoingCallService.cancelCallOnServer(this, callId)
             }
@@ -248,6 +253,28 @@ class OutgoingCallActivity : AppCompatActivity() {
         callIdReadyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         callIdReadyReceiver = null
         super.onDestroy()
+    }
+
+    private fun installPressFeedback(button: ImageButton) {
+        button.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> animateButtonPress(view, pressed = true)
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> animateButtonPress(view, pressed = false)
+            }
+            false
+        }
+    }
+
+    private fun animateButtonPress(view: View, pressed: Boolean) {
+        val scale = if (pressed) 0.86f else 1f
+        val alpha = if (pressed) 0.78f else 1f
+        view.animate()
+            .scaleX(scale)
+            .scaleY(scale)
+            .alpha(alpha)
+            .setDuration(if (pressed) 90L else 140L)
+            .start()
     }
 
     companion object {

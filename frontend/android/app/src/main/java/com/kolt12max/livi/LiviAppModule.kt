@@ -1723,18 +1723,31 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     var outgoingCanceledByUserFlag: Boolean = false
       private set
 
+    @Volatile
+    private var outgoingCanceledByUserCallId: String? = null
+
     /** Вызвать из OutgoingCallActivity при нажатии X — React очистит состояние исходящего. */
     @JvmStatic
-    fun emitOutgoingCallCanceledByUser() {
+    fun emitOutgoingCallCanceledByUser(callId: String?) {
       outgoingCanceledByUserFlag = true
+      outgoingCanceledByUserCallId = callId?.takeIf { it.isNotBlank() }
       reactContextRef?.runOnUiQueueThread {
-        reactContextRef?.emitDeviceEvent("OutgoingCallCanceledByUser", null)
+        val params = Arguments.createMap()
+        if (!callId.isNullOrBlank()) {
+          params.putString("callId", callId)
+        }
+        reactContextRef?.emitDeviceEvent("OutgoingCallCanceledByUser", params)
       }
     }
 
     @JvmStatic
     fun getAndClearOutgoingCanceledByUserFlag(): Boolean {
       return outgoingCanceledByUserFlag.also { outgoingCanceledByUserFlag = false }
+    }
+
+    @JvmStatic
+    fun getAndClearOutgoingCanceledByUserCallId(): String? {
+      return outgoingCanceledByUserCallId.also { outgoingCanceledByUserCallId = null }
     }
 
     /** FCM call_accepted: сохранить callId до старта MainActivity; React вызовет getAndClearPendingCallAcceptedCallId и отправит call:getAccepted. */

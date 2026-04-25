@@ -470,12 +470,29 @@ function AppContent() {
   React.useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
     const emitter = new NativeEventEmitter();
-    const sub1 = emitter.addListener('OutgoingCallCanceledByUser', () => {
+    const repeatNativeCallSignal = (type: 'cancel' | 'decline', rawCallId?: string | null) => {
+      const callId = String(rawCallId || '').trim();
+      if (!callId) return;
+      const send = () => {
+        try {
+          if (type === 'cancel') cancelCall(callId);
+          else declineCall(callId);
+        } catch {}
+      };
+      send();
+      setTimeout(send, 150);
+      void ensureSocketConnected(2500)
+        .then(() => { send(); })
+        .catch(() => {});
+    };
+    const sub1 = emitter.addListener('OutgoingCallCanceledByUser', (payload?: { callId?: string | null }) => {
       (global as any).__outgoingCanceledByNativeRef = (global as any).__outgoingCanceledByNativeRef ?? { current: false };
       (global as any).__outgoingCanceledByNativeRef.current = true;
+      repeatNativeCallSignal('cancel', payload?.callId);
       try { emitCloseOutgoingCall(); } catch {}
     });
-    const sub2 = emitter.addListener('IncomingCallDeclinedByUser', () => {
+    const sub2 = emitter.addListener('IncomingCallDeclinedByUser', (payload?: { callId?: string | null }) => {
+      repeatNativeCallSignal('decline', payload?.callId);
       incomingCallIdRef.current = null;
       setIncoming(null);
       try { setIncomingCallScreenVisible(false); } catch {}
@@ -2090,6 +2107,15 @@ function AppContent() {
           const LiviAppModule = NativeModules.LiviAppModule;
           LiviAppModule?.getAndClearOutgoingCanceledByUserFlag?.()?.then?.((flag: boolean) => {
             if (flag) try { emitCloseOutgoingCall(); } catch {}
+          });
+          LiviAppModule?.getAndClearOutgoingCanceledByUserCallId?.()?.then?.((callId: string | null) => {
+            if (callId) {
+              try { cancelCall(callId); } catch {}
+              setTimeout(() => { try { cancelCall(callId); } catch {} }, 150);
+              void ensureSocketConnected(2500)
+                .then(() => { try { cancelCall(callId); } catch {} })
+                .catch(() => {});
+            }
           });
           // FCM call_accepted вывел приложение — запросить call:accepted у сервера → переход на VideoCall
           LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
