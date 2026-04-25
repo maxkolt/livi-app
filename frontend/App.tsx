@@ -27,6 +27,7 @@ import RandomChatScreen from "./screens/RandomChatScreen";
 import ChatScreen from "./screens/ChatScreen";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
+import SystemPiPCaptureHost from "./src/pip/SystemPiPCaptureHost";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native';
@@ -310,6 +311,31 @@ function AppContent() {
   // Ref для различения в onEnd: мы принимающий (отклонили входящий) или звонящий (отменили исходящий)
   const incomingCallIdRef = React.useRef<string | null>(null);
   const expectedCallAcceptedRef = React.useRef<{ callId: string; reason: string; expiresAt: number } | null>(null);
+  const incomingAnswerTransitionTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setIncomingAnswerTransitionGuard = React.useCallback((callId?: string | null, active = true, ttlMs = 10000) => {
+    const g = global as any;
+    g.__incomingAnswerTransitionRef = g.__incomingAnswerTransitionRef || { current: null as null | { callId: string; expiresAt: number } };
+    if (incomingAnswerTransitionTimerRef.current) {
+      clearTimeout(incomingAnswerTransitionTimerRef.current);
+      incomingAnswerTransitionTimerRef.current = null;
+    }
+    if (!active) {
+      g.__incomingAnswerTransitionRef.current = null;
+      return;
+    }
+    const normalizedCallId = String(callId || '').trim();
+    if (!normalizedCallId) return;
+    g.__incomingAnswerTransitionRef.current = {
+      callId: normalizedCallId,
+      expiresAt: Date.now() + ttlMs,
+    };
+    incomingAnswerTransitionTimerRef.current = setTimeout(() => {
+      if (g.__incomingAnswerTransitionRef?.current?.callId === normalizedCallId) {
+        g.__incomingAnswerTransitionRef.current = null;
+      }
+      incomingAnswerTransitionTimerRef.current = null;
+    }, ttlMs);
+  }, []);
   const rememberExpectedCallAccepted = React.useCallback((callId: string, reason: string, ttlMs = 15000) => {
     const normalizedCallId = String(callId || '').trim();
     if (!normalizedCallId) return;
@@ -414,6 +440,7 @@ function AppContent() {
   const completeAndroidIncomingAnswer = React.useCallback(async (from: string, callId: string) => {
     logger.info('[App] Completing incoming answer', { callId, from });
     rememberExpectedCallAccepted(callId, 'incoming-answer');
+    setIncomingAnswerTransitionGuard(callId, true);
     if (Platform.OS === 'android') {
       try { stopIncomingCallRingtoneAndVibration(); } catch {}
       try { stopIncomingCallAlert(); } catch {}
@@ -421,10 +448,23 @@ function AppContent() {
       try { sendCallAnsweredBroadcast(callId); } catch {}
     }
     await openAnswerCallScreen(from, callId);
-  }, [rememberExpectedCallAccepted]);
+  }, [rememberExpectedCallAccepted, setIncomingAnswerTransitionGuard]);
 
   const completeAndroidIncomingAnswerRef = React.useRef(completeAndroidIncomingAnswer);
   completeAndroidIncomingAnswerRef.current = completeAndroidIncomingAnswer;
+
+  React.useEffect(() => {
+    return () => {
+      if (incomingAnswerTransitionTimerRef.current) {
+        clearTimeout(incomingAnswerTransitionTimerRef.current);
+        incomingAnswerTransitionTimerRef.current = null;
+      }
+      try {
+        const g = global as any;
+        if (g.__incomingAnswerTransitionRef) g.__incomingAnswerTransitionRef.current = null;
+      } catch {}
+    };
+  }, []);
 
   // События от нативных экранов: инициатор нажал X на исходящем / получатель нажал X на входящем — очищаем состояние
   React.useEffect(() => {
@@ -474,6 +514,20 @@ function AppContent() {
     });
     const sub4 = emitter.addListener('EndCallFromPiP', () => {
       console.log('[App] [PiP] 📵 EndCallFromPiP получен от натива (нажата кнопка «Завершить» в системном PiP)');
+      try {
+        const g = (global as any);
+        const now = Date.now();
+        const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
+        const returnToCallInFlight = g.__pipReturnToCallInFlightRef?.current === true;
+        if (returnToCallInFlight || now < returningUntil) {
+          console.log('[App] [PiP] ignoring EndCallFromPiP during system PiP return window', {
+            returnToCallInFlight,
+            returningUntil,
+            now,
+          });
+          return;
+        }
+      } catch (_) {}
       try {
         const g = (global as any);
         g.__endingFromPiPButtonRef = g.__endingFromPiPButtonRef || { current: false };
@@ -540,6 +594,8 @@ function AppContent() {
         const g = (global as any);
         g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
         g.__disableSystemPiPUntilRef.current = Date.now() + 6000;
+        g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
+        g.__enterSystemPiPAfterVideoCallRef.current = null;
         NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
         NativeModules.LiviAppModule?.requestExitSystemPiP?.();
       } catch (_) {}
@@ -595,6 +651,7 @@ function AppContent() {
           try {
             await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
             rememberExpectedCallAccepted(callId, 'callkeep-answer');
+            setIncomingAnswerTransitionGuard(callId, true);
             acceptCall(callId);
           } catch {}
           reportAnswerIncomingCall(callId);
@@ -1839,6 +1896,7 @@ function AppContent() {
       setAndroidPipGuardTick((n) => n + 1);
       // Очищаем сохранённый call:accepted, чтобы следующий звонок не подхватил старый payload (логи: «Found pending call:accepted» со старым callId).
       if (g.__pendingCallAcceptedRef) g.__pendingCallAcceptedRef.current = null;
+      if (g.__incomingAnswerTransitionRef) g.__incomingAnswerTransitionRef.current = null;
       expectedCallAcceptedRef.current = null;
       // Сразу закрываем системный PiP у собеседника (до любых очисток), иначе окно успевает показать лоадер.
       if (Platform.OS === 'android') {
@@ -2597,6 +2655,7 @@ function AppContent() {
 
           {/* In-app PiP не показывается на экране видеозвонка (VideoCall/RandomChat) — только на Home и др. */}
           <PiPOverlay currentRouteName={routeName} />
+          <SystemPiPCaptureHost />
 
           {/* Android: запрос разрешения «Отображение поверх других окон» при первом заходе (без Alert) */}
           {Platform.OS === 'android' && (
@@ -2874,6 +2933,8 @@ export default function App() {
                 if (typeof upd === 'function') {
                   upd({
                     pendingSystemPiP: true,
+                    systemPiPCaptureActive: true,
+                    systemPiPCaptureRequestId: Date.now(),
                     allowVideoRender: true,
                     ...(size ? { decorSizeForPiP: size } : {}),
                   });
@@ -2882,7 +2943,7 @@ export default function App() {
               setTimeout(() => {
                 try {
                   const upd2 = (global as any).__pipUpdateStateRef?.current;
-                  if (typeof upd2 === 'function') upd2({ pendingSystemPiP: false, decorSizeForPiP: null });
+                  if (typeof upd2 === 'function') upd2({ pendingSystemPiP: false, systemPiPCaptureActive: false, decorSizeForPiP: null });
                 } catch (_) {}
               }, 1500);
               setTimeout(() => {
@@ -2914,8 +2975,14 @@ export default function App() {
         const params = (global as any).__currentCallPiPParamsRef?.current;
         const callId = params?.callId ?? (typeof session.getCallId === 'function' ? session.getCallId() : null);
         const roomId = params?.roomId ?? (typeof session.getRoomId === 'function' ? session.getRoomId() : null);
+        const g = global as any;
+        const now = Date.now();
+        const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
+        const disableUntil = Number(g.__disableSystemPiPUntilRef?.current || 0);
         if (currentRoute !== 'VideoCall' && callId && roomId) {
-          const g = global as any;
+          if (now < returningUntil || now < disableUntil) {
+            return true;
+          }
           g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
           g.__enterSystemPiPAfterVideoCallRef.current = {
             callId,

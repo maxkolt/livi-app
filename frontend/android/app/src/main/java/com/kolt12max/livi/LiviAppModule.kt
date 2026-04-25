@@ -592,6 +592,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     LiviAppModule.setInAppPiPVisibleForSystemPiPStatic(visible)
   }
 
+  /** Координаты маленького in-app PiP в пикселях окна; используются как sourceRect при Home -> system PiP. */
+  @ReactMethod
+  fun setInAppPiPSourceRectForSystemPiP(left: Double, top: Double, width: Double, height: Double) {
+    LiviAppModule.setInAppPiPSourceRectForSystemPiPStatic(left.toInt(), top.toInt(), width.toInt(), height.toInt())
+  }
+
   /** Флаг «идёт завершение звонка»: при true не входить в системный PiP в onUserLeaveHint (чтобы не выкидывать на главный экран при принятии с блокировки). */
   @ReactMethod
   fun setEndingCallInProgress(inProgress: Boolean) {
@@ -605,13 +611,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     activity.runOnUiThread {
       try {
-        // Как в onUserLeaveHint(Home): сначала сигнализируем JS подготовить fullscreen PiP UI,
-        // затем пробуем несколько раз с короткими задержками, чтобы Android захватил уже
-        // подготовленный кадр (без случайного зума при сценарии Back).
-        val root = activity.window?.decorView
-        val decorW = root?.width ?: 0
-        val decorH = root?.height ?: 0
-        emitAboutToEnterSystemPiP(decorW, decorH)
+        Log.i(
+          NAME,
+          "requestEnterPictureInPicture invoked activity=${activity.javaClass.simpleName} isInPiP=${activity.isInPictureInPictureMode} hasFocus=${activity.window?.decorView?.hasWindowFocus() == true}"
+        )
+        // JS вызывает этот метод только после того, как dedicated SystemPiPCaptureHost уже
+        // отрисован и готов стать единственным источником кадра для system PiP.
         val ratio = Rational(9, 16)
         val builder = PictureInPictureParams.Builder()
           .setAspectRatio(ratio)
@@ -628,6 +633,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         val tryEnterPiP = Runnable {
           try {
             if (activity.isInPictureInPictureMode) return@Runnable
+            Log.i(
+              NAME,
+              "requestEnterPictureInPicture attempt isInPiP=${activity.isInPictureInPictureMode} hasFocus=${activity.window?.decorView?.hasWindowFocus() == true}"
+            )
             if (activity.enterPictureInPictureMode(params)) {
               Log.d("LiviAppModule", "Entered Picture-in-Picture mode (requested from JS)")
             } else {
@@ -1141,6 +1150,27 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     internal fun setInAppPiPVisibleForSystemPiPStatic(value: Boolean) {
       inAppPiPVisibleForSystemPiP = value
+    }
+
+    @Volatile
+    private var inAppPiPSourceRectForSystemPiP: Rect? = null
+    @JvmStatic
+    internal fun setInAppPiPSourceRectForSystemPiPStatic(left: Int, top: Int, width: Int, height: Int) {
+      if (width <= 0 || height <= 0) {
+        inAppPiPSourceRectForSystemPiP = null
+        return
+      }
+      inAppPiPSourceRectForSystemPiP = Rect(left, top, left + width, top + height)
+    }
+    @JvmStatic
+    fun getInAppPiPSourceRectForSystemPiP(rootWidth: Int, rootHeight: Int): Rect? {
+      val r = inAppPiPSourceRectForSystemPiP ?: return null
+      if (rootWidth <= 0 || rootHeight <= 0) return null
+      val left = r.left.coerceIn(0, rootWidth - 1)
+      val top = r.top.coerceIn(0, rootHeight - 1)
+      val right = r.right.coerceIn(left + 1, rootWidth)
+      val bottom = r.bottom.coerceIn(top + 1, rootHeight)
+      return Rect(left, top, right, bottom)
     }
 
     /** Пока true — не входить в системный PiP в onUserLeaveHint (JS ставит при завершении звонка, сбрасывает после). */

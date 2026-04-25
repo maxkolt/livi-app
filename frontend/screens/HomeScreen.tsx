@@ -2725,6 +2725,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     try {
       const g = global as any;
       const session = g.__webrtcSessionRef?.current;
+      const incomingAnswerTransition = g.__incomingAnswerTransitionRef?.current;
+      const incomingAnswerTransitionActive =
+        !!incomingAnswerTransition &&
+        Number(incomingAnswerTransition.expiresAt || 0) > Date.now();
       const sessionNotEnded =
         !!session &&
         (typeof session.isEnded === 'function'
@@ -2739,6 +2743,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         g.__videoCallActiveRef?.current === true ||
         g.__pipVisibleRef?.current === true ||
         g.__pipInSystemModeRef?.current === true ||
+        incomingAnswerTransitionActive ||
         sessionNotEnded ||
         hasAnyCallIds ||
         calling.visible ||
@@ -2755,6 +2760,35 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (tab !== 'friends') return;
     syncSelfPresenceOnlineIfIdle('friends-tab');
   }, [tab, syncSelfPresenceOnlineIfIdle]);
+
+  useEffect(() => {
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const scheduleIdleSync = (reason: string) => {
+      if (!getCurrentUserId()) return;
+      [250, 1200].forEach((delayMs) => {
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          syncSelfPresenceOnlineIfIdle(reason);
+          void loadFriends();
+        }, delayMs);
+        timers.add(timer);
+      });
+    };
+
+    const offIdentity = onCurrentUserId((id) => {
+      if (id) scheduleIdleSync('identity-ready');
+    });
+    const offConnected = onConnected(() => {
+      scheduleIdleSync('socket-connected');
+    });
+
+    return () => {
+      offIdentity?.();
+      offConnected?.();
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
+    };
+  }, [loadFriends, syncSelfPresenceOnlineIfIdle]);
 
   /* ===== app resume ===== */
   const appStateRef = useRef(AppState.currentState);

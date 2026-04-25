@@ -82,6 +82,10 @@ type PiPState = {
   inSystemPiPMode: boolean;
   /** true = скоро войдём в системный PiP (VideoCall рисует компактный вид перед входом). */
   pendingSystemPiP: boolean;
+  /** Выделенный fullscreen-host для system PiP capture. */
+  systemPiPCaptureActive: boolean;
+  /** Уникальный id запроса system PiP capture, чтобы вход выполнялся ровно один раз на подготовку. */
+  systemPiPCaptureRequestId: number;
   /** При возврате из системного PiP скрываем оверлей на 1 кадр, чтобы он не мелькнул поверх экрана видеозвонка. */
   suppressOverlayForReturn: boolean;
   /** Размеры decorView с натива для совпадения overlay 9:16 с sourceRect (без чёрных полос в системном PiP). */
@@ -117,6 +121,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const [isRemoteMuted, setIsRemoteMuted] = useState(false);
   const [inSystemPiPMode, setInSystemPiPMode] = useState(false);
   const [pendingSystemPiP, setPendingSystemPiP] = useState(false);
+  const [systemPiPCaptureActive, setSystemPiPCaptureActive] = useState(false);
+  const [systemPiPCaptureRequestId, setSystemPiPCaptureRequestId] = useState(0);
   // Эквалайзер отключен
 
   const localStreamRef = useRef<MediaStreamLike | null>(null);
@@ -248,6 +254,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         if (shouldIgnoreLateEnter) {
           setInSystemPiPMode(false);
           setPendingSystemPiP(false);
+          setSystemPiPCaptureActive(false);
+          setSystemPiPCaptureRequestId(0);
           setDecorSizeForPiP(null);
           try {
             g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
@@ -263,6 +271,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         setInSystemPiPMode(inPiP);
         if (!inPiP) {
           setDecorSizeForPiP(null);
+          setSystemPiPCaptureActive(false);
+          setSystemPiPCaptureRequestId(0);
           // Выход из системного PiP: сразу подавляем оверлей, чтобы он не мелькнул маленьким окном поверх экрана видеозвонка.
           setSuppressOverlayForReturn(true);
         }
@@ -273,6 +283,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         } catch (_) {}
         if (inPiP) {
           setPendingSystemPiP(false);
+          setSystemPiPCaptureActive(false);
+          setSystemPiPCaptureRequestId(0);
           const session = g.__webrtcSessionRef?.current;
           if (session && typeof (session as any).enterPiP === 'function') (session as any).enterPiP();
           // КРИТИЧНО: В PiP система часто переключает звук с громкого динамика на разговорный (earpiece) — становится тихо.
@@ -367,14 +379,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // При deferVisible (обычно Android Back → навигация назад) можно включать видео сразу:
     // VideoCall уже уходит, поэтому риска "двух RTCView на один stream" практически нет,
     // и PiP появляется сразу с видео собеседника (без мигания плейсхолдера).
-    if (Platform.OS === 'android' && p.deferVisible && p.remoteStream) {
+    if (Platform.OS === 'android' && p.deferVisible) {
       try {
         if (allowVideoRenderTimeoutRef.current) {
           clearTimeout(allowVideoRenderTimeoutRef.current);
           allowVideoRenderTimeoutRef.current = null;
         }
       } catch {}
-      setAllowVideoRender(true);
+      if (p.remoteStream) setAllowVideoRender(true);
+      // Prewarm dedicated system-PiP capture host while in-app PiP is visible.
+      // On slower devices this avoids mounting the fullscreen RTC surface only after Home,
+      // which can be too late for Android to accept enterPictureInPictureMode().
+      setSystemPiPCaptureActive(true);
+      setSystemPiPCaptureRequestId(0);
     }
     // localCamOn — источник истины для восстановления после PiP.
     // Если явно не передали, пытаемся вычислить из localStream (best-effort).
@@ -473,6 +490,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
     } catch {}
     setVisible(false);
+    setPendingSystemPiP(false);
+    setSystemPiPCaptureActive(false);
+    setSystemPiPCaptureRequestId(0);
   }, []);
 
   useEffect(() => {
@@ -553,24 +573,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
     const sub = emitter.addListener('AboutToEnterSystemPiP', (payload: { width?: number; height?: number } | null) => {
       const g = (global as any);
-      // КРИТИЧНО (релиз): Сразу помечаем PiP ДО любых проверок, чтобы stopSpeaker() в cleanup useAudioRouting
-      // не успел вызвать InCallManager.stop() до обработки события (в релизе порядок событий может отличаться).
       try {
-        g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-        g.__pipInSystemModeRef.current = true;
-        g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
-        g.__pipVisibleRef.current = true;
         g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
         g.__enterSystemPiPAfterVideoCallRef.current = null;
       } catch (_) {}
       // Не входить в PiP без нажатия пользователя: при завершении звонка (переход на Home) onUserLeaveHint может сработать раньше нативного флага.
       if (g.__endingCallInProgressRef?.current === true) {
-        try { g.__pipInSystemModeRef.current = false; g.__pipVisibleRef.current = false; } catch (_) {}
         return;
       }
       const session = g.__webrtcSessionRef?.current;
       if (session && typeof (session as any).isEnded === 'function' && (session as any).isEnded()) {
-        try { g.__pipInSystemModeRef.current = false; g.__pipVisibleRef.current = false; } catch (_) {}
         return;
       }
       try {
@@ -578,8 +590,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 2000;
       } catch (_) {}
 
-      // Сразу включаем layout «только видео собеседника», чтобы к моменту enterPictureInPictureMode() (через 80ms на нативе) кадр был правильный.
+      // Включаем отдельный fullscreen-host для system PiP capture. Native войдёт в PiP
+      // только после подтверждения готовности этого host, чтобы не захватить маленький in-app PiP.
+      const requestId = g.__pipVisibleRef?.current === true ? Date.now() : 0;
+      console.log('[PiPContext] AboutToEnterSystemPiP received', {
+        payload,
+        pipVisibleSync: g.__pipVisibleRef?.current === true,
+        requestId,
+        hasSession: !!session,
+        hasRemoteStream: !!remoteStreamRef.current,
+      });
       setPendingSystemPiP(true);
+      setSystemPiPCaptureActive(true);
+      setSystemPiPCaptureRequestId(requestId);
       const apply = (decorSize: { width: number; height: number } | null) => {
         console.log('[PiPContext] AboutToEnterSystemPiP apply', { decorSize });
         // Не применять размер окна PiP (типично ~334x594) — иначе при повторном входе layout/зум ломается.
@@ -595,15 +618,34 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         if (!NativeModules.LiviAppModule?.getDecorViewSize) apply(null);
       }
       setTimeout(() => {
-        setPendingSystemPiP(false);
-        setDecorSizeForPiP(null);
         try {
+          const inPiP = g.__pipInSystemModeRef?.current === true;
           const until = g.__systemPiPEntryInProgressUntilRef?.current;
-          if (typeof until === 'number' && until <= Date.now()) {
+          if (inPiP) {
+            console.log('[PiPContext] keep system PiP capture state: already in PiP');
+            return;
+          }
+          if (typeof until === 'number' && until > Date.now()) {
+            console.log('[PiPContext] keep system PiP capture state: entry window still active', {
+              until,
+              now: Date.now(),
+            });
+            return;
+          }
+          console.log('[PiPContext] reset system PiP capture state after timeout', {
+            requestId,
+            inPiP,
+            until,
+          });
+          setPendingSystemPiP(false);
+          setSystemPiPCaptureActive(false);
+          setSystemPiPCaptureRequestId(0);
+          setDecorSizeForPiP(null);
+          if (typeof until === 'number') {
             g.__systemPiPEntryInProgressUntilRef.current = 0;
           }
         } catch (_) {}
-      }, 1500);
+      }, 2200);
 
       let params = g.__currentCallPiPParamsRef?.current;
       if (!params && session) {
@@ -652,8 +694,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // Параметры для навигации берутся из state (callId, roomId, lastNavParams), при null — из __currentCallPiPParamsRef
   // и __pipLastContextRef (см. комментарий выше), чтобы возврат работал даже при гонках.
   const returnToCall = useCallback(() => {
+    const g = (global as any);
+    const nav = g.__navRef;
+    const currentRouteName = nav?.getCurrentRoute?.()?.name as string | undefined;
+    // returnToCall вызывается только по SystemPiPExpanded из App.tsx.
+    // Это явный сценарий "развернуть звонок из system PiP", поэтому нужно
+    // всегда возвращать пользователя на полноэкранный VideoCall, даже если
+    // под system PiP сейчас открыт Home после Back -> in-app PiP -> Home.
+    const shouldNavigateToVideoCall = true;
     try {
-      const g = (global as any);
       g.__lastReturnToCallAtRef = g.__lastReturnToCallAtRef || { current: 0 };
       const now = Date.now();
       if (now - Number(g.__lastReturnToCallAtRef.current || 0) < 1200) {
@@ -681,12 +730,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     }
     returnToCallInFlightRef.current = true;
     try {
-      const g = global as any;
       g.__pipReturnToCallInFlightRef = g.__pipReturnToCallInFlightRef || { current: false };
       g.__pipReturnToCallInFlightRef.current = true;
     } catch (_) {}
-    // Сразу подавляем оверлей (чтобы не мелькнул поверх экрана видеозвонка при навигации).
-    // ВАЖНО: не оставляем его включённым навсегда — иначе in-app PiP может не показаться на Home на некоторых девайсах.
+    // При возвращении в VideoCall подавляем in-app overlay, чтобы он не мелькнул поверх нового экрана.
     setSuppressOverlayForReturn(true);
     const clearSuppressLater = () => {
       // Даем навигации/перерисовке 1-2 кадра и отпускаем подавление.
@@ -711,6 +758,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       g.__returningFromSystemPiPUntilRef.current = Date.now() + 4000;
       g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
       g.__systemPiPEntryInProgressUntilRef.current = 0;
+      g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
+      g.__enterSystemPiPAfterVideoCallRef.current = null;
     } catch (_) {}
     console.log('🔥🔥🔥 [PiPContext] returnToCall вызван', { callId, roomId, lastNavParams });
 
@@ -728,11 +777,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     // «только удалённое видео на весь экран» — иначе после тапа по PiP экран выглядит «другое».
     setInSystemPiPMode(false);
     setPendingSystemPiP(false);
+    setSystemPiPCaptureActive(false);
+    setSystemPiPCaptureRequestId(0);
     if (Platform.OS === 'android') {
       try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
     }
 
-    const g = (global as any);
     const sessionForPipeState = g.__webrtcSessionRef?.current;
     const paramsRef = g.__currentCallPiPParamsRef?.current;
     const lastCtx = g.__pipLastContextRef?.current;
@@ -756,10 +806,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       clearSuppressLater();
       return;
     }
-
-    // КРИТИЧНО: Используем навигацию напрямую через глобальную ссылку (как в эталонном файле)
-    // Это гарантирует правильную навигацию с параметрами resume и fromPiP
-    const nav = g.__navRef;
 
     const doNavigate = (cid: string, rid: string, navParams?: any) => {
       // Сразу скрываем PiP, чтобы не показывать «приветствие с PiP» перед переходом на VideoCall
@@ -791,7 +837,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             routes: [{ name: 'Home' as any }, { name: 'VideoCall' as any, params }],
           })
         );
-        console.log('[PiPContext] ✅ Navigated to VideoCall with resume params', { params });
+        console.log('[PiPContext] ✅ Navigated to VideoCall with resume params', {
+          currentRouteName,
+          params,
+        });
       } catch (e) {
         console.error('[PiPContext] Navigation error:', e);
         onReturnToCall?.(cid, rid);
@@ -880,6 +929,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     setPartnerAvatarUrl(undefined);
     setLastNavParams(undefined);
     setLocalCamOn(undefined);
+    setPendingSystemPiP(false);
+    setSystemPiPCaptureActive(false);
+    setSystemPiPCaptureRequestId(0);
   }, [callId, roomId, onEndCall]);
 
   // Обработчик завершения звонка для пользователя в PiP (в т.ч. когда собеседник завершил из системного PiP).
@@ -959,6 +1011,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.allowVideoRender !== undefined) setAllowVideoRender(!!patch.allowVideoRender);
     if (patch.inSystemPiPMode !== undefined) setInSystemPiPMode(!!patch.inSystemPiPMode);
     if (patch.pendingSystemPiP !== undefined) setPendingSystemPiP(!!patch.pendingSystemPiP);
+    if (patch.systemPiPCaptureActive !== undefined) setSystemPiPCaptureActive(!!patch.systemPiPCaptureActive);
+    if (patch.systemPiPCaptureRequestId !== undefined) setSystemPiPCaptureRequestId(Number(patch.systemPiPCaptureRequestId || 0));
     if (patch.decorSizeForPiP !== undefined) setDecorSizeForPiP(patch.decorSizeForPiP ?? null);
     if (patch.lastNavParams !== undefined) setLastNavParams(patch.lastNavParams);
     // потоки через ref:
@@ -1041,12 +1095,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     allowVideoRender,
     inSystemPiPMode,
     pendingSystemPiP,
+    systemPiPCaptureActive,
+    systemPiPCaptureRequestId,
     suppressOverlayForReturn,
     decorSizeForPiP,
     updatePiPState,
   }), [
     visible, callId, roomId, partnerName, partnerAvatarUrl,
-    isMuted, isRemoteMuted, localCamOn, remoteCamOn, pipPos, allowVideoRender, inSystemPiPMode, pendingSystemPiP, suppressOverlayForReturn, decorSizeForPiP, remoteStreamVersion,
+    isMuted, isRemoteMuted, localCamOn, remoteCamOn, pipPos, allowVideoRender, inSystemPiPMode, pendingSystemPiP, systemPiPCaptureActive, systemPiPCaptureRequestId, suppressOverlayForReturn, decorSizeForPiP, remoteStreamVersion,
     showPiP, hidePiP, updatePiPPosition, returnToCall, endCall, updatePiPState
   ]);
 

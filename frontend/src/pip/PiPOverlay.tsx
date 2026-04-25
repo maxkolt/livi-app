@@ -17,9 +17,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { PiPContext } from './PiPContext';
 import { logger } from '../../utils/logger';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
-import { RemoteVideo } from '../../components/VideoChat/shared/RemoteVideo';
 import AwayPlaceholder from '../../components/AwayPlaceholder';
-import { defaultLang } from '../../utils/i18n';
 
 const PIP_W = 150;
 const PIP_H = 260;
@@ -93,6 +91,8 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const allowVideoRender = ctx?.allowVideoRender ?? false;
   const inSystemPiPMode = ctx?.inSystemPiPMode ?? false;
   const pendingSystemPiP = ctx?.pendingSystemPiP ?? false;
+  const systemPiPCaptureActive = ctx?.systemPiPCaptureActive ?? false;
+  const systemPiPCaptureRequestId = ctx?.systemPiPCaptureRequestId ?? 0;
   const suppressOverlayForReturn = ctx?.suppressOverlayForReturn ?? false;
   const pipPos = ctx?.pipPos ?? { x: 12, y: 120 };
   const updatePiPPosition = ctx?.updatePiPPosition ?? (() => {});
@@ -105,7 +105,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const toggleCamera = useCallback(() => {
     try {
       const toggleFromVideoCall = (global as any).__toggleCamRef?.current;
-      if (typeof toggleFromVideoCall === 'function') {
+      if (onVideoCallScreen && typeof toggleFromVideoCall === 'function') {
         toggleFromVideoCall();
         return;
       }
@@ -117,12 +117,12 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
         session.toggleCam().catch(() => {});
       }
     } catch (_) {}
-  }, [localCamOn]);
+  }, [localCamOn, onVideoCallScreen]);
 
   const toggleMic = useCallback(() => {
     try {
       const toggleFromVideoCall = (global as any).__toggleMicRef?.current;
-      if (typeof toggleFromVideoCall === 'function') {
+      if (onVideoCallScreen && typeof toggleFromVideoCall === 'function') {
         toggleFromVideoCall();
         return;
       }
@@ -133,14 +133,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
         session.toggleMic();
       }
     } catch (_) {}
-  }, [isMuted]);
+  }, [isMuted, onVideoCallScreen]);
 
-  // Системный PiP: overlay = область контента (window), блок 9:16 по центру — совпадает с buildSystemPiPSourceRect на нативе.
   const dims = Dimensions.get('window');
   const W = typeof dims?.width === 'number' && dims.width > 0 ? dims.width : 400;
   const H = typeof dims?.height === 'number' && dims.height > 0 ? dims.height : 700;
-  const pipRatioW = 9;
-  const pipRatioH = 16;
 
   const onVideoCallScreen = isVideoCallScreen(currentRouteName);
   const isSystemPiPLayout = pendingSystemPiP || inSystemPiPMode;
@@ -151,12 +148,14 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     onVideoCallScreen &&
     (global as any).__leavingVideoCallByBackRef?.current === true;
   // На экране VideoCall обычный in-app PiP не показываем. Исключение — явный уход по Back,
-  // где маленькое окно нужно показать сразу. Для системного PiP по Back/leaveHint тоже оставляем
-  // рендер оверлея с блоком 9:16, иначе в кадр попадёт экран звонка (чёрные/синие полосы).
+  // где маленькое окно нужно показать сразу. Для system PiP capture теперь используется
+  // отдельный fullscreen-host, поэтому обычный overlay в этот момент скрываем полностью.
   const shouldShowOverlay =
     visible &&
+    !(systemPiPCaptureActive && systemPiPCaptureRequestId > 0) &&
     !suppressOverlayForReturn &&
-    (!onVideoCallScreen || isSystemPiPLayout || showingInAppPiPDuringBackTransition);
+    !isSystemPiPLayout &&
+    (!onVideoCallScreen || showingInAppPiPDuringBackTransition);
 
   const translate = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const dragStartPos = useRef({ x: 0, y: 0 });
@@ -218,46 +217,6 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     allowVideoRender &&
     remoteStream &&
     (Platform.OS !== 'ios' || (streamURL && streamURL.length > 0));
-  const session = (global as any).__webrtcSessionRef?.current;
-
-  // Системный PiP: только видео собеседника по центру 9:16, без лишних элементов.
-  if (isSystemPiPLayout) {
-    const pipBlockW = W;
-    const pipBlockH = (W * pipRatioH) / pipRatioW;
-    const pipTop = Math.max(0, (H - pipBlockH) / 2);
-    return (
-      <PiPErrorBoundary onReturnRef={returnToCallRef}>
-        <View pointerEvents="box-none" style={[styles.overlay, { width: W, height: H }]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={returnToCall} android_ripple={{ color: 'rgba(255,255,255,0.08)', borderless: true }}>
-            {canRenderVideo && remoteStream ? (
-              <View style={[styles.pipSystemVideoBlock, { left: 0, top: pipTop, width: pipBlockW, height: pipBlockH }]}>
-                <RemoteVideo
-                  remoteStream={remoteStream as any}
-                  remoteCamOn={remoteCamOn}
-                  remoteMuted={false}
-                  isInactiveState={false}
-                  wasFriendCallEnded={false}
-                  started={true}
-                  loading={false}
-                  remoteViewKey={0}
-                  showFriendBadge={false}
-                  lang={defaultLang}
-                  session={session}
-                  partnerInPiP={false}
-                  forceTextureView={true}
-                  objectFit="contain"
-                />
-              </View>
-            ) : (
-              <View style={[styles.pipSystemVideoBlock, { left: 0, top: pipTop, width: pipBlockW, height: pipBlockH }]}>
-                <View style={styles.placeholder} />
-              </View>
-            )}
-          </Pressable>
-        </View>
-      </PiPErrorBoundary>
-    );
-  }
 
   // In-app PiP: маленькое перетаскиваемое окно
   return (
@@ -345,7 +304,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                       stream={remoteStream}
                       streamURL={streamURL}
                       style={styles.rtcView}
-                      objectFit="cover"
+                      objectFit="contain"
                       mirror={false}
                       {...({
                         renderToHardwareTextureAndroid: true,

@@ -824,8 +824,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
     const pending = g.__enterSystemPiPAfterVideoCallRef.current;
     if (!pending) return;
+    const now = Date.now();
+    const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
+    const disableUntil = Number(g.__disableSystemPiPUntilRef?.current || 0);
+    if (now < returningUntil || now < disableUntil) {
+      g.__enterSystemPiPAfterVideoCallRef.current = null;
+      logger.info('[VideoCall] Dropping pending system PiP entry during return guard', {
+        returningUntil,
+        disableUntil,
+      });
+      return;
+    }
     const pendingAgeMs =
-      typeof pending?.requestedAt === 'number' ? Date.now() - pending.requestedAt : Number.POSITIVE_INFINITY;
+      typeof pending?.requestedAt === 'number' ? now - pending.requestedAt : Number.POSITIVE_INFINITY;
     if (pending?.source !== 'back-root' || pendingAgeMs > 2500) {
       g.__enterSystemPiPAfterVideoCallRef.current = null;
       logger.info('[VideoCall] Ignoring stale system PiP transition request', {
@@ -907,7 +918,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const apply = (size: { width: number; height: number } | null) => {
       try {
         if (typeof upd === 'function') {
-          upd({ pendingSystemPiP: true, allowVideoRender: true, ...(size ? { decorSizeForPiP: size } : {}) });
+          upd({
+            pendingSystemPiP: true,
+            systemPiPCaptureActive: true,
+            systemPiPCaptureRequestId: Date.now(),
+            allowVideoRender: true,
+            ...(size ? { decorSizeForPiP: size } : {}),
+          });
+          return;
         }
       } catch (_) {}
       setTimeout(() => {
@@ -1243,6 +1261,134 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }, 0);
     return true;
   }, [clearSessionRefs, getGlobalCleanupKey, isPipOverlayVisibleSync, markGlobalCleanupDone, markGlobalTeardownScheduled, wasGlobalCleanupDone, wasGlobalTeardownScheduled]);
+
+  const getSystemPiPReturnGuard = useCallback(() => {
+    const g = global as any;
+    const now = Date.now();
+    const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
+    const disableUntil = Number(g.__disableSystemPiPUntilRef?.current || 0);
+    return {
+      now,
+      returningUntil,
+      disableUntil,
+      active: now < returningUntil || now < disableUntil,
+    };
+  }, []);
+
+  const cleanupFunction = useCallback(() => {
+    logger.info('[VideoCall] 🔥 cleanupFunction вызвана из глобальной ссылки (PiP/фон)');
+    if (!isCleanupOwner()) {
+      logger.info('[VideoCall] cleanupFunction skipped - cleanup owner changed', {
+        instanceId: screenInstanceIdRef.current,
+        cleanupOwner: (global as any).__endCallCleanupOwnerRef?.current ?? null,
+      });
+      return;
+    }
+
+    const { active, returningUntil, disableUntil } = getSystemPiPReturnGuard();
+    if (active) {
+      logger.info('[VideoCall] cleanupFunction skipped - recent system PiP return guard active', {
+        returningUntil,
+        disableUntil,
+      });
+      return;
+    }
+
+    const currentSession = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+    const cleanupCallId = currentSession?.getCallId?.() ?? callId ?? currentCallIdRef.current ?? null;
+    const cleanupRoomId = currentSession?.getRoomId?.() ?? roomId ?? null;
+
+    clearVideoCallHomeScreenLocks('cleanupFunction');
+
+    if (isInactiveStateRef.current || isEndingCallRef.current || callEndedTransitionDoneRef.current) {
+      logger.info('[VideoCall] cleanupFunction вызвана, но уже в неактивном состоянии или звонок завершается - игнорируем повторный вызов', {
+        isInactiveStateRef: isInactiveStateRef.current,
+        isEndingCallRef: isEndingCallRef.current,
+        callEndedTransitionDoneRef: callEndedTransitionDoneRef.current,
+      });
+      return;
+    }
+    if (wasGlobalCleanupDone(cleanupCallId, cleanupRoomId)) {
+      logger.info('[VideoCall] cleanupFunction skipped - global cleanup already completed', {
+        cleanupCallId,
+        cleanupRoomId,
+      });
+      return;
+    }
+    if (wasGlobalTeardownScheduled(cleanupCallId, cleanupRoomId)) {
+      logger.info('[VideoCall] cleanupFunction skipped - deferred teardown already scheduled globally', {
+        cleanupCallId,
+        cleanupRoomId,
+      });
+      return;
+    }
+
+    isEndingCallRef.current = true;
+    isInactiveStateRef.current = true;
+    markGlobalCleanupDone('cleanupFunction', cleanupCallId, cleanupRoomId);
+
+    if (currentSession) {
+      try {
+        const localStream = currentSession.getLocalStream?.();
+        stopStreamTracks(localStream, 'cleanupFunction/sessionLocalStream');
+
+        const sessionAlreadyEnded =
+          typeof currentSession.isEnded === 'function' && currentSession.isEnded();
+        const callIdForEnd = currentSession.getCallId?.() ?? undefined;
+        const roomIdForEnd = currentSession.getRoomId?.() ?? undefined;
+        const lastHandledCallEnded = (global as any).__lastHandledCallEndedRef;
+        const recentSocketEndedKey = String(lastHandledCallEnded?.key || '');
+        const recentSocketEndedAt = Number(lastHandledCallEnded?.at || 0);
+        const currentCallEndKey =
+          callIdForEnd && roomIdForEnd ? `${callIdForEnd}|${roomIdForEnd}` : callIdForEnd || roomIdForEnd || '';
+        const recentSocketEndedForThisCall =
+          !!currentCallEndKey &&
+          recentSocketEndedKey === currentCallEndKey &&
+          Date.now() - recentSocketEndedAt < 5000;
+
+        if (recentSocketEndedForThisCall) {
+          logger.info('[VideoCall] cleanupFunction: recent socket call:ended detected, skipping session.endCall', {
+            currentCallEndKey,
+            elapsedMs: Date.now() - recentSocketEndedAt,
+          });
+        } else if (!sessionAlreadyEnded && typeof currentSession.endCall === 'function') {
+          logger.info('[VideoCall] Вызываем session.endCall() из cleanupFunction');
+          currentSession.endCall(callIdForEnd, roomIdForEnd);
+        } else if (sessionAlreadyEnded) {
+          logger.info('[VideoCall] cleanupFunction: session уже завершена, пропускаем session.endCall');
+        } else {
+          logger.warn('[VideoCall] session.endCall недоступен в cleanupFunction');
+        }
+
+        if (typeof currentSession.cleanup === 'function') {
+          logger.info('[VideoCall] Вызываем session.cleanup() из cleanupFunction');
+          currentSession.cleanup();
+          clearSessionRefs();
+        } else {
+          logger.warn('[VideoCall] session.cleanup недоступен в cleanupFunction');
+          clearSessionRefs();
+        }
+
+        try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
+        try { InCallManager.setSpeakerphoneOn(false); } catch {}
+        try { InCallManager.stop(); } catch {}
+      } catch (e) {
+        logger.error('[VideoCall] Error in cleanupFunction:', e);
+      }
+    } else {
+      logger.warn('[VideoCall] Session не найдена в cleanupFunction');
+    }
+  }, [
+    callId,
+    roomId,
+    clearSessionRefs,
+    clearVideoCallHomeScreenLocks,
+    getSystemPiPReturnGuard,
+    isCleanupOwner,
+    markGlobalCleanupDone,
+    wasGlobalCleanupDone,
+    wasGlobalTeardownScheduled,
+  ]);
 
   // Guard: эффект восстановления из PiP должен срабатывать один раз на возврат,
   // иначе он может откатывать camOn после ручного нажатия кнопки камеры.
@@ -1835,119 +1981,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       });
     }
     
-    // КРИТИЧНО: Создаем функцию очистки, которая вызывает session.endCall() и полную очистку
-    // Это нужно для глобальной ссылки __endCallCleanupRef
-    // Функция должна работать даже когда VideoCall экран размонтирован (в PiP/фоне)
-    const cleanupFunction = () => {
-      logger.info('[VideoCall] 🔥 cleanupFunction вызвана из глобальной ссылки (PiP/фон)');
-      if (!isCleanupOwner()) {
-        logger.info('[VideoCall] cleanupFunction skipped - cleanup owner changed', {
-          instanceId: screenInstanceIdRef.current,
-          cleanupOwner: (global as any).__endCallCleanupOwnerRef?.current ?? null,
-        });
-        return;
-      }
-      const currentSession = sessionRef.current || (global as any).__webrtcSessionRef?.current;
-      const cleanupCallId = currentSession?.getCallId?.() ?? callId ?? currentCallIdRef.current ?? null;
-      const cleanupRoomId = currentSession?.getRoomId?.() ?? roomId ?? null;
-      
-      // КРИТИЧНО: Всегда сбрасываем refs и уведомляем HomeScreen сразу, чтобы кнопки видеозвонка и бейдж «Занят»
-      // обновились сразу после завершения из in-app PiP (даже при раннем return ниже).
-      clearVideoCallHomeScreenLocks('cleanupFunction');
-
-      // КРИТИЧНО: Защита от повторных вызовов - если звонок уже завершён/в процессе завершения, не трогаем сессию.
-      // Это важно для сценария: пришёл call:ended → handleCallEnded сделал cleanup → затем компонент размонтировался и unmount-cleanup попытался вызвать cleanupFunction ещё раз.
-      if (isInactiveStateRef.current || isEndingCallRef.current || callEndedTransitionDoneRef.current) {
-        logger.info('[VideoCall] cleanupFunction вызвана, но уже в неактивном состоянии или звонок завершается - игнорируем повторный вызов', {
-          isInactiveStateRef: isInactiveStateRef.current,
-          isEndingCallRef: isEndingCallRef.current,
-          callEndedTransitionDoneRef: callEndedTransitionDoneRef.current,
-        });
-        return;
-      }
-      if (wasGlobalCleanupDone(cleanupCallId, cleanupRoomId)) {
-        logger.info('[VideoCall] cleanupFunction skipped - global cleanup already completed', {
-          cleanupCallId,
-          cleanupRoomId,
-        });
-        return;
-      }
-      if (wasGlobalTeardownScheduled(cleanupCallId, cleanupRoomId)) {
-        logger.info('[VideoCall] cleanupFunction skipped - deferred teardown already scheduled globally', {
-          cleanupCallId,
-          cleanupRoomId,
-        });
-        return;
-      }
-      
-      // КРИТИЧНО: Устанавливаем флаги СИНХРОННО перед вызовом session.endCall()
-      // Это предотвратит повторные вызовы handleCallEnded (особенно важно на iOS)
-      isEndingCallRef.current = true;
-      isInactiveStateRef.current = true;
-      markGlobalCleanupDone('cleanupFunction', cleanupCallId, cleanupRoomId);
-      
-      if (currentSession) {
-        try {
-          // КРИТИЧНО: Сначала останавливаем локальные стримы напрямую
-          // Это гарантирует, что камера остановится даже если компонент размонтирован
-          const localStream = currentSession.getLocalStream?.();
-          stopStreamTracks(localStream, 'cleanupFunction/sessionLocalStream');
-
-          const sessionAlreadyEnded =
-            typeof currentSession.isEnded === 'function' && currentSession.isEnded();
-          const callIdForEnd = currentSession.getCallId?.() ?? undefined;
-          const roomIdForEnd = currentSession.getRoomId?.() ?? undefined;
-          const lastHandledCallEnded = (global as any).__lastHandledCallEndedRef;
-          const recentSocketEndedKey = String(lastHandledCallEnded?.key || '');
-          const recentSocketEndedAt = Number(lastHandledCallEnded?.at || 0);
-          const currentCallEndKey =
-            callIdForEnd && roomIdForEnd ? `${callIdForEnd}|${roomIdForEnd}` : callIdForEnd || roomIdForEnd || '';
-          const recentSocketEndedForThisCall =
-            !!currentCallEndKey &&
-            recentSocketEndedKey === currentCallEndKey &&
-            Date.now() - recentSocketEndedAt < 5000;
-
-          // cleanupFunction может вызываться и после локального endCall (например, из PiP/App).
-          // После серверного call:ended делаем только локальный cleanup, иначе unmount экрана
-          // может отправить лишний второй call:end, который backend потом дедупит.
-          if (recentSocketEndedForThisCall) {
-            logger.info('[VideoCall] cleanupFunction: recent socket call:ended detected, skipping session.endCall', {
-              currentCallEndKey,
-              elapsedMs: Date.now() - recentSocketEndedAt,
-            });
-          } else if (!sessionAlreadyEnded && typeof currentSession.endCall === 'function') {
-            logger.info('[VideoCall] Вызываем session.endCall() из cleanupFunction');
-            currentSession.endCall(callIdForEnd, roomIdForEnd);
-          } else if (sessionAlreadyEnded) {
-            logger.info('[VideoCall] cleanupFunction: session уже завершена, пропускаем session.endCall');
-          } else {
-            logger.warn('[VideoCall] session.endCall недоступен в cleanupFunction');
-          }
-
-          if (typeof currentSession.cleanup === 'function') {
-            logger.info('[VideoCall] Вызываем session.cleanup() из cleanupFunction');
-            currentSession.cleanup();
-            clearSessionRefs();
-          } else {
-            logger.warn('[VideoCall] session.cleanup недоступен в cleanupFunction');
-            clearSessionRefs();
-          }
-          // Refs и __onVideoCallEndedRef уже вызваны в начале cleanupFunction.
-
-          // КРИТИЧНО: Если звонок завершают из PiP (экран звонка уже размонтирован),
-          // то useAudioRouting больше не будет вызван для остановки аудио-сессии.
-          // Останавливаем InCallManager вручную.
-          try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
-          try { InCallManager.setSpeakerphoneOn(false); } catch {}
-          try { InCallManager.stop(); } catch {}
-        } catch (e) {
-          logger.error('[VideoCall] Error in cleanupFunction:', e);
-        }
-      } else {
-        logger.warn('[VideoCall] Session не найдена в cleanupFunction');
-      }
-    };
-    
     // КРИТИЧНО: Устанавливаем глобальную ссылку на функцию очистки сразу после создания сессии
     // Это нужно чтобы можно было вызвать очистку даже когда VideoCall экран размонтирован (в PiP/фоне)
     (global as any).__endCallCleanupRef.current = cleanupFunction;
@@ -1963,7 +1996,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
     // КРИТИЧНО: Убрали зависимости roomId, callId, partnerId чтобы не пересоздавать сессию
     // Сессия создается один раз при монтировании компонента
-  }, [route?.params?.directCall, route?.params?.resume, pip.visible, pip.isRemoteMuted, clearSessionRefs, isInactiveState, wasFriendCallEnded, isCleanupOwner, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn, extendPiPReturnAbortGuard]);
+  }, [route?.params?.directCall, route?.params?.resume, pip.visible, pip.isRemoteMuted, clearSessionRefs, isInactiveState, wasFriendCallEnded, isCleanupOwner, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn, extendPiPReturnAbortGuard, cleanupFunction]);
   
   // КРИТИЧНО: Отдельный useEffect для установки обработчиков событий
   // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
@@ -2395,13 +2428,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       return;
     }
 
-    const returningFromSystemPiPUntil = (global as any).__returningFromSystemPiPUntilRef?.current;
-    const isReturningFromSystemPiP =
-      typeof returningFromSystemPiPUntil === 'number' &&
-      Date.now() < returningFromSystemPiPUntil;
+    const { now, returningUntil, disableUntil, active: systemPiPReturnGuardActive } = getSystemPiPReturnGuard();
+    const isReturningFromSystemPiP = now < returningUntil;
     if (isReturningFromSystemPiP) {
       logger.info('[VideoCall] [end] onAbortCall skipped - returning from system PiP', {
-        returningFromSystemPiPUntil,
+        returningFromSystemPiPUntil: returningUntil,
+        callId: callId ?? currentCallIdRef.current ?? null,
+        roomId,
+      });
+      return;
+    }
+    if (systemPiPReturnGuardActive) {
+      logger.info('[VideoCall] [end] onAbortCall skipped - system PiP return guard active', {
+        disableUntil,
         callId: callId ?? currentCallIdRef.current ?? null,
         roomId,
       });
@@ -2589,7 +2628,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
       }, 100);
     }, 1000);
-  }, [isInactiveState, roomId, callId, localStream]);
+  }, [isInactiveState, roomId, callId, localStream, getSystemPiPReturnGuard]);
   
   // КРИТИЧНО: Обновляем глобальные ссылки при изменении сессии или функции очистки
   // Это гарантирует, что ссылки всегда актуальны
@@ -2606,28 +2645,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Обновляем ссылку на сессию (на случай если она изменилась)
     if (session) {
       (global as any).__webrtcSessionRef.current = session;
-    }
-
-    // Обновляем ссылку на функцию очистки
-    // Основная функция очистки устанавливается при создании сессии выше
-    // Здесь обновляем только если onAbortCall изменился (как дополнительная опция)
-    // Но приоритет у cleanupFunction, установленной при создании сессии
-    if (typeof onAbortCall === 'function' && !(global as any).__endCallCleanupRef?.current) {
-      // Если cleanupFunction еще не установлена, используем onAbortCall
-      (global as any).__endCallCleanupRef.current = onAbortCall;
+      (global as any).__endCallCleanupRef.current = cleanupFunction;
       (global as any).__endCallCleanupOwnerRef = (global as any).__endCallCleanupOwnerRef || { current: null };
       (global as any).__endCallCleanupOwnerRef.current = screenInstanceIdRef.current;
-      logger.info('[VideoCall] Установлена cleanup функция из onAbortCall (fallback)');
     }
 
     logger.info('[VideoCall] Глобальные ссылки обновлены в useEffect', {
       hasSession: !!session,
-      hasCleanupFn: typeof onAbortCall === 'function',
+      hasCleanupFn: typeof cleanupFunction === 'function',
       __webrtcSessionRef: !!(global as any).__webrtcSessionRef?.current,
       __endCallCleanupRef: !!(global as any).__endCallCleanupRef?.current,
       cleanupOwner: (global as any).__endCallCleanupOwnerRef?.current ?? null,
     });
-  }, [onAbortCall]);
+  }, [cleanupFunction]);
 
   // Если открыли приложение и попали на неактивный видеозвонок (например после закрытия PiP при завершении) — закрываем экран: goBack или reset на Home. Не редиректить, если звонок только что завершили из PiP.
   useFocusEffect(
@@ -2679,10 +2709,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       const pipVisible =
         (global as any).__pipVisibleRef?.current === true ||
         (global as any).__pipInSystemModeRef?.current === true;
-      const returningFromSystemPiPUntil = (global as any).__returningFromSystemPiPUntilRef?.current;
-      const returningFromSystemPiP =
-        typeof returningFromSystemPiPUntil === 'number' &&
-        Date.now() < returningFromSystemPiPUntil;
+      const { now, returningUntil, disableUntil, active: systemPiPReturnGuardActive } = getSystemPiPReturnGuard();
+      const returningFromSystemPiP = now < returningUntil;
       // Если звонок уже корректно завершили через handleCallEnded/onAbortCall — не дёргаем cleanup повторно.
       // Иначе для "второго участника" (который не нажимал end) получается двойное завершение.
       const alreadyEndedOrEnding =
@@ -2699,7 +2727,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       );
       if (returningFromSystemPiP) {
         logger.info('[VideoCall] cleanup при размонтировании пропущен (возврат из system PiP)', {
-          returningFromSystemPiPUntil,
+          returningFromSystemPiPUntil: returningUntil,
+        });
+      } else if (systemPiPReturnGuardActive) {
+        logger.info('[VideoCall] cleanup при размонтировании пропущен (system PiP return guard active)', {
+          disableUntil,
         });
       } else if (replacedByAnotherVideoCall) {
         logger.info('[VideoCall] cleanup при размонтировании пропущен (replaced by another VideoCall)', {
@@ -2747,7 +2779,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         logger.info('[VideoCall] Глобальные ссылки очищены (сессия удалена)');
       }
     };
-  }, [roomId, route?.params?.callId, route?.params?.roomId, wasGlobalCleanupDone, isCleanupOwner]);
+  }, [roomId, route?.params?.callId, route?.params?.roomId, wasGlobalCleanupDone, isCleanupOwner, getSystemPiPReturnGuard]);
   
   const toggleMic = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
@@ -2942,13 +2974,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             }
           } finally {
             if (typeof upd === 'function') {
-              setTimeout(() => upd({ pendingSystemPiP: false, decorSizeForPiP: null }), 2000);
+              setTimeout(() => upd({ pendingSystemPiP: false, systemPiPCaptureActive: false, decorSizeForPiP: null }), 2000);
             }
           }
         };
         if (typeof upd === 'function') {
           const apply = (size: { width: number; height: number } | null) => {
-            upd({ pendingSystemPiP: true, allowVideoRender: true, ...(size ? { decorSizeForPiP: size } : {}) });
+            upd({ pendingSystemPiP: true, systemPiPCaptureActive: true, systemPiPCaptureRequestId: Date.now(), allowVideoRender: true, ...(size ? { decorSizeForPiP: size } : {}) });
             setTimeout(doEnterPiP, 480);
           };
           NativeModules.LiviAppModule?.getDecorViewSize?.()?.then(apply)?.catch(() => apply(null));
@@ -3297,31 +3329,30 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   // При возврате из PiP (fromPiP) показываем полноэкранный вид; при повторном входе в PiP (pendingSystemPiP) — компакт, иначе захватится layout с бейджем/кнопкой.
   const systemPiPCompact =
     Platform.OS === 'android' &&
+    !pip.systemPiPCaptureActive &&
     (pip.pendingSystemPiP || pip.inSystemPiPMode) &&
     (pip.pendingSystemPiP || !route?.params?.fromPiP);
   if (systemPiPCompact) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: 'transparent' }]} edges={[]}>
-        <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'transparent' }]}>
-          <View style={[styles.card, { flex: 1, width: '100%', minHeight: 0, backgroundColor: 'transparent' }]}>
-            <RemoteVideo
-              remoteStream={currentRemoteStream}
-              remoteCamOn={remoteCamOn}
-              remoteMuted={remoteMuted}
-              isInactiveState={isInactiveState}
-              wasFriendCallEnded={wasFriendCallEnded}
-              started={started}
-              loading={loading}
-              remoteViewKey={remoteViewKey}
-              showFriendBadge={false}
-              lang={lang}
-              session={sessionRef.current}
-              remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
-              partnerInPiP={partnerInPiP}
-              forceTextureView={true}
-              objectFit="contain"
-            />
-          </View>
+      <SafeAreaView style={styles.systemPiPContainer} edges={[]}>
+        <View style={styles.systemPiPVideoFill}>
+          <RemoteVideo
+            remoteStream={currentRemoteStream}
+            remoteCamOn={remoteCamOn}
+            remoteMuted={remoteMuted}
+            isInactiveState={isInactiveState}
+            wasFriendCallEnded={wasFriendCallEnded}
+            started={started}
+            loading={loading}
+            remoteViewKey={remoteViewKey}
+            showFriendBadge={false}
+            lang={lang}
+            session={sessionRef.current}
+            remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
+            partnerInPiP={false}
+            forceTextureView={true}
+            objectFit="contain"
+          />
         </View>
       </SafeAreaView>
     );
@@ -3508,6 +3539,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     // padding не задаём тут: на Android safe-area + базовый отступ считаем во внутреннем контейнере (styles.content)
+  },
+  systemPiPContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  systemPiPVideoFill: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000',
   },
   content: {
     flex: 1,

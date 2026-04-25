@@ -123,23 +123,25 @@ class MainActivity : ReactActivity() {
     }
   }
 
+  private fun emitSystemPiPExpandedOnce(reason: String) {
+    exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
+    exitPipTimeoutRunnable = null
+    exitedPipPending = false
+    wasInPip = false
+    expandedEmittedForPipExit = true
+    LiviAppModule.setPiPOnLeaveHintEnabled(false)
+    android.util.Log.i("MainActivity", "PiP exit: $reason -> emitting SystemPiPExpanded")
+    LiviAppModule.emitSystemPiPExpanded()
+  }
+
   override fun onResume() {
     super.onResume()
     isInForeground = true
-    // Выход из системного PiP по кнопке «развернуть»: onResume приходит когда активность снова на переднем плане.
-    // На части устройств onResume приходит до onPictureInPictureModeChanged(false), поэтому проверяем и exitedPipPending, и wasInPip.
-    // Сначала отключаем вход в PiP по onUserLeaveHint — иначе на части устройств во время перехода
-    // срабатывает onUserLeaveHint до запуска JS, приложение снова уходит в PiP вместо открытия экрана звонка.
-    val leavingPip = exitedPipPending || (wasInPip && !isInPictureInPictureMode)
-    if (leavingPip) {
-      exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
-      exitPipTimeoutRunnable = null
-      exitedPipPending = false
-      wasInPip = false
-      expandedEmittedForPipExit = true
-      LiviAppModule.setPiPOnLeaveHintEnabled(false)
-      android.util.Log.i("MainActivity", "PiP exit: onResume -> emitting SystemPiPExpanded")
-      LiviAppModule.emitSystemPiPExpanded()
+    // Выход из системного PiP по кнопке «развернуть»: надёжно обрабатываем только тот resume,
+    // который пришёл после onPictureInPictureModeChanged(false). Старый fallback по wasInPip
+    // давал ложный SystemPiPExpanded во время Home -> system PiP на части устройств.
+    if (exitedPipPending) {
+      emitSystemPiPExpandedOnce("onResume")
     }
     restoreNavigationBarVisibility()
     // Тап по уведомлению «Пропущенный вызов» — снять уведомления из шторки и открыть вкладку Друзья (здесь срабатывает и при холодном старте — activity уже готова)
@@ -197,8 +199,10 @@ class MainActivity : ReactActivity() {
   }
 
   /**
-   * При Home во время звонка уведомляем JS, затем входим в системный PiP.
-   * На части устройств (например Samsung A35) активность уходит в фон быстрее — пробуем сразу и с несколькими задержками.
+   * При Home во время звонка сначала просим JS подготовить dedicated fullscreen-host
+   * для system PiP capture, а затем несколько раз пробуем войти в PiP нативно.
+   * Так поведение остаётся таким же стабильным, как раньше, но кадр берётся уже
+   * из отдельного fullscreen-host, а не из маленького in-app PiP.
    */
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
@@ -215,7 +219,7 @@ class MainActivity : ReactActivity() {
     }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && shouldEnterPiP) {
       try {
-        android.util.Log.i("MainActivity", "onUserLeaveHint: preparing system PiP entry")
+        android.util.Log.i("MainActivity", "onUserLeaveHint: requesting JS system PiP capture preparation")
         val root = window?.decorView
         val decorW = root?.width ?: 0
         val decorH = root?.height ?: 0
@@ -229,7 +233,6 @@ class MainActivity : ReactActivity() {
               android.util.Log.i("MainActivity", "onUserLeaveHint: skip retry because shouldEnterPiPOnLeaveHint=false")
               return@Runnable
             }
-            // Базовый размер системного PiP (как в исходном варианте).
             val ratio = Rational(9, 16)
             val builder = PictureInPictureParams.Builder()
               .setAspectRatio(ratio)
@@ -248,26 +251,32 @@ class MainActivity : ReactActivity() {
             android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode failed", e2)
           }
         }
-        // Если пользователь уже ушёл с экрана звонка в маленький in-app PiP, мгновенный вход
-        // захватывает этот cover-кадр и в system PiP получается визуальный зум. Даём JS
-        // один-два кадра на fullscreen 9:16 layout, как в requestEnterPictureInPicture().
+        // Для direct VideoCall -> Home нужен самый ранний вход, иначе активность может успеть уйти в фон.
+        // Для Back -> in-app PiP -> Home fullscreen capture-host теперь prewarm-ится ещё во время in-app PiP,
+        // поэтому на leaveHint можно снова пробовать ранний native enter — это критично для более медленных устройств.
         if (!inAppPiPVisible) {
-          // КРИТИЧНО: первый вызов синхронно — в logcat событие AboutToEnterSystemPiP приходит в JS с задержкой 0.7–1.7s,
-          // к моменту post()/postDelayed активность уже не resumed, enterPictureInPictureMode() бросает или возвращает false.
-          // Синхронный вызов гарантирует вход в PiP; кадр может быть старым при повторном входе (митируем через setPendingSystemPiP в JS при получении события).
+          android.util.Log.i("MainActivity", "onUserLeaveHint: direct path, running tryEnterPiP immediately")
+          tryEnterPiP.run()
+        } else {
+          android.util.Log.i("MainActivity", "onUserLeaveHint: in-app PiP path, running prewarmed tryEnterPiP immediately")
           tryEnterPiP.run()
         }
         if (!isInPictureInPictureMode) {
           if (!inAppPiPVisible) {
+            android.util.Log.i("MainActivity", "onUserLeaveHint: scheduling direct-path retries")
             handler.post(tryEnterPiP)
             handler.postDelayed(tryEnterPiP, 80)
+            handler.postDelayed(tryEnterPiP, 180)
+            handler.postDelayed(tryEnterPiP, 320)
+            handler.postDelayed(tryEnterPiP, 450)
+          } else {
+            android.util.Log.i("MainActivity", "onUserLeaveHint: scheduling prewarmed in-app PiP retries")
+            handler.post(tryEnterPiP)
+            handler.postDelayed(tryEnterPiP, 80)
+            handler.postDelayed(tryEnterPiP, 180)
+            handler.postDelayed(tryEnterPiP, 320)
+            handler.postDelayed(tryEnterPiP, 450)
           }
-          if (inAppPiPVisible) {
-            handler.postDelayed(tryEnterPiP, 120)
-          }
-          handler.postDelayed(tryEnterPiP, 180)
-          handler.postDelayed(tryEnterPiP, 320)
-          handler.postDelayed(tryEnterPiP, 450)
           handler.postDelayed(tryEnterPiP, 800)
           handler.postDelayed(tryEnterPiP, 1200)
         }
@@ -309,11 +318,24 @@ class MainActivity : ReactActivity() {
             exitedPipPending = false
             wasInPip = false
             exitPipTimeoutRunnable = null
+            val hasFocusNow = window?.decorView?.hasWindowFocus() == true
+            if (isInForeground && hasFocusNow) {
+              android.util.Log.i(
+                "MainActivity",
+                "PiP exit: timeout but app foreground+focused -> treating as return, emitting SystemPiPExpanded"
+              )
+              emitSystemPiPExpandedOnce("pipExit:timeout+foreground")
+              return@Runnable
+            }
             android.util.Log.i("MainActivity", "PiP exit: no onResume in time -> emitting EndCallFromPiP")
             LiviAppModule.emitEndCallFromPiP()
           }
         }
         pipHandler.postDelayed(exitPipTimeoutRunnable!!, pipExitDecideMs)
+        val hasFocus = window?.decorView?.hasWindowFocus() == true
+        if (isInForeground && hasFocus) {
+          emitSystemPiPExpandedOnce("modeChanged(false)+foreground")
+        }
       }
     }
   }
