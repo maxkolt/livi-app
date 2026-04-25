@@ -40,6 +40,7 @@ import {
   sendCallPushToRecipient,
   sendCallEscalationPushToRecipient,
   sendCallCanceledToRecipient,
+  sendCallEndedToPeer,
   sendCallDeclinedToCaller,
   sendCallAcceptedToCaller,
 } from './utils/push';
@@ -2038,12 +2039,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             }
           }
           if (pushPeerUserId) {
-            await sendPushToUser(pushPeerUserId, {
-              kind: 'call',
-              title: 'Звонок завершён',
-              body: 'Собеседник завершил разговор',
-              data: { type: 'call_ended', from: senderUserId, fromNick, callId: callId || id, endedFromActive: true },
-            });
+            await sendCallEndedToPeer(pushPeerUserId, callId || id, senderUserId, fromNick);
           }
         } catch (e: any) {
           logger.warn('[call:end] send call_ended push failed', { error: e?.message });

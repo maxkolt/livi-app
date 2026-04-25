@@ -1004,3 +1004,72 @@ export async function sendCallCanceledToRecipient(
     }
   }
 }
+
+/**
+ * Активный звонок завершён другим участником.
+ * Android получает только FCM data-only, чтобы закрыть PiP/экран без видимого системного уведомления.
+ * На iOS оставляем Expo push, чтобы сохранить текущую доставку в фоне/убитом приложении.
+ */
+export async function sendCallEndedToPeer(
+  peerUserId: string,
+  callId: string,
+  fromUserId: string,
+  fromNick?: string
+): Promise<void> {
+  logger.info('[push] sendCallEndedToPeer start', { peerUserId, callId, fromUserId });
+  const messaging = getFirebaseMessaging();
+  const recs = await PushTokenModel.find({ userId: peerUserId })
+    .select('token platform fcmToken')
+    .lean();
+  type Rec = { token: string; platform: string; fcmToken?: string };
+  const list = (recs || []) as unknown as Rec[];
+  let androidSent = false;
+  if (messaging) {
+    for (const r of list) {
+      if (r.platform === 'android' && r.fcmToken) {
+        try {
+          await messaging.send({
+            token: r.fcmToken,
+            data: {
+              type: 'call_ended',
+              callId: String(callId),
+              fromUserId: String(fromUserId),
+              fromNick: String(fromNick ?? ''),
+              endedFromActive: 'true',
+            },
+            android: { priority: 'high' },
+          });
+          logger.info('[push] call_ended sent via FCM (data-only)', { userId: peerUserId, callId });
+          androidSent = true;
+        } catch (e) {
+          const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
+          const isInvalidToken =
+            isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
+          if (shouldRemoveFcmTokenFromDb(e)) await removeInvalidFcmToken(peerUserId, r);
+          logger.warn('[push] FCM call_ended failed', { userId: peerUserId, callId, error: errMsg, isInvalidToken });
+        }
+      }
+    }
+  }
+  const iosTokens = list.filter((r) => r.platform === 'ios').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
+  if (iosTokens.length > 0) {
+    try {
+      const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
+        to,
+        sound: 'default',
+        priority: 'high',
+        title: 'Звонок завершён',
+        body: 'Собеседник завершил разговор',
+        data: { type: 'call_ended', from: fromUserId, fromNick: fromNick ?? '', callId: String(callId), endedFromActive: true },
+      }));
+      const chunks = expo.chunkPushNotifications(messages);
+      for (const chunk of chunks) await expo.sendPushNotificationsAsync(chunk);
+      logger.info('[push] call_ended sent via Expo (iOS)', { userId: peerUserId, callId, count: iosTokens.length });
+    } catch (e) {
+      logger.warn('[push] Expo call_ended to peer failed', { userId: peerUserId, callId, error: (e as Error)?.message });
+    }
+  }
+  if (!androidSent && list.some((r) => r.platform === 'android')) {
+    logger.warn('[push] call_ended Android fallback skipped to avoid visible system notification', { userId: peerUserId, callId });
+  }
+}
