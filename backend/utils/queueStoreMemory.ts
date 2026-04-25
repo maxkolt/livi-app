@@ -16,6 +16,8 @@ const moderationBans = new Map<string, number>();
 const lastMatchAttempt = new Map<string, number>();
 const lastStart = new Map<string, number>();
 const lastSearch = new Map<string, number>();
+const directCalls = new Map<string, { a: string; b: string; createdAtMs: number; expiresAtMs: number }>();
+const userDirectCalls = new Map<string, { with: string; callId: string; expiresAtMs: number }>();
 
 const LOCK_TTL_MS = 30_000;
 
@@ -26,6 +28,10 @@ function now() {
 function banKey(a: string, b: string) {
   const [x, y] = [a, b].sort();
   return `${x}|${y}`;
+}
+
+function isExpired(expiresAtMs?: number) {
+  return Number(expiresAtMs || 0) > 0 && Number(expiresAtMs) <= now();
 }
 
 export function createMemoryStore() {
@@ -228,6 +234,70 @@ export function createMemoryStore() {
     },
 
     async setBusy(_userId: string, _busy: boolean): Promise<void> {},
+
+    async setDirectCall(
+      callId: string,
+      state: { a: string; b: string; createdAtMs: number; expiresAtMs: number }
+    ): Promise<void> {
+      const id = String(callId).trim();
+      if (!id) return;
+      directCalls.set(id, {
+        a: String(state.a),
+        b: String(state.b),
+        createdAtMs: Number(state.createdAtMs) || now(),
+        expiresAtMs: Number(state.expiresAtMs) || now(),
+      });
+    },
+
+    async getDirectCall(callId: string): Promise<{ a: string; b: string; createdAtMs: number; expiresAtMs: number } | null> {
+      const id = String(callId).trim();
+      if (!id) return null;
+      const state = directCalls.get(id);
+      if (!state) return null;
+      if (isExpired(state.expiresAtMs)) {
+        directCalls.delete(id);
+        return null;
+      }
+      return { ...state };
+    },
+
+    async removeDirectCall(callId: string): Promise<void> {
+      directCalls.delete(String(callId).trim());
+    },
+
+    async setUserDirectCall(
+      userId: string,
+      state: { with: string; callId: string; expiresAtMs: number }
+    ): Promise<void> {
+      const id = String(userId).trim();
+      if (!id) return;
+      userDirectCalls.set(id, {
+        with: String(state.with),
+        callId: String(state.callId),
+        expiresAtMs: Number(state.expiresAtMs) || now(),
+      });
+    },
+
+    async getUserDirectCall(userId: string): Promise<{ with: string; callId: string; expiresAtMs: number } | null> {
+      const id = String(userId).trim();
+      if (!id) return null;
+      const state = userDirectCalls.get(id);
+      if (!state) return null;
+      if (isExpired(state.expiresAtMs)) {
+        userDirectCalls.delete(id);
+        return null;
+      }
+      return { ...state };
+    },
+
+    async clearUserDirectCall(userId: string, expectedCallId?: string): Promise<void> {
+      const id = String(userId).trim();
+      if (!id) return;
+      const state = userDirectCalls.get(id);
+      if (!state) return;
+      if (expectedCallId && String(state.callId) !== String(expectedCallId)) return;
+      userDirectCalls.delete(id);
+    },
 
     async close(): Promise<void> {},
   };

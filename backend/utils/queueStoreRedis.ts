@@ -18,6 +18,19 @@ function banKey(a: string, b: string) {
   return `${x}|${y}`;
 }
 
+function directCallKey(callId: string) {
+  return PREFIX + 'directCall:' + String(callId).trim();
+}
+
+function userDirectCallKey(userId: string) {
+  return PREFIX + 'userDirectCall:' + String(userId).trim();
+}
+
+function activeCallTtlMs(expiresAtMs: number) {
+  const ttlFromExpiry = Math.max(1_000, Number(expiresAtMs || 0) - now() + 10 * 60_000);
+  return ttlFromExpiry;
+}
+
 export type CleanupStatesResult = { cleanedBans: number; cleanedLocks: number; cleanedPairs: number };
 
 export function createRedisStore(redisUrl: string) {
@@ -224,6 +237,108 @@ export function createRedisStore(redisUrl: string) {
     },
 
     async setBusy(_userId: string, _busy: boolean): Promise<void> {},
+
+    async setDirectCall(
+      callId: string,
+      state: { a: string; b: string; createdAtMs: number; expiresAtMs: number }
+    ): Promise<void> {
+      const key = directCallKey(callId);
+      if (!String(callId || '').trim()) return;
+      await redis.set(
+        key,
+        JSON.stringify({
+          a: String(state.a),
+          b: String(state.b),
+          createdAtMs: Number(state.createdAtMs) || now(),
+          expiresAtMs: Number(state.expiresAtMs) || now(),
+        }),
+        'PX',
+        activeCallTtlMs(Number(state.expiresAtMs) || now())
+      );
+    },
+
+    async getDirectCall(callId: string): Promise<{ a: string; b: string; createdAtMs: number; expiresAtMs: number } | null> {
+      const id = String(callId || '').trim();
+      if (!id) return null;
+      const raw = await redis.get(directCallKey(id));
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        const expiresAtMs = Number(parsed?.expiresAtMs) || 0;
+        if (expiresAtMs > 0 && expiresAtMs <= now()) {
+          await redis.del(directCallKey(id));
+          return null;
+        }
+        return {
+          a: String(parsed?.a || ''),
+          b: String(parsed?.b || ''),
+          createdAtMs: Number(parsed?.createdAtMs) || 0,
+          expiresAtMs,
+        };
+      } catch {
+        await redis.del(directCallKey(id));
+        return null;
+      }
+    },
+
+    async removeDirectCall(callId: string): Promise<void> {
+      const id = String(callId || '').trim();
+      if (!id) return;
+      await redis.del(directCallKey(id));
+    },
+
+    async setUserDirectCall(
+      userId: string,
+      state: { with: string; callId: string; expiresAtMs: number }
+    ): Promise<void> {
+      const id = String(userId || '').trim();
+      if (!id) return;
+      await redis.set(
+        userDirectCallKey(id),
+        JSON.stringify({
+          with: String(state.with),
+          callId: String(state.callId),
+          expiresAtMs: Number(state.expiresAtMs) || now(),
+        }),
+        'PX',
+        activeCallTtlMs(Number(state.expiresAtMs) || now())
+      );
+    },
+
+    async getUserDirectCall(userId: string): Promise<{ with: string; callId: string; expiresAtMs: number } | null> {
+      const id = String(userId || '').trim();
+      if (!id) return null;
+      const raw = await redis.get(userDirectCallKey(id));
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        const expiresAtMs = Number(parsed?.expiresAtMs) || 0;
+        if (expiresAtMs > 0 && expiresAtMs <= now()) {
+          await redis.del(userDirectCallKey(id));
+          return null;
+        }
+        return {
+          with: String(parsed?.with || ''),
+          callId: String(parsed?.callId || ''),
+          expiresAtMs,
+        };
+      } catch {
+        await redis.del(userDirectCallKey(id));
+        return null;
+      }
+    },
+
+    async clearUserDirectCall(userId: string, expectedCallId?: string): Promise<void> {
+      const id = String(userId || '').trim();
+      if (!id) return;
+      if (!expectedCallId) {
+        await redis.del(userDirectCallKey(id));
+        return;
+      }
+      const current = await this.getUserDirectCall(id);
+      if (!current || String(current.callId) !== String(expectedCallId)) return;
+      await redis.del(userDirectCallKey(id));
+    },
 
     async close(): Promise<void> {
       await redis.quit();

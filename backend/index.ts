@@ -966,13 +966,22 @@ const updateFriendRoomState = (io: Server, roomId: string) => {
 // findRandom/cancelRandom удалены - используется match.ts
 
 /* ========= Direct Calls (P2P invite) ========= */
-type CallLink = { a: string; b: string; timer?: NodeJS.Timeout; retryPushTimer?: NodeJS.Timeout };
+const CALL_RING_TIMEOUT_MS = 20_000;
+type CallLink = {
+  a: string;
+  b: string;
+  createdAtMs: number;
+  expiresAtMs: number;
+  timer?: NodeJS.Timeout;
+  retryPushTimer?: NodeJS.Timeout;
+};
 const callsById = new Map<string, CallLink>();
 const callOfUser = new Map<string, { with: string; callId: string }>();
 type CallDeliveryTelemetry = {
   callerId: string;
   calleeId: string;
   createdAtMs: number;
+  expiresAtMs: number;
   callerNick?: string;
   pushSentAtMs?: number;
   incomingShownAtMs?: number;
@@ -986,16 +995,84 @@ const callDeliveryById = new Map<string, CallDeliveryTelemetry>();
 // Активный callId для конкретного socket.id (после accept)
 const activeCallBySocket = new Map<string, string>();
 
+async function persistDirectCallSharedState(callId: string, link: CallLink): Promise<void> {
+  await queueStore.setDirectCall(callId, {
+    a: link.a,
+    b: link.b,
+    createdAtMs: link.createdAtMs,
+    expiresAtMs: link.expiresAtMs,
+  });
+  await queueStore.setUserDirectCall(link.a, {
+    with: link.b,
+    callId,
+    expiresAtMs: link.expiresAtMs,
+  });
+  await queueStore.setUserDirectCall(link.b, {
+    with: link.a,
+    callId,
+    expiresAtMs: link.expiresAtMs,
+  });
+}
+
+async function clearDirectCallSharedState(callId: string, link?: { a: string; b: string }): Promise<void> {
+  const resolved =
+    link ??
+    (await queueStore.getDirectCall(callId)) ?? {
+      a: '',
+      b: '',
+    };
+  await queueStore.removeDirectCall(callId);
+  if (resolved.a) await queueStore.clearUserDirectCall(resolved.a, callId);
+  if (resolved.b) await queueStore.clearUserDirectCall(resolved.b, callId);
+}
+
+async function getCallLinkFromAnyStore(callId: string): Promise<CallLink | null> {
+  const local = callsById.get(callId);
+  if (local) return local;
+  const shared = await queueStore.getDirectCall(callId);
+  if (!shared) return null;
+  const hydrated: CallLink = {
+    a: shared.a,
+    b: shared.b,
+    createdAtMs: shared.createdAtMs,
+    expiresAtMs: shared.expiresAtMs,
+  };
+  callsById.set(callId, hydrated);
+  return hydrated;
+}
+
+async function getUserCallEntryFromAnyStore(userId: string): Promise<{ with: string; callId: string; expiresAtMs?: number } | null> {
+  const local = callOfUser.get(userId);
+  if (local) {
+    const link = callsById.get(local.callId);
+    if (link) return { ...local, expiresAtMs: link.expiresAtMs };
+    callOfUser.delete(userId);
+  }
+  const shared = await queueStore.getUserDirectCall(userId);
+  if (!shared) return null;
+  const hydrated = { with: shared.with, callId: shared.callId };
+  callOfUser.set(userId, hydrated);
+  return { ...hydrated, expiresAtMs: shared.expiresAtMs };
+}
+
 /** Если звонок уже инициирован, а сокет callee появился позже (reconnect / гонка с bind) — повторить call:incoming по прямому emit. */
-function replayIncomingToCalleeIfRinging(sock: AuthedSocket, userId: string) {
+async function replayIncomingToCalleeIfRinging(sock: AuthedSocket, userId: string) {
   try {
     const uid = normalizeMongoObjectId(String(userId || ''));
     if (!isOid(uid)) return;
     if (activeRoomByUserId.has(uid)) return;
-    const entry = callOfUser.get(uid);
+    const entry = await getUserCallEntryFromAnyStore(uid);
     if (!entry) return;
-    const link = callsById.get(entry.callId);
+    const link = await getCallLinkFromAnyStore(entry.callId);
     if (!link || link.b !== uid) return;
+    if (link.expiresAtMs <= Date.now()) {
+      logger.info('[call:incoming_replay] skipped expired ringing call', {
+        callId: entry.callId,
+        callee: uid,
+        expiresAtMs: link.expiresAtMs,
+      });
+      return;
+    }
     const telemetry = callDeliveryById.get(entry.callId);
     if (telemetry?.incomingShownAtMs != null) return;
     const fromNick =
@@ -1003,7 +1080,13 @@ function replayIncomingToCalleeIfRinging(sock: AuthedSocket, userId: string) {
         ? String(telemetry.callerNick).trim()
         : undefined;
     try {
-      sock.emit('call:incoming', { callId: entry.callId, from: link.a, fromNick });
+      sock.emit('call:incoming', {
+        callId: entry.callId,
+        from: link.a,
+        fromNick,
+        ts: link.createdAtMs,
+        expiresAt: link.expiresAtMs,
+      });
       sock.emit('friend:call:incoming', { callId: entry.callId, from: link.a, nick: fromNick });
       logger.info('[call:incoming_replay] delivered on user bind', {
         callId: entry.callId,
@@ -1199,12 +1282,20 @@ async function emitPendingCallAcceptedToSocket(
 
 function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'canceled' | 'timeout' | 'ended') {
   const link = callsById.get(callId);
-  if (!link) return;
+  if (!link) {
+    void clearDirectCallSharedState(callId).catch((e) => {
+      logger.warn('[call:cleanup] clear shared state failed', { callId, error: (e as Error)?.message });
+    });
+    return;
+  }
   if (link.timer) { try { clearTimeout(link.timer); } catch {} }
   if (link.retryPushTimer) { try { clearTimeout(link.retryPushTimer); } catch {} }
   callsById.delete(callId);
   callOfUser.delete(link.a);
   callOfUser.delete(link.b);
+  void clearDirectCallSharedState(callId, { a: link.a, b: link.b }).catch((e) => {
+    logger.warn('[call:cleanup] clear shared state failed', { callId, error: (e as Error)?.message });
+  });
   callAcceptedDeliveryByKey.delete(getCallAcceptedDeliveryKey(callId, link.a));
   callAcceptedDeliveryByKey.delete(getCallAcceptedDeliveryKey(callId, link.b));
   const telemetry = callDeliveryById.get(callId);
@@ -1303,8 +1394,11 @@ function scheduleCallPushRetry(callId: string, delayMs: number) {
 }
 
 async function runCallPushRetryCycle(callId: string): Promise<void> {
-  const link = callsById.get(callId);
-  if (!link) return;
+  const link = await getCallLinkFromAnyStore(callId);
+  if (!link) {
+    cleanupCall(callId);
+    return;
+  }
   const telemetry = callDeliveryById.get(callId);
   if (!telemetry) return;
   if (telemetry.incomingShownAtMs) {
@@ -1312,6 +1406,14 @@ async function runCallPushRetryCycle(callId: string): Promise<void> {
     return;
   }
   const elapsedMs = Date.now() - telemetry.createdAtMs;
+  if (Date.now() >= telemetry.expiresAtMs) {
+    logger.info('[call:initiate] stop push retry: call expired', {
+      callId,
+      callee: telemetry.calleeId,
+      expiresAtMs: telemetry.expiresAtMs,
+    });
+    return;
+  }
   if (elapsedMs >= CALL_DELIVERY_RETRY_MAX_WINDOW_MS) {
     logger.info('[call:initiate] stop push retry: retry window elapsed', { callId, callee: telemetry.calleeId, elapsedMs });
     return;
@@ -1332,6 +1434,8 @@ async function runCallPushRetryCycle(callId: string): Promise<void> {
         callId,
         from: telemetry.callerId,
         fromNick: callerNick,
+        createdAtMs: telemetry.createdAtMs,
+        expiresAtMs: telemetry.expiresAtMs,
       });
       addCallEvent(callId, 'push_escalated', 'backend_retry', {
         elapsedMs,
@@ -1350,6 +1454,8 @@ async function runCallPushRetryCycle(callId: string): Promise<void> {
         callId,
         from: telemetry.callerId,
         fromNick: callerNick,
+        createdAtMs: telemetry.createdAtMs,
+        expiresAtMs: telemetry.expiresAtMs,
       });
       addCallEvent(callId, 'push_retry', 'backend_retry', {
         elapsedMs,
@@ -1426,7 +1532,7 @@ app.post('/api/calls/decline', async (req, res) => {
     if (!callId) {
       return res.status(400).json({ ok: false, error: 'callId_required' });
     }
-    const link = callsById.get(callId);
+    const link = await getCallLinkFromAnyStore(callId);
     if (!link) {
       return res.json({ ok: true }); // уже завершён — не ошибка
     }
@@ -1485,7 +1591,7 @@ app.post('/api/calls/incoming-shown', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'callId_required' });
     }
 
-    const link = callsById.get(callId);
+    const link = await getCallLinkFromAnyStore(callId);
     const telemetry = callDeliveryById.get(callId);
     const expectedCallee = link?.b || telemetry?.calleeId;
     if (!expectedCallee || String(expectedCallee) !== String(userId)) {
@@ -1504,6 +1610,7 @@ app.post('/api/calls/incoming-shown', async (req, res) => {
       callerId: link?.a || '',
       calleeId: expectedCallee,
       createdAtMs: now,
+      expiresAtMs: link?.expiresAtMs || now + CALL_RING_TIMEOUT_MS,
     };
     if (!t.incomingShownAtMs) {
       t.incomingShownAtMs = now;
@@ -1543,7 +1650,7 @@ app.post('/api/calls/cancel', async (req, res) => {
     if (!callId) {
       return res.status(400).json({ ok: false, error: 'callId_required' });
     }
-    const link = callsById.get(callId);
+    const link = await getCallLinkFromAnyStore(callId);
     if (!link) {
       return res.json({ ok: true }); // уже завершён — не ошибка
     }
@@ -1717,9 +1824,9 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
 
       clearPendingPresenceOffline(mappedUserId);
-      void bindUserIdentity(io, sock, mappedUserId).then(() => {
+      void bindUserIdentity(io, sock, mappedUserId).then(async () => {
         clearStickyPresenceStateForUser(mappedUserId);
-        replayIncomingToCalleeIfRinging(sock, mappedUserId);
+        await replayIncomingToCalleeIfRinging(sock, mappedUserId);
       });
       emitPresence(io);
 
@@ -1805,9 +1912,9 @@ io.on('connection', async (sock: AuthedSocket) => {
     // Привязываем пользователя к сокету
     clearPendingPresenceOffline(String(bindUid));
     const boundUid = String(bindUid);
-    void bindUserIdentity(io, sock, boundUid).then(() => {
+    void bindUserIdentity(io, sock, boundUid).then(async () => {
       clearStickyPresenceStateForUser(boundUid);
-      replayIncomingToCalleeIfRinging(sock, boundUid);
+      await replayIncomingToCalleeIfRinging(sock, boundUid);
     });
     emitPresence(io);
     // Replay call:accepted здесь не делаем: после connect клиент всегда шлёт reauth,
@@ -2455,7 +2562,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       // Убрано: проверка randomBusyByUser - рандомный поиск не блокирует звонки другу
 
       // Уже в звонке?
-      if (callOfUser.has(me)) return ack?.({ ok: false, error: 'busy' });
+      if (await getUserCallEntryFromAnyStore(me)) return ack?.({ ok: false, error: 'busy' });
       
       // Найдём любой сокет получателя (может быть offline — тогда будем будить пушем)
       const peerSocket = Array.from(io.sockets.sockets.values()).find(
@@ -2470,22 +2577,26 @@ io.on('connection', async (sock: AuthedSocket) => {
       
       // Убрано: проверка randomBusyByUser - рандомный поиск не блокирует звонки другу
       
-      if (peerSocket && callOfUser.has(peerId)) {
+      if (await getUserCallEntryFromAnyStore(peerId)) {
         // Получатель уже в активном звонке
         try { sock.emit('call:busy', { from: peerId, userId: peerId }); } catch {}
         return ack?.({ ok: false, error: 'peer_busy' });
       }
 
-      const callId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      callsById.set(callId, { a: me, b: peerId });
+      const createdAtMs = Date.now();
+      const expiresAtMs = createdAtMs + CALL_RING_TIMEOUT_MS;
+      const callId = `${createdAtMs}_${Math.random().toString(36).slice(2, 8)}`;
+      callsById.set(callId, { a: me, b: peerId, createdAtMs, expiresAtMs });
       createOrchestratedCall({ callId, callerId: me, calleeId: peerId });
       callDeliveryById.set(callId, {
         callerId: me,
         calleeId: peerId,
-        createdAtMs: Date.now(),
+        createdAtMs,
+        expiresAtMs,
       });
       callOfUser.set(me, { with: peerId, callId });
       callOfUser.set(peerId, { with: me, callId });
+      await persistDirectCallSharedState(callId, { a: me, b: peerId, createdAtMs, expiresAtMs });
 
       // КРИТИЧНО: Создаем комнату при инициации звонка (инициатором)
       // Используем user IDs для имени комнаты, чтобы совпадало с LiveKit roomName
@@ -2524,8 +2635,11 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       // таймаут 20с
       const timer = setTimeout(async () => {
-        const link = callsById.get(callId);
-        if (!link) return;
+        const link = await getCallLinkFromAnyStore(callId);
+        if (!link) {
+          cleanupCall(callId);
+          return;
+        }
         const shouldProcess = transitionCall(callId, 'timeout', {
           actionKey: `timeout:${callId}`,
           source: 'timer_timeout',
@@ -2584,7 +2698,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (!bSock) await saveMissedCall(link.b, link.a, fromNick || '');
         logger.info('[call:timeout] call ended for both: callee notified (socket+missed push), caller gets timeout', { callId, caller: link.a, callee: link.b });
         cleanupCall(callId, 'timeout');
-      }, 20000);
+      }, CALL_RING_TIMEOUT_MS);
       const link = callsById.get(callId);
       if (link) link.timer = timer;
 
@@ -2610,14 +2724,26 @@ io.on('connection', async (sock: AuthedSocket) => {
         );
         for (const recipientSocket of recipientSockets) {
           try {
-            (recipientSocket as any).emit('call:incoming', { callId, from: me, fromNick });
+            (recipientSocket as any).emit('call:incoming', {
+              callId,
+              from: me,
+              fromNick,
+              ts: createdAtMs,
+              expiresAt: expiresAtMs,
+            });
             (recipientSocket as any).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
           } catch {}
         }
         const roomSize = room ? room.size : 0;
         logger.info('[call:initiate] emitting call:incoming to recipient', { peerId, callId, recipientSocketsCount: recipientSockets.length, roomUSize: roomSize });
         if (recipientSockets.length === 0 && roomSize > 0) {
-          io.to(`u:${peerId}`).emit('call:incoming', { callId, from: me, fromNick });
+          io.to(`u:${peerId}`).emit('call:incoming', {
+            callId,
+            from: me,
+            fromNick,
+            ts: createdAtMs,
+            expiresAt: expiresAtMs,
+          });
           io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
         }
       } catch {}
@@ -2630,7 +2756,13 @@ io.on('connection', async (sock: AuthedSocket) => {
           callDeliveryById.set(callId, t);
         }
         logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
-        await sendCallPushToRecipient(peerId, { callId, from: me, fromNick: fromNick ?? '' });
+        await sendCallPushToRecipient(peerId, {
+          callId,
+          from: me,
+          fromNick: fromNick ?? '',
+          createdAtMs,
+          expiresAtMs,
+        });
         addCallEvent(callId, 'push_sent', 'backend_initial', {
           providerMode: callProviderMode,
           providerPrimary: callFeatureFlags.providerSignalingEnabled,
@@ -2715,7 +2847,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
   sock.on('call:accept', async ({ callId }: { callId?: string }) => {
     const id = String(callId || '');
-    const link = callsById.get(id);
+    const link = await getCallLinkFromAnyStore(id);
     if (!link) return;
     
     logger.debug('Call accepted', { callId: id });
@@ -2966,12 +3098,12 @@ io.on('connection', async (sock: AuthedSocket) => {
   });
 
   // Получатель подтверждает фактический показ входящего экрана (когда приложение живо и есть socket).
-  sock.on('call:incoming_shown', ({ callId }: { callId?: string }) => {
+  sock.on('call:incoming_shown', async ({ callId }: { callId?: string }) => {
     try {
       const id = String(callId || '').trim();
       const me = String((sock as any)?.data?.userId || '');
       if (!id || !me) return;
-      const link = callsById.get(id);
+      const link = await getCallLinkFromAnyStore(id);
       const telemetry = callDeliveryById.get(id);
       const expectedCallee = link?.b || telemetry?.calleeId;
       if (!expectedCallee || String(expectedCallee) !== me) return;
@@ -2980,6 +3112,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         callerId: link?.a || '',
         calleeId: expectedCallee,
         createdAtMs: now,
+        expiresAtMs: link?.expiresAtMs || now + CALL_RING_TIMEOUT_MS,
       };
       if (!t.incomingShownAtMs) {
         t.incomingShownAtMs = now;
@@ -3007,7 +3140,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
   sock.on('call:decline', async ({ callId }: { callId?: string }) => {
     const id = String(callId || '');
-    const link = callsById.get(id);
+    const link = await getCallLinkFromAnyStore(id);
     if (!link) return;
     const shouldProcess = transitionCall(id, 'declined', {
       actionKey: `socket_decline:${id}:${String((sock as any)?.data?.userId || '')}`,
@@ -3044,7 +3177,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
   sock.on('call:cancel', async ({ callId }: { callId?: string }) => {
     const id = String(callId || '');
-    const link = callsById.get(id);
+    const link = await getCallLinkFromAnyStore(id);
     if (!link) return;
     const shouldProcess = transitionCall(id, 'canceled', {
       actionKey: `socket_cancel:${id}:${String((sock as any)?.data?.userId || '')}`,

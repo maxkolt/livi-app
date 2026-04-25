@@ -58,6 +58,18 @@ export const cleanupStaleQueueEntries = (
 export const cleanupStaleStates = (isSocketConnected: (sid: string) => boolean) =>
   store.cleanupStaleStates(isSocketConnected);
 export const setBusy = (userId: string, busy: boolean) => store.setBusy(userId, busy);
+export const setDirectCall = (
+  callId: string,
+  state: { a: string; b: string; createdAtMs: number; expiresAtMs: number }
+) => store.setDirectCall(callId, state);
+export const getDirectCall = (callId: string) => store.getDirectCall(callId);
+export const removeDirectCall = (callId: string) => store.removeDirectCall(callId);
+export const setUserDirectCall = (
+  userId: string,
+  state: { with: string; callId: string; expiresAtMs: number }
+) => store.setUserDirectCall(userId, state);
+export const getUserDirectCall = (userId: string) => store.getUserDirectCall(userId);
+export const clearUserDirectCall = (userId: string, expectedCallId?: string) => store.clearUserDirectCall(userId, expectedCallId);
 
 export async function close(): Promise<void> {
   if (redisStore) {

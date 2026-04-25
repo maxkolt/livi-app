@@ -522,6 +522,8 @@ export type CallPushData = {
   callId: string;
   from: string;
   fromNick: string;
+  createdAtMs: number;
+  expiresAtMs: number;
 };
 
 /**
@@ -539,13 +541,15 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     return;
   }
 
-  const callTs = Date.now();
+  const callTs = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
+  const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 20_000;
   const fcmData = {
     type: 'call',
     callId: data.callId,
     from: data.from,
     fromNick: data.fromNick || '',
     ts: String(callTs),
+    expiresAt: String(callExpiresAtMs),
   };
   // FCM data payload: ключ "from" зарезервирован, используем fromUserId для FCM
   const fcmDataPayload: Record<string, string> = {
@@ -554,6 +558,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     fromUserId: data.from,
     fromNick: data.fromNick || '',
     ts: String(callTs),
+    expiresAt: String(callExpiresAtMs),
   };
 
   const messaging = getFirebaseMessaging();
@@ -739,7 +744,8 @@ export async function sendCallEscalationPushToRecipient(
   if (!androidTargets) return { androidTargets: 0, fcmSent: 0, expoSent: 0 };
 
   const messaging = getFirebaseMessaging();
-  const callTs = Date.now();
+  const callTs = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
+  const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 20_000;
   const title = (data.fromNick || '').trim() || 'Входящий видеозвонок';
   const body = 'Откройте, чтобы ответить';
   const dataPayload: Record<string, string> = {
@@ -748,6 +754,7 @@ export async function sendCallEscalationPushToRecipient(
     fromUserId: data.from,
     fromNick: data.fromNick || '',
     ts: String(callTs),
+    expiresAt: String(callExpiresAtMs),
     escalation: '1',
   };
 
@@ -803,6 +810,7 @@ export async function sendCallEscalationPushToRecipient(
           from: data.from,
           fromNick: data.fromNick || '',
           ts: String(callTs),
+          expiresAt: String(callExpiresAtMs),
           escalation: true,
         },
       }));
