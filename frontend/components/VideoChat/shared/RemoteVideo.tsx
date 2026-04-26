@@ -9,6 +9,7 @@ import { logger } from '../../../utils/logger';
 interface RemoteVideoProps {
   remoteStream: MediaStream | null;
   remoteCamOn: boolean;
+  remoteCamSide: 'front' | 'back';
   remoteMuted: boolean;
   isInactiveState: boolean;
   wasFriendCallEnded: boolean;
@@ -33,6 +34,7 @@ interface RemoteVideoProps {
 export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   remoteStream,
   remoteCamOn,
+  remoteCamSide,
   remoteMuted,
   isInactiveState,
   wasFriendCallEnded,
@@ -128,7 +130,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           {...(rtcViewProps as any)}
           style={styles.rtc}
           objectFit={objectFitProp}
-          mirror={false}
+          mirror={remoteCamSide === 'front'}
           zOrder={0}
         />
       );
@@ -611,7 +613,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
           {...(rtcViewProps as any)}
           style={styles.rtc}
           objectFit={objectFitProp}
-          mirror={false}
+          mirror={remoteCamSide === 'front'}
           // Удаленное видео - базовый слой
           zOrder={0}
         />

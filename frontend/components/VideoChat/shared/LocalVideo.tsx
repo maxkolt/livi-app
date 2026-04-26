@@ -8,6 +8,7 @@ import { logger } from '../../../utils/logger';
 interface LocalVideoProps {
   localStream: MediaStream | null;
   camOn: boolean;
+  isFrontCamera: boolean;
   isInactiveState: boolean;
   wasFriendCallEnded: boolean;
   started: boolean;
@@ -23,6 +24,7 @@ interface LocalVideoProps {
 export const LocalVideo: React.FC<LocalVideoProps> = ({
   localStream,
   camOn,
+  isFrontCamera,
   isInactiveState,
   wasFriendCallEnded,
   started,
@@ -183,7 +185,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
         {...(rtcViewProps as any)}
         style={styles.rtc}
         objectFit="cover"
-        mirror={false}
+        mirror={isFrontCamera}
         // Не поднимаем Surface "наверх": на старых Android это прячет RN-кнопки.
         zOrder={0}
       />

@@ -67,6 +67,7 @@ export class RandomChatSession extends SimpleEventEmitter {
   private isCamOn = true;
   private remoteAudioMuted = false;
   private remoteCamEnabled = false;
+  private remoteCamSide: CamSide = 'front';
   private lastAutoSearchAt = 0;
   private socketOffs: Array<() => void> = [];
   private connectRequestId = 0;
@@ -155,6 +156,10 @@ export class RandomChatSession extends SimpleEventEmitter {
     (this.config.callbacks.onRemoteCamStateChange ?? this.config.onRemoteCamStateChange)?.(enabled);
   }
 
+  private notifyRemoteCamSideChange(side: CamSide): void {
+    (this.config.callbacks.onRemoteCamSideChange ?? this.config.onRemoteCamSideChange)?.(side);
+  }
+
   /** Socket relay so partner can show «Отошёл» before LiveKit video subscribes; safe to call multiple times. */
   private emitCamToggleRelay(reason: string): void {
     try {
@@ -171,6 +176,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         enabled: this.isCamOn,
         from: socket.id,
         roomId,
+        camSide: this.camSide,
       });
       logger.debug('[RandomChatSession] cam-toggle relay', {
         reason,
@@ -1000,6 +1006,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       }
 
       await this.restartLocalCamera();
+      this.emitCamToggleRelay('flip_cam');
     } finally {
       this.flipCamInProgress = false;
     }
@@ -1133,6 +1140,14 @@ export class RandomChatSession extends SimpleEventEmitter {
     return this.remoteStream;
   }
 
+  getCamSide(): CamSide {
+    return this.camSide;
+  }
+
+  getRemoteCamSide(): CamSide {
+    return this.remoteCamSide;
+  }
+
   getPartnerId(): string | null {
     return this.currentRemoteParticipant?.identity || null;
   }
@@ -1177,7 +1192,7 @@ export class RandomChatSession extends SimpleEventEmitter {
     // RandomChat UX: "Отошел" must be driven ONLY by explicit user action (camera toggle button).
     // We use a dedicated socket relay (cam-toggle) instead of LiveKit TrackMuted/Unmuted to avoid false positives
     // during re-subscribes, network churn, or when a participant is leaving.
-    const camToggleHandler = (data: { enabled: boolean; from: string; roomId?: string }) => {
+    const camToggleHandler = (data: { enabled: boolean; from: string; roomId?: string; camSide?: CamSide }) => {
       try {
         const currentRoomId = this.matchRoomId;
         const roomIdsMatch =
@@ -1190,6 +1205,11 @@ export class RandomChatSession extends SimpleEventEmitter {
         }
 
         const nextEnabled = !!data.enabled;
+        const nextCamSide: CamSide = data.camSide === 'back' ? 'back' : 'front';
+        if (this.remoteCamSide !== nextCamSide) {
+          this.remoteCamSide = nextCamSide;
+          this.notifyRemoteCamSideChange(nextCamSide);
+        }
         // Dedup: if camera state didn't actually change, do NOT bump remoteViewKey.
         // Bumping remoteViewKey remounts RTCView and can cause black flickers on Android.
         if (this.remoteCamEnabled === nextEnabled) {

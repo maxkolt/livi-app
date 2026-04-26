@@ -13,6 +13,7 @@ export interface WebRTCSessionCallbacks {
   onMicStateChange?: (enabled: boolean) => void;
   onCamStateChange?: (enabled: boolean) => void;
   onRemoteCamStateChange?: (enabled: boolean) => void;
+  onRemoteCamSideChange?: (side: CamSide) => void;
   onPcConnectedChange?: (connected: boolean) => void;
   onLoadingChange?: (loading: boolean) => void;
   onMicLevelChange?: (level: number) => void; // Уровень микрофона для эквалайзера
@@ -84,6 +85,7 @@ export interface WebRTCSessionConfig {
   onMicStateChange?: (enabled: boolean) => void;
   onCamStateChange?: (enabled: boolean) => void;
   onRemoteCamStateChange?: (enabled: boolean) => void;
+  onRemoteCamSideChange?: (side: CamSide) => void;
   onPcConnectedChange?: (connected: boolean) => void;
   onLoadingChange?: (loading: boolean) => void;
   onMicLevelChange?: (level: number) => void;

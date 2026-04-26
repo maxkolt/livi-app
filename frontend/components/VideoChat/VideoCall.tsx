@@ -23,7 +23,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
 import { VideoCallSession } from '../../src/webrtc/sessions/VideoCallSession';
-import type { WebRTCSessionConfig } from '../../src/webrtc/types';
+import type { CamSide, WebRTCSessionConfig } from '../../src/webrtc/types';
 import { BlurView } from 'expo-blur';
 import { MediaControls } from './shared/MediaControls';
 import { LocalVideo } from './shared/LocalVideo';
@@ -231,6 +231,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
   const [remoteViewKey, setRemoteViewKey] = useState(0);
   const [localRenderKey, setLocalRenderKey] = useState(0);
+  const [localCamSide, setLocalCamSide] = useState<CamSide>('front');
+  const [remoteCamSide, setRemoteCamSide] = useState<CamSide>('front');
   // Эквалайзер отключен
   const [isInactiveState, setIsInactiveState] = useState(false);
   const [wasFriendCallEnded, setWasFriendCallEnded] = useState(false);
@@ -1676,6 +1678,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         onPartnerIdChange: (id) => {
           if (isEndingCallRef.current) return;
           setPartnerId(id);
+          if (!id) setRemoteCamSide('front');
         },
         onRoomIdChange: (id) => {
           if (isEndingCallRef.current) return;
@@ -1752,6 +1755,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           setRemoteCamOn(enabled);
           // ВАЖНО: Не дергаем remoteViewKey из UI.
           // Этим управляет сессия через событие remoteViewKeyChanged, иначе на Android легко получить мерцания из-за частых remount RTCView.
+        },
+        onRemoteCamSideChange: (side) => {
+          if (isInactiveStateRef.current || isEndingCallRef.current) return;
+          setRemoteCamSide(side);
         },
         // Эквалайзер отключен
         onMicLevelChange: () => {},
@@ -1849,6 +1856,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         session.rebindVideoCallMount(config);
         sessionRef.current = session;
         (global as any).__webrtcSessionRef.current = session;
+        setLocalCamSide(session.getCamSide?.() ?? 'front');
+        setRemoteCamSide(session.getRemoteCamSide?.() ?? 'front');
         setSessionTick((t) => t + 1);
         logger.info('[VideoCall] ♻️ Переиспользуем глобальную VideoCallSession (PiP/Home → снова экран), без второго LiveKit connect', {
           callId: effectiveCallId,
@@ -1899,6 +1908,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       });
       session = new VideoCallSession(config);
       sessionRef.current = session;
+      setLocalCamSide(session.getCamSide?.() ?? 'front');
+      setRemoteCamSide(session.getRemoteCamSide?.() ?? 'front');
       try {
         createdSessionsRef.current.add(session as any);
       } catch {}
@@ -3401,6 +3412,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           <RemoteVideo
             remoteStream={currentRemoteStream}
             remoteCamOn={remoteCamOn}
+            remoteCamSide={remoteCamSide}
             remoteMuted={remoteMuted}
             isInactiveState={isInactiveState}
             wasFriendCallEnded={wasFriendCallEnded}
@@ -3435,6 +3447,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           <RemoteVideo
             remoteStream={currentRemoteStream}
             remoteCamOn={remoteCamOn}
+            remoteCamSide={remoteCamSide}
             remoteMuted={remoteMuted}
             isInactiveState={isInactiveState}
             wasFriendCallEnded={wasFriendCallEnded}
@@ -3525,6 +3538,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           <LocalVideo
             localStream={localStream}
             camOn={camOn}
+            isFrontCamera={localCamSide === 'front'}
             isInactiveState={isInactiveState}
             wasFriendCallEnded={wasFriendCallEnded}
             started={started}
@@ -3541,9 +3555,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             onFlipCamera={() => {
               const session = sessionRef.current ?? (global as any).__webrtcSessionRef?.current;
               if (!session?.flipCam) return;
-              Promise.resolve(session.flipCam()).catch((e: any) => {
-                logger.warn('[VideoCall] flipCam error:', e);
-              });
+              Promise.resolve(session.flipCam())
+                .then(() => {
+                  setLocalCamSide((prev) => (prev === 'front' ? 'back' : 'front'));
+                })
+                .catch((e: any) => {
+                  logger.warn('[VideoCall] flipCam error:', e);
+                });
             }}
             localStream={localStream}
             visible={showControls}

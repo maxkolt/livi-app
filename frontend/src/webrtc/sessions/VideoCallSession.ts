@@ -82,6 +82,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private isCamOn = true;
   private remoteAudioMuted = false;
   private remoteCamEnabled = false;
+  private remoteCamSide: CamSide = 'front';
   /** Партнёр прислал cam-toggle: камера выкл — не поднимать remoteCam по первому «живому» видеотреку (гонка с публикацией). */
   private remotePartnerDeclaredCamOff = false;
   private remoteCamOffTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -533,6 +534,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (callbacks.onLocalStreamChange) this.config.onLocalStreamChange = callbacks.onLocalStreamChange;
     if (callbacks.onRemoteStreamChange) this.config.onRemoteStreamChange = callbacks.onRemoteStreamChange;
     if (callbacks.onRemoteCamStateChange) this.config.onRemoteCamStateChange = callbacks.onRemoteCamStateChange;
+    if (callbacks.onRemoteCamSideChange) this.config.onRemoteCamSideChange = callbacks.onRemoteCamSideChange;
     if (callbacks.onLoadingChange) this.config.onLoadingChange = callbacks.onLoadingChange;
     if (callbacks.onPartnerIdChange) this.config.onPartnerIdChange = callbacks.onPartnerIdChange;
     if (callbacks.onRoomIdChange) this.config.onRoomIdChange = callbacks.onRoomIdChange;
@@ -576,6 +578,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       'onMicStateChange',
       'onCamStateChange',
       'onRemoteCamStateChange',
+      'onRemoteCamSideChange',
       'onLoadingChange',
       'onPartnerIdChange',
       'onRoomIdChange',
@@ -611,6 +614,10 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private notifyRemoteCamStateChange(enabled: boolean): void {
     (this.config.callbacks.onRemoteCamStateChange ?? this.config.onRemoteCamStateChange)?.(enabled);
+  }
+
+  private notifyRemoteCamSideChange(side: CamSide): void {
+    (this.config.callbacks.onRemoteCamSideChange ?? this.config.onRemoteCamSideChange)?.(side);
   }
 
   private notifyLoadingChange(loading: boolean): void {
@@ -649,6 +656,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           enabled: !!this.isCamOn,
           from: socket.id,
           roomId: currentRoomId,
+          camSide: this.camSide,
         });
         logger.info('[VideoCallSession] ✅ Отправлено cam-toggle партнеру (сразу при нажатии)', { roomId: currentRoomId, enabled: this.isCamOn });
       } catch (e) {
@@ -850,6 +858,17 @@ export class VideoCallSession extends SimpleEventEmitter {
       // Так переворот работает стабильно на всех устройствах; applyConstraints на треке
       // от livekit-client часто не переключает камеру на нативной стороне.
       await this.restartLocalCamera();
+      const currentRoomId = this.getRoomId();
+      if (!this.ended && !this.endCallInProgress && currentRoomId) {
+        try {
+          socket.emit('cam-toggle', {
+            enabled: !!this.isCamOn,
+            from: socket.id,
+            roomId: currentRoomId,
+            camSide: this.camSide,
+          });
+        } catch {}
+      }
       logger.info('[VideoCallSession] flipCam done via restartLocalCamera', {
         prevSide,
         nextSide,
@@ -1109,6 +1128,14 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   getRemoteStream(): MediaStream | null {
     return this.remoteStream;
+  }
+
+  getCamSide(): CamSide {
+    return this.camSide;
+  }
+
+  getRemoteCamSide(): CamSide {
+    return this.remoteCamSide;
   }
 
   shouldSuppressRemoteTransientUi(windowMs = 2500): boolean {
@@ -1405,7 +1432,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     };
 
-    const camToggleHandler = (data: { enabled: boolean; from: string; roomId?: string }) => {
+    const camToggleHandler = (data: { enabled: boolean; from: string; roomId?: string; camSide?: CamSide }) => {
       const currentRoomId = this.getRoomId();
       const incoming = data.roomId;
 
@@ -1428,8 +1455,14 @@ export class VideoCallSession extends SimpleEventEmitter {
         enabled: data.enabled,
         from: data.from,
         roomId: incoming,
+        camSide: data.camSide,
       });
 
+      const nextCamSide: CamSide = data.camSide === 'back' ? 'back' : 'front';
+      if (this.remoteCamSide !== nextCamSide) {
+        this.remoteCamSide = nextCamSide;
+        this.notifyRemoteCamSideChange(nextCamSide);
+      }
       this.remotePartnerDeclaredCamOff = !data.enabled;
       this.remoteCamEnabled = data.enabled;
       this.clearRemoteCamOffTimeout();

@@ -28,7 +28,7 @@ import { CommonActions } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MediaStream, mediaDevices, RTCView } from '@livekit/react-native-webrtc';
 import { RandomChatSession } from '../../src/webrtc/sessions/RandomChatSession';
-import type { WebRTCSessionConfig } from '../../src/webrtc/types';
+import type { CamSide, WebRTCSessionConfig } from '../../src/webrtc/types';
 // import VoiceEqualizer from '../VoiceEqualizer'; // эквалайзер отключен
 import AwayPlaceholder from '../AwayPlaceholder';
 import { t, defaultLang } from '../../utils/i18n';
@@ -134,6 +134,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const [micOn, setMicOn] = useState(true);
   const [remoteMuted, setRemoteMuted] = useState(false);
   const [remoteCamEnabled, setRemoteCamEnabled] = useState(false);
+  const [remoteCamSide, setRemoteCamSide] = useState<CamSide>('front');
   // Once we have rendered remote video at least once, we should never show a spinner again for camera on/off.
   const hasEverRemoteVideoRef = useRef(false);
   // Full-screen network overlay (black screen with icon) for network-origin video failures.
@@ -145,6 +146,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const remoteCamStateKnownRef = useRef(false);
   const [remoteViewKey, setRemoteViewKey] = useState(0);
   const [localRenderKey, setLocalRenderKey] = useState(0);
+  const [localCamSide, setLocalCamSide] = useState<CamSide>('front');
   // Keep last good remote stream to keep RTCView mounted (do not break the video pipeline).
   const lastGoodRemoteStreamRef = useRef<MediaStream | null>(null);
   const lastGoodRemoteStreamAtRef = useRef<number>(0);
@@ -515,6 +517,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           // КРИТИЧНО: Сбрасываем partnerUserId при сбросе partnerId, чтобы скрыть кнопку "Добавить в друзья"
           if (!id) {
             setPartnerUserId(null);
+            setRemoteCamSide('front');
           }
         },
         onRoomIdChange: (id) => {
@@ -553,6 +556,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           // Сессия сама эмитит remoteViewKeyChanged при необходимости — иначе на Android легко получить мерцания из-за remount RTCView.
           logger.debug('[RandomChat] Remote camera state changed', { enabled });
         },
+        onRemoteCamSideChange: (side) => {
+          setRemoteCamSide(side);
+        },
         onLoadingChange: (loading) => {
           setLoading(loading);
         },
@@ -574,6 +580,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     
     const session = new RandomChatSession(config);
     sessionRef.current = session;
+    setLocalCamSide(session.getCamSide?.() ?? 'front');
+    setRemoteCamSide(session.getRemoteCamSide?.() ?? 'front');
     
     // Подписки на события
     session.on('localStream', (stream) => {
@@ -1121,6 +1129,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     
     try {
       await sessionRef.current.flipCam();
+      setLocalCamSide((prev) => (prev === 'front' ? 'back' : 'front'));
       // КРИТИЧНО: Force local RTCView refresh after flip (sometimes streamId stays the same)
       // Переворот камеры - критическое обновление, поэтому обновляем сразу, даже если интервал не прошел
       const now = Date.now();
@@ -1748,7 +1757,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                     {...(rtcViewProps as any)}
                     style={styles.rtc}
                     objectFit="cover"
-                    mirror={false}
+                    mirror={remoteCamSide === 'front'}
                   />
                 ) : (
                   <View style={styles.remoteBlack} />
@@ -1906,6 +1915,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                         stream: displayStream, 
                         streamURL: localStreamURL, 
                         renderToHardwareTextureAndroid: true,
+                        useTextureView: true,
                       } as any;
                     })()
                   : { streamURL: localStreamURL! }; // iOS: используем streamURL
@@ -1917,7 +1927,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                       {...localRtcViewProps}
                       style={styles.rtc}
                       objectFit="cover"
-                      mirror={false}
+                      mirror={localCamSide === 'front'}
                     />
                   );
                 } else {
