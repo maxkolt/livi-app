@@ -252,7 +252,7 @@ router.patch('/me', async (req, res) => {
 });
 
 /**
- * Регистрация Expo Push Token для устройства.
+ * Регистрация push-токенов для устройства.
  * Ожидаем заголовки:
  * - x-user-id (или userId в query/по installId — как в глобальном middleware)
  * - x-install-id (желательно)
@@ -286,7 +286,12 @@ router.post('/push-token', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
-    const { token, platform, fcmToken } = (req.body || {}) as { token?: string; platform?: 'ios' | 'android'; fcmToken?: string };
+    const { token, platform, fcmToken, voipToken } = (req.body || {}) as {
+      token?: string;
+      platform?: 'ios' | 'android';
+      fcmToken?: string;
+      voipToken?: string;
+    };
 
     if (!token || typeof token !== 'string') {
       return res.status(400).json({ ok: false, error: 'token_required' });
@@ -296,11 +301,13 @@ router.post('/push-token', async (req, res) => {
     }
 
     const fcm = typeof fcmToken === 'string' && fcmToken.length > 0 ? fcmToken : undefined;
-    await upsertExpoPushToken({ userId, installId, platform, token, fcmToken: fcm });
+    const voip = typeof voipToken === 'string' && voipToken.length > 0 ? voipToken : undefined;
+    await upsertExpoPushToken({ userId, installId, platform, token, fcmToken: fcm, voipToken: voip });
     pushLog('token_registered', {
       userId: String(userId),
       platform,
       hasFcmToken: !!fcm,
+      hasVoipToken: !!voip,
     });
     return res.json({ ok: true });
   } catch (e: any) {

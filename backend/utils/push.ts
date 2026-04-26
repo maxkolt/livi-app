@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs';
+import { createHash } from 'crypto';
 import mongoose from 'mongoose';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 import type { ExpoPushTicket } from 'expo-server-sdk';
@@ -7,6 +8,8 @@ import { logger } from './logger';
 import { pushLog } from './pushLogBuffer';
 
 const expo = new Expo();
+const IOS_VOIP_BUNDLE_ID = String(process.env.APNS_BUNDLE_ID || 'com.kolt12max.livi').trim();
+const IOS_VOIP_PRODUCTION = !/^(0|false|no)$/i.test(String(process.env.APNS_PRODUCTION || 'true'));
 
 type PushKind = 'message' | 'call';
 
@@ -71,6 +74,14 @@ async function removeInvalidFcmToken(userId: string, r: { token: string; fcmToke
 }
 
 let firebaseApp: unknown = null;
+let apnsProvider: {
+  send: (notification: unknown, recipients: string | string[]) => Promise<{
+    sent: Array<{ device: string }>;
+    failed: Array<{ device?: string; status?: number; response?: { reason?: string } }>;
+  }>;
+} | null = null;
+let apnsInitAttempted = false;
+
 function getFirebaseMessaging(): { send: (msg: unknown) => Promise<string> } | null {
   if (!firebaseApp) {
     try {
@@ -95,12 +106,151 @@ function getFirebaseMessaging(): { send: (msg: unknown) => Promise<string> } | n
   return firebaseApp ? require('firebase-admin').messaging() : null;
 }
 
+function getApnsVoipProvider():
+  | {
+      send: (notification: unknown, recipients: string | string[]) => Promise<{
+        sent: Array<{ device: string }>;
+        failed: Array<{ device?: string; status?: number; response?: { reason?: string } }>;
+      }>;
+    }
+  | null {
+  if (apnsProvider || apnsInitAttempted) return apnsProvider;
+  apnsInitAttempted = true;
+  try {
+    const keyId = String(process.env.APNS_KEY_ID || '').trim();
+    const teamId = String(process.env.APNS_TEAM_ID || '').trim();
+    const keyPath = String(process.env.APNS_AUTH_KEY_PATH || '').trim();
+    const keyBase64 = String(process.env.APNS_AUTH_KEY_BASE64 || '').trim();
+    const key = keyPath
+      ? readFileSync(keyPath, 'utf8')
+      : keyBase64
+        ? Buffer.from(keyBase64, 'base64').toString('utf8')
+        : '';
+    if (!keyId || !teamId || !key) {
+      logger.warn('[push] APNs VoIP init skipped (missing APNS_* env)');
+      return null;
+    }
+    // `apn` does not ship stable TS types, so keep the provider loosely typed here.
+    const apn = require('apn') as {
+      Provider: new (opts: {
+        token: { key: string; keyId: string; teamId: string };
+        production: boolean;
+      }) => typeof apnsProvider;
+    };
+    apnsProvider = new apn.Provider({
+      token: { key, keyId, teamId },
+      production: IOS_VOIP_PRODUCTION,
+    }) as typeof apnsProvider;
+    logger.info('[push] APNs VoIP provider initialized', {
+      bundleId: IOS_VOIP_BUNDLE_ID,
+      production: IOS_VOIP_PRODUCTION,
+    });
+  } catch (e) {
+    logger.warn('[push] APNs VoIP init failed', { error: (e as Error)?.message });
+    apnsProvider = null;
+  }
+  return apnsProvider;
+}
+
+function shouldRemoveVoipToken(failure: { status?: number; response?: { reason?: string } }): boolean {
+  const status = Number(failure?.status || 0);
+  const reason = String(failure?.response?.reason || '');
+  return (
+    status === 400 ||
+    status === 410 ||
+    reason === 'BadDeviceToken' ||
+    reason === 'DeviceTokenNotForTopic' ||
+    reason === 'Unregistered'
+  );
+}
+
+async function removeInvalidVoipToken(userId: string, rec: { token: string; voipToken?: string }): Promise<boolean> {
+  if (!rec.voipToken) return false;
+  try {
+    let result = await PushTokenModel.updateOne(
+      { userId, voipToken: rec.voipToken },
+      { $unset: { voipToken: 1 }, $set: { updatedAtMs: Date.now() } }
+    ).exec();
+    let modified = (result as { modifiedCount?: number })?.modifiedCount ?? 0;
+    if (modified === 0) {
+      result = await PushTokenModel.updateOne(
+        { userId, token: rec.token },
+        { $unset: { voipToken: 1 }, $set: { updatedAtMs: Date.now() } }
+      ).exec();
+      modified = (result as { modifiedCount?: number })?.modifiedCount ?? 0;
+    }
+    if (modified > 0) {
+      logger.warn('[push] removed invalid VoIP token', { userId, tokenPrefix: String(rec.token).slice(0, 20) });
+      return true;
+    }
+  } catch (e) {
+    logger.warn('[push] failed to remove invalid VoIP token', { userId, error: (e as Error)?.message });
+  }
+  return false;
+}
+
+async function sendVoipPushToRecipient(
+  userId: string,
+  recs: Array<{ token: string; voipToken?: string }>,
+  payload: Record<string, string>,
+  opts?: { expirationMs?: number }
+): Promise<number> {
+  const provider = getApnsVoipProvider();
+  if (!provider) return 0;
+  const targets = recs.filter((r) => typeof r.voipToken === 'string' && r.voipToken.length > 0);
+  if (!targets.length) return 0;
+
+  let sent = 0;
+  for (const rec of targets) {
+    try {
+      const apn = require('apn') as {
+        Notification: new () => {
+          topic: string;
+          pushType: string;
+          priority: number;
+          expiry?: number;
+          payload: Record<string, string>;
+        };
+      };
+      const note = new apn.Notification();
+      note.topic = `${IOS_VOIP_BUNDLE_ID}.voip`;
+      note.pushType = 'voip';
+      note.priority = 10;
+      if (opts?.expirationMs && opts.expirationMs > 0) {
+        note.expiry = Math.max(0, Math.floor(opts.expirationMs / 1000));
+      }
+      note.payload = payload;
+      const result = await provider.send(note, rec.voipToken as string);
+      sent += result.sent?.length || 0;
+      for (const failure of result.failed || []) {
+        if (shouldRemoveVoipToken(failure)) {
+          await removeInvalidVoipToken(userId, rec);
+        }
+        logger.warn('[push] APNs VoIP push failed', {
+          userId,
+          status: failure?.status,
+          reason: failure?.response?.reason || '',
+        });
+      }
+    } catch (e) {
+      logger.warn('[push] APNs VoIP send failed', { userId, error: (e as Error)?.message });
+    }
+  }
+  return sent;
+}
+
 const CALL_PUSH_MAX_ATTEMPTS = 3;
 const CALL_PUSH_RETRY_BASE_DELAY_MS = 700;
 const CALL_PUSH_ESCALATION_TTL_SECONDS = 15;
 const CALL_PUSH_NOTIFICATION_TTL_SECONDS = 15;
 const PUSH_TOKEN_STALE_TTL_MS = Math.max(24 * 60 * 60 * 1000, Number(process.env.PUSH_TOKEN_STALE_TTL_MS || 45 * 24 * 60 * 60 * 1000));
 const MAX_PUSH_TOKENS_PER_USER_PLATFORM = Math.max(2, Number(process.env.MAX_PUSH_TOKENS_PER_USER_PLATFORM || 4));
+
+export function getCallKitUuid(callId: string): string {
+  const hex = createHash('sha1').update(String(callId || '')).digest('hex');
+  const base = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  return base.toLowerCase();
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -279,8 +429,9 @@ export async function upsertExpoPushToken(opts: {
   platform: 'android' | 'ios';
   token: string;
   fcmToken?: string;
+  voipToken?: string;
 }) {
-  const { userId, installId, platform, token, fcmToken } = opts;
+  const { userId, installId, platform, token, fcmToken, voipToken } = opts;
   if (!Expo.isExpoPushToken(token)) {
     throw new Error('invalid_expo_push_token');
   }
@@ -294,6 +445,9 @@ export async function upsertExpoPushToken(opts: {
   };
   if (platform === 'android' && typeof fcmToken === 'string' && fcmToken.length > 0) {
     update.fcmToken = fcmToken;
+  }
+  if (platform === 'ios' && typeof voipToken === 'string' && voipToken.length > 0) {
+    update.voipToken = voipToken;
   }
 
   const result = await PushTokenModel.updateOne(
@@ -309,6 +463,12 @@ export async function upsertExpoPushToken(opts: {
     await PushTokenModel.updateOne(
       { token },
       { $set: { fcmToken, updatedAtMs: Date.now() } }
+    ).exec();
+  }
+  if (platform === 'ios' && typeof voipToken === 'string' && voipToken.length > 0) {
+    await PushTokenModel.updateOne(
+      { token },
+      { $set: { voipToken, updatedAtMs: Date.now() } }
     ).exec();
   }
 
@@ -378,8 +538,8 @@ export async function sendMessagePushToUser(
     messagePreview: dataStr.messagePreview,
   };
   const messaging = getFirebaseMessaging();
-  const recs = await PushTokenModel.find({ userId }).select('token platform fcmToken').lean();
-  type Rec = { token: string; platform: string; fcmToken?: string };
+  const recs = await PushTokenModel.find({ userId }).select('token platform fcmToken voipToken').lean();
+  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
   const list = (recs || []) as unknown as Rec[];
   let androidSent = false;
   if (messaging) {
@@ -534,7 +694,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   const userIdObj = new mongoose.Types.ObjectId(userId);
   const recs = await PushTokenModel.find({ userId: userIdObj })
     .read('primary')
-    .select('_id token platform fcmToken')
+    .select('_id token platform fcmToken voipToken')
     .lean();
   if (!recs?.length) {
     logger.warn('[push] sendCallPushToRecipient: no tokens for user', { userId });
@@ -543,9 +703,11 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
 
   const callTs = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
   const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 20_000;
+  const callKitId = getCallKitUuid(data.callId);
   const fcmData = {
     type: 'call',
     callId: data.callId,
+    callKitId,
     from: data.from,
     fromNick: data.fromNick || '',
     ts: String(callTs),
@@ -555,6 +717,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   const fcmDataPayload: Record<string, string> = {
     type: 'call',
     callId: data.callId,
+    callKitId,
     fromUserId: data.from,
     fromNick: data.fromNick || '',
     ts: String(callTs),
@@ -562,15 +725,17 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   };
 
   const messaging = getFirebaseMessaging();
-  type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string };
+  type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string; voipToken?: string };
   const list = recs as unknown as Rec[];
   const androidWithFcm = list.filter((r) => r.platform === 'android' && r.fcmToken).length;
   const androidTotal = list.filter((r) => r.platform === 'android').length;
+  const iosWithVoip = list.filter((r) => r.platform === 'ios' && r.voipToken).length;
   logger.info('[push] sendCallPushToRecipient', {
     userId,
     hasFirebase: !!messaging,
     androidTokensWithFcm: androidWithFcm,
     androidTokensTotal: androidTotal,
+    iosTokensWithVoip: iosWithVoip,
     totalTokens: list.length,
   });
   const androidRecs = list.filter((r) => r.platform === 'android');
@@ -601,6 +766,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   const expoTokens: string[] = [];
   let androidDataSignalSent = 0;
   let androidNotificationSignalSent = 0;
+  let iosVoipSent = 0;
   for (const r of list) {
     if (r.platform === 'android' && r.fcmToken && messaging) {
       let canSendNotificationSignal = true;
@@ -676,6 +842,29 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     }
   }
 
+  if (iosWithVoip > 0) {
+    iosVoipSent = await sendVoipPushToRecipient(
+      userId,
+      list.filter((r) => r.platform === 'ios'),
+      {
+        type: 'call',
+        callId: data.callId,
+        callKitId,
+        from: data.from,
+        fromNick: data.fromNick || '',
+        ts: String(callTs),
+        expiresAt: String(callExpiresAtMs),
+      },
+      { expirationMs: callExpiresAtMs }
+    );
+    pushLog('call_push_sent_via_apns_voip', {
+      userId,
+      callId: data.callId,
+      iosVoipSent,
+      iosTokensWithVoip: iosWithVoip,
+    });
+  }
+
   if (androidTotal > 0) {
     logger.info('[push] sendCallPushToRecipient Android dual signals', {
       userId,
@@ -693,8 +882,12 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     });
   }
 
-  if (expoTokens.length > 0) {
-    logger.info('[push] sendCallPushToRecipient: sending via Expo (iOS only)', { userId, tokenCount: expoTokens.length });
+  if (expoTokens.length > 0 && iosVoipSent === 0) {
+    logger.info('[push] sendCallPushToRecipient: sending via Expo (iOS fallback)', {
+      userId,
+      tokenCount: expoTokens.length,
+      iosVoipSent,
+    });
     pushLog('call_push_sending_via_Expo', { userId, tokenCount: expoTokens.length });
     const callTitle = (data.fromNick || '').trim() || 'Входящий видеозвонок';
     const callBody = 'Входящий видеозвонок';
@@ -733,11 +926,11 @@ export async function sendCallEscalationPushToRecipient(
   const userIdObj = new mongoose.Types.ObjectId(userId);
   const recs = await PushTokenModel.find({ userId: userIdObj })
     .read('primary')
-    .select('_id token platform fcmToken')
+    .select('_id token platform fcmToken voipToken')
     .lean();
   if (!recs?.length) return { androidTargets: 0, fcmSent: 0, expoSent: 0 };
 
-  type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string };
+  type Rec = { _id?: unknown; token: string; platform: string; fcmToken?: string; voipToken?: string };
   const list = recs as unknown as Rec[];
   const androidRecs = list.filter((r) => r.platform === 'android');
   const androidTargets = androidRecs.length;
@@ -746,11 +939,13 @@ export async function sendCallEscalationPushToRecipient(
   const messaging = getFirebaseMessaging();
   const callTs = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
   const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 20_000;
+  const callKitId = getCallKitUuid(data.callId);
   const title = (data.fromNick || '').trim() || 'Входящий видеозвонок';
   const body = 'Откройте, чтобы ответить';
   const dataPayload: Record<string, string> = {
     type: 'call',
     callId: data.callId,
+    callKitId,
     fromUserId: data.from,
     fromNick: data.fromNick || '',
     ts: String(callTs),
@@ -807,6 +1002,7 @@ export async function sendCallEscalationPushToRecipient(
         data: {
           type: 'call',
           callId: data.callId,
+          callKitId,
           from: data.from,
           fromNick: data.fromNick || '',
           ts: String(callTs),
@@ -853,9 +1049,9 @@ export async function sendCallDeclinedToCaller(callerUserId: string, callId: str
   const messaging = getFirebaseMessaging();
   if (messaging) {
     const recs = await PushTokenModel.find({ userId: callerUserId })
-      .select('token platform fcmToken')
+      .select('token platform fcmToken voipToken')
       .lean();
-    type Rec = { token: string; platform: string; fcmToken?: string };
+    type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
     const list = (recs || []) as unknown as Rec[];
     for (const r of list) {
       if (r.platform === 'android' && r.fcmToken) {
@@ -907,9 +1103,9 @@ export async function sendCallAcceptedToCaller(callerUserId: string, callId: str
   const messaging = getFirebaseMessaging();
   if (messaging) {
     const recs = await PushTokenModel.find({ userId: callerUserId })
-      .select('token platform fcmToken')
+      .select('token platform fcmToken voipToken')
       .lean();
-    type Rec = { token: string; platform: string; fcmToken?: string };
+    type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
     const list = (recs || []) as unknown as Rec[];
     for (const r of list) {
       if (r.platform === 'android' && r.fcmToken) {
@@ -945,11 +1141,26 @@ export async function sendCallCanceledToRecipient(
   logger.info('[push] sendCallCanceledToRecipient start', { calleeUserId, callId, fromUserId });
   const messaging = getFirebaseMessaging();
   const recs = await PushTokenModel.find({ userId: calleeUserId })
-    .select('token platform fcmToken')
+    .select('token platform fcmToken voipToken')
     .lean();
-  type Rec = { token: string; platform: string; fcmToken?: string };
+  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
   const list = (recs || []) as unknown as Rec[];
   let androidSent = false;
+  const iosVoipRecs = list.filter((r) => r.platform === 'ios' && r.voipToken);
+  if (iosVoipRecs.length > 0) {
+    const voipSent = await sendVoipPushToRecipient(
+      calleeUserId,
+      iosVoipRecs,
+      {
+        type: 'call_canceled',
+        callId: String(callId),
+        callKitId: getCallKitUuid(callId),
+        fromUserId: String(fromUserId),
+        fromNick: String(fromNick ?? ''),
+      }
+    );
+    pushLog('call_canceled_sent_via_apns_voip', { userId: calleeUserId, callId, voipSent });
+  }
   if (messaging) {
     for (const r of list) {
       if (r.platform === 'android' && r.fcmToken) {
@@ -959,6 +1170,7 @@ export async function sendCallCanceledToRecipient(
             data: {
               type: 'call_canceled',
               callId: String(callId),
+              callKitId: getCallKitUuid(callId),
               fromUserId: String(fromUserId),
               fromNick: String(fromNick ?? ''),
             },
@@ -987,7 +1199,13 @@ export async function sendCallCanceledToRecipient(
         priority: 'high',
         title,
         body,
-        data: { type: 'call_canceled', callId: String(callId), from: fromUserId, fromNick: fromNick ?? '' },
+        data: {
+          type: 'call_canceled',
+          callId: String(callId),
+          callKitId: getCallKitUuid(callId),
+          from: fromUserId,
+          fromNick: fromNick ?? '',
+        },
       }));
       const chunks = expo.chunkPushNotifications(messages);
       for (const chunk of chunks) await expo.sendPushNotificationsAsync(chunk);
@@ -1004,7 +1222,13 @@ export async function sendCallCanceledToRecipient(
         kind: 'message',
         title,
         body,
-        data: { type: 'call_canceled', callId: String(callId), from: fromUserId, fromNick: fromNick ?? '' },
+        data: {
+          type: 'call_canceled',
+          callId: String(callId),
+          callKitId: getCallKitUuid(callId),
+          from: fromUserId,
+          fromNick: fromNick ?? '',
+        },
       });
       logger.info('[push] call_canceled sent via Expo (Android fallback)');
     } catch (e) {
@@ -1027,11 +1251,27 @@ export async function sendCallEndedToPeer(
   logger.info('[push] sendCallEndedToPeer start', { peerUserId, callId, fromUserId });
   const messaging = getFirebaseMessaging();
   const recs = await PushTokenModel.find({ userId: peerUserId })
-    .select('token platform fcmToken')
+    .select('token platform fcmToken voipToken')
     .lean();
-  type Rec = { token: string; platform: string; fcmToken?: string };
+  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
   const list = (recs || []) as unknown as Rec[];
   let androidSent = false;
+  const iosVoipRecs = list.filter((r) => r.platform === 'ios' && r.voipToken);
+  if (iosVoipRecs.length > 0) {
+    const voipSent = await sendVoipPushToRecipient(
+      peerUserId,
+      iosVoipRecs,
+      {
+        type: 'call_ended',
+        callId: String(callId),
+        callKitId: getCallKitUuid(callId),
+        fromUserId: String(fromUserId),
+        fromNick: String(fromNick ?? ''),
+        endedFromActive: 'true',
+      }
+    );
+    pushLog('call_ended_sent_via_apns_voip', { userId: peerUserId, callId, voipSent });
+  }
   if (messaging) {
     for (const r of list) {
       if (r.platform === 'android' && r.fcmToken) {
@@ -1041,6 +1281,7 @@ export async function sendCallEndedToPeer(
             data: {
               type: 'call_ended',
               callId: String(callId),
+              callKitId: getCallKitUuid(callId),
               fromUserId: String(fromUserId),
               fromNick: String(fromNick ?? ''),
               endedFromActive: 'true',
@@ -1068,7 +1309,14 @@ export async function sendCallEndedToPeer(
         priority: 'high',
         title: 'Звонок завершён',
         body: 'Собеседник завершил разговор',
-        data: { type: 'call_ended', from: fromUserId, fromNick: fromNick ?? '', callId: String(callId), endedFromActive: true },
+        data: {
+          type: 'call_ended',
+          from: fromUserId,
+          fromNick: fromNick ?? '',
+          callId: String(callId),
+          callKitId: getCallKitUuid(callId),
+          endedFromActive: true,
+        },
       }));
       const chunks = expo.chunkPushNotifications(messages);
       for (const chunk of chunks) await expo.sendPushNotificationsAsync(chunk);

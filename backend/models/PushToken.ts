@@ -10,6 +10,8 @@ const PushTokenSchema = new mongoose.Schema(
     token: { type: String, required: true, unique: true, index: true },
     /** FCM registration token (Android only). Для data-only пуша звонка — onMessageReceived вызывается в фоне. */
     fcmToken: { type: String, default: '', index: true },
+    /** APNs VoIP token (iOS only). Для PushKit/CallKit входящего при фоне/убитом приложении. */
+    voipToken: { type: String, default: '', index: true },
     updatedAtMs: { type: Number, default: () => Date.now(), index: true },
   },
   { timestamps: true }

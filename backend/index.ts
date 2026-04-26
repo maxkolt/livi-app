@@ -43,6 +43,7 @@ import {
   sendCallEndedToPeer,
   sendCallDeclinedToCaller,
   sendCallAcceptedToCaller,
+  getCallKitUuid,
 } from './utils/push';
 import { pushLog } from './utils/pushLogBuffer';
 import * as queueStore from './utils/queueStore';
@@ -1082,6 +1083,7 @@ async function replayIncomingToCalleeIfRinging(sock: AuthedSocket, userId: strin
     try {
       sock.emit('call:incoming', {
         callId: entry.callId,
+        callKitId: getCallKitUuid(entry.callId),
         from: link.a,
         fromNick,
         ts: link.createdAtMs,
@@ -2726,6 +2728,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           try {
             (recipientSocket as any).emit('call:incoming', {
               callId,
+              callKitId: getCallKitUuid(callId),
               from: me,
               fromNick,
               ts: createdAtMs,
@@ -2739,6 +2742,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (recipientSockets.length === 0 && roomSize > 0) {
           io.to(`u:${peerId}`).emit('call:incoming', {
             callId,
+            callKitId: getCallKitUuid(callId),
             from: me,
             fromNick,
             ts: createdAtMs,
