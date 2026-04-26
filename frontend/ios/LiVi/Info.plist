@@ -80,6 +80,11 @@
     <string>Разрешите сохранять изображения в медиатеку.</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>Разрешите доступ к фото, чтобы выбрать аватар.</string>
+    <key>UIBackgroundModes</key>
+    <array>
+      <string>voip</string>
+      <string>remote-notification</string>
+    </array>
     <key>UILaunchStoryboardName</key>
     <string>SplashScreen</string>
     <key>UIRequiredDeviceCapabilities</key>

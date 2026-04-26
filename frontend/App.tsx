@@ -34,7 +34,9 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, notifyCallCanceled } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, notifyCallCanceled, addEndedCallId } from './utils/callKeep';
+import { isIncomingCallExpired } from './utils/callExpiry';
+import { addVoipTokenListener } from './utils/voipPush';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 
@@ -835,7 +837,7 @@ function AppContent() {
   // Время последнего инкремента пропущенного по userId (из сокета) — чтобы не дублировать при применении pending с FCM
   const lastMissedIncrementTimeByUserRef = React.useRef<Record<string, number>>({});
   // Ref для хранения обработчика входящего звонка, чтобы он всегда был доступен
-  const incomingCallHandlerRef = React.useRef<((d: { callId: string; from: string; fromNick?: string }) => void) | null>(null);
+  const incomingCallHandlerRef = React.useRef<((d: { callId: string; callKitId?: string; from: string; fromNick?: string; ts?: number | string; expiresAt?: number | string }) => void) | null>(null);
 
 
   const startAnim = React.useCallback(() => {
@@ -904,11 +906,9 @@ function AppContent() {
 
       // 📞 Android: разрешение «звонки и управление ими» (CallKeep/ConnectionService) — запрашиваем вместе с остальными,
       // чтобы диалог не появлялся поверх экрана исходящего звонка.
-      if (Platform.OS === 'android') {
-        try {
-          await setupCallKeep({ requestPermission: true });
-        } catch {}
-      }
+      try {
+        await setupCallKeep({ requestPermission: Platform.OS === 'android' });
+      } catch {}
 
         // 📱 Android: модалка «показ поверх других окон» — только один раз при первом запуске после установки.
       if (Platform.OS === 'android') {
@@ -1063,6 +1063,15 @@ function AppContent() {
       if (uid) registerAndSendPushToken(uid, { reason: 'app_active' }).catch(() => {});
     });
     return () => sub.remove();
+  }, []);
+
+  React.useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    return addVoipTokenListener((token) => {
+      const uid = getCurrentUserId?.();
+      if (!uid || !token) return;
+      registerAndSendPushToken(uid, { force: true, reason: 'ios_voip_token' }).catch(() => {});
+    });
   }, []);
 
   // ===== Deep Linking: звонки livi://incoming-call | livi://answer-call | livi://decline-call =====
@@ -1706,7 +1715,7 @@ function AppContent() {
   const INCOMING_CALL_DEBOUNCE_MS = 3000;
   const lastProcessedIncomingRef = React.useRef<{ callId: string; at: number } | null>(null);
 
-  const handleIncomingCall = React.useCallback((d: { callId: string; from: string; fromNick?: string }) => {
+  const handleIncomingCall = React.useCallback((d: { callId: string; callKitId?: string; from: string; fromNick?: string; ts?: number | string; expiresAt?: number | string }) => {
     const callId = String(d?.callId ?? '');
     const now = Date.now();
     const last = lastProcessedIncomingRef.current;
@@ -1756,6 +1765,16 @@ function AppContent() {
       logger.debug('[call:incoming] Ignoring incoming from current partner (active VideoCall)', { callId: d.callId, from: d.from });
       return;
     }
+    if (isIncomingCallExpired({ expiresAt: d.expiresAt, ts: d.ts })) {
+      logger.info('[call:incoming] Ignoring stale incoming call', {
+        callId: d.callId,
+        from: d.from,
+        ts: d.ts,
+        expiresAt: d.expiresAt,
+      });
+      try { addEndedCallId(d.callId); } catch {}
+      return;
+    }
 
     // Android: мы отказались от кастомных модалок — входящий всегда открываем нативным экраном
     // поверх любого экрана/вкладки/модалки в приложении (в т.ч. "неактивный" VideoCall после завершения).
@@ -1784,7 +1803,7 @@ function AppContent() {
       }
     } else if (isCallKeepAvailable()) {
       // iOS: системный UI через CallKeep (нативный, без RN-модалки)
-      displayIncomingCall(d.callId, d.from, d.fromNick ?? '', true);
+      displayIncomingCall(d.callId, d.from, d.fromNick ?? '', true, d.callKitId);
     }
     try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
   }, [routeName]);
@@ -1793,7 +1812,14 @@ function AppContent() {
   incomingCallHandlerRef.current = handleIncomingCall;
   (global as any).__setIncomingCallFromPush = (data: any) => {
     if (data?.callId && data?.from && incomingCallHandlerRef.current) {
-      incomingCallHandlerRef.current({ callId: String(data.callId), from: String(data.from), fromNick: data?.fromNick ?? '' });
+      incomingCallHandlerRef.current({
+        callId: String(data.callId),
+        callKitId: data?.callKitId ? String(data.callKitId) : undefined,
+        from: String(data.from),
+        fromNick: data?.fromNick ?? '',
+        ts: data?.ts,
+        expiresAt: data?.expiresAt,
+      });
     }
   };
 

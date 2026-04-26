@@ -77,19 +77,25 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         vLog("FCM parsed typeNorm=$typeNorm callId=$callId")
 
         if (typeNorm == "call" && callId != null && from != null) {
-            // Пуш «call» пришёл с задержкой (устройство было офлайн): показываем только «Пропущенный вызов», не полноэкранный входящий (порог 22 сек — чуть больше таймаута звонка на сервере).
-            val STALE_CALL_MS = 22_000L
+            // Пуш «call» пришёл с задержкой (устройство было офлайн): показываем только «Пропущенный вызов», не полноэкранный входящий.
+            val CALL_RING_TIMEOUT_MS = 20_000L
+            val STALE_GRACE_MS = 2_000L
             var callTs: Long? = data["ts"]?.toLongOrNull()
+            var callExpiresAtMs: Long? = data["expiresAt"]?.toLongOrNull()
             if (callTs == null && data["body"] != null) {
                 try {
                     val body = JSONObject(data["body"]!!)
                     callTs = body.optString("ts", "").takeIf { it.isNotEmpty() }?.toLongOrNull()
+                    if (callExpiresAtMs == null) {
+                        callExpiresAtMs = body.optString("expiresAt", "").takeIf { it.isNotEmpty() }?.toLongOrNull()
+                    }
                 } catch (_: Exception) {}
             }
-            if (callTs != null) {
-                val ageMs = System.currentTimeMillis() - callTs
-                if (ageMs > STALE_CALL_MS) {
-                    Log.i(TAG, "[INCOMING_CALL] FCM call push treated as stale (delayed delivery) callId=$callId ageMs=$ageMs")
+            if (callExpiresAtMs == null && callTs != null) {
+                callExpiresAtMs = callTs + CALL_RING_TIMEOUT_MS
+            }
+            if (callExpiresAtMs != null && System.currentTimeMillis() > callExpiresAtMs + STALE_GRACE_MS) {
+                    Log.i(TAG, "[INCOMING_CALL] FCM call push treated as stale (delayed delivery) callId=$callId expiresAtMs=$callExpiresAtMs ts=$callTs")
                     EndedCallIds.add(this, callId)
                     try {
                         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -100,7 +106,6 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                         showMissedCallNotification(callId, from, fromNick)
                     }
                     return
-                }
             }
             // Dual-signal режим (data + notification) может доставить одно и то же call событие дважды.
             // Отсекаем дубликаты по callId в коротком окне, чтобы не было двойного запуска экрана.
@@ -394,48 +399,14 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         LiviAppModule.updateAppIconBadgeFromMissedCount(this)
     }
 
-    /** Учёт пропущенного звонка и одно системное уведомление в шторке: «От кого HH:MM» + «Пропущенный видеозвонок». */
+    /** Учёт пропущенного звонка и обновление общего summary-уведомления в шторке. */
     private fun showMissedCallNotification(callId: String, fromUserId: String, fromNick: String) {
         ensureMissedCallChannel(this)
         LiviAppModule.addPendingMissedCall(this, fromUserId)
         LiviAppModule.saveMissedCallNick(this, fromUserId, fromNick)
-        val count = LiviAppModule.incrementMissedCountForUser(this, fromUserId)
-        val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date())
-        val displayNick = fromNick.trim().ifEmpty { getString(R.string.incoming_call_title) }
-        val title = "$displayNick $timeStr".trim().ifEmpty { getString(R.string.missed_call_video) }
-        val body = if (count > 1) getString(R.string.missed_call_from_count, count, displayNick) else getString(R.string.missed_call_video)
-        val safeBody = body.ifEmpty { getString(R.string.missed_call_video) }
-        val smallIconRes = resources.getIdentifier("ic_launcher", "mipmap", packageName).takeIf { it != 0 }
-            ?: android.R.drawable.ic_menu_call
-        val contentIntent = Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
-        }
-        val contentPending = PendingIntent.getActivity(
-            this, 0, contentIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val deleteIntent = Intent(LiviAppModule.ACTION_MISSED_CALL_DISMISSED).apply {
-            setPackage(packageName)
-            putExtra(LiviAppModule.EXTRA_USER_ID, fromUserId)
-        }
-        val deletePending = PendingIntent.getBroadcast(
-            this, fromUserId.hashCode() and 0x7FFF, deleteIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID_MISSED_CALL)
-            .setSmallIcon(smallIconRes)
-            .setContentTitle(title)
-            .setContentText(safeBody)
-            .setContentIntent(contentPending)
-            .setDeleteIntent(deletePending)
-            .setAutoCancel(true)
-            .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .build()
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(LiviAppModule.getMissedNotificationIdForUser(fromUserId), notification)
+        LiviAppModule.incrementMissedCountForUser(this, fromUserId)
+        val total = LiviAppModule.getTotalMissedCount(this)
+        updateSummaryMissedCallsNotification(this, total)
         LiviAppModule.updateAppIconBadgeFromMissedCount(this)
     }
 
@@ -684,10 +655,43 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
         }
 
-        /** Уведомления в шторке отключены — только системный бейдж. */
+        /** Показать/обновить одно уведомление «N пропущенных звонков» в шторке. */
         @JvmStatic
         fun updateSummaryMissedCallsNotification(context: Context, total: Int) {
             if (total <= 0) return
+            ensureMissedCallChannel(context)
+            val title = context.getString(R.string.summary_missed_calls_title)
+            val body = context.getString(R.string.summary_missed_calls_count, total)
+            val contentIntent = Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
+            }
+            val contentPending = PendingIntent.getActivity(context, 0, contentIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
+                ?: android.R.drawable.ic_menu_call
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    @Suppress("DEPRECATION")
+                    val active = nm.activeNotifications
+                    val base = LiviAppModule.MISSED_NOTIFICATION_ID_BASE
+                    for (n in active) {
+                        val id = n.id
+                        if (id in base until base + 0x8000) nm.cancel(id)
+                    }
+                }
+            } catch (_: Exception) {}
+            val notification = NotificationCompat.Builder(context, CHANNEL_ID_MISSED_CALL)
+                .setSmallIcon(smallIconRes)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setContentIntent(contentPending)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .build()
+            nm.notify(NOTIFICATION_ID_SUMMARY_MISSED_CALLS, notification)
         }
 
         /** Показать/обновить одно уведомление «N непрочитанных» в шторке. */
@@ -711,45 +715,23 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             buildAndShowUnreadNotification(context, NOTIFICATION_ID_SUMMARY_UNREAD, title, body)
         }
 
-        /** Сообщение: MessagingStyle + HIGH + снятие прежнего уведомления — иначе Android часто не показывает heads-up при notify с тем же id. */
+        /** Сообщение: одно summary-уведомление «N непрочитанных» с последним отправителем и временем. */
         @JvmStatic
         fun showMessageNotificationWithPreview(context: Context, fromUserId: String, fromNick: String, timeStr: String, messagePreview: String, unreadFromSender: Int = 1) {
-            ensureUnreadChannel(context)
-            val nick = fromNick.trim().ifEmpty { "—" }
-            val time = timeStr.trim()
-            val previewRaw = messagePreview.trim().ifEmpty { context.getString(R.string.notification_new_message) }
-            val lineText = buildString {
-                if (time.isNotEmpty()) append(time).append("\n")
-                append(previewRaw)
-                if (unreadFromSender > 1) append(" · ").append(unreadFromSender)
-            }
-            val whenMs = System.currentTimeMillis()
-            val sender = Person.Builder().setName(nick).build()
-            val style = NotificationCompat.MessagingStyle(sender)
-                .setGroupConversation(false)
-                .addMessage(lineText, whenMs, sender)
-            val contentIntent = Intent(context, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
-            }
-            val contentPending = PendingIntent.getActivity(context, 0, contentIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
-            val notificationId = LiviAppModule.getMessageNotificationIdForUser(fromUserId)
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             try {
-                nm.cancel(notificationId)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    @Suppress("DEPRECATION")
+                    val active = nm.activeNotifications
+                    val base = NOTIFICATION_ID_MESSAGE_BASE
+                    for (n in active) {
+                        val id = n.id
+                        if (id in base until base + 0x8000) nm.cancel(id)
+                    }
+                }
             } catch (_: Exception) {}
-            val notification = NotificationCompat.Builder(context, CHANNEL_ID_UNREAD)
-                .setSmallIcon(smallIconRes)
-                .setStyle(style)
-                .setContentIntent(contentPending)
-                .setAutoCancel(true)
-                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setOnlyAlertOnce(false)
-                .build()
-            nm.notify(notificationId, notification)
+            val unreadTotal = unreadFromSender.coerceAtLeast(1)
+            updateSummaryUnreadNotificationWithLast(context, unreadTotal, fromNick, timeStr)
         }
 
         private fun buildAndShowUnreadNotification(context: Context, notificationId: Int, title: String, body: String) {

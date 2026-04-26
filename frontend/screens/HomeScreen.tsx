@@ -4728,8 +4728,8 @@ const handleClearNick = useCallback(async () => {
     );
   };
 
-  // Показ уведомления «Звонок завершён» / «Вызов отменен», авто-открытие меню друзей, переход на вкладку «Друзья» (тап по «Пропущенный вызов»).
-  // При переходе по тапу «Пропущенный вызов» (openFriendsTab) — снимаем уведомления из шторки и бейдж.
+  // Показ уведомления «Звонок завершён» / «Вызов отменен», авто-открытие меню друзей, переход на вкладку «Друзья».
+  // При переходе по тапу summary-уведомлений (пропущенные / непрочитанные) — снимаем уведомления из шторки и бейдж.
   useEffect(() => {
     const ended = (route as any)?.params?.callEnded;
     const cancelled = (route as any)?.params?.callCancelled;
@@ -4750,6 +4750,7 @@ const handleClearNick = useCallback(async () => {
       setTab('friends');
       // Сразу снимаем уведомления из шторки (дублируем нативный dismiss на случай, если интент не дошёл)
       dismissMissedCallNotificationsOnly().catch(() => {});
+      dismissMessageNotificationsOnly().catch(() => {});
       setMissedBadgeCleared()
         .then(() => syncAppBadgeFromMissedCount())
         .catch(() => {});

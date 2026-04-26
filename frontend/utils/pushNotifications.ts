@@ -20,6 +20,8 @@ import { stopIncomingCallAlert } from './incomingCallAlert';
 import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration } from './callKeep';
 import { emitCloseOutgoingCall, emitCloseHomeModals } from './globalEvents';
 import { loadLang, t } from './i18n';
+import { isIncomingCallExpired } from './callExpiry';
+import { getVoipPushToken } from './voipPush';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 /** Флаг: пользователь заходил во вкладку «Друзья» и «увидел» пропущенные — бейдж и уведомления в шторке скрываем, счётчики в приложении не трогаем. */
@@ -38,7 +40,7 @@ type PushTokenSnapshot = {
 
 type RegisterPushTokenOptions = {
   force?: boolean;
-  reason?: 'startup' | 'app_active' | 'socket_reconnect' | 'manual';
+  reason?: 'startup' | 'app_active' | 'socket_reconnect' | 'manual' | 'ios_voip_token';
 };
 
 let lastRegisteredPushToken: PushTokenSnapshot | null = null;
@@ -523,10 +525,12 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
       const nav = await waitForNavReady();
       if (!nav) return;
       await clearNotificationIndicators();
-      const peerId = String(data?.from || '');
-      const peerName = String(data?.fromNick || '').trim() || '—';
-      if (!peerId) return;
-      nav.navigate('Chat', { peerId, peerName } as any);
+      nav.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [{ name: 'Home' as never, params: { openFriendsMenu: true, openFriendsTab: true } }],
+        })
+      );
       return;
     }
 
@@ -534,6 +538,19 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
       const peerUserId = String(data?.from || '');
       const callId = String(data?.callId || '');
       if (!peerUserId) return;
+      if (isIncomingCallExpired({ expiresAt: data?.expiresAt, ts: data?.ts })) {
+        logger.info('[push] ignore stale call notification action', {
+          callId,
+          actionIdentifier,
+          expiresAt: data?.expiresAt,
+          ts: data?.ts,
+        });
+        try {
+          addEndedCallId(callId);
+        } catch {}
+        await clearCallRelatedNotificationsAndSyncBadge();
+        return;
+      }
 
       const isAnswer = actionIdentifier === 'answer';
       const isDecline = actionIdentifier === 'decline';
@@ -770,10 +787,12 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
       }
 
       // Регистрируем токен на backend. Для Android входящий звонок с кнопками возможен только при отправке fcmToken — бэкенд шлёт FCM data-only.
+      const voipToken = Platform.OS === 'ios' ? await getVoipPushToken() : undefined;
       const body: Record<string, unknown> = {
         token,
         platform: Platform.OS,
         ...(Platform.OS === 'android' && fcmToken ? { fcmToken } : {}),
+        ...(Platform.OS === 'ios' && voipToken ? { voipToken } : {}),
       };
       if (Platform.OS === 'android') {
         logger.info('[push] registering token', { hasFcmToken: !!fcmToken });
@@ -914,11 +933,12 @@ export function addNotificationListeners() {
           logger.info('[push] incoming call notification ignored (call already ended)', { callId: data.callId });
           return;
         }
-        // Пуш «call» пришёл с задержкой (устройство было офлайн): показываем только «Пропущенный вызов», не полноэкранный входящий.
-        const STALE_CALL_MS = 22 * 1000; // 22 сек — чуть больше таймаута звонка на сервере (20 сек)
-        const ts = data.ts != null ? Number(data.ts) : NaN;
-        if (!Number.isNaN(ts) && Date.now() - ts > STALE_CALL_MS) {
-          logger.info('[push] incoming call notification treated as stale (delayed delivery)', { callId: data.callId, ts, ageMs: Date.now() - ts });
+        if (isIncomingCallExpired({ expiresAt: data.expiresAt, ts: data.ts })) {
+          logger.info('[push] incoming call notification treated as stale (delayed delivery)', {
+            callId: data.callId,
+            ts: data.ts,
+            expiresAt: data.expiresAt,
+          });
           try {
             addEndedCallId(String(data.callId));
           } catch {}
@@ -954,7 +974,7 @@ export function addNotificationListeners() {
         if (Platform.OS === 'android') {
           await launchIncomingCallActivityScreen(data.callId, data.from, data.fromNick ?? '', true);
         } else if (isCallKeepAvailable() && AppState.currentState !== 'active') {
-          displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true);
+          displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true, data.callKitId);
         }
         const setFromPush = (global as any).__setIncomingCallFromPush;
         if (typeof setFromPush === 'function') {

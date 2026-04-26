@@ -14,13 +14,18 @@ import { registerRootComponent } from 'expo';
 import App from './App';
 import { isEndedCallId, setupCallKeep, displayIncomingCall, stopIncomingCallForegroundService, showIncomingCallSystemUI } from './utils/callKeep';
 import * as Notifications from 'expo-notifications';
+import { isIncomingCallExpired } from './utils/callExpiry';
 
 // Headless: при входящем пуше показываем баннер через ConnectionService/CallKeep (как в Telegram) — он не исчезает через 5–7 сек.
-AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (data: { type?: string; callId?: string; from?: string; fromNick?: string } | null) => {
+AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (data: { type?: string; callId?: string; from?: string; fromNick?: string; ts?: number | string; expiresAt?: number | string } | null) => {
   if (Platform.OS !== 'android') return;
   console.log('[headless] RNCallKeepBackgroundMessage received', data ? { type: data.type, callId: data?.callId, from: data?.from } : null);
   if (!data || data.type !== 'call' || !data.callId || !data.from) return;
   try {
+    if (isIncomingCallExpired({ expiresAt: data.expiresAt, ts: data.ts })) {
+      console.log('[headless] skip stale incoming call', { callId: data.callId, ts: data.ts, expiresAt: data.expiresAt });
+      return;
+    }
     if (await isEndedCallId(data.callId)) {
       console.log('[headless] skip (call already ended)', data.callId);
       return;

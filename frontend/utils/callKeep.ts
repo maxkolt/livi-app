@@ -13,8 +13,32 @@ export const OUTGOING_CALL_TIMEOUT_MS = 20_000;
 let isSetup = false;
 /** Разрешение READ_PHONE_NUMBERS выдано (иначе VoiceConnectionService падает с SecurityException) */
 let hasPhoneNumbersPermission = false;
-/** callId (uuid) -> { from, fromNick } для навигации при answer из нативного UI */
-const pendingCallByUuid: Record<string, { from: string; fromNick?: string }> = {};
+/** raw callId -> { from, fromNick, callKitId } для навигации при answer из нативного UI */
+const pendingCallById: Record<string, { from: string; fromNick?: string; callKitId?: string }> = {};
+const callKitUuidByCallId: Record<string, string> = {};
+const callIdByCallKitUuid: Record<string, string> = {};
+
+function resolveRawCallId(callIdOrUuid: string): string {
+  const id = String(callIdOrUuid || '').trim();
+  return callIdByCallKitUuid[id] || id;
+}
+
+function resolveCallKeepUuid(callIdOrUuid: string): string {
+  const id = String(callIdOrUuid || '').trim();
+  return callKitUuidByCallId[id] || id;
+}
+
+function rememberPendingCall(input: { callId: string; from: string; fromNick?: string; callKitId?: string }): void {
+  const callId = String(input.callId || '').trim();
+  const from = String(input.from || '').trim();
+  const callKitId = String(input.callKitId || '').trim();
+  if (!callId || !from) return;
+  pendingCallById[callId] = { from, fromNick: input.fromNick, callKitId: callKitId || undefined };
+  if (callKitId) {
+    callKitUuidByCallId[callId] = callKitId;
+    callIdByCallKitUuid[callKitId] = callId;
+  }
+}
 
 type SetupCallKeepOptions = {
   requestPermission?: boolean;
@@ -22,9 +46,49 @@ type SetupCallKeepOptions = {
 
 /** Ленивая инициализация CallKeep. Permission можно только проверить или запросить явно. */
 export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boolean> {
-  if (Platform.OS !== 'android') return false;
   const requestPermission = options?.requestPermission === true;
   const lang = await loadLang();
+
+  if (Platform.OS === 'ios') {
+    try {
+      const RNCallKeep = require('react-native-callkeep');
+      const settings = {
+        ios: {
+          appName: 'LiVi',
+          handleType: 'generic',
+          supportsVideo: true,
+          includesCallsInRecents: false,
+          maximumCallGroups: '1',
+          maximumCallsPerCallGroup: '1',
+        },
+        android: {
+          alertTitle: t('callPermissionTitle', lang),
+          alertDescription: t('callKeepAlertDescription', lang),
+          cancelButton: t('cancelAction', lang),
+          okButton: t('allowAction', lang),
+          selfManaged: true,
+          foregroundService: {
+            channelId: 'livi_call_channel',
+            channelName: t('callChannelName', lang),
+            notificationTitle: t('callNotificationTitle', lang),
+            notificationIcon: 'ic_launcher',
+          },
+        },
+      };
+      try {
+        RNCallKeep.default.setSettings?.(settings);
+      } catch {
+        await RNCallKeep.default.setup(settings);
+      }
+      isSetup = true;
+      return true;
+    } catch (e) {
+      logger.warn('[callKeep] iOS setup failed', e as Error);
+      return false;
+    }
+  }
+
+  if (Platform.OS !== 'android') return false;
 
   try {
     const status = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS);
@@ -89,6 +153,7 @@ export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boo
 }
 
 export function isCallKeepAvailable(): boolean {
+  if (Platform.OS === 'ios') return isSetup;
   return Platform.OS === 'android' && isSetup && hasPhoneNumbersPermission;
 }
 
@@ -429,9 +494,9 @@ export function displayOutgoingCall(callId: string, toUserId: string, toNick?: s
  * Показать входящий звонок в нативном UI (полный экран / уведомление).
  * Вызывать при получении входящего (сокет или пуш). Повторные вызовы для того же callId игнорируются.
  */
-export function displayIncomingCall(callId: string, fromUserId: string, fromNick?: string, hasVideo = true): void {
-  if (Platform.OS !== 'android') return;
-  if (!isSetup || !hasPhoneNumbersPermission) {
+export function displayIncomingCall(callId: string, fromUserId: string, fromNick?: string, hasVideo = true, callKitId?: string): void {
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
+  if (!isSetup || (Platform.OS === 'android' && !hasPhoneNumbersPermission)) {
     logger.warn('[callKeep] displayIncomingCall skipped (no setup or no READ_PHONE_NUMBERS)', {
       callId,
       isSetup,
@@ -447,9 +512,16 @@ export function displayIncomingCall(callId: string, fromUserId: string, fromNick
   lastDisplayedCallId.id = callId;
   lastDisplayedCallId.at = now;
   try {
-    pendingCallByUuid[callId] = { from: fromUserId, fromNick };
+    rememberPendingCall({ callId, from: fromUserId, fromNick, callKitId });
     const RNCallKeep = require('react-native-callkeep');
-    RNCallKeep.default.displayIncomingCall(callId, fromUserId, fromNick ?? '', hasVideo);
+    const nativeCallId = Platform.OS === 'ios' ? resolveCallKeepUuid(callKitId || callId) : callId;
+    if (Platform.OS === 'ios') {
+      RNCallKeep.default.displayIncomingCall(nativeCallId, fromUserId, fromNick ?? '', 'generic', hasVideo, {
+        ios: { supportsHolding: false, supportsDTMF: false, supportsGrouping: false, supportsUngrouping: false },
+      });
+    } else {
+      RNCallKeep.default.displayIncomingCall(nativeCallId, fromUserId, fromNick ?? '', hasVideo);
+    }
     setIncomingCallScreenVisible(true, fromUserId);
     logger.info('[callKeep] displayIncomingCall', { callId, from: fromUserId });
   } catch (e) {
@@ -458,23 +530,32 @@ export function displayIncomingCall(callId: string, fromUserId: string, fromNick
 }
 
 /** Данные входящего по callId (для навигации при answer из нативного UI). */
-export function getPendingCallInfo(callId: string): { from: string; fromNick?: string } | undefined {
-  return pendingCallByUuid[callId];
+export function getPendingCallInfo(callId: string): { from: string; fromNick?: string; callKitId?: string } | undefined {
+  return pendingCallById[resolveRawCallId(callId)];
 }
 
 export function clearPendingCall(callId: string): void {
-  delete pendingCallByUuid[callId];
+  const rawCallId = resolveRawCallId(callId);
+  const callKitId = callKitUuidByCallId[rawCallId];
+  delete pendingCallById[rawCallId];
+  if (callKitId) {
+    delete callIdByCallKitUuid[callKitId];
+  }
+  delete callKitUuidByCallId[rawCallId];
 }
 
 /**
  * Сообщить CallKeep, что пользователь принял звонок (вызывать после перехода на VideoCall и acceptCall).
  */
 export function reportAnswerIncomingCall(callId: string): void {
-  if (Platform.OS !== 'android' || !isSetup) return;
+  if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !isSetup) return;
   try {
     const RNCallKeep = require('react-native-callkeep');
-    RNCallKeep.default.answerIncomingCall(callId);
-    RNCallKeep.default.setCurrentCallActive?.(callId);
+    const nativeCallId = resolveCallKeepUuid(callId);
+    RNCallKeep.default.answerIncomingCall(nativeCallId);
+    if (Platform.OS === 'android') {
+      RNCallKeep.default.setCurrentCallActive?.(nativeCallId);
+    }
     clearPendingCall(callId);
   } catch (e) {
     logger.warn('[callKeep] answerIncomingCall failed', e as Error);
@@ -485,10 +566,10 @@ export function reportAnswerIncomingCall(callId: string): void {
  * Сообщить CallKeep, что пользователь отклонил звонок.
  */
 export function reportRejectCall(callId: string): void {
-  if (Platform.OS !== 'android' || !isSetup) return;
+  if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !isSetup) return;
   try {
     const RNCallKeep = require('react-native-callkeep');
-    RNCallKeep.default.rejectCall(callId);
+    RNCallKeep.default.rejectCall(resolveCallKeepUuid(callId));
     clearPendingCall(callId);
   } catch (e) {
     logger.warn('[callKeep] rejectCall failed', e as Error);
@@ -500,10 +581,10 @@ export function reportRejectCall(callId: string): void {
  * Обязательно вызывать при завершении звонка, иначе следующий звонок может не идти.
  */
 export function reportEndCallToCallKeep(callId: string | null): void {
-  if (Platform.OS !== 'android' || !isSetup || !callId) return;
+  if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !isSetup || !callId) return;
   try {
     const RNCallKeep = require('react-native-callkeep');
-    RNCallKeep.default.endCall(callId);
+    RNCallKeep.default.endCall(resolveCallKeepUuid(callId));
     clearPendingCall(callId);
     logger.debug('[callKeep] endCall reported', { callId });
   } catch (e) {
@@ -535,21 +616,56 @@ export type CallKeepEventCallbacks = {
  * Возвращает функцию отписки.
  */
 export function registerCallKeepEvents(callbacks: CallKeepEventCallbacks): () => void {
-  if (Platform.OS !== 'android') return () => {};
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') return () => {};
   try {
     const RNCallKeep = require('react-native-callkeep');
+    const syncPendingFromDisplay = (event: {
+      callUUID?: string;
+      handle?: string;
+      localizedCallerName?: string;
+      payload?: Record<string, unknown>;
+    }) => {
+      const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+      const callId = String((payload as any)?.callId || event?.callUUID || '').trim();
+      const from = String((payload as any)?.from || (payload as any)?.fromUserId || event?.handle || '').trim();
+      const fromNick = String((payload as any)?.fromNick || event?.localizedCallerName || '').trim();
+      const callKitId = String((payload as any)?.callKitId || event?.callUUID || '').trim();
+      if (callId && from) {
+        rememberPendingCall({ callId, callKitId, from, fromNick: fromNick || undefined });
+      }
+    };
     const onAnswer = ({ callUUID }: { callUUID?: string }) => {
-      if (callUUID) callbacks.onAnswer(callUUID);
+      if (callUUID) callbacks.onAnswer(resolveRawCallId(callUUID));
     };
     const onEnd = ({ callUUID }: { callUUID?: string }) => {
-      if (callUUID) callbacks.onEnd(callUUID);
+      if (callUUID) callbacks.onEnd(resolveRawCallId(callUUID));
+    };
+    const onDisplay = (event: { callUUID?: string; handle?: string; localizedCallerName?: string; payload?: Record<string, unknown> }) => {
+      syncPendingFromDisplay(event);
     };
     RNCallKeep.default.addEventListener('answerCall', onAnswer);
     RNCallKeep.default.addEventListener('endCall', onEnd);
+    RNCallKeep.default.addEventListener('didDisplayIncomingCall', onDisplay);
+    RNCallKeep.default.getInitialEvents?.()
+      ?.then?.((events: Array<{ name?: string; data?: any }>) => {
+        for (const event of events || []) {
+          const name = String(event?.name || '');
+          if (name === 'RNCallKeepDidDisplayIncomingCall') {
+            syncPendingFromDisplay(event?.data || {});
+          } else if (name === 'RNCallKeepPerformAnswerCallAction' && event?.data?.callUUID) {
+            callbacks.onAnswer(resolveRawCallId(String(event.data.callUUID)));
+          } else if (name === 'RNCallKeepPerformEndCallAction' && event?.data?.callUUID) {
+            callbacks.onEnd(resolveRawCallId(String(event.data.callUUID)));
+          }
+        }
+        RNCallKeep.default.clearInitialEvents?.();
+      })
+      ?.catch?.(() => {});
     return () => {
       try {
         RNCallKeep.default.removeEventListener?.('answerCall', onAnswer);
         RNCallKeep.default.removeEventListener?.('endCall', onEnd);
+        RNCallKeep.default.removeEventListener?.('didDisplayIncomingCall', onDisplay);
       } catch {}
     };
   } catch (e) {

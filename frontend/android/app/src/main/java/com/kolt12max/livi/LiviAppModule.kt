@@ -936,6 +936,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       clearMissedCountForUser(reactApplicationContext, userId)
       val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
       nm.cancel(getMissedNotificationIdForUser(userId))
+      val total = getTotalMissedCount(reactApplicationContext)
+      if (total > 0) {
+        LiviFirebaseMessagingService.updateSummaryMissedCallsNotification(reactApplicationContext, total)
+      } else {
+        nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
+      }
     } catch (_: Exception) {}
   }
 
@@ -945,7 +951,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     if (userId.isBlank()) return
     try {
       setMissedCountForUser(reactApplicationContext, userId, count.coerceAtLeast(0))
-      LiviFirebaseMessagingService.updateMissedCallNotification(reactApplicationContext, userId, count.coerceAtLeast(0))
+      val total = getTotalMissedCount(reactApplicationContext)
+      if (total > 0) {
+        LiviFirebaseMessagingService.updateSummaryMissedCallsNotification(reactApplicationContext, total)
+      }
     } catch (_: Exception) {}
   }
 
@@ -976,6 +985,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           val key = it.next().toString().trim()
           if (key.isNotEmpty()) nm.cancel(getMissedNotificationIdForUser(key))
         }
+        nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
       } catch (_: Exception) {}
     }
   }
@@ -987,7 +997,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     try {
       val c = count.coerceAtLeast(0)
       setMissedCountForUser(reactApplicationContext, userId, c)
-      LiviFirebaseMessagingService.updateMissedCallNotification(reactApplicationContext, userId, c)
+      val total = getTotalMissedCount(reactApplicationContext)
+      if (total > 0) {
+        LiviFirebaseMessagingService.updateSummaryMissedCallsNotification(reactApplicationContext, total)
+      }
     } catch (_: Exception) {}
   }
 
@@ -1010,21 +1023,24 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         } else {
           nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
         }
-        // Сводное уведомление «Непрочитанные сообщения» не показываем — в шторке только одно уведомление на сообщение (От кого HH:MM + превью) из FCM.
-        if (unreadTotal <= 0) {
+        if (unreadTotal > 0) {
+          LiviFirebaseMessagingService.updateSummaryUnreadNotification(reactApplicationContext, unreadTotal)
+        } else {
           nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
         }
       } catch (_: Exception) {}
     }
   }
 
-  /** Больше не показываем сводное уведомление «Непрочитанные сообщения» — только одно уведомление на сообщение (От кого HH:MM + превью) из FCM. Метод оставлен для совместимости: при unreadTotal=0 снимаем сводное. */
+  /** Обновить summary-уведомление «Непрочитанные сообщения» с последним отправителем. */
   @ReactMethod
   fun updateSummaryUnreadWithLast(unreadTotal: Int, lastFromNick: String, timeStr: String) {
     Handler(Looper.getMainLooper()).post {
       try {
-        if (unreadTotal <= 0) {
-          val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (unreadTotal > 0) {
+          LiviFirebaseMessagingService.updateSummaryUnreadNotificationWithLast(reactApplicationContext, unreadTotal, lastFromNick, timeStr)
+        } else {
           nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
         }
       } catch (_: Exception) {}
@@ -1424,6 +1440,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     fun dismissAllMissedCallNotificationsFromContext(context: Context) {
       try {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
         // 1) По списку userId из prefs (источник истины при показе)
         val prefs = context.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
         val raw = prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"

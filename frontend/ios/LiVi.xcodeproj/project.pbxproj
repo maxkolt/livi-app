@@ -11,6 +11,8 @@
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
 		646B5E5B3869D409959E0665 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 34D770273033ABAF37F3567E /* PrivacyInfo.xcprivacy */; };
 		72E8E769E9FDFD548444BECD /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 831ED26739C2415BD83C1900 /* ExpoModulesProvider.swift */; };
+		A1C0D1E22F1234567890ABCD /* LiviVoipPushManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0D1E12F1234567890ABCD /* LiviVoipPushManager.swift */; };
+		A1C0D1E42F1234567890ABCD /* LiviVoipPushManager.m in Sources */ = {isa = PBXBuildFile; fileRef = A1C0D1E32F1234567890ABCD /* LiviVoipPushManager.m */; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		C41038094E0DA4325B03441F /* libPods-LiVi.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 048125F832E91824F6F03B4A /* libPods-LiVi.a */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
@@ -23,6 +25,8 @@
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = LiVi/Info.plist; sourceTree = "<group>"; };
 		34D770273033ABAF37F3567E /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = LiVi/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		831ED26739C2415BD83C1900 /* ExpoModulesProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExpoModulesProvider.swift; path = "Pods/Target Support Files/Pods-LiVi/ExpoModulesProvider.swift"; sourceTree = "<group>"; };
+		A1C0D1E12F1234567890ABCD /* LiviVoipPushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LiviVoipPushManager.swift; path = LiVi/LiviVoipPushManager.swift; sourceTree = "<group>"; };
+		A1C0D1E32F1234567890ABCD /* LiviVoipPushManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = LiviVoipPushManager.m; path = LiVi/LiviVoipPushManager.m; sourceTree = "<group>"; };
 		96215C51B28DD9242503110C /* Pods-LiVi.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-LiVi.debug.xcconfig"; path = "Target Support Files/Pods-LiVi/Pods-LiVi.debug.xcconfig"; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = LiVi/SplashScreen.storyboard; sourceTree = "<group>"; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
@@ -48,6 +52,8 @@
 			isa = PBXGroup;
 			children = (
 				F11748412D0307B40044C1D9 /* AppDelegate.swift */,
+				A1C0D1E12F1234567890ABCD /* LiviVoipPushManager.swift */,
+				A1C0D1E32F1234567890ABCD /* LiviVoipPushManager.m */,
 				F11748442D0722820044C1D9 /* LiVi-Bridging-Header.h */,
 				BB2F792B24A3F905000567C9 /* Supporting */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
@@ -380,6 +386,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
+				A1C0D1E22F1234567890ABCD /* LiviVoipPushManager.swift in Sources */,
+				A1C0D1E42F1234567890ABCD /* LiviVoipPushManager.m in Sources */,
 				72E8E769E9FDFD548444BECD /* ExpoModulesProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -392,6 +400,7 @@
 			baseConfigurationReference = 96215C51B28DD9242503110C /* Pods-LiVi.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				APS_ENVIRONMENT = development;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = LiVi/LiVi.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
@@ -432,6 +441,7 @@
 			baseConfigurationReference = C419DB992DA2C79F7DEF6D01 /* Pods-LiVi.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				APS_ENVIRONMENT = production;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = LiVi/LiVi.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";

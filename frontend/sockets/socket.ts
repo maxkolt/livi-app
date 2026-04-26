@@ -2813,7 +2813,7 @@ export function requestCallAccepted(callId: string) {
   socket.emit('call:getAccepted', { callId });
 }
 
-export function onCallIncoming(cb: (d: { callId: string; from: string; fromNick?: string }) => void): () => void {
+export function onCallIncoming(cb: (d: { callId: string; callKitId?: string; from: string; fromNick?: string; ts?: number | string; expiresAt?: number | string }) => void): () => void {
   const h = (d: any) => {
     logger.debug('Socket received call:incoming', { callId: d.callId, from: d.from, fromNick: d.fromNick });
     cb(d);
