@@ -20,6 +20,9 @@ let tokenErrorsTotal = 0;
 let clientReconnectCount = 0;
 let clientJoinSuccessCount = 0;
 let clientJoinFailureCount = 0;
+let clientRemoteMediaTimeoutCount = 0;
+let clientRemoteMediaRecoveredCount = 0;
+let clientRelayFallbackCount = 0;
 
 function pushSample(arr: number[], value: number, max: number) {
   arr.push(value);
@@ -51,6 +54,9 @@ export function recordClientMetrics(data: {
   reconnect?: boolean;
   joinSuccess?: boolean;
   joinFailure?: boolean;
+  remoteMediaTimeout?: boolean;
+  remoteMediaRecovered?: boolean;
+  relayFallback?: boolean;
 }) {
   if (!CAPACITY_METRICS_ENABLED) return;
   if (typeof data.joinTimeMs === 'number' && data.joinTimeMs >= 0) {
@@ -65,6 +71,9 @@ export function recordClientMetrics(data: {
   if (data.reconnect) clientReconnectCount += 1;
   if (data.joinSuccess) clientJoinSuccessCount += 1;
   if (data.joinFailure) clientJoinFailureCount += 1;
+  if (data.remoteMediaTimeout) clientRemoteMediaTimeoutCount += 1;
+  if (data.remoteMediaRecovered) clientRemoteMediaRecoveredCount += 1;
+  if (data.relayFallback) clientRelayFallbackCount += 1;
 }
 
 export function getStats() {
@@ -80,6 +89,9 @@ export function getStats() {
     clientReconnectCount,
     clientJoinSuccessCount,
     clientJoinFailureCount,
+    clientRemoteMediaTimeoutCount,
+    clientRemoteMediaRecoveredCount,
+    clientRelayFallbackCount,
     joinFailureRate,
   };
 }
@@ -112,6 +124,15 @@ export function getPrometheusText(): string {
     '# HELP livi_join_failures_total Client join failure count',
     '# TYPE livi_join_failures_total counter',
     `livi_join_failures_total ${s.clientJoinFailureCount}`,
+    '# HELP livi_remote_media_timeouts_total Connected calls where remote media did not arrive in time',
+    '# TYPE livi_remote_media_timeouts_total counter',
+    `livi_remote_media_timeouts_total ${s.clientRemoteMediaTimeoutCount}`,
+    '# HELP livi_remote_media_recovered_total Remote media watchdog recoveries that eventually received media',
+    '# TYPE livi_remote_media_recovered_total counter',
+    `livi_remote_media_recovered_total ${s.clientRemoteMediaRecoveredCount}`,
+    '# HELP livi_relay_fallback_total Relay-only fallback attempts triggered by clients',
+    '# TYPE livi_relay_fallback_total counter',
+    `livi_relay_fallback_total ${s.clientRelayFallbackCount}`,
   ];
   return lines.join('\n') + '\n';
 }

@@ -87,6 +87,7 @@ import {
   armInAppOfflinePresenceEmit,
   cancelInAppOfflinePresenceEmit,
 } from './utils/friendOnlinePresence';
+import { isSocketIoRedisAdapterActive, setupSocketIoRedisAdapter } from './utils/socketIoRedisAdapter';
 
 /* ========= Типы ========= */
 type LeanUser = {
@@ -285,6 +286,7 @@ const io = new Server(server, {
   pingInterval: 25000,
   pingTimeout: 30000,
 });
+let closeSocketIoRedisAdapter: (() => Promise<void>) | null = null;
 
 // Сохраняем глобально для использования в роутах
 setIoInstance(io);
@@ -303,7 +305,13 @@ app.use((req, _res, next) => {
 
 /* ========= Базовые маршруты ========= */
 app.get('/', (_req, res) => res.send('🚀 Сервер работает!'));
-app.get('/health', (_req, res) => res.json({ ok: true, mongo: mongoose.connection.readyState }));
+app.get('/health', (_req, res) =>
+  res.json({
+    ok: true,
+    mongo: mongoose.connection.readyState,
+    socketIoRedisAdapter: isSocketIoRedisAdapterActive(),
+  })
+);
 
 // Capacity: только при CAPACITY_METRICS_ENABLED=1. В проде — 404.
 app.get('/metrics', (_req, res) => {
@@ -328,6 +336,9 @@ app.post('/api/capacity/client-metrics', express.json(), (req, res) => {
       reconnect: !!body.reconnect,
       joinSuccess: !!body.joinSuccess,
       joinFailure: !!body.joinFailure,
+      remoteMediaTimeout: !!body.remoteMediaTimeout,
+      remoteMediaRecovered: !!body.remoteMediaRecovered,
+      relayFallback: !!body.relayFallback,
     });
     res.json({ ok: true });
   } catch {
@@ -462,6 +473,24 @@ app.post('/chat/ensure-dm', async (req, res) => {
  */
 app.get('/api/turn-credentials', async (_req, res) => {
   try {
+    const req = _req as express.Request & { userId?: string; installId?: string };
+    const installId = String(req.installId || '').trim();
+    const trustedUserId = String(req.userId || '').trim();
+    if (!installId || !trustedUserId) {
+      logger.warn('[TURN] Unauthorized TURN credentials request, returning STUN only', {
+        hasInstallId: !!installId,
+        hasUserId: !!trustedUserId,
+      });
+      return res.status(401).json({
+        ok: false,
+        error: 'unauthorized',
+        ttl: 300,
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' },
+        ],
+      });
+    }
     if (!TURN_SECRET) {
       // Dev-friendly behavior: do NOT return 503 when TURN isn't configured.
       // Returning 503 causes clients to retry and spam logs, and can contribute to reconnect storms.
@@ -3409,7 +3438,18 @@ function printLanUrls(port: number) {
   }
 }
 
-server.listen(PORT, HOST, () => printLanUrls(PORT));
+void (async () => {
+  try {
+    closeSocketIoRedisAdapter = await setupSocketIoRedisAdapter(io);
+  } catch (e: any) {
+    logger.warn('[socket.io:redis] unexpected setup error, continuing without adapter', {
+      error: e?.message || String(e),
+    });
+    closeSocketIoRedisAdapter = async () => {};
+  } finally {
+    server.listen(PORT, HOST, () => printLanUrls(PORT));
+  }
+})();
 
 const GRACEFUL_SHUTDOWN_EMIT_FLUSH_MS = 200;
 const GRACEFUL_SHUTDOWN_FORCE_EXIT_MS = 85_000;
@@ -3443,6 +3483,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
     await io.close();
   } catch (e: any) {
     logger.warn('io.close failed', { error: e?.message });
+  }
+  try {
+    if (closeSocketIoRedisAdapter) {
+      await closeSocketIoRedisAdapter();
+      closeSocketIoRedisAdapter = null;
+    }
+  } catch (e: any) {
+    logger.warn('socket.io redis adapter close failed', { error: e?.message });
   }
   try {
     await mongoose.connection.close();

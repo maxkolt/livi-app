@@ -90,20 +90,37 @@ export async function createToken({ identity, roomName }: { identity: string; ro
 router.post('/livekit/token', async (req, res) => {
   try {
     const { userId, roomName } = req.body;
+    const trustedUserId = String((req as any).userId || '').trim();
+    const claimedUserId = String(userId || '').trim();
 
-    if (!userId || !roomName) {
+    if (!roomName) {
+      return res.status(400).json({ ok: false, error: 'missing_roomName' });
+    }
+    if (!trustedUserId) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    if (claimedUserId && claimedUserId !== trustedUserId) {
+      logger.warn('[LiveKit] Token rejected: client userId mismatch', {
+        trustedUserId: trustedUserId.slice(0, 8) + '…',
+        claimedUserId: claimedUserId.slice(0, 8) + '…',
+        roomName: roomName.slice(0, 20) + '…',
+      });
+      return res.status(403).json({ ok: false, error: 'user_mismatch' });
+    }
+
+    if (!trustedUserId || !roomName) {
       return res.status(400).json({ ok: false, error: 'missing_userId_or_roomName' });
     }
 
-    if (!isAllowedParticipant(roomName, String(userId))) {
+    if (!isAllowedParticipant(roomName, trustedUserId)) {
       logger.warn('[LiveKit] Token rejected: user is not a participant of the room', {
-        userId: String(userId).slice(0, 8) + '…',
+        userId: trustedUserId.slice(0, 8) + '…',
         roomName: roomName.slice(0, 20) + '…',
       });
       return res.status(403).json({ ok: false, error: 'not_participant' });
     }
 
-    const token = await createToken({ identity: userId, roomName });
+    const token = await createToken({ identity: trustedUserId, roomName });
 
     res.json({ ok: true, token, url: LIVEKIT_URL });
   } catch (e: any) {
