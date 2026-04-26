@@ -5,7 +5,7 @@ import { usePiP as usePiPContext, isPipOverlayVisibleSync } from '../../../src/p
 import { logger } from '../../../utils/logger';
 import socket from '../../../sockets/socket';
 
-const logStateTransition = () => {};
+const logStateTransition = (..._args: unknown[]) => {};
 
 interface UsePiPProps {
   roomId: string | null;

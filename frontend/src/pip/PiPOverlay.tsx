@@ -101,11 +101,13 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const localCamOn = ctx?.localCamOn ?? true;
   const remoteCamOn = ctx?.remoteCamOn ?? true;
   const isMuted = ctx?.isMuted ?? false;
+  const onVideoCallScreen = isVideoCallScreen(currentRouteName);
 
   const toggleCamera = useCallback(() => {
     try {
+      const onVideoCallScreenNow = isVideoCallScreen(currentRouteName);
       const toggleFromVideoCall = (global as any).__toggleCamRef?.current;
-      if (onVideoCallScreen && typeof toggleFromVideoCall === 'function') {
+      if (onVideoCallScreenNow && typeof toggleFromVideoCall === 'function') {
         toggleFromVideoCall();
         return;
       }
@@ -117,12 +119,13 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
         session.toggleCam().catch(() => {});
       }
     } catch (_) {}
-  }, [localCamOn, onVideoCallScreen]);
+  }, [currentRouteName, localCamOn]);
 
   const toggleMic = useCallback(() => {
     try {
+      const onVideoCallScreenNow = isVideoCallScreen(currentRouteName);
       const toggleFromVideoCall = (global as any).__toggleMicRef?.current;
-      if (onVideoCallScreen && typeof toggleFromVideoCall === 'function') {
+      if (onVideoCallScreenNow && typeof toggleFromVideoCall === 'function') {
         toggleFromVideoCall();
         return;
       }
@@ -133,13 +136,12 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
         session.toggleMic();
       }
     } catch (_) {}
-  }, [isMuted, onVideoCallScreen]);
+  }, [currentRouteName, isMuted]);
 
   const dims = Dimensions.get('window');
   const W = typeof dims?.width === 'number' && dims.width > 0 ? dims.width : 400;
   const H = typeof dims?.height === 'number' && dims.height > 0 ? dims.height : 700;
 
-  const onVideoCallScreen = isVideoCallScreen(currentRouteName);
   const isSystemPiPLayout = pendingSystemPiP || inSystemPiPMode;
   // При Android Back со страницы звонка разрешаем показать in-app PiP сразу, ещё до завершения goBack(),
   // иначе окно ждёт смены route и выглядит "задержанным".

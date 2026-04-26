@@ -18,6 +18,7 @@ export type RootStackParamList = {
         mode?: 'friend';
         resume?: boolean;
         fromPiP?: boolean;
+        systemPiPReturnToken?: number;
       }
     | undefined;
   Chat: { peerId: string; peerName?: string; peerAvatar?: string };

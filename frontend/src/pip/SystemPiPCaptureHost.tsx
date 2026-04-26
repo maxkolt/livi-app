@@ -74,6 +74,7 @@ export default function SystemPiPCaptureHost() {
         <RemoteVideo
           remoteStream={remoteStream as any}
           remoteCamOn={remoteCamOnForCapture}
+          remoteCamSide="front"
           remoteMuted={false}
           isInactiveState={false}
           wasFriendCallEnded={false}

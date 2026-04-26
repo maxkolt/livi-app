@@ -4888,7 +4888,6 @@ export default function ChatScreen({ route, navigation }: Props) {
                       key={idx}
                       onPress={() => openMessageUrl(seg.value)}
                       onLongPress={openMessageActionsFromBubble}
-                      delayLongPress={280}
                       style={linkStyle}
                     >
                       {seg.value}

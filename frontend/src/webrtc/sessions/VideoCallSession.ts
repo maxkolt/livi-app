@@ -26,6 +26,7 @@ import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
 import { getInstallId } from '../../../utils/installId';
+import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
 
@@ -170,6 +171,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private remoteMediaRelayRecoveryAttempted = false;
   private lastLiveKitUrl: string | null = null;
   private lastLiveKitToken: string | null = null;
+  private iceTransportLogTimers: Array<ReturnType<typeof setTimeout>> = [];
+  private lastIceTransportLogSignature: string | null = null;
 
   constructor(config: WebRTCSessionConfig) {
     super();
@@ -2140,6 +2143,69 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
+  private clearIceTransportLogTimers(): void {
+    for (const timer of this.iceTransportLogTimers) {
+      clearTimeout(timer);
+    }
+    this.iceTransportLogTimers = [];
+  }
+
+  private buildIceTransportSignature(diagnostics: Awaited<ReturnType<typeof getRoomIceTransportDiagnostics>>): string {
+    return JSON.stringify(
+      diagnostics.map((item) => ({
+        source: item.source,
+        usingRelay: item.usingRelay,
+        localCandidateType: item.localCandidateType,
+        localProtocol: item.localProtocol,
+        localRelayProtocol: item.localRelayProtocol,
+        remoteCandidateType: item.remoteCandidateType,
+        remoteProtocol: item.remoteProtocol,
+        selectedCandidatePairId: item.selectedCandidatePairId,
+      }))
+    );
+  }
+
+  private async logSelectedIceTransport(room: Room, reason: string): Promise<void> {
+    try {
+      if (this.room !== room) return;
+      const diagnostics = await getRoomIceTransportDiagnostics(room as any);
+      if (!diagnostics.length) {
+        logger.debug('[VideoCallSession] ICE transport diagnostics unavailable', {
+          reason,
+          roomName: room.name,
+          roomState: room.state,
+        });
+        return;
+      }
+
+      const signature = this.buildIceTransportSignature(diagnostics);
+      if (signature === this.lastIceTransportLogSignature) return;
+      this.lastIceTransportLogSignature = signature;
+
+      logger.info('[VideoCallSession] Selected ICE transport path', {
+        reason,
+        roomName: room.name,
+        roomState: room.state,
+        myUserId: this.config.myUserId,
+        partnerUserId: this.partnerUserId,
+        transports: diagnostics,
+      });
+    } catch (e) {
+      logger.debug('[VideoCallSession] ICE transport diagnostics failed (ignored)', e);
+    }
+  }
+
+  private scheduleIceTransportLogging(room: Room, reason: string): void {
+    const delays = [1500, 5000];
+    for (const delayMs of delays) {
+      const timer = setTimeout(() => {
+        this.iceTransportLogTimers = this.iceTransportLogTimers.filter((entry) => entry !== timer);
+        void this.logSelectedIceTransport(room, `${reason}:${delayMs}ms`);
+      }, delayMs);
+      this.iceTransportLogTimers.push(timer);
+    }
+  }
+
   private scheduleRemoteMediaWatchdog(
     context: { url: string; token: string; targetRoomName?: string | null },
     preserveRecovery = false
@@ -2171,6 +2237,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       participantId: participant.identity,
       recovered,
     });
+    if (this.room) {
+      this.scheduleIceTransportLogging(this.room, `remote_media_first_seen:${publication.kind}`);
+    }
   }
 
   private async handleRemoteMediaWatchdog(context: { url: string; token: string; targetRoomName?: string | null }): Promise<void> {
@@ -3226,6 +3295,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.clearPendingRemoteDisconnectTimer();
     this.clearRemoteCamOffTimeout();
     this.clearRemoteMediaWatchdog(true);
+    this.clearIceTransportLogTimers();
+    this.lastIceTransportLogSignature = null;
     this.remoteMediaFirstSeenAt = 0;
     this.remoteStream = null;
     this.remoteAudioTrack = null;
@@ -3667,6 +3738,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.lastLiveKitUrl = url;
       this.lastLiveKitToken = token;
       this.roomConnectedAt = Date.now();
+      this.scheduleIceTransportLogging(room, options?.reason ? `connect:${options.reason}` : 'connect');
       this.scheduleRemoteMediaWatchdog({
         url,
         token,
@@ -4206,6 +4278,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private async disconnectRoom(reason: 'user' | 'server' = 'user'): Promise<void> {
     this.clearLocalVideoWatchdog();
     this.clearRemoteMediaWatchdog(true);
+    this.clearIceTransportLogTimers();
     setActiveVideoCall(false);
     // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
     // Если уже идет отключение, возвращаем существующий промис
@@ -4580,6 +4653,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           partnerUserId: this.partnerUserId,
           participantsCount: room.remoteParticipants.size,
         });
+        this.scheduleIceTransportLogging(room, 'reconnected');
         this.clearPendingRemoteDisconnectTimer();
         if (
           !this.remoteStream &&

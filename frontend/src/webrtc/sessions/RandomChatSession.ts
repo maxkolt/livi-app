@@ -23,6 +23,7 @@ import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
+import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
 
@@ -131,6 +132,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   private readonly nextWithoutRemoteMediaGraceMs = 2500;
   private readonly remoteVideoUnsubscribeGraceMs = 220;
   private reconnectCycleId = 0;
+  private iceTransportLogTimers: Array<ReturnType<typeof setTimeout>> = [];
+  private lastIceTransportLogSignature: string | null = null;
   /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и stop повторно */
   private cleaned = false;
   private stopRequested = false;
@@ -150,6 +153,70 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   private notifyRemoteStreamChange(stream: MediaStream | null): void {
     (this.config.callbacks.onRemoteStreamChange ?? this.config.onRemoteStreamChange)?.(stream);
+  }
+
+  private clearIceTransportLogTimers(): void {
+    for (const timer of this.iceTransportLogTimers) {
+      clearTimeout(timer);
+    }
+    this.iceTransportLogTimers = [];
+  }
+
+  private buildIceTransportSignature(diagnostics: Awaited<ReturnType<typeof getRoomIceTransportDiagnostics>>): string {
+    return JSON.stringify(
+      diagnostics.map((item) => ({
+        source: item.source,
+        usingRelay: item.usingRelay,
+        localCandidateType: item.localCandidateType,
+        localProtocol: item.localProtocol,
+        localRelayProtocol: item.localRelayProtocol,
+        remoteCandidateType: item.remoteCandidateType,
+        remoteProtocol: item.remoteProtocol,
+        selectedCandidatePairId: item.selectedCandidatePairId,
+      }))
+    );
+  }
+
+  private async logSelectedIceTransport(room: Room, reason: string): Promise<void> {
+    try {
+      if (this.room !== room) return;
+      const diagnostics = await getRoomIceTransportDiagnostics(room as any);
+      if (!diagnostics.length) {
+        logger.debug('[RandomChatSession] ICE transport diagnostics unavailable', {
+          reason,
+          roomName: room.name,
+          roomState: room.state,
+          sessionId: this.sessionId,
+        });
+        return;
+      }
+
+      const signature = this.buildIceTransportSignature(diagnostics);
+      if (signature === this.lastIceTransportLogSignature) return;
+      this.lastIceTransportLogSignature = signature;
+
+      logger.info('[RandomChatSession] Selected ICE transport path', {
+        reason,
+        roomName: room.name,
+        roomState: room.state,
+        sessionId: this.sessionId,
+        myUserId: this.resolveMyUserId(),
+        transports: diagnostics,
+      });
+    } catch (e) {
+      logger.debug('[RandomChatSession] ICE transport diagnostics failed (ignored)', e);
+    }
+  }
+
+  private scheduleIceTransportLogging(room: Room, reason: string): void {
+    const delays = [1500, 5000];
+    for (const delayMs of delays) {
+      const timer = setTimeout(() => {
+        this.iceTransportLogTimers = this.iceTransportLogTimers.filter((entry) => entry !== timer);
+        void this.logSelectedIceTransport(room, `${reason}:${delayMs}ms`);
+      }, delayMs);
+      this.iceTransportLogTimers.push(timer);
+    }
   }
 
   private notifyRemoteCamStateChange(enabled: boolean): void {
@@ -2145,6 +2212,8 @@ export class RandomChatSession extends SimpleEventEmitter {
   private resetRemoteState(): void {
     this.clearPendingRemoteVideoReset('reset_remote_state');
     this.clearRemoteCamImplicitOffTimer('reset_remote_state');
+    this.clearIceTransportLogTimers();
+    this.lastIceTransportLogSignature = null;
     this.remoteStream = null;
     this.remoteAudioTrack = null;
     this.remoteVideoTrack = null;
@@ -3439,6 +3508,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         reconnectCycleId: this.reconnectCycleId,
       });
       this.roomConnectedAt = Date.now();
+      this.scheduleIceTransportLogging(room, `connect:${connectSource}`);
       this.remoteMediaFirstSeenAt = 0;
       const joinTimeMs = this.roomConnectedAt - connectStartTime;
       this.logReconnectTrace('connect_success', {
@@ -3652,6 +3722,7 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   private async disconnectRoom(reason: 'user' | 'server' = 'user', source = 'unknown'): Promise<void> {
     this.logReconnectTrace('disconnect_requested', { reason, source });
+    this.clearIceTransportLogTimers();
     // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
     // Если уже идет отключение, возвращаем существующий промис
     if (this.isDisconnecting && this.disconnectPromise) {
@@ -4054,6 +4125,7 @@ export class RandomChatSession extends SimpleEventEmitter {
           roomName: room.name || null,
         });
         void sendClientMetrics(API_BASE, { roomReconnected: true, reconnect: true }).catch(() => {});
+        this.scheduleIceTransportLogging(room, 'reconnected');
       })
       .on(RoomEvent.ParticipantConnected, (participant) => {
         if (participant.isLocal) return;
@@ -4252,6 +4324,9 @@ export class RandomChatSession extends SimpleEventEmitter {
         nextTransitionId: completedNextTransitionId,
       });
       this.activeNextTransitionId = null;
+      if (this.room) {
+        this.scheduleIceTransportLogging(this.room, `remote_media_first_seen:${publication.kind}`);
+      }
     }
     
     const isVideoTrack = publication.kind === Track.Kind.Video;

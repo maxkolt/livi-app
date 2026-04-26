@@ -64,6 +64,7 @@ type Props = {
       returnTo?: { name: string; params?: any };
       resume?: boolean;
       fromPiP?: boolean;
+      systemPiPReturnToken?: number;
       isIncoming?: boolean;
       partnerNick?: string;
     } 
