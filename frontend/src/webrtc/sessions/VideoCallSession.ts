@@ -25,6 +25,7 @@ import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
+import { getInstallId } from '../../../utils/installId';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
 
@@ -36,6 +37,7 @@ const REMOTE_CAM_OFF_GRACE_MS = 1400;
 // Keep this guard short: a long window makes real remote hangup wait for delayed socket call:ended.
 const RECENT_RECONNECT_DISCONNECT_GUARD_MS = 2000;
 const REMOTE_PARTICIPANT_DISCONNECT_CONFIRM_MS = 250;
+const REMOTE_MEDIA_WATCHDOG_MS = 12_000;
 
 function parsePublicFlag(value: string | undefined, fallback: boolean): boolean {
   const v = String(value ?? '').trim().toLowerCase();
@@ -63,6 +65,11 @@ type CallIncomingPayload = {
   callId: string;
   from: string;
   fromNick?: string;
+};
+
+type LiveKitConnectOptions = {
+  forceRelayOnly?: boolean;
+  reason?: string;
 };
 
 export class VideoCallSession extends SimpleEventEmitter {
@@ -156,6 +163,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   private eqPhase = 0;
   private localVideoHealthTimeout: ReturnType<typeof setTimeout> | null = null;
   private localVideoHealthAttempts = 0;
+  private roomConnectedAt = 0;
+  private remoteMediaFirstSeenAt = 0;
+  private remoteMediaWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private remoteMediaRecoveryInProgress = false;
+  private remoteMediaRelayRecoveryAttempted = false;
+  private lastLiveKitUrl: string | null = null;
+  private lastLiveKitToken: string | null = null;
 
   constructor(config: WebRTCSessionConfig) {
     super();
@@ -480,6 +494,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Очищаем состояние после отправки на сервер
     this.callId = null;
     this.roomId = null;
+    this.lastLiveKitUrl = null;
+    this.lastLiveKitToken = null;
     this.lastSentPiPState = null;
     this.lastSentPiPRoomId = null;
     this.partnerId = null;
@@ -1054,9 +1070,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Если нужно восстановить активный звонок, запрашиваем токен
     if (params.returnToActiveCall && params.roomId) {
       try {
+        const installId = await getInstallId().catch(() => '');
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (installId) headers['x-install-id'] = String(installId);
         const response = await fetch(`${process.env.EXPO_PUBLIC_SERVER_URL}/api/livekit/token`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             userId: this.config.myUserId,
             roomName: params.roomId,
@@ -1860,9 +1879,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       
       try {
+        const installId = await getInstallId().catch(() => '');
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (installId) headers['x-install-id'] = String(installId);
         const response = await fetch(`${process.env.EXPO_PUBLIC_SERVER_URL}/api/livekit/token`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             userId: this.config.myUserId,
             roomName: roomId,
@@ -2104,6 +2126,121 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.fastStartVideoUpgradeTimer) {
       clearTimeout(this.fastStartVideoUpgradeTimer);
       this.fastStartVideoUpgradeTimer = null;
+    }
+  }
+
+  private clearRemoteMediaWatchdog(resetRecovery = true): void {
+    if (this.remoteMediaWatchdogTimer) {
+      clearTimeout(this.remoteMediaWatchdogTimer);
+      this.remoteMediaWatchdogTimer = null;
+    }
+    if (resetRecovery) {
+      this.remoteMediaRecoveryInProgress = false;
+      this.remoteMediaRelayRecoveryAttempted = false;
+    }
+  }
+
+  private scheduleRemoteMediaWatchdog(
+    context: { url: string; token: string; targetRoomName?: string | null },
+    preserveRecovery = false
+  ): void {
+    this.clearRemoteMediaWatchdog(!preserveRecovery);
+    this.remoteMediaFirstSeenAt = 0;
+    this.remoteMediaWatchdogTimer = setTimeout(() => {
+      void this.handleRemoteMediaWatchdog(context);
+    }, REMOTE_MEDIA_WATCHDOG_MS);
+  }
+
+  private markRemoteMediaSeen(reason: string, publication: RemoteTrackPublication, participant: RemoteParticipant): void {
+    if (this.remoteMediaFirstSeenAt !== 0) return;
+    this.remoteMediaFirstSeenAt = Date.now();
+    const firstRemoteMediaMs = this.roomConnectedAt > 0 ? Math.max(0, this.remoteMediaFirstSeenAt - this.roomConnectedAt) : undefined;
+    const recovered = this.remoteMediaRecoveryInProgress || this.remoteMediaRelayRecoveryAttempted;
+    this.clearRemoteMediaWatchdog(false);
+    this.remoteMediaRecoveryInProgress = false;
+    this.remoteMediaRelayRecoveryAttempted = false;
+    if (typeof firstRemoteMediaMs === 'number') {
+      void sendClientMetrics(API_BASE, { remoteMediaFirstSeenMs: firstRemoteMediaMs }).catch(() => {});
+    }
+    if (recovered) {
+      void sendClientMetrics(API_BASE, { remoteMediaRecovered: true }).catch(() => {});
+    }
+    logger.info('[VideoCallSession] Remote media first seen', {
+      reason,
+      kind: publication.kind,
+      participantId: participant.identity,
+      recovered,
+    });
+  }
+
+  private async handleRemoteMediaWatchdog(context: { url: string; token: string; targetRoomName?: string | null }): Promise<void> {
+    this.remoteMediaWatchdogTimer = null;
+    if (this.ended || this.isDisconnecting) return;
+
+    const room = this.room;
+    if (!room || room.state !== 'connected') return;
+    if (this.remoteMediaFirstSeenAt > 0 || this.remoteStream || this.remoteVideoTrack || this.remoteAudioTrack) return;
+
+    const remoteParticipants = Array.from(room.remoteParticipants.values()).filter((participant) => !participant.isLocal);
+    if (remoteParticipants.length === 0) {
+      logger.warn('[VideoCallSession] Remote media watchdog fired without remote participant', {
+        roomName: room.name,
+        roomState: room.state,
+      });
+      return;
+    }
+
+    void sendClientMetrics(API_BASE, { remoteMediaTimeout: true }).catch(() => {});
+    logger.warn('[VideoCallSession] Remote media watchdog fired; retrying subscriptions', {
+      roomName: room.name,
+      participantsCount: remoteParticipants.length,
+      remoteParticipantIds: remoteParticipants.map((participant) => participant.identity),
+    });
+
+    this.remoteMediaRecoveryInProgress = true;
+
+    for (const participant of remoteParticipants) {
+      participant.audioTrackPublications.forEach((publication) => {
+        if (!publication.isSubscribed) publication.setSubscribed(true);
+        if (publication.track) this.handleTrackSubscribed(publication.track, publication, participant);
+      });
+      participant.videoTrackPublications.forEach((publication) => {
+        if (!publication.isSubscribed) publication.setSubscribed(true);
+        if (publication.track) this.handleTrackSubscribed(publication.track, publication, participant);
+      });
+    }
+
+    if (this.remoteMediaFirstSeenAt > 0 || this.remoteStream || this.remoteVideoTrack || this.remoteAudioTrack) {
+      return;
+    }
+    if (this.remoteMediaRelayRecoveryAttempted) {
+      return;
+    }
+
+    this.remoteMediaRelayRecoveryAttempted = true;
+    void sendClientMetrics(API_BASE, { relayFallback: true }).catch(() => {});
+    logger.warn('[VideoCallSession] Remote media still missing; reconnecting with relay-only ICE fallback', {
+      roomName: room.name,
+      targetRoomName: context.targetRoomName || null,
+    });
+
+    try {
+      this.notifyLoadingChange(true);
+      this.resetRemoteState();
+      await this.disconnectRoom('server');
+      if (this.ended) return;
+      this.remoteMediaRecoveryInProgress = true;
+      this.remoteMediaRelayRecoveryAttempted = true;
+      const recoveryConnectRequestId = ++this.connectRequestId;
+      await this.connectToLiveKit(
+        context.url,
+        context.token,
+        recoveryConnectRequestId,
+        context.targetRoomName || undefined,
+        { forceRelayOnly: true, reason: 'remote_media_watchdog' }
+      );
+    } catch (e) {
+      logger.warn('[VideoCallSession] Relay-only remote media recovery failed', e);
     }
   }
 
@@ -3088,6 +3225,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private resetRemoteState(): void {
     this.clearPendingRemoteDisconnectTimer();
     this.clearRemoteCamOffTimeout();
+    this.clearRemoteMediaWatchdog(true);
+    this.remoteMediaFirstSeenAt = 0;
     this.remoteStream = null;
     this.remoteAudioTrack = null;
     this.remoteVideoTrack = null;
@@ -3113,7 +3252,13 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.emit('remoteViewKeyChanged', this.remoteViewKey);
   }
 
-  private async connectToLiveKit(url: string, token: string, connectRequestId: number, targetRoomName?: string): Promise<boolean> {
+  private async connectToLiveKit(
+    url: string,
+    token: string,
+    connectRequestId: number,
+    targetRoomName?: string,
+    options?: LiveKitConnectOptions
+  ): Promise<boolean> {
     if (this.ended) {
       logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
       return false;
@@ -3134,7 +3279,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         rejectGate = rej;
       });
       this.liveKitConnectByRoom.set(coalesceKey, gate);
-      void this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName)
+      void this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName, options)
         .then(
           (v) => resolveGate(v),
           (e) => rejectGate(e)
@@ -3146,10 +3291,16 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
       return gate;
     }
-    return this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName);
+    return this.executeConnectToLiveKit(url, token, connectRequestId, targetRoomName, options);
   }
 
-  private async executeConnectToLiveKit(url: string, token: string, connectRequestId: number, targetRoomName?: string): Promise<boolean> {
+  private async executeConnectToLiveKit(
+    url: string,
+    token: string,
+    connectRequestId: number,
+    targetRoomName?: string,
+    options?: LiveKitConnectOptions
+  ): Promise<boolean> {
     if (this.ended) {
       logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
       return false;
@@ -3410,10 +3561,11 @@ export class VideoCallSession extends SimpleEventEmitter {
       // ICE/TURN: используем креды с /api/turn-credentials для стабильности на мобильной сети/VPN
       let rtcConfig: RTCConfiguration | undefined = undefined;
       try {
-        rtcConfig = await getIceConfiguration(false);
+        rtcConfig = await getIceConfiguration(false, { forceRelayOnly: !!options?.forceRelayOnly });
       } catch (e: any) {
         logger.warn('[VideoCallSession] Failed to load ICE config, using LiveKit defaults', {
           error: e?.message || String(e),
+          forceRelayOnly: !!options?.forceRelayOnly,
         });
       }
 
@@ -3464,6 +3616,8 @@ export class VideoCallSession extends SimpleEventEmitter {
           tokenPrefix: token ? token.substring(0, 20) + '...' : 'no-token',
           targetRoomName,
           roomState: room.state,
+          forceRelayOnly: !!options?.forceRelayOnly,
+          connectReason: options?.reason || null,
         });
         const connectStartTime = Date.now();
         // Увеличиваем peerConnectionTimeout: при одновременном подключении обоих участников
@@ -3510,6 +3664,14 @@ export class VideoCallSession extends SimpleEventEmitter {
       
       // Сохраняем имя подключенной комнаты для проверки переиспользования
       this.currentRoomName = room.name || targetRoomName || null;
+      this.lastLiveKitUrl = url;
+      this.lastLiveKitToken = token;
+      this.roomConnectedAt = Date.now();
+      this.scheduleRemoteMediaWatchdog({
+        url,
+        token,
+        targetRoomName: this.currentRoomName || targetRoomName || null,
+      }, !!options?.reason && options.reason === 'remote_media_watchdog');
       
       // КРИТИЧНО: Логируем детальную информацию о состоянии комнаты
       const roomLocalIdentity = room.localParticipant?.identity;
@@ -4043,6 +4205,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private async disconnectRoom(reason: 'user' | 'server' = 'user'): Promise<void> {
     this.clearLocalVideoWatchdog();
+    this.clearRemoteMediaWatchdog(true);
     setActiveVideoCall(false);
     // КРИТИЧНО: Защита от множественных вызовов disconnectRoom
     // Если уже идет отключение, возвращаем существующий промис
@@ -4397,6 +4560,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       .on(RoomEvent.Reconnecting, () => {
         this.liveKitReconnecting = true;
         this.lastLiveKitReconnectingAt = Date.now();
+        void sendClientMetrics(API_BASE, { roomReconnecting: true }).catch(() => {});
         // Do NOT reset streams/UI here. LiveKit will recover by itself.
         logger.warn('[VideoCallSession] LiveKit room reconnecting (transient)', {
           roomName: room.name,
@@ -4408,6 +4572,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       })
       .on(RoomEvent.Reconnected, () => {
         this.liveKitReconnecting = false;
+        void sendClientMetrics(API_BASE, { roomReconnected: true, reconnect: true }).catch(() => {});
         logger.info('[VideoCallSession] LiveKit room reconnected', {
           roomName: room.name,
           roomState: room.state,
@@ -4416,11 +4581,25 @@ export class VideoCallSession extends SimpleEventEmitter {
           participantsCount: room.remoteParticipants.size,
         });
         this.clearPendingRemoteDisconnectTimer();
+        if (
+          !this.remoteStream &&
+          !this.remoteVideoTrack &&
+          !this.remoteAudioTrack &&
+          this.lastLiveKitUrl &&
+          this.lastLiveKitToken
+        ) {
+          this.scheduleRemoteMediaWatchdog({
+            url: this.lastLiveKitUrl,
+            token: this.lastLiveKitToken,
+            targetRoomName: room.name || this.currentRoomName,
+          }, this.remoteMediaRecoveryInProgress || this.remoteMediaRelayRecoveryAttempted);
+        }
         void this.recoverLocalTracksAfterReconnect(room, 'RoomEvent.Reconnected');
       })
       .on(RoomEvent.ParticipantConnected, (participant) => {
         // КРИТИЧНО: При подключении участника подписываемся на все его существующие треки
         if (!participant.isLocal) {
+          void sendClientMetrics(API_BASE, { remoteParticipantConnected: true }).catch(() => {});
           // If we were about to end the call due to a disconnect, cancel — remote is back.
           this.clearPendingRemoteDisconnectTimer();
           logger.info('[VideoCallSession] ✅ Remote participant connected event received', {
@@ -4787,6 +4966,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       isMuted: track.isMuted,
       trackReady: track.mediaStreamTrack?.readyState,
     });
+    this.markRemoteMediaSeen('track_subscribed', publication, participant);
     
     // Учёт lastUnsubscribedRemoteVideoTrackSid: при перевороте камеры сначала приходит TrackUnsubscribed (remoteVideoTrack обнуляется),
     // потом TrackSubscribed — без сохранённого SID wasVideoTrackChanged был бы false и у собеседника не создавался бы новый MediaStream.

@@ -331,11 +331,15 @@ app.post('/api/capacity/client-metrics', express.json(), (req, res) => {
     const body = req.body || {};
     capacityMetrics.recordClientMetrics({
       joinTimeMs: typeof body.joinTimeMs === 'number' ? body.joinTimeMs : undefined,
+      remoteMediaFirstSeenMs: typeof body.remoteMediaFirstSeenMs === 'number' ? body.remoteMediaFirstSeenMs : undefined,
       rttMs: typeof body.rttMs === 'number' ? body.rttMs : undefined,
       packetLoss: typeof body.packetLoss === 'number' ? body.packetLoss : undefined,
       reconnect: !!body.reconnect,
       joinSuccess: !!body.joinSuccess,
       joinFailure: !!body.joinFailure,
+      roomReconnecting: !!body.roomReconnecting,
+      roomReconnected: !!body.roomReconnected,
+      remoteParticipantConnected: !!body.remoteParticipantConnected,
       remoteMediaTimeout: !!body.remoteMediaTimeout,
       remoteMediaRecovered: !!body.remoteMediaRecovered,
       relayFallback: !!body.relayFallback,

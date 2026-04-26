@@ -1,6 +1,7 @@
 // frontend/utils/iceConfig.ts
 import { Platform } from 'react-native';
 import { API_BASE } from '../sockets/socket';
+import { getInstallId } from './installId';
 
 let cachedConfig: RTCConfiguration | null = null;
 let cacheUntil = 0;
@@ -140,13 +141,16 @@ export async function getIceConfiguration(forceRefresh = false, options?: { forc
       // Используем AbortController для таймаута
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const installId = await getInstallId().catch(() => '');
+      const headers: Record<string, string> = {
+        'Accept': 'application/json',
+      };
+      if (installId) headers['x-install-id'] = String(installId);
 
       const r = await fetch(`${API_BASE}/api/turn-credentials`, { 
         method: 'GET',
         signal: controller.signal,
-        headers: {
-          'Accept': 'application/json',
-        },
+        headers,
         // Дополнительные опции для VPN
         cache: 'no-cache',
       } as any);

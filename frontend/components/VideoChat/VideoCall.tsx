@@ -1648,6 +1648,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                 prevVideoReady,
                 newVideoReady
               });
+              remoteStreamReceivedAtRef.current = Date.now();
+              setLoading(false);
             }
             remoteStreamRef.current = stream;
             return;

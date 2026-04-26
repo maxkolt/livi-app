@@ -4039,8 +4039,25 @@ export class RandomChatSession extends SimpleEventEmitter {
 
   private registerRoomEvents(room: Room): void {
     room
+      .on(RoomEvent.Reconnecting, () => {
+        this.logReconnectTrace('room_reconnecting', {
+          sessionId: this.sessionId,
+          reconnectCycleId: this.reconnectCycleId,
+          roomName: room.name || null,
+        });
+        void sendClientMetrics(API_BASE, { roomReconnecting: true, reconnect: true }).catch(() => {});
+      })
+      .on(RoomEvent.Reconnected, () => {
+        this.logReconnectTrace('room_reconnected', {
+          sessionId: this.sessionId,
+          reconnectCycleId: this.reconnectCycleId,
+          roomName: room.name || null,
+        });
+        void sendClientMetrics(API_BASE, { roomReconnected: true, reconnect: true }).catch(() => {});
+      })
       .on(RoomEvent.ParticipantConnected, (participant) => {
         if (participant.isLocal) return;
+        void sendClientMetrics(API_BASE, { remoteParticipantConnected: true }).catch(() => {});
         // When the peer finishes joining, they always have matchRoomId — replay our cam state so
         // «Отошёл» is instant even if earlier cam-toggle was dropped during the match handshake.
         this.emitCamToggleRelay('participant_connected');
@@ -4223,6 +4240,11 @@ export class RandomChatSession extends SimpleEventEmitter {
     
     if (this.remoteMediaFirstSeenAt === 0) {
       this.remoteMediaFirstSeenAt = Date.now();
+      const firstRemoteMediaMs =
+        this.roomConnectedAt > 0 ? Math.max(0, this.remoteMediaFirstSeenAt - this.roomConnectedAt) : undefined;
+      if (typeof firstRemoteMediaMs === 'number') {
+        void sendClientMetrics(API_BASE, { remoteMediaFirstSeenMs: firstRemoteMediaMs }).catch(() => {});
+      }
       const completedNextTransitionId = this.activeNextTransitionId;
       this.logReconnectTrace('remote_media_first_seen', {
         kind: publication.kind,

@@ -12,6 +12,7 @@ export function isCapacityMetricsEnabled(): boolean {
 
 const MAX_SAMPLES = 10_000;
 const joinTimeSamples: number[] = [];
+const remoteMediaFirstSeenSamples: number[] = [];
 const rttSamples: number[] = [];
 const packetLossSamples: number[] = [];
 
@@ -20,6 +21,9 @@ let tokenErrorsTotal = 0;
 let clientReconnectCount = 0;
 let clientJoinSuccessCount = 0;
 let clientJoinFailureCount = 0;
+let clientRoomReconnectingCount = 0;
+let clientRoomReconnectedCount = 0;
+let clientRemoteParticipantConnectedCount = 0;
 let clientRemoteMediaTimeoutCount = 0;
 let clientRemoteMediaRecoveredCount = 0;
 let clientRelayFallbackCount = 0;
@@ -49,11 +53,15 @@ export function recordTokenFailure() {
 
 export function recordClientMetrics(data: {
   joinTimeMs?: number;
+  remoteMediaFirstSeenMs?: number;
   rttMs?: number;
   packetLoss?: number;
   reconnect?: boolean;
   joinSuccess?: boolean;
   joinFailure?: boolean;
+  roomReconnecting?: boolean;
+  roomReconnected?: boolean;
+  remoteParticipantConnected?: boolean;
   remoteMediaTimeout?: boolean;
   remoteMediaRecovered?: boolean;
   relayFallback?: boolean;
@@ -61,6 +69,9 @@ export function recordClientMetrics(data: {
   if (!CAPACITY_METRICS_ENABLED) return;
   if (typeof data.joinTimeMs === 'number' && data.joinTimeMs >= 0) {
     pushSample(joinTimeSamples, data.joinTimeMs, MAX_SAMPLES);
+  }
+  if (typeof data.remoteMediaFirstSeenMs === 'number' && data.remoteMediaFirstSeenMs >= 0) {
+    pushSample(remoteMediaFirstSeenSamples, data.remoteMediaFirstSeenMs, MAX_SAMPLES);
   }
   if (typeof data.rttMs === 'number' && data.rttMs >= 0) {
     pushSample(rttSamples, data.rttMs, MAX_SAMPLES);
@@ -71,6 +82,9 @@ export function recordClientMetrics(data: {
   if (data.reconnect) clientReconnectCount += 1;
   if (data.joinSuccess) clientJoinSuccessCount += 1;
   if (data.joinFailure) clientJoinFailureCount += 1;
+  if (data.roomReconnecting) clientRoomReconnectingCount += 1;
+  if (data.roomReconnected) clientRoomReconnectedCount += 1;
+  if (data.remoteParticipantConnected) clientRemoteParticipantConnectedCount += 1;
   if (data.remoteMediaTimeout) clientRemoteMediaTimeoutCount += 1;
   if (data.remoteMediaRecovered) clientRemoteMediaRecoveredCount += 1;
   if (data.relayFallback) clientRelayFallbackCount += 1;
@@ -84,11 +98,15 @@ export function getStats() {
     tokenErrorsTotal,
     tokenFailureRate: tokenRequestsTotal > 0 ? (tokenErrorsTotal / tokenRequestsTotal) * 100 : 0,
     joinTimeMs: { p95: p95(joinTimeSamples), samples: joinTimeSamples.length },
+    remoteMediaFirstSeenMs: { p95: p95(remoteMediaFirstSeenSamples), samples: remoteMediaFirstSeenSamples.length },
     rttMs: { p95: p95(rttSamples), samples: rttSamples.length },
     packetLoss: { p95: p95(packetLossSamples), samples: packetLossSamples.length },
     clientReconnectCount,
     clientJoinSuccessCount,
     clientJoinFailureCount,
+    clientRoomReconnectingCount,
+    clientRoomReconnectedCount,
+    clientRemoteParticipantConnectedCount,
     clientRemoteMediaTimeoutCount,
     clientRemoteMediaRecoveredCount,
     clientRelayFallbackCount,
@@ -109,6 +127,9 @@ export function getPrometheusText(): string {
     '# HELP livi_join_time_ms_p95 P95 join time (ms) from client reports',
     '# TYPE livi_join_time_ms_p95 gauge',
     `livi_join_time_ms_p95 ${s.joinTimeMs.p95}`,
+    '# HELP livi_remote_media_first_seen_ms_p95 P95 time to first remote media after room connect (ms)',
+    '# TYPE livi_remote_media_first_seen_ms_p95 gauge',
+    `livi_remote_media_first_seen_ms_p95 ${s.remoteMediaFirstSeenMs.p95}`,
     '# HELP livi_rtt_ms_p95 P95 RTT (ms) from client reports',
     '# TYPE livi_rtt_ms_p95 gauge',
     `livi_rtt_ms_p95 ${s.rttMs.p95}`,
@@ -124,6 +145,15 @@ export function getPrometheusText(): string {
     '# HELP livi_join_failures_total Client join failure count',
     '# TYPE livi_join_failures_total counter',
     `livi_join_failures_total ${s.clientJoinFailureCount}`,
+    '# HELP livi_room_reconnecting_total Client room reconnecting events',
+    '# TYPE livi_room_reconnecting_total counter',
+    `livi_room_reconnecting_total ${s.clientRoomReconnectingCount}`,
+    '# HELP livi_room_reconnected_total Client room reconnected events',
+    '# TYPE livi_room_reconnected_total counter',
+    `livi_room_reconnected_total ${s.clientRoomReconnectedCount}`,
+    '# HELP livi_remote_participant_connected_total Remote participant connected events observed by clients',
+    '# TYPE livi_remote_participant_connected_total counter',
+    `livi_remote_participant_connected_total ${s.clientRemoteParticipantConnectedCount}`,
     '# HELP livi_remote_media_timeouts_total Connected calls where remote media did not arrive in time',
     '# TYPE livi_remote_media_timeouts_total counter',
     `livi_remote_media_timeouts_total ${s.clientRemoteMediaTimeoutCount}`,
