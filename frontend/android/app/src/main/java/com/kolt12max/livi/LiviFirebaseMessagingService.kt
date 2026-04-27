@@ -744,9 +744,6 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val contentPending = PendingIntent.getActivity(context, 0, contentIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            try {
-                nm.cancel(notificationId)
-            } catch (_: Exception) {}
             val notification = NotificationCompat.Builder(context, CHANNEL_ID_UNREAD)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(safeTitle)
@@ -756,7 +753,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setOnlyAlertOnce(false)
+                .setOnlyAlertOnce(true)
                 .build()
             nm.notify(notificationId, notification)
         }

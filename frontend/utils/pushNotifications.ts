@@ -46,6 +46,72 @@ type RegisterPushTokenOptions = {
 let lastRegisteredPushToken: PushTokenSnapshot | null = null;
 let registerPushInFlight: Promise<void> | null = null;
 
+function ensureInAppPiPBeforeOpeningFriendsFromMessageNotification(): void {
+  try {
+    const g = global as any;
+    if (g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true) return;
+
+    const session = g.__webrtcSessionRef?.current;
+    const sessionEnded = !!session && typeof session.isEnded === 'function' && session.isEnded();
+    if (sessionEnded) return;
+
+    const params = g.__currentCallPiPParamsRef?.current;
+    const callIdFromSession =
+      !!session && typeof session.getCallId === 'function'
+        ? session.getCallId()
+        : null;
+    const roomIdFromSession =
+      !!session && typeof session.getRoomId === 'function'
+        ? session.getRoomId()
+        : null;
+    const callId = String(params?.callId || callIdFromSession || '').trim();
+    const roomId = String(params?.roomId || roomIdFromSession || '').trim();
+    if (!callId || !roomId) return;
+
+    const showPiP = g.__pipShowPiPRef?.current;
+    if (typeof showPiP !== 'function') return;
+
+    const remoteStream =
+      params?.remoteStream ??
+      (!!session && typeof session.getRemoteStream === 'function' ? session.getRemoteStream() : null);
+    const localStream =
+      params?.localStream ??
+      (!!session && typeof session.getLocalStream === 'function' ? session.getLocalStream() : null);
+    const remoteCamOn =
+      typeof params?.remoteCamOn === 'boolean'
+        ? params.remoteCamOn
+        : (!!session && typeof session.getRemoteCamEnabled === 'function' ? session.getRemoteCamEnabled() : undefined);
+    const localCamOn =
+      typeof params?.localCamOn === 'boolean'
+        ? params.localCamOn
+        : (!!session && typeof session.getLocalCamEnabled === 'function' ? session.getLocalCamEnabled() : undefined);
+
+    showPiP({
+      callId,
+      roomId,
+      partnerName: params?.partnerName,
+      partnerAvatarUrl: params?.partnerAvatarUrl,
+      localStream: localStream ?? null,
+      remoteStream: remoteStream ?? null,
+      muteLocal: params?.muteLocal,
+      muteRemote: params?.muteRemote,
+      localCamOn,
+      remoteCamOn,
+      navParams: params?.navParams,
+      deferVisible: false,
+    });
+
+    if (Platform.OS === 'android') {
+      try { NativeModules.LiviAppModule?.setPiPEndCallParams?.(callId, roomId); } catch {}
+    }
+    try {
+      if (session && typeof session.enterPiP === 'function') session.enterPiP();
+    } catch {}
+  } catch (e) {
+    logger.warn('[push] ensureInAppPiPBeforeOpeningFriendsFromMessageNotification failed', e as any);
+  }
+}
+
 /** Отметить, что пользователь «увидел» пропущенные (зашёл во вкладку Друзья) — бейдж и шторка будут скрыты. */
 export async function setMissedBadgeCleared(): Promise<void> {
   try {
@@ -524,6 +590,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
     if (type === 'message') {
       const nav = await waitForNavReady();
       if (!nav) return;
+      ensureInAppPiPBeforeOpeningFriendsFromMessageNotification();
       await clearNotificationIndicators();
       nav.dispatch(
         CommonActions.reset({

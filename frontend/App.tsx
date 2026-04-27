@@ -958,6 +958,67 @@ function AppContent() {
     };
   }, []);
 
+  // Android native notification tap (summary unread/missed) opens Friends via MainActivity flag.
+  // If a call is active, force in-app PiP before navigation so user can return to VideoCall.
+  const ensureInAppPiPBeforeOpenFriends = React.useCallback(() => {
+    if (Platform.OS !== 'android') return;
+    try {
+      const g = global as any;
+      if (g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true) return;
+
+      const session = g.__webrtcSessionRef?.current;
+      const sessionEnded = !!session && typeof session.isEnded === 'function' && session.isEnded();
+      if (sessionEnded) return;
+
+      const params = g.__currentCallPiPParamsRef?.current;
+      const callIdFromSession = !!session && typeof session.getCallId === 'function' ? session.getCallId() : null;
+      const roomIdFromSession = !!session && typeof session.getRoomId === 'function' ? session.getRoomId() : null;
+      const callId = String(params?.callId || callIdFromSession || '').trim();
+      const roomId = String(params?.roomId || roomIdFromSession || '').trim();
+      if (!callId || !roomId) return;
+
+      const showPiP = g.__pipShowPiPRef?.current;
+      if (typeof showPiP !== 'function') return;
+
+      const remoteStream =
+        params?.remoteStream ??
+        (!!session && typeof session.getRemoteStream === 'function' ? session.getRemoteStream() : null);
+      const localStream =
+        params?.localStream ??
+        (!!session && typeof session.getLocalStream === 'function' ? session.getLocalStream() : null);
+      const remoteCamOn =
+        typeof params?.remoteCamOn === 'boolean'
+          ? params.remoteCamOn
+          : (!!session && typeof session.getRemoteCamEnabled === 'function' ? session.getRemoteCamEnabled() : undefined);
+      const localCamOn =
+        typeof params?.localCamOn === 'boolean'
+          ? params.localCamOn
+          : (!!session && typeof session.getLocalCamEnabled === 'function' ? session.getLocalCamEnabled() : undefined);
+
+      showPiP({
+        callId,
+        roomId,
+        partnerName: params?.partnerName,
+        partnerAvatarUrl: params?.partnerAvatarUrl,
+        localStream: localStream ?? null,
+        remoteStream: remoteStream ?? null,
+        muteLocal: params?.muteLocal,
+        muteRemote: params?.muteRemote,
+        localCamOn,
+        remoteCamOn,
+        navParams: params?.navParams,
+        deferVisible: false,
+      });
+
+      try { NativeModules.LiviAppModule?.setPiPEndCallParams?.(callId, roomId); } catch {}
+      try {
+        if (session && typeof session.enterPiP === 'function') session.enterPiP();
+      } catch {}
+    } catch (e) {
+      logger.warn('[App] ensureInAppPiPBeforeOpenFriends failed', e);
+    }
+  }, []);
+
   // Android: при старте приложения применить пропущенные, показанные из нативного кода (FCM call_ended), чтобы бейдж совпадал с числом уведомлений в шторке
   // И при тапе по уведомлению «Пропущенный вызов» — перейти на вкладку Друзья
   React.useEffect(() => {
@@ -970,6 +1031,7 @@ function AppContent() {
     const goToFriends = (retryCount = 0) => {
       if (cancelled) return;
       if (navRef.isReady()) {
+        ensureInAppPiPBeforeOpenFriends();
         navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openFriendsMenu: true, openFriendsTab: true } }));
         return;
       }
@@ -978,61 +1040,70 @@ function AppContent() {
       }
     };
     (async () => {
-      // Сразу проверяем «открыли по тапу Пропущенный вызов» и помечаем «увидел», чтобы ни syncAppBadgeFromMissedCount, ни синхронизация с нативом не пересоздавали уведомление и иконку в статус-баре
+      // Fast-path: если открыли по уведомлению, сразу показываем Friends (+PiP), а тяжелые синки уводим в фон.
       const open = await (LiviAppModule?.getAndClearPendingOpenTabFriends?.() ?? Promise.resolve(false));
-      if (open) await setMissedBadgeCleared();
-      try {
-        const arr = (await (LiviAppModule?.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]))) as string[];
-        if (arr?.length && !cancelled) {
-          const raw = await AsyncStorage.getItem(key);
-          const map = raw ? JSON.parse(raw) : {};
-          const MISSED_APPLY_SKIP_MS = 15000;
-          // Считаем количество пропущенных по каждому userId (массив — по одному элементу на каждый показ «Пропущенный вызов» из FCM)
-          const countByUid: Record<string, number> = {};
-          for (const u of arr) {
-            if (!u) continue;
-            countByUid[u] = (countByUid[u] || 0) + 1;
-          }
-          for (const uid of Object.keys(countByUid)) {
-            const lastInc = lastMissedIncrementTimeByUserRef.current[uid];
-            if (lastInc && Date.now() - lastInc < MISSED_APPLY_SKIP_MS) continue;
-            if (wasAppliedFromReauth(uid)) continue;
-            const add = countByUid[uid] || 1;
-            map[uid] = (map[uid] || 0) + add;
-            try { recordAppliedFromPending(uid); } catch {}
-            try { emitMissedIncrement(uid); } catch {}
-          }
-          await AsyncStorage.setItem(key, JSON.stringify(map));
-          await clearMissedBadgeCleared();
-          await syncAppBadgeFromMissedCount();
-        }
-      } catch (e) {
-        logger.warn('[App] getAndClearPendingMissedCalls on mount failed', e);
+      if (open) {
+        setMissedBadgeCleared().catch(() => {});
+        goToFriends();
       }
-      if (cancelled) return;
-      await syncAppBadgeFromMissedCount();
-      // Синхронизировать счётчик в шторке с источником истины (AsyncStorage) при каждом старте
-      if (Platform.OS === 'android') {
-        try {
-          const badgeCleared = await AsyncStorage.getItem('missed_calls_badge_cleared_v1');
-          const raw2 = await AsyncStorage.getItem(key);
-          const map2 = raw2 ? JSON.parse(raw2) as Record<string, number> : {};
-          const setOnly = badgeCleared === 'true';
-          for (const uid of Object.keys(map2 || {})) {
-            const c = map2[uid];
-            if (uid && typeof c === 'number' && c > 0) {
-              if (setOnly) LiviAppModule?.setMissedCountForUserOnly?.(uid, c);
-              else LiviAppModule?.syncMissedCountForUser?.(uid, c);
+      setTimeout(() => {
+        if (cancelled) return;
+        (async () => {
+          try {
+            const arr = (await (LiviAppModule?.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]))) as string[];
+            if (arr?.length && !cancelled) {
+              const raw = await AsyncStorage.getItem(key);
+              const map = raw ? JSON.parse(raw) : {};
+              const MISSED_APPLY_SKIP_MS = 15000;
+              // Считаем количество пропущенных по каждому userId (массив — по одному элементу на каждый показ «Пропущенный вызов» из FCM)
+              const countByUid: Record<string, number> = {};
+              for (const u of arr) {
+                if (!u) continue;
+                countByUid[u] = (countByUid[u] || 0) + 1;
+              }
+              for (const uid of Object.keys(countByUid)) {
+                const lastInc = lastMissedIncrementTimeByUserRef.current[uid];
+                if (lastInc && Date.now() - lastInc < MISSED_APPLY_SKIP_MS) continue;
+                if (wasAppliedFromReauth(uid)) continue;
+                const add = countByUid[uid] || 1;
+                map[uid] = (map[uid] || 0) + add;
+                try { recordAppliedFromPending(uid); } catch {}
+                try { emitMissedIncrement(uid); } catch {}
+              }
+              await AsyncStorage.setItem(key, JSON.stringify(map));
+              await clearMissedBadgeCleared();
+              await syncAppBadgeFromMissedCount();
+            } else if (!cancelled) {
+              await syncAppBadgeFromMissedCount();
             }
+          } catch (e) {
+            logger.warn('[App] getAndClearPendingMissedCalls on mount failed', e);
           }
-        } catch (_) {}
-      }
-      if (open) goToFriends();
+
+          if (cancelled) return;
+          // Синхронизировать счётчик в шторке с источником истины (AsyncStorage) при каждом старте.
+          if (Platform.OS === 'android') {
+            try {
+              const badgeCleared = await AsyncStorage.getItem('missed_calls_badge_cleared_v1');
+              const raw2 = await AsyncStorage.getItem(key);
+              const map2 = raw2 ? JSON.parse(raw2) as Record<string, number> : {};
+              const setOnly = badgeCleared === 'true';
+              for (const uid of Object.keys(map2 || {})) {
+                const c = map2[uid];
+                if (uid && typeof c === 'number' && c > 0) {
+                  if (setOnly) LiviAppModule?.setMissedCountForUserOnly?.(uid, c);
+                  else LiviAppModule?.syncMissedCountForUser?.(uid, c);
+                }
+              }
+            } catch (_) {}
+          }
+        })().catch(() => {});
+      }, 0);
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [ensureInAppPiPBeforeOpenFriends]);
 
   // Android: при возврате в приложение (тап по уведомлению «Пропущенный вызов») — открыть меню и вкладку Друзья; сразу помечаем «увидел», чтобы синхронизация с нативом не пересоздала уведомление
   React.useEffect(() => {
@@ -1044,6 +1115,7 @@ function AppContent() {
         setMissedBadgeCleared().catch(() => {});
         const go = (retry = 0) => {
           if (navRef.isReady()) {
+            ensureInAppPiPBeforeOpenFriends();
             navRef.dispatch(CommonActions.navigate({ name: 'Home', params: { openFriendsMenu: true, openFriendsTab: true } }));
             return;
           }
@@ -1053,7 +1125,7 @@ function AppContent() {
       });
     });
     return () => sub.remove();
-  }, []);
+  }, [ensureInAppPiPBeforeOpenFriends]);
 
   // При возврате в приложение перерегистрируем push-токен (в т.ч. fcmToken на Android), чтобы не терять FCM после пуша сообщения.
   React.useEffect(() => {
