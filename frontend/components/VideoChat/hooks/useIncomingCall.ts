@@ -105,6 +105,7 @@ export const useIncomingCall = ({
       setIncomingOverlay(true);
       setIncomingFriendCall({ from: d.from, nick: d.fromNick });
       hadIncomingCallRef.current = true;
+      void (sessionRef.current as any)?.prewarmLocalTracks?.();
     });
 
     return () => {
@@ -235,6 +236,7 @@ export const useIncomingCall = ({
       }
       setIncomingOverlay(true);
       hadIncomingCallRef.current = true;
+      void (currentSession as any)?.prewarmLocalTracks?.();
     };
 
     currentSession.on('incomingCall', handleIncomingCall);

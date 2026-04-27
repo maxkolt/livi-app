@@ -2801,7 +2801,25 @@ export function cancelCall(callId: string) {
 }
 
 export function acceptCall(callId: string) {
-  socket.emit('call:accept', { callId });
+  const id = String(callId || '').trim();
+  if (!id) return;
+  void (async () => {
+    try {
+      await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
+      const resp = await emitAck<{ ok?: boolean; error?: string }>('call:accept', { callId: id }, 7000, 2);
+      if (!resp?.ok) {
+        logger.warn('[socket] call:accept ack returned not ok', { callId: id, error: resp?.error });
+      }
+    } catch (e: any) {
+      logger.warn('[socket] call:accept via ack failed, fallback emit', {
+        callId: id,
+        error: e?.message || String(e),
+      });
+      try {
+        socket.emit('call:accept', { callId: id });
+      } catch {}
+    }
+  })();
 }
 
 export function declineCall(callId: string) {

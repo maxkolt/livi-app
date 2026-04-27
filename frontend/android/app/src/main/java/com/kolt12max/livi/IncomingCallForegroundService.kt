@@ -48,6 +48,25 @@ class IncomingCallForegroundService : Service() {
         pendingActivityLaunchRunnables.clear()
     }
 
+    private fun unregisterAllReceivers() {
+        activityShownReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        activityShownReceiver = null
+        callEndedReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        callEndedReceiver = null
+        declinedReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        declinedReceiver = null
+        answeredReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        answeredReceiver = null
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val callId = intent?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID)
             ?: return stopAndReturn()
@@ -62,14 +81,7 @@ class IncomingCallForegroundService : Service() {
         currentCallId = callId
         currentFrom = from
         currentFromNick = fromNick
-        activityShownReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
-        activityShownReceiver = null
-        callEndedReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
-        callEndedReceiver = null
-        declinedReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
-        declinedReceiver = null
-        answeredReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
-        answeredReceiver = null
+        unregisterAllReceivers()
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
         cancelPendingActivityLaunches()
@@ -241,22 +253,7 @@ class IncomingCallForegroundService : Service() {
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
         cancelPendingActivityLaunches()
-        activityShownReceiver?.let {
-            try { unregisterReceiver(it) } catch (_: Exception) {}
-        }
-        activityShownReceiver = null
-        callEndedReceiver?.let {
-            try { unregisterReceiver(it) } catch (_: Exception) {}
-        }
-        callEndedReceiver = null
-        declinedReceiver?.let {
-            try { unregisterReceiver(it) } catch (_: Exception) {}
-        }
-        declinedReceiver = null
-        answeredReceiver?.let {
-            try { unregisterReceiver(it) } catch (_: Exception) {}
-        }
-        answeredReceiver = null
+        unregisterAllReceivers()
         currentCallId = null
         currentFrom = null
         currentFromNick = null
@@ -280,6 +277,7 @@ class IncomingCallForegroundService : Service() {
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
         cancelPendingActivityLaunches()
+        unregisterAllReceivers()
         if (stopFullIncomingAudioOnDestroy) {
             if (!IncomingCallActivity.isAlive) {
                 LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)

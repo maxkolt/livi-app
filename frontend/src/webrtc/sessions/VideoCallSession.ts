@@ -18,7 +18,7 @@ import {
 } from 'livekit-client';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, WebRTCSessionCallbacks, CamSide } from '../types';
-import socket, { API_BASE, setActiveVideoCall } from '../../../sockets/socket';
+import socket, { API_BASE, emitAck, ensureSocketConnected, setActiveVideoCall } from '../../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
 import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
@@ -166,9 +166,16 @@ export class VideoCallSession extends SimpleEventEmitter {
   private localVideoHealthAttempts = 0;
   private roomConnectedAt = 0;
   private remoteMediaFirstSeenAt = 0;
+  private acceptAckStartedAt = 0;
+  private acceptAckCompletedAt = 0;
+  private livekitConnectStartedAt = 0;
+  private livekitConnectedAt = 0;
+  private publishCompletedAt = 0;
+  private subscribeFirstSeenAt = 0;
   private remoteMediaWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private remoteMediaRecoveryInProgress = false;
   private remoteMediaRelayRecoveryAttempted = false;
+  private remoteMediaNoParticipantWatchdogCount = 0;
   private lastLiveKitUrl: string | null = null;
   private lastLiveKitToken: string | null = null;
   private iceTransportLogTimers: Array<ReturnType<typeof setTimeout>> = [];
@@ -256,6 +263,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     
     this.partnerUserId = friendUserId;
+    this.resetCallFlowMetrics();
     // КРИТИЧНО: partnerId еще нет (будет установлен при получении call:accepted)
     // Но partnerUserId уже есть, и компонент должен его получить через setPartnerUserId в VideoCall.tsx
     // Здесь мы только устанавливаем внутреннее состояние, компонент сам устанавливает partnerUserId
@@ -278,6 +286,24 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.consumedPendingCallAcceptedAtConstruct;
   }
 
+  async prewarmLocalTracks(): Promise<void> {
+    if (this.ended) return;
+    try {
+      await this.ensureLocalTracks();
+    } catch (e) {
+      logger.warn('[VideoCallSession] prewarmLocalTracks failed', e);
+    }
+  }
+
+  private resetCallFlowMetrics(): void {
+    this.acceptAckStartedAt = 0;
+    this.acceptAckCompletedAt = 0;
+    this.livekitConnectStartedAt = 0;
+    this.livekitConnectedAt = 0;
+    this.publishCompletedAt = 0;
+    this.subscribeFirstSeenAt = 0;
+  }
+
   async acceptCall(callId: string, fromUserId: string): Promise<void> {
     // КРИТИЧНО: Очищаем старую комнату перед принятием звонка. disconnect() только если комната уже connected,
     // иначе LiveKit бросает "cannot send signal request before connected, type: leave" и первая попытка подключения падает.
@@ -298,15 +324,30 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     this.callId = callId;
     this.partnerUserId = fromUserId;
+    this.resetCallFlowMetrics();
     this.notifyLoadingChange(true);
+    // Keep signaling in foreground policy during accept -> call:accepted transition.
+    setActiveVideoCall(true);
     const localTracksPromise = this.ensureLocalTracks();
     
     try {
-      socket.emit('call:accept', { callId });
+      await ensureSocketConnected(8000);
+      this.acceptAckStartedAt = Date.now();
+      const resp = await emitAck<{ ok?: boolean; error?: string }>('call:accept', { callId }, 7000, 2);
+      this.acceptAckCompletedAt = Date.now();
+      if (!resp?.ok) {
+        throw new Error(resp?.error || 'call_accept_failed');
+      }
+      if (this.acceptAckStartedAt > 0 && this.acceptAckCompletedAt >= this.acceptAckStartedAt) {
+        void sendClientMetrics(API_BASE, {
+          acceptAckLatencyMs: this.acceptAckCompletedAt - this.acceptAckStartedAt,
+        }).catch(() => {});
+      }
       await localTracksPromise;
     } catch (e) {
       logger.error('[VideoCallSession] Error accepting call', e);
       this.notifyLoadingChange(false);
+      setActiveVideoCall(false);
     }
   }
 
@@ -333,6 +374,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     this.callId = callId;
     this.partnerUserId = peerUserId;
+    this.resetCallFlowMetrics();
     this.notifyLoadingChange(true);
     const localTracksPromise = this.ensureLocalTracks();
     
@@ -2212,6 +2254,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   ): void {
     this.clearRemoteMediaWatchdog(!preserveRecovery);
     this.remoteMediaFirstSeenAt = 0;
+    if (!preserveRecovery) this.remoteMediaNoParticipantWatchdogCount = 0;
     this.remoteMediaWatchdogTimer = setTimeout(() => {
       void this.handleRemoteMediaWatchdog(context);
     }, REMOTE_MEDIA_WATCHDOG_MS);
@@ -2220,6 +2263,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private markRemoteMediaSeen(reason: string, publication: RemoteTrackPublication, participant: RemoteParticipant): void {
     if (this.remoteMediaFirstSeenAt !== 0) return;
     this.remoteMediaFirstSeenAt = Date.now();
+    this.subscribeFirstSeenAt = this.remoteMediaFirstSeenAt;
     const firstRemoteMediaMs = this.roomConnectedAt > 0 ? Math.max(0, this.remoteMediaFirstSeenAt - this.roomConnectedAt) : undefined;
     const recovered = this.remoteMediaRecoveryInProgress || this.remoteMediaRelayRecoveryAttempted;
     this.clearRemoteMediaWatchdog(false);
@@ -2228,6 +2272,30 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (typeof firstRemoteMediaMs === 'number') {
       void sendClientMetrics(API_BASE, { remoteMediaFirstSeenMs: firstRemoteMediaMs }).catch(() => {});
     }
+    const stageMetrics: Record<string, number> = {};
+    if (this.acceptAckStartedAt > 0 && this.acceptAckCompletedAt >= this.acceptAckStartedAt) {
+      stageMetrics.acceptAckLatencyMs = this.acceptAckCompletedAt - this.acceptAckStartedAt;
+    }
+    if (this.livekitConnectStartedAt > 0 && this.livekitConnectedAt >= this.livekitConnectStartedAt) {
+      stageMetrics.livekitConnectLatencyMs = this.livekitConnectedAt - this.livekitConnectStartedAt;
+    }
+    if (this.livekitConnectedAt > 0 && this.publishCompletedAt >= this.livekitConnectedAt) {
+      stageMetrics.publishLatencyMs = this.publishCompletedAt - this.livekitConnectedAt;
+    }
+    if (this.publishCompletedAt > 0 && this.subscribeFirstSeenAt >= this.publishCompletedAt) {
+      stageMetrics.subscribeLatencyMs = this.subscribeFirstSeenAt - this.publishCompletedAt;
+    } else if (this.livekitConnectedAt > 0 && this.subscribeFirstSeenAt >= this.livekitConnectedAt) {
+      stageMetrics.subscribeLatencyMs = this.subscribeFirstSeenAt - this.livekitConnectedAt;
+    }
+    const totalFromAcceptMs =
+      this.acceptAckStartedAt > 0
+        ? Math.max(0, this.remoteMediaFirstSeenAt - this.acceptAckStartedAt)
+        : undefined;
+    void sendClientMetrics(API_BASE, {
+      remoteMediaStageBreakdown: true,
+      ...(typeof totalFromAcceptMs === 'number' ? { timeToFirstRemoteFrameMs: totalFromAcceptMs } : {}),
+      ...stageMetrics,
+    }).catch(() => {});
     if (recovered) {
       void sendClientMetrics(API_BASE, { remoteMediaRecovered: true }).catch(() => {});
     }
@@ -2255,7 +2323,22 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.warn('[VideoCallSession] Remote media watchdog fired without remote participant', {
         roomName: room.name,
         roomState: room.state,
+        noParticipantAttempts: this.remoteMediaNoParticipantWatchdogCount + 1,
       });
+      this.remoteMediaNoParticipantWatchdogCount += 1;
+      void sendClientMetrics(API_BASE, {
+        remoteMediaNoParticipantTimeout: true,
+        remoteMediaNoParticipantAttempts: this.remoteMediaNoParticipantWatchdogCount,
+      }).catch(() => {});
+      if (this.remoteMediaNoParticipantWatchdogCount >= 2) {
+        logger.warn('[VideoCallSession] Remote media watchdog: no participant after retries, ending loading state', {
+          roomName: room.name,
+          roomState: room.state,
+        });
+        this.notifyLoadingChange(false);
+      } else {
+        this.scheduleRemoteMediaWatchdog(context, true);
+      }
       return;
     }
 
@@ -3691,6 +3774,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           connectReason: options?.reason || null,
         });
         const connectStartTime = Date.now();
+        this.livekitConnectStartedAt = connectStartTime;
         // Увеличиваем peerConnectionTimeout: при одновременном подключении обоих участников
         // переговоры (negotiation) могут не уложиться в 15s → "negotiation timed out" и повторная попытка.
         await room.connect(url, token, {
@@ -3738,6 +3822,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.lastLiveKitUrl = url;
       this.lastLiveKitToken = token;
       this.roomConnectedAt = Date.now();
+      this.livekitConnectedAt = this.roomConnectedAt;
       this.scheduleIceTransportLogging(room, options?.reason ? `connect:${options.reason}` : 'connect');
       this.scheduleRemoteMediaWatchdog({
         url,
@@ -3776,6 +3861,11 @@ export class VideoCallSession extends SimpleEventEmitter {
         return elapsedMs > 5000 && room.state === 'connected';
       };
       sendClientMetrics(API_BASE, { joinTimeMs, joinSuccess: true }).catch(() => {});
+      if (this.livekitConnectStartedAt > 0 && this.livekitConnectedAt >= this.livekitConnectStartedAt) {
+        void sendClientMetrics(API_BASE, {
+          livekitConnectLatencyMs: this.livekitConnectedAt - this.livekitConnectStartedAt,
+        }).catch(() => {});
+      }
 
       // Аудио-роутинг управляется на уровне UI (useAudioRouting) — без агрессивных "пинков" из сессии.
       
@@ -4135,6 +4225,12 @@ export class VideoCallSession extends SimpleEventEmitter {
             });
           }
         }
+      }
+      this.publishCompletedAt = Date.now();
+      if (this.livekitConnectedAt > 0 && this.publishCompletedAt >= this.livekitConnectedAt) {
+        void sendClientMetrics(API_BASE, {
+          publishLatencyMs: this.publishCompletedAt - this.livekitConnectedAt,
+        }).catch(() => {});
       }
 
       // Пользователь мог выключить мик во время connecting — publish не меняет желаемое состояние в комнате.
