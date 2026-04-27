@@ -479,11 +479,9 @@ app.get('/api/turn-credentials', async (_req, res) => {
   try {
     const req = _req as express.Request & { userId?: string; installId?: string };
     const installId = String(req.installId || '').trim();
-    const trustedUserId = String(req.userId || '').trim();
-    if (!installId || !trustedUserId) {
+    if (!installId) {
       logger.warn('[TURN] Unauthorized TURN credentials request, returning STUN only', {
         hasInstallId: !!installId,
-        hasUserId: !!trustedUserId,
       });
       return res.status(401).json({
         ok: false,
