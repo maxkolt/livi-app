@@ -10,13 +10,6 @@ import { sendMessagePushToUser } from '../utils/push';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
-const OID_HEX_24 = /^[a-f\d]{24}$/i;
-/** Единый ключ для viewingChat / сравнения (Mongo ObjectId без учёта регистра). */
-function canonicalUserId(s: string): string {
-  const t = String(s || '').trim();
-  return OID_HEX_24.test(t) ? t.toLowerCase() : t;
-}
-
 async function purgeMessageFromFriendship(friendshipId: mongoose.Types.ObjectId | null, messageId: string) {
   if (!friendshipId || !messageId) return;
   await FriendshipMessages.updateOne(
@@ -101,23 +94,21 @@ const viewingChat = new Map<string, { with: string; at: number }>();
 const VIEWING_CHAT_TTL_MS = 90_000;
 
 function isViewingChatWith(recipientUserId: string, senderUserId: string): boolean {
-  const rec = canonicalUserId(recipientUserId);
-  const entry = viewingChat.get(rec);
+  const entry = viewingChat.get(recipientUserId);
   if (!entry) return false;
   if (Date.now() - entry.at > VIEWING_CHAT_TTL_MS) {
-    viewingChat.delete(rec);
+    viewingChat.delete(recipientUserId);
     return false;
   }
-  return canonicalUserId(entry.with) === canonicalUserId(senderUserId);
+  return entry.with === senderUserId;
 }
 
 function setViewingChat(userId: string, withPeerId: string | null) {
-  const uid = canonicalUserId(userId);
-  if (!uid) return;
+  if (!userId) return;
   if (withPeerId) {
-    viewingChat.set(uid, { with: canonicalUserId(withPeerId), at: Date.now() });
+    viewingChat.set(userId, { with: withPeerId, at: Date.now() });
   } else {
-    viewingChat.delete(uid);
+    viewingChat.delete(userId);
   }
 }
 
@@ -333,17 +324,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
   sock.on('disconnect', () => {
     const me = meId();
-    if (!me) return;
-    // При замене сокета (duplicate connection) старый disconnect идёт после bind нового —
-    // не сбрасываем viewing, иначе сервер перестаёт слать FCM, хотя клиент всё ещё в чате.
-    const canon = canonicalUserId(me);
-    const hasOtherSocket = Array.from(io.sockets.sockets.values()).some(
-      (s) =>
-        s.id !== sock.id &&
-        s.connected &&
-        canonicalUserId(String((s as any).data?.userId || '')) === canon
-    );
-    if (!hasOtherSocket) setViewingChat(me, null);
+    if (me) setViewingChat(me, null);
   });
 
   /** ===== Typing/Recording indicator (chat) ===== */
@@ -448,8 +429,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'save_failed' });
       }
 
-      // Добавляем в счетчик непрочитанных
-      addUnreadMessage(payload.to, messageId, me);
+      // Счётчик непрочитанных: не копим, если получатель уже в этом чате (chat:viewing), иначе бейдж/Home дергаются до mark_read.
+      if (!isViewingChatWith(payload.to, me)) {
+        addUnreadMessage(payload.to, messageId, me);
+      }
 
       // Отправляем сообщение получателю если он онлайн
       const recipientOnline = isUserOnline(io, payload.to);
@@ -486,7 +469,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
       // 📲 PUSH: новое сообщение. Не слать пуш, если получатель сейчас в этом чате (как в Telegram).
       try {
-        if (isViewingChatWith(String(payload.to), String(me))) {
+        if (isViewingChatWith(payload.to, me)) {
           // Получатель смотрит чат с отправителем — пуш не отправляем
         } else {
           let fromNick: string | undefined;
