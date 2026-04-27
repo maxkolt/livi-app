@@ -75,7 +75,7 @@ import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, onMessagesDeleted, getUnreadCount, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
-import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals } from '../utils/globalEvents';
+import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onCometChatStatus } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
 import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
@@ -1011,6 +1011,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
     baseShowNotice(text, kind, ms);
   }, [baseShowNotice, setSavedToast, lang]);
+
+  useEffect(() => {
+    const off = onCometChatStatus?.((payload) => {
+      if (!payload?.message) return;
+      const prefix = payload.title ? `${payload.title}: ` : '';
+      const kind = payload.kind === 'error' ? 'error' : 'info';
+      showNotice(`${prefix}${payload.message}`, kind, payload.kind === 'error' ? 4500 : 3000);
+    });
+    return () => {
+      try { off?.(); } catch {}
+    };
+  }, [showNotice]);
   
   // ===== Donate modal =====
   const [donateVisible, setDonateVisible] = useState(false);
@@ -3505,10 +3517,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     // Слушатель новых сообщений для обновления счетчиков; при новом сообщении сбрасываем «увидел», чтобы на иконке снова показывались все пропущенные
     const offReceived = onMessageReceived((message) => {
       const messageFromStr = String(message.from);
-      if (friends.some(f => String(f.id) === messageFromStr)) {
-        updateOne(messageFromStr);
-        clearMissedBadgeCleared().then(() => syncAppBadgeFromMissedCount()).catch(() => {});
+      if (!friends.some(f => String(f.id) === messageFromStr)) return;
+      // Пользователь в открытом чате с этим отправителем — не поднимаем локальный счётчик (сервер тоже не кладёт unread при chat:viewing).
+      const openChatPeer = String((global as any).__currentChatPeerId || '').trim();
+      if (openChatPeer && openChatPeer === messageFromStr) {
+        if (!disposed) setUnreadByUser((prev) => ({ ...prev, [messageFromStr]: 0 }));
+      } else {
+        void updateOne(messageFromStr);
       }
+      clearMissedBadgeCleared().then(() => syncAppBadgeFromMissedCount()).catch(() => {});
     });
 
     // Слушатель подтверждений прочтения

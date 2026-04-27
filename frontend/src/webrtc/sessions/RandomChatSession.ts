@@ -4108,6 +4108,48 @@ export class RandomChatSession extends SimpleEventEmitter {
     }
   }
 
+  private resolveLiveRemoteParticipant(participant: RemoteParticipant): RemoteParticipant | null {
+    if (participant.isLocal) return null;
+    const room = this.room;
+    if (!room) return null;
+    const identity = String(participant.identity || '').trim();
+    if (!identity) return null;
+
+    const liveParticipant = room.remoteParticipants.get(identity) || null;
+    if (liveParticipant?.sid) return liveParticipant;
+
+    const expectedIdentity = String(this.currentRemoteParticipant?.identity || '').trim();
+    if (expectedIdentity && expectedIdentity !== identity) {
+      const expectedParticipant = room.remoteParticipants.get(expectedIdentity) || null;
+      if (expectedParticipant?.sid) return expectedParticipant;
+    }
+
+    return null;
+  }
+
+  private isSameRemoteParticipant(participant: RemoteParticipant): boolean {
+    const current = this.currentRemoteParticipant;
+    if (!current) return false;
+    return String(current.identity || '') === String(participant.identity || '');
+  }
+
+  private refreshCurrentRemoteParticipant(room: Room): void {
+    const identities = [
+      this.currentRemoteParticipant?.identity,
+      this.matchRoomId,
+    ]
+      .map((v) => String(v || '').trim())
+      .filter(Boolean);
+
+    for (const identity of identities) {
+      const liveParticipant = room.remoteParticipants.get(identity) || null;
+      if (liveParticipant?.sid) {
+        this.currentRemoteParticipant = liveParticipant;
+        return;
+      }
+    }
+  }
+
   private registerRoomEvents(room: Room): void {
     room
       .on(RoomEvent.Reconnecting, () => {
@@ -4125,10 +4167,22 @@ export class RandomChatSession extends SimpleEventEmitter {
           roomName: room.name || null,
         });
         void sendClientMetrics(API_BASE, { roomReconnected: true, reconnect: true }).catch(() => {});
+        this.refreshCurrentRemoteParticipant(room);
         this.scheduleIceTransportLogging(room, 'reconnected');
       })
       .on(RoomEvent.ParticipantConnected, (participant) => {
         if (participant.isLocal) return;
+        const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+        if (!liveParticipant) {
+          logger.debug('[RandomChatSession] Ignoring ParticipantConnected for stale participant', {
+            participantIdentity: participant.identity,
+            participantSid: participant.sid,
+            roomState: room.state,
+          });
+          return;
+        }
+        participant = liveParticipant;
+        this.currentRemoteParticipant = liveParticipant;
         void sendClientMetrics(API_BASE, { remoteParticipantConnected: true }).catch(() => {});
         // When the peer finishes joining, they always have matchRoomId — replay our cam state so
         // «Отошёл» is instant even if earlier cam-toggle was dropped during the match handshake.
@@ -4145,12 +4199,35 @@ export class RandomChatSession extends SimpleEventEmitter {
           });
           return;
         }
+        const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+        if (!liveParticipant) {
+          logger.debug('[RandomChatSession] Ignoring TrackSubscribed for stale participant', {
+            participantIdentity: participant.identity,
+            participantSid: participant.sid,
+            trackSid: publication.trackSid,
+            roomState: room.state,
+          });
+          return;
+        }
+        participant = liveParticipant;
         this.handleTrackSubscribed(track, publication, participant);
       })
       .on(RoomEvent.TrackPublished, (publication, participant) => {
         // КРИТИЧНО: При публикации трека удаленным участником подписываемся на него
         // Это особенно важно при перевороте камеры, когда старый трек удаляется и публикуется новый
         if (!participant.isLocal) {
+          const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+          if (!liveParticipant) {
+            logger.debug('[RandomChatSession] Ignoring TrackPublished for stale participant', {
+              participantIdentity: participant.identity,
+              participantSid: participant.sid,
+              trackSid: publication.trackSid,
+              roomState: room.state,
+            });
+            return;
+          }
+          participant = liveParticipant;
+          this.currentRemoteParticipant = liveParticipant;
           logger.info('[RandomChatSession] Remote track published', {
             kind: publication.kind,
             trackSid: publication.trackSid,
@@ -4199,7 +4276,17 @@ export class RandomChatSession extends SimpleEventEmitter {
           return;
         }
         // КРИТИЧНО: Приводим к RemoteParticipant для типизации
-        this.handleTrackUnsubscribed(publication, participant as RemoteParticipant);
+        const liveParticipant = this.resolveLiveRemoteParticipant(participant as RemoteParticipant);
+        if (!liveParticipant) {
+          logger.debug('[RandomChatSession] Ignoring TrackUnsubscribed for stale participant', {
+            participantIdentity: participant.identity,
+            participantSid: participant.sid,
+            trackSid: publication.trackSid,
+            roomState: room.state,
+          });
+          return;
+        }
+        this.handleTrackUnsubscribed(publication, liveParticipant);
       })
       .on(RoomEvent.TrackMuted, (pub, participant) => {
         if (!participant.isLocal && pub.kind === Track.Kind.Video) {
@@ -4222,7 +4309,7 @@ export class RandomChatSession extends SimpleEventEmitter {
         }
       })
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
-        if (participant === this.currentRemoteParticipant) {
+        if (this.isSameRemoteParticipant(participant)) {
           // КРИТИЧНО: Если партнер отключился, мы должны отключиться от комнаты
           // Даже если уже идет процесс отключения, убеждаемся что комната отключена
           if (!this.isDisconnecting && !this.disconnectHandled) {
@@ -4276,7 +4363,19 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
 
-    this.currentRemoteParticipant = participant;
+    const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+    if (!liveParticipant) {
+      logger.debug('[RandomChatSession] Ignoring subscription for stale participant', {
+        kind: publication.kind,
+        trackId: track.sid,
+        participantId: participant.identity,
+        participantSid: participant.sid,
+      });
+      return;
+    }
+
+    this.currentRemoteParticipant = liveParticipant;
+    participant = liveParticipant;
 
     const mediaTrackEarly = track.mediaStreamTrack;
     const isVid = publication.kind === Track.Kind.Video;
@@ -4473,7 +4572,7 @@ export class RandomChatSession extends SimpleEventEmitter {
       return;
     }
     
-    if (participant !== this.currentRemoteParticipant) {
+    if (!this.isSameRemoteParticipant(participant)) {
       return;
     }
 

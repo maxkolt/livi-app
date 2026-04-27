@@ -792,6 +792,14 @@ socket.on("connect", async () => {
   };
   syncAppVisibilityAfterConnect();
   setTimeout(syncAppVisibilityAfterConnect, 250);
+  __flushPendingRtcSignals();
+  // После reconnect сервер сбрасывает chat:viewing — восстанавливаем, если пользователь всё ещё в переписке.
+  try {
+    const peer = (global as any).__currentChatPeerId;
+    if (peer && typeof peer === 'string' && peer.length > 0) {
+      sendChatViewing(peer);
+    }
+  } catch {}
 });
 socket.on("reconnect_attempt", () => { reconnecting = true; });
 // Manager `reconnect` не дублируем: после успешного переподключения снова срабатывает `connect` → один reauth через emitReauthDeduped.
@@ -847,6 +855,25 @@ socket.on('friends:room_state', (data: { roomId: string; participants: string[] 
 /* ========= ICE candidates ========= */
 // Буфер ICE-кандидатов на уровне сокета (для модулей, где PC создаются позже)
 const __candidateBuffer: Record<string, any[]> = {};
+type PendingRtcSignal = {
+  event: 'offer' | 'answer' | 'ice-candidate';
+  to: string;
+  payload: any;
+};
+const __pendingRtcSignals: PendingRtcSignal[] = [];
+
+function __flushPendingRtcSignals() {
+  if (!socket.connected) return;
+  if (!__pendingRtcSignals.length) return;
+  const pending = __pendingRtcSignals.splice(0, __pendingRtcSignals.length);
+  for (const item of pending) {
+    try {
+      socket.emit(item.event, item.payload);
+    } catch {
+      __pendingRtcSignals.unshift(item);
+    }
+  }
+}
 
 export function socketBufferIceCandidate(from: string, candidate: any) {
   const key = String(from || '');
@@ -1489,13 +1516,28 @@ export function onUserPresence(
 
 /* ========= Signaling (webrtc) ========= */
 export function sendOffer(to: string, offer: any) {
-  socket.emit("offer", { to, offer });
+  const payload = { to, offer };
+  if (!socket.connected || reconnecting) {
+    __pendingRtcSignals.push({ event: 'offer', to, payload });
+    return;
+  }
+  socket.emit("offer", payload);
 }
 export function sendAnswer(to: string, answer: any) {
-  socket.emit("answer", { to, answer });
+  const payload = { to, answer };
+  if (!socket.connected || reconnecting) {
+    __pendingRtcSignals.push({ event: 'answer', to, payload });
+    return;
+  }
+  socket.emit("answer", payload);
 }
 export function sendCandidate(to: string, candidate: any) {
-  socket.emit("ice-candidate", { to, candidate });
+  const payload = { to, candidate };
+  if (!socket.connected || reconnecting) {
+    __pendingRtcSignals.push({ event: 'ice-candidate', to, payload });
+    return;
+  }
+  socket.emit("ice-candidate", payload);
 }
 
 export function onRtcOffer(

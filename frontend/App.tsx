@@ -39,6 +39,7 @@ import { isIncomingCallExpired } from './utils/callExpiry';
 import { addVoipTokenListener } from './utils/voipPush';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
+import { connectStreamIfNeeded } from './chat/cometchat';
 
 // Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
 const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
@@ -1241,6 +1242,10 @@ function AppContent() {
     void syncDeclinePrefs();
     const off = onCurrentUserId?.(() => {
       void syncDeclinePrefs();
+      const userId = getCurrentUserId();
+      if (userId) {
+        void connectStreamIfNeeded(userId).catch(() => {});
+      }
     });
     return () => {
       try {

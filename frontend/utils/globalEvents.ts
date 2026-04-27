@@ -11,6 +11,15 @@ const closeOutgoingCallListeners = new Set<Listener<{}>>();
 const callCancelledOnHomeListeners = new Set<Listener<{}>>();
 const callEndedOnHomeListeners = new Set<Listener<{}>>();
 const closeHomeModalsListeners = new Set<Listener<{}>>();
+type CometChatStatusKind = 'info' | 'success' | 'error';
+type CometChatStatusPayload = {
+  kind: CometChatStatusKind;
+  title: string;
+  message: string;
+  userId?: string;
+  source?: string;
+};
+const cometchatStatusListeners = new Set<Listener<CometChatStatusPayload>>();
 
 export function onMissedIncrement(cb: Listener<{ userId: string }>): () => void {
   missedListeners.add(cb);
@@ -163,6 +172,19 @@ export function onCloseHomeModals(cb: () => void): () => void {
 export function emitCloseHomeModals() {
   for (const l of closeHomeModalsListeners) {
     try { (l as any)({}); } catch {}
+  }
+}
+
+export function onCometChatStatus(cb: Listener<CometChatStatusPayload>): () => void {
+  cometchatStatusListeners.add(cb);
+  return () => {
+    cometchatStatusListeners.delete(cb);
+  };
+}
+
+export function emitCometChatStatus(payload: CometChatStatusPayload) {
+  for (const l of cometchatStatusListeners) {
+    try { l(payload); } catch {}
   }
 }
 

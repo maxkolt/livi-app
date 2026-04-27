@@ -257,7 +257,11 @@ export async function syncAppBadgeFromMissedCount(): Promise<void> {
     const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
     const map = raw ? JSON.parse(raw) : {};
     const missedTotal = Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
-    const unreadResult = await getUnreadCount();
+    let unreadResult = await getUnreadCount();
+    if (!unreadResult?.ok) {
+      await new Promise((r) => setTimeout(r, 400));
+      unreadResult = await getUnreadCount();
+    }
     const unreadTotal = unreadResult?.ok ? Math.max(0, Number(unreadResult.count || 0)) : 0;
     const total = Math.min(99, missedTotal + unreadTotal);
     await Notifications.setBadgeCountAsync(total);

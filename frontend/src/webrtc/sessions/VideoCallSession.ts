@@ -4749,6 +4749,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           partnerUserId: this.partnerUserId,
           participantsCount: room.remoteParticipants.size,
         });
+        this.refreshCurrentRemoteParticipant(room);
         this.scheduleIceTransportLogging(room, 'reconnected');
         this.clearPendingRemoteDisconnectTimer();
         if (
@@ -4769,6 +4770,17 @@ export class VideoCallSession extends SimpleEventEmitter {
       .on(RoomEvent.ParticipantConnected, (participant) => {
         // КРИТИЧНО: При подключении участника подписываемся на все его существующие треки
         if (!participant.isLocal) {
+          const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+          if (!liveParticipant) {
+            logger.debug('[VideoCallSession] Ignoring ParticipantConnected for stale participant', {
+              participantIdentity: participant.identity,
+              participantSid: participant.sid,
+              roomState: room.state,
+            });
+            return;
+          }
+          participant = liveParticipant;
+          this.currentRemoteParticipant = liveParticipant;
           void sendClientMetrics(API_BASE, { remoteParticipantConnected: true }).catch(() => {});
           // If we were about to end the call due to a disconnect, cancel — remote is back.
           this.clearPendingRemoteDisconnectTimer();
@@ -4865,6 +4877,18 @@ export class VideoCallSession extends SimpleEventEmitter {
       .on(RoomEvent.TrackPublished, (publication, participant) => {
         // КРИТИЧНО: При публикации трека удаленным участником подписываемся на него
         if (!participant.isLocal) {
+          const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+          if (!liveParticipant) {
+            logger.debug('[VideoCallSession] Ignoring TrackPublished for stale participant', {
+              participantIdentity: participant.identity,
+              participantSid: participant.sid,
+              trackSid: publication.trackSid,
+              roomState: room.state,
+            });
+            return;
+          }
+          participant = liveParticipant;
+          this.currentRemoteParticipant = liveParticipant;
           logger.info('[VideoCallSession] Remote track published', {
             kind: publication.kind,
             trackSid: publication.trackSid,
@@ -4916,6 +4940,17 @@ export class VideoCallSession extends SimpleEventEmitter {
           isMuted: track.isMuted,
           trackReady: track.mediaStreamTrack?.readyState,
         });
+        const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+        if (!liveParticipant) {
+          logger.debug('[VideoCallSession] Ignoring TrackSubscribed for stale participant', {
+            participantIdentity: participant.identity,
+            participantSid: participant.sid,
+            trackSid: publication.trackSid,
+            roomState: room.state,
+          });
+          return;
+        }
+        participant = liveParticipant;
         this.handleTrackSubscribed(track, publication, participant);
       })
       .on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
@@ -4928,7 +4963,17 @@ export class VideoCallSession extends SimpleEventEmitter {
           });
           return;
         }
-        this.handleTrackUnsubscribed(publication, participant);
+        const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+        if (!liveParticipant) {
+          logger.debug('[VideoCallSession] Ignoring TrackUnsubscribed for stale participant', {
+            participantIdentity: participant.identity,
+            participantSid: participant.sid,
+            trackSid: publication.trackSid,
+            roomState: room.state,
+          });
+          return;
+        }
+        this.handleTrackUnsubscribed(publication, liveParticipant);
       })
       .on(RoomEvent.TrackMuted, (pub, participant) => {
         if (!participant.isLocal && pub.kind === Track.Kind.Video) {
@@ -4949,7 +4994,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       })
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
-        if (participant === this.currentRemoteParticipant) {
+        if (this.isSameRemoteParticipant(participant)) {
           if (!this.isDisconnecting) {
             // LiveKit can emit ParticipantDisconnected transiently during reconnect/negotiation.
             // We must NOT end the call immediately in that case, otherwise UI shows "error" and then "connects".
@@ -5073,6 +5118,49 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
   }
 
+  private resolveLiveRemoteParticipant(participant: RemoteParticipant): RemoteParticipant | null {
+    if (participant.isLocal) return null;
+    const room = this.room;
+    if (!room) return null;
+    const identity = String(participant.identity || '').trim();
+    if (!identity) return null;
+
+    const liveParticipant = room.remoteParticipants.get(identity) || null;
+    if (liveParticipant?.sid) return liveParticipant;
+
+    const expectedIdentity = String(this.partnerUserId || this.partnerId || '').trim();
+    if (expectedIdentity && expectedIdentity !== identity) {
+      const expectedParticipant = room.remoteParticipants.get(expectedIdentity) || null;
+      if (expectedParticipant?.sid) return expectedParticipant;
+    }
+
+    return null;
+  }
+
+  private isSameRemoteParticipant(participant: RemoteParticipant): boolean {
+    const current = this.currentRemoteParticipant;
+    if (!current) return false;
+    return String(current.identity || '') === String(participant.identity || '');
+  }
+
+  private refreshCurrentRemoteParticipant(room: Room): void {
+    const identities = [
+      this.partnerUserId,
+      this.partnerId,
+      this.currentRemoteParticipant?.identity,
+    ]
+      .map((v) => String(v || '').trim())
+      .filter(Boolean);
+
+    for (const identity of identities) {
+      const liveParticipant = room.remoteParticipants.get(identity) || null;
+      if (liveParticipant?.sid) {
+        this.currentRemoteParticipant = liveParticipant;
+        return;
+      }
+    }
+  }
+
   /** Delayed 500/1000ms ретраи: не дергать handleTrackSubscribed, если тот же трек уже в remoteStream (меньше логов и лишних колбэков в UI). */
   private shouldSkipRedundantDelayedTrackApply(track: RemoteTrack, publication: RemoteTrackPublication): boolean {
     if (publication.kind === Track.Kind.Audio) {
@@ -5098,7 +5186,17 @@ export class VideoCallSession extends SimpleEventEmitter {
     publication: RemoteTrackPublication,
     participant: RemoteParticipant
   ): void {
-    this.currentRemoteParticipant = participant;
+    const liveParticipant = this.resolveLiveRemoteParticipant(participant);
+    if (!liveParticipant) {
+      logger.debug('[VideoCallSession] Ignoring TrackSubscribed for stale participant at handler', {
+        participantIdentity: participant.identity,
+        participantSid: participant.sid,
+        trackSid: track.sid,
+      });
+      return;
+    }
+    this.currentRemoteParticipant = liveParticipant;
+    participant = liveParticipant;
 
     const isVideoTrack = publication.kind === Track.Kind.Video;
     const isAudioTrack = publication.kind === Track.Kind.Audio;
@@ -5306,7 +5404,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     publication: RemoteTrackPublication,
     participant: RemoteParticipant
   ): void {
-    if (participant !== this.currentRemoteParticipant) {
+    if (!this.isSameRemoteParticipant(participant)) {
       return;
     }
 

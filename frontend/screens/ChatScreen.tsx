@@ -30,7 +30,7 @@ import {
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
 import { PanGestureHandler, PinchGestureHandler, State, GestureHandlerRootView } from "react-native-gesture-handler";
-import { onCloseIncoming, emitCloseIncoming } from '../utils/globalEvents';
+import { onCloseIncoming, emitCloseIncoming, onCometChatStatus } from '../utils/globalEvents';
 import socket from '../sockets/socket';
 import { Ionicons } from "@expo/vector-icons";
 import { useAppTheme } from "../theme/ThemeProvider";
@@ -92,7 +92,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
 import { t } from "../utils/i18n";
-import { clearNotificationIndicators, setCurrentChatPeerId, dismissMessageNotificationForUser } from "../utils/pushNotifications";
+import { setCurrentChatPeerId, dismissMessageNotificationForUser, syncAppBadgeFromMissedCount } from "../utils/pushNotifications";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 
 type RouteParams = {
@@ -443,6 +443,19 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
     });
     return () => sub.remove();
+  }, [peerId, isChatScreenFocused]);
+
+  // Продлеваем chat:viewing на сервере (TTL 90s), иначе длинная переписка без смены AppState → снова пуши и unread в памяти.
+  useEffect(() => {
+    if (!peerId) return;
+    const id = setInterval(() => {
+      try {
+        if (AppState.currentState === 'active' && isChatScreenFocused) {
+          sendChatViewing(peerId);
+        }
+      } catch {}
+    }, 45_000);
+    return () => clearInterval(id);
   }, [peerId, isChatScreenFocused]);
 
   const [conversation, setConversation] =
@@ -1351,7 +1364,10 @@ export default function ChatScreen({ route, navigation }: Props) {
         if (isFromPeer) {
           setTimeout(() => {
             markMessagesAsRead(senderId);
-            try { void clearNotificationIndicators(); } catch {}
+            try {
+              void dismissMessageNotificationForUser(senderId);
+              void syncAppBadgeFromMissedCount();
+            } catch {}
           }, 1000);
         }
       }
@@ -1744,8 +1760,10 @@ export default function ChatScreen({ route, navigation }: Props) {
           
           // Отмечаем сообщения как прочитанные
           await markMessagesAsRead(peerId);
-          // Clear notification tray/badge after reading
-          try { await clearNotificationIndicators(); } catch {}
+          try {
+            await dismissMessageNotificationForUser(peerId);
+            await syncAppBadgeFromMissedCount();
+          } catch {}
           
               // Синхронизируем статусы доставки/прочтения из сервера для моих сообщений
               try {
@@ -1874,7 +1892,8 @@ export default function ChatScreen({ route, navigation }: Props) {
 
             await markMessagesAsRead(pid);
             try {
-              await clearNotificationIndicators();
+              await dismissMessageNotificationForUser(pid);
+              await syncAppBadgeFromMissedCount();
             } catch {}
             logger.debug('[ChatScreen] Merged messages after socket connect/reconnect', { n: formattedMessages.length, peerId: pid });
           } catch (e) {
@@ -2375,16 +2394,27 @@ export default function ChatScreen({ route, navigation }: Props) {
     };
   }, [peerId]);
 
-  // When chat is focused, clear system notification tray/badge.
-  // This fixes the case: user opens app from notifications, reads messages, but badge stays.
+  // После прочтения бейдж чинится через markMessagesAsRead + sync. Здесь только «живой» фокус приложения:
+  // иначе при inactive/background спurious focus снимал всю шторку и обнулял бейдж (глобальный dismissAll).
   useEffect(() => {
     const unsub = navigation?.addListener?.('focus', () => {
-      try { void clearNotificationIndicators(); } catch {}
+      const run = () => {
+        if (AppState.currentState !== 'active') return;
+        try {
+          if (peerId) void dismissMessageNotificationForUser(peerId);
+          void syncAppBadgeFromMissedCount();
+        } catch {}
+      };
+      run();
+      requestAnimationFrame(() => {
+        if (AppState.currentState !== 'active') return;
+        run();
+      });
     });
     return () => {
       try { unsub?.(); } catch {}
     };
-  }, [navigation]);
+  }, [navigation, peerId]);
 
   // Предзагрузка удалена - теперь используется система кеширования в AvatarImage
 
@@ -2963,6 +2993,16 @@ export default function ChatScreen({ route, navigation }: Props) {
     },
     [],
   );
+
+  React.useEffect(() => {
+    const off = onCometChatStatus?.((payload) => {
+      if (!payload?.message) return;
+      showNotice(payload.kind === 'error' ? 'error' : 'info', payload.title || 'LiVi', payload.message);
+    });
+    return () => {
+      try { off?.(); } catch {}
+    };
+  }, [showNotice]);
 
   const handleScrollToIndexFailed = React.useCallback((info: { index: number; averageItemLength?: number }) => {
     const fl = flatListRef.current as any;
