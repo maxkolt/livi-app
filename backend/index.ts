@@ -2882,10 +2882,13 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
   );
 
-  sock.on('call:accept', async ({ callId }: { callId?: string }) => {
+  sock.on('call:accept', async ({ callId }: { callId?: string }, ack?: (resp: { ok: boolean; error?: string; duplicate?: boolean }) => void) => {
     const id = String(callId || '');
     const link = await getCallLinkFromAnyStore(id);
-    if (!link) return;
+    if (!link) {
+      ack?.({ ok: false, error: 'not_found' });
+      return;
+    }
     
     logger.debug('Call accepted', { callId: id });
     
@@ -2893,12 +2896,18 @@ io.on('connection', async (sock: AuthedSocket) => {
     const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a) as AuthedSocket | undefined;
     const bSock = (sock as any)?.data?.userId === link.b ? (sock as AuthedSocket) : Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b) as AuthedSocket | undefined;
     
-    if (!bSock) return;
+    if (!bSock) {
+      ack?.({ ok: false, error: 'callee_socket_not_found' });
+      return;
+    }
     const shouldProcess = transitionCall(id, 'accepted', {
       actionKey: `socket_accept:${id}:${link.b}`,
       source: 'socket_accept',
     });
-    if (!shouldProcess) return;
+    if (!shouldProcess) {
+      ack?.({ ok: true, duplicate: true });
+      return;
+    }
     if (link.timer) {
       try { clearTimeout(link.timer); } catch {}
       link.timer = undefined;
@@ -3032,6 +3041,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           await emitPresenceUpdateToFriends(io, link.b, false);
         }
         cleanupCall(id);
+        ack?.({ ok: false, error: 'token_failed' });
         return;
       }
       
@@ -3113,6 +3123,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       } catch {}
       
       logger.debug('Direct call room established', { roomId, callId: id, aConnected: !!aSock, bConnected: !!bSock });
+      ack?.({ ok: true });
     }
   });
 
