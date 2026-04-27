@@ -333,7 +333,17 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
   sock.on('disconnect', () => {
     const me = meId();
-    if (me) setViewingChat(me, null);
+    if (!me) return;
+    // При замене сокета (duplicate connection) старый disconnect идёт после bind нового —
+    // не сбрасываем viewing, иначе сервер перестаёт слать FCM, хотя клиент всё ещё в чате.
+    const canon = canonicalUserId(me);
+    const hasOtherSocket = Array.from(io.sockets.sockets.values()).some(
+      (s) =>
+        s.id !== sock.id &&
+        s.connected &&
+        canonicalUserId(String((s as any).data?.userId || '')) === canon
+    );
+    if (!hasOtherSocket) setViewingChat(me, null);
   });
 
   /** ===== Typing/Recording indicator (chat) ===== */
