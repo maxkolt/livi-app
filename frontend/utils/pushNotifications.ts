@@ -788,16 +788,6 @@ export async function ensureInitialNotificationPermissions(): Promise<void> {
     logger.warn('[push] Failed to request notification permissions', e as any);
   }
 
-  // Android 12+: exact alarm permission may be required for precise triggers.
-  // We do not fail startup; caller should fallback to inexact notifications when this is false.
-  if (Platform.OS === 'android') {
-    try {
-      const canExact = await NativeModules.LiviAppModule?.canScheduleExactAlarms?.();
-      if (canExact === false) {
-        logger.warn('[push] exact alarms are not allowed; use inexact notification trigger fallback on Android 12+');
-      }
-    } catch {}
-  }
 }
 
 export async function registerAndSendPushToken(userId?: string, options?: RegisterPushTokenOptions) {

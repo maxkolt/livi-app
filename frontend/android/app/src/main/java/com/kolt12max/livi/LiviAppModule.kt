@@ -1117,34 +1117,6 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** Android 12+: можно ли ставить точные alarm'ы. Если false, нужно fallback на inexact trigger. */
-  @ReactMethod
-  fun canScheduleExactAlarms(promise: Promise) {
-    try {
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-        promise.resolve(true)
-        return
-      }
-      val am = reactApplicationContext.getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
-      promise.resolve(am?.canScheduleExactAlarms() == true)
-    } catch (_: Exception) {
-      promise.resolve(false)
-    }
-  }
-
-  /** Открыть настройки exact alarms для приложения (best-effort). */
-  @ReactMethod
-  fun openExactAlarmSettings() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-    try {
-      val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
-        data = Uri.parse("package:${reactApplicationContext.packageName}")
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-      }
-      reactApplicationContext.startActivity(intent)
-    } catch (_: Exception) {}
-  }
-
   /** Очистить нативное хранилище пропущенных вызовов и выставить бейдж иконки в 0. Вызывать из JS при «просмотрено»/«прочитано», чтобы следующий FCM не прибавлял старые пропущенные к unreadCount. */
   @ReactMethod
   fun clearAllMissedCountsAndSetBadgeZero() {

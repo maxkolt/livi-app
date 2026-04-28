@@ -7,6 +7,7 @@ apply plugin: "com.facebook.react"
 def _isReleaseTaskRequested = gradle.startParameter.taskNames.any { it.toString().toLowerCase().contains('release') }
 if (file("google-services.json").exists()) {
     apply plugin: "com.google.gms.google-services"
+    apply plugin: "com.google.firebase.crashlytics"
 } else {
     println("[livi] google-services.json not found in android/app - skipping google-services plugin")
     // For release builds we fail fast, unless BUILD_SKIP_GOOGLE_SERVICES_CHECK=1 (e.g. EAS staging profile).
