@@ -1103,6 +1103,9 @@ async function replayIncomingToCalleeIfRinging(sock: AuthedSocket, userId: strin
         callee: uid,
         expiresAtMs: link.expiresAtMs,
       });
+      // Expired ringing call should be finalized once and removed from memory/shared stores,
+      // otherwise reauth/user-bind can keep producing the same skip log in a loop.
+      cleanupCall(entry.callId, 'timeout');
       return;
     }
     const telemetry = callDeliveryById.get(entry.callId);
@@ -2154,6 +2157,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (cidToCleanup) {
         cleanupCall(cidToCleanup, 'ended');
       }
+      const pushCallId = cidToCleanup || (callId ? String(callId) : id);
 
       // Пуш второму участнику (если приложение в фоне/убито) — снять уведомление о звонке и закрыть UI при открытии
       const senderUserId = (sock as any)?.data?.userId;
@@ -2179,7 +2183,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             }
           }
           if (pushPeerUserId) {
-            await sendCallEndedToPeer(pushPeerUserId, callId || id, senderUserId, fromNick);
+            await sendCallEndedToPeer(pushPeerUserId, pushCallId, senderUserId, fromNick);
           }
         } catch (e: any) {
           logger.warn('[call:end] send call_ended push failed', { error: e?.message });
