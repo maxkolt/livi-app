@@ -56,6 +56,22 @@ class MainActivity : ReactActivity() {
   private var backPressLoggingCallback: OnBackPressedCallback? = null
   /** Был intent с EXTRA_PENDING_ANSWER_* — в onResume шлём LiviPendingAnswerCall (один раз на доставку). */
   private var pendingAnswerFromIntent = false
+  private var lastFinishRequestAtMs = 0L
+
+  private fun requestFinish(reason: String) {
+    val now = System.currentTimeMillis()
+    if (isFinishing || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed)) {
+      android.util.Log.i("MainActivity", "requestFinish ignored ($reason): already finishing/destroyed")
+      return
+    }
+    if (now - lastFinishRequestAtMs < 700L) {
+      android.util.Log.i("MainActivity", "requestFinish deduped ($reason): duplicate within guard window")
+      return
+    }
+    lastFinishRequestAtMs = now
+    android.util.Log.i("MainActivity", "requestFinish accepted ($reason)")
+    finish()
+  }
 
   private fun tryStashPendingAnswerFromIntent(i: Intent?): Boolean {
     if (i == null) return false
@@ -383,7 +399,7 @@ class MainActivity : ReactActivity() {
     }
     // Кнопка Домой свернула приложение во время звонка → при тапе по иконке снова показываем экран звонка, а не главный.
     if (isLaunchedFromLauncher(intent) && LiviOngoingCallHelper.launchOngoingCallActivityIfNeeded(this)) {
-      finish()
+      requestFinish("launcher-redirect-to-ongoing-call")
     }
     // Пуш call_ended (endedFromActive): закрыть PiP сразу у собеседника, т.к. сокет в фоне часто отключён.
     closePipCallEndedReceiver = object : BroadcastReceiver() {
@@ -391,7 +407,7 @@ class MainActivity : ReactActivity() {
         if (intent?.action != LiviFirebaseMessagingService.ACTION_CLOSE_PIP_CALL_ENDED) return
         (context as? MainActivity)?.runOnUiThread {
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && (context as MainActivity).isInPictureInPictureMode) {
-            (context as MainActivity).finish()
+            (context as MainActivity).requestFinish("close-pip-from-call-ended-push")
             android.util.Log.d("MainActivity", "Close PiP from call_ended push (endedFromActive)")
           }
         }

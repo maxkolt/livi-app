@@ -4,6 +4,7 @@ import { CometChatUIKit } from "@cometchat/chat-uikit-react-native";
 import { getCurrentUserId } from "../sockets/socket";
 import { emitCometChatStatus } from "../utils/globalEvents";
 import { logger } from "../utils/logger";
+import { trackReleaseError, trackReleaseEvent } from "../utils/telemetry";
 
 const appID = process.env.EXPO_PUBLIC_COMETCHAT_APP_ID || '';
 const region = process.env.EXPO_PUBLIC_COMETCHAT_REGION || '';
@@ -57,6 +58,20 @@ function emitCometChatProblem(source: string, title: string, message: string, ui
   lastCometChatStatusKey = key;
   lastCometChatStatusAt = now;
   logger.warn('[CometChat]', { source, title, message, uid });
+  if (source === 'login' || title.toLowerCase().includes('login failed')) {
+    trackReleaseError('cometchat_login_failed', message, {
+      userId: uid || null,
+      source,
+      title,
+    });
+  } else {
+    trackReleaseEvent('cometchat_issue', {
+      userId: uid || null,
+      source,
+      title,
+      message,
+    });
+  }
   emitCometChatStatus({
     kind: 'error',
     title,

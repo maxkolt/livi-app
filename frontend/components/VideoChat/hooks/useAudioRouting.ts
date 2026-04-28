@@ -14,6 +14,8 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
   const lastSelectedRef = useRef<string>('');
   const lastLogAtRef = useRef(0);
   const btPermissionRequestedRef = useRef(false);
+  const refreshInFlightRef = useRef(false);
+  const lastRefreshAtRef = useRef(0);
   const log = (msg: string, data?: any) => {
     // Keep logs useful but not too spammy.
     const now = Date.now();
@@ -248,6 +250,11 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
 
       const refresh = async (reason: string) => {
         if (cancelled) return;
+        if (refreshInFlightRef.current) return;
+        const now = Date.now();
+        if (now - lastRefreshAtRef.current < 120) return;
+        refreshInFlightRef.current = true;
+        lastRefreshAtRef.current = now;
         try {
           const chosen = lastSelectedRef.current || 'SPEAKER_PHONE';
           const status = await icm.chooseAudioRoute?.(chosen);
@@ -256,6 +263,8 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
           await applyDesiredRoute(available, reason);
         } catch (e) {
           log('[useAudioRouting] refreshStatus failed', { reason, e });
+        } finally {
+          refreshInFlightRef.current = false;
         }
       };
 

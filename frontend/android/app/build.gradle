@@ -117,8 +117,8 @@ android {
         applicationId 'com.kolt12max.livi'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 116
-        versionName "1.1.15"
+        versionCode 117
+        versionName "1.1.16"
     }
     signingConfigs {
     debug {
@@ -231,6 +231,8 @@ dependencies {
     implementation("com.google.firebase:firebase-messaging:24.0.1")
     // Firebase Analytics: FCM логирует события (notification_received и т.д.) — без этой зависимости "Unable to log event: analytics library is missing"
     implementation("com.google.firebase:firebase-analytics:22.0.2")
+    // Crashlytics: non-fatal release telemetry for crash-free diagnostics.
+    implementation("com.google.firebase:firebase-crashlytics:19.3.0")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

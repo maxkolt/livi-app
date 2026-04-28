@@ -17,6 +17,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Bundle
 import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -25,6 +26,8 @@ import android.os.VibrationAttributes
 import android.provider.Settings
 import android.util.Log
 import org.json.JSONObject
+import com.google.firebase.analytics.FirebaseAnalytics
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import expo.modules.notifications.badge.BadgeHelper
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -47,6 +50,24 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   override fun getName(): String = NAME
+
+  private fun hasActiveNotification(nm: NotificationManager, id: Int): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+    return try {
+      @Suppress("DEPRECATION")
+      nm.activeNotifications?.any { it.id == id } == true
+    } catch (_: Exception) {
+      true
+    }
+  }
+
+  private fun cancelNotificationIfPresent(nm: NotificationManager, id: Int) {
+    try {
+      if (hasActiveNotification(nm, id)) {
+        nm.cancel(id)
+      }
+    } catch (_: Exception) {}
+  }
 
   private fun buildSystemPiPSourceRect(activity: android.app.Activity): Rect? {
     return try {
@@ -966,7 +987,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     Handler(Looper.getMainLooper()).post {
       try {
         val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.cancel(getMissedNotificationIdForUser(uid))
+        cancelNotificationIfPresent(nm, getMissedNotificationIdForUser(uid))
       } catch (_: Exception) {}
     }
   }
@@ -985,7 +1006,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           val key = it.next().toString().trim()
           if (key.isNotEmpty()) nm.cancel(getMissedNotificationIdForUser(key))
         }
-        nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
+        cancelNotificationIfPresent(nm, LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
       } catch (_: Exception) {}
     }
   }
@@ -1017,16 +1038,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           val it = map.keys()
           while (it.hasNext()) {
             val key = it.next().toString().trim()
-            if (key.isNotEmpty()) nm.cancel(getMissedNotificationIdForUser(key))
+            if (key.isNotEmpty()) cancelNotificationIfPresent(nm, getMissedNotificationIdForUser(key))
           }
           LiviFirebaseMessagingService.updateSummaryMissedCallsNotification(reactApplicationContext, missedTotal)
         } else {
-          nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
+          cancelNotificationIfPresent(nm, LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
         }
         if (unreadTotal > 0) {
           LiviFirebaseMessagingService.updateSummaryUnreadNotification(reactApplicationContext, unreadTotal)
         } else {
-          nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
+          cancelNotificationIfPresent(nm, LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
         }
       } catch (_: Exception) {}
     }
@@ -1041,7 +1062,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         if (unreadTotal > 0) {
           LiviFirebaseMessagingService.updateSummaryUnreadNotificationWithLast(reactApplicationContext, unreadTotal, lastFromNick, timeStr)
         } else {
-          nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
+          cancelNotificationIfPresent(nm, LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
         }
       } catch (_: Exception) {}
     }
@@ -1053,8 +1074,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     Handler(Looper.getMainLooper()).post {
       try {
         val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
-        nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
+        cancelNotificationIfPresent(nm, LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
+        cancelNotificationIfPresent(nm, LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
       } catch (_: Exception) {}
     }
   }
@@ -1066,7 +1087,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     Handler(Looper.getMainLooper()).post {
       try {
         val id = LiviAppModule.getMessageNotificationIdForUser(userId)
-        (reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)?.cancel(id)
+        val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        if (nm != null) cancelNotificationIfPresent(nm, id)
       } catch (_: Exception) {}
     }
   }
@@ -1077,7 +1099,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     Handler(Looper.getMainLooper()).post {
       try {
         val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
+        cancelNotificationIfPresent(nm, LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_UNREAD)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
           try {
             @Suppress("DEPRECATION")
@@ -1086,13 +1108,41 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
               val base = LiviFirebaseMessagingService.NOTIFICATION_ID_MESSAGE_BASE
               for (n in active) {
                 val id = n.id
-                if (id >= base && id < base + 0x8000) nm.cancel(id)
+                if (id >= base && id < base + 0x8000) cancelNotificationIfPresent(nm, id)
               }
             }
           } catch (_: Exception) {}
         }
       } catch (_: Exception) {}
     }
+  }
+
+  /** Android 12+: можно ли ставить точные alarm'ы. Если false, нужно fallback на inexact trigger. */
+  @ReactMethod
+  fun canScheduleExactAlarms(promise: Promise) {
+    try {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        promise.resolve(true)
+        return
+      }
+      val am = reactApplicationContext.getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+      promise.resolve(am?.canScheduleExactAlarms() == true)
+    } catch (_: Exception) {
+      promise.resolve(false)
+    }
+  }
+
+  /** Открыть настройки exact alarms для приложения (best-effort). */
+  @ReactMethod
+  fun openExactAlarmSettings() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+    try {
+      val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+        data = Uri.parse("package:${reactApplicationContext.packageName}")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      reactApplicationContext.startActivity(intent)
+    } catch (_: Exception) {}
   }
 
   /** Очистить нативное хранилище пропущенных вызовов и выставить бейдж иконки в 0. Вызывать из JS при «просмотрено»/«прочитано», чтобы следующий FCM не прибавлял старые пропущенные к unreadCount. */
@@ -1103,6 +1153,18 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         LiviAppModule.clearAllMissedCountsAndSetBadgeZeroStatic(reactApplicationContext)
       } catch (_: Exception) {}
     }
+  }
+
+  /** Release telemetry event (Analytics + Crashlytics breadcrumb log). */
+  @ReactMethod
+  fun trackAppEvent(eventName: String, paramsJson: String?) {
+    trackAppEventStatic(reactApplicationContext, eventName, paramsJson)
+  }
+
+  /** Release non-fatal event with exception for crash-free diagnostics. */
+  @ReactMethod
+  fun trackAppError(eventName: String, message: String?, paramsJson: String?) {
+    trackAppErrorStatic(reactApplicationContext, eventName, message, paramsJson)
   }
 
   companion object {
@@ -1859,6 +1921,50 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         params.putString("callId", callId)
         reactContextRef?.emitDeviceEvent("IncomingCallDeclinedByUser", params)
       }
+    }
+
+    @JvmStatic
+    fun trackAppEventStatic(context: Context, eventName: String, paramsJson: String?) {
+      try {
+        val normalizedName = eventName.trim().lowercase().replace(Regex("[^a-z0-9_]+"), "_").take(40)
+        if (normalizedName.isEmpty()) return
+        val bundle = Bundle()
+        if (!paramsJson.isNullOrBlank()) {
+          try {
+            val json = JSONObject(paramsJson)
+            val keys = json.keys()
+            while (keys.hasNext()) {
+              val keyRaw = keys.next().toString()
+              val key = keyRaw.lowercase().replace(Regex("[^a-z0-9_]+"), "_").take(40)
+              if (key.isEmpty()) continue
+              val value = json.opt(keyRaw)
+              when (value) {
+                is Int -> bundle.putInt(key, value)
+                is Long -> bundle.putLong(key, value)
+                is Double -> bundle.putDouble(key, value)
+                is Float -> bundle.putDouble(key, value.toDouble())
+                is Boolean -> bundle.putString(key, value.toString())
+                null -> {}
+                else -> bundle.putString(key, String(value).take(200))
+              }
+            }
+          } catch (_: Exception) {}
+        }
+        FirebaseAnalytics.getInstance(context).logEvent("livi_$normalizedName", bundle)
+        FirebaseCrashlytics.getInstance().log("livi_event:$normalizedName params=${paramsJson ?: "{}"}")
+      } catch (_: Exception) {}
+    }
+
+    @JvmStatic
+    fun trackAppErrorStatic(context: Context, eventName: String, message: String?, paramsJson: String?) {
+      try {
+        trackAppEventStatic(context, eventName, paramsJson)
+        val normalizedName = eventName.trim().ifEmpty { "unknown_error" }
+        val msg = message?.takeIf { it.isNotBlank() } ?: "unknown"
+        FirebaseCrashlytics.getInstance().recordException(
+          IllegalStateException("livi_non_fatal:$normalizedName message=$msg params=${paramsJson ?: "{}"}")
+        )
+      } catch (_: Exception) {}
     }
   }
 }

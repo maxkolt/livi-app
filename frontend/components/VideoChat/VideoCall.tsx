@@ -200,12 +200,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamReceivedAtRef = useRef<number | null>(null);
+  const isMountedRef = useRef(true);
   
   // КРИТИЧНО: Синхронизируем ref с state для использования в callbacks
   // Это fallback на случай, если ref не был обновлен синхронно
   useEffect(() => {
     remoteStreamRef.current = remoteStream;
   }, [remoteStream]);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
   
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
@@ -2119,6 +2126,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }
 
     const handleRemoteViewKeyChange = (key: number) => {
+      if (!isMountedRef.current) return;
       setRemoteViewKey(key);
     };
     
@@ -2227,6 +2235,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     };
     
     const handleCallAnswered = () => {
+      if (!isMountedRef.current) return;
       if (isEndingCallRef.current || isInactiveStateRef.current) {
         logger.info('[VideoCall] handleCallAnswered ignored (call ending or inactive)');
         return;
@@ -2271,6 +2280,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     };
     
     const handleCallDeclined = () => {
+      if (!isMountedRef.current) return;
       logger.info('[VideoCall] 🔴 callDeclined event - очистка состояния', {
         roomId,
         callId,
@@ -2316,6 +2326,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     };
     
     const handleRemoteState = ({ muted }: { muted?: boolean }) => {
+      if (!isMountedRef.current) return;
       if (isInactiveStateRef.current || isEndingCallRef.current) return;
       const remoteStreamSnapshot = remoteStreamRef.current;
       logger.info('[VideoCall] remoteState event received', {
@@ -2334,6 +2345,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     };
     
     const handlePartnerPiPStateChanged = ({ inPiP }: { inPiP: boolean }) => {
+      if (!isMountedRef.current) return;
       // КРИТИЧНО: Если звонок уже завершён — не обновляем state (никаких setState), чтобы не было ререндеров при закрытии экрана.
       if (isInactiveStateRef.current || isEndingCallRef.current) {
         partnerInPiPRef.current = inPiP;
@@ -2386,6 +2398,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     lastAttachedSessionKeyRef.current = sessionAttachKey;
 
     const handleLocalStreamEvent = (stream: MediaStream | null) => {
+      if (!isMountedRef.current) return;
       if (isInactiveStateRef.current || isEndingCallRef.current) return;
       const prev = localStreamRef.current;
       localStreamRef.current = stream as any;
@@ -2402,6 +2415,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     };
 
     const handleRemoteStreamEvent = (stream: MediaStream | null) => {
+      if (!isMountedRef.current) return;
       if (isInactiveStateRef.current || isEndingCallRef.current) return;
       remoteStreamRef.current = stream as any;
       setRemoteStream(stream as any);
@@ -2556,6 +2570,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       isEndingCallRef.current = true;
       setIsEndingCall(true);
       isInactiveStateRef.current = true;
+      const g = global as any;
+      try {
+        g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
+        g.__endingCallInProgressRef.current = true;
+      } catch (_) {}
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(true); } catch (_) {}
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+      }
       markGlobalCleanupDone('onAbortCall-no-session', callId ?? currentCallIdRef.current ?? null, roomId ?? null);
       try {
         setWasFriendCallEnded(true);
@@ -2567,7 +2590,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         const rootNav = (global as any).__navRef;
         if (rootNav?.isReady?.()) {
           const currentRoute = rootNav.getCurrentRoute();
-          if (currentRoute?.name === 'VideoCall') {
+          const alreadyResetByVideoCall = !!(global as any).__homeResetByVideoCallRef?.current;
+          if (currentRoute?.name === 'VideoCall' && !alreadyResetByVideoCall) {
+            try { (global as any).__homeResetByVideoCallRef.current = true; } catch (_) {}
             const state = rootNav.getState();
             const routes = state?.routes ?? [];
             if (routes.length > 1) {
@@ -2585,6 +2610,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setTimeout(() => {
         isEndingCallRef.current = false;
         setIsEndingCall(false);
+        try {
+          const gr = (global as any).__endingCallInProgressRef;
+          if (gr && typeof gr.current !== 'undefined') gr.current = false;
+        } catch (_) {}
+        if (Platform.OS === 'android') {
+          try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(false); } catch (_) {}
+        }
         logger.debug('[VideoCall] isEndingCallRef reset (onAbortCall no-session)');
       }, 1000);
       return;

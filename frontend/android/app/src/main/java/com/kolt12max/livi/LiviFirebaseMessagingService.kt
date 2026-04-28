@@ -168,6 +168,18 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     headsUpOnly = false,
                     silentNotification = true
                 )
+                try {
+                    val isForeground = isAppProcessForeground()
+                    if (!isForeground) {
+                        val params = JSONObject()
+                            .put("callId", callId)
+                            .put("source", "incoming_call_fcm")
+                            .put("appForeground", false)
+                            .put("isInteractive", isScreenInteractive())
+                            .toString()
+                        LiviAppModule.trackAppEventStatic(this@LiviFirebaseMessagingService, "fgs_start_background", params)
+                    }
+                } catch (_: Exception) {}
                 vLog("[INCOMING_CALL] startIncomingCallForegroundService returned callId=$callId")
             }
             return
@@ -469,6 +481,15 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         /** Broadcast: закрыть системный PiP сразу при пуше call_ended (endedFromActive). Собеседник в PiP не получает call:ended по сокету — пуш доходит, MainActivity закрывает PiP. */
         const val ACTION_CLOSE_PIP_CALL_ENDED = "com.kolt12max.livi.CLOSE_PIP_CALL_ENDED"
         const val EXTRA_CALL_ID = "callId"
+        @JvmStatic
+        private fun getSafeSmallIconRes(context: Context, fallback: Int): Int {
+            return try {
+                val appIcon = context.applicationInfo?.icon ?: 0
+                if (appIcon != 0) appIcon else fallback
+            } catch (_: Exception) {
+                fallback
+            }
+        }
 
         /** Канал входящих звонков: HIGH — чтобы full-screen intent сработал и нативный экран показался поверх домашнего. */
         @JvmStatic
@@ -554,8 +575,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 else -> context.getString(R.string.missed_call_video)
             }
             val safeBody = body.ifEmpty { context.getString(R.string.missed_call_video) }
-            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
-                ?: android.R.drawable.ic_menu_call
+            val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_menu_call)
             val contentIntent = Intent(context, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
@@ -619,16 +639,28 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         @JvmStatic
         private fun dismissMessageNotificationsForIncomingCall(nm: NotificationManager) {
             try {
-                nm.cancel(NOTIFICATION_ID_SUMMARY_UNREAD)
+                cancelNotificationIfPresent(nm, NOTIFICATION_ID_SUMMARY_UNREAD)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     @Suppress("DEPRECATION")
                     val active = nm.activeNotifications
                     val base = NOTIFICATION_ID_MESSAGE_BASE
                     for (n in active) {
                         val id = n.id
-                        if (id in base until base + 0x8000) nm.cancel(id)
+                        if (id in base until base + 0x8000) cancelNotificationIfPresent(nm, id)
                     }
                 }
+            } catch (_: Exception) {}
+        }
+
+        @JvmStatic
+        private fun cancelNotificationIfPresent(nm: NotificationManager, id: Int) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    @Suppress("DEPRECATION")
+                    val exists = nm.activeNotifications?.any { it.id == id } == true
+                    if (!exists) return
+                }
+                nm.cancel(id)
             } catch (_: Exception) {}
         }
 
@@ -667,8 +699,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
             }
             val contentPending = PendingIntent.getActivity(context, 0, contentIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
-                ?: android.R.drawable.ic_menu_call
+            val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_menu_call)
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -742,7 +773,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
             }
             val contentPending = PendingIntent.getActivity(context, 0, contentIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
+            val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_dialog_info)
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val notification = NotificationCompat.Builder(context, CHANNEL_ID_UNREAD)
                 .setSmallIcon(smallIconRes)
@@ -791,8 +822,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             )
             val title = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_title)
             val subtitle = context.getString(R.string.incoming_call_title)
-            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
-                ?: android.R.drawable.ic_menu_call
+            val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_menu_call)
 
             return NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
                 .setSmallIcon(smallIconRes)
@@ -819,8 +849,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val callerName = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_unknown)
             val title = appName
             val subtitle = "${callerName} — ${context.getString(R.string.incoming_call_title)}"
-            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
-                ?: android.R.drawable.ic_menu_call
+            val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_menu_call)
 
             val contentIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)
             val contentPending = PendingIntent.getActivity(
@@ -850,8 +879,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         fun buildIncomingCallNotificationSilent(context: Context, callId: String, from: String, fromNick: String): Notification {
             val title = if (fromNick.isNotEmpty()) fromNick else context.getString(R.string.incoming_call_title)
             val subtitle = context.getString(R.string.incoming_call_title)
-            val smallIconRes = context.resources.getIdentifier("ic_launcher", "mipmap", context.packageName).takeIf { it != 0 }
-                ?: android.R.drawable.ic_menu_call
+            val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_menu_call)
 
             val contentIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick)
             val contentPending = PendingIntent.getActivity(

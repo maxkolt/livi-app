@@ -98,7 +98,7 @@ class LiviOutgoingCallService : Service() {
 
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle(getString(R.string.outgoing_call_notification_title))
-            .setSmallIcon(resources.getIdentifier("ic_launcher", "mipmap", packageName).takeIf { it != 0 } ?: android.R.drawable.ic_menu_call)
+            .setSmallIcon(applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.ic_menu_call)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)

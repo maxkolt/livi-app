@@ -23,6 +23,15 @@ class ActiveCallForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         partnerNick = intent?.getStringExtra(EXTRA_PARTNER_NICK)?.trim()?.takeIf { it.isNotEmpty() }
         startForeground(NOTIFICATION_ID, buildNotification())
+        try {
+            val p = org.json.JSONObject()
+                .put("source", "active_call_service")
+                .put("appForeground", MainActivity.isInForeground)
+                .toString()
+            if (!MainActivity.isInForeground) {
+                LiviAppModule.trackAppEventStatic(applicationContext, "fgs_start_background", p)
+            }
+        } catch (_: Exception) {}
         return START_STICKY
     }
 
@@ -56,7 +65,7 @@ class ActiveCallForegroundService : Service() {
 
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle(title)
-            .setSmallIcon(resources.getIdentifier("ic_launcher", "mipmap", packageName).takeIf { it != 0 } ?: android.R.drawable.ic_menu_call)
+            .setSmallIcon(applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.ic_menu_call)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)

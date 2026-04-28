@@ -22,6 +22,7 @@ import socket, { API_BASE, emitAck, ensureSocketConnected, setActiveVideoCall } 
 import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
 import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
+import { trackReleaseEvent } from '../../../utils/telemetry';
 import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
@@ -142,6 +143,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastLiveKitReconnectingAt = 0;
   private pendingRemoteDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSocketDisconnectLogAt = 0;
+  private socketRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastSocketRecoveryAttemptAt = 0;
   private cameraSwitchInProgress = false;
   private ensureLocalTracksPromise: Promise<void> | null = null;
   private fastStartVideoProfileActive = false;
@@ -1145,6 +1148,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private detachFromCall(): void {
     if (this.ended) return;
     this.ended = true;
+    this.clearSocketRecoveryTimer();
     this.socketOffs.forEach((off) => off());
     this.socketOffs = [];
     logger.info('[VideoCallSession] 🔌 Сессия отключена от сокета (skip path), handlers сняты');
@@ -1153,6 +1157,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   cleanup(): void {
     if (this.cleaned) return;
     this.cleaned = true;
+    this.clearSocketRecoveryTimer();
     this.clearPendingRemoteDisconnectTimer();
     this.clearFastStartVideoUpgradeTimer();
     this.cleanupAudioRecorder();
@@ -1318,6 +1323,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   /* ===================== Internal helpers ===================== */
 
   private setupSocketHandlers(): void {
+    this.clearSocketRecoveryTimer();
+
     logger.info('[VideoCallSession] 🔌 Setting up socket handlers', {
       myUserId: this.config.myUserId,
     });
@@ -1439,6 +1446,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         hasRoom: !!this.room,
         roomState: this.room?.state,
       });
+      // Best-effort recovery: signaling reconnect is idempotent and should not affect active LiveKit media.
+      this.scheduleSocketRecovery();
     };
 
     const pipStateHandler = (data: { inPiP: boolean; roomId: string; from: string }) => {
@@ -1579,6 +1588,32 @@ export class VideoCallSession extends SimpleEventEmitter {
       () => socket.off('pip:state', pipStateHandler),
       () => socket.off('cam-toggle', camToggleHandler),
     ];
+  }
+
+  private clearSocketRecoveryTimer(): void {
+    if (!this.socketRecoveryTimer) return;
+    clearTimeout(this.socketRecoveryTimer);
+    this.socketRecoveryTimer = null;
+  }
+
+  private scheduleSocketRecovery(): void {
+    if (this.ended || this.endCallInProgress) return;
+    if (!this.callId && !this.roomId) return;
+    if (this.socketRecoveryTimer) return;
+    this.socketRecoveryTimer = setTimeout(() => {
+      this.socketRecoveryTimer = null;
+      if (this.ended || this.endCallInProgress) return;
+      const now = Date.now();
+      if (now - this.lastSocketRecoveryAttemptAt < 5000) return;
+      this.lastSocketRecoveryAttemptAt = now;
+      ensureSocketConnected(8000).catch((e) => {
+        logger.debug('[VideoCallSession] socket recovery attempt failed', {
+          callId: this.callId,
+          roomId: this.roomId,
+          error: (e as Error)?.message || String(e),
+        });
+      });
+    }, 700);
   }
 
   private async handleCallAccepted(data: CallAcceptedPayload): Promise<void> {
@@ -4737,6 +4772,13 @@ export class VideoCallSession extends SimpleEventEmitter {
           myUserId: this.config.myUserId,
           partnerUserId: this.partnerUserId,
         });
+        trackReleaseEvent('signal_reconnect', {
+          phase: 'reconnecting',
+          callId: this.callId,
+          roomId: this.roomId || room.name || null,
+          userId: this.config.myUserId,
+          partnerUserId: this.partnerUserId,
+        });
         this.clearPendingRemoteDisconnectTimer();
       })
       .on(RoomEvent.Reconnected, () => {
@@ -4746,6 +4788,14 @@ export class VideoCallSession extends SimpleEventEmitter {
           roomName: room.name,
           roomState: room.state,
           myUserId: this.config.myUserId,
+          partnerUserId: this.partnerUserId,
+          participantsCount: room.remoteParticipants.size,
+        });
+        trackReleaseEvent('signal_reconnect', {
+          phase: 'reconnected',
+          callId: this.callId,
+          roomId: this.roomId || room.name || null,
+          userId: this.config.myUserId,
           partnerUserId: this.partnerUserId,
           participantsCount: room.remoteParticipants.size,
         });

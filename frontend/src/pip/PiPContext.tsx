@@ -8,6 +8,7 @@ import socket, { onConnected, emitPresenceUpdateIfChanged } from '../../sockets/
 import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
 import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
+import { trackReleaseEvent } from '../../utils/telemetry';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
 
@@ -238,6 +239,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
     const sub = emitter.addListener('SystemPiPModeChanged', (payload: { isInPiP?: boolean }) => {
       const inPiP = !!payload?.isInPiP;
+      trackReleaseEvent('pip_enter_exit', {
+        phase: inPiP ? 'enter' : 'exit',
+        callId,
+        roomId,
+      });
       const run = () => {
         const g = global as any;
         const now = Date.now();
@@ -576,6 +582,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
         g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 2000;
       } catch (_) {}
+      trackReleaseEvent('pip_enter_exit', {
+        phase: 'about_to_enter',
+        callId,
+        roomId,
+      });
 
       // Включаем отдельный fullscreen-host для system PiP capture. Native войдёт в PiP
       // только после подтверждения готовности этого host, чтобы не захватить маленький in-app PiP.

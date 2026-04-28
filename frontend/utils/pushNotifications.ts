@@ -16,6 +16,7 @@ import {
 } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
+import { trackReleaseError, trackReleaseEvent } from './telemetry';
 import { stopIncomingCallAlert } from './incomingCallAlert';
 import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration } from './callKeep';
 import { emitCloseOutgoingCall, emitCloseHomeModals } from './globalEvents';
@@ -26,6 +27,7 @@ import { getVoipPushToken } from './voipPush';
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 /** Флаг: пользователь заходил во вкладку «Друзья» и «увидел» пропущенные — бейдж и уведомления в шторке скрываем, счётчики в приложении не трогаем. */
 const MISSED_BADGE_CLEARED_KEY = 'missed_calls_badge_cleared_v1';
+const PUSH_TOKEN_SNAPSHOT_KEY = 'push_token_snapshot_v1';
 
 /** ID категории уведомления входящего звонка с кнопками «Поднять» / «Положить» */
 export const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
@@ -45,6 +47,33 @@ type RegisterPushTokenOptions = {
 
 let lastRegisteredPushToken: PushTokenSnapshot | null = null;
 let registerPushInFlight: Promise<void> | null = null;
+let lastRegisteredPushTokenLoaded = false;
+
+async function loadPersistedPushTokenSnapshot(): Promise<void> {
+  if (lastRegisteredPushTokenLoaded) return;
+  lastRegisteredPushTokenLoaded = true;
+  try {
+    const raw = await AsyncStorage.getItem(PUSH_TOKEN_SNAPSHOT_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw || '{}') as Partial<PushTokenSnapshot>;
+    if (!parsed || typeof parsed !== 'object') return;
+    const userId = String(parsed.userId || '').trim();
+    const expoToken = String(parsed.expoToken || '').trim();
+    if (!userId || !expoToken) return;
+    lastRegisteredPushToken = {
+      userId,
+      expoToken,
+      fcmToken: String(parsed.fcmToken || ''),
+      atMs: Number(parsed.atMs || 0) || 0,
+    };
+  } catch {}
+}
+
+async function persistPushTokenSnapshot(snapshot: PushTokenSnapshot): Promise<void> {
+  try {
+    await AsyncStorage.setItem(PUSH_TOKEN_SNAPSHOT_KEY, JSON.stringify(snapshot));
+  } catch {}
+}
 
 function ensureInAppPiPBeforeOpeningFriendsFromMessageNotification(): void {
   try {
@@ -236,7 +265,9 @@ export async function dismissMissedCallNotificationsOnly(): Promise<void> {
         try { await Notifications.dismissNotificationAsync(n.request.identifier); } catch (_) {}
       }
     }
-  } catch (_) {}
+  } catch (e) {
+    trackReleaseError('notification_cancel_miss', e, {});
+  }
 }
 
 /** Синхронизировать бейдж иконки: непрочитанные сообщения + пропущенные вызовы.
@@ -536,6 +567,13 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
   try {
     const type = String(data?.type || '');
     if (!type) return;
+    trackReleaseEvent('notification_tap', {
+      type,
+      actionIdentifier,
+      callId: String(data?.callId || '').trim() || null,
+      roomId: String(data?.roomId || '').trim() || null,
+      userId: String(data?.from || data?.fromUserId || '').trim() || null,
+    });
 
     if (type === 'call_declined') {
       const id = data?.callId ? String(data.callId) : '';
@@ -660,6 +698,12 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
       }
     }
   } catch (e) {
+    trackReleaseError('notification_tap_failed', e, {
+      callId: String(data?.callId || '').trim() || null,
+      roomId: String(data?.roomId || '').trim() || null,
+      userId: String(data?.from || data?.fromUserId || '').trim() || null,
+      actionIdentifier,
+    });
     logger.warn('[push] handleNotificationResponse failed', e as any);
   }
 }
@@ -743,10 +787,22 @@ export async function ensureInitialNotificationPermissions(): Promise<void> {
   } catch (e) {
     logger.warn('[push] Failed to request notification permissions', e as any);
   }
+
+  // Android 12+: exact alarm permission may be required for precise triggers.
+  // We do not fail startup; caller should fallback to inexact notifications when this is false.
+  if (Platform.OS === 'android') {
+    try {
+      const canExact = await NativeModules.LiviAppModule?.canScheduleExactAlarms?.();
+      if (canExact === false) {
+        logger.warn('[push] exact alarms are not allowed; use inexact notification trigger fallback on Android 12+');
+      }
+    } catch {}
+  }
 }
 
 export async function registerAndSendPushToken(userId?: string, options?: RegisterPushTokenOptions) {
   if (!userId) return;
+  await loadPersistedPushTokenSnapshot();
   const force = options?.force === true;
   const reason = options?.reason || 'manual';
   const uid = String(userId);
@@ -892,6 +948,7 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
           });
           if (resp.ok) {
             lastRegisteredPushToken = snapshotNow;
+            await persistPushTokenSnapshot(snapshotNow);
           }
           if (Platform.OS === 'android' && resp.ok) {
             logger.info('[push] token registered', { hasFcmToken: !!fcmToken });
