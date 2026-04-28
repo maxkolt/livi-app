@@ -1945,7 +1945,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
                 is Float -> bundle.putDouble(key, value.toDouble())
                 is Boolean -> bundle.putString(key, value.toString())
                 null -> {}
-                else -> bundle.putString(key, String(value).take(200))
+                else -> bundle.putString(key, value.toString().take(200))
               }
             }
           } catch (_: Exception) {}
