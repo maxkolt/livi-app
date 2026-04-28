@@ -427,12 +427,24 @@ type AnimatedBorderButtonProps = {
   label: string;
   style?: ViewStyle;
   backgroundColor?: string; // Цвет фона страницы для перекрытия градиента
+  disabled?: boolean;
+  onDisabledPress?: () => void;
 };
 
-const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onPress, label, style, backgroundColor }) => {
+const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
+  isDark,
+  onPress,
+  label,
+  style,
+  backgroundColor,
+  disabled = false,
+  onDisabledPress,
+}) => {
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const [blurIntensity, setBlurIntensity] = useState<number>(isDark ? 15 : 20);
   const titanOpacity = useRef(new Animated.Value(0.25)).current;
+  const blockedFlashOpacity = useRef(new Animated.Value(0)).current;
+  const blockedShakeX = useRef(new Animated.Value(0)).current;
   const borderWidth = 0.8; // Рамка кнопки «Начать поиск»
 
   // Цвета из палитры эквалайзера для темной темы - зациклены для непрерывности
@@ -491,6 +503,36 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
   const borderRadius = 12;
   const gradientSize = Math.max(buttonWidth, buttonHeight) * 2; // Достаточно большой для плавного движения
 
+  const triggerBlockedFeedback = useCallback(() => {
+    // Короткий визуальный "нельзя": красный пульс + мягкий шейк.
+    blockedFlashOpacity.stopAnimation();
+    blockedShakeX.stopAnimation();
+    blockedFlashOpacity.setValue(0);
+    blockedShakeX.setValue(0);
+
+    Animated.sequence([
+      Animated.parallel([
+        Animated.timing(blockedFlashOpacity, {
+          toValue: 1,
+          duration: 130,
+          useNativeDriver: true,
+        }),
+        Animated.sequence([
+          Animated.timing(blockedShakeX, { toValue: 2, duration: 60, useNativeDriver: true }),
+          Animated.timing(blockedShakeX, { toValue: -2, duration: 70, useNativeDriver: true }),
+          Animated.timing(blockedShakeX, { toValue: 1.5, duration: 55, useNativeDriver: true }),
+          Animated.timing(blockedShakeX, { toValue: 0, duration: 65, useNativeDriver: true }),
+        ]),
+      ]),
+      Animated.timing(blockedFlashOpacity, {
+        toValue: 0,
+        duration: 280,
+        useNativeDriver: true,
+      }),
+    ]).start();
+    onDisabledPress?.();
+  }, [blockedFlashOpacity, blockedShakeX, onDisabledPress]);
+
   return (
     <View style={[{ alignItems: 'center', justifyContent: 'center' }, style]}>
       {/* Внешний контейнер для отражения/тени */}
@@ -502,12 +544,13 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
         }}
       >
         {/* Контейнер с градиентной рамкой и внешним отражением */}
-        <View
+        <Animated.View
           style={{
             width: buttonWidth + borderWidth * 2,
             height: buttonHeight + borderWidth * 2,
             borderRadius: borderRadius + borderWidth,
             overflow: 'hidden',
+            transform: [{ translateX: blockedShakeX }],
             shadowOpacity: 0, // Тень убрана
             elevation: 0,
             ...(Platform.OS === "android" && !isDark ? {
@@ -566,12 +609,28 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
                 ...StyleSheet.absoluteFillObject,
                 borderRadius: borderRadius,
                 backgroundColor: titanColor,
-                opacity: titanOpacity,
+                opacity: disabled ? 0.18 : titanOpacity,
+              }}
+            />
+            <Animated.View
+              pointerEvents="none"
+              style={{
+                ...StyleSheet.absoluteFillObject,
+                borderRadius: borderRadius,
+                backgroundColor: 'rgba(255,90,103,0.35)',
+                opacity: blockedFlashOpacity.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 0.55],
+                }),
               }}
             />
             <TouchableOpacity
               activeOpacity={1}
               onPressIn={() => {
+                if (disabled) {
+                  triggerBlockedFeedback();
+                  return;
+                }
                 // Увеличиваем blur и прозрачность титана при нажатии - более заметно для светлой темы
                 setBlurIntensity(isDark ? 25 : 40);
                 Animated.timing(titanOpacity, {
@@ -581,6 +640,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
                 }).start();
               }}
               onPressOut={() => {
+                if (disabled) return;
                 // Возвращаем к исходным значениям
                 setBlurIntensity(isDark ? 15 : 20);
                 Animated.timing(titanOpacity, {
@@ -589,7 +649,14 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
                   useNativeDriver: true,
                 }).start();
               }}
-              onPress={onPress}
+              onPress={() => {
+                if (disabled) {
+                  triggerBlockedFeedback();
+                  return;
+                }
+                onPress();
+              }}
+              accessibilityState={{ disabled }}
               style={{
                 width: '100%',
                 height: '100%',
@@ -601,15 +668,30 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({ isDark, onP
               }}
             >
               <Text
-                style={[styles.buttonLabel, { color: isDark ? LIVI.text : LIVI.textThemeWhite, textAlign: 'center' }]}
+                style={[
+                  styles.buttonLabel,
+                  {
+                    color: isDark ? LIVI.text : LIVI.textThemeWhite,
+                    textAlign: 'center',
+                    opacity: disabled ? 0.88 : 1,
+                  },
+                ]}
                 allowFontScaling={false}
                 maxFontSizeMultiplier={1}
               >
                 {label}
               </Text>
             </TouchableOpacity>
+            {disabled && (
+              <Pressable
+                style={StyleSheet.absoluteFillObject}
+                onPressIn={triggerBlockedFeedback}
+                onPress={triggerBlockedFeedback}
+                android_ripple={{ color: 'rgba(255,90,103,0.10)', borderless: false }}
+              />
+            )}
           </View>
-        </View>
+        </Animated.View>
       </View>
     </View>
   );
@@ -4851,6 +4933,21 @@ const handleClearNick = useCallback(async () => {
   // Home всегда монтируется под сплешем.
   // Сам сплеш ждёт server/dataLoaded только в пределах окна 2.5с, после чего исчезает принудительно.
   const showSplashOverlay = !splashDismissed;
+  const [showCallSearchLockBadge, setShowCallSearchLockBadge] = useState(false);
+  const hasActiveCallForSearch =
+    pip.visible ||
+    pip.inSystemPiPMode ||
+    pip.pendingSystemPiP ||
+    calling.visible ||
+    incomingCallScreen.visible;
+  const handleBlockedStartSearchPress = useCallback(() => {
+    setShowCallSearchLockBadge(true);
+  }, []);
+  useEffect(() => {
+    if (!hasActiveCallForSearch) {
+      setShowCallSearchLockBadge(false);
+    }
+  }, [hasActiveCallForSearch]);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -4985,6 +5082,26 @@ const handleClearNick = useCallback(async () => {
         </View>
         <View style={styles.noticeSlot}>
           {NoticeView}
+          {hasActiveCallForSearch && showCallSearchLockBadge && (
+            <View
+              style={[
+                styles.notice,
+                {
+                  backgroundColor: isDark ? 'rgba(138,143,153,0.16)' : 'rgba(59,68,83,0.16)',
+                  borderColor: isDark ? 'rgba(138,143,153,0.36)' : 'rgba(59,68,83,0.34)',
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.noticeText,
+                  { color: isDark ? 'rgba(240,241,243,0.92)' : 'rgba(47,55,66,0.9)' },
+                ]}
+              >
+                Сначала завершите текущий звонок
+              </Text>
+            </View>
+          )}
           {/* Бейдж «Обновить»: тот же слот, что и «Вызов отменён» — между подзаголовком и «Начать поиск», автоскрытие, тап — магазин */}
           {showUpdateBadge && (
             <View
@@ -5101,6 +5218,8 @@ const handleClearNick = useCallback(async () => {
           label={L("startSearchBtn")}
           style={{ marginBottom: 40 }}
           backgroundColor={theme.colors.background as string}
+          disabled={hasActiveCallForSearch}
+          onDisabledPress={handleBlockedStartSearchPress}
         />
       </View>
 
