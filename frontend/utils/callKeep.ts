@@ -17,6 +17,9 @@ let hasPhoneNumbersPermission = false;
 const pendingCallById: Record<string, { from: string; fromNick?: string; callKitId?: string }> = {};
 const callKitUuidByCallId: Record<string, string> = {};
 const callIdByCallKitUuid: Record<string, string> = {};
+const activeCallKeepCallIds = new Set<string>();
+const recentCallKeepEndAtByCallId: Record<string, number> = {};
+const CALLKEEP_END_DEDUP_MS = 4000;
 
 function resolveRawCallId(callIdOrUuid: string): string {
   const id = String(callIdOrUuid || '').trim();
@@ -34,10 +37,33 @@ function rememberPendingCall(input: { callId: string; from: string; fromNick?: s
   const callKitId = String(input.callKitId || '').trim();
   if (!callId || !from) return;
   pendingCallById[callId] = { from, fromNick: input.fromNick, callKitId: callKitId || undefined };
+  activeCallKeepCallIds.add(callId);
   if (callKitId) {
     callKitUuidByCallId[callId] = callKitId;
     callIdByCallKitUuid[callKitId] = callId;
   }
+}
+
+function canEndCallKeepCall(callIdOrUuid: string): { ok: boolean; callId: string } {
+  const callId = resolveRawCallId(callIdOrUuid);
+  if (!callId) return { ok: false, callId: '' };
+  const now = Date.now();
+  const lastEndAt = recentCallKeepEndAtByCallId[callId] || 0;
+  if (lastEndAt > 0 && now - lastEndAt < CALLKEEP_END_DEDUP_MS) {
+    return { ok: false, callId };
+  }
+  if (!activeCallKeepCallIds.has(callId)) {
+    return { ok: false, callId };
+  }
+  return { ok: true, callId };
+}
+
+function markCallKeepEnded(callIdOrUuid: string): void {
+  const callId = resolveRawCallId(callIdOrUuid);
+  if (!callId) return;
+  recentCallKeepEndAtByCallId[callId] = Date.now();
+  activeCallKeepCallIds.delete(callId);
+  clearPendingCall(callId);
 }
 
 type SetupCallKeepOptions = {
@@ -542,6 +568,7 @@ export function clearPendingCall(callId: string): void {
     delete callIdByCallKitUuid[callKitId];
   }
   delete callKitUuidByCallId[rawCallId];
+  activeCallKeepCallIds.delete(rawCallId);
 }
 
 /**
@@ -557,6 +584,7 @@ export function reportAnswerIncomingCall(callId: string): void {
       RNCallKeep.default.setCurrentCallActive?.(nativeCallId);
     }
     clearPendingCall(callId);
+    activeCallKeepCallIds.add(resolveRawCallId(callId));
   } catch (e) {
     logger.warn('[callKeep] answerIncomingCall failed', e as Error);
   }
@@ -567,11 +595,17 @@ export function reportAnswerIncomingCall(callId: string): void {
  */
 export function reportRejectCall(callId: string): void {
   if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !isSetup) return;
+  const endCheck = canEndCallKeepCall(callId);
+  if (!endCheck.ok) {
+    logger.debug('[callKeep] rejectCall skipped (not active or duplicate)', { callId: endCheck.callId || callId });
+    return;
+  }
   try {
     const RNCallKeep = require('react-native-callkeep');
-    RNCallKeep.default.rejectCall(resolveCallKeepUuid(callId));
-    clearPendingCall(callId);
+    RNCallKeep.default.rejectCall(resolveCallKeepUuid(endCheck.callId));
+    markCallKeepEnded(endCheck.callId);
   } catch (e) {
+    markCallKeepEnded(endCheck.callId);
     logger.warn('[callKeep] rejectCall failed', e as Error);
   }
 }
@@ -582,12 +616,18 @@ export function reportRejectCall(callId: string): void {
  */
 export function reportEndCallToCallKeep(callId: string | null): void {
   if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !isSetup || !callId) return;
+  const endCheck = canEndCallKeepCall(callId);
+  if (!endCheck.ok) {
+    logger.debug('[callKeep] endCall skipped (not active or duplicate)', { callId });
+    return;
+  }
   try {
     const RNCallKeep = require('react-native-callkeep');
-    RNCallKeep.default.endCall(resolveCallKeepUuid(callId));
-    clearPendingCall(callId);
-    logger.debug('[callKeep] endCall reported', { callId });
+    RNCallKeep.default.endCall(resolveCallKeepUuid(endCheck.callId));
+    markCallKeepEnded(endCheck.callId);
+    logger.debug('[callKeep] endCall reported', { callId: endCheck.callId });
   } catch (e) {
+    markCallKeepEnded(endCheck.callId);
     logger.warn('[callKeep] endCall failed', e as Error);
   }
 }
@@ -638,7 +678,10 @@ export function registerCallKeepEvents(callbacks: CallKeepEventCallbacks): () =>
       if (callUUID) callbacks.onAnswer(resolveRawCallId(callUUID));
     };
     const onEnd = ({ callUUID }: { callUUID?: string }) => {
-      if (callUUID) callbacks.onEnd(resolveRawCallId(callUUID));
+      if (callUUID) {
+        markCallKeepEnded(callUUID);
+        callbacks.onEnd(resolveRawCallId(callUUID));
+      }
     };
     const onDisplay = (event: { callUUID?: string; handle?: string; localizedCallerName?: string; payload?: Record<string, unknown> }) => {
       syncPendingFromDisplay(event);

@@ -137,6 +137,7 @@ class IncomingCallActivity : AppCompatActivity() {
         startCallRingtone()
         startRepeatingVibration()
         currentCallId = callIdFromIntent
+        activeCallId = currentCallId
         val callId = currentCallId
         val from = intent.getStringExtra(EXTRA_FROM) ?: ""
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
@@ -255,6 +256,9 @@ class IncomingCallActivity : AppCompatActivity() {
     override fun onDestroy() {
         isInForeground = false
         isAlive = false
+        if (activeCallId == currentCallId) {
+            activeCallId = ""
+        }
         android.util.Log.e(TAG, "IncomingCallActivity onDestroy: isInForeground=false isAlive=false callId=$currentCallId")
         LiviOngoingCallHelper.clearOngoingCall(applicationContext)
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
@@ -778,5 +782,8 @@ class IncomingCallActivity : AppCompatActivity() {
         /** true пока экземпляр IncomingCallActivity существует, даже если он ушёл в фон. */
         @JvmField
         var isAlive: Boolean = false
+        /** callId текущего живого IncomingCallActivity; нужен FGS, чтобы не делать повторные startActivity для того же звонка. */
+        @JvmField
+        var activeCallId: String = ""
     }
 }

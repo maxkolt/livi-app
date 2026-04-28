@@ -642,50 +642,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       !!sessionForSystemPiP &&
       sessionAliveForSystemPiP &&
       globalVideoCallActiveForPiP;
-    const canEnableSystemPiP =
-      Platform.OS === 'android' &&
-      appState === 'active' &&
-      isFocused &&
-      !!roomId &&
-      !isInactiveState &&
-      !!sessionForSystemPiP &&
-      sessionAliveForSystemPiP &&
-      globalVideoCallActiveForPiP;
-    const systemPiPEntryUntil = g.__systemPiPEntryInProgressUntilRef?.current;
-    const systemPiPEntryInProgress =
-      typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
+    const blockSystemPiPReenterUntil = g.__blockSystemPiPReenterUntilRef?.current;
+    const systemPiPReenterBlocked =
+      typeof blockSystemPiPReenterUntil === 'number' && blockSystemPiPReenterUntil > Date.now();
 
     // Не очищаем ref при !canEnableSystemPiP — иначе при возврате из системного PiP returnToCall получит null.
     // Очищаем только в cleanup эффекта, когда сессия реально завершена (stillActive === false).
-    if (!hasStableSystemPiPContext) {
-      if (Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
-      }
-      return;
-    }
-    if (canEnableSystemPiP) {
-      if (Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
-      }
-    } else {
-      // Не выключать leaveHint при уходе в background при активном звонке — иначе по нажатию Home
-      // эффект перезапускается (appState='background'), canEnableSystemPiP=false, и мы гасим системный PiP.
-      // Учитываем background+звонок даже без завершённого grace: иначе у одного пользователя (напр. звонящий,
-      // только что открывший VideoCall) PiP не сработает, если он нажал Home до истечения grace.
-      const hasSessionAny = !!sessionRef.current || !!g.__webrtcSessionRef?.current;
-      const isBackgroundWithActiveCall =
-        appState === 'background' &&
-        Platform.OS === 'android' &&
-        !!roomId &&
-        !isInactiveState &&
-        !!hasSessionAny;
-      if (!systemPiPEntryInProgress && !isBackgroundWithActiveCall && Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
-      }
-      if (isBackgroundWithActiveCall && Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
-      }
-    }
+    // Владелец leaveHint-флага — App.tsx (единая точка принятия решения).
+    // Здесь держим только стабильный PiP-контекст и не трогаем нативный флаг,
+    // чтобы убрать гонки "true/false" между несколькими эффектами.
+    // no-op: App.tsx owns leaveHint flag updates.
     const partner = partnerUserId
       ? friendsRef.current?.find((f: any) => String(f._id) === String(partnerUserId))
       : null;
@@ -730,9 +696,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       const stillActive = session && (typeof session.isEnded !== 'function' || !session.isEnded());
       if (stillActive) return;
       g.__currentCallPiPParamsRef.current = null;
-      if (Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
-      }
     };
   }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, micOn, remoteMuted, remoteCamOn, route?.params, isFocused, appState, getTrackEnabled, getDesiredRemoteMutedForPiPReturn]);
 

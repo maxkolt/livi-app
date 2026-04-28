@@ -250,6 +250,20 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun bringMainActivityToFront() {
     val ctx = reactApplicationContext
+    val now = System.currentTimeMillis()
+    synchronized(LiviAppModule::class.java) {
+      if (now - lastBringMainToFrontAtMs < BRING_MAIN_TO_FRONT_DEBOUNCE_MS) {
+        Log.d(NAME, "bringMainActivityToFront: skip duplicate within debounce window")
+        return
+      }
+      lastBringMainToFrontAtMs = now
+    }
+    // Если MainActivity уже в foreground, не запускаем лишние startActivity — это даёт stop/start churn и destroySurfaces.
+    if (MainActivity.isInForeground) {
+      LiviOutgoingCallService.stop(ctx)
+      Log.d(NAME, "bringMainActivityToFront: MainActivity already foreground, skip relaunch")
+      return
+    }
     LiviOngoingCallHelper.clearOngoingCall(ctx)
     // 1) Broadcast — закрыть OutgoingCallActivity, если на экране
     val closeOutgoing = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
@@ -685,6 +699,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun requestExitSystemPiP() {
     val activity = currentActivity ?: return
+    val now = System.currentTimeMillis()
+    synchronized(LiviAppModule::class.java) {
+      if (now - lastRequestExitSystemPiPAtMs < EXIT_SYSTEM_PIP_DEBOUNCE_MS) {
+        Log.d(NAME, "requestExitSystemPiP: skip duplicate within debounce window")
+        return
+      }
+      lastRequestExitSystemPiPAtMs = now
+    }
     val run: Runnable = Runnable {
       try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity.isInPictureInPictureMode) {
@@ -1184,6 +1206,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @Volatile
     @JvmField
     var shouldEnterPiPOnLeaveHint = false
+    @Volatile
+    private var lastBringMainToFrontAtMs: Long = 0L
+    @Volatile
+    private var lastRequestExitSystemPiPAtMs: Long = 0L
+    private const val BRING_MAIN_TO_FRONT_DEBOUNCE_MS = 1200L
+    private const val EXIT_SYSTEM_PIP_DEBOUNCE_MS = 1200L
     @JvmStatic
     fun getShouldEnterPiPOnLeaveHint(): Boolean = shouldEnterPiPOnLeaveHint
     @JvmStatic

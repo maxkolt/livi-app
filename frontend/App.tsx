@@ -1506,6 +1506,9 @@ function AppContent() {
         const systemPiPEntryUntil = g.__systemPiPEntryInProgressUntilRef?.current;
         const systemPiPEntryInProgress =
           typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
+        const blockSystemPiPReenterUntil = g.__blockSystemPiPReenterUntilRef?.current;
+        const systemPiPReenterBlocked =
+          typeof blockSystemPiPReenterUntil === 'number' && blockSystemPiPReenterUntil > Date.now();
         const videoCallInactiveByRef = g.__videoCallActiveRef?.current === false;
         const endingFromPiPNoOpen = g.__callEndedFromPiPNoOpenRef?.current === true;
         const endingCallInProgress = g.__endingCallInProgressRef?.current === true;
@@ -1525,16 +1528,12 @@ function AppContent() {
         const onVideoCallWithActiveSession =
           !videoCallInactiveByRef && isVideoSessionRoute(currentRoute) && sessionNotEnded;
         const allowSystemPiP =
-          (systemPiPEntryInProgress && hasActiveCallForPiP) ||
-          pipVisible ||
-          !!incoming ||
-          (hasActiveCallForPiP || onVideoCallWithActiveSession);
-        // Пока активен экран VideoCall/RandomChat, App не должен перетирать leaveHint.
-        // Иначе вокруг onUserLeaveHint(Home) получается гонка true -> false.
-        const skipSetLeaveHint =
-          onVideoSessionRoute &&
-          sessionNotEnded &&
-          !videoCallInactiveByRef;
+          !systemPiPReenterBlocked && (
+            (systemPiPEntryInProgress && hasActiveCallForPiP) ||
+            pipVisible ||
+            !!incoming ||
+            onVideoCallWithActiveSession
+          );
         const logKey = JSON.stringify({
           currentRoute,
           allowSystemPiP: !!allowSystemPiP,
@@ -1547,13 +1546,12 @@ function AppContent() {
           sessionNotEnded: !!sessionNotEnded,
           videoCallInactiveByRef: !!videoCallInactiveByRef,
           systemPiPEntryInProgress: !!systemPiPEntryInProgress,
+          systemPiPReenterBlocked: !!systemPiPReenterBlocked,
         });
         if (systemPiPDecisionLogRef.current !== logKey) {
           systemPiPDecisionLogRef.current = logKey;
         }
-        if (!skipSetLeaveHint) {
-          NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!allowSystemPiP);
-        }
+        NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!allowSystemPiP);
         }
       } catch (_) {}
     }
@@ -2011,10 +2009,6 @@ function AppContent() {
       if (g.__pendingCallAcceptedRef) g.__pendingCallAcceptedRef.current = null;
       if (g.__incomingAnswerTransitionRef) g.__incomingAnswerTransitionRef.current = null;
       expectedCallAcceptedRef.current = null;
-      // Сразу закрываем системный PiP у собеседника (до любых очисток), иначе окно успевает показать лоадер.
-      if (Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
-      }
       // Жёстко запрещаем системный PiP на короткое время после завершения звонка (анти-гонка).
       try {
         (global as any).__disableSystemPiPUntilRef = (global as any).__disableSystemPiPUntilRef || { current: 0 };
@@ -2043,6 +2037,9 @@ function AppContent() {
       if (typeof hidePiP === 'function') hidePiP();
       // Кто в системном PiP при call:ended — только закрываем PiP, приложение не открываем.
       if (inSystem) {
+        if (Platform.OS === 'android') {
+          try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+        }
         console.log('[App] [call:ended] inSystem=true → ставим __callEndedFromPiPNoOpenRef, return (НЕ вызываем goHome)');
         try {
           g.__callEndedFromPiPNoOpenRef = g.__callEndedFromPiPNoOpenRef || { current: false };
@@ -2132,10 +2129,10 @@ function AppContent() {
       const inSystem = g.__pipInSystemModeRef?.current === true;
       const pipVisible = g.__pipVisibleRef?.current === true;
       const hidePiP = g.__pipHidePiPRef?.current;
-      if (Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
-      }
       if (inSystem) {
+        if (Platform.OS === 'android') {
+          try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+        }
         if (typeof hidePiP === 'function') hidePiP();
       } else if (pipVisible) {
         if (typeof hidePiP === 'function') hidePiP();
@@ -3090,7 +3087,9 @@ export default function App() {
         const disableUntil = Number(g.__disableSystemPiPUntilRef?.current || 0);
         const returnState = g.__systemPiPReturnStateRef?.current;
         const settledUntil = Number(returnState?.settledUntil || 0);
-        if (currentRoute !== 'VideoCall' && callId && roomId) {
+        // Если in-app PiP уже видим на корне, не делаем промежуточную навигацию обратно в VideoCall:
+        // сразу запрашиваем system PiP, иначе при частых Back получаем "пустое" нажатие.
+        if (!pipVisible && currentRoute !== 'VideoCall' && callId && roomId) {
           if (now < returningUntil || now < disableUntil || now < settledUntil) {
             return true;
           }

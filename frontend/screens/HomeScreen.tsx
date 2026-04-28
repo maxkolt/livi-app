@@ -4182,6 +4182,7 @@ const handleClearNick = useCallback(async () => {
             rippleColor="rgba(255,255,255,0.28)"
             underlayColor="rgba(255,255,255,0.14)"
             activeOpacity={0.82}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             delayLongPress={280}
             onPress={handlePress}
             onLongPress={
@@ -4383,6 +4384,7 @@ const handleClearNick = useCallback(async () => {
             rippleColor="rgba(255,255,255,0.28)"
             underlayColor="rgba(255,255,255,0.14)"
             activeOpacity={0.82}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             delayLongPress={280}
             onLongPress={
               missedCount > 0 && !videoDisabled
@@ -4436,7 +4438,8 @@ const handleClearNick = useCallback(async () => {
 
   const FriendsTab = () => (
     <FlatList
-      keyboardShouldPersistTaps="handled"
+      // Первый тап по action-кнопкам (чат/звонок) должен срабатывать даже при открытой клавиатуре.
+      keyboardShouldPersistTaps="always"
       showsVerticalScrollIndicator={false}
       overScrollMode="never"
       removeClippedSubviews={false}
@@ -4452,8 +4455,10 @@ const handleClearNick = useCallback(async () => {
           onSwipeableOpen={() => { openSwipeableRef.current = swipeableRefsMap.current[item.id] ?? null; }}
           onSwipeableClose={() => { if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) openSwipeableRef.current = null; }}
           renderRightActions={() => renderRightActions(item.id)}
-          dragOffsetFromRightEdge={40}
-          dragOffsetFromLeftEdge={24}
+          // Требуем более явный горизонтальный жест, чтобы случайные микросдвиги не "съедали" тапы по кнопкам.
+          dragOffsetFromRightEdge={56}
+          dragOffsetFromLeftEdge={56}
+          overshootRight={false}
         >
           <View
             style={styles.listRowWrap}

@@ -103,7 +103,22 @@ if (typeof global !== 'undefined' && global.HermesInternal) {
   // React Native с Hermes
   const originalUnhandledRejection = global.onunhandledrejection;
   global.onunhandledrejection = (event: any) => {
-    console.error('[Unhandled Promise Rejection]', event?.reason || event);
+    const reason = event?.reason || event;
+    const msg = String(reason?.message || reason?.reasonName || reason || '');
+    const isLeaveWhileReconnect =
+      msg.includes('leave request') ||
+      msg.includes('LeaveRequest') ||
+      (msg.includes('reconnect') && msg.includes('leave'));
+    if (isLeaveWhileReconnect) {
+      if (typeof console?.warn === 'function') {
+        console.warn('[Unhandled Promise Rejection] Suppressed LiveKit leave/reconnect error (non-fatal)', msg);
+      }
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      return;
+    }
+    console.error('[Unhandled Promise Rejection]', reason);
     // Предотвращаем краш приложения
     if (event?.preventDefault) {
       event.preventDefault();
@@ -116,7 +131,22 @@ if (typeof global !== 'undefined' && global.HermesInternal) {
   // Fallback для других движков
   if (typeof global !== 'undefined') {
     (global as any).onunhandledrejection = (event: any) => {
-      console.error('[Unhandled Promise Rejection]', event?.reason || event);
+      const reason = event?.reason || event;
+      const msg = String(reason?.message || reason?.reasonName || reason || '');
+      const isLeaveWhileReconnect =
+        msg.includes('leave request') ||
+        msg.includes('LeaveRequest') ||
+        (msg.includes('reconnect') && msg.includes('leave'));
+      if (isLeaveWhileReconnect) {
+        if (typeof console?.warn === 'function') {
+          console.warn('[Unhandled Promise Rejection] Suppressed LiveKit leave/reconnect error (non-fatal)', msg);
+        }
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        return;
+      }
+      console.error('[Unhandled Promise Rejection]', reason);
       // Предотвращаем краш
       if (event?.preventDefault) {
         event.preventDefault();

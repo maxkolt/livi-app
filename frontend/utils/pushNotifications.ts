@@ -304,18 +304,39 @@ export async function syncAppBadgeFromMissedCount(): Promise<void> {
   }
 }
 
+async function dismissPresentedNotificationsByTypes(types: Set<string>): Promise<void> {
+  try {
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    for (const n of presented || []) {
+      const type = String((n?.request?.content?.data as Record<string, unknown>)?.type || '').trim();
+      if (!types.has(type)) continue;
+      if (!n?.request?.identifier) continue;
+      try {
+        await Notifications.dismissNotificationAsync(n.request.identifier);
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+/** Снимает только уведомления, связанные со звонками (без глобального dismissAll). */
+async function dismissCallRelatedNotificationsOnly(): Promise<void> {
+  if (Platform.OS === 'android') {
+    try { NativeModules.LiviAppModule?.dismissSummaryNotifications?.(); } catch {}
+    try { NativeModules.LiviAppModule?.dismissAllMissedCallNotifications?.(); } catch {}
+    return;
+  }
+  await dismissPresentedNotificationsByTypes(new Set(['call', 'call_canceled', 'call_declined', 'call_ended', 'missed_call']));
+}
+
 /** Убрать уведомления из шторки и выставить бейдж по пропущенным (после отклонения/завершения звонка). */
 export async function clearCallRelatedNotificationsAndSyncBadge(): Promise<void> {
-  try {
-    await Notifications.dismissAllNotificationsAsync();
-  } catch {}
+  await dismissCallRelatedNotificationsOnly();
   await syncAppBadgeFromMissedCount();
 }
 
 export async function clearNotificationIndicators() {
-  try {
-    await Notifications.dismissAllNotificationsAsync();
-  } catch {}
+  await dismissMessageNotificationsOnly();
+  await dismissMissedCallNotificationsOnly();
   await syncAppBadgeFromMissedCount();
 }
 
@@ -351,9 +372,7 @@ Notifications.setNotificationHandler({
       try {
         stopIncomingCallAlert();
       } catch {}
-      try {
-        await Notifications.dismissAllNotificationsAsync();
-      } catch {}
+      await dismissCallRelatedNotificationsOnly();
       if (!endedFromActive && Platform.OS !== 'android') {
         const fromNick = String(data.fromNick || '').trim();
         const fromUserId = String(data.from || '');

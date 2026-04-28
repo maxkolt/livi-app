@@ -276,7 +276,9 @@ export const usePiP = ({
         g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
         g.__leavingVideoCallByBackRef.current = true;
         g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
-        g.__disableSystemPiPUntilRef.current = Date.now() + 2000;
+        // Блокируем system PiP только на короткое окно перехода VideoCall -> previous screen.
+        // Длинный блок ломает сценарий "несколько Back подряд" (на корне не включается system PiP).
+        g.__disableSystemPiPUntilRef.current = Date.now() + 650;
         g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
         g.__pipVisibleRef.current = true;
       } catch {}

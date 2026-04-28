@@ -3812,10 +3812,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.livekitConnectStartedAt = connectStartTime;
         // Увеличиваем peerConnectionTimeout: при одновременном подключении обоих участников
         // переговоры (negotiation) могут не уложиться в 15s → "negotiation timed out" и повторная попытка.
-        await room.connect(url, token, {
-          autoSubscribe: true,
-          peerConnectionTimeout: 30_000,
-        });
+        await this.connectRoomWithDnsRetry(room, url, token, targetRoomName, options);
       
         // КРИТИЧНО: Проверяем состояние после подключения
         if (room.state !== 'connected') {
@@ -4404,6 +4401,66 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       throw e;
     }
+  }
+
+  private isLikelyDnsResolutionError(errorMessage: string): boolean {
+    const msg = String(errorMessage || '').toLowerCase();
+    return (
+      msg.includes('unable to resolve host') ||
+      msg.includes('ename_not_resolved') ||
+      msg.includes('dns') ||
+      msg.includes('host lookup')
+    );
+  }
+
+  private async connectRoomWithDnsRetry(
+    room: Room,
+    url: string,
+    token: string,
+    targetRoomName?: string,
+    options?: LiveKitConnectOptions
+  ): Promise<void> {
+    const maxAttempts = 3;
+    let attempt = 0;
+    let lastError: unknown = null;
+    while (attempt < maxAttempts) {
+      attempt += 1;
+      try {
+        await room.connect(url, token, {
+          autoSubscribe: true,
+          peerConnectionTimeout: 30_000,
+        });
+        if (attempt > 1) {
+          logger.info('[VideoCallSession] LiveKit connect recovered after DNS retry', {
+            url,
+            urlHost: url ? new URL(url).hostname : 'unknown',
+            attempt,
+            targetRoomName,
+            connectReason: options?.reason || null,
+          });
+        }
+        return;
+      } catch (e: any) {
+        lastError = e;
+        const message = e?.message || String(e);
+        const isDnsError = this.isLikelyDnsResolutionError(message);
+        const canRetry = isDnsError && attempt < maxAttempts && !this.ended;
+        logger.warn('[VideoCallSession] LiveKit connect attempt failed', {
+          url,
+          urlHost: url ? new URL(url).hostname : 'unknown',
+          attempt,
+          maxAttempts,
+          isDnsError,
+          targetRoomName,
+          connectReason: options?.reason || null,
+          error: message,
+        });
+        if (!canRetry) break;
+        const backoffMs = attempt === 1 ? 350 : 900;
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+    throw lastError;
   }
 
   private async disconnectRoom(reason: 'user' | 'server' = 'user'): Promise<void> {

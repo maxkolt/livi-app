@@ -57,6 +57,12 @@ class MainActivity : ReactActivity() {
   /** Был intent с EXTRA_PENDING_ANSWER_* — в onResume шлём LiviPendingAnswerCall (один раз на доставку). */
   private var pendingAnswerFromIntent = false
   private var lastFinishRequestAtMs = 0L
+  private val pipEnterHandler = Handler(Looper.getMainLooper())
+  private val pendingPiPEnterRunnables = mutableListOf<Runnable>()
+  private var lastPiPEnterRequestAtMs = 0L
+  private var isPiPEnterAttemptRunning = false
+  /** Анти-реэнтри: сразу после выхода из system PiP игнорируем ложный onUserLeaveHint этого же transition. */
+  private var suppressPiPReenterUntilMs = 0L
 
   private fun requestFinish(reason: String) {
     val now = System.currentTimeMillis()
@@ -71,6 +77,14 @@ class MainActivity : ReactActivity() {
     lastFinishRequestAtMs = now
     android.util.Log.i("MainActivity", "requestFinish accepted ($reason)")
     finish()
+  }
+
+  private fun cancelPendingPiPEnterAttempts() {
+    for (r in pendingPiPEnterRunnables) {
+      pipEnterHandler.removeCallbacks(r)
+    }
+    pendingPiPEnterRunnables.clear()
+    isPiPEnterAttemptRunning = false
   }
 
   private fun tryStashPendingAnswerFromIntent(i: Intent?): Boolean {
@@ -222,6 +236,15 @@ class MainActivity : ReactActivity() {
    */
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
+    val now = System.currentTimeMillis()
+    if (now < suppressPiPReenterUntilMs) {
+      android.util.Log.i(
+        "MainActivity",
+        "onUserLeaveHint: skip system PiP due to recent PiP-exit cooldown (remainingMs=${suppressPiPReenterUntilMs - now})"
+      )
+      cancelPendingPiPEnterAttempts()
+      return
+    }
     val endingCallInProgress = LiviAppModule.getEndingCallInProgress()
     val shouldEnterPiP = LiviAppModule.getShouldEnterPiPOnLeaveHint()
     val inAppPiPVisible = LiviAppModule.getInAppPiPVisibleForSystemPiP()
@@ -235,31 +258,40 @@ class MainActivity : ReactActivity() {
     }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && shouldEnterPiP) {
       try {
+        val now = System.currentTimeMillis()
+        if (isPiPEnterAttemptRunning && now - lastPiPEnterRequestAtMs < 1200L) {
+          android.util.Log.i("MainActivity", "onUserLeaveHint: skip duplicate PiP enter sequence (already running)")
+          return
+        }
+        lastPiPEnterRequestAtMs = now
+        cancelPendingPiPEnterAttempts()
+        isPiPEnterAttemptRunning = true
         android.util.Log.i("MainActivity", "onUserLeaveHint: requesting JS system PiP capture preparation")
         val root = window?.decorView
         val decorW = root?.width ?: 0
         val decorH = root?.height ?: 0
         LiviAppModule.emitAboutToEnterSystemPiP(decorW, decorH)
-        val handler = Handler(Looper.getMainLooper())
+        val sourceRect = buildSystemPiPSourceRect()
         val tryEnterPiP = Runnable {
           try {
             if (isInPictureInPictureMode) return@Runnable
             if (LiviAppModule.getEndingCallInProgress()) return@Runnable
             if (!LiviAppModule.getShouldEnterPiPOnLeaveHint()) {
               android.util.Log.i("MainActivity", "onUserLeaveHint: skip retry because shouldEnterPiPOnLeaveHint=false")
+              cancelPendingPiPEnterAttempts()
               return@Runnable
             }
             val ratio = Rational(9, 16)
             val builder = PictureInPictureParams.Builder()
               .setAspectRatio(ratio)
               .setActions(emptyList<RemoteAction>())
-            val sourceRect = buildSystemPiPSourceRect()
             if (sourceRect != null) {
               builder.setSourceRectHint(sourceRect)
             }
             val params = builder.build()
             if (enterPictureInPictureMode(params)) {
               android.util.Log.d("MainActivity", "Entered Picture-in-Picture mode (leaveHint)")
+              cancelPendingPiPEnterAttempts()
             } else {
               android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode returned false")
             }
@@ -278,32 +310,25 @@ class MainActivity : ReactActivity() {
           tryEnterPiP.run()
         }
         if (!isInPictureInPictureMode) {
-          if (!inAppPiPVisible) {
-            android.util.Log.i("MainActivity", "onUserLeaveHint: scheduling direct-path retries")
-            handler.post(tryEnterPiP)
-            handler.postDelayed(tryEnterPiP, 80)
-            handler.postDelayed(tryEnterPiP, 180)
-            handler.postDelayed(tryEnterPiP, 320)
-            handler.postDelayed(tryEnterPiP, 450)
-          } else {
-            android.util.Log.i("MainActivity", "onUserLeaveHint: scheduling prewarmed in-app PiP retries")
-            handler.post(tryEnterPiP)
-            handler.postDelayed(tryEnterPiP, 80)
-            handler.postDelayed(tryEnterPiP, 180)
-            handler.postDelayed(tryEnterPiP, 320)
-            handler.postDelayed(tryEnterPiP, 450)
+          if (!inAppPiPVisible) android.util.Log.i("MainActivity", "onUserLeaveHint: scheduling direct-path retries")
+          else android.util.Log.i("MainActivity", "onUserLeaveHint: scheduling prewarmed in-app PiP retries")
+          val delays = longArrayOf(0L, 120L, 280L, 520L, 900L)
+          for (d in delays) {
+            val r = Runnable { tryEnterPiP.run() }
+            pendingPiPEnterRunnables.add(r)
+            pipEnterHandler.postDelayed(r, d)
           }
-          handler.postDelayed(tryEnterPiP, 800)
-          handler.postDelayed(tryEnterPiP, 1200)
         }
       } catch (e: Exception) {
         android.util.Log.w("MainActivity", "emitAboutToEnterSystemPiP failed", e)
+        cancelPendingPiPEnterAttempts()
       }
     } else {
       android.util.Log.i(
         "MainActivity",
         "onUserLeaveHint: skip system PiP because shouldEnterPiPOnLeaveHint=false or sdk<26"
       )
+      cancelPendingPiPEnterAttempts()
     }
   }
 
@@ -311,6 +336,7 @@ class MainActivity : ReactActivity() {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       if (isInPictureInPictureMode) {
+        cancelPendingPiPEnterAttempts()
         window.setBackgroundDrawableResource(android.R.color.transparent)
         // Вход в PiP: отменяем таймер «выход из PiP», иначе на части устройств через таймаут срабатывает EndCallFromPiP.
         exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
@@ -321,6 +347,9 @@ class MainActivity : ReactActivity() {
       }
       LiviAppModule.emitSystemPiPModeChanged(isInPictureInPictureMode)
       if (!isInPictureInPictureMode) {
+        // На части устройств сразу после разворота из PiP прилетает ложный onUserLeaveHint и
+        // может повторно увести экран в PiP. Держим короткое окно anti re-enter.
+        suppressPiPReenterUntilMs = System.currentTimeMillis() + 3000L
         // Сразу отключаем вход в PiP по onUserLeaveHint — на части устройств onUserLeaveHint
         // приходит во время перехода PiP→fullscreen до onResume; иначе приложение снова уходит в PiP.
         LiviAppModule.setPiPOnLeaveHintEnabled(false)
@@ -422,6 +451,7 @@ class MainActivity : ReactActivity() {
   }
 
   override fun onDestroy() {
+    cancelPendingPiPEnterAttempts()
     closePipCallEndedReceiver?.let {
       try { unregisterReceiver(it) } catch (_: Exception) {}
       closePipCallEndedReceiver = null

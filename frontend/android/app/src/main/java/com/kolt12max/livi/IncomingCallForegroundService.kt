@@ -48,6 +48,14 @@ class IncomingCallForegroundService : Service() {
         pendingActivityLaunchRunnables.clear()
     }
 
+    /**
+     * Не пытаемся повторно открыть IncomingCallActivity, если она уже живёт для того же callId.
+     * Иначе delayed-attempt'ы сервиса вызывают lifecycle flapping (onPause/onResume) на одном экране.
+     */
+    private fun shouldSkipActivityLaunch(callId: String): Boolean {
+        return IncomingCallActivity.isAlive && IncomingCallActivity.activeCallId == callId
+    }
+
     private fun unregisterAllReceivers() {
         activityShownReceiver?.let {
             try { unregisterReceiver(it) } catch (_: Exception) {}
@@ -98,9 +106,10 @@ class IncomingCallForegroundService : Service() {
             headsUpOnly -> LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
             else -> LiviFirebaseMessagingService.buildIncomingCallNotification(this, callId, from, fromNick)
         }
-        // Android 14+ (API 34): тип PHONE_CALL — система не накладывает ограничение «no camera/microphone» при старте из фона (VoIP/входящий вызов).
-        // На старых версиях — SPECIAL_USE (только показ уведомления, камера/микрофон не используем в сервисе).
-        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        // Для Android 10+ используем PHONE_CALL как основной тип call-FGS.
+        // Это согласовано с manifest (phoneCall|specialUse) и уменьшает warning'и FGS type tracking.
+        // SPECIAL_USE оставляем только как legacy fallback для API < 29.
+        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
         } else {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
@@ -191,6 +200,10 @@ class IncomingCallForegroundService : Service() {
                         vl("[INCOMING_FGS] startActivity attempt $attemptIndex SKIP cur=$cur")
                         return@Runnable
                     }
+                    if (shouldSkipActivityLaunch(callId)) {
+                        vl("[INCOMING_FGS] startActivity attempt $attemptIndex SKIP IncomingCallActivity already alive callId=$callId")
+                        return@Runnable
+                    }
                     try {
                         startActivity(launchIntent)
                         vl("[INCOMING_FGS] startActivity attempt $attemptIndex OK")
@@ -234,6 +247,7 @@ class IncomingCallForegroundService : Service() {
     private fun detachForegroundAfterIncomingActivityVisible() {
         if (didDetachAfterActivityShown) return
         didDetachAfterActivityShown = true
+        cancelPendingActivityLaunches()
         vl("[INCOMING_FGS] detach after activity visible: keep FGS ringtone until Activity play OK, DETACH, keep service")
         stopFullIncomingAudioOnDestroy = false
         activityShownReceiver?.let {

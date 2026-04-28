@@ -9,6 +9,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -17,6 +18,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import java.net.URL
 
 /**
@@ -65,7 +67,13 @@ class LiviOutgoingCallService : Service() {
             return START_NOT_STICKY
         }
 
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // Явно указываем mediaPlayback тип, чтобы FGS logger/state на Android 13+ не ловил рассинхрон.
+        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        } else {
+            0
+        }
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), fgsType)
         startSound()
         scheduleTimeout()
 
