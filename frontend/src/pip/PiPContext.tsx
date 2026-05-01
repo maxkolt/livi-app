@@ -254,9 +254,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           returnState && Number(returnState.token || 0) === Number(g.__systemPiPReturnTokenRef?.current || 0)
             ? Number(returnState.settledUntil || 0)
             : 0;
-        const blockReenterUntil = Number(g.__blockSystemPiPReenterUntilRef?.current || 0);
-        const lastSystemPiPExitAt = Number(g.__lastSystemPiPExitAtRef?.current || 0);
-        const rapidReenterBlocked = inPiP && now - lastSystemPiPExitAt < 3000;
         const shouldIgnoreLateEnter =
           inPiP &&
           (
@@ -264,14 +261,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             now < returningUntil ||
             now < disableUntil ||
             now < settledUntil ||
-            now < blockReenterUntil ||
-            rapidReenterBlocked ||
             g.__pipReturnToCallJustPressedRef?.current === true
           );
         if (shouldIgnoreLateEnter) {
-          if (Platform.OS === 'android') {
-            try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
-          }
           setInSystemPiPMode(false);
           setPendingSystemPiP(false);
           setSystemPiPCaptureActive(false);
@@ -285,12 +277,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         }
         setInSystemPiPMode(inPiP);
         if (!inPiP) {
-          // Анти-реэнтри: после возврата/выхода из system PiP коротко игнорируем и
-          // принудительно гасим поздние/ложные enter-сигналы от Android transition.
-          g.__blockSystemPiPReenterUntilRef = g.__blockSystemPiPReenterUntilRef || { current: 0 };
-          g.__blockSystemPiPReenterUntilRef.current = Date.now() + 3000;
-          g.__lastSystemPiPExitAtRef = g.__lastSystemPiPExitAtRef || { current: 0 };
-          g.__lastSystemPiPExitAtRef.current = Date.now();
           setDecorSizeForPiP(null);
           setSystemPiPCaptureActive(false);
           setSystemPiPCaptureRequestId(0);

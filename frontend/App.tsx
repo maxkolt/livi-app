@@ -1506,9 +1506,6 @@ function AppContent() {
         const systemPiPEntryUntil = g.__systemPiPEntryInProgressUntilRef?.current;
         const systemPiPEntryInProgress =
           typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
-        const blockSystemPiPReenterUntil = g.__blockSystemPiPReenterUntilRef?.current;
-        const systemPiPReenterBlocked =
-          typeof blockSystemPiPReenterUntil === 'number' && blockSystemPiPReenterUntil > Date.now();
         const videoCallInactiveByRef = g.__videoCallActiveRef?.current === false;
         const endingFromPiPNoOpen = g.__callEndedFromPiPNoOpenRef?.current === true;
         const endingCallInProgress = g.__endingCallInProgressRef?.current === true;
@@ -1528,12 +1525,10 @@ function AppContent() {
         const onVideoCallWithActiveSession =
           !videoCallInactiveByRef && isVideoSessionRoute(currentRoute) && sessionNotEnded;
         const allowSystemPiP =
-          !systemPiPReenterBlocked && (
-            (systemPiPEntryInProgress && hasActiveCallForPiP) ||
-            pipVisible ||
-            !!incoming ||
-            onVideoCallWithActiveSession
-          );
+          (systemPiPEntryInProgress && hasActiveCallForPiP) ||
+          pipVisible ||
+          !!incoming ||
+          (hasActiveCallForPiP || onVideoCallWithActiveSession);
         const logKey = JSON.stringify({
           currentRoute,
           allowSystemPiP: !!allowSystemPiP,
@@ -1546,7 +1541,6 @@ function AppContent() {
           sessionNotEnded: !!sessionNotEnded,
           videoCallInactiveByRef: !!videoCallInactiveByRef,
           systemPiPEntryInProgress: !!systemPiPEntryInProgress,
-          systemPiPReenterBlocked: !!systemPiPReenterBlocked,
         });
         if (systemPiPDecisionLogRef.current !== logKey) {
           systemPiPDecisionLogRef.current = logKey;
@@ -3087,9 +3081,7 @@ export default function App() {
         const disableUntil = Number(g.__disableSystemPiPUntilRef?.current || 0);
         const returnState = g.__systemPiPReturnStateRef?.current;
         const settledUntil = Number(returnState?.settledUntil || 0);
-        // Если in-app PiP уже видим на корне, не делаем промежуточную навигацию обратно в VideoCall:
-        // сразу запрашиваем system PiP, иначе при частых Back получаем "пустое" нажатие.
-        if (!pipVisible && currentRoute !== 'VideoCall' && callId && roomId) {
+        if (currentRoute !== 'VideoCall' && callId && roomId) {
           if (now < returningUntil || now < disableUntil || now < settledUntil) {
             return true;
           }
