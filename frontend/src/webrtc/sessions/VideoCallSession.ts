@@ -27,6 +27,7 @@ import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
 import { getInstallId } from '../../../utils/installId';
+import { requestExitSystemPiPSoft } from '../../../utils/callKeep';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
@@ -2108,13 +2109,13 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Повторный вход (echo call:ended, call:cancel+call:ended, LiveKit+socket): не дублируем PiP/globals/teardown.
     if (this.ended || this.endCallInProgress) {
       if (Platform.OS === 'android') {
-        try { (NativeModules as any)?.LiviAppModule?.requestExitSystemPiP?.(); } catch {}
+        try { requestExitSystemPiPSoft(); } catch {}
       }
       return;
     }
 
     if (Platform.OS === 'android') {
-      try { (NativeModules as any)?.LiviAppModule?.requestExitSystemPiP?.(); } catch {}
+      try { requestExitSystemPiPSoft(); } catch {}
     }
     try {
       const hidePiP = (global as any).__pipHidePiPRef?.current;
@@ -5120,7 +5121,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
             // Сразу закрываем системный и in-app PiP при уходе партнёра (без задержки 1.5s — UX).
             if (Platform.OS === 'android') {
-              try { (NativeModules as any)?.LiviAppModule?.requestExitSystemPiP?.(); } catch {}
+              try { requestExitSystemPiPSoft(); } catch {}
             }
             try {
               const hidePiP = (global as any).__pipHidePiPRef?.current;
@@ -5166,7 +5167,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (!this.disconnectPromise && !this.ended) {
           this.clearPendingRemoteDisconnectTimer();
           if (Platform.OS === 'android') {
-            try { (NativeModules as any)?.LiviAppModule?.requestExitSystemPiP?.(); } catch {}
+            try { requestExitSystemPiPSoft(); } catch {}
           }
         }
         // Флаги будут сброшены в disconnectRoom через промис, если он активен

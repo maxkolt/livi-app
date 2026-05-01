@@ -435,9 +435,14 @@ class MainActivity : ReactActivity() {
       override fun onReceive(context: Context?, intent: Intent?) {
         if (intent?.action != LiviFirebaseMessagingService.ACTION_CLOSE_PIP_CALL_ENDED) return
         (context as? MainActivity)?.runOnUiThread {
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && (context as MainActivity).isInPictureInPictureMode) {
-            (context as MainActivity).requestFinish("close-pip-from-call-ended-push")
-            android.util.Log.d("MainActivity", "Close PiP from call_ended push (endedFromActive)")
+          val self = context as? MainActivity ?: return@runOnUiThread
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && self.isInPictureInPictureMode) {
+            try {
+              LiviAppModule.softExitSystemPiPFromActivity(self)
+            } catch (e: Exception) {
+              android.util.Log.w("MainActivity", "softExitSystemPiPFromActivity failed, fallback requestFinish", e)
+              self.requestFinish("close-pip-from-call-ended-push")
+            }
           }
         }
       }

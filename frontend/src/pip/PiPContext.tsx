@@ -9,6 +9,7 @@ import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
 import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
+import { requestExitSystemPiPSoft } from '../../utils/callKeep';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
 
@@ -272,7 +273,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setDecorSizeForPiP(null);
           try {
             g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-            // Ref должен совпадать с нативом (App/call:ended/requestExitSystemPiP), иначе PiP остаётся в системе.
+            // Ref должен совпадать с нативом (App/call:ended/requestExitSystemPiPSoft), иначе PiP остаётся в системе.
             g.__pipInSystemModeRef.current = inPiP;
           } catch (_) {}
           return;
@@ -702,7 +703,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         logger.info('[PiPContext] returnToCall ignored: call teardown in progress');
         hidePiP();
         if (Platform.OS === 'android') {
-          try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+          try { requestExitSystemPiPSoft(); } catch (_) {}
         }
         return;
       }
@@ -775,7 +776,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     setSystemPiPCaptureActive(false);
     setSystemPiPCaptureRequestId(0);
     if (Platform.OS === 'android') {
-      try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+      try { requestExitSystemPiPSoft(); } catch (_) {}
     }
 
     const sessionForPipeState = g.__webrtcSessionRef?.current;
@@ -944,13 +945,27 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const shouldClosePiP = (visible || inSystemPiPMode || inSystemByRef) && (callId || roomId);
       // Идемпотентно с App и VideoCallSession (один socket — несколько слушателей call:ended).
       applyCallEndedGlobalRefsOnce(receivedCallId || undefined, receivedRoomId || undefined);
-      if (!shouldClosePiP) return;
+      if (!shouldClosePiP) {
+        try {
+          const g2 = global as any;
+          if (g2.__pipCallEndedWasInSystemRef) g2.__pipCallEndedWasInSystemRef.current = false;
+        } catch (_) {}
+        return;
+      }
+      // Слушатель PiPContext обычно идёт раньше App: hidePiP() обнулит __pipInSystemModeRef до того, как App
+      // прочитает inSystem. Снимок — чтобы App и VideoCall применили ту же ветку «завершение из PiP».
+      try {
+        const g2 = global as any;
+        g2.__pipCallEndedWasInSystemRef = g2.__pipCallEndedWasInSystemRef || { current: false };
+        g2.__pipCallEndedWasInSystemRef.current =
+          inSystemPiPMode === true || inSystemByRef === true;
+      } catch (_) {}
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
       // Сначала закрываем системный PiP, чтобы окно исчезло быстрее у того, кто получил call:ended.
       if (Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+        try { requestExitSystemPiPSoft(); } catch (_) {}
       }
       hidePiP();
       setCallId(null);

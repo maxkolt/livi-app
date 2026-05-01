@@ -696,42 +696,46 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   /**
-   * Закрытие системного PiP: debounce только если реально в PiP и планируем finish().
-   * Раньше debounce стоял до проверки isInPictureInPictureMode — первый вызов «съедал» 1200ms,
-   * хотя finish() не вызывался (ещё не вошли в PiP), и call:ended больше не мог закрыть окно.
+   * Закрытие системного PiP: debounce только если реально в PiP.
+   * [soft]: развернуть MainActivity в полноэкранный режим без finish() — сохраняется RN/Metro (call:ended у собеседника, LiveKit).
+   * [!soft]: moveTaskToBack + finish() — только при завершении по X в PiP, чтобы не всплывало на splash.
    */
-  private fun tryExitSystemPiPFromRunnable(activity: android.app.Activity, retryCount: Int) {
+  private fun tryExitSystemPiPFromRunnable(activity: android.app.Activity, retryCount: Int, soft: Boolean) {
     try {
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
       if (!activity.isInPictureInPictureMode) {
         if (retryCount < 8) {
           Handler(Looper.getMainLooper()).postDelayed({
-            tryExitSystemPiPFromRunnable(activity, retryCount + 1)
+            tryExitSystemPiPFromRunnable(activity, retryCount + 1, soft)
           }, 200)
         } else {
-          Log.d("LiviAppModule", "requestExitSystemPiP: retries exhausted, not in PiP")
+          Log.d("LiviAppModule", "requestExitSystemPiP(soft=$soft): retries exhausted, not in PiP")
         }
         return
       }
       val now = System.currentTimeMillis()
       synchronized(LiviAppModule::class.java) {
         if (now - lastRequestExitSystemPiPAtMs < EXIT_SYSTEM_PIP_DEBOUNCE_MS) {
-          Log.d(NAME, "requestExitSystemPiP: skip duplicate within debounce window (in PiP)")
+          Log.d(NAME, "requestExitSystemPiP(soft=$soft): skip duplicate within debounce window (in PiP)")
           return
         }
         lastRequestExitSystemPiPAtMs = now
       }
-      activity.moveTaskToBack(true)
-      Handler(Looper.getMainLooper()).postDelayed({
-        try {
-          activity.finish()
-          Log.d("LiviAppModule", "requestExitSystemPiP: moved to back, then finish() (was in PiP)")
-        } catch (e2: Exception) {
-          Log.w("LiviAppModule", "requestExitSystemPiP finish failed", e2)
-        }
-      }, 80)
+      if (soft) {
+        LiviAppModule.softExitSystemPiPFromActivity(activity)
+      } else {
+        activity.moveTaskToBack(true)
+        Handler(Looper.getMainLooper()).postDelayed({
+          try {
+            activity.finish()
+            Log.d("LiviAppModule", "requestExitSystemPiP: moved to back, then finish() (was in PiP)")
+          } catch (e2: Exception) {
+            Log.w("LiviAppModule", "requestExitSystemPiP finish failed", e2)
+          }
+        }, 80)
+      }
     } catch (e: Exception) {
-      Log.w("LiviAppModule", "requestExitSystemPiP failed", e)
+      Log.w("LiviAppModule", "requestExitSystemPiP(soft=$soft) failed", e)
     }
   }
 
@@ -740,9 +744,23 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun requestExitSystemPiP() {
     val activity = currentActivity ?: return
     if (Looper.myLooper() == Looper.getMainLooper()) {
-      tryExitSystemPiPFromRunnable(activity, 0)
+      tryExitSystemPiPFromRunnable(activity, 0, false)
     } else {
-      activity.runOnUiThread { tryExitSystemPiPFromRunnable(activity, 0) }
+      activity.runOnUiThread { tryExitSystemPiPFromRunnable(activity, 0, false) }
+    }
+  }
+
+  /**
+   * Развернуть приложение из системного PiP без destroy MainActivity (сохраняется JS и dev-сессия Metro).
+   * Использовать при call:ended / отключении партнёра; жёсткий [requestExitSystemPiP] — при нажатии X в PiP.
+   */
+  @ReactMethod
+  fun requestExitSystemPiPSoft() {
+    val activity = currentActivity ?: return
+    if (Looper.myLooper() == Looper.getMainLooper()) {
+      tryExitSystemPiPFromRunnable(activity, 0, true)
+    } else {
+      activity.runOnUiThread { tryExitSystemPiPFromRunnable(activity, 0, true) }
     }
   }
 
@@ -1225,6 +1243,85 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private var lastRequestExitSystemPiPAtMs: Long = 0L
     private const val BRING_MAIN_TO_FRONT_DEBOUNCE_MS = 1200L
     private const val EXIT_SYSTEM_PIP_DEBOUNCE_MS = 1200L
+
+    /**
+     * Жёстко закрыть system PiP (moveTaskToBack + finish), без debounce — только как fallback после soft.
+     */
+    @JvmStatic
+    internal fun hardExitFromSystemPiPNoDebounce(activity: android.app.Activity) {
+      try {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (!activity.isInPictureInPictureMode || activity.isFinishing) return
+        activity.moveTaskToBack(true)
+        Handler(Looper.getMainLooper()).postDelayed({
+          try {
+            if (!activity.isFinishing) {
+              activity.finish()
+              Log.d(NAME, "hardExitFromSystemPiPNoDebounce: finish()")
+            }
+          } catch (e: Exception) {
+            Log.w(NAME, "hardExitFromSystemPiPNoDebounce finish failed", e)
+          }
+        }, 80)
+      } catch (e: Exception) {
+        Log.w(NAME, "hardExitFromSystemPiPNoDebounce failed", e)
+      }
+    }
+
+    /**
+     * Разворот из system PiP без немедленного finish():
+     * 1) [applicationContext] + NEW_TASK — при [singleTask] надёжнее, чем только REORDER_TO_FRONT с activity;
+     * 2) через ~420 ms, если всё ещё isInPictureInPictureMode — [hardExitFromSystemPiPNoDebounce] (иначе PiP «висит» поверх UI).
+     */
+    @JvmStatic
+    fun softExitSystemPiPFromActivity(activity: android.app.Activity?) {
+      val a = activity ?: return
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+      if (!a.isInPictureInPictureMode) return
+      var launched = false
+      try {
+        val app = a.applicationContext
+        val intentApp = Intent(app, MainActivity::class.java).apply {
+          addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+              Intent.FLAG_ACTIVITY_CLEAR_TOP or
+              Intent.FLAG_ACTIVITY_SINGLE_TOP or
+              Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+          )
+        }
+        app.startActivity(intentApp)
+        launched = true
+        Log.d(NAME, "softExitSystemPiPFromActivity: applicationContext.startActivity(NEW_TASK|CLEAR_TOP|…)")
+      } catch (e1: Exception) {
+        Log.w(NAME, "softExitSystemPiPFromActivity: app.startActivity failed", e1)
+      }
+      if (!launched) {
+        try {
+          val intentAct = Intent(a, MainActivity::class.java).apply {
+            addFlags(
+              Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+            )
+          }
+          a.startActivity(intentAct)
+          Log.d(NAME, "softExitSystemPiPFromActivity: activity.startActivity fallback")
+        } catch (e2: Exception) {
+          Log.w(NAME, "softExitSystemPiPFromActivity: activity.startActivity failed", e2)
+        }
+      }
+      Handler(Looper.getMainLooper()).postDelayed({
+        try {
+          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return@postDelayed
+          if (a.isFinishing) return@postDelayed
+          if (a.isInPictureInPictureMode) {
+            Log.w(NAME, "softExitSystemPiPFromActivity: still in PiP → hardExitFromSystemPiPNoDebounce")
+            hardExitFromSystemPiPNoDebounce(a)
+          }
+        } catch (_: Exception) {}
+      }, 420)
+    }
+
     @JvmStatic
     fun getShouldEnterPiPOnLeaveHint(): Boolean = shouldEnterPiPOnLeaveHint
     @JvmStatic

@@ -34,7 +34,7 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, notifyCallCanceled, addEndedCallId } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, requestExitSystemPiPSoft, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, notifyCallCanceled, addEndedCallId } from './utils/callKeep';
 import { isIncomingCallExpired } from './utils/callExpiry';
 import { addVoipTokenListener } from './utils/voipPush';
 import { useLang } from './store/lang';
@@ -623,7 +623,7 @@ function AppContent() {
         g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
         g.__enterSystemPiPAfterVideoCallRef.current = null;
         NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
-        NativeModules.LiviAppModule?.requestExitSystemPiP?.();
+        requestExitSystemPiPSoft();
       } catch (_) {}
       const fn = (global as any).__pipReturnToCallRef?.current;
       if (typeof fn === 'function') {
@@ -1961,7 +1961,38 @@ function AppContent() {
     const onCallEnded = (data?: { callId?: string; roomId?: string }) => {
       const g = global as any;
       const eventCallId = String(data?.callId || g.__currentCallPiPParamsRef?.current?.callId || '').trim();
-      const eventRoomId = String(data?.roomId || '').trim();
+      const eventRoomId = String(
+        data?.roomId || g.__currentCallPiPParamsRef?.current?.roomId || g.__pipLastContextRef?.current?.roomId || ''
+      ).trim();
+      const inactiveNavSnapPre = (() => {
+        try {
+          const wasInSys =
+            g.__pipInSystemModeRef?.current === true ||
+            g.__pipCallEndedWasInSystemRef?.current === true;
+          if (!wasInSys) return null;
+          return {
+            callId: String(
+              data?.callId ||
+                g.__currentCallPiPParamsRef?.current?.callId ||
+                g.__pipLastContextRef?.current?.callId ||
+                ''
+            ).trim(),
+            roomId: String(
+              data?.roomId ||
+                g.__currentCallPiPParamsRef?.current?.roomId ||
+                g.__pipLastContextRef?.current?.roomId ||
+                ''
+            ).trim(),
+            peer: String(g.__videoCallPartnerUserIdRef?.current || '').trim(),
+            baseNav: {
+              ...((g.__pipLastContextRef?.current?.navParams ||
+                g.__currentCallPiPParamsRef?.current?.navParams) as Record<string, unknown>),
+            },
+          };
+        } catch {
+          return null;
+        }
+      })();
       try {
         // Если этот звонок уже завершили локально (например, EndCallFromPiP),
         // то поздний echo call:ended не должен повторно запускать teardown при возврате в приложение.
@@ -1987,8 +2018,11 @@ function AppContent() {
           // Дубликат call:ended: всё равно пробуем снять системный PiP (первый проход мог попасть в debounce натива).
           try {
             const g2 = global as any;
-            if (Platform.OS === 'android' && g2.__pipInSystemModeRef?.current === true) {
-              NativeModules.LiviAppModule?.requestExitSystemPiP?.();
+            const dupInSystem =
+              g2.__pipInSystemModeRef?.current === true ||
+              g2.__pipCallEndedWasInSystemRef?.current === true;
+            if (Platform.OS === 'android' && dupInSystem) {
+              requestExitSystemPiPSoft();
               const h = g2.__pipHidePiPRef?.current;
               if (typeof h === 'function') h();
             }
@@ -2032,7 +2066,14 @@ function AppContent() {
       try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
 
-      const inSystem = g.__pipInSystemModeRef?.current === true;
+      const wasInSystemSnapshot = g.__pipCallEndedWasInSystemRef?.current === true;
+      const inSystem =
+        g.__pipInSystemModeRef?.current === true || wasInSystemSnapshot;
+      try {
+        if (wasInSystemSnapshot && g.__pipCallEndedWasInSystemRef) {
+          g.__pipCallEndedWasInSystemRef.current = false;
+        }
+      } catch (_) {}
       const pipVisible = g.__pipVisibleRef?.current === true;
       const hidePiP = g.__pipHidePiPRef?.current;
       const noOpenFlag = g.__callEndedFromPiPNoOpenRef?.current === true;
@@ -2041,7 +2082,7 @@ function AppContent() {
       // Кто в системном PiP при call:ended — только закрываем PiP, приложение не открываем.
       if (inSystem) {
         if (Platform.OS === 'android') {
-          try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+          try { requestExitSystemPiPSoft(); } catch (_) {}
         }
         console.log('[App] [call:ended] inSystem=true → ставим __callEndedFromPiPNoOpenRef, return (НЕ вызываем goHome)');
         try {
@@ -2051,6 +2092,43 @@ function AppContent() {
             try { (global as any).__callEndedFromPiPNoOpenRef.current = false; } catch (_) {}
           }, 6000);
         } catch (_) {}
+        // После обработки сокета: если не на VideoCall — тот же «неактивный» экран, что у завершившего из PiP.
+        const snap = inactiveNavSnapPre;
+        queueMicrotask(() => {
+          try {
+            if (!navRef.isReady()) return;
+            if (String(navRef.getCurrentRoute()?.name ?? '') === 'VideoCall') return;
+            if (!snap?.callId || !snap?.roomId) return;
+            const peerFromNav = snap.baseNav.peerUserId ?? snap.baseNav.partnerId;
+            const peer =
+              (typeof peerFromNav === 'string' && String(peerFromNav).trim()) ||
+              snap.peer ||
+              undefined;
+            navRef.dispatch(
+              CommonActions.reset({
+                index: 1,
+                routes: [
+                  { name: 'Home' as any },
+                  {
+                    name: 'VideoCall' as any,
+                    params: {
+                      ...snap.baseNav,
+                      callId: snap.callId,
+                      roomId: snap.roomId,
+                      peerUserId: peer,
+                      resume: true,
+                      fromPiP: true,
+                      directCall: true,
+                      endedFromRemoteSystemPiP: true,
+                    },
+                  },
+                ],
+              })
+            );
+          } catch (e) {
+            console.warn('[App] [call:ended] inSystem navigate to inactive VideoCall failed', e);
+          }
+        });
         return;
       }
       // Звонок завершили из PiP (флаг выставлен в endCallImpl): call:ended мог прийти после закрытия PiP (inSystem уже false). Не открываем приложение.
@@ -2107,7 +2185,7 @@ function AppContent() {
       const roomDisconnected = session?.room?.state === 'disconnected';
       const sessionEnded = typeof session?.ended === 'boolean' && session.ended;
       if (roomDisconnected || sessionEnded || !session) {
-        try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+        try { requestExitSystemPiPSoft(); } catch (_) {}
         try {
           const hidePiP = g.__pipHidePiPRef?.current;
           if (typeof hidePiP === 'function') hidePiP();
@@ -2134,7 +2212,7 @@ function AppContent() {
       const hidePiP = g.__pipHidePiPRef?.current;
       if (inSystem) {
         if (Platform.OS === 'android') {
-          try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}
+          try { requestExitSystemPiPSoft(); } catch (_) {}
         }
         if (typeof hidePiP === 'function') hidePiP();
       } else if (pipVisible) {
@@ -2970,7 +3048,7 @@ export default function App() {
     // endingFromSystemPiP = inSystem || fromPiPButton: fromPiPButton true, когда вызов из EndCallFromPiP (SystemPiPModeChanged(true) может прийти позже).
     const hidePiP = g.__pipHidePiPRef?.current;
     if (endingFromSystemPiP) {
-      console.log('[App] [PiP] endCallImpl: endingFromSystemPiP=true (inSystem=', inSystem, ', fromPiPButton=', fromPiPButton, ') → hidePiP(), requestExitSystemPiP(), return (НЕ открываем приложение)');
+      console.log('[App] [PiP] endCallImpl: endingFromSystemPiP=true (inSystem=', inSystem, ', fromPiPButton=', fromPiPButton, ') → hidePiP(), requestExitSystemPiP(hard), return (НЕ открываем приложение)');
       if (typeof hidePiP === 'function') hidePiP();
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.requestExitSystemPiP?.(); } catch (_) {}

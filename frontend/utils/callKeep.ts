@@ -231,6 +231,18 @@ export function bringMainActivityToFront(): void {
   } catch {}
 }
 
+/**
+ * Выход из системного PiP без finish() MainActivity: разворот в полноэкранный режим (REORDER_TO_FRONT).
+ * Нужен при call:ended у собеседника / LiveKit — иначе moveTaskToBack+finish() убивает Activity и Metro перезапускается с нуля.
+ * Завершение по X в PiP — по-прежнему {@link NativeModules.LiviAppModule.requestExitSystemPiP} (жёсткий выход).
+ */
+export function requestExitSystemPiPSoft(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    (NativeModules.LiviAppModule as any)?.requestExitSystemPiPSoft?.();
+  } catch {}
+}
+
 /** Дедупликация: один и тот же callId не показываем повторно (сокет + пуш могут вызвать несколько раз). */
 const lastDisplayedCallId = { id: '' as string, at: 0 };
 const DISPLAY_DEBOUNCE_MS = 3000;
