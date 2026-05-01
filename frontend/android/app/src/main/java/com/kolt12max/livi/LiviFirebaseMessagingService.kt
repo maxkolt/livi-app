@@ -315,13 +315,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
             try { startActivity(activityIntent) } catch (e: Exception) { Log.w(TAG, "FCM call_ended: startActivity failed", e) }
-            // КРИТИЧНО: Когда звонок завершён из PiP (endedFromActive), собеседник может быть в системном PiP с отключённым сокетом.
-            // Пуш доходит сразу — закрываем его PiP broadcast'ом, чтобы окно закрылось без задержки 5–7 сек (LiveKit).
-            if (endedFromActive) {
-                val closePipIntent = Intent(ACTION_CLOSE_PIP_CALL_ENDED).apply { setPackage(packageName) }
-                sendBroadcast(closePipIntent)
-                Log.d(TAG, "FCM call_ended: sent ACTION_CLOSE_PIP_CALL_ENDED (endedFromActive) to close partner PiP immediately")
-            }
+            // Собеседник в системном PiP часто без call:ended по сокету. MainActivity закрывает PiP только если isInPictureInPictureMode.
+            // Раньше broadcast шли только при endedFromActive=true — при потере флага в payload (OEM/Expo) окно оставалось висеть.
+            val closePipIntent = Intent(ACTION_CLOSE_PIP_CALL_ENDED).apply { setPackage(packageName) }
+            sendBroadcast(closePipIntent)
+            Log.d(TAG, "FCM call_ended: sent ACTION_CLOSE_PIP_CALL_ENDED (endedFromActive=$endedFromActive)")
             Log.d(TAG, "FCM call_ended: incoming canceled, missed=${!endedFromActive}, outgoing closed callId=$callId")
             return
         }
@@ -478,7 +476,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         const val NOTIFICATION_ID_INCOMING_CALL = 1001
         private const val CHANNEL_ID_MISSED_CALL = "missed_call"
         const val ACTION_CALL_CANCELED = "com.kolt12max.livi.CALL_CANCELED"
-        /** Broadcast: закрыть системный PiP сразу при пуше call_ended (endedFromActive). Собеседник в PiP не получает call:ended по сокету — пуш доходит, MainActivity закрывает PiP. */
+        /** Broadcast: закрыть системный PiP при пуше call_ended (MainActivity — только если isInPictureInPictureMode). */
         const val ACTION_CLOSE_PIP_CALL_ENDED = "com.kolt12max.livi.CLOSE_PIP_CALL_ENDED"
         const val EXTRA_CALL_ID = "callId"
         @JvmStatic

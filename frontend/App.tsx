@@ -1984,6 +1984,15 @@ function AppContent() {
         const lastKey = String(g.__lastHandledCallEndedRef.key || '');
         const lastAt = Number(g.__lastHandledCallEndedRef.at || 0);
         if (lastKey === eventKey && now - lastAt < 3000) {
+          // Дубликат call:ended: всё равно пробуем снять системный PiP (первый проход мог попасть в debounce натива).
+          try {
+            const g2 = global as any;
+            if (Platform.OS === 'android' && g2.__pipInSystemModeRef?.current === true) {
+              NativeModules.LiviAppModule?.requestExitSystemPiP?.();
+              const h = g2.__pipHidePiPRef?.current;
+              if (typeof h === 'function') h();
+            }
+          } catch (_) {}
           return;
         }
         g.__lastHandledCallEndedRef.key = eventKey;

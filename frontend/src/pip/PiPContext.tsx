@@ -248,18 +248,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         const g = global as any;
         const now = Date.now();
         const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
-        const disableUntil = Number(g.__disableSystemPiPUntilRef?.current || 0);
         const returnState = g.__systemPiPReturnStateRef?.current;
         const settledUntil =
           returnState && Number(returnState.token || 0) === Number(g.__systemPiPReturnTokenRef?.current || 0)
             ? Number(returnState.settledUntil || 0)
             : 0;
+        // Не используем __disableSystemPiPUntilRef здесь: после Back с VideoCall usePiP ставит +2s,
+        // пользователь уходит на Home и сразу жмёт Home → реальный system PiP, а мы обнуляли ref и
+        // call:ended / PiPContext не закрывали окно (PiP «висит» без связи с JS).
         const shouldIgnoreLateEnter =
           inPiP &&
           (
             returnToCallInFlightRef.current ||
             now < returningUntil ||
-            now < disableUntil ||
             now < settledUntil ||
             g.__pipReturnToCallJustPressedRef?.current === true
           );
@@ -271,7 +272,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setDecorSizeForPiP(null);
           try {
             g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-            g.__pipInSystemModeRef.current = false;
+            // Ref должен совпадать с нативом (App/call:ended/requestExitSystemPiP), иначе PiP остаётся в системе.
+            g.__pipInSystemModeRef.current = inPiP;
           } catch (_) {}
           return;
         }
@@ -934,8 +936,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       if (!hasNoIdsInPayload && !matchedByCallId && !matchedByRoomId) {
         return;
       }
-      // Закрываем PiP при call:ended и когда in-app PiP виден, и когда в системном PiP (inSystemPiPMode), чтобы у второго пользователя PiP закрывался сразу.
-      const shouldClosePiP = (visible || inSystemPiPMode) && (callId || roomId);
+      // Закрываем PiP при call:ended: in-app, state системного PiP или ref (после shouldIgnoreLateEnter state мог остаться false).
+      let inSystemByRef = false;
+      try {
+        inSystemByRef = (global as any).__pipInSystemModeRef?.current === true;
+      } catch (_) {}
+      const shouldClosePiP = (visible || inSystemPiPMode || inSystemByRef) && (callId || roomId);
       // Идемпотентно с App и VideoCallSession (один socket — несколько слушателей call:ended).
       applyCallEndedGlobalRefsOnce(receivedCallId || undefined, receivedRoomId || undefined);
       if (!shouldClosePiP) return;

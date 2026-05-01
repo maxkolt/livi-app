@@ -695,41 +695,54 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /**
+   * Закрытие системного PiP: debounce только если реально в PiP и планируем finish().
+   * Раньше debounce стоял до проверки isInPictureInPictureMode — первый вызов «съедал» 1200ms,
+   * хотя finish() не вызывался (ещё не вошли в PiP), и call:ended больше не мог закрыть окно.
+   */
+  private fun tryExitSystemPiPFromRunnable(activity: android.app.Activity, retryCount: Int) {
+    try {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+      if (!activity.isInPictureInPictureMode) {
+        if (retryCount < 8) {
+          Handler(Looper.getMainLooper()).postDelayed({
+            tryExitSystemPiPFromRunnable(activity, retryCount + 1)
+          }, 200)
+        } else {
+          Log.d("LiviAppModule", "requestExitSystemPiP: retries exhausted, not in PiP")
+        }
+        return
+      }
+      val now = System.currentTimeMillis()
+      synchronized(LiviAppModule::class.java) {
+        if (now - lastRequestExitSystemPiPAtMs < EXIT_SYSTEM_PIP_DEBOUNCE_MS) {
+          Log.d(NAME, "requestExitSystemPiP: skip duplicate within debounce window (in PiP)")
+          return
+        }
+        lastRequestExitSystemPiPAtMs = now
+      }
+      activity.moveTaskToBack(true)
+      Handler(Looper.getMainLooper()).postDelayed({
+        try {
+          activity.finish()
+          Log.d("LiviAppModule", "requestExitSystemPiP: moved to back, then finish() (was in PiP)")
+        } catch (e2: Exception) {
+          Log.w("LiviAppModule", "requestExitSystemPiP finish failed", e2)
+        }
+      }, 80)
+    } catch (e: Exception) {
+      Log.w("LiviAppModule", "requestExitSystemPiP failed", e)
+    }
+  }
+
   /** Выйти из системного PiP без открытия приложения: только закрыть окно PiP. Сначала уводим задачу в фон (moveTaskToBack), затем finish() — чтобы приложение не открывалось на экране приветствия. */
   @ReactMethod
   fun requestExitSystemPiP() {
     val activity = currentActivity ?: return
-    val now = System.currentTimeMillis()
-    synchronized(LiviAppModule::class.java) {
-      if (now - lastRequestExitSystemPiPAtMs < EXIT_SYSTEM_PIP_DEBOUNCE_MS) {
-        Log.d(NAME, "requestExitSystemPiP: skip duplicate within debounce window")
-        return
-      }
-      lastRequestExitSystemPiPAtMs = now
-    }
-    val run: Runnable = Runnable {
-      try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity.isInPictureInPictureMode) {
-          activity.moveTaskToBack(true)
-          Handler(Looper.getMainLooper()).postDelayed({
-            try {
-              activity.finish()
-              Log.d("LiviAppModule", "requestExitSystemPiP: moved to back, then finish() (was in PiP)")
-            } catch (e2: Exception) {
-              Log.w("LiviAppModule", "requestExitSystemPiP finish failed", e2)
-            }
-          }, 80)
-        } else {
-          Log.d("LiviAppModule", "requestExitSystemPiP: not in PiP, skipping finish()")
-        }
-      } catch (e: Exception) {
-        Log.w("LiviAppModule", "requestExitSystemPiP failed", e)
-      }
-    }
     if (Looper.myLooper() == Looper.getMainLooper()) {
-      run.run()
+      tryExitSystemPiPFromRunnable(activity, 0)
     } else {
-      activity.runOnUiThread(run)
+      activity.runOnUiThread { tryExitSystemPiPFromRunnable(activity, 0) }
     }
   }
 
