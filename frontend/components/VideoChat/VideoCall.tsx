@@ -2005,15 +2005,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         setCallId(existingCallId);
         setStarted(true);
         setLoading(true);
-        
-        if (pendingCallId && pendingCallId === String(existingCallId)) {
-          logger.info('[VideoCall] Pending call:accepted already queued, skipping connectAsInitiatorAfterAccepted', {
-            existingCallId,
-            friendId,
-          });
-          return;
-        }
 
+        // Только ctor VideoCallSession поднимает LiveKit из __pendingCallAcceptedRef (queueMicrotask).
+        // Старый ранний return по pendingCallId дублировал это и откладывал connect лишним macrotask;
+        // явный connectAsInitiatorAfterAccepted нужен, если pending не обработан ctor (например, несовпадение callId).
         if (session.didSchedulePendingCallAcceptedConnect()) {
           logger.info('[VideoCall] Session ctor scheduled pending call:accepted, skipping connectAsInitiatorAfterAccepted', {
             existingCallId,

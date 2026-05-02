@@ -227,23 +227,23 @@ export class VideoCallSession extends SimpleEventEmitter {
       (global as any).__pendingCallAcceptedRef.current = null;
     } else if (usePending) {
       this.consumedPendingCallAcceptedAtConstruct = true;
-      logger.info('[VideoCallSession] 🔄 Found pending call:accepted event, will process after first frame', {
+      logger.info('[VideoCallSession] 🔄 Found pending call:accepted event, scheduling handleCallAccepted (microtask)', {
         callId: pendingCallAccepted.callId,
         roomId: pendingCallAccepted.roomId,
         myUserId: config.myUserId,
       });
       // Очищаем сохраненное событие
       (global as any).__pendingCallAcceptedRef.current = null;
-      // Не ждём долгого InteractionManager idle: запускаем сразу после текущего тика,
-      // чтобы pending call:accepted начинал поднимать комнату заметно быстрее.
-      setTimeout(() => {
-        this.handleCallAccepted(pendingCallAccepted).catch((e) => {
+      // Microtask: раньше, чем setTimeout(0), чтобы инициатор начал Room.connect до конца текущего
+      // React useEffect и уменьшил окно «ответивший один в комнате».
+      queueMicrotask(() => {
+        void this.handleCallAccepted(pendingCallAccepted).catch((e) => {
           logger.error('[VideoCallSession] ❌ Failed to handle pending call:accepted', {
             error: e,
             callId: pendingCallAccepted.callId,
           });
         });
-      }, 0);
+      });
     }
   }
 
@@ -2305,9 +2305,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.clearRemoteMediaWatchdog(false);
     this.remoteMediaRecoveryInProgress = false;
     this.remoteMediaRelayRecoveryAttempted = false;
-    if (typeof firstRemoteMediaMs === 'number') {
-      void sendClientMetrics(API_BASE, { remoteMediaFirstSeenMs: firstRemoteMediaMs }).catch(() => {});
-    }
     const stageMetrics: Record<string, number> = {};
     if (this.acceptAckStartedAt > 0 && this.acceptAckCompletedAt >= this.acceptAckStartedAt) {
       stageMetrics.acceptAckLatencyMs = this.acceptAckCompletedAt - this.acceptAckStartedAt;
@@ -2329,6 +2326,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         : undefined;
     void sendClientMetrics(API_BASE, {
       remoteMediaStageBreakdown: true,
+      ...(typeof firstRemoteMediaMs === 'number' ? { remoteMediaFirstSeenMs: firstRemoteMediaMs } : {}),
       ...(typeof totalFromAcceptMs === 'number' ? { timeToFirstRemoteFrameMs: totalFromAcceptMs } : {}),
       ...stageMetrics,
     }).catch(() => {});

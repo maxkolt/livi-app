@@ -6,6 +6,18 @@
 export type ClientMetricsPayload = {
   joinTimeMs?: number;
   remoteMediaFirstSeenMs?: number;
+  /** Ответ сервера на call:accept до продолжения ( callee ). */
+  acceptAckLatencyMs?: number;
+  /** Room.connect до состояния connected ( LiveKit ). */
+  livekitConnectLatencyMs?: number;
+  /** Публикация локальных треков после join. */
+  publishLatencyMs?: number;
+  /** Первый удалённый трек после publish (или после join, если publish не зафиксирован ). */
+  subscribeLatencyMs?: number;
+  /** От начала call:accept ack до первого удалённого медиа ( friend call ). */
+  timeToFirstRemoteFrameMs?: number;
+  /** Пакет стадий при remote media first seen (сервер может агрегировать по флагу ). */
+  remoteMediaStageBreakdown?: boolean;
   rttMs?: number;
   packetLoss?: number;
   reconnect?: boolean;
@@ -17,7 +29,14 @@ export type ClientMetricsPayload = {
   remoteMediaTimeout?: boolean;
   remoteMediaRecovered?: boolean;
   relayFallback?: boolean;
+  remoteMediaNoParticipantTimeout?: boolean;
+  remoteMediaNoParticipantAttempts?: number;
 };
+
+function optNonNegInt(n: unknown): number | undefined {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return undefined;
+  return Math.floor(n);
+}
 
 export async function sendClientMetrics(
   apiBase: string,
@@ -32,6 +51,27 @@ export async function sendClientMetrics(
       typeof payload.remoteMediaFirstSeenMs === 'number' && payload.remoteMediaFirstSeenMs >= 0
         ? payload.remoteMediaFirstSeenMs
         : undefined,
+    acceptAckLatencyMs:
+      typeof payload.acceptAckLatencyMs === 'number' && payload.acceptAckLatencyMs >= 0
+        ? payload.acceptAckLatencyMs
+        : undefined,
+    livekitConnectLatencyMs:
+      typeof payload.livekitConnectLatencyMs === 'number' && payload.livekitConnectLatencyMs >= 0
+        ? payload.livekitConnectLatencyMs
+        : undefined,
+    publishLatencyMs:
+      typeof payload.publishLatencyMs === 'number' && payload.publishLatencyMs >= 0
+        ? payload.publishLatencyMs
+        : undefined,
+    subscribeLatencyMs:
+      typeof payload.subscribeLatencyMs === 'number' && payload.subscribeLatencyMs >= 0
+        ? payload.subscribeLatencyMs
+        : undefined,
+    timeToFirstRemoteFrameMs:
+      typeof payload.timeToFirstRemoteFrameMs === 'number' && payload.timeToFirstRemoteFrameMs >= 0
+        ? payload.timeToFirstRemoteFrameMs
+        : undefined,
+    remoteMediaStageBreakdown: payload.remoteMediaStageBreakdown ? true : undefined,
     rttMs: typeof payload.rttMs === 'number' && payload.rttMs >= 0 ? payload.rttMs : undefined,
     packetLoss: typeof payload.packetLoss === 'number' && payload.packetLoss >= 0 ? payload.packetLoss : undefined,
     reconnect: !!payload.reconnect || undefined,
@@ -43,6 +83,8 @@ export async function sendClientMetrics(
     remoteMediaTimeout: !!payload.remoteMediaTimeout || undefined,
     remoteMediaRecovered: !!payload.remoteMediaRecovered || undefined,
     relayFallback: !!payload.relayFallback || undefined,
+    remoteMediaNoParticipantTimeout: !!payload.remoteMediaNoParticipantTimeout || undefined,
+    remoteMediaNoParticipantAttempts: optNonNegInt(payload.remoteMediaNoParticipantAttempts),
   };
 
   const hasData = Object.values(normalized).some((value) => value !== undefined);
