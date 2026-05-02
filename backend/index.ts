@@ -329,11 +329,19 @@ app.post('/api/capacity/client-metrics', express.json(), (req, res) => {
   if (!capacityMetrics.isCapacityMetricsEnabled()) return res.status(404).end();
   try {
     const body = req.body || {};
+    const num = (v: unknown) =>
+      typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined;
     capacityMetrics.recordClientMetrics({
-      joinTimeMs: typeof body.joinTimeMs === 'number' ? body.joinTimeMs : undefined,
-      remoteMediaFirstSeenMs: typeof body.remoteMediaFirstSeenMs === 'number' ? body.remoteMediaFirstSeenMs : undefined,
-      rttMs: typeof body.rttMs === 'number' ? body.rttMs : undefined,
-      packetLoss: typeof body.packetLoss === 'number' ? body.packetLoss : undefined,
+      joinTimeMs: num(body.joinTimeMs),
+      remoteMediaFirstSeenMs: num(body.remoteMediaFirstSeenMs),
+      acceptAckLatencyMs: num(body.acceptAckLatencyMs),
+      livekitConnectLatencyMs: num(body.livekitConnectLatencyMs),
+      publishLatencyMs: num(body.publishLatencyMs),
+      subscribeLatencyMs: num(body.subscribeLatencyMs),
+      timeToFirstRemoteFrameMs: num(body.timeToFirstRemoteFrameMs),
+      remoteMediaStageBreakdown: !!body.remoteMediaStageBreakdown,
+      rttMs: num(body.rttMs),
+      packetLoss: num(body.packetLoss),
       reconnect: !!body.reconnect,
       joinSuccess: !!body.joinSuccess,
       joinFailure: !!body.joinFailure,
@@ -343,6 +351,8 @@ app.post('/api/capacity/client-metrics', express.json(), (req, res) => {
       remoteMediaTimeout: !!body.remoteMediaTimeout,
       remoteMediaRecovered: !!body.remoteMediaRecovered,
       relayFallback: !!body.relayFallback,
+      remoteMediaNoParticipantTimeout: !!body.remoteMediaNoParticipantTimeout,
+      remoteMediaNoParticipantAttempts: num(body.remoteMediaNoParticipantAttempts),
     });
     res.json({ ok: true });
   } catch {

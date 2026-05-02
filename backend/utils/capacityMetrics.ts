@@ -13,6 +13,12 @@ export function isCapacityMetricsEnabled(): boolean {
 const MAX_SAMPLES = 10_000;
 const joinTimeSamples: number[] = [];
 const remoteMediaFirstSeenSamples: number[] = [];
+const acceptAckLatencySamples: number[] = [];
+const livekitConnectLatencySamples: number[] = [];
+const publishLatencySamples: number[] = [];
+const subscribeLatencySamples: number[] = [];
+const timeToFirstRemoteFrameSamples: number[] = [];
+const remoteMediaNoParticipantAttemptsSamples: number[] = [];
 const rttSamples: number[] = [];
 const packetLossSamples: number[] = [];
 
@@ -27,6 +33,8 @@ let clientRemoteParticipantConnectedCount = 0;
 let clientRemoteMediaTimeoutCount = 0;
 let clientRemoteMediaRecoveredCount = 0;
 let clientRelayFallbackCount = 0;
+let clientRemoteMediaNoParticipantTimeoutCount = 0;
+let clientRemoteMediaStageBreakdownCount = 0;
 
 function pushSample(arr: number[], value: number, max: number) {
   arr.push(value);
@@ -54,6 +62,12 @@ export function recordTokenFailure() {
 export function recordClientMetrics(data: {
   joinTimeMs?: number;
   remoteMediaFirstSeenMs?: number;
+  acceptAckLatencyMs?: number;
+  livekitConnectLatencyMs?: number;
+  publishLatencyMs?: number;
+  subscribeLatencyMs?: number;
+  timeToFirstRemoteFrameMs?: number;
+  remoteMediaStageBreakdown?: boolean;
   rttMs?: number;
   packetLoss?: number;
   reconnect?: boolean;
@@ -65,6 +79,8 @@ export function recordClientMetrics(data: {
   remoteMediaTimeout?: boolean;
   remoteMediaRecovered?: boolean;
   relayFallback?: boolean;
+  remoteMediaNoParticipantTimeout?: boolean;
+  remoteMediaNoParticipantAttempts?: number;
 }) {
   if (!CAPACITY_METRICS_ENABLED) return;
   if (typeof data.joinTimeMs === 'number' && data.joinTimeMs >= 0) {
@@ -73,6 +89,22 @@ export function recordClientMetrics(data: {
   if (typeof data.remoteMediaFirstSeenMs === 'number' && data.remoteMediaFirstSeenMs >= 0) {
     pushSample(remoteMediaFirstSeenSamples, data.remoteMediaFirstSeenMs, MAX_SAMPLES);
   }
+  if (typeof data.acceptAckLatencyMs === 'number' && data.acceptAckLatencyMs >= 0) {
+    pushSample(acceptAckLatencySamples, data.acceptAckLatencyMs, MAX_SAMPLES);
+  }
+  if (typeof data.livekitConnectLatencyMs === 'number' && data.livekitConnectLatencyMs >= 0) {
+    pushSample(livekitConnectLatencySamples, data.livekitConnectLatencyMs, MAX_SAMPLES);
+  }
+  if (typeof data.publishLatencyMs === 'number' && data.publishLatencyMs >= 0) {
+    pushSample(publishLatencySamples, data.publishLatencyMs, MAX_SAMPLES);
+  }
+  if (typeof data.subscribeLatencyMs === 'number' && data.subscribeLatencyMs >= 0) {
+    pushSample(subscribeLatencySamples, data.subscribeLatencyMs, MAX_SAMPLES);
+  }
+  if (typeof data.timeToFirstRemoteFrameMs === 'number' && data.timeToFirstRemoteFrameMs >= 0) {
+    pushSample(timeToFirstRemoteFrameSamples, data.timeToFirstRemoteFrameMs, MAX_SAMPLES);
+  }
+  if (data.remoteMediaStageBreakdown) clientRemoteMediaStageBreakdownCount += 1;
   if (typeof data.rttMs === 'number' && data.rttMs >= 0) {
     pushSample(rttSamples, data.rttMs, MAX_SAMPLES);
   }
@@ -88,6 +120,13 @@ export function recordClientMetrics(data: {
   if (data.remoteMediaTimeout) clientRemoteMediaTimeoutCount += 1;
   if (data.remoteMediaRecovered) clientRemoteMediaRecoveredCount += 1;
   if (data.relayFallback) clientRelayFallbackCount += 1;
+  if (data.remoteMediaNoParticipantTimeout) clientRemoteMediaNoParticipantTimeoutCount += 1;
+  if (
+    typeof data.remoteMediaNoParticipantAttempts === 'number' &&
+    data.remoteMediaNoParticipantAttempts >= 0
+  ) {
+    pushSample(remoteMediaNoParticipantAttemptsSamples, data.remoteMediaNoParticipantAttempts, MAX_SAMPLES);
+  }
 }
 
 export function getStats() {
@@ -99,6 +138,17 @@ export function getStats() {
     tokenFailureRate: tokenRequestsTotal > 0 ? (tokenErrorsTotal / tokenRequestsTotal) * 100 : 0,
     joinTimeMs: { p95: p95(joinTimeSamples), samples: joinTimeSamples.length },
     remoteMediaFirstSeenMs: { p95: p95(remoteMediaFirstSeenSamples), samples: remoteMediaFirstSeenSamples.length },
+    acceptAckLatencyMs: { p95: p95(acceptAckLatencySamples), samples: acceptAckLatencySamples.length },
+    livekitConnectLatencyMs: { p95: p95(livekitConnectLatencySamples), samples: livekitConnectLatencySamples.length },
+    publishLatencyMs: { p95: p95(publishLatencySamples), samples: publishLatencySamples.length },
+    subscribeLatencyMs: { p95: p95(subscribeLatencySamples), samples: subscribeLatencySamples.length },
+    timeToFirstRemoteFrameMs: { p95: p95(timeToFirstRemoteFrameSamples), samples: timeToFirstRemoteFrameSamples.length },
+    remoteMediaNoParticipantAttempts: {
+      p95: p95(remoteMediaNoParticipantAttemptsSamples),
+      samples: remoteMediaNoParticipantAttemptsSamples.length,
+    },
+    clientRemoteMediaNoParticipantTimeoutCount,
+    clientRemoteMediaStageBreakdownCount,
     rttMs: { p95: p95(rttSamples), samples: rttSamples.length },
     packetLoss: { p95: p95(packetLossSamples), samples: packetLossSamples.length },
     clientReconnectCount,
@@ -130,6 +180,27 @@ export function getPrometheusText(): string {
     '# HELP livi_remote_media_first_seen_ms_p95 P95 time to first remote media after room connect (ms)',
     '# TYPE livi_remote_media_first_seen_ms_p95 gauge',
     `livi_remote_media_first_seen_ms_p95 ${s.remoteMediaFirstSeenMs.p95}`,
+    '# HELP livi_accept_ack_latency_ms_p95 P95 call:accept ack latency (ms)',
+    '# TYPE livi_accept_ack_latency_ms_p95 gauge',
+    `livi_accept_ack_latency_ms_p95 ${s.acceptAckLatencyMs.p95}`,
+    '# HELP livi_livekit_connect_latency_ms_p95 P95 LiveKit Room.connect latency (ms)',
+    '# TYPE livi_livekit_connect_latency_ms_p95 gauge',
+    `livi_livekit_connect_latency_ms_p95 ${s.livekitConnectLatencyMs.p95}`,
+    '# HELP livi_publish_latency_ms_p95 P95 publish latency after join (ms)',
+    '# TYPE livi_publish_latency_ms_p95 gauge',
+    `livi_publish_latency_ms_p95 ${s.publishLatencyMs.p95}`,
+    '# HELP livi_subscribe_latency_ms_p95 P95 subscribe latency (ms)',
+    '# TYPE livi_subscribe_latency_ms_p95 gauge',
+    `livi_subscribe_latency_ms_p95 ${s.subscribeLatencyMs.p95}`,
+    '# HELP livi_time_to_first_remote_frame_ms_p95 P95 time from accept ack to first remote frame (ms)',
+    '# TYPE livi_time_to_first_remote_frame_ms_p95 gauge',
+    `livi_time_to_first_remote_frame_ms_p95 ${s.timeToFirstRemoteFrameMs.p95}`,
+    '# HELP livi_remote_media_stage_breakdown_total Bundled stage-breakdown payloads from clients',
+    '# TYPE livi_remote_media_stage_breakdown_total counter',
+    `livi_remote_media_stage_breakdown_total ${s.clientRemoteMediaStageBreakdownCount}`,
+    '# HELP livi_remote_media_no_participant_timeout_total Watchdog: no remote participant in room',
+    '# TYPE livi_remote_media_no_participant_timeout_total counter',
+    `livi_remote_media_no_participant_timeout_total ${s.clientRemoteMediaNoParticipantTimeoutCount}`,
     '# HELP livi_rtt_ms_p95 P95 RTT (ms) from client reports',
     '# TYPE livi_rtt_ms_p95 gauge',
     `livi_rtt_ms_p95 ${s.rttMs.p95}`,
