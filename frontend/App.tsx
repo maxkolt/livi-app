@@ -2585,6 +2585,28 @@ function AppContent() {
       if (!(global as any).__pendingCallAcceptedRef) {
         (global as any).__pendingCallAcceptedRef = { current: null };
       }
+      // Повторный call:accepted (reconnect сокета / дубль broadcast), пока инициатор уже в LiveKit —
+      // не перезаписываем pending ref и не дёргаем UI (в логах второй дубль часто приходит в `connecting`, не только в `connected`).
+      if (alreadyOnVideoCall && isCaller && callId) {
+        try {
+          const sess = (global as any).__webrtcSessionRef?.current;
+          const sid =
+            sess && typeof sess.getCallId === 'function' ? String(sess.getCallId() || '').trim() : '';
+          const ended = sess && typeof sess.isEnded === 'function' ? !!sess.isEnded() : false;
+          const roomState = sess?.room?.state as string | undefined;
+          const lkBusy =
+            roomState === 'connected' ||
+            roomState === 'connecting' ||
+            roomState === 'reconnecting';
+          if (!ended && sid === callId && lkBusy) {
+            logger.info('[App] ⏭️ call:accepted duplicate ignored (friend call LiveKit already active)', {
+              callId,
+              roomState,
+            });
+            return;
+          }
+        } catch (_) {}
+      }
       (global as any).__pendingCallAcceptedRef.current = data;
       logger.info('[App] 💾 Saved call:accepted event to global ref', {
         callId: data?.callId,

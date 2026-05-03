@@ -236,7 +236,15 @@ export class VideoCallSession extends SimpleEventEmitter {
       (global as any).__pendingCallAcceptedRef.current = null;
       // Microtask: раньше, чем setTimeout(0), чтобы инициатор начал Room.connect до конца текущего
       // React useEffect и уменьшил окно «ответивший один в комнате».
+      // Параллельно поднимаем локальные треки тем же тиком, что и handleCallAccepted — пока идёт
+      // синхронная часть handleCallAccepted / roomLock, камера успевает стартовать (dedupe в ensureLocalTracks).
       queueMicrotask(() => {
+        void this.ensureLocalTracks().catch((e) => {
+          logger.warn('[VideoCallSession] ensureLocalTracks (pending call:accepted) failed', {
+            error: (e as Error)?.message || String(e),
+            callId: pendingCallAccepted.callId,
+          });
+        });
         void this.handleCallAccepted(pendingCallAccepted).catch((e) => {
           logger.error('[VideoCallSession] ❌ Failed to handle pending call:accepted', {
             error: e,
@@ -1756,6 +1764,14 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     // Если токен пришел в событии (новый формат)
     if (data.livekitToken && data.livekitRoomName) {
+      // Раньше начинаем захват камеры/микрофона параллельно с блокировками/ретраями подключения,
+      // чтобы к моменту publish в connectToLiveKit треки чаще уже были готовы (уменьшает окно «в комнате без видео»).
+      void this.ensureLocalTracks().catch((e) => {
+        logger.warn('[VideoCallSession] ensureLocalTracks (call:accepted token path) failed', {
+          error: (e as Error)?.message || String(e),
+          callId: data.callId,
+        });
+      });
       logger.info('[VideoCallSession] 🔑 Connecting to LiveKit with token from call:accepted', {
         roomName: data.livekitRoomName,
         tokenLength: data.livekitToken.length,

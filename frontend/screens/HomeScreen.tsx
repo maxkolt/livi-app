@@ -348,19 +348,22 @@ const useLiviNotice = () => {
     });
   }, [hide, opacity]);
 
-  const isCallNotice = notice?.kind === 'error' || notice?.kind === 'success';
+  const noticeSurface =
+    notice?.kind === 'success'
+      ? { backgroundColor: 'rgba(34, 197, 94, 0.22)', borderColor: 'rgba(22, 163, 74, 0.9)' }
+      : notice?.kind === 'error'
+        ? { backgroundColor: 'rgba(255, 90, 103, 0.2)', borderColor: 'rgba(200, 50, 65, 0.85)' }
+        : {
+            borderColor: LIVI.accent,
+            backgroundColor: isDark ? 'rgba(113,91,168,0.15)' : 'rgba(113,91,168,0.28)',
+          };
   const view = notice ? (
     <Animated.View
       style={[
         styles.notice,
         {
           opacity,
-          ...(isCallNotice
-            ? { backgroundColor: 'rgba(255, 90, 103, 0.2)', borderColor: 'rgba(200, 50, 65, 0.85)' }
-            : {
-                borderColor: LIVI.accent,
-                backgroundColor: isDark ? 'rgba(113,91,168,0.15)' : 'rgba(113,91,168,0.28)',
-              }),
+          ...noticeSurface,
         },
       ]}
     >
