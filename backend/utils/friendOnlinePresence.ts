@@ -208,6 +208,17 @@ export function getFriendVisibleOnlineUserIds(io: Server): string[] {
   return [...uids].filter((uid) => isUserOnlineInApplicationAfterSync(io, uid));
 }
 
+/** Пользователи с хотя бы одним сокетом, где клиент сообщил: на устройстве нет интернета (NetInfo). */
+export function getLocalNetworkUnreachableUserIds(io: Server): string[] {
+  const bad = new Set<string>();
+  for (const s of io.sockets.sockets.values()) {
+    const u = normalizeUid(String((s as any)?.data?.userId || ''));
+    if (!u) continue;
+    if ((s as any).data?.localInternetReachable === false) bad.add(u);
+  }
+  return [...bad];
+}
+
 /** @deprecated используйте isUserOnlineInApplication — то же имя для HTTP/сокетов друзей */
 export const isFriendGloballyVisibleOnline = isUserOnlineInApplication;
 
@@ -215,6 +226,8 @@ export function emitGlobalFriendPresence(io: Server): void {
   const list = getFriendVisibleOnlineUserIds(io);
   io.emit('presence_update', list);
   io.emit('presence:update', list);
+  const unreachableIds = getLocalNetworkUnreachableUserIds(io);
+  io.emit('presence:local_inet', { unreachableIds });
 }
 
 let presenceBroadcastDebounceTimer: ReturnType<typeof setTimeout> | null = null;

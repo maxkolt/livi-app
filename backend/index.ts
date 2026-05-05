@@ -2369,6 +2369,24 @@ io.on('connection', async (sock: AuthedSocket) => {
     }
   });
 
+  /** Клиент: NetInfo — на этом устройстве пропал интернет (друзьям показываем отдельный индикатор). */
+  sock.on('presence:local_inet', (payload: any) => {
+    try {
+      const userId = String((sock as any).data?.userId || '');
+      if (!userId) return;
+      (sock as any).data = (sock as any).data || {};
+      const reachable = payload?.reachable !== false;
+      if (reachable) {
+        delete (sock as any).data.localInternetReachable;
+      } else {
+        (sock as any).data.localInternetReachable = false;
+      }
+      scheduleGlobalFriendPresenceEmit(io);
+    } catch (e) {
+      logger.error('❌ [presence:local_inet] Error', { error: (e as any)?.message || String(e) });
+    }
+  });
+
   // SECURITY: legacy attach_user is disabled (use identity:attach instead).
 
   // ВОТ ЗДЕСЬ: читаем профиль (ник + нормализованный https-аватар)
