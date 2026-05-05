@@ -1,0 +1,44 @@
+# Метрики из backend/utils/capacityMetrics.ts (эндпоинт GET /metrics).
+
+groups:
+  - name: livi_backend_capacity
+    rules:
+      - alert: LiviLivekitTokenErrors
+        expr: increase(livi_token_errors_total[15m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          component: livekit-token
+        annotations:
+          summary: 'LiVi: ошибки выдачи LiveKit JWT'
+          description: 'За 15 мин вырос livi_token_errors_total — проверьте LIVEKIT_* на бэкенде и логи createToken.'
+
+      - alert: LiviClientJoinFailures
+        expr: increase(livi_join_failures_total[30m]) >= 3
+        for: 5m
+        labels:
+          severity: warning
+          component: video-call-client
+        annotations:
+          summary: 'LiVi: много client join failure'
+          description: 'livi_join_failures_total вырос за 30 мин — клиенты / сеть / LiveKit.'
+
+      - alert: LiviRemoteMediaTimeouts
+        expr: increase(livi_remote_media_timeouts_total[30m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: video-call-media
+        annotations:
+          summary: 'LiVi: таймауты удалённого медиа на клиентах'
+          description: 'Сработал watchdog удалённого видео — ICE/TURN и задержки.'
+
+      - alert: LiviHighTimeToFirstFrameP95
+        expr: livi_time_to_first_remote_frame_ms_p95 > 8000
+        for: 15m
+        labels:
+          severity: info
+          component: video-call-ux
+        annotations:
+          summary: 'LiVi: высокий p95 time-to-first-remote-frame'
+          description: 'По отчётам клиентов p95 > 8s — сеть/UX; при малых выборках возможен шум.'

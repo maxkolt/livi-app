@@ -1,0 +1,3 @@
+# Секреты и локальный Alertmanager — не коммитить
+.env
+alertmanager/alertmanager.yml

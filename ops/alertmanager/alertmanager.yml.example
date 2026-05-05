@@ -1,0 +1,37 @@
+# Скопируйте в alertmanager.yml и подставьте пароль SMTP:
+#   cp alertmanager/alertmanager.yml.example alertmanager/alertmanager.yml
+#
+# Gmail для Alertmanager (порт 587 + STARTTLS — чаще проходит с VPS, чем 465):
+#   1) В аккаунте Google: безопасность → двухэтапная проверка → пароли приложений.
+#   2) Создайте пароль для приложения «Почта» и вставьте в smtp_auth_password (не обычный пароль от Gmail).
+
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: '12345kolt@gmail.com'
+  smtp_auth_username: '12345kolt@gmail.com'
+  smtp_auth_password: 'PASTE_GMAIL_APP_PASSWORD'
+  smtp_require_tls: true
+
+route:
+  receiver: email-ops
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: email-ops
+    email_configs:
+      - to: '12345kolt@gmail.com'
+        send_resolved: true
+        headers:
+          Subject: '[LiVi] {{ with index .Alerts 0 }}{{ .Labels.alertname }}{{ end }}'
+        html: |
+          {{ range .Alerts }}
+          <p><b>{{ .Status | toUpper }}</b> {{ .Labels.alertname }}</p>
+          <p>{{ .Annotations.summary }}</p>
+          <p>{{ .Annotations.description }}</p>
+          <hr/>
+          {{ end }}
+
+# Другой SMTP (Mail.ru и т.д.) — замените smtp_smarthost / from / username / to и при 465 выставьте smtp_require_tls: false.
