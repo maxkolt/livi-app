@@ -1152,6 +1152,11 @@ export default function ChatScreen({ route, navigation }: Props) {
     return `chat_statuses_${sortedIds[0]}_${sortedIds[1]}`;
   };
 
+  const getMediaOutboxKey = (userId: string, peerId: string) => {
+    const sortedIds = [userId, peerId].sort();
+    return `chat_media_outbox_${sortedIds[0]}_${sortedIds[1]}`;
+  };
+
   /**
    * Одна очередь на запись чата в AsyncStorage: параллельные setItem давали multi-second spikes (см. логи setItemMs).
    * Снимок всегда из ref в момент выполнения — быстрые пачки обновлений схлопываются в одну запись.
@@ -2007,9 +2012,60 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const [retryUiForId, setRetryUiForId] = useState<string | null>(null);
 
-  const retryFailedOutgoingMessage = React.useCallback(async (m: any) => {
+  const mediaOutboxRetryInFlightRef = useRef<Set<string>>(new Set());
+
+  const enqueueMediaOutboxId = React.useCallback(async (id: string) => {
     try {
-      if (!m?.id || !currentUserId || !peerId) return;
+      const uid = String(currentUserId || '').trim();
+      const pid = String(peerId || '').trim();
+      const mid = String(id || '').trim();
+      if (!uid || !pid || !mid) return;
+      const key = getMediaOutboxKey(uid, pid);
+      const raw = await AsyncStorage.getItem(key);
+      const list = raw ? (JSON.parse(raw) as string[]) : [];
+      const next = Array.isArray(list) ? list.map(String) : [];
+      if (!next.includes(mid)) {
+        next.push(mid);
+        await AsyncStorage.setItem(key, JSON.stringify(next));
+      }
+    } catch {}
+  }, [currentUserId, peerId]);
+
+  const dequeueMediaOutboxId = React.useCallback(async (id: string) => {
+    try {
+      const uid = String(currentUserId || '').trim();
+      const pid = String(peerId || '').trim();
+      const mid = String(id || '').trim();
+      if (!uid || !pid || !mid) return;
+      const key = getMediaOutboxKey(uid, pid);
+      const raw = await AsyncStorage.getItem(key);
+      const list = raw ? (JSON.parse(raw) as string[]) : [];
+      const next = (Array.isArray(list) ? list.map(String) : []).filter((x) => x !== mid);
+      if (next.length) {
+        await AsyncStorage.setItem(key, JSON.stringify(next));
+      } else {
+        await AsyncStorage.removeItem(key);
+      }
+    } catch {}
+  }, [currentUserId, peerId]);
+
+  const loadMediaOutboxIds = React.useCallback(async (): Promise<string[]> => {
+    try {
+      const uid = String(currentUserId || '').trim();
+      const pid = String(peerId || '').trim();
+      if (!uid || !pid) return [];
+      const key = getMediaOutboxKey(uid, pid);
+      const raw = await AsyncStorage.getItem(key);
+      const list = raw ? (JSON.parse(raw) as string[]) : [];
+      return Array.isArray(list) ? Array.from(new Set(list.map(String).filter(Boolean))) : [];
+    } catch {
+      return [];
+    }
+  }, [currentUserId, peerId]);
+
+  const retryFailedOutgoingMessage = React.useCallback(async (m: any): Promise<boolean> => {
+    try {
+      if (!m?.id || !currentUserId || !peerId) return false;
       const mid = String(m.id);
       const type = String(m?.type || '').trim();
       if (!type) return;
@@ -2031,7 +2087,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           if (!upload.success || !upload.url) {
             updateReadStatuses((prev) => ({ ...prev, [mid]: 'failed' }));
             setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
-            return;
+            return false;
           }
           remoteUrl = upload.url;
         }
@@ -2073,12 +2129,12 @@ export default function ChatScreen({ route, navigation }: Props) {
 
           // cleanup local file if it exists and we have sent successfully
           try { if (!looksRemote) await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch {}
-          return;
+          return true;
         }
 
         updateReadStatuses((prev) => ({ ...prev, [mid]: 'failed' }));
         setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
-        return;
+        return false;
       }
 
       if (type === 'image') {
@@ -2093,7 +2149,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           if (!upload.success || !upload.url) {
             updateReadStatuses((prev) => ({ ...prev, [mid]: 'failed' }));
             setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
-            return;
+            return false;
           }
           remoteUrl = upload.url;
         }
@@ -2131,17 +2187,18 @@ export default function ChatScreen({ route, navigation }: Props) {
             delete next[mid];
             return next;
           });
-          return;
+          return true;
         }
 
         updateReadStatuses((prev) => ({ ...prev, [mid]: 'failed' }));
         setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
-        return;
+        return false;
       }
 
       // Fallback: no retry implemented for this type
       updateReadStatuses((prev) => ({ ...prev, [mid]: 'failed' }));
       setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
+      return false;
     } catch {
       try {
         const mid = String(m?.id || '');
@@ -2150,8 +2207,47 @@ export default function ChatScreen({ route, navigation }: Props) {
           setUploadStatus((prev) => ({ ...prev, [mid]: 'failed' }));
         }
       } catch {}
+      return false;
     }
   }, [currentUserId, peerId, resolveMediaUri, updateReadStatuses]);
+
+  const drainMediaOutbox = React.useCallback(async () => {
+    const ids = await loadMediaOutboxIds();
+    if (!ids.length) return;
+    for (const id of ids) {
+      if (mediaOutboxRetryInFlightRef.current.has(id)) continue;
+      const msg = messages.find((x: any) => String(x?.id) === String(id));
+      if (!msg) {
+        await dequeueMediaOutboxId(id);
+        continue;
+      }
+      const uri = String(msg?.uri || '').trim();
+      const type = String(msg?.type || '').trim();
+      const isMedia = type === 'image' || type === 'audio';
+      const canRetry = !!uri && (!/^https?:\/\//i.test(uri) || (uploadStatus[id] === 'failed' || readStatuses[id] === 'failed'));
+      if (!isMedia || !canRetry) continue;
+      mediaOutboxRetryInFlightRef.current.add(id);
+      try {
+        const ok = await retryFailedOutgoingMessage(msg);
+        if (ok) await dequeueMediaOutboxId(id);
+      } finally {
+        mediaOutboxRetryInFlightRef.current.delete(id);
+      }
+    }
+  }, [dequeueMediaOutboxId, loadMediaOutboxIds, messages, readStatuses, retryFailedOutgoingMessage, uploadStatus]);
+
+  useEffect(() => {
+    const run = () => {
+      void drainMediaOutbox();
+    };
+    socket.on('connect', run);
+    socket.on('reconnect', run);
+    run();
+    return () => {
+      socket.off('connect', run);
+      socket.off('reconnect', run);
+    };
+  }, [drainMediaOutbox]);
 
   const [playingAudioState, setPlayingAudioState] = useState<{
     id: string;
@@ -3829,6 +3925,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (!uploadResult.success || !uploadResult.url) {
         updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
         setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+        void enqueueMediaOutboxId(messageId);
         return;
       }
 
@@ -3871,14 +3968,16 @@ export default function ChatScreen({ route, navigation }: Props) {
       } else {
         updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
         setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+        void enqueueMediaOutboxId(messageId);
       }
     } catch {
       updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
       setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+      void enqueueMediaOutboxId(messageId);
     } finally {
       setVoiceRecordMs(0);
     }
-  }, [currentUserId, peerId, resolveMediaUri, updateReadStatuses]);
+  }, [currentUserId, peerId, resolveMediaUri, updateReadStatuses, enqueueMediaOutboxId]);
 
   const startVoiceRecording = React.useCallback(async () => {
     try {
@@ -4140,6 +4239,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         console.error('❌ Media upload failed:', uploadResult.error);
         updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
         setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+        void enqueueMediaOutboxId(messageId);
         return;
       }
 
@@ -4177,13 +4277,15 @@ export default function ChatScreen({ route, navigation }: Props) {
         console.warn('❌ Socket send failed:', socketResult);
         updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
         setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+        void enqueueMediaOutboxId(messageId);
       }
     } catch (e) {
       console.error('Failed to upload and send media:', e);
       updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
       setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+      void enqueueMediaOutboxId(messageId);
     }
-  }, [currentUserId, peerId, updateReadStatuses, resolveMediaUri]);
+  }, [currentUserId, peerId, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId]);
 
   const openComposeViewer = React.useCallback((asset: any) => {
     setComposeAsset(asset);

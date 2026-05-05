@@ -67,6 +67,105 @@ import { getInstallId } from "../utils/installId";
 import { emitMissedFetchedFromServer } from '../utils/globalEvents';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
+const MESSAGE_OUTBOX_KEY = 'chat_message_outbox_v1';
+
+type MessageOutboxItem = {
+  id: string;
+  createdAt: number;
+  payload: {
+    to: string;
+    text?: string;
+    type: 'text' | 'image' | 'audio';
+    uri?: string;
+    name?: string;
+    size?: number;
+    duration?: number;
+    replyTo?: { id: string; text?: string; from: string };
+  };
+};
+
+let outboxDrainInFlight: Promise<void> | null = null;
+
+function isLikelyOfflineError(err: unknown): boolean {
+  const msg = String((err as any)?.message || err || '').toLowerCase();
+  return (
+    msg.includes('network request failed') ||
+    msg.includes('socket connection timeout') ||
+    msg.includes('xhr poll error') ||
+    msg.includes('timeout') ||
+    msg.includes('aborted')
+  );
+}
+
+async function loadMessageOutbox(): Promise<MessageOutboxItem[]> {
+  try {
+    const raw = await AsyncStorage.getItem(MESSAGE_OUTBOX_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed) ? parsed : [];
+    return list
+      .map((item: any) => ({
+        id: String(item?.id || ''),
+        createdAt: Number(item?.createdAt || Date.now()),
+        payload: item?.payload || {},
+      }))
+      .filter((item: MessageOutboxItem) => !!item.id && !!item.payload?.to);
+  } catch {
+    return [];
+  }
+}
+
+async function saveMessageOutbox(items: MessageOutboxItem[]): Promise<void> {
+  try {
+    if (!items.length) {
+      await AsyncStorage.removeItem(MESSAGE_OUTBOX_KEY);
+      return;
+    }
+    await AsyncStorage.setItem(MESSAGE_OUTBOX_KEY, JSON.stringify(items));
+  } catch {}
+}
+
+async function enqueueMessageOutbox(item: MessageOutboxItem): Promise<void> {
+  const items = await loadMessageOutbox();
+  if (items.some((x) => x.id === item.id)) return;
+  items.push(item);
+  await saveMessageOutbox(items);
+}
+
+async function drainMessageOutbox(): Promise<void> {
+  if (outboxDrainInFlight) return outboxDrainInFlight;
+  outboxDrainInFlight = (async () => {
+    if (!socket.connected) return;
+    let items = await loadMessageOutbox();
+    if (!items.length) return;
+
+    // Сохраняем порядок отправки, чтобы история чата после оффлайна выглядела ожидаемо.
+    items.sort((a, b) => a.createdAt - b.createdAt);
+    const keep: MessageOutboxItem[] = [];
+
+    for (const item of items) {
+      try {
+        const resp = await emitAck<{ ok: boolean }>('message:send', item.payload);
+        if (!resp?.ok) {
+          keep.push(item);
+        }
+      } catch (e) {
+        if (isLikelyOfflineError(e)) {
+          keep.push(item);
+          // Если сеть снова упала — прерываем drain, остальные остаются в очереди.
+          keep.push(...items.slice(items.indexOf(item) + 1));
+          break;
+        }
+        keep.push(item);
+      }
+    }
+
+    await saveMessageOutbox(keep);
+  })().finally(() => {
+    outboxDrainInFlight = null;
+  });
+  return outboxDrainInFlight;
+}
 
 /** Uids, для которых мы только что применили пропущенные из reauth (missed_calls:sync). Нужно не дублировать при getAndClearPendingMissedCalls. */
 const appliedFromReauthByUid = new Map<string, number>();
@@ -327,6 +426,7 @@ socket.on('connect', () => {
   __hasConnectedEver = true;
   __lastPresenceUpdateKey = null;
   __lastSocketConnectAt = Date.now();
+  drainMessageOutbox().catch(() => {});
 });
 
 function ingestVisibleOnlinePresenceList(data: unknown) {
@@ -570,14 +670,25 @@ async function boot() {
 
           logger.debug('Using existing user with profile:', saved);
         } else {
-          logger.info('Failed to load profile, creating new user...');
-          await createUser();
-          return; // Выходим из функции boot
+          const err = String((profileResponse as any)?.error || '').toLowerCase();
+          const isDefinitiveUserMissing =
+            err === 'user_not_found' ||
+            err.includes('user_not_found') ||
+            err.startsWith('http_404');
+          if (isDefinitiveUserMissing) {
+            logger.info('Profile explicitly missing for saved userId, creating new user...');
+            await createUser();
+            return; // Выходим из функции boot
+          }
+          // ВАЖНО: оффлайн/таймаут/временный сбой НЕ должен приводить к пересозданию userId
+          // и очистке локального профиля/кэшей друзей.
+          logger.warn('[boot] Profile check failed (temporary), keep saved userId and local cache', {
+            error: (profileResponse as any)?.error,
+          });
         }
       } catch (e) {
-        logger.warn('Profile check failed, creating new user...', e);
-        await createUser();
-        return; // Выходим из функции boot
+        // ВАЖНО: при сетевых сбоях не пересоздаём пользователя.
+        logger.warn('[boot] Profile check threw error, keep saved userId and local cache', e as any);
       }
     } else {
       // Нет сохраненного userId (удаление приложения или сброс аккаунта) - создаем нового
@@ -2207,15 +2318,48 @@ export function sendMessage(payload: {
   };
 
   return (async () => {
+    const outboxId = `outbox_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     try {
       const r = await viaSocket();
       // IMPORTANT: if socket responds with ok=false (no throw), fall back to HTTP.
       // This improves reliability (e.g. during transient auth/reauth timing or server hiccups),
       // and still supports offline recipients via backend persistence.
       if ((r as any)?.ok === true) return r;
-      return await viaHttp();
+      const http = await viaHttp();
+      if ((http as any)?.ok === true) return http;
+      if (isLikelyOfflineError((http as any)?.error)) {
+        await enqueueMessageOutbox({
+          id: outboxId,
+          createdAt: Date.now(),
+          payload: socketPayload,
+        });
+        return { ok: true, queued: true, messageId: outboxId, delivered: false };
+      }
+      return http;
     } catch {
-      return await viaHttp();
+      try {
+        const http = await viaHttp();
+        if ((http as any)?.ok === true) return http;
+        if (isLikelyOfflineError((http as any)?.error)) {
+          await enqueueMessageOutbox({
+            id: outboxId,
+            createdAt: Date.now(),
+            payload: socketPayload,
+          });
+          return { ok: true, queued: true, messageId: outboxId, delivered: false };
+        }
+        return http;
+      } catch (e) {
+        if (isLikelyOfflineError(e)) {
+          await enqueueMessageOutbox({
+            id: outboxId,
+            createdAt: Date.now(),
+            payload: socketPayload,
+          });
+          return { ok: true, queued: true, messageId: outboxId, delivered: false };
+        }
+        throw e;
+      }
     }
   })();
 }
