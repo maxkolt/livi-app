@@ -939,6 +939,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const setSavedNickDebug = useCallback((value: string) => {
     setSavedNick(value);
   }, []);
+  const savedNickRef = useRef<string>('');
+  const avatarUriRef = useRef<string>('');
+  useEffect(() => {
+    savedNickRef.current = savedNick;
+  }, [savedNick]);
+  useEffect(() => {
+    avatarUriRef.current = avatarUri;
+  }, [avatarUri]);
   const [savedAvatarUrl, setSavedAvatarUrl] = useState<string>(''); // ТОЛЬКО https или ''
   const [myAvatarVer, setMyAvatarVer] = useState<number>(0);   // версия моего аватара
   const [avatarVerChecked, setAvatarVerChecked] = useState(false); // true после первой проверки кэша (убирает мелькание буквы при переходе на Home после звонка)
@@ -1426,6 +1434,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [wave1, wave2, wave3]);
 
   const pendingCancelRef = useRef(false);
+  /** Пользователь явно сбросил исходящий (кнопка/натив): не показывать callStartFailed когда позже падает отложенный startCall. */
+  const outgoingCallUserCanceledRef = useRef(false);
   const outgoingCallSoundRef = useRef<Audio.Sound | null>(null);
   const callingVisibleRef = useRef(false);
   callingVisibleRef.current = calling.visible;
@@ -1534,6 +1544,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     openSwipeableRef.current?.close?.();
     clearOutgoingDeclineHandled();
     try {
+      pendingCancelRef.current = false;
+      outgoingCallUserCanceledRef.current = false;
       setCalling({ visible: true, friend, callId: null });
       startWaves();
       // Сразу помечаем «исходящий на экране», чтобы сокет не отключался при уходе в фон (диалог разрешений).
@@ -1719,11 +1731,26 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       callingVisibleRef.current = false;
       setCalling({ visible: false, friend: null, callId: null });
       stopWaves();
-      showNotice(t('callStartFailed', lang), 'error', 3000);
+      const canceledByNative =
+        typeof global !== 'undefined' &&
+        (global as any).__outgoingCanceledByNativeRef?.current === true;
+      const skipNetworkBanner =
+        outgoingCallUserCanceledRef.current ||
+        pendingCancelRef.current ||
+        canceledByNative;
+      if (!skipNetworkBanner) {
+        showNotice(t('callStartFailed', lang), 'error', 3000);
+      }
+      if (canceledByNative) {
+        try {
+          (global as any).__outgoingCanceledByNativeRef.current = false;
+        } catch {}
+      }
     }
   }, [navigation, showNotice, startWaves, stopWaves, lang]);
 
   const handleCancelCall = useCallback(() => {
+    outgoingCallUserCanceledRef.current = true;
     // Важно: ставим ref сразу, чтобы внешние события (socket/push/native) не закрывали второй раз до рендера.
     callingVisibleRef.current = false;
     if (calling.callId) {
@@ -1808,8 +1835,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             avatarThumbB64: f.avatarThumbB64 ? `[base64: ${f.avatarThumbB64.length} chars]` : undefined
           }))
         } : res;
-        
-        const incoming: any[] = Array.isArray(res?.list) ? res.list : [];
+
+        // ВАЖНО: при временном оффлайне/ошибке не затираем текущий список друзей пустым массивом.
+        // Обновлять friends-state (и friends_cache) можно только при валидном успешном ответе.
+        const hasUsableFriendsPayload = !!res?.ok && Array.isArray(res?.list);
+        if (!hasUsableFriendsPayload) {
+          logger.debug('[loadFriends] Skip friends overwrite: backend payload not usable', {
+            ok: !!res?.ok,
+            hasList: Array.isArray(res?.list),
+            error: String(res?.error || ''),
+          });
+          return;
+        }
+
+        const incoming: any[] = res.list;
         const fresh: Friend[] = incoming.map(mapToFriend);
         setFriends((prev) => {
           const merged: Friend[] = fresh.map((f: Friend) => {
@@ -2197,9 +2236,39 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // 1. Проверяем, есть ли userId
       const existingUserId = getCurrentUserId();
 
-      let userExistsOnServer: boolean | null = false;
+      // null = сервер временно недоступен; НЕ трактуем как "пользователя нет"
+      let userExistsOnServer: boolean | null = null;
 
-      // 2. Если userId есть - проверяем его существование на сервере
+      let localNick = '';
+      let cachedAvatar = '';
+      let draftAvatar = '';
+
+      // 2a. Сначала поднимаем локальный профиль с диска (до сетевого round-trip), чтобы ник не мигал «—».
+      // Для новых пользователей (!existingUserId) черновик не трогаем — не воскрешаем данные после удаления аккаунта.
+      if (existingUserId) {
+        const draft = await loadDraftProfile();
+        const cached = await loadProfileFromStorage();
+
+        localNick = (cached?.nick ?? draft?.nick ?? '') as string;
+
+        if (/^user_[a-z0-9]{3,10}$/i.test(localNick)) {
+          localNick = '';
+        }
+
+        cachedAvatar = (cached?.avatar ?? '') as string;
+        draftAvatar = (draft?.avatar ?? '') as string;
+
+        const liveEarly = String(nickLiveRef.current || '').trim();
+        if (!liveEarly && localNick) {
+          setNick(localNick);
+          nickLiveRef.current = localNick;
+        }
+        if (!String(savedNickRef.current || '').trim() && localNick) {
+          setSavedNickDebug(localNick);
+        }
+      }
+
+      // 2b. Если userId есть — проверяем существование на сервере (после локальной подстановки)
       if (existingUserId) {
         try {
           userExistsOnServer = await checkUserExists(existingUserId);
@@ -2229,43 +2298,24 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         } catch (e) {
           console.warn('[ensureIdentity] Failed to check user existence:', e);
           // Продолжаем работу - возможно просто нет интернета
-          userExistsOnServer = true; // считаем что пользователь существует
+          userExistsOnServer = null; // неизвестно — держим локальный кэш
         }
       }
 
-      // 3. Загружаем черновик/профиль ТОЛЬКО если пользователь СУЩЕСТВУЕТ на сервере
-      // Для новых пользователей (!existingUserId) НЕ загружаем черновик
-      // Это предотвращает "воскрешение" данных удалённого пользователя
-      let localNick = '';
-      let cachedAvatar = '';
-      let draftAvatar = '';
-
-      if (userExistsOnServer && existingUserId) {
-        const draft = await loadDraftProfile();
-        const cached = await loadProfileFromStorage();
-
-        localNick = (cached?.nick ?? draft?.nick ?? '') as string;
-
-        if (/^user_[a-z0-9]{3,10}$/i.test(localNick)) {
-          localNick = '';
-        }
-
-        cachedAvatar = (cached?.avatar ?? '') as string; // ТОЛЬКО https или ''
-        draftAvatar = (draft?.avatar ?? '') as string; // может быть file://
-      } else if (!existingUserId) {} else {}
+      // 3. Черновик уже загружен выше для existingUserId; для новых пользователей localNick остаётся пустым.
 
       // 4. Подставляем данные в UI ТОЛЬКО для существующих пользователей
       // Для новых пользователей показываем пустые поля (пользователь введёт сам)
 
-      // savedNick - только для существующих пользователей
-      if (userExistsOnServer && existingUserId && !savedNick && localNick) {
+      // savedNick - только если сервер не сказал "удалён" (false уже обработан return выше)
+      if (existingUserId && !String(savedNickRef.current || '').trim() && localNick) {
         setSavedNickDebug(localNick);
-      } else if (!existingUserId || !userExistsOnServer) {
+      } else if (!existingUserId) {
         setSavedNickDebug('');
       }
 
-      // savedAvatarUrl - только для существующих пользователей
-      if (userExistsOnServer && existingUserId) {
+      // savedAvatarUrl — аналогично (не затираем при null / офлайне)
+      if (existingUserId) {
         setSavedAvatarUrl(cachedAvatar);
       } else {
         setSavedAvatarUrl('');
@@ -2275,9 +2325,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // nick - только для существующих пользователей
       // КРИТИЧНО: используем nickLiveRef (state может отставать на 1 ввод),
       // иначе первый символ может "съедаться" async-логикой после удаления аккаунта.
-      const liveNickNow = String(nickLiveRef.current || nick || '').trim();
+      const liveNickNow = String(nickLiveRef.current || '').trim();
       if (!liveNickNow) {
-        if (userExistsOnServer && existingUserId && localNick) {
+        if (existingUserId && localNick) {
           setNick(localNick);
           nickLiveRef.current = localNick;
         } else {
@@ -2296,7 +2346,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         // если уже что-то есть — не затираем
         if (prev) return prev;
         // гидрируем из кэша ТОЛЬКО для существующих пользователей
-        if (existingUserId && userExistsOnServer && draftAvatar) {
+        if (existingUserId && draftAvatar) {
           return draftAvatar;
         }
         return '';
@@ -2304,9 +2354,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       const profile: { nick?: string; avatar?: string } = {};
 
-      // Передаём профиль только если пользователь СУЩЕСТВУЕТ на сервере
+      // Передаём профиль только если есть userId и сервер не подтвердил удаление
       // Для новых пользователей profile = {} (будет проигнорирован в attachIdentitySafe)
-      if (userExistsOnServer && existingUserId) {
+      if (existingUserId) {
         const trimmedNick = String(localNick ?? '').trim();
         // Не шлём пустой nick в attach — сервер трактует '' как осознанную очистку (nick_cleared).
         if (trimmedNick) profile.nick = trimmedNick;
@@ -2316,7 +2366,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       // Проверяем, нужно ли вызывать attachIdentitySafe
       const currentUserId = getCurrentUserId();
-      if (currentUserId && userExistsOnServer) {
+      if (currentUserId) {
         return;
       }
 
@@ -2334,8 +2384,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const wasNewUser = true;
 
         // Проверяем есть ли данные введённые пользователем СЕЙЧАС (не из черновика)
-        const currentNick = String((nickLiveRef.current || nick || '')).trim();
-        const currentAvatarUri = (avatarUri ?? '').trim();
+        const currentNick = String(nickLiveRef.current || '').trim();
+        const currentAvatarUri = String(avatarUriRef.current || '').trim();
 
         // Отправляем только если пользователь что-то ввёл
         const hasCurrentData = currentNick || currentAvatarUri;
@@ -2375,49 +2425,42 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       ensureIdentityRef.current = null;
     });
     return promise;
-  }, [attachIdentitySafe, nick, savedNick, resetAllState, avatarUri]);
+  }, [attachIdentitySafe, resetAllState]);
 
   // Синхронная загрузка профиля для предотвращения мерцания
   const loadProfileSync = useCallback(async () => {
     try {
-      const currentUserId = getCurrentUserId();
-      if (!currentUserId) {
-        logger.debug('[HomeScreen] No currentUserId, skipping profile load');
-        return;
-      }
-
-      // КРИТИЧНО: Сначала загружаем данные из локального кэша для мгновенного отображения
-      let cachedNick = ''; // Локальные переменные для данных из кэша
+      // КРИТИЧНО: кэш с диска ДО проверки userId — boot может ещё не выставить currentUserId в памяти.
+      let cachedNick = '';
       let cachedAvatar = '';
-      
+
       try {
         const cached = await loadProfileFromStorage();
         if (cached) {
-          // Загружаем никнейм из кэша, если текущий пустой или не установлен
           if (cached.nick && typeof cached.nick === 'string' && cached.nick.trim()) {
-            const currentNick = nick || '';
-            if (!currentNick || !currentNick.trim()) {
-              cachedNick = cached.nick;
-              setNick(cached.nick);
-              setSavedNick(cached.nick);
-              setSavedNickDebug(cached.nick);
-              logger.debug('[HomeScreen] Loaded nick from cache', { nick: cached.nick });
-            }
+            cachedNick = cached.nick.trim();
+            setNick((n) => (String(n || '').trim() ? n : cachedNick));
+            setSavedNick((s) => (String(s || '').trim() ? s : cachedNick));
+            logger.debug('[HomeScreen] Loaded nick from cache', { nick: cachedNick });
           }
-          // Загружаем аватар из кэша, если текущий пустой или не установлен
           if (cached.avatar && typeof cached.avatar === 'string' && cached.avatar.trim()) {
-            const currentAvatar = avatarUri || '';
-            if (!currentAvatar || !currentAvatar.trim()) {
-              cachedAvatar = cached.avatar;
-              setAvatarUri(cached.avatar);
-              setMyFullAvatarUri(cached.avatar);
-              setSavedAvatarUrl(cached.avatar);
-              logger.debug('[HomeScreen] Loaded avatar from cache');
-            }
+            const url = cached.avatar.trim();
+            cachedAvatar = url;
+            setAvatarUri((a) => (String(a || '').trim() ? a : url));
+            setMyFullAvatarUri((a) => (String(a || '').trim() ? a : url));
+            setSavedAvatarUrl((s) => (String(s || '').trim() ? s : url));
+            logger.debug('[HomeScreen] Loaded avatar from cache');
           }
         }
       } catch (e) {
         logger.warn('[HomeScreen] Failed to load from cache', { e });
+      }
+
+      const currentUserId = getCurrentUserId();
+      if (!currentUserId) {
+        logger.debug('[HomeScreen] No currentUserId yet; profile hydrated from disk only');
+        setDataLoaded(true);
+        return;
       }
 
       // Ждем подключения и авторизации socket перед загрузкой с сервера
@@ -6243,11 +6286,11 @@ const styles = StyleSheet.create({
   notice: {
     borderRadius: 12,
     paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    width: '68%',
+    width: '82%',
     alignSelf: 'center',
   },
   noticeText: { color: LIVI.text2, fontSize: 13, fontWeight: '500', textAlign: 'center' },

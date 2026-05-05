@@ -603,7 +603,12 @@ async function applyAuthAndConnect() {
         logger.debug('[applyAuthAndConnect] Connection attempt stopped while realtime paused');
         return;
       }
-      logger.error('[applyAuthAndConnect] Connection failed:', error);
+      if (isExpectedSocketConnectError(error)) {
+        // Оффлайн/временные сетевые сбои — ожидаемое состояние, не показываем как console.error в dev.
+        logger.warn('[applyAuthAndConnect] Connection failed (non-critical network):', error);
+      } else {
+        logger.error('[applyAuthAndConnect] Connection failed:', error);
+      }
       // Не выбрасываем ошибку - приложение должно продолжить работу
       // Socket переподключится автоматически
     } finally {
@@ -781,6 +786,17 @@ function shouldAttemptRealtimeConnection(): boolean {
     typeof (global as any).__pipInSystemModeRef?.current === 'boolean' &&
     (global as any).__pipInSystemModeRef?.current === true;
   return !__realtimePaused || __outgoingCallScreenVisible || __incomingCallScreenVisible || __activeVideoCall || inSystemPiP;
+}
+
+function isExpectedSocketConnectError(error: unknown): boolean {
+  const msg = String((error as any)?.message || error || '').toLowerCase();
+  return (
+    msg.includes('websocket error') ||
+    msg.includes('xhr poll error') ||
+    msg.includes('network request failed') ||
+    msg.includes('timeout') ||
+    msg.includes('aborted')
+  );
 }
 
 export function setOutgoingCallScreenVisible(visible: boolean): void {

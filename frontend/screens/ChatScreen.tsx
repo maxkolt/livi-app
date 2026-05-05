@@ -53,6 +53,8 @@ import {
   onPresenceUpdate,
   PRESENCE_OFFLINE_DEBOUNCE_MS,
   isReconnecting,
+  onCurrentUserId,
+  getCurrentUserId as getCurrentSocketUserId,
 } from '../sockets/socket';
 import { uploadMediaToServer } from '../utils/mediaUpload';
 import MediaViewer from '../components/MediaViewer';
@@ -324,6 +326,27 @@ function ReactionsRowWithSwipe({
   );
 }
 
+/** Локальный id исходящего после офлайн-очереди или оптимистичной отправки (может ещё не попасть в свежую выборку с сервера). */
+function isOfflineQueuedOrOptimisticOutgoingId(messageId: string): boolean {
+  const id = String(messageId || '').trim();
+  if (!id) return false;
+  if (id.startsWith('outbox_')) return true;
+  return /^\d{10,}-[a-z0-9]+$/i.test(id);
+}
+
+/** Совпадение исходящего текста ± время — убрать дубликат outbox/optimistic, когда сервер уже отдал msg_*. */
+function approxSameOutgoingTextMessage(a: any, b: any): boolean {
+  if (String(a?.sender || '') !== 'me' || String(b?.sender || '') !== 'me') return false;
+  const t1 = String(a?.text ?? '').trim();
+  const t2 = String(b?.text ?? '').trim();
+  if (!t1 || t1 !== t2) return false;
+  const ty1 = String(a?.type || 'text');
+  const ty2 = String(b?.type || 'text');
+  if (ty1 !== 'text' || ty2 !== 'text') return false;
+  const dt = Math.abs(+new Date(a?.timestamp || 0) - +new Date(b?.timestamp || 0));
+  return dt < 180_000;
+}
+
 export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
@@ -496,6 +519,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [peerActivity, setPeerActivity] = useState<'typing' | 'recording' | null>(null);
   const [peerTypingDots, setPeerTypingDots] = useState(1);
   const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
+  const readStatusesRef = useRef(readStatuses);
+  readStatusesRef.current = readStatuses;
   const [uploadStatus, setUploadStatus] = useState<Record<string, 'sending' | 'sent' | 'failed'>>({});
   const [showClearMenu, setShowClearMenu] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<any>(null);
@@ -1218,8 +1243,11 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const saveStatuses = async (statuses: Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>) => {
     try {
-      if (!currentUserId || !peerId) return;
-      const key = getStatusesKey(currentUserId, peerId);
+      // Читаем id из ref: эффект reconnect подписан с deps [] и иначе мог бы сохранять статусы под устаревшими peer/user.
+      const uid = String(currentUserIdForPersistRef.current || '').trim();
+      const pid = String(peerIdForPersistRef.current || '').trim();
+      if (!uid || !pid) return;
+      const key = getStatusesKey(uid, pid);
       await AsyncStorage.setItem(key, JSON.stringify(statuses));
     } catch (error) {
       // Игнорируем ошибки сохранения
@@ -1228,8 +1256,10 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const loadStatuses = async (): Promise<Record<string, 'sending' | 'delivered' | 'read' | 'failed'>> => {
     try {
-      if (!currentUserId || !peerId) return {};
-      const key = getStatusesKey(currentUserId, peerId);
+      const uid = String(currentUserIdForPersistRef.current || '').trim();
+      const pid = String(peerIdForPersistRef.current || '').trim();
+      if (!uid || !pid) return {};
+      const key = getStatusesKey(uid, pid);
       const savedStatuses = await AsyncStorage.getItem(key);
       if (savedStatuses) {
         return JSON.parse(savedStatuses);
@@ -1260,7 +1290,22 @@ export default function ChatScreen({ route, navigation }: Props) {
       
       try {
         // Получаем userId через REST API (как в старой версии)
-        const userId = await getMyUserId();
+        let userId = await getMyUserId();
+        // Оффлайн fallback: если сеть недоступна и whoami не отдал id,
+        // пробуем взять уже известный userId из runtime/локального storage.
+        if (!userId) {
+          try {
+            userId = getCurrentSocketUserId() || null;
+          } catch {}
+        }
+        if (!userId) {
+          try {
+            const raw = await AsyncStorage.getItem('userId');
+            if (raw && /^[a-f\d]{24}$/i.test(String(raw))) {
+              userId = String(raw);
+            }
+          } catch {}
+        }
         
         if (userId) {
           setCurrentUserId(userId);
@@ -1293,6 +1338,18 @@ export default function ChatScreen({ route, navigation }: Props) {
     initializeChat();
 
   }, [peerId, route?.params?.peerName, route?.params?.peerAvatar]);
+
+  // Реактивно подхватываем userId из socket-модуля (boot/reauth), чтобы оффлайн-чат
+  // не зависел от результата сетевого getMyUserId().
+  useEffect(() => {
+    const off = onCurrentUserId((id) => {
+      const next = String(id || '').trim();
+      if (next) setCurrentUserId(next);
+    });
+    return () => {
+      try { off?.(); } catch {}
+    };
+  }, []);
 
   // Слушатели сообщений через сокеты
   useEffect(() => {
@@ -1585,22 +1642,47 @@ export default function ChatScreen({ route, navigation }: Props) {
         // Preserve local pending/failed outgoing messages (file://) that server doesn't know about yet.
         const localKeep = prev.filter((m: any) => {
           const id = String(m?.id || '');
-          if (!id) return false;
-          if (serverIdSet.has(id)) return false;
-          const st = (uploadStatus as any)?.[id];
-          if (st === 'sending' || st === 'failed') return true;
+          if (!id || serverIdSet.has(id)) return false;
+
+          const stUp = (uploadStatus as any)?.[id];
+          if (stUp === 'sending' || stUp === 'failed') return true;
           const uri = String(m?.uri || '');
           if (String(m?.sender || '') === 'me' && /^(file|content|ph|assets-library):\/\//i.test(uri)) return true;
+
+          if (String(m?.sender || '') !== 'me') return false;
+
+          const rs = readStatusesRef.current?.[id];
+          if (rs === 'sending' || rs === 'failed') return true;
+          // Текст из офлайн-outbox: пока сервер не вернул msg_* в этой выборке — не выкидываем из ленты (quiet sync).
+          if (isOfflineQueuedOrOptimisticOutgoingId(id)) return true;
+
           return false;
         });
 
+        // Убираем клиентский дубликат, если сервер уже отдал то же исходящее (иначе два пузыря).
+        const dropLocalIds = new Set<string>();
+        const serverMine = formatted.filter((x: any) => String(x?.sender || '') === 'me');
+        for (const loc of localKeep) {
+          const lid = String(loc?.id || '');
+          if (!isOfflineQueuedOrOptimisticOutgoingId(lid)) continue;
+          for (const sv of serverMine) {
+            if (approxSameOutgoingTextMessage(loc, sv)) {
+              dropLocalIds.add(lid);
+              break;
+            }
+          }
+        }
+
         // Для сообщений с сервера: если у локального есть replyTo, а у серверного нет — сохраняем локальный replyTo (гонка синка).
         const prevById = new Map(prev.map((m: any) => [String(m?.id || ''), m]));
-        const merged = [...formatted.map((f: any) => {
+        let merged = [...formatted.map((f: any) => {
           const local = prevById.get(String(f?.id || ''));
           if (local?.replyTo && !f.replyTo) return { ...f, replyTo: local.replyTo };
           return f;
         }), ...localKeep];
+        if (dropLocalIds.size > 0) {
+          merged = merged.filter((m: any) => !dropLocalIds.has(String(m?.id || '')));
+        }
         merged.sort((a: any, b: any) => {
           const ta = +new Date(a?.timestamp || 0);
           const tb = +new Date(b?.timestamp || 0);
@@ -1710,11 +1792,23 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
 
     const loadHistory = async () => {
+      let localPreloaded = false;
       try {
         // На входе в чат не показываем "пусто", пока не загрузили историю
         setHistoryReady(false);
         // Очищаем кэш для принудительной перезагрузки с правильными полями
         clearMessageCache(peerId, currentUserId);
+
+        // OFFLINE-FIRST: поднимаем локальную историю сразу, не ждём сетевые таймауты.
+        try {
+          const localMessages = await getChatMessages(peerId, currentUserId);
+          if (Array.isArray(localMessages) && localMessages.length > 0) {
+            setMessages(localMessages);
+            localPreloaded = true;
+            const savedStatuses = await loadStatuses();
+            setReadStatuses(savedStatuses);
+          }
+        } catch {}
         
         // Загружаем сообщения с сервера через новую систему
         const serverMessages = await fetchMessages({ 
@@ -1780,13 +1874,15 @@ export default function ChatScreen({ route, navigation }: Props) {
                 }
                 // Загружаем сохраненные статусы и объединяем, отдавая приоритет данным с сервера
                 const savedStatuses = await loadStatuses();
-                setReadStatuses({ ...(savedStatuses || {}), ...serverStatuses });
+                updateReadStatuses(() => ({ ...(savedStatuses || {}), ...serverStatuses }));
               } catch {}
 
             } else {
-          // Fallback: загружаем локальные сообщения
-          const localMessages = await getChatMessages(peerId, currentUserId);
-          setMessages(localMessages);
+          // Fallback: если локально уже показали историю, не перетираем её.
+          if (!localPreloaded) {
+            const localMessages = await getChatMessages(peerId, currentUserId);
+            setMessages(localMessages);
+          }
         }
             // Если выше не загрузили (ветка fallback) — поднимем сохраненные статусы
             if (!(serverMessages?.ok && serverMessages.messages)) {
@@ -1797,14 +1893,19 @@ export default function ChatScreen({ route, navigation }: Props) {
         
         
       } catch (error) {
-        console.error("Error loading chat history:", error);
-        // Fallback на локальные сообщения при ошибке
-        try {
-          const localMessages = await getChatMessages(peerId, currentUserId);
-          setMessages(localMessages);
-        } catch (fallbackError) {
-          console.error('Fallback loading also failed:', fallbackError);
-          setMessages([]); // Пустая история при ошибке
+        // Ожидаемый оффлайн-сценарий не должен вызывать красный экран через console.error.
+        console.warn("Chat history network load failed, using local cache:", error);
+        // Fallback на локальные сообщения при ошибке, если ещё не подгрузили.
+        if (!localPreloaded) {
+          try {
+            const localMessages = await getChatMessages(peerId, currentUserId);
+            setMessages(localMessages);
+            const savedStatuses = await loadStatuses();
+            setReadStatuses(savedStatuses);
+          } catch (fallbackError) {
+            console.warn('Local fallback loading failed:', fallbackError);
+            setMessages([]); // Пустая история только если локальный fallback тоже не сработал
+          }
         }
       } finally {
         // История (успешно или с фолбэком) отработала — можно показывать заглушку при реально пустом чате
@@ -1891,7 +1992,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 if (m.sender === 'me') serverStatuses[m.id] = m.read ? 'read' : 'sent';
               }
               if (Object.keys(serverStatuses).length) {
-                setReadStatuses((prev) => ({ ...prev, ...serverStatuses }));
+                updateReadStatuses((prev) => ({ ...prev, ...serverStatuses }));
               }
             } catch {}
 
@@ -2068,7 +2169,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (!m?.id || !currentUserId || !peerId) return false;
       const mid = String(m.id);
       const type = String(m?.type || '').trim();
-      if (!type) return;
+      if (!type) return false;
 
       setRetryUiForId(null);
       setUploadStatus((prev) => ({ ...prev, [mid]: 'sending' }));
