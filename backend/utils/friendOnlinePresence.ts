@@ -208,32 +208,9 @@ export function getFriendVisibleOnlineUserIds(io: Server): string[] {
   return [...uids].filter((uid) => isUserOnlineInApplicationAfterSync(io, uid));
 }
 
-/** HTTP fallback до разрыва сокета: держим флаг коротко, только пока у пользователя есть сокет (без «фантома» в офлайне). */
-const LOCAL_INET_STICKY_MS = 25_000;
-const localInetStickyExpiry = new Map<string, number>();
-
-export function touchLocalInetSticky(userId: string, unreachable: boolean): void {
-  const u = normalizeUid(userId);
-  if (!u) return;
-  if (!unreachable) {
-    localInetStickyExpiry.delete(u);
-    return;
-  }
-  localInetStickyExpiry.set(u, Date.now() + LOCAL_INET_STICKY_MS);
-}
-
 /** Пользователи с хотя бы одним сокетом, где клиент сообщил: на устройстве нет интернета (NetInfo). */
 export function getLocalNetworkUnreachableUserIds(io: Server): string[] {
   const bad = new Set<string>();
-  const now = Date.now();
-  for (const [uid, exp] of [...localInetStickyExpiry.entries()]) {
-    if (exp <= now) {
-      localInetStickyExpiry.delete(uid);
-      continue;
-    }
-    if (!hasAnySocketForUser(io, uid)) continue;
-    bad.add(uid);
-  }
   for (const s of io.sockets.sockets.values()) {
     const u = normalizeUid(String((s as any)?.data?.userId || ''));
     if (!u) continue;
