@@ -81,6 +81,7 @@ import {
   getFriendVisibleOnlineUserIds,
   emitGlobalFriendPresence,
   scheduleGlobalFriendPresenceEmit,
+  touchLocalInetSticky,
   applyFastOfflineAfterCallIfAllSocketsBackground,
   scheduleDebouncedClearBackgroundOnForeground,
   cancelDebouncedForegroundAck,
@@ -2381,6 +2382,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       } else {
         (sock as any).data.localInternetReachable = false;
       }
+      touchLocalInetSticky(userId, !reachable);
       scheduleGlobalFriendPresenceEmit(io);
     } catch (e) {
       logger.error('❌ [presence:local_inet] Error', { error: (e as any)?.message || String(e) });
@@ -3456,6 +3458,40 @@ app.get('/whoami', async (req, res) => {
 
 /* ========= REST presence ========= */
 app.get('/api/presence', (_req, res) => res.json({ ok: true, list: getOnlineListFromIo(io) }));
+
+/** NetInfo → сервер, когда сокет уже отвалился (иначе друзья не видят «нет интернета»). Auth: x-install-id → req.userId */
+app.post('/api/presence/local-inet', express.json(), (req, res) => {
+  try {
+    const userId = String((req as any).userId || '').trim();
+    if (!userId) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    const ioRef = (req as any).io as Server | undefined;
+    if (!ioRef) return res.status(500).json({ ok: false, error: 'no_io' });
+    const reachable = (req.body || {}).reachable !== false;
+    touchLocalInetSticky(userId, !reachable);
+    if (reachable) {
+      for (const s of ioRef.sockets.sockets.values()) {
+        if (String((s as any)?.data?.userId || '') !== userId) continue;
+        try {
+          delete (s as any).data.localInternetReachable;
+        } catch {}
+      }
+    } else {
+      for (const s of ioRef.sockets.sockets.values()) {
+        if (String((s as any)?.data?.userId || '') !== userId) continue;
+        try {
+          (s as any).data = (s as any).data || {};
+          (s as any).data.localInternetReachable = false;
+        } catch {}
+      }
+    }
+    scheduleGlobalFriendPresenceEmit(ioRef);
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
 
 /* ========= REST chat history REMOVED - using in-memory only ========= */
 
