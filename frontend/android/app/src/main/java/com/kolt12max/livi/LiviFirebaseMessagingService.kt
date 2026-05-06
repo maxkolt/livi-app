@@ -78,8 +78,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
 
         if (typeNorm == "call" && callId != null && from != null) {
             // Пуш «call» пришёл с задержкой (устройство было офлайн): показываем только «Пропущенный вызов», не полноэкранный входящий.
-            val CALL_RING_TIMEOUT_MS = 20_000L
-            val STALE_GRACE_MS = 2_000L
+            val CALL_RING_TIMEOUT_MS = 27_000L
             var callTs: Long? = data["ts"]?.toLongOrNull()
             var callExpiresAtMs: Long? = data["expiresAt"]?.toLongOrNull()
             if (callTs == null && data["body"] != null) {
@@ -94,7 +93,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             if (callExpiresAtMs == null && callTs != null) {
                 callExpiresAtMs = callTs + CALL_RING_TIMEOUT_MS
             }
-            if (callExpiresAtMs != null && System.currentTimeMillis() > callExpiresAtMs + STALE_GRACE_MS) {
+            // Inclusive end of ring window (same as JS callExpiry / backend). No grace after expiresAt:
+            // otherwise delayed FCM briefly opens IncomingCallActivity after a missed/ended call.
+            if (callExpiresAtMs != null && System.currentTimeMillis() >= callExpiresAtMs) {
                     Log.i(TAG, "[INCOMING_CALL] FCM call push treated as stale (delayed delivery) callId=$callId expiresAtMs=$callExpiresAtMs ts=$callTs")
                     EndedCallIds.add(this, callId)
                     try {
@@ -699,6 +700,21 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val contentPending = PendingIntent.getActivity(context, 0, contentIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_menu_call)
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            // Avoid duplicate missed cards in shade:
+            // if an individual missed notification is already visible on the same channel
+            // (e.g. system/Expo notification payload), skip posting summary right now.
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    @Suppress("DEPRECATION")
+                    val active = nm.activeNotifications
+                    val hasIndividualMissed = active?.any { sbn ->
+                        val id = sbn.id
+                        id != NOTIFICATION_ID_SUMMARY_MISSED_CALLS &&
+                            sbn.notification?.channelId == CHANNEL_ID_MISSED_CALL
+                    } == true
+                    if (hasIndividualMissed) return
+                }
+            } catch (_: Exception) {}
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     @Suppress("DEPRECATION")
@@ -832,7 +848,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setOngoing(true)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
-                .setTimeoutAfter(20_000)
+                .setTimeoutAfter(27_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build()
@@ -866,7 +882,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setOngoing(true)
                 .setAutoCancel(false)
                 .setOnlyAlertOnce(true)
-                .setTimeoutAfter(20_000)
+                .setTimeoutAfter(27_000)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build()
@@ -896,7 +912,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setOngoing(true)
                 .setAutoCancel(false)
                 .setOnlyAlertOnce(true)
-                .setTimeoutAfter(20_000)
+                .setTimeoutAfter(27_000)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build()

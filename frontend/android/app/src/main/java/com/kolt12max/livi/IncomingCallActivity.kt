@@ -71,6 +71,9 @@ class IncomingCallActivity : AppCompatActivity() {
     private var closeHandled = false
     private var incomingShownReported = false
     private var incomingShownInFlight = false
+    private var incomingDeadlineAtMs: Long = 0L
+    private var closingForCompletion: Boolean = false
+    private var minimizedToShade: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -165,6 +168,7 @@ class IncomingCallActivity : AppCompatActivity() {
             clearIncomingTimeout()
             stopCallRingtone()
             stopRepeatingVibration()
+            closingForCompletion = true
             LiviAppModule.emitIncomingCallDeclinedByUser(callId)
             EndedCallIds.add(this, callId)
             isInForeground = false
@@ -211,22 +215,7 @@ class IncomingCallActivity : AppCompatActivity() {
         // Назад: экран уходит в шторку уведомлений (FGS с уведомлением, тап — вернуться на экран входящего).
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (currentCallId.isNotEmpty()) {
-                    val from = intent.getStringExtra(EXTRA_FROM) ?: ""
-                    val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
-                    val serviceIntent = Intent(this@IncomingCallActivity, IncomingCallForegroundService::class.java).apply {
-                        putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, currentCallId)
-                        putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
-                        putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick)
-                        putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, true)
-                        putExtra(IncomingCallForegroundService.EXTRA_MINIMIZED, true)
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(serviceIntent)
-                    } else {
-                        startService(serviceIntent)
-                    }
-                }
+                minimizeIncomingToShade()
                 moveTaskToBack(true)
             }
         })
@@ -250,6 +239,7 @@ class IncomingCallActivity : AppCompatActivity() {
      */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        minimizeIncomingToShade()
         moveTaskToBack(true)
     }
 
@@ -260,8 +250,13 @@ class IncomingCallActivity : AppCompatActivity() {
             activeCallId = ""
         }
         android.util.Log.e(TAG, "IncomingCallActivity onDestroy: isInForeground=false isAlive=false callId=$currentCallId")
-        LiviOngoingCallHelper.clearOngoingCall(applicationContext)
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+        if (closingForCompletion) {
+            LiviOngoingCallHelper.clearOngoingCall(applicationContext)
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+        } else if (minimizedToShade) {
+            // Keep ongoing incoming state + shade notification so user can reopen screen.
+            minimizeIncomingToShade()
+        }
         callCanceledReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         callCanceledReceiver = null
         callAnsweredReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
@@ -661,6 +656,7 @@ class IncomingCallActivity : AppCompatActivity() {
     private fun scheduleIncomingTimeout(callId: String) {
         if (callId.isEmpty()) return
         clearIncomingTimeout()
+        incomingDeadlineAtMs = System.currentTimeMillis() + INCOMING_TIMEOUT_MS
         timeoutRunnable = Runnable {
             try {
                 EndedCallIds.add(this, callId)
@@ -674,11 +670,43 @@ class IncomingCallActivity : AppCompatActivity() {
             }
             stopCallRingtone()
             stopRepeatingVibration()
+            closingForCompletion = true
             isInForeground = false
             android.util.Log.e(TAG, "IncomingCallActivity timeout 20s: isInForeground=false calling finish() callId=$callId")
             finish()
         }
         timeoutHandler.postDelayed(timeoutRunnable!!, INCOMING_TIMEOUT_MS)
+    }
+
+    private fun remainingIncomingMs(): Long {
+        if (incomingDeadlineAtMs <= 0L) return INCOMING_TIMEOUT_MS
+        return (incomingDeadlineAtMs - System.currentTimeMillis()).coerceAtLeast(0L)
+    }
+
+    private fun minimizeIncomingToShade() {
+        if (closingForCompletion) return
+        val callId = currentCallId
+        if (callId.isEmpty()) return
+        val remainingMs = remainingIncomingMs()
+        if (remainingMs <= 0L) return
+        minimizedToShade = true
+        val from = intent.getStringExtra(EXTRA_FROM) ?: ""
+        val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
+        val serviceIntent = Intent(this, IncomingCallForegroundService::class.java).apply {
+            putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
+            putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
+            putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick)
+            putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, true)
+            putExtra(IncomingCallForegroundService.EXTRA_MINIMIZED, true)
+            putExtra(IncomingCallForegroundService.EXTRA_REMAINING_TIMEOUT_MS, remainingMs)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+        } catch (_: Exception) {}
     }
 
     private fun clearIncomingTimeout() {
@@ -738,6 +766,7 @@ class IncomingCallActivity : AppCompatActivity() {
         stopRepeatingVibration()
         if (closeHandled || isFinishing || isDestroyed) return
         closeHandled = true
+        closingForCompletion = true
         isInForeground = false
         android.util.Log.e(TAG, "IncomingCallActivity closeIncomingScreen: setting isInForeground=false, calling finish()")
         finish()
@@ -769,7 +798,7 @@ class IncomingCallActivity : AppCompatActivity() {
         private const val TAG = "IncomingCallActivity"
         /** Совпадает с [android.media.AudioAttributes.USAGE_RINGTONE] (добавлен в API 29). */
         private const val AUDIO_USAGE_RINGTONE = 6
-        private const val INCOMING_TIMEOUT_MS = 20_000L
+        private const val INCOMING_TIMEOUT_MS = 27_000L
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"

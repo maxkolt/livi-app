@@ -1072,7 +1072,12 @@ function AppContent() {
                 try { emitMissedIncrement(uid); } catch {}
               }
               await AsyncStorage.setItem(key, JSON.stringify(map));
-              await clearMissedBadgeCleared();
+              // If app was opened from missed notification, keep "seen" state.
+              // Otherwise pending native missed sync immediately recreates summary in shade
+              // after MainActivity just dismissed it (visible flicker).
+              if (!open) {
+                await clearMissedBadgeCleared();
+              }
               await syncAppBadgeFromMissedCount();
             } else if (!cancelled) {
               await syncAppBadgeFromMissedCount();

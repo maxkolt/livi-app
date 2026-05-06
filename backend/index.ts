@@ -1008,7 +1008,7 @@ const updateFriendRoomState = (io: Server, roomId: string) => {
 // findRandom/cancelRandom удалены - используется match.ts
 
 /* ========= Direct Calls (P2P invite) ========= */
-const CALL_RING_TIMEOUT_MS = 20_000;
+const CALL_RING_TIMEOUT_MS = 27_000;
 type CallLink = {
   a: string;
   b: string;

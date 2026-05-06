@@ -702,7 +702,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   }
 
   const callTs = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
-  const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 20_000;
+  const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 27_000;
   const callKitId = getCallKitUuid(data.callId);
   const fcmData = {
     type: 'call',
@@ -938,7 +938,7 @@ export async function sendCallEscalationPushToRecipient(
 
   const messaging = getFirebaseMessaging();
   const callTs = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
-  const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 20_000;
+  const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 27_000;
   const callKitId = getCallKitUuid(data.callId);
   const title = (data.fromNick || '').trim() || 'Входящий видеозвонок';
   const body = 'Откройте, чтобы ответить';

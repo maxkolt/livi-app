@@ -1486,7 +1486,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Прямую подписку socket.on('call:declined') убрали — она давала второй setCalling и двойное мерцание.
 
   // Звук вызова: в модалке — из JS (WAV в цикле); на нативном экране — из OutgoingCallActivity (тот же WAV).
-  const OUTGOING_CALL_SOUND_DURATION_MS = 20000;
+  const OUTGOING_CALL_SOUND_DURATION_MS = 27000;
   useEffect(() => {
     if (!calling.visible || isCallKeepAvailable()) {
       const sound = outgoingCallSoundRef.current;

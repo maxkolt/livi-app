@@ -8,7 +8,7 @@ import { setIncomingCallScreenVisible } from '../sockets/socket';
 import { loadLang, t } from './i18n';
 
 /** Единый источник таймаута исходящего вызова (мс). Передаётся в натив при старте, используется в HomeScreen/App и в LiviOutgoingCallService. */
-export const OUTGOING_CALL_TIMEOUT_MS = 20_000;
+export const OUTGOING_CALL_TIMEOUT_MS = 27_000;
 
 let isSetup = false;
 /** Разрешение READ_PHONE_NUMBERS выдано (иначе VoiceConnectionService падает с SecurityException) */

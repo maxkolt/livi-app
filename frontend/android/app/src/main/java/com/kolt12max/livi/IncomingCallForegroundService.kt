@@ -83,6 +83,7 @@ class IncomingCallForegroundService : Service() {
         val headsUpOnly = intent.getBooleanExtra(EXTRA_HEADS_UP_ONLY, false)
         val silentNotification = intent.getBooleanExtra(EXTRA_SILENT_NOTIFICATION, false)
         val minimized = intent.getBooleanExtra(EXTRA_MINIMIZED, false)
+        val remainingTimeoutMs = intent.getLongExtra(EXTRA_REMAINING_TIMEOUT_MS, TIMEOUT_MS).coerceAtLeast(0L)
 
         vl("[INCOMING_FGS] onStartCommand callId=$callId minimized=$minimized")
 
@@ -218,8 +219,9 @@ class IncomingCallForegroundService : Service() {
             vl("[INCOMING_FGS] minimized=true: skip delayed startActivity")
         }
 
-        // Таймер 20 с уже крутится в IncomingCallActivity; второй в FGS при «свернуть в шторку» сдвинул бы конец звонка.
-        if (!minimized) {
+        // Keep timeout while minimized in shade: otherwise incoming can ring indefinitely after leaving screen.
+        if (!minimized || remainingTimeoutMs > 0L) {
+            val timeoutMsToUse = if (minimized) remainingTimeoutMs else TIMEOUT_MS
             timeoutRunnable = Runnable {
                 vl("[INCOMING_FGS] timeout 20s closing")
                 val cid = currentCallId
@@ -233,7 +235,7 @@ class IncomingCallForegroundService : Service() {
                 }
                 cleanupAndStopFully()
             }
-            handler.postDelayed(timeoutRunnable!!, TIMEOUT_MS)
+            handler.postDelayed(timeoutRunnable!!, timeoutMsToUse)
         }
 
         return START_NOT_STICKY
@@ -310,7 +312,7 @@ class IncomingCallForegroundService : Service() {
     companion object {
         private const val TAG = "IncomingCallFGS"
         /** 20 сек без ответа — совпадает с таймаутом на сервере и с IncomingCallActivity.INCOMING_TIMEOUT_MS. */
-        private const val TIMEOUT_MS = 20_000L
+        private const val TIMEOUT_MS = 27_000L
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"
         /** Broadcast: IncomingCallActivity открылась, сервис может снять уведомление и остановиться */
@@ -321,6 +323,8 @@ class IncomingCallForegroundService : Service() {
         const val EXTRA_SILENT_NOTIFICATION = "silent_notification"
         /** Экран входящего свернули по кнопке «Назад» — только уведомление в шторке, без рингтона/вибрации. */
         const val EXTRA_MINIMIZED = "minimized"
+        /** Remaining timeout (ms) until incoming auto-end when minimized to shade. */
+        const val EXTRA_REMAINING_TIMEOUT_MS = "remaining_timeout_ms"
         /** Broadcast: пользователь нажал «Отклонить» — FGS останавливается, чтобы второй звонок получил новый FGS. */
         const val ACTION_INCOMING_CALL_DECLINED = "com.kolt12max.livi.INCOMING_CALL_DECLINED"
     }

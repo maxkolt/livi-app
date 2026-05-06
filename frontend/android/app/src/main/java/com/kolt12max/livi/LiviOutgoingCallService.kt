@@ -81,13 +81,19 @@ class LiviOutgoingCallService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val channelId = "livi_outgoing_call_channel"
+        // Use a new channel id so previously created noisy channel settings do not persist.
+        val channelId = "livi_outgoing_call_channel_v2"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 channelId,
                 getString(R.string.outgoing_call_notification_channel),
-                NotificationManager.IMPORTANCE_DEFAULT
-            ).apply { setShowBadge(true) }
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                setShowBadge(true)
+                setSound(null, null)
+                enableVibration(false)
+                setVibrationPattern(longArrayOf(0))
+            }
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
         }
 
@@ -109,9 +115,10 @@ class LiviOutgoingCallService : Service() {
             .setSmallIcon(applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.ic_menu_call)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setSilent(true)
             .build()
     }
 
@@ -224,7 +231,7 @@ class LiviOutgoingCallService : Service() {
     companion object {
         private const val TAG = "LiviOutgoingCallService"
         private const val NOTIFICATION_ID = 1003
-        private const val DEFAULT_TIMEOUT_MS = 20_000L
+        private const val DEFAULT_TIMEOUT_MS = 27_000L
 
         fun start(context: Context, callId: String, toUserId: String, toNick: String) {
             val intent = Intent(context, LiviOutgoingCallService::class.java).apply {
