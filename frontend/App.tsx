@@ -428,9 +428,19 @@ function AppContent() {
               try {
                 setIncomingCallScreenVisible(true, m.fromUserId);
               } catch {}
+              return;
             }
+            // Важно: если нативный входящий уже закрыт (decline/timeout), обязательно
+            // сбрасываем флаг, иначе Home может оставить кнопки видеозвонка disabled.
+            try {
+              setIncomingCallScreenVisible(false);
+            } catch {}
           })
           .catch(() => {});
+      } else {
+        try {
+          setIncomingCallScreenVisible(false);
+        } catch {}
       }
     };
     sync();
