@@ -1,9 +1,12 @@
 services:
   prometheus:
     image: prom/prometheus:v2.54.1
-    # Linux VPS: общий сетевой стек с хостом — скрейп 127.0.0.1:PORT без обхода bridge→хост
-    # (иначе часто timeout до :3000 с livi-ops_default). На Docker Desktop (Mac) host ≠ ваш Mac.
-    network_mode: host
+    # Bridge-сеть: UI на localhost:9090 (Mac и Linux). Скрейп бэкенда на хосте — через host.docker.internal
+    # (на Linux нужен extra_hosts host-gateway; на Docker Desktop имя уже есть).
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '9090:9090'
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/rules:/etc/prometheus/rules:ro

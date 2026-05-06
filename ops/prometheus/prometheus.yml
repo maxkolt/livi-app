@@ -1,6 +1,6 @@
 # Скрейп LiVi Node-бэкенда: GET /metrics (нужен CAPACITY_METRICS_ENABLED=1).
-# В docker-compose Prometheus с network_mode: host — targets = localhost бэкенда на этой же машине.
-# Если Prometheus в bridge-сети: шлюз compose (docker network inspect …_default) или host.docker.internal.
+# Prometheus в bridge-сети compose: бэкенд на хосте — host.docker.internal (extra_hosts host-gateway в compose).
+# Удалённый бэкенд или Alertmanager — замените targets ниже.
 
 global:
   scrape_interval: 30s
@@ -12,16 +12,15 @@ rule_files:
 alerting:
   alertmanagers:
     - static_configs:
-        # На одном хосте с Alertmanager: 127.0.0.1:9093
-        # Alertmanager на другом VPS: <IP>:9093 (см. README «Два сервера»)
-        - targets: ['127.0.0.1:9093']
+        # Имя сервиса из docker-compose. Удалённый AM: замените на <IP>:9093 (README «Два сервера»).
+        - targets: ['alertmanager:9093']
 
 scrape_configs:
   - job_name: livi-backend
     metrics_path: /metrics
     scheme: http
     static_configs:
-      - targets: ['127.0.0.1:3000']
+      - targets: ['host.docker.internal:3000']
         labels:
           service: livi-backend
 

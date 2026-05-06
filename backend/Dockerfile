@@ -1,13 +1,14 @@
+# syntax=docker/dockerfile:1
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Системные зависимости (curl для healthcheck)
-RUN apk add --no-cache bash curl
+# Без apk: node:20-alpine уже содержит wget (busybox) — healthcheck в docker-compose.yml.
 
-# Зависимости
+# Зависимости (долго только при первом скачивании; кэш npm ускоряет повторные билды)
 COPY package*.json ./
-RUN npm ci --include=dev
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --include=dev --no-audit --fund=false
 
 # Исходники
 COPY . .

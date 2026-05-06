@@ -9,12 +9,15 @@ services:
       - "127.0.0.1:3000:3000"  # Только localhost, наружу через Nginx
     env_file:
       - ./backend/.env
+    # Проброс в процесс (приоритет над env_file). Для прод: CAPACITY_METRICS_ENABLED=0 в окружении или корневом .env рядом с compose.
+    environment:
+      CAPACITY_METRICS_ENABLED: "${CAPACITY_METRICS_ENABLED:-1}"
     volumes:
       - ./backend/public/uploads:/app/public/uploads
     networks:
       - livi-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3

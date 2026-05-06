@@ -36,7 +36,7 @@ chmod +x scripts/init.sh
 
 Отредактируйте `alertmanager/alertmanager.yml` (пароль приложения Gmail).
 
-На **Linux VPS**, где Node на том же хосте, Prometheus в `docker-compose.yml` поднят с **`network_mode: host`**, в **`prometheus/prometheus.yml`** по умолчанию **`127.0.0.1:3000`** и Alertmanager **`127.0.0.1:9093`**. Если бэкенд на другой машине — уберите `network_mode: host` у Prometheus и задайте `targets` вручную. На **Docker Desktop (Mac)** `network_mode: host` указывает не на ваш Mac — для локальной разработки настройте `targets` под bridge (например `host.docker.internal:PORT`).
+Prometheus в **`docker-compose.yml`** в **bridge-сети**, порт **`9090`**, скрейп бэкенда на хосте через **`host.docker.internal:3000`** (на Linux в compose задан `extra_hosts: host-gateway`). Alertmanager в конфиге — **`alertmanager:9093`** (DNS сервиса compose). Если бэкенд или Alertmanager на **другой машине**, правьте **`targets`** в `prometheus/prometheus.yml` вручную.
 
 Запуск:
 
@@ -137,13 +137,13 @@ curl -sS -o /dev/null -w "%{http_code}\n" --connect-timeout 5 http://168.222.253
 В **`/opt/livi-ops/prometheus/prometheus.yml`** в **`alerting.alertmanagers.static_configs.targets`** укажите внешний Alertmanager:
 
 ```sh
-sed -i.bak "s/127.0.0.1:9093/168.222.253.219:9093/g" /opt/livi-ops/prometheus/prometheus.yml
+sed -i.bak "s/alertmanager:9093/168.222.253.219:9093/g" /opt/livi-ops/prometheus/prometheus.yml
 grep targets /opt/livi-ops/prometheus/prometheus.yml
 cd /opt/livi-ops && docker compose stop alertmanager
 docker compose restart prometheus
 ```
 
-Локальный **Alertmanager на REG** остановлен, чтобы не путаться; Prometheus с **`network_mode: host`** шлёт алерты на **168.222.253.219:9093**.
+Локальный **Alertmanager на REG** остановлен, чтобы не путаться; Prometheus шлёт алерты на **168.222.253.219:9093**.
 
 Проверка почты: с **livi-turn** или с любой машины, где доступен Alertmanager:
 
