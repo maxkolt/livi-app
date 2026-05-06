@@ -18,7 +18,7 @@ import { getInstallId } from './installId';
 import { logger } from './logger';
 import { trackReleaseError, trackReleaseEvent } from './telemetry';
 import { stopIncomingCallAlert } from './incomingCallAlert';
-import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, launchIncomingCallActivityScreen, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration } from './callKeep';
+import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration } from './callKeep';
 import { emitCloseOutgoingCall, emitCloseHomeModals } from './globalEvents';
 import { loadLang, t } from './i18n';
 import { isIncomingCallExpired } from './callExpiry';
@@ -1066,6 +1066,15 @@ export function addNotificationListeners() {
         return;
       }
       if (data?.type === 'call' && data?.callId && data?.from) {
+        if (Platform.OS === 'android') {
+          // Android incoming call UI is handled only by native FCM path.
+          // Ignoring Expo "call" here prevents flash-open/close when delayed
+          // notifications arrive after offline recovery.
+          logger.info('[push] ignore Expo call notification on Android (native FCM owns incoming/missed)', {
+            callId: data.callId,
+          });
+          return;
+        }
         if (await isEndedCallId(data.callId)) {
           logger.info('[push] incoming call notification ignored (call already ended)', { callId: data.callId });
           return;
@@ -1088,27 +1097,24 @@ export function addNotificationListeners() {
           try {
             addEndedCallId(String(data.callId));
           } catch {}
-          // На Android пропущенный уже показывается нативным кодом (FCM → showMissedCallNotification), не дублируем Expo-уведомлением
-          if (Platform.OS !== 'android') {
-            const fromNick = String(data.fromNick || '').trim();
-            const fromUserId = String(data.from || '');
-            try {
-              const lang = await loadLang();
-              const title = t('missedCallTitle', lang);
-              const body = fromNick
-                ? t('incomingFromPrefix', lang).replace('{name}', fromNick)
-                : t('incomingVideoCallBody', lang);
-              await Notifications.scheduleNotificationAsync({
-                content: {
-                  title,
-                  body,
-                  data: { type: 'missed_call', from: fromUserId, fromNick },
-                },
-                trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
-              });
-            } catch (e) {
-              logger.warn('[push] failed to show missed_call for stale call', e as any);
-            }
+          const fromNick = String(data.fromNick || '').trim();
+          const fromUserId = String(data.from || '');
+          try {
+            const lang = await loadLang();
+            const title = t('missedCallTitle', lang);
+            const body = fromNick
+              ? t('incomingFromPrefix', lang).replace('{name}', fromNick)
+              : t('incomingVideoCallBody', lang);
+            await Notifications.scheduleNotificationAsync({
+              content: {
+                title,
+                body,
+                data: { type: 'missed_call', from: fromUserId, fromNick },
+              },
+              trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 0.2 },
+            });
+          } catch (e) {
+            logger.warn('[push] failed to show missed_call for stale call', e as any);
           }
           return;
         }
@@ -1117,9 +1123,7 @@ export function addNotificationListeners() {
           from: data.from,
           appState: AppState.currentState,
         });
-        if (Platform.OS === 'android') {
-          await launchIncomingCallActivityScreen(data.callId, data.from, data.fromNick ?? '', true);
-        } else if (isCallKeepAvailable() && AppState.currentState !== 'active') {
+        if (isCallKeepAvailable() && AppState.currentState !== 'active') {
           displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true, data.callKitId);
         }
         const setFromPush = (global as any).__setIncomingCallFromPush;
