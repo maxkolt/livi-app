@@ -1109,7 +1109,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const off = onCometChatStatus?.((payload) => {
       if (!payload?.message) return;
       const prefix = payload.title ? `${payload.title}: ` : '';
-      const kind = payload.kind === 'error' ? 'error' : 'info';
+      const kind: NoticeKind =
+        payload.kind === 'error' ? 'error' : payload.kind === 'success' ? 'success' : 'info';
       showNotice(`${prefix}${payload.message}`, kind, payload.kind === 'error' ? 4500 : 3000);
     });
     return () => {
