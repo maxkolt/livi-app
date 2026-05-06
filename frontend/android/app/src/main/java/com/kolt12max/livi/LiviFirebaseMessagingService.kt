@@ -79,6 +79,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         if (typeNorm == "call" && callId != null && from != null) {
             // Пуш «call» пришёл с задержкой (устройство было офлайн): показываем только «Пропущенный вызов», не полноэкранный входящий.
             val CALL_RING_TIMEOUT_MS = 27_000L
+            val MIN_REMAINING_WINDOW_TO_OPEN_UI_MS = 2_000L
             var callTs: Long? = data["ts"]?.toLongOrNull()
             var callExpiresAtMs: Long? = data["expiresAt"]?.toLongOrNull()
             if (callTs == null && data["body"] != null) {
@@ -90,8 +91,29 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     }
                 } catch (_: Exception) {}
             }
+            // Fallback for notification-only deliveries: use FCM server send time when ts/expiresAt are absent.
+            if (callTs == null) {
+                val sentAt = remoteMessage.sentTime
+                if (sentAt > 0L) callTs = sentAt
+            }
             if (callExpiresAtMs == null && callTs != null) {
                 callExpiresAtMs = callTs + CALL_RING_TIMEOUT_MS
+            }
+            // Extra stale guard by FCM envelope time.
+            // Some delayed deliveries may carry incomplete payload timestamps; sentTime still reflects old push.
+            val sentAtMs = remoteMessage.sentTime.takeIf { it > 0L }
+            if (sentAtMs != null && (System.currentTimeMillis() - sentAtMs) >= CALL_RING_TIMEOUT_MS) {
+                    Log.i(TAG, "[INCOMING_CALL] FCM call push stale by sentTime callId=$callId sentAtMs=$sentAtMs")
+                    EndedCallIds.add(this, callId)
+                    try {
+                        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
+                    } catch (_: Exception) {}
+                    if (!LiviAppModule.wasMissedShownForCallId(this, callId)) {
+                        LiviAppModule.markMissedShownForCallId(this, callId)
+                        showMissedCallNotification(callId, from, fromNick)
+                    }
+                    return
             }
             // Inclusive end of ring window (same as JS callExpiry / backend). No grace after expiresAt:
             // otherwise delayed FCM briefly opens IncomingCallActivity after a missed/ended call.
@@ -107,6 +129,23 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                         showMissedCallNotification(callId, from, fromNick)
                     }
                     return
+            }
+            // Don't flash incoming UI when call is about to auto-end anyway.
+            if (callExpiresAtMs != null) {
+                val remainingMs = callExpiresAtMs - System.currentTimeMillis()
+                if (remainingMs <= MIN_REMAINING_WINDOW_TO_OPEN_UI_MS) {
+                    Log.i(TAG, "[INCOMING_CALL] FCM call push stale by remaining window callId=$callId remainingMs=$remainingMs")
+                    EndedCallIds.add(this, callId)
+                    try {
+                        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
+                    } catch (_: Exception) {}
+                    if (!LiviAppModule.wasMissedShownForCallId(this, callId)) {
+                        LiviAppModule.markMissedShownForCallId(this, callId)
+                        showMissedCallNotification(callId, from, fromNick)
+                    }
+                    return
+                }
             }
             // Dual-signal режим (data + notification) может доставить одно и то же call событие дважды.
             // Отсекаем дубликаты по callId в коротком окне, чтобы не было двойного запуска экрана.
@@ -691,6 +730,12 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         fun updateSummaryMissedCallsNotification(context: Context, total: Int) {
             if (total <= 0) return
             ensureMissedCallChannel(context)
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            // For a single missed call keep only one "missed call" card (no extra summary).
+            if (total <= 1) {
+                try { nm.cancel(NOTIFICATION_ID_SUMMARY_MISSED_CALLS) } catch (_: Exception) {}
+                return
+            }
             val title = context.getString(R.string.summary_missed_calls_title)
             val body = context.getString(R.string.summary_missed_calls_count, total)
             val contentIntent = Intent(context, MainActivity::class.java).apply {
@@ -699,7 +744,6 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }
             val contentPending = PendingIntent.getActivity(context, 0, contentIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_menu_call)
-            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             // Avoid duplicate missed cards in shade:
             // if an individual missed notification is already visible on the same channel
             // (e.g. system/Expo notification payload), skip posting summary right now.

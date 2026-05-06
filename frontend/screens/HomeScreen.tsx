@@ -77,7 +77,7 @@ import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, onMessagesDeleted, getUnreadCount, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onCometChatStatus } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
-import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
+import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly, dismissMessageNotificationsOnly, dismissMessageNotificationForUser, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
 // УБРАНО: forceClearUserDataOnly не используется - вместо этого используется hardLocalReset() и clearAllUserData() из socket.ts
@@ -1768,7 +1768,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
     setCalling({ visible: false, friend: null, callId: null });
     stopWaves();
-    showNotice(t('callCancelled', lang), 'success', 3000);
+    showNotice(t('callCancelled', lang), 'error', 3000);
   }, [calling.callId, stopWaves, showNotice, lang]);
 
   /* friends fetch */
@@ -3579,6 +3579,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       if (!userIdStr) return;
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(userIdStr); } catch (_) {}
+        try { NativeModules.LiviAppModule?.removePendingMissedCall?.(userIdStr); } catch (_) {}
       }
       try {
         const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
@@ -4323,6 +4324,7 @@ const handleClearNick = useCallback(async () => {
   const clearMissedCallsForFriend = useCallback(async (friendIdStr: string) => {
     if (Platform.OS === 'android') {
       try { NativeModules.LiviAppModule?.cancelMissedCallNotificationForUser?.(friendIdStr); } catch (_) {}
+      try { NativeModules.LiviAppModule?.removePendingMissedCall?.(friendIdStr); } catch (_) {}
     }
     try {
       const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
@@ -4593,7 +4595,10 @@ const handleClearNick = useCallback(async () => {
                         } else {
                           markMessagesAsRead(friendId).then((r) => {
                             setUnreadByUser((prev) => ({ ...prev, [friendId]: 0 }));
-                            if (r?.ok) syncAppBadgeFromMissedCount().catch(() => {});
+                            if (r?.ok) {
+                              dismissMessageNotificationForUser(friendId).catch(() => {});
+                              syncAppBadgeFromMissedCount().catch(() => {});
+                            }
                           }).catch(() => {});
                         }
                       }}
@@ -4891,7 +4896,7 @@ const handleClearNick = useCallback(async () => {
     }
     if (cancelled) {
       suppressUpdateBadgeForCallNotice();
-      showNotice(t('callCancelled', lang), 'success', 3000);
+      showNotice(t('callCancelled', lang), 'error', 3000);
     }
     if (openFriendsMenu) {
       setMenuOpen(true);
@@ -4936,7 +4941,7 @@ const handleClearNick = useCallback(async () => {
   useEffect(() => {
     const off = onCallCancelledOnHome(() => {
       suppressUpdateBadgeForCallNotice();
-      showNotice(t('callCancelled', lang), 'success', 3000);
+      showNotice(t('callCancelled', lang), 'error', 3000);
     });
     return off;
   }, [showNotice, lang, suppressUpdateBadgeForCallNotice]);

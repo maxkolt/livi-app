@@ -1070,6 +1070,15 @@ export function addNotificationListeners() {
           logger.info('[push] incoming call notification ignored (call already ended)', { callId: data.callId });
           return;
         }
+        const hasExplicitExpiry = data.expiresAt != null || data.ts != null;
+        if (Platform.OS === 'android' && !hasExplicitExpiry) {
+          // Android incoming UI should be driven by native FCM data path with expiresAt/ts.
+          // Notification-only or stripped payloads can arrive delayed and cause flash-open/close.
+          logger.info('[push] incoming call notification ignored (android payload without expiresAt/ts)', {
+            callId: data.callId,
+          });
+          return;
+        }
         if (isIncomingCallExpired({ expiresAt: data.expiresAt, ts: data.ts })) {
           logger.info('[push] incoming call notification treated as stale (delayed delivery)', {
             callId: data.callId,
