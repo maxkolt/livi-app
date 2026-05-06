@@ -2973,10 +2973,8 @@ io.on('connection', async (sock: AuthedSocket) => {
       (bSock as any).data.partnerSid = aSock?.id ?? null;
       (bSock as any).data.inCall = true;
       
-      // Рассылаем presence:update обоим участникам для всех друзей обоих (чтобы у общего друга оба были «Занято»)
-      await emitPresenceUpdateCallToFriends(io, link.a, link.b, true);
-
       // Создаем LiveKit токены для обоих участников
+      const acceptFlowStartedAt = Date.now();
       let livekitTokenA: string | null = null;
       let livekitTokenB: string | null = null;
       let livekitRoomName: string = roomId;
@@ -3106,6 +3104,17 @@ io.on('connection', async (sock: AuthedSocket) => {
           console.error('[call:accept] ❌ Error sending call:accepted to participant B:', e);
         }
       }
+
+      // Важно для UX инициатора: presence-update не должен блокировать call:accepted.
+      // Сначала переводим участников на экран видеозвонка, затем обновляем busy у друзей.
+      try {
+        await emitPresenceUpdateCallToFriends(io, link.a, link.b, true);
+      } catch (e: any) {
+        logger.warn('[call:accept] emitPresenceUpdateCallToFriends failed (post-accepted)', {
+          callId: id,
+          error: e?.message,
+        });
+      }
       
       // Сохраняем pending room для обоих участников, чтобы reconnect/reauth могли
       // восстановить call:accepted и подключение к LiveKit без повторного входящего.
@@ -3134,7 +3143,13 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       } catch {}
       
-      logger.debug('Direct call room established', { roomId, callId: id, aConnected: !!aSock, bConnected: !!bSock });
+      logger.debug('Direct call room established', {
+        roomId,
+        callId: id,
+        aConnected: !!aSock,
+        bConnected: !!bSock,
+        acceptFlowLatencyMs: Date.now() - acceptFlowStartedAt,
+      });
       ack?.({ ok: true });
     }
   });
