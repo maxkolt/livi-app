@@ -1584,6 +1584,23 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         body();
       };
 
+      const forceResetCallBusyRefs = () => {
+        try {
+          const g = global as any;
+          g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
+          g.__videoCallPartnerUserIdRef.current = null;
+          g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
+          g.__videoCallActiveRef.current = false;
+          g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+          g.__pipVisibleRef.current = false;
+          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
+          g.__pipInSystemModeRef.current = false;
+          g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
+          g.__currentCallPiPParamsRef.current = null;
+          g.__onVideoCallEndedRef?.current?.();
+        } catch {}
+      };
+
       const sub = (off: (() => void) | undefined) => {
         if (off) socketUnsubs.push(off);
       };
@@ -1622,6 +1639,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         onCallDeclined?.(() => {
           finishOutgoing(() => {
             logger.info('[decline/инициатор] HomeScreen offDeclined: setCalling(false), stopWaves, showNotice');
+            try { setOutgoingCallScreenVisible(false); } catch {}
+            try { closeOutgoingCallActivity(); } catch {}
+            forceResetCallBusyRefs();
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             stopWaves();
@@ -1635,6 +1655,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           finishOutgoing(() => {
             try { setOutgoingCallScreenVisible(false); } catch {}
             try { closeOutgoingCallActivity(); } catch {}
+            forceResetCallBusyRefs();
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             stopWaves();
@@ -1659,6 +1680,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           finishOutgoing(() => {
             try { setOutgoingCallScreenVisible(false); } catch {}
             try { closeOutgoingCallActivity(); } catch {}
+            forceResetCallBusyRefs();
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             stopWaves();
@@ -4893,7 +4915,7 @@ const handleClearNick = useCallback(async () => {
     const openFriendsTab = (route as any)?.params?.openFriendsTab;
     if (ended) {
       suppressUpdateBadgeForCallNotice();
-      showNotice(t('callEnded', lang), 'success', 3000);
+      showNotice(t('callEnded', lang), 'error', 3000);
     }
     if (cancelled) {
       suppressUpdateBadgeForCallNotice();
@@ -4951,7 +4973,7 @@ const handleClearNick = useCallback(async () => {
   useEffect(() => {
     const off = onCallEndedOnHome(() => {
       suppressUpdateBadgeForCallNotice();
-      showNotice(t('callEnded', lang), 'success', 3000);
+      showNotice(t('callEnded', lang), 'error', 3000);
     });
     return off;
   }, [showNotice, lang, suppressUpdateBadgeForCallNotice]);

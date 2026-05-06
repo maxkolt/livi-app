@@ -2961,6 +2961,19 @@ export default function App() {
   const endCallImpl = (callId: string | null, roomId: string | null) => {
     const g = global as any;
     const localEndCallId = String(callId || g.__currentCallPiPParamsRef?.current?.callId || '').trim();
+    const session = g.__webrtcSessionRef?.current;
+    const resolvedCallId = String(
+      callId ||
+        g.__currentCallPiPParamsRef?.current?.callId ||
+        (typeof session?.getCallId === 'function' ? session.getCallId() : '') ||
+        ''
+    ).trim() || null;
+    const resolvedRoomId = String(
+      roomId ||
+        g.__currentCallPiPParamsRef?.current?.roomId ||
+        (typeof session?.getRoomId === 'function' ? session.getRoomId() : '') ||
+        ''
+    ).trim() || null;
     if (localEndCallId) {
       try {
         g.__locallyEndedCallRef = g.__locallyEndedCallRef || { current: { callId: '', at: 0 } };
@@ -3022,16 +3035,15 @@ export default function App() {
 
     // КРИТИЧНО: Завершение видеозвонка из PiP (кнопка X) завершает звонок у обоих: отправка call:end на сервер,
     // иначе у собеседника звонок продолжается. Сначала завершаем звонок на сервере, потом локальный cleanup.
-    const hasPiPIds = (callId && roomId) || pipVisible || inSystem;
+    const hasPiPIds = (!!resolvedCallId && !!resolvedRoomId) || pipVisible || inSystem;
     let endedViaPiPPrimaryPath = false;
-    if (hasPiPIds && (callId || roomId)) {
+    if (hasPiPIds && (resolvedCallId || resolvedRoomId)) {
       try {
-        const session = g.__webrtcSessionRef?.current;
         if (session && typeof session.endCall === 'function') {
-          session.endCall(callId || undefined, roomId || undefined);
+          session.endCall(resolvedCallId || undefined, resolvedRoomId || undefined);
           endedViaPiPPrimaryPath = true;
         } else {
-          socket.emit('call:end', buildCallEndSocketPayload(callId, roomId));
+          socket.emit('call:end', buildCallEndSocketPayload(resolvedCallId, resolvedRoomId));
           endedViaPiPPrimaryPath = true;
         }
       } catch (e) {
@@ -3052,7 +3064,7 @@ export default function App() {
         if (session && typeof session.endCall === 'function') {
           session.endCall();
         } else {
-          socket.emit('call:end', buildCallEndSocketPayload(callId, roomId));
+          socket.emit('call:end', buildCallEndSocketPayload(resolvedCallId, resolvedRoomId));
         }
       }
     } catch (e) {
