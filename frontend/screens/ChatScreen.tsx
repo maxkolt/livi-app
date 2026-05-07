@@ -34,6 +34,7 @@ import { onCloseIncoming, emitCloseIncoming, onCometChatStatus } from '../utils/
 import socket from '../sockets/socket';
 import { Ionicons } from "@expo/vector-icons";
 import { useAppTheme } from "../theme/ThemeProvider";
+import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE } from "../constants/uiTokens";
 import { Image as ExpoImage } from "expo-image";
 import AvatarImage from "../components/AvatarImage";
 import * as Haptics from 'expo-haptics';
@@ -76,6 +77,7 @@ import {
   hasVisibleOnlinePresenceSnapshot,
   isPeerInVisibleOnlinePresence,
   getChatMessages,
+  getChatMessagesLocal,
   clearMessageCache,
   clearChatMessages,
   onChatCleared,
@@ -87,6 +89,9 @@ import {
   onMessageEdited,
   globalMessageStorage,
   fetchMessages,
+  removeQueuedMessagesMatching,
+  removeQueuedEditsMatching,
+  onOutboxMessageDelivered,
   fetchFriends,
   getAvatar,
   sendChatViewing,
@@ -347,6 +352,25 @@ function approxSameOutgoingTextMessage(a: any, b: any): boolean {
   return dt < 180_000;
 }
 
+/** Удалить сообщение и «близнеца» outbox/optimistic с тем же текстом (чтобы не остался второй пузырь). */
+function filterRemoveMessageAndOutgoingDupes(prev: any[], deletedId: string): any[] {
+  const victim = prev.find((m) => String(m?.id || '') === deletedId);
+  return prev.filter((msg) => {
+    const id = String(msg?.id || '');
+    if (id === deletedId) return false;
+    if (
+      victim &&
+      String(victim?.sender || '') === 'me' &&
+      String(msg?.sender || '') === 'me' &&
+      isOfflineQueuedOrOptimisticOutgoingId(id) &&
+      approxSameOutgoingTextMessage(msg, victim)
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
 export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
@@ -521,6 +545,17 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
   const readStatusesRef = useRef(readStatuses);
   readStatusesRef.current = readStatuses;
+  /** Удалённые msg_*: блокируем поздний onOutboxMessageDelivered (иначе ghost с outbox_* превращается снова в удалённое). */
+  const deletedServerMessageIdsRef = useRef<Set<string>>(new Set());
+  const rememberDeletedServerMessageId = React.useCallback((rawId: string) => {
+    const id = String(rawId || '').trim();
+    if (!id.startsWith('msg_')) return;
+    const s = deletedServerMessageIdsRef.current;
+    s.add(id);
+    if (s.size > 400) {
+      deletedServerMessageIdsRef.current = new Set(Array.from(s).slice(-200));
+    }
+  }, []);
   const [uploadStatus, setUploadStatus] = useState<Record<string, 'sending' | 'sent' | 'failed'>>({});
   const [showClearMenu, setShowClearMenu] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<any>(null);
@@ -1487,6 +1522,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       const deletedIds = new Set(Array.from(pendingDeletedIds));
       pendingDeletedIds.clear();
       pendingDeletedTimer = null;
+      for (const id of deletedIds) rememberDeletedServerMessageId(String(id));
       setMessages((prev) => prev.filter((msg) => !deletedIds.has(String(msg?.id || '').trim())));
       try {
         updateReadStatuses((prev) => {
@@ -1513,6 +1549,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     const applyDeletedIds = (ids: string[]) => {
       const deletedIds = new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean));
       if (deletedIds.size === 0) return;
+      for (const id of deletedIds) rememberDeletedServerMessageId(String(id));
       setMessages((prev) => prev.filter((msg) => !deletedIds.has(String(msg?.id || '').trim())));
       try {
         updateReadStatuses((prev) => {
@@ -1539,6 +1576,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     const unsubscribeMessageDeleted = onMessageDeleted((data) => {
       const mid = String((data as any)?.messageId || '').trim();
       if (!mid) return;
+      rememberDeletedServerMessageId(mid);
       pendingDeletedIds.add(mid);
       if (pendingDeletedTimer) clearTimeout(pendingDeletedTimer);
       pendingDeletedTimer = setTimeout(flushPendingDeleted, 120);
@@ -1564,6 +1602,59 @@ export default function ChatScreen({ route, navigation }: Props) {
       });
     });
 
+    const unsubscribeOutboxDelivered = onOutboxMessageDelivered((ev) => {
+      if (String(ev.to || '') !== peerId) return;
+      const serverMessageId = String(ev.serverMessageId || '').trim();
+      if (!serverMessageId) return;
+      const olds = new Set(
+        [ev.outboxId, ev.optimisticUiId].map((x) => String(x || '').trim()).filter(Boolean),
+      );
+      if (olds.size === 0) return;
+
+      if (deletedServerMessageIdsRef.current.has(serverMessageId)) {
+        clearMessageCache(peerId, currentUserId);
+        setMessages((prev) => prev.filter((msg) => !olds.has(String(msg?.id || ''))));
+        updateReadStatuses((prev) => {
+          const next: any = { ...prev };
+          for (const oid of olds) delete next[oid];
+          delete next[serverMessageId];
+          return next;
+        });
+        return;
+      }
+
+      clearMessageCache(peerId, currentUserId);
+      setMessages((prev) => {
+        let changed = false;
+        const mapped = prev.map((msg) => {
+          const id = String(msg?.id || '');
+          if (!olds.has(id)) return msg;
+          changed = true;
+          return { ...msg, id: serverMessageId, from: currentUserId, to: peerId };
+        });
+        if (!changed) return prev;
+        const seen = new Set<string>();
+        return mapped.filter((msg) => {
+          const id = String(msg?.id || '');
+          if (!id) return true;
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+      });
+      updateReadStatuses((prev) => {
+        const next: any = { ...prev };
+        let st = next[serverMessageId] || 'sent';
+        for (const oid of olds) {
+          const v = next[oid];
+          if (v === 'delivered') st = 'delivered';
+        }
+        for (const oid of olds) delete next[oid];
+        if (!next[serverMessageId]) next[serverMessageId] = st;
+        return next;
+      });
+    });
+
     return () => {
       if (pendingDeletedTimer) {
         clearTimeout(pendingDeletedTimer);
@@ -1577,9 +1668,10 @@ export default function ChatScreen({ route, navigation }: Props) {
       unsubscribeMessageDeleted();
       unsubscribeMessagesDeleted();
       unsubscribeMessageEdited();
+      unsubscribeOutboxDelivered();
       unsubscribeDelivered();
     };
-  }, [currentUserId, peerId]);
+  }, [currentUserId, peerId, rememberDeletedServerMessageId]);
 
   // When app returns from background with chat open, we might have missed realtime events
   // (e.g. message deleted by peer while device was sleeping). Do a quiet sync.
@@ -1781,6 +1873,8 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   /** Очищаем ленту только при смене peerId (не при первом появлении currentUserId для того же чата — меньше лишних миганий). */
   const prevPeerIdForHistoryRef = useRef<string | null>(null);
+  /** Инкремент при каждом запуске загрузки истории — отменяет фоновый fetch при смене собеседника. */
+  const historySyncGenerationRef = useRef(0);
 
   // Загрузка истории при открытии чата
   useEffect(() => {
@@ -1791,126 +1885,131 @@ export default function ChatScreen({ route, navigation }: Props) {
       setMessages([]);
     }
 
+    historySyncGenerationRef.current += 1;
+    const syncGen = historySyncGenerationRef.current;
+    const pid = peerId;
+    const uid = currentUserId;
+
     const loadHistory = async () => {
+      setHistoryReady(false);
+      clearMessageCache(pid, uid);
+
       let localPreloaded = false;
       try {
-        // На входе в чат не показываем "пусто", пока не загрузили историю
-        setHistoryReady(false);
-        // Очищаем кэш для принудительной перезагрузки с правильными полями
-        clearMessageCache(peerId, currentUserId);
+        const localMessages = await getChatMessagesLocal(pid, uid);
+        if (historySyncGenerationRef.current !== syncGen) return;
+        if (Array.isArray(localMessages) && localMessages.length > 0) {
+          setMessages(localMessages);
+          localPreloaded = true;
+        }
+        const savedStatuses = await loadStatuses();
+        if (historySyncGenerationRef.current !== syncGen) return;
+        setReadStatuses(savedStatuses);
+      } catch {}
 
-        // OFFLINE-FIRST: поднимаем локальную историю сразу, не ждём сетевые таймауты.
+      if (historySyncGenerationRef.current !== syncGen) return;
+      // Сразу показываем локальную ленту или пустую заглушку — без ожидания fetchMessages (сокет/HTTP могут висеть десятки секунд).
+      setHistoryReady(true);
+
+      void (async () => {
         try {
-          const localMessages = await getChatMessages(peerId, currentUserId);
-          if (Array.isArray(localMessages) && localMessages.length > 0) {
-            setMessages(localMessages);
-            localPreloaded = true;
-            const savedStatuses = await loadStatuses();
-            setReadStatuses(savedStatuses);
-          }
-        } catch {}
-        
-        // Загружаем сообщения с сервера через новую систему
-        const serverMessages = await fetchMessages({ 
-          with: peerId, 
-          limit: 50 
-        });
-        
-            if (serverMessages?.ok && serverMessages.messages) {
-          // Конвертируем сообщения сервера в формат фронтенда
-          const formattedMessages = serverMessages.messages.map((msg: any) => {
-            // КРИТИЧНО: Логируем сообщения с изображениями при загрузке истории
-            if (msg.type === 'image') {
-            const mid = String(msg.id || '').trim();
-            // В проде это не нужно. В dev ограничиваем максимум 1 логом.
-            if (__DEV__ && mid && !loggedHistoryImageIdsRef.current.has(mid) && loggedHistoryImagesCountRef.current < 1) {
-              loggedHistoryImageIdsRef.current.add(mid);
-              loggedHistoryImagesCountRef.current += 1;
-              logger.info('[ChatScreen] Loading image message from history', {
-                messageId: msg.id,
+          const serverMessages = await fetchMessages({
+            with: pid,
+            limit: 50,
+          });
+          if (historySyncGenerationRef.current !== syncGen) return;
+
+          if (serverMessages?.ok && serverMessages.messages) {
+            const formattedMessages = serverMessages.messages.map((msg: any) => {
+              if (msg.type === 'image') {
+                const mid = String(msg.id || '').trim();
+                if (__DEV__ && mid && !loggedHistoryImageIdsRef.current.has(mid) && loggedHistoryImagesCountRef.current < 1) {
+                  loggedHistoryImageIdsRef.current.add(mid);
+                  loggedHistoryImagesCountRef.current += 1;
+                  logger.info('[ChatScreen] Loading image message from history', {
+                    messageId: msg.id,
+                    from: msg.from,
+                    to: msg.to,
+                    uri: msg.uri,
+                    resolvedUri: resolveMediaUri(msg.uri),
+                    hasUri: !!msg.uri,
+                  });
+                }
+              }
+
+              return {
+                id: msg.id,
+                text: msg.text,
+                type: msg.type,
+                uri: msg.uri,
+                name: (msg as any).name,
+                size: (msg as any).size,
+                duration: (msg as any).duration,
+                sender: msg.from === uid ? 'me' : 'peer',
                 from: msg.from,
                 to: msg.to,
-                uri: msg.uri,
-                resolvedUri: resolveMediaUri(msg.uri),
-                hasUri: !!msg.uri,
-              });
-            }
-            }
-            
-            return {
-              id: msg.id,
-              text: msg.text,
-              type: msg.type,
-              uri: msg.uri,
-              name: (msg as any).name,
-              size: (msg as any).size,
-              duration: (msg as any).duration,
-              sender: msg.from === currentUserId ? 'me' : 'peer',
-              from: msg.from,
-              to: msg.to,
-              timestamp: new Date(msg.timestamp),
-              read: !!msg.read,
-              reactions: Array.isArray((msg as any).reactions) ? (msg as any).reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
-              ...((msg as any).replyTo && (msg as any).replyTo.id ? { replyTo: { id: (msg as any).replyTo.id, text: (msg as any).replyTo.text, from: (msg as any).replyTo.from, isOwn: (msg as any).replyTo.from === currentUserId } } : {}),
-            };
-          });
-          
-              setMessages(formattedMessages);
-          
-          // Отмечаем сообщения как прочитанные
-          await markMessagesAsRead(peerId);
-          try {
-            await dismissMessageNotificationForUser(peerId);
-            await syncAppBadgeFromMissedCount();
-          } catch {}
-          
-              // Синхронизируем статусы доставки/прочтения из сервера для моих сообщений
-              try {
-                const serverStatuses: Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'> = {};
-                for (const m of formattedMessages) {
-                  if (m.sender === 'me') {
-                    serverStatuses[m.id] = m.read ? 'read' : 'sent';
-                  }
-                }
-                // Загружаем сохраненные статусы и объединяем, отдавая приоритет данным с сервера
-                const savedStatuses = await loadStatuses();
-                updateReadStatuses(() => ({ ...(savedStatuses || {}), ...serverStatuses }));
-              } catch {}
+                timestamp: new Date(msg.timestamp),
+                read: !!msg.read,
+                reactions: Array.isArray((msg as any).reactions)
+                  ? (msg as any).reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) }))
+                  : [],
+                ...((msg as any).replyTo && (msg as any).replyTo.id
+                  ? {
+                      replyTo: {
+                        id: (msg as any).replyTo.id,
+                        text: (msg as any).replyTo.text,
+                        from: (msg as any).replyTo.from,
+                        isOwn: (msg as any).replyTo.from === uid,
+                      },
+                    }
+                  : {}),
+              };
+            });
 
-            } else {
-          // Fallback: если локально уже показали историю, не перетираем её.
-          if (!localPreloaded) {
-            const localMessages = await getChatMessages(peerId, currentUserId);
-            setMessages(localMessages);
+            setMessages(formattedMessages);
+
+            await markMessagesAsRead(pid);
+            try {
+              await dismissMessageNotificationForUser(pid);
+              await syncAppBadgeFromMissedCount();
+            } catch {}
+
+            try {
+              const serverStatuses: Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'> = {};
+              for (const m of formattedMessages) {
+                if (m.sender === 'me') {
+                  serverStatuses[m.id] = m.read ? 'read' : 'sent';
+                }
+              }
+              const savedStatuses = await loadStatuses();
+              updateReadStatuses(() => ({ ...(savedStatuses || {}), ...serverStatuses }));
+            } catch {}
+          } else {
+            if (!localPreloaded) {
+              const fallbackLocal = await getChatMessages(pid, uid);
+              if (historySyncGenerationRef.current !== syncGen) return;
+              setMessages(fallbackLocal);
+            }
+            const savedStatuses = await loadStatuses();
+            if (historySyncGenerationRef.current !== syncGen) return;
+            setReadStatuses(savedStatuses);
           }
-        }
-            // Если выше не загрузили (ветка fallback) — поднимем сохраненные статусы
-            if (!(serverMessages?.ok && serverMessages.messages)) {
+        } catch (error) {
+          console.warn('Chat history network load failed, using local cache:', error);
+          if (historySyncGenerationRef.current !== syncGen) return;
+          if (!localPreloaded) {
+            try {
+              const localMessages = await getChatMessages(pid, uid);
+              setMessages(localMessages);
               const savedStatuses = await loadStatuses();
               setReadStatuses(savedStatuses);
+            } catch (fallbackError) {
+              console.warn('Local fallback loading failed:', fallbackError);
+              setMessages([]);
             }
-        
-        
-        
-      } catch (error) {
-        // Ожидаемый оффлайн-сценарий не должен вызывать красный экран через console.error.
-        console.warn("Chat history network load failed, using local cache:", error);
-        // Fallback на локальные сообщения при ошибке, если ещё не подгрузили.
-        if (!localPreloaded) {
-          try {
-            const localMessages = await getChatMessages(peerId, currentUserId);
-            setMessages(localMessages);
-            const savedStatuses = await loadStatuses();
-            setReadStatuses(savedStatuses);
-          } catch (fallbackError) {
-            console.warn('Local fallback loading failed:', fallbackError);
-            setMessages([]); // Пустая история только если локальный fallback тоже не сработал
           }
         }
-      } finally {
-        // История (успешно или с фолбэком) отработала — можно показывать заглушку при реально пустом чате
-        setHistoryReady(true);
-      }
+      })();
     };
 
     loadHistory();
@@ -2200,7 +2299,13 @@ export default function ChatScreen({ route, navigation }: Props) {
           name,
           size,
           duration: durationSec,
+          clientUiMessageId: mid,
         });
+
+        if (socketResult?.localCancelled) {
+          await dequeueMediaOutboxId(mid);
+          return true;
+        }
 
         if (socketResult?.ok && socketResult?.messageId) {
           const newId = String(socketResult.messageId);
@@ -2261,7 +2366,13 @@ export default function ChatScreen({ route, navigation }: Props) {
           uri: remoteUrl,
           name: fileName || undefined,
           size: fileSize || undefined,
+          clientUiMessageId: mid,
         });
+
+        if (socketResult?.localCancelled) {
+          await dequeueMediaOutboxId(mid);
+          return true;
+        }
 
         if (socketResult?.ok && socketResult?.messageId) {
           const newId = String(socketResult.messageId);
@@ -2707,26 +2818,38 @@ export default function ChatScreen({ route, navigation }: Props) {
   const deleteSingleMessage = async (messageId: string) => {
     const mid = String(messageId || '').trim();
     if (!mid) return;
+    void removeQueuedEditsMatching([mid]).catch(() => {});
 
     // Server message ids look like "msg_...". Local pending/outgoing messages can have numeric ids (Date.now()).
     // In release builds users are more likely to delete messages while they are still pending.
     // For such messages we should delete locally without hitting the server.
     const isServerId = /^msg_\d+_[a-z0-9]+$/i.test(mid) || mid.startsWith('msg_');
     if (!isServerId) {
+      void removeQueuedMessagesMatching([mid]).catch(() => {});
+      void dequeueMediaOutboxId(mid);
       setMessages((prev) => {
-        const updated = prev.filter((msg) => String(msg?.id || '') !== mid);
-        return updated;
-      });
-      // cleanup local status maps
-      updateReadStatuses((prev) => {
-        const next = { ...prev };
-        delete (next as any)[mid];
-        return next as any;
-      });
-      setUploadStatus((prev) => {
-        const next = { ...prev };
-        delete (next as any)[mid];
-        return next as any;
+        const next = filterRemoveMessageAndOutgoingDupes(prev, mid);
+        const nextIds = new Set(next.map((m: any) => String(m?.id || '')));
+        const dropped = prev
+          .map((m: any) => String(m?.id || ''))
+          .filter((id) => id && !nextIds.has(id));
+        if (dropped.length) {
+          queueMicrotask(() => {
+            updateReadStatuses((rs) => {
+              const n = { ...rs };
+              for (const d of dropped) delete (n as any)[d];
+              return n as any;
+            });
+            setUploadStatus((up) => {
+              const n = { ...up };
+              for (const d of dropped) delete (n as any)[d];
+              return n;
+            });
+            void removeQueuedMessagesMatching(dropped).catch(() => {});
+            dropped.forEach((d) => dequeueMediaOutboxId(d));
+          });
+        }
+        return next;
       });
       showForwardToastBadge(false, t('chatDeleted', lang));
       return;
@@ -2734,20 +2857,30 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     const success = await deleteMessage(mid);
     if (success) {
+      rememberDeletedServerMessageId(mid);
       setMessages((prev) => {
-        const updated = prev.filter((msg) => String(msg?.id || '') !== mid);
-        return updated;
-      });
-      // cleanup status maps (server will also emit message:deleted, but keep local maps tidy)
-      updateReadStatuses((prev) => {
-        const next = { ...prev };
-        delete (next as any)[mid];
-        return next as any;
-      });
-      setUploadStatus((prev) => {
-        const next = { ...prev };
-        delete (next as any)[mid];
-        return next as any;
+        const next = filterRemoveMessageAndOutgoingDupes(prev, mid);
+        const nextIds = new Set(next.map((m: any) => String(m?.id || '')));
+        const dropped = prev
+          .map((m: any) => String(m?.id || ''))
+          .filter((id) => id && !nextIds.has(id));
+        if (dropped.length) {
+          queueMicrotask(() => {
+            updateReadStatuses((rs) => {
+              const n = { ...rs };
+              for (const d of dropped) delete (n as any)[d];
+              return n as any;
+            });
+            setUploadStatus((up) => {
+              const n = { ...up };
+              for (const d of dropped) delete (n as any)[d];
+              return n;
+            });
+            void removeQueuedMessagesMatching(dropped).catch(() => {});
+            dropped.forEach((d) => dequeueMediaOutboxId(d));
+          });
+        }
+        return next;
       });
     } else {
       showNotice('error', t('errorTitle', lang), t('chatDeleteMessageFailed', lang));
@@ -2918,6 +3051,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         let okCount = 0;
         for (const payload of forwardables) {
           const r: any = await sendSocketMessage({ to, ...payload });
+          if (r?.localCancelled) continue;
           if (r?.ok) okCount += 1;
         }
         return okCount;
@@ -2928,7 +3062,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         const txt = String(selectedMessage?.text ?? '').trim();
         if (!txt) return 0;
         const r: any = await sendSocketMessage({ to, text: txt, type: 'text' });
-        return r?.ok ? 1 : 0;
+        return r?.ok && !r?.localCancelled ? 1 : 0;
       }
       if (type === 'image') {
         const rawUri = String(selectedMessage?.uri ?? '').trim();
@@ -2941,7 +3075,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           name: selectedMessage?.name,
           size: selectedMessage?.size,
         });
-        return r?.ok ? 1 : 0;
+        return r?.ok && !r?.localCancelled ? 1 : 0;
       }
       if (type === 'audio') {
         const rawUri = String(selectedMessage?.uri ?? '').trim();
@@ -2955,7 +3089,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           size: selectedMessage?.size,
           duration: selectedMessage?.duration,
         });
-        return r?.ok ? 1 : 0;
+        return r?.ok && !r?.localCancelled ? 1 : 0;
       }
       return 0;
     },
@@ -3332,24 +3466,27 @@ export default function ChatScreen({ route, navigation }: Props) {
     // Optimistic UI: remove all selected messages at once (no sequential "one-by-one" deletion).
     // Keep a snapshot of removed messages so we can restore only the ones that actually failed.
     const removedById = new Map<string, any>();
+    const prevSnap = Array.isArray(messagesRef.current) ? [...messagesRef.current] : [];
     try {
-      const snap = Array.isArray(messagesRef.current) ? messagesRef.current : [];
-      for (const mm of snap) {
+      for (const mm of prevSnap) {
         const mid = String(mm?.id || '').trim();
         if (mid && idSet.has(mid)) removedById.set(mid, mm);
       }
     } catch {}
-    setMessages((prev) => {
-      const next: any[] = [];
-      for (const mm of prev) {
-        const mid = String(mm?.id || '').trim();
-        if (mid && idSet.has(mid)) {
-          if (!removedById.has(mid)) removedById.set(mid, mm);
-        } else {
-          next.push(mm);
-        }
-      }
-      return next;
+    let nextMessages = prevSnap;
+    for (const id of ids) {
+      const delId = String(id || '').trim();
+      if (!delId) continue;
+      nextMessages = filterRemoveMessageAndOutgoingDupes(nextMessages, delId);
+    }
+    const nextIds = new Set(nextMessages.map((m: any) => String(m?.id || '').trim()).filter(Boolean));
+    const droppedAll = prevSnap
+      .map((m: any) => String(m?.id || '').trim())
+      .filter((mid) => mid && !nextIds.has(mid));
+    setMessages(nextMessages);
+    queueMicrotask(() => {
+      void removeQueuedMessagesMatching(droppedAll).catch(() => {});
+      droppedAll.forEach((d) => dequeueMediaOutboxId(d));
     });
     // UI уже очистили оптимистично, поэтому режим выбора закрываем сразу.
     try { hideMessageActions(); } catch {}
@@ -3363,6 +3500,9 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     // local-only deletions are always considered successful (client-side only)
     const successServerIds = serverIds.filter((id) => !failedServer.includes(String(id)));
+    for (const sid of successServerIds) {
+      rememberDeletedServerMessageId(String(sid));
+    }
 
     // cleanup status maps for successful deletions (both server + local-only)
     const deletedOk = new Set<string>([...localOnlyIds, ...successServerIds].map(String));
@@ -3420,6 +3560,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     updateReadStatuses,
     setUploadStatus,
     hideMessageActions,
+    rememberDeletedServerMessageId,
   ]);
 
   const confirmDeleteSelected = React.useCallback(() => {
@@ -3472,9 +3613,9 @@ export default function ChatScreen({ route, navigation }: Props) {
         }}
         activeOpacity={0.5}
         style={{
-          width: 36,
-          height: 36,
-          borderRadius: 14,
+          width: FRIEND_ACTION_BUTTON.width,
+          height: FRIEND_ACTION_BUTTON.height,
+          borderRadius: FRIEND_ACTION_BUTTON.borderRadius,
           backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
           borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
           borderWidth: 1,
@@ -3482,7 +3623,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           justifyContent: "center",
         }}
       >
-        <Ionicons name={selectionMode ? "close" : "arrow-back"} size={20} color={LIVI.titan} />
+        <Ionicons name={selectionMode ? "close" : "arrow-back"} size={FRIEND_ACTION_ICON_SIZE} color={LIVI.titan} />
       </TouchableOpacity>
 
       <View style={{ flex: 1, alignItems: "center" }}>
@@ -3567,7 +3708,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             userId={peerId}
             avatarVer={peerAvatarVerState}
             uri={fullAvatarUri || undefined}
-            size={36}
+            size={FRIEND_ACTION_BUTTON.width}
             fallbackText={headerInitial}
             fallbackTextStyle={{ color: LIVI.titan }}
             // If no avatar: match back button background + 1px outline
@@ -3797,7 +3938,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       setMessageText('');
       setEditingMessageId(null);
       const result = await editMessage(editingMessageId, newText);
-      if (result.ok) {
+      if (result.ok || result.queued) {
         setMessages((prev) => {
           const updated = prev.map((m) =>
             m.id === editingMessageId ? { ...m, text: newText } : m
@@ -3852,6 +3993,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           to: peerId,
           text: messageToSend,
           type: 'text',
+          clientUiMessageId: messageId,
           ...(replyTo
             ? {
                 replyTo: {
@@ -3863,6 +4005,10 @@ export default function ChatScreen({ route, navigation }: Props) {
               }
             : {}),
         });
+
+        if ((result as any)?.localCancelled) {
+          return;
+        }
         
         if (result.ok) {
           clearMessageCache(peerId, currentUserId);
@@ -4037,7 +4183,24 @@ export default function ChatScreen({ route, navigation }: Props) {
         name,
         size,
         duration: durationSec,
+        clientUiMessageId: messageId,
       });
+
+      if (socketResult?.localCancelled) {
+        updateReadStatuses((prev) => {
+          const n = { ...prev };
+          delete (n as any)[messageId];
+          return n as any;
+        });
+        setUploadStatus((prev) => {
+          const n = { ...prev };
+          delete (n as any)[messageId];
+          return n;
+        });
+        try { await FileSystem.deleteAsync(localFileForCleanup, { idempotent: true }); } catch {}
+        void dequeueMediaOutboxId(messageId);
+        return;
+      }
 
       if (socketResult?.ok && socketResult?.messageId) {
         setMessages((prev) => {
@@ -4344,13 +4507,29 @@ export default function ChatScreen({ route, navigation }: Props) {
         return;
       }
 
-      const socketResult = await sendSocketMessage({
+      const socketResult: any = await sendSocketMessage({
         to: peerId,
         type: messageType,
         uri: uploadResult.url,
         name: fileName || undefined,
         size: fileSize || undefined,
+        clientUiMessageId: messageId,
       });
+
+      if (socketResult?.localCancelled) {
+        updateReadStatuses((prev) => {
+          const n = { ...prev };
+          delete (n as any)[messageId];
+          return n as any;
+        });
+        setUploadStatus((prev) => {
+          const n = { ...prev };
+          delete (n as any)[messageId];
+          return n;
+        });
+        void dequeueMediaOutboxId(messageId);
+        return;
+      }
 
       if (socketResult.ok && socketResult.messageId) {
         setMessages((prev) => {

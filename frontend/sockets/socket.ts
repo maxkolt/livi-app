@@ -68,9 +68,14 @@ import { emitMissedFetchedFromServer } from '../utils/globalEvents';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 const MESSAGE_OUTBOX_KEY = 'chat_message_outbox_v1';
+const MESSAGE_EDIT_OUTBOX_KEY = 'chat_message_edit_outbox_v1';
+/** fingerprint: optimisticUiId / outbox_* — пользователь удалил до отправки; блокируем поздний enqueue и drain. */
+const MESSAGE_OUTBOX_CANCELLED_IDS_KEY = 'chat_message_outbox_cancelled_ids_v1';
 
 type MessageOutboxItem = {
   id: string;
+  /** Совпадает с id сообщения в UI до замены на outbox_/msg_* (чтобы удалить из очереди при отмене до ack). */
+  optimisticUiId?: string;
   createdAt: number;
   payload: {
     to: string;
@@ -84,7 +89,63 @@ type MessageOutboxItem = {
   };
 };
 
+type EditOutboxItem = {
+  id: string;
+  messageId: string;
+  text: string;
+  createdAt: number;
+};
+
 let outboxDrainInFlight: Promise<void> | null = null;
+let editOutboxDrainInFlight: Promise<void> | null = null;
+
+const cancelledOutboxSendIds = new Set<string>();
+let cancelledOutboxDiskHydrated = false;
+
+async function loadCancelledOutboxIdsDisk(): Promise<Set<string>> {
+  try {
+    const raw = await AsyncStorage.getItem(MESSAGE_OUTBOX_CANCELLED_IDS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(
+      Array.isArray(parsed) ? parsed.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+async function hydrateCancelledOutboxFromDisk(): Promise<void> {
+  if (cancelledOutboxDiskHydrated) return;
+  cancelledOutboxDiskHydrated = true;
+  const disk = await loadCancelledOutboxIdsDisk();
+  for (const id of disk) cancelledOutboxSendIds.add(id);
+}
+
+async function persistCancelledOutboxIdsMerge(ids: Iterable<string>): Promise<void> {
+  const add = [...new Set([...ids].map((x) => String(x || '').trim()).filter(Boolean))];
+  if (!add.length) return;
+  for (const id of add) cancelledOutboxSendIds.add(id);
+  try {
+    const merged = new Set([...(await loadCancelledOutboxIdsDisk()), ...cancelledOutboxSendIds]);
+    const capped = [...merged].slice(-500);
+    await AsyncStorage.setItem(MESSAGE_OUTBOX_CANCELLED_IDS_KEY, JSON.stringify(capped));
+  } catch {}
+}
+
+function isFingerprintCancelledSync(optimisticUiId?: string, rowId?: string): boolean {
+  const oid = String(optimisticUiId || '').trim();
+  const rid = String(rowId || '').trim();
+  if (rid && cancelledOutboxSendIds.has(rid)) return true;
+  if (oid && cancelledOutboxSendIds.has(oid)) return true;
+  return false;
+}
+
+export function clearCancelledOutboxFingerprints(): void {
+  cancelledOutboxSendIds.clear();
+  cancelledOutboxDiskHydrated = false;
+  AsyncStorage.removeItem(MESSAGE_OUTBOX_CANCELLED_IDS_KEY).catch(() => {});
+}
 
 function isLikelyOfflineError(err: unknown): boolean {
   const msg = String((err as any)?.message || err || '').toLowerCase();
@@ -106,6 +167,7 @@ async function loadMessageOutbox(): Promise<MessageOutboxItem[]> {
     return list
       .map((item: any) => ({
         id: String(item?.id || ''),
+        optimisticUiId: item?.optimisticUiId ? String(item.optimisticUiId) : undefined,
         createdAt: Number(item?.createdAt || Date.now()),
         payload: item?.payload || {},
       }))
@@ -125,17 +187,219 @@ async function saveMessageOutbox(items: MessageOutboxItem[]): Promise<void> {
   } catch {}
 }
 
-async function enqueueMessageOutbox(item: MessageOutboxItem): Promise<void> {
-  const items = await loadMessageOutbox();
-  if (items.some((x) => x.id === item.id)) return;
+/** @returns false если отправку отменили (удалили сообщение) — не ставить снова в очередь. */
+async function enqueueMessageOutbox(item: MessageOutboxItem): Promise<boolean> {
+  await hydrateCancelledOutboxFromDisk();
+  const oid = String(item.optimisticUiId || '').trim();
+  const rid = String(item.id || '').trim();
+  if (isFingerprintCancelledSync(oid, rid)) {
+    return false;
+  }
+  let items = await loadMessageOutbox();
+  if (items.some((x) => x.id === item.id)) return true;
+  if (oid) {
+    items = items.filter((x) => String(x.optimisticUiId || '').trim() !== oid);
+  }
+  if (isFingerprintCancelledSync(oid, rid)) {
+    await saveMessageOutbox(items);
+    return false;
+  }
   items.push(item);
   await saveMessageOutbox(items);
+  return true;
+}
+
+/** Убрать из офлайн-очереди отправки по id outbox_* или по прежнему optimistic id из UI. */
+export async function removeQueuedMessagesMatching(rawIds: readonly string[]): Promise<void> {
+  const ids = new Set(
+    (rawIds || []).map((x) => String(x || '').trim()).filter(Boolean),
+  );
+  if (ids.size === 0) return;
+  const items = await loadMessageOutbox();
+  const removed = items.filter(
+    (item) =>
+      ids.has(item.id) ||
+      !!(item.optimisticUiId && ids.has(String(item.optimisticUiId))),
+  );
+  const fingerprints = new Set<string>(ids);
+  for (const r of removed) {
+    fingerprints.add(r.id);
+    if (r.optimisticUiId) fingerprints.add(String(r.optimisticUiId));
+  }
+  await persistCancelledOutboxIdsMerge(fingerprints);
+
+  const next = items.filter(
+    (item) =>
+      !ids.has(item.id) &&
+      !(item.optimisticUiId && ids.has(item.optimisticUiId)),
+  );
+  if (next.length === items.length && removed.length === 0) return;
+  await saveMessageOutbox(next);
+}
+
+async function loadEditOutbox(): Promise<EditOutboxItem[]> {
+  try {
+    const raw = await AsyncStorage.getItem(MESSAGE_EDIT_OUTBOX_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed) ? parsed : [];
+    return list
+      .map((item: any) => ({
+        id: String(item?.id || ''),
+        messageId: String(item?.messageId || '').trim(),
+        text: String(item?.text ?? ''),
+        createdAt: Number(item?.createdAt || Date.now()),
+      }))
+      .filter((item: EditOutboxItem) => !!item.id && !!item.messageId);
+  } catch {
+    return [];
+  }
+}
+
+async function saveEditOutbox(items: EditOutboxItem[]): Promise<void> {
+  try {
+    if (!items.length) {
+      await AsyncStorage.removeItem(MESSAGE_EDIT_OUTBOX_KEY);
+      return;
+    }
+    await AsyncStorage.setItem(MESSAGE_EDIT_OUTBOX_KEY, JSON.stringify(items));
+  } catch {}
+}
+
+async function enqueueEditOutbox(item: EditOutboxItem): Promise<void> {
+  let items = await loadEditOutbox();
+  items = items.filter((x) => x.messageId !== item.messageId);
+  items.push(item);
+  await saveEditOutbox(items);
+}
+
+/**
+ * Если сообщение ещё в очереди message outbox (офлайн / не успело уйти),
+ * правка текста должна менять payload очереди — а не message:edit с id outbox_* / optimistic,
+ * иначе сервер сохранит старый текст и quietSync даст дубликат с другим текстом.
+ */
+async function mergePendingMessageOutboxEdit(messageId: string, text: string): Promise<boolean> {
+  const mid = String(messageId || '').trim();
+  if (!mid) return false;
+  let items = await loadMessageOutbox();
+  const idx = items.findIndex(
+    (x) => x.id === mid || (!!x.optimisticUiId && String(x.optimisticUiId) === mid),
+  );
+  if (idx < 0) return false;
+  const item = items[idx];
+  items[idx] = {
+    ...item,
+    payload: { ...item.payload, text: String(text ?? '') },
+  };
+  await saveMessageOutbox(items);
+  const rid = [mid, item.id, item.optimisticUiId].map((x) => String(x || '').trim()).filter(Boolean);
+  await removeQueuedEditsMatching(rid);
+  return true;
+}
+
+async function remapEditOutboxMessageIds(oldIds: readonly string[], newId: string): Promise<void> {
+  const nid = String(newId || '').trim();
+  if (!nid) return;
+  const olds = new Set(
+    (oldIds || []).map((x) => String(x || '').trim()).filter(Boolean),
+  );
+  if (!olds.size) return;
+  let items = await loadEditOutbox();
+  let touched = false;
+  items = items.map((x) => {
+    if (olds.has(x.messageId)) {
+      touched = true;
+      return { ...x, messageId: nid };
+    }
+    return x;
+  });
+  if (!touched) return;
+  items.sort((a, b) => a.createdAt - b.createdAt);
+  const lastByMid = new Map<string, EditOutboxItem>();
+  for (const it of items) {
+    lastByMid.set(it.messageId, it);
+  }
+  await saveEditOutbox(Array.from(lastByMid.values()));
+}
+
+export type OutboxMessageDeliveredPayload = {
+  to: string;
+  outboxId: string;
+  optimisticUiId?: string;
+  serverMessageId: string;
+};
+
+const outboxMessageDeliveredSubs = new Set<(p: OutboxMessageDeliveredPayload) => void>();
+
+function dispatchOutboxMessageDelivered(p: OutboxMessageDeliveredPayload): void {
+  for (const cb of outboxMessageDeliveredSubs) {
+    try {
+      cb(p);
+    } catch {}
+  }
+}
+
+/** После flush outbox: локальный id → серверный msg_*, плюс remap очереди правок. */
+export function onOutboxMessageDelivered(cb: (p: OutboxMessageDeliveredPayload) => void): () => void {
+  outboxMessageDeliveredSubs.add(cb);
+  return () => {
+    outboxMessageDeliveredSubs.delete(cb);
+  };
+}
+
+/** Удалить из офлайн-очереди правок (например при удалении сообщения). */
+export async function removeQueuedEditsMatching(rawIds: readonly string[]): Promise<void> {
+  const ids = new Set(
+    (rawIds || []).map((x) => String(x || '').trim()).filter(Boolean),
+  );
+  if (ids.size === 0) return;
+  const items = await loadEditOutbox();
+  const next = items.filter((x) => !ids.has(x.messageId));
+  if (next.length === items.length) return;
+  await saveEditOutbox(next);
+}
+
+async function drainEditOutbox(): Promise<void> {
+  if (editOutboxDrainInFlight) return editOutboxDrainInFlight;
+  editOutboxDrainInFlight = (async () => {
+    if (!socket.connected) return;
+    let items = await loadEditOutbox();
+    if (!items.length) return;
+
+    items.sort((a, b) => a.createdAt - b.createdAt);
+    const keep: EditOutboxItem[] = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      try {
+        const resp = await emitAck<{ ok: boolean; error?: string }>('message:edit', {
+          messageId: item.messageId,
+          text: item.text,
+        });
+        if (!resp?.ok) {
+          keep.push(item);
+        }
+      } catch (e) {
+        if (isLikelyOfflineError(e)) {
+          keep.push(...items.slice(i));
+          break;
+        }
+        keep.push(item);
+      }
+    }
+
+    await saveEditOutbox(keep);
+  })().finally(() => {
+    editOutboxDrainInFlight = null;
+  });
+  return editOutboxDrainInFlight;
 }
 
 async function drainMessageOutbox(): Promise<void> {
   if (outboxDrainInFlight) return outboxDrainInFlight;
   outboxDrainInFlight = (async () => {
     if (!socket.connected) return;
+    await hydrateCancelledOutboxFromDisk();
     let items = await loadMessageOutbox();
     if (!items.length) return;
 
@@ -144,19 +408,41 @@ async function drainMessageOutbox(): Promise<void> {
     const keep: MessageOutboxItem[] = [];
 
     for (const item of items) {
+      await hydrateCancelledOutboxFromDisk();
+      if (isFingerprintCancelledSync(item.optimisticUiId, item.id)) {
+        continue;
+      }
+      const freshList = await loadMessageOutbox();
+      const row = freshList.find((x) => x.id === item.id);
+      if (!row) {
+        continue;
+      }
       try {
-        const resp = await emitAck<{ ok: boolean }>('message:send', item.payload);
-        if (!resp?.ok) {
-          keep.push(item);
+        const resp = await emitAck<{ ok: boolean; messageId?: string; delivered?: boolean }>(
+          'message:send',
+          row.payload,
+        );
+        if (resp?.ok === true && resp.messageId) {
+          const serverMessageId = String(resp.messageId);
+          const oldIds = [row.id, row.optimisticUiId].map((x) => String(x || '').trim()).filter(Boolean);
+          await remapEditOutboxMessageIds(oldIds, serverMessageId);
+          dispatchOutboxMessageDelivered({
+            to: String(row.payload?.to || ''),
+            outboxId: row.id,
+            optimisticUiId: row.optimisticUiId,
+            serverMessageId,
+          });
+        } else if (!resp?.ok) {
+          keep.push(row);
         }
       } catch (e) {
         if (isLikelyOfflineError(e)) {
-          keep.push(item);
+          keep.push(row);
           // Если сеть снова упала — прерываем drain, остальные остаются в очереди.
           keep.push(...items.slice(items.indexOf(item) + 1));
           break;
         }
-        keep.push(item);
+        keep.push(row);
       }
     }
 
@@ -426,7 +712,9 @@ socket.on('connect', () => {
   __hasConnectedEver = true;
   __lastPresenceUpdateKey = null;
   __lastSocketConnectAt = Date.now();
-  drainMessageOutbox().catch(() => {});
+  void drainMessageOutbox()
+    .then(() => drainEditOutbox())
+    .catch(() => {});
 });
 
 function ingestVisibleOnlinePresenceList(data: unknown) {
@@ -2223,6 +2511,7 @@ export function clearCurrentUserId() {
   try { userExistsCache.clear(); } catch {}
   try { pendingChecks.clear(); } catch {}
   try { clearAllMessageCache(); } catch {}
+  try { clearCancelledOutboxFingerprints(); } catch {}
   AsyncStorage.removeItem("userId").catch(e => console.warn('Failed to remove userId from storage:', e));
   console.log('[clearCurrentUserId] Cleared currentUserId');
 }
@@ -2291,9 +2580,13 @@ export function sendMessage(payload: {
   size?: number;
   duration?: number;
   replyTo?: { id: string; text?: string; from: string; isOwn?: boolean };
+  /** Не уходит на сервер — только для сопоставления с очередью при удалении до отправки. */
+  clientUiMessageId?: string;
 }) {
   // Ограничиваем типы сообщений для новой системы
   const messageType = payload.type === 'video' || payload.type === 'document' ? 'text' : payload.type;
+
+  const optimisticUiId = String(payload.clientUiMessageId || '').trim() || undefined;
 
   const socketPayload: any = { to: payload.to, text: payload.text, type: messageType, uri: payload.uri, name: payload.name, size: payload.size, duration: payload.duration };
   if (payload.replyTo?.id) socketPayload.replyTo = { id: payload.replyTo.id, text: payload.replyTo.text, from: payload.replyTo.from };
@@ -2344,11 +2637,15 @@ export function sendMessage(payload: {
       const http = await viaHttp();
       if ((http as any)?.ok === true) return http;
       if (isLikelyOfflineError((http as any)?.error)) {
-        await enqueueMessageOutbox({
+        const enq = await enqueueMessageOutbox({
           id: outboxId,
+          optimisticUiId,
           createdAt: Date.now(),
           payload: socketPayload,
         });
+        if (!enq) {
+          return { ok: true, localCancelled: true as const, delivered: false };
+        }
         return { ok: true, queued: true, messageId: outboxId, delivered: false };
       }
       return http;
@@ -2357,21 +2654,29 @@ export function sendMessage(payload: {
         const http = await viaHttp();
         if ((http as any)?.ok === true) return http;
         if (isLikelyOfflineError((http as any)?.error)) {
-          await enqueueMessageOutbox({
+          const enq = await enqueueMessageOutbox({
             id: outboxId,
+            optimisticUiId,
             createdAt: Date.now(),
             payload: socketPayload,
           });
+          if (!enq) {
+            return { ok: true, localCancelled: true as const, delivered: false };
+          }
           return { ok: true, queued: true, messageId: outboxId, delivered: false };
         }
         return http;
       } catch (e) {
         if (isLikelyOfflineError(e)) {
-          await enqueueMessageOutbox({
+          const enq = await enqueueMessageOutbox({
             id: outboxId,
+            optimisticUiId,
             createdAt: Date.now(),
             payload: socketPayload,
           });
+          if (!enq) {
+            return { ok: true, localCancelled: true as const, delivered: false };
+          }
           return { ok: true, queued: true, messageId: outboxId, delivered: false };
         }
         throw e;
@@ -2725,6 +3030,72 @@ export function clearMessageCache(peerId: string, userId?: string) {
   messageCache.delete(cacheKey);
 }
 
+function parseStoredChatMessagesJson(
+  savedMessages: string,
+  currentUser: string,
+  peerId: string,
+): any[] {
+  const parsed = JSON.parse(savedMessages);
+  return parsed
+    .filter((msg: any) => {
+      const isFromCurrentUser = msg.from === currentUser && msg.to === peerId;
+      const isToCurrentUser = msg.from === peerId && msg.to === currentUser;
+      return isFromCurrentUser || isToCurrentUser;
+    })
+    .map((msg: any) => {
+      let correctedMsg = { ...msg };
+      if (!msg.from || !msg.to) {
+        if (msg.sender === 'me') {
+          correctedMsg.from = currentUser;
+          correctedMsg.to = peerId;
+        } else if (msg.sender === 'peer') {
+          correctedMsg.from = peerId;
+          correctedMsg.to = currentUser;
+        }
+      }
+      return {
+        ...correctedMsg,
+        timestamp: new Date(msg.timestamp),
+        sender: correctedMsg.from === currentUser ? 'me' : 'peer',
+      };
+    });
+}
+
+/**
+ * Только in-memory кэш + AsyncStorage — без сети и без getMyUserId.
+ * Нужен для первого кадра ChatScreen (нет долгого спиннера при офлайне / таймаутах сокета).
+ */
+export async function getChatMessagesLocal(peerId: string, userId?: string): Promise<any[]> {
+  try {
+    let currentUser = userId || currentUserId;
+    if (!currentUser) {
+      const raw = await AsyncStorage.getItem('userId');
+      if (raw && /^[a-f\d]{24}$/i.test(String(raw))) {
+        currentUser = String(raw);
+      }
+    }
+    if (!currentUser || !peerId) return [];
+
+    const cacheKey = `${currentUser}-${peerId}`;
+    const now = Date.now();
+    const cached = messageCache.get(cacheKey);
+    if (cached && now - cached.timestamp < CACHE_DURATION) {
+      return cached.messages;
+    }
+
+    const chatKey = globalMessageStorage.getChatKey(currentUser, peerId);
+    const savedMessages = await AsyncStorage.getItem(chatKey);
+    if (!savedMessages) return [];
+
+    const messagesWithDates = parseStoredChatMessagesJson(savedMessages, currentUser, peerId);
+    messageCache.set(cacheKey, { messages: messagesWithDates, timestamp: now });
+    return messagesWithDates;
+  } catch (error) {
+    console.warn('getChatMessagesLocal failed:', error);
+    return [];
+  }
+}
+
 // Очистка всего кэша сообщений
 export function clearAllMessageCache() {
   messageCache.clear();
@@ -2893,29 +3264,95 @@ export async function deleteMessages(messageIds: string[]): Promise<{ deletedIds
   }
 }
 
-/** Редактировать текстовое сообщение (только своё). */
-export async function editMessage(messageId: string, text: string): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const viaSocket = async () => emitAck<{ ok: boolean; error?: string }>('message:edit', { messageId, text });
-    const viaHttp = async () => {
-      const installId = await getInstallId().catch(() => '');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (installId) headers['x-install-id'] = String(installId);
-      if (currentUserId) headers['x-user-id'] = String(currentUserId);
+/** Редактировать текстовое сообщение (только своё). При офлайне ставит в очередь — после connect уйдёт через drainEditOutbox. */
+export async function editMessage(
+  messageId: string,
+  text: string,
+): Promise<{ ok: boolean; queued?: boolean; error?: string }> {
+  const trimmedMid = String(messageId || '').trim();
+  const trimmedText = String(text ?? '');
+  if (!trimmedMid) return { ok: false, error: 'no_messageId' };
+
+  if (await mergePendingMessageOutboxEdit(trimmedMid, trimmedText)) {
+    return { ok: true };
+  }
+
+  const queueOffline = async (): Promise<{ ok: true; queued: true }> => {
+    if (await mergePendingMessageOutboxEdit(trimmedMid, trimmedText)) {
+      return { ok: true, queued: true };
+    }
+    await enqueueEditOutbox({
+      id: `edit_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      messageId: trimmedMid,
+      text: trimmedText,
+      createdAt: Date.now(),
+    });
+    return { ok: true, queued: true };
+  };
+
+  const viaSocket = async () =>
+    emitAck<{ ok: boolean; error?: string }>('message:edit', {
+      messageId: trimmedMid,
+      text: trimmedText,
+    });
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
       const res = await fetch(`${API_BASE}/api/messages/edit`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ messageId, text }),
+        body: JSON.stringify({ messageId: trimmedMid, text: trimmedText }),
+        signal: controller.signal,
       });
       if (!res.ok) return { ok: false, error: `http_${res.status}` };
       const data = await res.json().catch(() => null);
       return data?.ok ? { ok: true } : { ok: false, error: data?.error || 'unknown' };
-    };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  try {
     const r: any = await viaSocket();
     if (r?.ok === true) return { ok: true };
-    return await viaHttp();
-  } catch (e: any) {
-    return { ok: false, error: e?.message || 'network_error' };
+    if (await mergePendingMessageOutboxEdit(trimmedMid, trimmedText)) {
+      return { ok: true };
+    }
+    const http = await viaHttp();
+    if ((http as any)?.ok === true) return { ok: true };
+    if (isLikelyOfflineError((http as any)?.error)) {
+      return await queueOffline();
+    }
+    if (await mergePendingMessageOutboxEdit(trimmedMid, trimmedText)) {
+      return { ok: true };
+    }
+    return { ok: false, error: (http as any)?.error || 'edit_failed' };
+  } catch {
+    try {
+      const http = await viaHttp();
+      if ((http as any)?.ok === true) return { ok: true };
+      if (isLikelyOfflineError((http as any)?.error)) {
+        return await queueOffline();
+      }
+      if (await mergePendingMessageOutboxEdit(trimmedMid, trimmedText)) {
+        return { ok: true };
+      }
+      return { ok: false, error: (http as any)?.error || 'edit_failed' };
+    } catch (e: any) {
+      if (isLikelyOfflineError(e)) {
+        return await queueOffline();
+      }
+      if (await mergePendingMessageOutboxEdit(trimmedMid, trimmedText)) {
+        return { ok: true };
+      }
+      return { ok: false, error: e?.message || 'network_error' };
+    }
   }
 }
 
@@ -2956,38 +3393,8 @@ export async function getChatMessages(peerId: string, userId?: string): Promise<
     const savedMessages = await AsyncStorage.getItem(chatKey);
 
     if (savedMessages) {
-      const parsed = JSON.parse(savedMessages);
-      const messagesWithDates = parsed
-        .filter((msg: any) => {
-          // Фильтруем только сообщения между currentUser и peerId
-          const isFromCurrentUser = msg.from === currentUser && msg.to === peerId;
-          const isToCurrentUser = msg.from === peerId && msg.to === currentUser;
-          return isFromCurrentUser || isToCurrentUser;
-        })
-        .map((msg: any) => {
-          // Исправляем недостающие поля для старых сообщений
-          let correctedMsg = { ...msg };
-          
-          if (!msg.from || !msg.to) {
-            if (msg.sender === 'me') {
-              correctedMsg.from = currentUser;
-              correctedMsg.to = peerId;
-            } else if (msg.sender === 'peer') {
-              correctedMsg.from = peerId;
-              correctedMsg.to = currentUser;
-            }
-          }
-          
-          return {
-            ...correctedMsg,
-            timestamp: new Date(msg.timestamp),
-            sender: correctedMsg.from === currentUser ? 'me' : 'peer'
-          };
-        });
-
-      // Кэшируем результат
+      const messagesWithDates = parseStoredChatMessagesJson(savedMessages, currentUser, peerId);
       messageCache.set(cacheKey, { messages: messagesWithDates, timestamp: now });
-
       return messagesWithDates;
     }
 
