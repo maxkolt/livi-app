@@ -264,6 +264,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       Log.d(NAME, "bringMainActivityToFront: MainActivity already foreground, skip relaunch")
       return
     }
+    val outgoingPeek = LiviOngoingCallHelper.peekOutgoingCall(ctx)
     LiviOngoingCallHelper.clearOngoingCall(ctx)
     // 1) Broadcast — закрыть OutgoingCallActivity, если на экране
     val closeOutgoing = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
@@ -275,6 +276,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     val closeActivityIntent = Intent(ctx, OutgoingCallActivity::class.java).apply {
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NO_HISTORY)
       putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
+      outgoingPeek?.let { (cid, uid, nick) ->
+        putExtra(OutgoingCallActivity.EXTRA_CALL_ID, cid)
+        putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, uid)
+        putExtra(OutgoingCallActivity.EXTRA_TO_NICK, nick)
+      }
     }
     try {
       ctx.startActivity(closeActivityIntent)

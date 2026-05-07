@@ -51,6 +51,7 @@ import {
 } from '../utils/uploadAvatar';
 
 import LanguagePicker from '../components/LanguagePicker';
+import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE } from '../constants/uiTokens';
 import { useAppTheme, ThemePreference } from '../theme/ThemeProvider';
 import { t, defaultLang } from '../utils/i18n';
 import type { Lang } from '../utils/i18n';
@@ -5372,19 +5373,9 @@ const handleClearNick = useCallback(async () => {
                   closeMenu();
                 }}
                 activeOpacity={0.5}
-                style={{
-                  width: Platform.OS === 'ios' ? 40 : 38,
-                  height: Platform.OS === 'ios' ? 40 : 38,
-                  borderRadius: Platform.OS === 'ios' ? 16 : 14,
-                  backgroundColor: 'rgba(255,255,255,0.06)',
-                  borderWidth: 1,
-                  borderColor: 'rgba(255,255,255,0.12)',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginLeft: 5,
-                }}
+                style={[styles.sheetCornerIconBtn, { marginLeft: 5 }]}
               >
-                <Ionicons name="arrow-back" size={Platform.OS === 'ios' ? 22 : 20} color={LIVI.titan} />
+                <Ionicons name="arrow-back" size={FRIEND_ACTION_ICON_SIZE} color={LIVI.titan} />
               </TouchableOpacity>
               <Text style={styles.sheetTitle}>{L('menuTitle')}</Text>
               {tab === 'settings' && handleWipeAccount && (
@@ -5392,23 +5383,18 @@ const handleClearNick = useCallback(async () => {
                   onPress={handleWipeAccount}
                   activeOpacity={0.85}
                   disabled={wiping}
-                  style={{
-                    width: Platform.OS === 'ios' ? 40 : 38,
-                    height: Platform.OS === 'ios' ? 40 : 38,
-                    borderRadius: Platform.OS === 'ios' ? 16 : 14,
-                    backgroundColor: 'rgba(255,90,103,0.1)',
-                    borderWidth: 1,
-                    borderColor: 'rgba(255,255,255,0.12)',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginRight: 5,
-                    opacity: wiping ? 0.7 : 1,
-                  }}
+                  style={[
+                    styles.sheetCornerIconBtn,
+                    styles.sheetCornerIconBtnDanger,
+                    { marginRight: 5, opacity: wiping ? 0.7 : 1 },
+                  ]}
                 >
-                  <Ionicons name="trash" size={Platform.OS === 'ios' ? 20 : 18} color="rgba(255,90,103,0.6)" />
+                  <Ionicons name="trash" size={FRIEND_ACTION_ICON_SIZE} color="rgba(255,90,103,0.6)" />
                 </TouchableOpacity>
               )}
-              {!(tab === 'settings' && handleWipeAccount) && <View style={{ width: Platform.OS === 'ios' ? 40 : 38 }} />}
+              {!(tab === 'settings' && handleWipeAccount) && (
+                <View style={{ width: FRIEND_ACTION_BUTTON.width }} />
+              )}
             </View>
 
             <View style={styles.segmentCapsule}>
@@ -5568,22 +5554,15 @@ const handleClearNick = useCallback(async () => {
                 setDonateVisible(false);
               }}
               activeOpacity={0.5}
-              style={{
-                position: 'absolute',
-                top: insets.top + (Platform.OS === "android" ? 35 : 16),
-                left: Platform.OS === 'ios' ? 15 : 17,
-                width: Platform.OS === 'ios' ? 40 : 38,
-                height: Platform.OS === 'ios' ? 40 : 38,
-                borderRadius: Platform.OS === 'ios' ? 16 : 14,
-                backgroundColor: 'rgba(255,255,255,0.06)',
-                borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.12)',
-                alignItems: 'center',
-                justifyContent: 'center',
-                zIndex: 10
-              }}
+              style={[
+                styles.modalFloatingCornerBtn,
+                {
+                  top: insets.top + (Platform.OS === "android" ? 35 : 16),
+                  left: Platform.OS === 'ios' ? 15 : 17,
+                },
+              ]}
             >
-              <Ionicons name="arrow-back" size={Platform.OS === 'ios' ? 22 : 20} color={LIVI.titan} />
+              <Ionicons name="arrow-back" size={FRIEND_ACTION_ICON_SIZE} color={LIVI.titan} />
             </TouchableOpacity>
             <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: LIVI.accent }]}>
               <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#B8A9E8' }]}>{t('supportProjectTitle', lang)}</Text>
@@ -5697,22 +5676,15 @@ const handleClearNick = useCallback(async () => {
                 setShareVisible(false);
               }}
               activeOpacity={0.5}
-              style={{
-                position: 'absolute',
-                top: insets.top + (Platform.OS === "android" ? 35 : 16),
-                left: Platform.OS === 'ios' ? 15 : 17,
-                width: Platform.OS === 'ios' ? 40 : 38,
-                height: Platform.OS === 'ios' ? 40 : 38,
-                borderRadius: Platform.OS === 'ios' ? 16 : 14,
-                backgroundColor: 'rgba(255,255,255,0.06)',
-                borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.12)',
-                alignItems: 'center',
-                justifyContent: 'center',
-                zIndex: 10
-              }}
+              style={[
+                styles.modalFloatingCornerBtn,
+                {
+                  top: insets.top + (Platform.OS === "android" ? 35 : 16),
+                  left: Platform.OS === 'ios' ? 15 : 17,
+                },
+              ]}
             >
-              <Ionicons name="arrow-back" size={Platform.OS === 'ios' ? 22 : 20} color={LIVI.titan} />
+              <Ionicons name="arrow-back" size={FRIEND_ACTION_ICON_SIZE} color={LIVI.titan} />
             </TouchableOpacity>
             <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: '#4DD0E1' }]}>
               <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#4DD0E1' }]}>
@@ -5847,22 +5819,15 @@ const handleClearNick = useCallback(async () => {
             <TouchableOpacity
               onPress={handleDeclineInvite}
               activeOpacity={0.85}
-              style={{
-                position: 'absolute',
-                top: insets.top + (Platform.OS === "android" ? 35 : 16),
-                left: Platform.OS === 'ios' ? 15 : 17,
-                width: Platform.OS === 'ios' ? 40 : 38,
-                height: Platform.OS === 'ios' ? 40 : 38,
-                borderRadius: Platform.OS === 'ios' ? 16 : 14,
-                backgroundColor: 'rgba(255,255,255,0.06)',
-                borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.12)',
-                alignItems: 'center',
-                justifyContent: 'center',
-                zIndex: 10
-              }}
+              style={[
+                styles.modalFloatingCornerBtn,
+                {
+                  top: insets.top + (Platform.OS === "android" ? 35 : 16),
+                  left: Platform.OS === 'ios' ? 15 : 17,
+                },
+              ]}
             >
-              <Ionicons name="close" size={Platform.OS === 'ios' ? 22 : 20} color={LIVI.titan} />
+              <Ionicons name="close" size={FRIEND_ACTION_ICON_SIZE} color={LIVI.titan} />
             </TouchableOpacity>
             <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: '#4DD0E1' }]}>
               <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#4DD0E1' }]}>
@@ -6115,6 +6080,31 @@ const styles = StyleSheet.create({
   },
   sheetTopBar: { height: 56, flexDirection: 'row', marginTop: Platform.OS === "android" ? 26 : 12, alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12 },
   sheetTitle: { color: LIVI.white, fontSize: 16, fontWeight: '700' },
+  sheetCornerIconBtn: {
+    width: FRIEND_ACTION_BUTTON.width,
+    height: FRIEND_ACTION_BUTTON.height,
+    borderRadius: FRIEND_ACTION_BUTTON.borderRadius,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetCornerIconBtnDanger: {
+    backgroundColor: 'rgba(255,90,103,0.1)',
+  },
+  modalFloatingCornerBtn: {
+    position: 'absolute',
+    width: FRIEND_ACTION_BUTTON.width,
+    height: FRIEND_ACTION_BUTTON.height,
+    borderRadius: FRIEND_ACTION_BUTTON.borderRadius,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
 
   segmentCapsule: {
     flexDirection: 'row', alignItems: 'stretch', margin: Platform.OS === "android" ? 12 : 12,
@@ -6139,12 +6129,16 @@ const styles = StyleSheet.create({
   },
 
   actionBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
-  friendActionBtnSize: { width: 40, height: 40, borderRadius: 12 },
+  friendActionBtnSize: {
+    width: FRIEND_ACTION_BUTTON.width,
+    height: FRIEND_ACTION_BUTTON.height,
+    borderRadius: FRIEND_ACTION_BUTTON.borderRadius,
+  },
   /** Отступ между видео и чатом — снаружи якоря 40×40, чтобы бейдж считался от угла кнопки */
   chatBtnOuter: { marginLeft: 14 },
   friendActionBadgeAnchor: {
-    width: 40,
-    height: 40,
+    width: FRIEND_ACTION_BUTTON.width,
+    height: FRIEND_ACTION_BUTTON.height,
     position: 'relative' as const,
     overflow: 'visible' as const,
   },

@@ -34,11 +34,11 @@ groups:
           description: 'Сработал watchdog удалённого видео — ICE/TURN и задержки.'
 
       - alert: LiviHighTimeToFirstFrameP95
-        expr: livi_time_to_first_remote_frame_ms_p95 > 8000
-        for: 15m
+        expr: (livi_time_to_first_remote_frame_ms_p95 > 10000) and (increase(livi_join_success_total[30m]) >= 20)
+        for: 20m
         labels:
           severity: info
           component: video-call-ux
         annotations:
           summary: 'LiVi: высокий p95 time-to-first-remote-frame'
-          description: 'По отчётам клиентов p95 > 8s — сеть/UX; при малых выборках возможен шум.'
+          description: 'По отчётам клиентов p95 > 10s и есть >=20 успешных join за 30 мин; сеть/UX.'

@@ -74,6 +74,7 @@ class IncomingCallActivity : AppCompatActivity() {
     private var incomingDeadlineAtMs: Long = 0L
     private var closingForCompletion: Boolean = false
     private var minimizedToShade: Boolean = false
+    private var acceptInProgress: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -157,11 +158,16 @@ class IncomingCallActivity : AppCompatActivity() {
         installPressFeedback(declineButton)
 
         acceptButton.setOnClickListener {
-            clearIncomingTimeout()
+            if (acceptInProgress) return@setOnClickListener
+            acceptInProgress = true
+            acceptButton.isEnabled = false
+            declineButton.isEnabled = false
             stopCallRingtone()
             stopRepeatingVibration()
             startMainForAnswerCall(callId, from, fromNick)
-            closeIncomingScreen()
+            // Не закрываем экран сразу:
+            // закрытие подтверждается ACTION_CALL_ANSWERED из JS после фактического старта флоу accept.
+            // Это убирает гонку, когда экран входящего исчезает, но VideoCall ещё не открылся.
         }
 
         declineButton.setOnClickListener {

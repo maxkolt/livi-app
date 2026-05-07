@@ -50,6 +50,17 @@ object LiviOngoingCallHelper {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
     }
 
+    /** Не очищает prefs: перед clearOngoingCall — передать callId/toUserId/toNick в intent «close immediately». */
+    @JvmStatic
+    fun peekOutgoingCall(context: Context): Triple<String, String, String>? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getString(KEY_TYPE, null) != "outgoing") return null
+        val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
+        val toUserId = prefs.getString(KEY_TO_USER_ID, "") ?: ""
+        val toNick = prefs.getString(KEY_TO_NICK, "") ?: ""
+        return Triple(callId, toUserId, toNick)
+    }
+
     /** Не очищает prefs: для JS presence — пока висит нативный входящий, синхронизировать setIncomingCallScreenVisible. */
     @JvmStatic
     fun peekIncomingCall(context: Context): Triple<String, String, String>? {
