@@ -12,6 +12,10 @@ services:
     # Проброс в процесс (приоритет над env_file). Для прод: CAPACITY_METRICS_ENABLED=0 в окружении или корневом .env рядом с compose.
     environment:
       CAPACITY_METRICS_ENABLED: "${CAPACITY_METRICS_ENABLED:-1}"
+      # В Docker backend должен ходить в Redis по имени сервиса.
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+    depends_on:
+      - redis
     volumes:
       - ./backend/public/uploads:/app/public/uploads
     networks:
