@@ -2,15 +2,12 @@
 port: 7880
 log_level: info
 
-# WebRTC: TCP fallback и диапазон UDP для медиа (прод: 50000-60000).
+# WebRTC: TCP fallback и локальный диапазон UDP для медиа.
 rtc:
   tcp_port: 7881
-  port_range_start: 50000
-  port_range_end: 60000
+  port_range_start: 52000
+  port_range_end: 52050
   use_external_ip: true
 
-# Ключи — те же, что в backend .env (LIVEKIT_API_KEY и LIVEKIT_API_SECRET).
-# Подставь свои значения локально; в репозитории только плейсхолдеры.
-# Сгенерировать: https://docs.livekit.io/home/self-hosting/generate-keys/ или lk CLI.
-keys:
-  your_api_key: "your_api_secret"
+# Ключи передаются через переменную окружения LIVEKIT_KEYS из livekit/.env.
+# Пример значения LIVEKIT_KEYS: key1: secret1,key2: secret2

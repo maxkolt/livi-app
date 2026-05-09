@@ -31,12 +31,15 @@ services:
     image: livekit/livekit-server:latest
     restart: unless-stopped
     stop_grace_period: 10s
+    env_file:
+      - ./livekit/.env
     ports:
       - "127.0.0.1:7880:7880"
       - "127.0.0.1:7881:7881"
-      - "127.0.0.1:50000-60000:50000-60000/udp"
+      # Локально используем узкий UDP-диапазон, чтобы избежать конфликтов портов.
+      - "127.0.0.1:52000-52050:52000-52050/udp"
     volumes:
-      - ./livekit/livekit.yaml:/etc/livekit.yaml:ro
+      - ./livekit/livekit.local.yaml:/etc/livekit.yaml:ro
     networks:
       - livi-network
     command: --config /etc/livekit.yaml
