@@ -20,7 +20,9 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.27.0
     # При необходимости исходящего HTTP(S)-прокси (SMTP/др.): раскомментируйте и задайте URL.
-    # environment:
+    environment:
+      # Secrets are loaded from ops/.env (gitignored).
+      SMTP_AUTH_PASSWORD: ${SMTP_AUTH_PASSWORD}
     #   HTTP_PROXY: http://user:pass@proxy.example.com:3128
     #   HTTPS_PROXY: http://user:pass@proxy.example.com:3128
     #   NO_PROXY: 127.0.0.1,localhost
@@ -28,5 +30,6 @@ services:
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--config.expand-env'
     ports:
       - '9093:9093'

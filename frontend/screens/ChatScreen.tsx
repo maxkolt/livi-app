@@ -3611,6 +3611,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           if (selectionMode) exitSelectionMode();
           else navigation.goBack();
         }}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         activeOpacity={0.5}
         style={{
           width: FRIEND_ACTION_BUTTON.width,
@@ -5621,8 +5622,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     >
       <View
         style={{ flex: 1, backgroundColor: LIVI.feedBg }}
-        // Prevent touch-through during modal close animations (can trigger header back -> Home -> Chat flicker)
-        pointerEvents={mediaViewerVisible || composeViewerVisible || avatarModalVisible ? 'none' : 'auto'}
+        // Не блокируем весь экран pointerEvents='none': на Android это иногда "съедало" первый тап.
+        pointerEvents="auto"
         onLayout={handleRootLayout}
       >
         {headerEl}
@@ -5671,7 +5672,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   {GapCenterIndicator}
                 </View>
               ) : null}
-              keyboardShouldPersistTaps="handled"
+              keyboardShouldPersistTaps="always"
               showsVerticalScrollIndicator={false}
               inverted={false}
               onScrollToIndexFailed={handleScrollToIndexFailed}
@@ -5931,6 +5932,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
                 <TouchableOpacity
                   onPress={sendMessage}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   style={{
                     backgroundColor:
                       messageText.trim() || voiceIsRecording
@@ -5969,7 +5971,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 paddingTop: 12,
               }}
               showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
+              keyboardShouldPersistTaps="always"
               removeClippedSubviews={false}
               inverted={!showEmpty}
               onScrollToIndexFailed={handleScrollToIndexFailed}
@@ -6258,6 +6260,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
                 <TouchableOpacity
                   onPress={sendMessage}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   style={{
                     backgroundColor:
                       messageText.trim() || voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',

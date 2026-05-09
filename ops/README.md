@@ -19,11 +19,11 @@
 ## Почта (Gmail) для алертов
 
 1. Скопируйте шаблон: `./scripts/init.sh` или `cp alertmanager/alertmanager.yml.example alertmanager/alertmanager.yml`.
-2. В Google-аккаунте включите **двухэтапную проверку** и создайте **пароль приложения** для почты; в **`alertmanager/alertmanager.yml`** подставьте его в **`PASTE_GMAIL_APP_PASSWORD`** (не обычный пароль от Gmail).
+2. В Google-аккаунте включите **двухэтапную проверку** и создайте **пароль приложения** для почты; в **`ops/.env`** укажите `SMTP_AUTH_PASSWORD=...` (не обычный пароль от Gmail).
 3. По умолчанию в шаблоне **`12345kolt@gmail.com`** и **`smtp.gmail.com:587`**; при необходимости измените **`to:`** и **`smtp_*`** в `global`.
 4. `docker compose restart alertmanager`.
 
-Файл `alertmanager.yml` с паролем **не коммитьте** (он в `.gitignore`).
+Файлы `.env` и `alertmanager.yml` с секретами **не коммитьте** (они в `.gitignore`).
 
 ## Первый запуск (Docker)
 
@@ -34,7 +34,7 @@ chmod +x scripts/init.sh
 ./scripts/init.sh
 ```
 
-Отредактируйте `alertmanager/alertmanager.yml` (пароль приложения Gmail).
+Отредактируйте `.env` и укажите `SMTP_AUTH_PASSWORD`.
 
 Prometheus в **`docker-compose.yml`** в **bridge-сети**, порт **`9090`**, скрейп бэкенда на хосте через **`host.docker.internal:3000`** (на Linux в compose задан `extra_hosts: host-gateway`). Alertmanager в конфиге — **`alertmanager:9093`** (DNS сервиса compose). Если бэкенд или Alertmanager на **другой машине**, правьте **`targets`** в `prometheus/prometheus.yml` вручную.
 
@@ -65,8 +65,9 @@ docker compose up -d
 | `docker-compose.yml` | Prometheus + Alertmanager |
 | `prometheus/prometheus.yml` | Скрейп `/metrics` бэкенда |
 | `prometheus/rules/livi_backend.yml` | Правила алертов по `livi_*` |
-| `alertmanager/alertmanager.yml.example` | Шаблон почты Gmail (SMTP 587) |
-| `alertmanager/alertmanager.yml` | Локальная копия с паролем (**в .gitignore**) |
+| `alertmanager/alertmanager.yml.example` | Шаблон Alertmanager (пароль берётся из `.env`) |
+| `alertmanager/alertmanager.yml` | Локальная копия конфига (**в .gitignore**) |
+| `.env` | SMTP секреты для compose/Alertmanager (**в .gitignore**) |
 | `docker-compose.alertmanager-only.yml` | Только Alertmanager на отдельном VPS (см. «Два сервера») |
 
 Алерты не появляются в UI приложения LiVi — только на почте (или в другом канале, если вы сами расширите `receivers`).
@@ -104,7 +105,8 @@ mv docker-compose.alertmanager-only.yml docker-compose.yml
 # если alertmanager.yml ещё нет:
 cp alertmanager/alertmanager.yml.example alertmanager/alertmanager.yml
 nano alertmanager/alertmanager.yml
-# подставьте PASTE_GMAIL_APP_PASSWORD
+nano .env
+# укажите SMTP_AUTH_PASSWORD
 ```
 
 Файрвол (только IP Prometheus, **92.242.61.46** — ваш REG-VPS):

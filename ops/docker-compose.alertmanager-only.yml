@@ -1,13 +1,16 @@
 # Только Alertmanager — для отдельного VPS (например, с нормальным исходящим SMTP/Telegram).
 # Запуск: docker compose -f docker-compose.alertmanager-only.yml up -d
-# Рядом нужны: alertmanager/alertmanager.yml (секреты), при необходимости скопируйте из alertmanager.yml.example.
+# Рядом нужны: alertmanager/alertmanager.yml и .env (SMTP_AUTH_PASSWORD).
 
 services:
   alertmanager:
     image: prom/alertmanager:v0.27.0
+    environment:
+      SMTP_AUTH_PASSWORD: ${SMTP_AUTH_PASSWORD}
     volumes:
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--config.expand-env'
     ports:
       - '0.0.0.0:9093:9093'

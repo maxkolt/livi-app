@@ -4527,9 +4527,11 @@ const handleClearNick = useCallback(async () => {
           onSwipeableOpen={() => { openSwipeableRef.current = swipeableRefsMap.current[item.id] ?? null; }}
           onSwipeableClose={() => { if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) openSwipeableRef.current = null; }}
           renderRightActions={() => renderRightActions(item.id)}
-          // Требуем более явный горизонтальный жест, чтобы случайные микросдвиги не "съедали" тапы по кнопкам.
-          dragOffsetFromRightEdge={56}
-          dragOffsetFromLeftEdge={56}
+          // Требуем заметный горизонтальный жест, чтобы случайные микросдвиги не "съедали" первый тап по кнопкам.
+          dragOffsetFromRightEdge={108}
+          dragOffsetFromLeftEdge={108}
+          rightThreshold={72}
+          leftThreshold={72}
           overshootRight={false}
         >
           <View
@@ -4800,7 +4802,7 @@ const handleClearNick = useCallback(async () => {
               backgroundColor: 'transparent',
               borderWidth: StyleSheet.hairlineWidth,
               borderColor: isDark ? '#5A5F69' : '#2E3643',
-              borderRadius: 20,
+              borderRadius: 12,
               paddingVertical: 6,
               paddingHorizontal: 12,
               flexDirection: 'row',
@@ -5187,7 +5189,7 @@ const handleClearNick = useCallback(async () => {
             <View
               style={{
                 padding: isDark ? 0.2 : 0.4,
-                borderRadius: 14,
+                borderRadius: 12,
                 position: 'relative',
                 overflow: 'hidden',
                 alignSelf: 'center',
@@ -5202,7 +5204,7 @@ const handleClearNick = useCallback(async () => {
                 }
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
-                style={[StyleSheet.absoluteFillObject, { borderRadius: 14 }]}
+                style={[StyleSheet.absoluteFillObject, { borderRadius: 12 }]}
               />
               <View
                 style={{
@@ -5211,8 +5213,8 @@ const handleClearNick = useCallback(async () => {
                   left: 0,
                   right: 0,
                   height: isDark ? 0.2 : 0.4,
-                  borderTopLeftRadius: 14,
-                  borderTopRightRadius: 14,
+                  borderTopLeftRadius: 12,
+                  borderTopRightRadius: 12,
                   overflow: 'hidden',
                   zIndex: 2,
                 }}
@@ -5225,7 +5227,7 @@ const handleClearNick = useCallback(async () => {
                   }
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 0 }}
-                  style={[StyleSheet.absoluteFillObject, { borderTopLeftRadius: 14, borderTopRightRadius: 14 }]}
+                  style={[StyleSheet.absoluteFillObject, { borderTopLeftRadius: 12, borderTopRightRadius: 12 }]}
                 />
               </View>
               <View
@@ -5235,8 +5237,8 @@ const handleClearNick = useCallback(async () => {
                   left: 0,
                   right: 0,
                   height: isDark ? 0.2 : 0.4,
-                  borderBottomLeftRadius: 14,
-                  borderBottomRightRadius: 14,
+                  borderBottomLeftRadius: 12,
+                  borderBottomRightRadius: 12,
                   overflow: 'hidden',
                   zIndex: 2,
                 }}
@@ -5249,14 +5251,14 @@ const handleClearNick = useCallback(async () => {
                   }
                   start={{ x: 1, y: 0 }}
                   end={{ x: 0, y: 0 }}
-                  style={[StyleSheet.absoluteFillObject, { borderBottomLeftRadius: 14, borderBottomRightRadius: 14 }]}
+                  style={[StyleSheet.absoluteFillObject, { borderBottomLeftRadius: 12, borderBottomRightRadius: 12 }]}
                 />
               </View>
               <Pressable
                 style={({ pressed }) => [
                   {
                     margin: isDark ? 0.2 : 0.4,
-                    borderRadius: isDark ? 13.8 : 13.6,
+                    borderRadius: isDark ? 11.8 : 11.6,
                     alignItems: 'center',
                     justifyContent: 'center',
                     alignSelf: 'stretch',
