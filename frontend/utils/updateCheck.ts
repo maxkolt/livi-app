@@ -48,10 +48,14 @@ function isVersionLess(current: string, latest: string): boolean {
   return false;
 }
 
-/** Текущая версия приложения. В релизе приоритет у nativeApplicationVersion (реальная версия из системы). */
+/** Текущая версия приложения для проверки обновлений.
+ * Приоритет: nativeBuildVersion (Android versionCode / iOS buildNumber), затем nativeApplicationVersion.
+ */
 export function getCurrentAppVersion(): string {
   try {
-    const { nativeApplicationVersion } = require('expo-application');
+    const { nativeBuildVersion, nativeApplicationVersion } = require('expo-application');
+    const build = nativeBuildVersion ? String(nativeBuildVersion).trim() : '';
+    if (build) return build;
     const native = nativeApplicationVersion ? String(nativeApplicationVersion).trim() : '';
     if (native) return native;
   } catch {}

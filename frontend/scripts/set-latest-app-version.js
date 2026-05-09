@@ -5,9 +5,9 @@
  *
  * Использование:
  *   APP_UPDATE_SECRET=твой_секрет npm run app:set-version
- *   APP_UPDATE_SECRET=твой_секрет npm run app:set-version -- 1.0.63
+ *   APP_UPDATE_SECRET=твой_секрет npm run app:set-version -- 122
  *
- * Версия берётся из аргумента или из frontend/app.json (expo.version).
+ * Версия берётся из аргумента или из frontend/app.json (expo.android.versionCode).
  * API по умолчанию: https://api.liviapp.com (переопредели через API_BASE).
  */
 
@@ -36,15 +36,20 @@ if (!version) {
   try {
     const appJsonPath = path.join(__dirname, '..', 'app.json');
     const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
-    version = (appJson.expo && appJson.expo.version) || '';
+    const versionCode = appJson?.expo?.android?.versionCode;
+    if (versionCode !== undefined && versionCode !== null && String(versionCode).trim()) {
+      version = String(versionCode).trim();
+    } else {
+      version = (appJson.expo && appJson.expo.version) || '';
+    }
   } catch (e) {
-    console.error('Не удалось прочитать версию из app.json. Укажи версию аргументом: node set-latest-app-version.js 1.0.62');
+    console.error('Не удалось прочитать версию из app.json. Укажи версию аргументом: node set-latest-app-version.js 122');
     process.exit(1);
   }
 }
 version = version.trim();
 if (!version) {
-  console.error('Укажи версию: npm run app:set-version -- 1.0.62');
+  console.error('Укажи версию: npm run app:set-version -- 122');
   process.exit(1);
 }
 
