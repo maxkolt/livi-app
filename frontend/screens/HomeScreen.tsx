@@ -53,6 +53,7 @@ import {
 import LanguagePicker from '../components/LanguagePicker';
 import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE } from '../constants/uiTokens';
 import { useAppTheme, ThemePreference } from '../theme/ThemeProvider';
+import { uiAccent } from '../theme/uiAccent';
 import { t, defaultLang } from '../utils/i18n';
 import type { Lang } from '../utils/i18n';
 import { useLang } from '../store/lang';
@@ -174,7 +175,6 @@ const LIVI = {
   border: 'rgba(255,255,255,0.12)',
   text: '#AEB6C6',
   text2: '#9FA7B4',
-  accent: '#715BA8',
   titan: '#8A8F99',
   white: '#F4F5F7',
   green: '#2ECC71',
@@ -335,6 +335,7 @@ const useLiviNotice = () => {
   const opacity = useRef(new Animated.Value(0)).current;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { isDark } = useAppTheme();
+  const accent = uiAccent(isDark);
 
   const hide = useCallback(() => {
     Animated.timing(opacity, { toValue: 0, duration: 160, useNativeDriver: true }).start(() => setNotice(null));
@@ -355,8 +356,8 @@ const useLiviNotice = () => {
       : notice?.kind === 'error'
         ? { backgroundColor: 'rgba(255, 90, 103, 0.2)', borderColor: 'rgba(200, 50, 65, 0.85)' }
         : {
-            borderColor: LIVI.accent,
-            backgroundColor: isDark ? 'rgba(113,91,168,0.15)' : 'rgba(113,91,168,0.28)',
+            borderColor: accent.solid,
+            backgroundColor: isDark ? accent.solid15 : accent.solid28,
           };
   const view = notice ? (
     <Animated.View
@@ -711,6 +712,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const insets = useSafeAreaInsets();
   const pip = usePiP();
   const { preference, setPreference, theme, isDark } = useAppTheme();
+  const accent = React.useMemo(() => uiAccent(isDark), [isDark]);
   const [appIsActive, setAppIsActive] = useState(AppState.currentState === 'active');
 
   /* friends state */
@@ -4679,7 +4681,11 @@ const handleClearNick = useCallback(async () => {
                   borderRadius: 24,
                   borderWidth: StyleSheet.hairlineWidth,
                   borderColor: LIVI.border,
-                  backgroundColor: active ? 'rgba(113,91,168,0.22)' : 'rgba(255,255,255,0.02)'
+                  ...(active
+                    ? opt.key === 'auto'
+                      ? styles.segActiveBg
+                      : { backgroundColor: accent.solid22 }
+                    : { backgroundColor: 'rgba(255,255,255,0.02)' }),
                 }}
               >
                 <Text style={{ color: LIVI.white, fontWeight: '700', opacity: active ? 1 : 0.8 }}>{opt.label}</Text>
@@ -4714,7 +4720,7 @@ const handleClearNick = useCallback(async () => {
         style={{ 
           borderRadius: 12, 
           borderWidth: 1,
-          borderColor: LIVI.accent,
+          borderColor: accent.solid,
         }}
       >
         <View style={{ 
@@ -4728,7 +4734,7 @@ const handleClearNick = useCallback(async () => {
             width: 44, 
             height: 44, 
             borderRadius: 22, 
-            backgroundColor: LIVI.accent, 
+            backgroundColor: accent.solid, 
             justifyContent: 'center', 
             alignItems: 'center',
             marginRight: 14,
@@ -4739,7 +4745,7 @@ const handleClearNick = useCallback(async () => {
             </Text>
           </View>
           <View style={{ flex: 1, justifyContent: 'center' }}>
-            <Text style={{ color: '#B8A9E8', fontSize: 16, fontWeight: '700', marginBottom: 3, lineHeight: 20 }}>
+            <Text style={{ color: accent.softText, fontSize: 16, fontWeight: '700', marginBottom: 3, lineHeight: 20 }}>
               {t('supportProjectTitle', lang)}
             </Text>
             <Text style={{ color: LIVI.text2, fontSize: 13, lineHeight: 17 }}>
@@ -5566,8 +5572,8 @@ const handleClearNick = useCallback(async () => {
             >
               <Ionicons name="arrow-back" size={FRIEND_ACTION_ICON_SIZE} color={LIVI.titan} />
             </TouchableOpacity>
-            <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: LIVI.accent }]}>
-              <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#B8A9E8' }]}>{t('supportProjectTitle', lang)}</Text>
+            <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: accent.solid }]}>
+              <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: accent.softText }]}>{t('supportProjectTitle', lang)}</Text>
               <View style={{ marginBottom: 20 }}>
                 <TouchableOpacity
                   onPress={async () => {
@@ -5586,8 +5592,8 @@ const handleClearNick = useCallback(async () => {
                   onPressOut={() => setPressedButton(null)}
                   activeOpacity={1}
                   style={{
-                    backgroundColor: pressedButton === 'boosty' ? '#B8A9E8' : 'rgba(113,91,168,0.1)',
-                    borderColor: LIVI.accent,
+                    backgroundColor: pressedButton === 'boosty' ? accent.softText : accent.solid10,
+                    borderColor: accent.solid,
                     borderWidth: StyleSheet.hairlineWidth,
                     paddingVertical: 14,
                     paddingHorizontal: 20,
@@ -5630,8 +5636,8 @@ const handleClearNick = useCallback(async () => {
                   onPressOut={() => setPressedButton(null)}
                   activeOpacity={1}
                   style={{
-                    backgroundColor: pressedButton === 'patreon' ? '#B8A9E8' : 'rgba(113,91,168,0.1)',
-                    borderColor: LIVI.accent,
+                    backgroundColor: pressedButton === 'patreon' ? accent.softText : accent.solid10,
+                    borderColor: accent.solid,
                     borderWidth: StyleSheet.hairlineWidth,
                     paddingVertical: 14,
                     paddingHorizontal: 20,

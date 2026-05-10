@@ -29,11 +29,12 @@ import {
 } from "react-native";
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
-import { PanGestureHandler, PinchGestureHandler, State, GestureHandlerRootView } from "react-native-gesture-handler";
+import { PanGestureHandler, PinchGestureHandler, State, GestureHandlerRootView, NativeViewGestureHandler } from "react-native-gesture-handler";
 import { onCloseIncoming, emitCloseIncoming, onCometChatStatus } from '../utils/globalEvents';
 import socket from '../sockets/socket';
 import { Ionicons } from "@expo/vector-icons";
 import { useAppTheme } from "../theme/ThemeProvider";
+import { uiAccent } from "../theme/uiAccent";
 import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE } from "../constants/uiTokens";
 import { Image as ExpoImage } from "expo-image";
 import AvatarImage from "../components/AvatarImage";
@@ -422,6 +423,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     replyQuoteAccent: isDark ? 'rgba(186, 236, 224, 0.98)' : 'rgba(154, 134, 190, 0.98)',
     replyQuotePressBg: isDark ? 'rgba(186, 236, 224, 0.14)' : 'rgba(154, 134, 190, 0.22)',
     replyHighlightAccent: isDark ? 'rgba(186, 236, 224, 0.95)' : 'rgba(154, 134, 190, 0.96)',
+    accent: uiAccent(isDark),
   } as const), [theme, isDark]);
 
   // Защита от полупрозрачного фона темы: панель ввода всегда должна быть полностью непрозрачной,
@@ -590,8 +592,15 @@ export default function ChatScreen({ route, navigation }: Props) {
   const forwardToastOpacity = useRef(new Animated.Value(0)).current;
   const forwardToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const forwardSheetTranslateY = useRef(new Animated.Value(0)).current;
+  /** Чтобы PanGestureHandler (свайп закрытия) не перехватывал вертикальную прокрутку списка друзей. */
+  const forwardFriendsListGestureRef = useRef<React.ComponentRef<typeof NativeViewGestureHandler>>(null);
   /** Блокирует повторный вызов send до ре-рендера (двойной тап по «Отправить»). */
   const textSendGuardRef = useRef(false);
+
+  const forwardPickerSheetMaxH = React.useMemo(() => {
+    const h = Dimensions.get('window').height;
+    return Math.min(Math.round(h * 0.72), Math.round(h - insets.top - 12));
+  }, [insets.top, showForwardPicker]);
 
   useEffect(() => {
     if (showForwardPicker) forwardSheetTranslateY.setValue(0);
@@ -6632,7 +6641,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                             justifyContent: 'space-between',
                             paddingVertical: 12,
                             paddingHorizontal: 14,
-                            backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
+                            backgroundColor: pressed ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10) : 'transparent',
                           })}
                         >
                           <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionCopy', lang)}</Text>
@@ -6647,7 +6656,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                             justifyContent: 'space-between',
                             paddingVertical: 12,
                             paddingHorizontal: 14,
-                            backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
+                            backgroundColor: pressed ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10) : 'transparent',
                           })}
                         >
                           <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionForward', lang)}</Text>
@@ -6662,7 +6671,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                             justifyContent: 'space-between',
                             paddingVertical: 12,
                             paddingHorizontal: 14,
-                            backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
+                            backgroundColor: pressed ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10) : 'transparent',
                           })}
                         >
                           <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionSelect', lang)}</Text>
@@ -6687,7 +6696,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                             justifyContent: 'space-between',
                             paddingVertical: 12,
                             paddingHorizontal: 14,
-                            backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
+                            backgroundColor: pressed ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10) : 'transparent',
                           })}
                         >
                           <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionReply', lang)}</Text>
@@ -6709,7 +6718,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                                 justifyContent: 'space-between',
                                 paddingVertical: 12,
                                 paddingHorizontal: 14,
-                                backgroundColor: pressed ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)') : 'transparent',
+                                backgroundColor: pressed ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10) : 'transparent',
                               })}
                             >
                               <Text style={{ color: LIVI.white, fontSize: 15, fontWeight: '400' }}>{t('chatActionEdit', lang)}</Text>
@@ -6777,7 +6786,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               <Pressable
                 onPress={() => {}}
                 style={{
-                  backgroundColor: isDark ? '#0F1626' : LIVI.surface,
+                  backgroundColor: isDark ? LIVI.bg : LIVI.surface,
                   borderTopLeftRadius: 20,
                   borderTopRightRadius: 20,
                   paddingTop: 8,
@@ -6814,7 +6823,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     borderRadius: 14,
                     overflow: 'hidden',
                     backgroundColor: pressed
-                      ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
+                      ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10)
                       : 'transparent',
                   })}
                 >
@@ -6838,7 +6847,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     overflow: 'hidden',
                     marginTop: 2,
                     backgroundColor: pressed
-                      ? (isDark ? 'rgba(123,97,255,0.12)' : 'rgba(123,97,255,0.10)')
+                      ? (isDark ? LIVI.accent.vivid12 : LIVI.accent.vivid10)
                       : 'transparent',
                   })}
                 >
@@ -6886,24 +6895,30 @@ export default function ChatScreen({ route, navigation }: Props) {
           >
           <PanGestureHandler
             activeOffsetY={[0, 8]}
+            waitFor={forwardFriendsListGestureRef}
             onGestureEvent={onForwardSheetGestureEvent}
             onHandlerStateChange={onForwardSheetHandlerStateChange}
           >
             <Animated.View
               style={{
                 transform: [{ translateY: forwardSheetTranslateY }],
-                maxHeight: '70%',
+                maxHeight: forwardPickerSheetMaxH,
+                width: '100%',
               }}
             >
             <Pressable
               onPress={() => {}}
               style={{
-                backgroundColor: isDark ? '#0F1626' : 'rgba(182, 203, 216, 1)',
+                backgroundColor: isDark ? LIVI.bg : 'rgba(182, 203, 216, 1)',
                 borderTopLeftRadius: 20,
                 borderTopRightRadius: 20,
                 paddingTop: 8,
                 paddingHorizontal: 14,
                 paddingBottom: ANDROID_SHEET_BOTTOM_PAD,
+                height: forwardPickerSheetMaxH,
+                maxHeight: forwardPickerSheetMaxH,
+                width: '100%',
+                flexDirection: 'column',
               }}
             >
               <View
@@ -6921,7 +6936,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10, paddingHorizontal: 8, position: 'relative' }}>
                 <View style={{ position: 'absolute', left: 0, right: 0, alignItems: 'center', pointerEvents: 'none' }}>
-                  <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700' }}>
+                  <Text style={{ color: theme.colors.titan as string, fontSize: 16, fontWeight: '700' }}>
                     {`${t('chatActionForward', lang)}…`}
                   </Text>
                 </View>
@@ -6943,83 +6958,103 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </Pressable>
               </View>
 
-              {forwardLoading ? (
-                <View style={{ paddingVertical: 18, alignItems: 'center' }}>
-                  <ActivityIndicator />
-                </View>
-              ) : (
-                <FlatList
-                  data={forwardFriends}
-                  keyExtractor={(it: any) => String(it?._id || Math.random())}
-                  showsVerticalScrollIndicator={false}
-                  renderItem={({ item }) => {
-                    const friendId = String(item?._id || '');
-                    const isSelected = forwardSelectedFriendIds.has(friendId);
-                    return (
-                      <Pressable
-                        onPress={() => {
-                          setForwardSelectedFriendIds((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(friendId)) next.delete(friendId);
-                            else next.add(friendId);
-                            return next;
-                          });
-                        }}
-                        style={({ pressed }) => ({
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          paddingVertical: 10,
-                          paddingHorizontal: 8,
-                          borderRadius: 14,
-                          overflow: 'hidden',
-                          backgroundColor: pressed
-                            ? isDark
-                              ? 'rgba(123,97,255,0.10)'
-                              : 'rgba(123,97,255,0.08)'
-                            : isSelected
-                              ? isDark
-                                ? 'rgba(123,97,255,0.12)'
-                                : 'rgba(123,97,255,0.10)'
-                              : 'transparent',
-                        })}
-                      >
-                        <AvatarImage
-                          userId={friendId}
-                          avatarVer={Number(item.avatarVer || 0)}
-                          uri={item.avatarThumbB64 || undefined}
-                          size={44}
-                          fallbackText={String((item.nick || '--').trim()?.[0] || '--').toUpperCase()}
-                          containerStyle={{
-                            borderWidth: 1,
-                            borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
-                            overflow: 'hidden',
-                            ...(isDark ? {} : { backgroundColor: 'rgba(0,0,0,0.08)' }),
+              <View style={{ flex: 1, minHeight: 0 }}>
+                <NativeViewGestureHandler ref={forwardFriendsListGestureRef}>
+                {forwardLoading ? (
+                  <View style={{ flex: 1, minHeight: 0, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' }}>
+                    <ActivityIndicator />
+                  </View>
+                ) : (
+                  <FlatList
+                    data={forwardFriends}
+                    keyExtractor={(it: any) => String(it?._id || Math.random())}
+                    style={{ flex: 1, minHeight: 0 }}
+                    contentContainerStyle={forwardFriends.length === 0 ? { flexGrow: 1 } : undefined}
+                    keyboardShouldPersistTaps="handled"
+                    nestedScrollEnabled
+                    showsVerticalScrollIndicator
+                    renderItem={({ item }) => {
+                      const friendId = String(item?._id || '');
+                      const isSelected = forwardSelectedFriendIds.has(friendId);
+                      return (
+                        <Pressable
+                          onPress={() => {
+                            setForwardSelectedFriendIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(friendId)) next.delete(friendId);
+                              else next.add(friendId);
+                              return next;
+                            });
                           }}
-                          fallbackTextStyle={isDark ? { color: LIVI.white, fontSize: 16 } : { color: 'rgba(0,0,0,0.45)', fontSize: 16 }}
+                          style={({ pressed }) => ({
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            paddingVertical: 10,
+                            paddingHorizontal: 8,
+                            borderRadius: 14,
+                            overflow: 'hidden',
+                            backgroundColor: pressed
+                              ? isDark
+                                ? LIVI.accent.vivid10
+                                : LIVI.accent.vivid8
+                              : isSelected
+                                ? isDark
+                                  ? LIVI.accent.vivid12
+                                  : LIVI.accent.vivid10
+                                : 'transparent',
+                          })}
+                        >
+                          <AvatarImage
+                            userId={friendId}
+                            avatarVer={Number(item.avatarVer || 0)}
+                            uri={item.avatarThumbB64 || undefined}
+                            size={44}
+                            fallbackText={String((item.nick || '--').trim()?.[0] || '--').toUpperCase()}
+                            containerStyle={{
+                              borderWidth: 1,
+                              borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
+                              overflow: 'hidden',
+                              ...(isDark ? {} : { backgroundColor: 'rgba(0,0,0,0.08)' }),
+                            }}
+                            fallbackTextStyle={isDark ? { color: LIVI.white, fontSize: 16 } : { color: 'rgba(0,0,0,0.45)', fontSize: 16 }}
+                          />
+                          <View style={{ marginLeft: 12, flex: 1, justifyContent: 'center' }}>
+                            <Text style={{ color: isDark ? LIVI.white : LIVI.text, fontSize: 16, fontWeight: '600' }}>
+                              {(item.nick && String(item.nick).trim()) || '—'}
+                            </Text>
+                          </View>
+                          <Ionicons
+                            name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                            size={24}
+                            color={isSelected ? LIVI.accent.bright : (theme.colors.titan as string)}
+                          />
+                        </Pressable>
+                      );
+                    }}
+                    ItemSeparatorComponent={({ leadingItem, trailingItem }) => {
+                      const leadSel = forwardSelectedFriendIds.has(String(leadingItem?._id || ''));
+                      const trailSel = forwardSelectedFriendIds.has(String(trailingItem?._id || ''));
+                      if (leadSel && trailSel) return null;
+                      const sepColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+                      return (
+                        <View
+                          style={{
+                            height: 1,
+                            marginHorizontal: 14,
+                            backgroundColor: sepColor,
+                          }}
                         />
-                        <View style={{ marginLeft: 12, flex: 1, justifyContent: 'center' }}>
-                          <Text style={{ color: isDark ? LIVI.white : LIVI.text, fontSize: 16, fontWeight: '600' }}>
-                            {(item.nick && String(item.nick).trim()) || '—'}
-                          </Text>
-                        </View>
-                        <Ionicons
-                          name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
-                          size={24}
-                          color={isSelected ? '#7B61FF' : LIVI.titan}
-                        />
-                      </Pressable>
-                    );
-                  }}
-                  ItemSeparatorComponent={() => (
-                    <View style={{ height: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }} />
-                  )}
-                  ListEmptyComponent={() => (
-                    <View style={{ paddingVertical: 18, alignItems: 'center' }}>
-                      <Text style={{ color: LIVI.titan, textAlign: 'center' }}>{t('chatForwardNoFriends', lang)}</Text>
-                    </View>
-                  )}
-                />
-              )}
+                      );
+                    }}
+                    ListEmptyComponent={() => (
+                      <View style={{ paddingVertical: 18, alignItems: 'center' }}>
+                        <Text style={{ color: LIVI.titan, textAlign: 'center' }}>{t('chatForwardNoFriends', lang)}</Text>
+                      </View>
+                    )}
+                  />
+                )}
+                </NativeViewGestureHandler>
+              </View>
 
               <View style={{ height: 10 }} />
               <TouchableOpacity
@@ -7029,16 +7064,12 @@ export default function ChatScreen({ route, navigation }: Props) {
                   paddingVertical: 14,
                   backgroundColor:
                     forwardSelectedFriendIds.size > 0
-                      ? isDark
-                        ? 'rgba(113,91,168,0.1)'
-                        : 'rgba(79, 195, 247, 0.15)'
+                      ? LIVI.accent.forwardSendBg
                       : 'transparent',
                   borderWidth: forwardSelectedFriendIds.size > 0 ? StyleSheet.hairlineWidth : 1,
                   borderColor:
                     forwardSelectedFriendIds.size > 0
-                      ? isDark
-                        ? '#715BA8'
-                        : '#4FC3F7'
+                      ? LIVI.accent.forwardSendBorder
                       : isDark
                         ? 'rgba(255,255,255,0.2)'
                         : 'rgba(0,0,0,0.15)',
@@ -7051,9 +7082,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   style={{
                     color:
                       forwardSelectedFriendIds.size > 0
-                        ? isDark
-                          ? '#B8A9E8'
-                          : '#4FC3F7'
+                        ? LIVI.accent.forwardSendText
                         : LIVI.titan,
                     fontSize: 16,
                     fontWeight: '600',
@@ -7161,9 +7190,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                   alignItems: 'center',
                   backgroundColor: confirmDestructive
                     ? (pressed ? 'rgba(255,90,103,0.26)' : 'rgba(255,90,103,0.18)')
-                    : (pressed ? 'rgba(123,97,255,0.22)' : 'rgba(123,97,255,0.16)'),
+                    : (pressed ? LIVI.accent.vivid22 : LIVI.accent.vivid16),
                   borderWidth: StyleSheet.hairlineWidth,
-                  borderColor: confirmDestructive ? 'rgba(255,90,103,0.45)' : 'rgba(123,97,255,0.45)',
+                  borderColor: confirmDestructive ? 'rgba(255,90,103,0.45)' : LIVI.accent.vivid45,
                 })}
               >
                 <Text

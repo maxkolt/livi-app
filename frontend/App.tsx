@@ -8,6 +8,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-cont
 import * as NavigationBar from "expo-navigation-bar";
 import { NavigationContainer, createNavigationContainerRef, CommonActions, DefaultTheme } from "@react-navigation/native";
 import { ThemeProvider, useAppTheme } from "./theme/ThemeProvider";
+import { uiAccent } from "./theme/uiAccent";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Audio } from "expo-av";
 import { View, Text, TextInput, Animated, TouchableOpacity, StyleSheet, Easing, AppState, StatusBar, Linking, LogBox, Keyboard, InteractionManager, NativeModules, NativeEventEmitter, BackHandler, Modal } from "react-native";
@@ -151,7 +152,9 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 // КРИТИЧНО: Глобальная ссылка на функцию переключения камеры из VideoCall (для PiP).
 (global as any).__toggleCamRef = { current: null as (() => void) | null };
 
-const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => StyleSheet.create({
+const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
+  const a = uiAccent(isDark);
+  return StyleSheet.create({
   overlayPermissionBackdrop: {
     flex: 1,
     backgroundColor: isDark ? 'rgba(5, 8, 14, 0.66)' : 'rgba(26, 35, 52, 0.28)',
@@ -188,7 +191,7 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => StyleSh
     marginRight: 12,
     backgroundColor: isDark ? 'rgba(4, 4, 4, 0.8)' : 'rgba(113,91,168,0.12)',
     borderWidth: 1,
-    borderColor: isDark ? '#4DD0E1' : theme.colors.primary,
+    borderColor: isDark ? a.solid : theme.colors.primary,
   },
   overlayPermissionTitleWrap: {
     flex: 1,
@@ -197,7 +200,7 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => StyleSh
   overlayPermissionTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: isDark ? '#4DD0E1' : '#8B7BC8',
+    color: isDark ? a.bright : '#8B7BC8',
   },
   overlayPermissionText: {
     fontSize: 15,
@@ -210,9 +213,9 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => StyleSh
     paddingVertical: 12,
     paddingHorizontal: 14,
     marginBottom: 18,
-    backgroundColor: isDark ? '#201C31' : '#F2EEF9',
+    backgroundColor: isDark ? a.noteTintBg : '#F2EEF9',
     borderWidth: 1,
-    borderColor: isDark ? 'rgba(113,91,168,0.34)' : 'rgba(113,91,168,0.22)',
+    borderColor: isDark ? a.solid34 : 'rgba(113,91,168,0.22)',
   },
   overlayPermissionNoteText: {
     fontSize: 14,
@@ -257,7 +260,7 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => StyleSh
     paddingBottom: 1.5,
   },
   overlayPermissionButtonPrimaryDarkOuter: {
-    backgroundColor: '#4DD0E1',
+    backgroundColor: a.solid,
     padding: 1,
   },
   overlayPermissionButtonPrimaryLightInner: {
@@ -291,9 +294,11 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => StyleSh
     paddingVertical: 6,
   },
 });
+};
 
 function AppContent() {
   const { theme, isDark } = useAppTheme();
+  const accent = React.useMemo(() => uiAccent(isDark), [isDark]);
   const overlayPermissionModalStyles = React.useMemo(
     () => getOverlayPermissionModalStyles(theme, isDark),
     [theme, isDark]
@@ -2908,7 +2913,7 @@ function AppContent() {
                 <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={overlayPermissionModalStyles.overlayPermissionCard}>
                   <View style={overlayPermissionModalStyles.overlayPermissionHeader}>
                     <View style={overlayPermissionModalStyles.overlayPermissionIconWrap}>
-                      <MaterialIcons name="lock-open" size={20} color={isDark ? '#4DD0E1' : theme.colors.primary} />
+                      <MaterialIcons name="lock-open" size={20} color={isDark ? accent.bright : theme.colors.primary} />
                     </View>
                     <View style={overlayPermissionModalStyles.overlayPermissionTitleWrap}>
                       <Text style={overlayPermissionModalStyles.overlayPermissionTitle}>Вызовы на заблокированном экране</Text>

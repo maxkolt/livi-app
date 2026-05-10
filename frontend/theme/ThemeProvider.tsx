@@ -17,7 +17,8 @@ export const LightPalette = {
 };
 
 export const DarkPalette = {
-  primary: '#715BA8',
+  /** Бирюзовый акцент в тёмной теме (светлая тема — фиолетовый). */
+  primary: '#2EC4B6',
   background: '#151F33',
   surface: '#0D0E10',
   outline: 'rgba(255,255,255,0.12)',
