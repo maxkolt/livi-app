@@ -29,7 +29,14 @@ import {
 } from "react-native";
  
 import { useSafeAreaInsets, SafeAreaView } from "react-native-safe-area-context";
-import { PanGestureHandler, PinchGestureHandler, State, GestureHandlerRootView, NativeViewGestureHandler } from "react-native-gesture-handler";
+import {
+  PanGestureHandler,
+  PinchGestureHandler,
+  State,
+  GestureHandlerRootView,
+  NativeViewGestureHandler,
+  FlatList as GHFlatList,
+} from "react-native-gesture-handler";
 import { onCloseIncoming, emitCloseIncoming, onCometChatStatus } from '../utils/globalEvents';
 import socket from '../sockets/socket';
 import { Ionicons } from "@expo/vector-icons";
@@ -601,6 +608,39 @@ export default function ChatScreen({ route, navigation }: Props) {
     const h = Dimensions.get('window').height;
     return Math.min(Math.round(h * 0.72), Math.round(h - insets.top - 12));
   }, [insets.top, showForwardPicker]);
+
+  /** Высота шита и списка по числу друзей — без лишней пустоты при 1–3 контактах. */
+  const forwardPickerLayout = React.useMemo(() => {
+    const maxSheet = forwardPickerSheetMaxH;
+    const padBottom = ANDROID_SHEET_BOTTOM_PAD;
+    const padTop = 30;
+    // Шапка (ручка + заголовок) + разделитель с отступами — оценка по вёрстке.
+    const headerAndSep = 86;
+    // Зазор под списком + «Переслать» + «Отмена» + margin между кнопками (как раньше по отступу от списка).
+    const footerBlock = 140;
+    const maxList = Math.max(110, maxSheet - padTop - padBottom - headerAndSep - footerBlock);
+    const rowApprox = 62;
+    const listPadding = 16;
+    let listHeight: number;
+    if (forwardLoading) {
+      listHeight = Math.min(168, maxList);
+    } else if (forwardFriends.length === 0) {
+      listHeight = Math.min(96, maxList);
+    } else {
+      const contentH = forwardFriends.length * rowApprox + listPadding;
+      listHeight = Math.min(Math.max(contentH, 72), maxList);
+    }
+    const sheetHeight = Math.min(maxSheet, padTop + headerAndSep + listHeight + footerBlock + padBottom);
+    const wantListContent = forwardFriends.length * rowApprox + listPadding;
+    const friendsScrollEnabled =
+      !forwardLoading && forwardFriends.length > 0 && wantListContent > listHeight + 4;
+    return { sheetHeight, listHeight, friendsScrollEnabled };
+  }, [
+    forwardPickerSheetMaxH,
+    forwardLoading,
+    forwardFriends.length,
+    ANDROID_SHEET_BOTTOM_PAD,
+  ]);
 
   useEffect(() => {
     if (showForwardPicker) forwardSheetTranslateY.setValue(0);
@@ -3038,6 +3078,54 @@ export default function ChatScreen({ route, navigation }: Props) {
         return resolved;
       };
 
+      /** Сразу показать в текущем чате, если переслали собеседнику этого экрана (иначе ждём socket echo с задержкой). */
+      const appendIfForwardedToThisPeer = (r: any, partial: { type: string; text?: string; uri?: string; name?: any; size?: any; duration?: any }) => {
+        const uid = String(currentUserId || '').trim();
+        const pid = String(peerId || '').trim();
+        const t = String(to || '').trim();
+        if (!uid || !pid || t !== pid) return;
+        if (!r?.ok || r?.localCancelled) return;
+        const mid = String(r?.messageId || '').trim();
+        if (!mid || mid.startsWith('outbox_')) return;
+        const tsRaw = (r as any)?.timestamp;
+        const ts = tsRaw ? new Date(tsRaw) : new Date();
+        const typ = String(partial.type || 'text').trim();
+        setMessages((prev) => {
+          if (prev.some((m) => String(m?.id) === mid)) return prev;
+          const row: any = {
+            id: mid,
+            type: typ,
+            sender: 'me',
+            from: uid,
+            to: pid,
+            timestamp: ts,
+            reactions: [],
+          };
+          if (typ === 'text') row.text = String(partial.text || '');
+          else {
+            if (partial.uri) row.uri = resolveMediaUri(String(partial.uri));
+            if (partial.name != null) row.name = partial.name;
+            if (partial.size != null) row.size = partial.size;
+            if (partial.duration != null) row.duration = partial.duration;
+          }
+          return [...prev, row];
+        });
+        updateReadStatuses((prev) => ({
+          ...prev,
+          [mid]: (r as any)?.delivered ? 'delivered' : 'sent',
+        }));
+        if (Platform.OS === 'android') {
+          requestAnimationFrame(() => {
+            scrollToBottom();
+            setTimeout(() => scrollToBottom(), 90);
+            setTimeout(() => scrollToBottom(), 220);
+          });
+        } else {
+          scheduleScrollToBottom(0);
+          setTimeout(() => scrollToBottom(), 60);
+        }
+      };
+
       if (selectionMode) {
         const selected = messages.filter((m) => selectedMessageIds.has(String(m?.id || '')));
         const forwardables: any[] = [];
@@ -3061,7 +3149,10 @@ export default function ChatScreen({ route, navigation }: Props) {
         for (const payload of forwardables) {
           const r: any = await sendSocketMessage({ to, ...payload });
           if (r?.localCancelled) continue;
-          if (r?.ok) okCount += 1;
+          if (r?.ok) {
+            okCount += 1;
+            appendIfForwardedToThisPeer(r, payload);
+          }
         }
         return okCount;
       }
@@ -3071,7 +3162,11 @@ export default function ChatScreen({ route, navigation }: Props) {
         const txt = String(selectedMessage?.text ?? '').trim();
         if (!txt) return 0;
         const r: any = await sendSocketMessage({ to, text: txt, type: 'text' });
-        return r?.ok && !r?.localCancelled ? 1 : 0;
+        if (r?.ok && !r?.localCancelled) {
+          appendIfForwardedToThisPeer(r, { type: 'text', text: txt });
+          return 1;
+        }
+        return 0;
       }
       if (type === 'image') {
         const rawUri = String(selectedMessage?.uri ?? '').trim();
@@ -3084,7 +3179,11 @@ export default function ChatScreen({ route, navigation }: Props) {
           name: selectedMessage?.name,
           size: selectedMessage?.size,
         });
-        return r?.ok && !r?.localCancelled ? 1 : 0;
+        if (r?.ok && !r?.localCancelled) {
+          appendIfForwardedToThisPeer(r, { type: 'image', uri, name: selectedMessage?.name, size: selectedMessage?.size });
+          return 1;
+        }
+        return 0;
       }
       if (type === 'audio') {
         const rawUri = String(selectedMessage?.uri ?? '').trim();
@@ -3098,11 +3197,32 @@ export default function ChatScreen({ route, navigation }: Props) {
           size: selectedMessage?.size,
           duration: selectedMessage?.duration,
         });
-        return r?.ok && !r?.localCancelled ? 1 : 0;
+        if (r?.ok && !r?.localCancelled) {
+          appendIfForwardedToThisPeer(r, {
+            type: 'audio',
+            uri,
+            name: selectedMessage?.name,
+            size: selectedMessage?.size,
+            duration: selectedMessage?.duration,
+          });
+          return 1;
+        }
+        return 0;
       }
       return 0;
     },
-    [selectionMode, messages, selectedMessageIds, selectedMessage, resolveMediaUri]
+    [
+      selectionMode,
+      messages,
+      selectedMessageIds,
+      selectedMessage,
+      resolveMediaUri,
+      peerId,
+      currentUserId,
+      updateReadStatuses,
+      scrollToBottom,
+      scheduleScrollToBottom,
+    ]
   );
 
   const forwardToSelectedFriends = React.useCallback(async () => {
@@ -6894,7 +7014,9 @@ export default function ChatScreen({ route, navigation }: Props) {
             style={{ flex: 1, backgroundColor: isDark ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.40)', justifyContent: 'flex-end' }}
           >
           <PanGestureHandler
-            activeOffsetY={[0, 8]}
+            // Широкий мёртвый диапазон по Y вверх: иначе Pan перехватывает вертикальную прокрутку списка друзей.
+            // Закрытие шита — при явном свайпе вниз (translationY больше порога).
+            activeOffsetY={[-1e4, 14]}
             waitFor={forwardFriendsListGestureRef}
             onGestureEvent={onForwardSheetGestureEvent}
             onHandlerStateChange={onForwardSheetHandlerStateChange}
@@ -6915,64 +7037,103 @@ export default function ChatScreen({ route, navigation }: Props) {
                 paddingTop: 8,
                 paddingHorizontal: 14,
                 paddingBottom: ANDROID_SHEET_BOTTOM_PAD,
-                height: forwardPickerSheetMaxH,
+                height: forwardPickerLayout.sheetHeight,
                 maxHeight: forwardPickerSheetMaxH,
                 width: '100%',
                 flexDirection: 'column',
               }}
             >
-              <View
-                style={{ width: '100%', alignItems: 'center', paddingTop: 4, paddingBottom: 12, minHeight: 40 }}
-                pointerEvents="box-only"
-              >
+              <View style={{ paddingBottom: 2 }}>
+                <View
+                  style={{ width: '100%', alignItems: 'center', paddingTop: 2, paddingBottom: 4, minHeight: 28 }}
+                  pointerEvents="box-only"
+                >
+                  <View
+                    style={{
+                      width: 42,
+                      height: 4,
+                      borderRadius: 2,
+                      backgroundColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.18)',
+                    }}
+                  />
+                </View>
                 <View
                   style={{
-                    width: 42,
-                    height: 4,
-                    borderRadius: 2,
-                    backgroundColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.18)',
-                  }}
-                />
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10, paddingHorizontal: 8, position: 'relative' }}>
-                <View style={{ position: 'absolute', left: 0, right: 0, alignItems: 'center', pointerEvents: 'none' }}>
-                  <Text style={{ color: theme.colors.titan as string, fontSize: 16, fontWeight: '700' }}>
-                    {`${t('chatActionForward', lang)}…`}
-                  </Text>
-                </View>
-                <View style={{ flex: 1 }} />
-                <Pressable
-                  onPress={() => void shareForwardToSystem()}
-                  style={({ pressed }) => ({
-                    width: 44,
-                    height: 44,
-                    marginRight: -10,
-                    borderRadius: 22,
+                    flexDirection: 'row',
                     alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: pressed ? (isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'),
-                  })}
-                  hitSlop={8}
+                    minHeight: 36,
+                    marginTop: -8,
+                    paddingHorizontal: 4,
+                  }}
                 >
-                  <Ionicons name="share-outline" size={22} color={LIVI.titan} />
-                </Pressable>
+                  {/* Симметрия с правой кнопкой — заголовок по центру экрана и по вертикали с кнопкой */}
+                  <View style={{ width: 36, marginLeft: -2 }} />
+                  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
+                    <Text style={{ color: theme.colors.titan as string, fontSize: 16, fontWeight: '700' }}>
+                      {`${t('chatActionForward', lang)}…`}
+                    </Text>
+                  </View>
+                  <View style={{ width: 36, marginRight: -2, alignItems: 'center', justifyContent: 'center' }}>
+                    <Pressable
+                      onPress={() => void shareForwardToSystem()}
+                      style={({ pressed }) => ({
+                        width: 36,
+                        height: 36,
+                        borderRadius: 10,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderWidth: 1,
+                        borderColor: isDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.14)',
+                        backgroundColor: pressed
+                          ? isDark
+                            ? 'rgba(255,255,255,0.12)'
+                            : 'rgba(0,0,0,0.08)'
+                          : isDark
+                            ? 'rgba(255,255,255,0.06)'
+                            : 'rgba(0,0,0,0.06)',
+                      })}
+                      hitSlop={10}
+                    >
+                      <Ionicons name="share-social-outline" size={19} color={LIVI.titan} />
+                    </Pressable>
+                  </View>
+                </View>
               </View>
+              {/* Линия на всю ширину шита: компенсируем paddingHorizontal родителя (14). */}
+              <View
+                style={{
+                  height: StyleSheet.hairlineWidth,
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.1)',
+                  marginHorizontal: -14,
+                  marginTop: 12,
+                  marginBottom: 8,
+                }}
+              />
 
-              <View style={{ flex: 1, minHeight: 0 }}>
+              <View style={{ height: forwardPickerLayout.listHeight, minHeight: 0 }}>
                 <NativeViewGestureHandler ref={forwardFriendsListGestureRef}>
                 {forwardLoading ? (
                   <View style={{ flex: 1, minHeight: 0, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' }}>
                     <ActivityIndicator />
                   </View>
                 ) : (
-                  <FlatList
+                  <GHFlatList
                     data={forwardFriends}
-                    keyExtractor={(it: any) => String(it?._id || Math.random())}
-                    style={{ flex: 1, minHeight: 0 }}
-                    contentContainerStyle={forwardFriends.length === 0 ? { flexGrow: 1 } : undefined}
+                    keyExtractor={(it: any, index: number) => String(it?._id || `fwd-friend-${index}`)}
+                    style={{ flex: 1, minHeight: 0, height: forwardPickerLayout.listHeight }}
+                    scrollEnabled={forwardPickerLayout.friendsScrollEnabled}
+                    contentContainerStyle={
+                      forwardFriends.length === 0
+                        ? { flexGrow: 1, paddingVertical: 8 }
+                        : { paddingTop: 4, paddingBottom: 8 }
+                    }
                     keyboardShouldPersistTaps="handled"
-                    nestedScrollEnabled
                     showsVerticalScrollIndicator
+                    scrollEventThrottle={16}
+                    windowSize={10}
+                    initialNumToRender={12}
+                    maxToRenderPerBatch={10}
+                    updateCellsBatchingPeriod={50}
                     renderItem={({ item }) => {
                       const friendId = String(item?._id || '');
                       const isSelected = forwardSelectedFriendIds.has(friendId);
@@ -6993,15 +7154,12 @@ export default function ChatScreen({ route, navigation }: Props) {
                             paddingHorizontal: 8,
                             borderRadius: 14,
                             overflow: 'hidden',
+                            // Выбор только на чекбоксе — строка без заливки по selected.
                             backgroundColor: pressed
                               ? isDark
-                                ? LIVI.accent.vivid10
-                                : LIVI.accent.vivid8
-                              : isSelected
-                                ? isDark
-                                  ? LIVI.accent.vivid12
-                                  : LIVI.accent.vivid10
-                                : 'transparent',
+                                ? 'rgba(255,255,255,0.08)'
+                                : 'rgba(0,0,0,0.05)'
+                              : 'transparent',
                           })}
                         >
                           <AvatarImage
@@ -7031,16 +7189,13 @@ export default function ChatScreen({ route, navigation }: Props) {
                         </Pressable>
                       );
                     }}
-                    ItemSeparatorComponent={({ leadingItem, trailingItem }) => {
-                      const leadSel = forwardSelectedFriendIds.has(String(leadingItem?._id || ''));
-                      const trailSel = forwardSelectedFriendIds.has(String(trailingItem?._id || ''));
-                      if (leadSel && trailSel) return null;
+                    ItemSeparatorComponent={() => {
                       const sepColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
                       return (
                         <View
                           style={{
                             height: 1,
-                            marginHorizontal: 14,
+                            marginHorizontal: 12,
                             backgroundColor: sepColor,
                           }}
                         />
@@ -7056,7 +7211,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </NativeViewGestureHandler>
               </View>
 
-              <View style={{ height: 10 }} />
+              <View style={{ height: 60 }} />
               <TouchableOpacity
                 onPress={() => void forwardToSelectedFriends()}
                 disabled={forwardSelectedFriendIds.size === 0}
