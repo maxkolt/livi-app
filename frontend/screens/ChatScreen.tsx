@@ -45,6 +45,7 @@ import { uiAccent } from "../theme/uiAccent";
 import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE } from "../constants/uiTokens";
 import { Image as ExpoImage } from "expo-image";
 import AvatarImage from "../components/AvatarImage";
+import ChatStyleBackButton from "../components/ChatStyleBackButton";
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { Audio } from 'expo-av';
@@ -3734,27 +3735,14 @@ export default function ChatScreen({ route, navigation }: Props) {
         paddingHorizontal: 12,
       }}
     >
-      <TouchableOpacity
+      <ChatStyleBackButton
+        icon={selectionMode ? 'close' : 'arrow-back'}
+        iconColor={LIVI.titan}
         onPress={() => {
-          try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
           if (selectionMode) exitSelectionMode();
           else navigation.goBack();
         }}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        activeOpacity={0.5}
-        style={{
-          width: FRIEND_ACTION_BUTTON.width,
-          height: FRIEND_ACTION_BUTTON.height,
-          borderRadius: FRIEND_ACTION_BUTTON.borderRadius,
-          backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
-          borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
-          borderWidth: 1,
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Ionicons name={selectionMode ? "close" : "arrow-back"} size={FRIEND_ACTION_ICON_SIZE} color={LIVI.titan} />
-      </TouchableOpacity>
+      />
 
       <View style={{ flex: 1, alignItems: "center" }}>
         <Text style={{
@@ -6066,7 +6054,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     backgroundColor:
                       messageText.trim() || voiceIsRecording
                         ? LIVI.titan
-                        : "rgba(255,255,255,0.2)",
+                        : 'rgba(255,255,255,0.2)',
                     borderRadius: 14,
                     padding: 6,
                     marginLeft: 12,
@@ -6387,10 +6375,13 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </View>
                 </Animated.View>
 
-                <TouchableOpacity
+                <Pressable
                   onPress={sendMessage}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  style={{
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  delayPressIn={0}
+                  delayPressOut={0}
+                  disabled={!messageText.trim() && !voiceIsRecording}
+                  style={({ pressed }) => ({
                     backgroundColor:
                       messageText.trim() || voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',
                     borderRadius: 14,
@@ -6398,15 +6389,17 @@ export default function ChatScreen({ route, navigation }: Props) {
                     marginLeft: 12,
                     borderWidth: 1,
                     borderColor: BORDER_COLOR,
-                  }}
-                  disabled={!messageText.trim() && !voiceIsRecording}
+                    overflow: 'hidden',
+                    opacity:
+                      pressed && (messageText.trim() || voiceIsRecording) ? 0.88 : 1,
+                  })}
                 >
                   <Ionicons
                     name="send"
                     size={20}
                     color={messageText.trim() || voiceIsRecording ? LIVI.white : LIVI.titan}
                   />
-                </TouchableOpacity>
+                </Pressable>
               </View>
             </View>
           </View>)

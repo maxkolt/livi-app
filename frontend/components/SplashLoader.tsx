@@ -11,6 +11,7 @@ import {
   Text,
   TouchableOpacity,
   Linking,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAppTheme } from '../theme/ThemeProvider';
@@ -40,6 +41,8 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
   const { theme } = useAppTheme();
   const lang = useLang((s) => s.lang);
   const insets = useSafeAreaInsets();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const logoSize = Math.min(150, Math.max(96, Math.round(Math.min(windowHeight * 0.2, windowWidth * 0.36))));
   const startedAtRef = useRef(Date.now());
   const finishScheduledRef = useRef(false);
 
@@ -236,7 +239,7 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
         >
           <Image
             source={require('../assets/adaptive-icon.png')}
-            style={styles.logo}
+            style={[styles.logo, { width: logoSize, height: logoSize }]}
             resizeMode="contain"
           />
         </Animated.View>
@@ -248,14 +251,15 @@ export default function SplashLoader({ dataLoaded, onComplete, hasNick, hasAvata
         activeOpacity={0.65}
         style={[
           styles.privacyWrap,
-          { paddingBottom: Math.max(insets.bottom, 10) + 8 },
+          { paddingBottom: Math.max(insets.bottom, 12) + 12 },
         ]}
         accessibilityRole="link"
         accessibilityLabel={t('privacyPolicyLink', lang)}
       >
         <Text
+          allowFontScaling={false}
+          maxFontSizeMultiplier={1}
           style={[styles.privacyText, { color: theme.colors.titan }]}
-          numberOfLines={2}
         >
           {t('privacyPolicyLink', lang)}
         </Text>
@@ -276,23 +280,31 @@ const styles = StyleSheet.create({
   },
   middle: {
     flex: 1,
+    flexShrink: 1,
+    minHeight: 0,
     justifyContent: 'center',
     alignItems: 'center',
   },
   logoContainer: {
     justifyContent: 'center',
     alignItems: 'center',
+    flexShrink: 1,
   },
   privacyWrap: {
+    flexShrink: 0,
     alignSelf: 'stretch',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    width: '100%',
+    paddingHorizontal: 16,
+    paddingTop: 8,
   },
   privacyText: {
     fontSize: 11,
-    lineHeight: 15,
+    lineHeight: 16,
     textAlign: 'center',
     textDecorationLine: 'underline',
+    width: '100%',
+    ...(Platform.OS === 'android' && { includeFontPadding: false }),
   },
   logoWrapper: {
     justifyContent: 'center',

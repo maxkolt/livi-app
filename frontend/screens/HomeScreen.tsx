@@ -81,6 +81,7 @@ import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestC
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
 import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly, dismissMessageNotificationsOnly, dismissMessageNotificationForUser, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
+import ChatStyleBackButton from '../components/ChatStyleBackButton';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
 // УБРАНО: forceClearUserDataOnly не используется - вместо этого используется hardLocalReset() и clearAllUserData() из socket.ts
 import { warmAvatar, putThumb, putFull, getFull, clearAvatarCacheFor } from '../utils/avatarCache';
@@ -187,6 +188,14 @@ const LIVI = {
 const ANDROID_VIDEO_CALL_DISABLED_BG = '#1C1C1E';
 const ANDROID_VIDEO_CALL_DISABLED_ICON = '#48484A';
 
+/** Android: instant touch feedback (no opacity fade delay). */
+const ANDROID_INSTANT_TOUCH =
+  Platform.OS === 'android'
+    ? ({ activeOpacity: 1 as const, delayPressIn: 0, delayPressOut: 0 })
+    : ({} as const);
+const ANDROID_FRIEND_ACTION_HIT_SLOP = { top: 14, bottom: 14, left: 14, right: 14 };
+const ANDROID_MENU_HIT_SLOP = { top: 12, bottom: 12, left: 12, right: 12 };
+const ANDROID_SEG_RIPPLE = { color: 'rgba(255,255,255,0.14)', borderless: false as const };
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 const displayName = (name?: string) => (name && name.trim().length ? name : '—');
@@ -601,6 +610,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
           >
             {/* Эффект стекла с blur - фон страницы просвечивает через размытие */}
             <BlurView
+              pointerEvents={Platform.OS === 'android' ? 'none' : 'auto'}
               intensity={blurIntensity}
               tint={isDark ? 'dark' : 'light'}
               style={{
@@ -610,6 +620,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
             />
             {/* Титановый слой с прозрачностью - создает эффект титанового стекла */}
             <Animated.View
+              pointerEvents="none"
               style={{
                 ...StyleSheet.absoluteFillObject,
                 borderRadius: borderRadius,
@@ -629,64 +640,104 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                 }),
               }}
             />
-            <TouchableOpacity
-              activeOpacity={1}
-              onPressIn={() => {
-                if (disabled) {
-                  triggerBlockedFeedback();
-                  return;
-                }
-                // Увеличиваем blur и прозрачность титана при нажатии - более заметно для светлой темы
-                setBlurIntensity(isDark ? 25 : 40);
-                Animated.timing(titanOpacity, {
-                  toValue: isDark ? 0.4 : 0.5, // Больше для светлой темы
-                  duration: 150,
-                  useNativeDriver: true,
-                }).start();
-              }}
-              onPressOut={() => {
-                if (disabled) return;
-                // Возвращаем к исходным значениям
-                setBlurIntensity(isDark ? 15 : 20);
-                Animated.timing(titanOpacity, {
-                  toValue: 0.25,
-                  duration: 200,
-                  useNativeDriver: true,
-                }).start();
-              }}
-              onPress={() => {
-                if (disabled) {
-                  triggerBlockedFeedback();
-                  return;
-                }
-                onPress();
-              }}
-              accessibilityState={{ disabled }}
-              style={{
-                width: '100%',
-                height: '100%',
-                borderRadius: borderRadius,
-                backgroundColor: 'transparent', // Полностью прозрачный фон
-                alignItems: 'center',
-                justifyContent: 'center',
-                paddingHorizontal: 32,
-              }}
-            >
-              <Text
-                style={[
-                  styles.buttonLabel,
-                  {
-                    color: isDark ? LIVI.text : LIVI.textThemeWhite,
-                    textAlign: 'center',
-                    opacity: disabled ? 0.88 : 1,
-                  },
-                ]}
-                allowFontScaling={false}
-                maxFontSizeMultiplier={1}
+            {Platform.OS === 'android' ? (
+              <Pressable
+                onPress={() => {
+                  if (disabled) {
+                    triggerBlockedFeedback();
+                    return;
+                  }
+                  onPress();
+                }}
+                disabled={disabled}
+                accessibilityState={{ disabled }}
+                android_ripple={{
+                  color: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.10)',
+                  borderless: false,
+                }}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  borderRadius: borderRadius,
+                  backgroundColor: 'transparent',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  paddingHorizontal: 32,
+                }}
               >
-                {label}
-              </Text>
-            </TouchableOpacity>
+                <Text
+                  style={[
+                    styles.buttonLabel,
+                    {
+                      color: isDark ? LIVI.text : LIVI.textThemeWhite,
+                      textAlign: 'center',
+                      opacity: disabled ? 0.88 : 1,
+                    },
+                  ]}
+                  allowFontScaling={false}
+                  maxFontSizeMultiplier={1}
+                >
+                  {label}
+                </Text>
+              </Pressable>
+            ) : (
+              <TouchableOpacity
+                activeOpacity={1}
+                onPressIn={() => {
+                  if (disabled) {
+                    triggerBlockedFeedback();
+                    return;
+                  }
+                  setBlurIntensity(isDark ? 25 : 40);
+                  Animated.timing(titanOpacity, {
+                    toValue: isDark ? 0.4 : 0.5,
+                    duration: 150,
+                    useNativeDriver: true,
+                  }).start();
+                }}
+                onPressOut={() => {
+                  if (disabled) return;
+                  setBlurIntensity(isDark ? 15 : 20);
+                  Animated.timing(titanOpacity, {
+                    toValue: 0.25,
+                    duration: 200,
+                    useNativeDriver: true,
+                  }).start();
+                }}
+                onPress={() => {
+                  if (disabled) {
+                    triggerBlockedFeedback();
+                    return;
+                  }
+                  onPress();
+                }}
+                accessibilityState={{ disabled }}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  borderRadius: borderRadius,
+                  backgroundColor: 'transparent',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  paddingHorizontal: 32,
+                }}
+              >
+                <Text
+                  style={[
+                    styles.buttonLabel,
+                    {
+                      color: isDark ? LIVI.text : LIVI.textThemeWhite,
+                      textAlign: 'center',
+                      opacity: disabled ? 0.88 : 1,
+                    },
+                  ]}
+                  allowFontScaling={false}
+                  maxFontSizeMultiplier={1}
+                >
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            )}
             {disabled && (
               <Pressable
                 style={StyleSheet.absoluteFillObject}
@@ -774,13 +825,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [menuOpen, menuOverlayOpacity]);
 
   const closeMenu = useCallback(() => {
+    setMenuOpen(false);
+    if (Platform.OS === 'android') {
+      menuOverlayOpacity.setValue(0);
+      return;
+    }
     Animated.timing(menuOverlayOpacity, {
       toValue: 0,
       duration: 150,
       useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (finished) setMenuOpen(false);
-    });
+    }).start();
   }, [menuOverlayOpacity]);
 
   /* обновление приложения: бейдж раз в сутки, индикатор у «Ещё», кнопка в табе Ещё */
@@ -4253,9 +4307,7 @@ const handleClearNick = useCallback(async () => {
               },
             ]}
             rippleColor="rgba(255,255,255,0.28)"
-            underlayColor="rgba(255,255,255,0.14)"
-            activeOpacity={0.82}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : { top: 10, bottom: 10, left: 10, right: 10 }}
             delayLongPress={280}
             onPress={handlePress}
             onLongPress={
@@ -4429,14 +4481,14 @@ const handleClearNick = useCallback(async () => {
     return (
       <View style={styles.rightWrap}>
         {showBusyBadge && (
-          <Animated.View style={[styles.busyBadge, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.65, 1] }) }]}>
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.busyBadge, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.65, 1] }) }]}
+          >
             <Text style={styles.busyText}>{t('busy', lang)}</Text>
           </Animated.View>
         )}
-        <View
-          style={styles.friendActionBadgeAnchor}
-          pointerEvents={Platform.OS === 'android' && videoDisabled ? 'none' : 'auto'}
-        >
+        <View style={styles.friendActionBadgeAnchor}>
           <RectButton
             enabled={!videoDisabled}
             accessibilityState={{ disabled: !!videoDisabled }}
@@ -4456,9 +4508,7 @@ const handleClearNick = useCallback(async () => {
               useBusyButtonStyle && Platform.OS !== 'android' ? styles.inviteBtnDisabled : null,
             ]}
             rippleColor="rgba(255,255,255,0.28)"
-            underlayColor="rgba(255,255,255,0.14)"
-            activeOpacity={0.82}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : { top: 10, bottom: 10, left: 10, right: 10 }}
             delayLongPress={280}
             onLongPress={
               missedCount > 0 && !videoDisabled
@@ -4535,6 +4585,9 @@ const handleClearNick = useCallback(async () => {
           rightThreshold={72}
           leftThreshold={72}
           overshootRight={false}
+          {...(Platform.OS === 'android'
+            ? { friction: 2, overshootFriction: 8, enableTrackpadTwoFingerGesture: false }
+            : {})}
         >
           <View
             style={styles.listRowWrap}
@@ -4614,7 +4667,9 @@ const handleClearNick = useCallback(async () => {
                     </Text>
                     <TouchableOpacity
                       style={styles.markReadMenuBtn}
-                      activeOpacity={0.8}
+                      activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
+                      {...ANDROID_INSTANT_TOUCH}
+                      hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
                       onPress={() => {
                         const { friendId, type } = markReadMenu;
                         setMarkReadMenu(null);
@@ -4635,7 +4690,9 @@ const handleClearNick = useCallback(async () => {
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={styles.markReadMenuBtn}
-                      activeOpacity={0.8}
+                      activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
+                      {...ANDROID_INSTANT_TOUCH}
+                      hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
                       onPress={() => setMarkReadMenu(null)}
                     >
                       <MaterialIcons name="close" size={18} color={LIVI.text2} />
@@ -5069,23 +5126,31 @@ const handleClearNick = useCallback(async () => {
             ]}
           >
             <Pressable
+              hitSlop={Platform.OS === 'android' ? ANDROID_MENU_HIT_SLOP : { top: 8, bottom: 8, left: 8, right: 8 }}
+              delayPressIn={Platform.OS === 'android' ? 0 : undefined}
+              delayPressOut={Platform.OS === 'android' ? 0 : undefined}
               style={({ pressed }) => [
                 styles.menuBtnInner,
-                { backgroundColor: MENU_BTN_INNER_BG, position: 'relative' },
+                {
+                  backgroundColor: MENU_BTN_INNER_BG,
+                  position: 'relative',
+                  ...(Platform.OS === 'android' ? { elevation: 0 } : {}),
+                },
                 Platform.OS === 'ios' && pressed && styles.menuBtnPressed,
               ]}
-              onPress={() => setMenuOpen(true)}
-              android_ripple={{
-                color: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.12)',
-                borderless: false,
+              onPress={() => {
+                try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
+                setMenuOpen(true);
               }}
             >
               <BlurView
+                pointerEvents="none"
                 intensity={isDark ? 15 : 20}
                 tint={isDark ? 'dark' : 'light'}
                 style={[StyleSheet.absoluteFillObject, { borderRadius: 13 }]}
               />
               <View
+                pointerEvents="none"
                 style={[
                   StyleSheet.absoluteFillObject,
                   {
@@ -5095,7 +5160,7 @@ const handleClearNick = useCallback(async () => {
                   },
                 ]}
               />
-              <View style={styles.menuBtnIconWrap}>
+              <View style={styles.menuBtnIconWrap} pointerEvents="none">
                 <Icon
                   source="menu"
                   size={Platform.OS === "ios" ? 28 : 24}
@@ -5365,9 +5430,17 @@ const handleClearNick = useCallback(async () => {
         style={[styles.overlayMenu, { opacity: menuOverlayOpacity }]}
         pointerEvents={menuOpen ? 'box-none' : 'none'}
       >
-        <View style={StyleSheet.absoluteFill} collapsable={false}>
-          <BlurView intensity={Platform.OS === 'ios' ? 80 : 60} tint="dark" style={StyleSheet.absoluteFill} />
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'ios' ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.6)' }]} />
+        <View style={StyleSheet.absoluteFill} collapsable={false} pointerEvents="none">
+          <BlurView
+            pointerEvents="none"
+            intensity={Platform.OS === 'ios' ? 80 : 60}
+            tint="dark"
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'ios' ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.6)' }]}
+          />
         </View>
         <SafeAreaView
           style={[styles.sheetFull]}
@@ -5375,30 +5448,41 @@ const handleClearNick = useCallback(async () => {
         >
           <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             <View style={styles.sheetTopBar}>
-              <TouchableOpacity
-                onPress={() => {
-                  try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
-                  closeMenu();
-                }}
-                activeOpacity={0.5}
-                style={[styles.sheetCornerIconBtn, { marginLeft: 5 }]}
-              >
-                <Ionicons name="arrow-back" size={FRIEND_ACTION_ICON_SIZE} color={LIVI.titan} />
-              </TouchableOpacity>
+              <ChatStyleBackButton
+                onPress={closeMenu}
+                iconColor={LIVI.titan}
+                style={{ marginLeft: 5 }}
+              />
               <Text style={styles.sheetTitle}>{L('menuTitle')}</Text>
               {tab === 'settings' && handleWipeAccount && (
-                <TouchableOpacity
-                  onPress={handleWipeAccount}
-                  activeOpacity={0.85}
-                  disabled={wiping}
-                  style={[
-                    styles.sheetCornerIconBtn,
-                    styles.sheetCornerIconBtnDanger,
-                    { marginRight: 5, opacity: wiping ? 0.7 : 1 },
-                  ]}
-                >
-                  <Ionicons name="trash" size={FRIEND_ACTION_ICON_SIZE} color="rgba(255,90,103,0.6)" />
-                </TouchableOpacity>
+                Platform.OS === 'android' ? (
+                  <Pressable
+                    onPress={handleWipeAccount}
+                    disabled={wiping}
+                    hitSlop={ANDROID_MENU_HIT_SLOP}
+                    android_ripple={{ color: 'rgba(255,90,103,0.22)', borderless: true }}
+                    style={[
+                      styles.sheetCornerIconBtn,
+                      styles.sheetCornerIconBtnDanger,
+                      { marginRight: 5, opacity: wiping ? 0.7 : 1 },
+                    ]}
+                  >
+                    <Ionicons name="trash" size={FRIEND_ACTION_ICON_SIZE} color="rgba(255,90,103,0.6)" />
+                  </Pressable>
+                ) : (
+                  <TouchableOpacity
+                    onPress={handleWipeAccount}
+                    activeOpacity={0.85}
+                    disabled={wiping}
+                    style={[
+                      styles.sheetCornerIconBtn,
+                      styles.sheetCornerIconBtnDanger,
+                      { marginRight: 5, opacity: wiping ? 0.7 : 1 },
+                    ]}
+                  >
+                    <Ionicons name="trash" size={FRIEND_ACTION_ICON_SIZE} color="rgba(255,90,103,0.6)" />
+                  </TouchableOpacity>
+                )
               )}
               {!(tab === 'settings' && handleWipeAccount) && (
                 <View style={{ width: FRIEND_ACTION_BUTTON.width }} />
@@ -5556,22 +5640,16 @@ const handleClearNick = useCallback(async () => {
                 <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
               </>
             )}
-            <TouchableOpacity
-              onPress={() => {
-                try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
-                setDonateVisible(false);
+            <ChatStyleBackButton
+              onPress={() => setDonateVisible(false)}
+              iconColor={LIVI.titan}
+              style={{
+                position: 'absolute',
+                zIndex: 10,
+                top: insets.top + (Platform.OS === 'android' ? 35 : 16),
+                left: Platform.OS === 'ios' ? 15 : 17,
               }}
-              activeOpacity={0.5}
-              style={[
-                styles.modalFloatingCornerBtn,
-                {
-                  top: insets.top + (Platform.OS === "android" ? 35 : 16),
-                  left: Platform.OS === 'ios' ? 15 : 17,
-                },
-              ]}
-            >
-              <Ionicons name="arrow-back" size={FRIEND_ACTION_ICON_SIZE} color={LIVI.titan} />
-            </TouchableOpacity>
+            />
             <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: accent.solid }]}>
               <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: accent.softText }]}>{t('supportProjectTitle', lang)}</Text>
               <View style={{ marginBottom: 20 }}>
@@ -5678,22 +5756,16 @@ const handleClearNick = useCallback(async () => {
                 <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
               </>
             )}
-            <TouchableOpacity
-              onPress={() => {
-                try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { Vibration.vibrate(10); }
-                setShareVisible(false);
+            <ChatStyleBackButton
+              onPress={() => setShareVisible(false)}
+              iconColor={LIVI.titan}
+              style={{
+                position: 'absolute',
+                zIndex: 10,
+                top: insets.top + (Platform.OS === 'android' ? 35 : 16),
+                left: Platform.OS === 'ios' ? 15 : 17,
               }}
-              activeOpacity={0.5}
-              style={[
-                styles.modalFloatingCornerBtn,
-                {
-                  top: insets.top + (Platform.OS === "android" ? 35 : 16),
-                  left: Platform.OS === 'ios' ? 15 : 17,
-                },
-              ]}
-            >
-              <Ionicons name="arrow-back" size={FRIEND_ACTION_ICON_SIZE} color={LIVI.titan} />
-            </TouchableOpacity>
+            />
             <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: '#4DD0E1' }]}>
               <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#4DD0E1' }]}>
                 {t('inviteFriendTitle', lang)}
@@ -5824,19 +5896,17 @@ const handleClearNick = useCallback(async () => {
                 <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
               </>
             )}
-            <TouchableOpacity
+            <ChatStyleBackButton
+              icon="close"
               onPress={handleDeclineInvite}
-              activeOpacity={0.85}
-              style={[
-                styles.modalFloatingCornerBtn,
-                {
-                  top: insets.top + (Platform.OS === "android" ? 35 : 16),
-                  left: Platform.OS === 'ios' ? 15 : 17,
-                },
-              ]}
-            >
-              <Ionicons name="close" size={FRIEND_ACTION_ICON_SIZE} color={LIVI.titan} />
-            </TouchableOpacity>
+              iconColor={LIVI.titan}
+              style={{
+                position: 'absolute',
+                zIndex: 10,
+                top: insets.top + (Platform.OS === 'android' ? 35 : 16),
+                left: Platform.OS === 'ios' ? 15 : 17,
+              }}
+            />
             <Surface style={[styles.confirmCard, { minWidth: 300, maxWidth: 400, borderColor: '#4DD0E1' }]}>
               <Text style={[styles.confirmTitle, { textAlign: 'center', marginBottom: 20, color: '#4DD0E1' }]}>
                 {t('friendInviteTitle', lang)}
@@ -5961,8 +6031,13 @@ const handleClearNick = useCallback(async () => {
   function renderMoreSegBtn() {
     const active = tab === 'more';
     const label = L('tabMore');
+    const SegWrapper = Platform.OS === 'android' ? Pressable : TouchableOpacity;
+    const segTouchProps =
+      Platform.OS === 'android'
+        ? { android_ripple: ANDROID_SEG_RIPPLE }
+        : { activeOpacity: 0.9 };
     return (
-      <TouchableOpacity key="more" activeOpacity={0.9} onPress={() => setTab('more')} style={[styles.segItem, styles.segRight, { position: 'relative' }]}>
+      <SegWrapper key="more" onPress={() => setTab('more')} style={[styles.segItem, styles.segRight, { position: 'relative' }]} {...segTouchProps}>
         {active && <View style={[StyleSheet.absoluteFill, styles.segActiveBg]} />}
         {active && <View style={styles.segTopShadow} />}
         {updateAvailable && (
@@ -5978,22 +6053,32 @@ const handleClearNick = useCallback(async () => {
           <List.Icon icon="dots-horizontal" color={LIVI.white} style={{ margin: 0, marginRight: 8 }} />
           <Text style={styles.segLabel}>{label}</Text>
         </View>
-      </TouchableOpacity>
+      </SegWrapper>
     );
   }
 
   /* segmented button */
   function renderSegBtn(value: 'friends' | 'settings' | 'more', label: string, icon: string, rounded: 'left' | 'mid' | 'right') {
     const active = tab === value;
+    const SegWrapper = Platform.OS === 'android' ? Pressable : TouchableOpacity;
+    const segTouchProps =
+      Platform.OS === 'android'
+        ? { android_ripple: ANDROID_SEG_RIPPLE }
+        : { activeOpacity: 0.9 };
     return (
-      <TouchableOpacity key={value} activeOpacity={0.9} onPress={() => setTab(value)} style={[styles.segItem, rounded === 'left' && styles.segLeft, rounded === 'right' && styles.segRight]}>
+      <SegWrapper
+        key={value}
+        onPress={() => setTab(value)}
+        style={[styles.segItem, rounded === 'left' && styles.segLeft, rounded === 'right' && styles.segRight]}
+        {...segTouchProps}
+      >
         {active && <View style={[StyleSheet.absoluteFill, styles.segActiveBg]} />}
         {active && <View style={styles.segTopShadow} />}
         <View style={styles.segContent}>
           <List.Icon icon={icon} color={LIVI.white} style={{ margin: 0, marginRight: 8 }} />
           <Text style={styles.segLabel}>{label}</Text>
         </View>
-      </TouchableOpacity>
+      </SegWrapper>
     );
   }
 }
@@ -6006,7 +6091,7 @@ const styles = StyleSheet.create({
   menuBtn: { backgroundColor: LIVI.glass, borderRadius: 14 },
   menuBtnOuter: { borderRadius: 14, padding: 1, alignSelf: 'flex-start', overflow: 'hidden' },
   menuBtnInner: { borderRadius: 13, overflow: 'hidden', minWidth: 40, minHeight: 40, justifyContent: 'center', alignItems: 'center' },
-  menuBtnPressed: { opacity: 0.75 },
+  menuBtnPressed: { opacity: 0.9 },
   menuBtnIconWrap: { margin: 0, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' },
   menuBtnIcon: { margin: 0, backgroundColor: 'transparent' },
   // Симметричные отступы: левый край -> аватар = правый край -> иконка чата.
