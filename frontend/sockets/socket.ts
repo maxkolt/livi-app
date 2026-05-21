@@ -2862,6 +2862,17 @@ export function getUnreadCount(from?: string) {
   }>("messages:unread_count", { from });
 }
 
+export function getUnreadCounts(fromIds?: string[]) {
+  const ids = Array.isArray(fromIds)
+    ? fromIds.map((id) => String(id).trim()).filter(Boolean)
+    : undefined;
+  return emitAck<{
+    ok: boolean;
+    counts?: Record<string, number>;
+    error?: string;
+  }>('messages:unread_counts', ids?.length ? { fromIds: ids } : {});
+}
+
 export function onMessageReceived(
   cb: (message: {
     id: string;

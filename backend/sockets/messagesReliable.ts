@@ -842,6 +842,42 @@ function registerMessageHandlers(io: Server, sock: Socket) {
     }
   });
 
+  /** ===== Batch: непрочитанные по списку собеседников (один round-trip) ===== */
+  sock.on('messages:unread_counts', async (payload: {
+    fromIds?: string[];
+  }, ack?: Function) => {
+    try {
+      const me = meId();
+
+      if (!isOid(me)) {
+        return ack?.({ ok: false, error: 'unauthorized' });
+      }
+
+      const counts: Record<string, number> = {};
+      const ids = Array.isArray(payload?.fromIds)
+        ? payload.fromIds.map((id) => String(id).trim()).filter((id) => isOid(id))
+        : [];
+
+      if (ids.length > 0) {
+        for (const from of ids) {
+          counts[from] = getUnreadCount(me, from);
+        }
+      } else {
+        const allUnreads = unreadMessages.get(me) || [];
+        for (const msg of allUnreads) {
+          const from = String(msg.from || '').trim();
+          if (!isOid(from)) continue;
+          counts[from] = (counts[from] || 0) + 1;
+        }
+      }
+
+      ack?.({ ok: true, counts });
+    } catch (e: any) {
+      console.error('[messages:unread_counts] error:', e?.message || e);
+      return ack?.({ ok: false, error: 'server_error' });
+    }
+  });
+
   /** ===== Удаление одного сообщения (для обоих). Поиск по messageId в БД. ===== */
   sock.on('message:delete', async (payload: { messageId: string }, ack?: Function) => {
     try {

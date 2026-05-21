@@ -653,10 +653,18 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
       if (!nav) return;
       ensureInAppPiPBeforeOpeningFriendsFromMessageNotification();
       await clearNotificationIndicators();
+      const fromId = String(data?.from || data?.fromUserId || '').trim();
       nav.dispatch(
         CommonActions.reset({
           index: 0,
-          routes: [{ name: 'Home' as never, params: { openFriendsMenu: true, openFriendsTab: true } }],
+          routes: [{
+            name: 'Home' as never,
+            params: {
+              openFriendsMenu: true,
+              openFriendsTab: true,
+              ...(fromId ? { pushMessageFrom: fromId } : {}),
+            },
+          }],
         })
       );
       return;

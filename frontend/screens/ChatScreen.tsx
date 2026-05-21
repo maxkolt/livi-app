@@ -1374,14 +1374,15 @@ export default function ChatScreen({ route, navigation }: Props) {
     const initializeChat = async () => {
       
       try {
-        // Получаем userId через REST API (как в старой версии)
-        let userId = await getMyUserId();
-        // Оффлайн fallback: если сеть недоступна и whoami не отдал id,
-        // пробуем взять уже известный userId из runtime/локального storage.
+        let userId: string | null = null;
+        try {
+          userId = getCurrentSocketUserId() || null;
+        } catch {}
+        if (userId) {
+          setCurrentUserId(userId);
+        }
         if (!userId) {
-          try {
-            userId = getCurrentSocketUserId() || null;
-          } catch {}
+          userId = await getMyUserId();
         }
         if (!userId) {
           try {
@@ -1928,7 +1929,17 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // Загрузка истории при открытии чата
   useEffect(() => {
-    if (!currentUserId || !peerId) return;
+    if (!peerId) return;
+    let uid = String(currentUserId || '').trim();
+    if (!uid) {
+      try {
+        uid = String(getCurrentSocketUserId() || '').trim();
+      } catch {}
+    }
+    if (!uid) return;
+    if (!currentUserId && uid) {
+      setCurrentUserId(uid);
+    }
     const prevPeer = prevPeerIdForHistoryRef.current;
     if (prevPeer !== peerId) {
       prevPeerIdForHistoryRef.current = peerId;
@@ -1938,11 +1949,12 @@ export default function ChatScreen({ route, navigation }: Props) {
     historySyncGenerationRef.current += 1;
     const syncGen = historySyncGenerationRef.current;
     const pid = peerId;
-    const uid = currentUserId;
 
     const loadHistory = async () => {
       setHistoryReady(false);
       clearMessageCache(pid, uid);
+
+      const fetchPromise = fetchMessages({ with: pid, limit: 50 }).catch(() => null);
 
       let localPreloaded = false;
       try {
@@ -1963,10 +1975,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       void (async () => {
         try {
-          const serverMessages = await fetchMessages({
-            with: pid,
-            limit: 50,
-          });
+          const serverMessages = await fetchPromise;
           if (historySyncGenerationRef.current !== syncGen) return;
 
           if (serverMessages?.ok && serverMessages.messages) {
@@ -2016,7 +2025,26 @@ export default function ChatScreen({ route, navigation }: Props) {
               };
             });
 
-            setMessages(formattedMessages);
+            setMessages((prev) => {
+              const byId = new Map<string, any>();
+              for (const m of prev) byId.set(String(m.id), m);
+              for (const m of formattedMessages) {
+                const id = String(m.id);
+                const existing = byId.get(id);
+                if (!existing) {
+                  byId.set(id, m);
+                  continue;
+                }
+                const ta = existing.timestamp instanceof Date ? existing.timestamp.getTime() : new Date(existing.timestamp).getTime();
+                const tb = m.timestamp instanceof Date ? m.timestamp.getTime() : new Date(m.timestamp).getTime();
+                byId.set(id, tb >= ta ? m : existing);
+              }
+              return Array.from(byId.values()).sort((a, b) => {
+                const ta = a.timestamp instanceof Date ? a.timestamp.getTime() : new Date(a.timestamp).getTime();
+                const tb = b.timestamp instanceof Date ? b.timestamp.getTime() : new Date(b.timestamp).getTime();
+                return ta - tb;
+              });
+            });
 
             await markMessagesAsRead(pid);
             try {

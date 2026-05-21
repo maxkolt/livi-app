@@ -76,7 +76,7 @@ const LinearGradient: any = (() => {
 import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
 import { usePiP } from '../src/pip/PiPContext';
-import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, onMessagesDeleted, getUnreadCount, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
+import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, onMessagesDeleted, getUnreadCount, getUnreadCounts, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onCometChatStatus } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
 import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly, dismissMessageNotificationsOnly, dismissMessageNotificationForUser, getMissedCountByUserFromNative } from '../utils/pushNotifications';
@@ -227,6 +227,7 @@ const mapToFriend = (u: any): Friend => {
 
 const DRAFT_KEY = 'profile_draft_v1';
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
+const UNREAD_BY_USER_KEY = 'unread_by_user_v1';
 const PROFILE_KEY = 'livi.profile.v1';
 const INSTALL_ID_KEY = 'livi.installId';
 const USER_ID_KEY = 'userId';
@@ -257,6 +258,7 @@ async function hardLocalReset() {
       INSTALL_ID_KEY,         // livi.installId
       USER_ID_KEY,            // userId
       MISSED_CALLS_KEY,       // missed_calls_by_user_v1
+      UNREAD_BY_USER_KEY,
     ];
 
     // Удаляем основные ключи
@@ -2124,6 +2126,32 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     };
   }, [loadFriends]);
 
+  const refreshUnreadCountsForFriends = useCallback(async (list: Friend[]) => {
+    if (!list.length) return;
+    const ids = list.map((f) => String(f.id));
+    try {
+      const result = await getUnreadCounts(ids);
+      if (!result?.ok || !result.counts) return;
+      const entries: Record<string, number> = {};
+      for (const id of ids) {
+        const n = result.counts[id];
+        entries[id] = typeof n === 'number' && n > 0 ? n : 0;
+      }
+      setUnreadByUser((prev) => {
+        const next = { ...prev, ...entries };
+        const cleaned: Record<string, number> = {};
+        Object.keys(next).forEach((key) => {
+          const v = next[key];
+          if (typeof v === 'number' && v > 0) cleaned[key] = v;
+        });
+        AsyncStorage.setItem(UNREAD_BY_USER_KEY, JSON.stringify(cleaned)).catch(() => {});
+        return next;
+      });
+    } catch (e) {
+      logger.warn('[HomeScreen] Batch unread refresh failed:', (e as Error)?.message);
+    }
+  }, []);
+
   /* ===== safe attachIdentity wrapper (queue if socket offline) ===== */
   const attachIdentitySafe = useCallback(
     async (params: { installId?: string | null; profile?: { nick?: string; avatar?: string } | null; }): Promise<{ ok: boolean; error?: string; userId?: string }> => {
@@ -2754,43 +2782,63 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Auto-upload отключен - теперь загружаем только при явном нажатии "Сохранить"
   // Это предотвращает попытки использовать старый HTTP endpoint (404)
 
+  // Кэш непрочитанных по друзьям — сразу при монтировании (до сокета).
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(UNREAD_BY_USER_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        const normalized: Record<string, number> = {};
+        if (parsed && typeof parsed === 'object') {
+          Object.keys(parsed).forEach((key) => {
+            const value = parsed[key];
+            if (typeof value === 'number' && value > 0) normalized[String(key)] = value;
+          });
+        }
+        if (Object.keys(normalized).length) {
+          setUnreadByUser((prev) => ({ ...normalized, ...prev }));
+        }
+      } catch {}
+    })();
+  }, []);
+
   /* ===== initial boot ===== */
   useEffect(() => {
     (async () => {
+      // Пропущенные звонки — не ждём loadFriends / сокет.
+      const loadMissedFromStorage = async () => {
+        try {
+          const rawMissed = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+          const parsed = rawMissed ? JSON.parse(rawMissed) : {};
+          const normalized: Record<string, number> = {};
+          if (parsed && typeof parsed === 'object') {
+            Object.keys(parsed).forEach((key) => {
+              const value = parsed[key];
+              if (typeof value === 'number' && value > 0) {
+                normalized[String(key)] = value;
+              }
+            });
+          }
+          setMissedByUser(normalized);
+          setMissedLoaded(true);
+          logger.debug('[HomeScreen] Loaded missed calls from storage', { count: Object.keys(normalized).length, normalized });
+        } catch (e) {
+          logger.warn('[HomeScreen] Error loading missed calls:', e);
+          setMissedLoaded(true);
+        }
+      };
+
+      void loadMissedFromStorage();
+
       try { await waitSocketConnected().catch(() => {}); } catch {}
-      
-      // Сначала синхронизируем данные пользователя
+
       const userExists = await syncUserData();
-      
-      // Если пользователь существует, загружаем его данные
+
       if (userExists !== false) {
-        // Не блокируем загрузку списка друзей — пусть идет параллельно, чтобы "Друзья" обновились быстрее.
         ensureIdentity().catch(() => {});
       }
-      
-      // Друзей грузим как можно раньше (socket или REST fallback)
-      await loadFriends();
-      // Инициализация пропущенных видеозвонков из хранилища
-      // КРИТИЧНО: Нормализуем ключи (преобразуем в строки) для корректной работы
-      try {
-        const rawMissed = await AsyncStorage.getItem(MISSED_CALLS_KEY);
-        const parsed = rawMissed ? JSON.parse(rawMissed) : {};
-        // Нормализуем ключи: преобразуем все ключи в строки
-        const normalized: Record<string, number> = {};
-        if (parsed && typeof parsed === 'object') {
-          Object.keys(parsed).forEach(key => {
-            const value = parsed[key];
-            if (typeof value === 'number' && value > 0) {
-              normalized[String(key)] = value;
-            }
-          });
-        }
-        setMissedByUser(normalized);
-        setMissedLoaded(true);
-        logger.debug('[HomeScreen] Loaded missed calls from storage', { count: Object.keys(normalized).length, normalized });
-      } catch (e) {
-        logger.warn('[HomeScreen] Error loading missed calls:', e);
-      }
+
+      void loadFriends();
     })();
   }, [syncUserData, ensureIdentity, loadFriends]);
 
@@ -3085,24 +3133,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           await syncAppBadgeFromMissedCount();
         }
 
-        // КРИТИЧНО: Обновляем счетчики непрочитанных сообщений при фокусе
         if (friends.length > 0) {
-          const entries: Record<string, number> = {};
-          await Promise.all(friends.map(async (f) => {
-            try { 
-              // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) для корректной работы
-              const friendIdStr = String(f.id);
-              const result = await getUnreadCount(friendIdStr);
-              entries[friendIdStr] = result.ok ? (result.count || 0) : 0;
-            } catch { 
-              const friendIdStr = String(f.id);
-              entries[friendIdStr] = 0; 
-            }
-          }));
-          setUnreadByUser((prev) => ({ ...prev, ...entries }));
-          logger.debug('[HomeScreen] Reloaded unread messages on focus', { 
-            count: Object.keys(entries).length,
-            entries 
+          await refreshUnreadCountsForFriends(friends);
+          logger.debug('[HomeScreen] Reloaded unread messages on focus (batch)', {
+            count: friends.length,
           });
         }
       } catch (e) {
@@ -3110,7 +3144,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
     });
     return () => { try { unsub?.(); } catch {} };
-  }, [navigation, friends, syncSelfPresenceOnlineIfIdle]);
+  }, [navigation, friends, syncSelfPresenceOnlineIfIdle, refreshUnreadCountsForFriends]);
 
   // После восстановления сети reauth приносит пропущенные с сервера — перечитываем из AsyncStorage и обновляем UI
   useEffect(() => {
@@ -3140,28 +3174,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const refreshUnread = () => {
       const list = friendsRef.current;
       if (!list.length) return;
-      (async () => {
-        try {
-          const entries: Record<string, number> = {};
-          await Promise.all(
-            list.map(async (f) => {
-              const friendIdStr = String(f.id);
-              try {
-                const result = await getUnreadCount(friendIdStr);
-                entries[friendIdStr] = result.ok ? (result.count || 0) : 0;
-              } catch {
-                entries[friendIdStr] = 0;
-              }
-            }),
-          );
-          setUnreadByUser((prev) => ({ ...prev, ...entries }));
-          logger.debug('[HomeScreen] Unread counts refreshed after socket connect/reconnect', {
-            n: Object.keys(entries).length,
-          });
-        } catch (e) {
-          logger.warn('[HomeScreen] Unread refresh after socket failed:', e);
-        }
-      })().catch(() => {});
+      void refreshUnreadCountsForFriends(list).then(() => {
+        logger.debug('[HomeScreen] Unread counts refreshed after socket connect/reconnect (batch)', {
+          n: list.length,
+        });
+      }).catch((e) => {
+        logger.warn('[HomeScreen] Unread refresh after socket failed:', e);
+      });
     };
 
     const schedule = () => {
@@ -3176,7 +3195,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       socket.off('reconnect', schedule);
       if (t) clearTimeout(t);
     };
-  }, []);
+  }, [refreshUnreadCountsForFriends]);
 
   // Регистрируем колбэк, чтобы при завершении видеозвонка (в т.ч. из PiP) принудительно обновить список друзей — снять бейдж «Занят» и disabled с кнопки.
   useEffect(() => {
@@ -3690,23 +3709,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
     const scheduleRecalcAll = () => {
       if (allTimer) return;
-      allTimer = setTimeout(async () => {
+      allTimer = setTimeout(() => {
         allTimer = null;
-        const entries: Record<string, number> = {};
-        await Promise.all(friends.map(async (f) => {
-          try { 
-            // КРИТИЧНО: Нормализуем ключ (преобразуем в строку) для корректной работы
-            const friendIdStr = String(f.id);
-            // Используем новую функцию getUnreadCount
-            const result = await getUnreadCount(friendIdStr);
-            entries[friendIdStr] = result.ok ? (result.count || 0) : 0;
-          } catch { 
-            // КРИТИЧНО: Нормализуем ключ даже при ошибке
-            const friendIdStr = String(f.id);
-            entries[friendIdStr] = 0; 
-          }
-        }));
-        if (!disposed) setUnreadByUser((prev) => ({ ...prev, ...entries }));
+        if (!disposed) void refreshUnreadCountsForFriends(friends);
       }, 150);
     };
 
@@ -3732,6 +3737,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       if (openChatPeer && openChatPeer === messageFromStr) {
         if (!disposed) setUnreadByUser((prev) => ({ ...prev, [messageFromStr]: 0 }));
       } else {
+        if (!disposed) {
+          setUnreadByUser((prev) => ({
+            ...prev,
+            [messageFromStr]: Math.max(1, prev[messageFromStr] || 0),
+          }));
+        }
         void updateOne(messageFromStr);
       }
       clearMissedBadgeCleared().then(() => syncAppBadgeFromMissedCount()).catch(() => {});
@@ -3761,7 +3772,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         allTimer = null; 
       } 
     };
-  }, [friends]);
+  }, [friends, refreshUnreadCountsForFriends]);
 
   /* ===== Конвертация изображения в base64 ===== */
   const imageToBase64 = async (uri: string): Promise<string> => {
@@ -4979,6 +4990,7 @@ const handleClearNick = useCallback(async () => {
     const cancelled = (route as any)?.params?.callCancelled;
     const openFriendsMenu = (route as any)?.params?.openFriendsMenu;
     const openFriendsTab = (route as any)?.params?.openFriendsTab;
+    const pushMessageFrom = String((route as any)?.params?.pushMessageFrom || '').trim();
     if (ended) {
       suppressUpdateBadgeForCallNotice();
       showNotice(t('callEnded', lang), 'error', 3000);
@@ -4992,12 +5004,17 @@ const handleClearNick = useCallback(async () => {
     }
     if (openFriendsTab) {
       setTab('friends');
-      // Сразу снимаем уведомления из шторки (дублируем нативный dismiss на случай, если интент не дошёл)
       dismissMissedCallNotificationsOnly().catch(() => {});
       dismissMessageNotificationsOnly().catch(() => {});
       setMissedBadgeCleared()
         .then(() => syncAppBadgeFromMissedCount())
         .catch(() => {});
+      if (pushMessageFrom && /^[a-f\d]{24}$/i.test(pushMessageFrom)) {
+        setUnreadByUser((prev) => ({
+          ...prev,
+          [pushMessageFrom]: Math.max(1, prev[pushMessageFrom] || 0),
+        }));
+      }
     }
     if (openFriendsMenu || openFriendsTab) {
       AsyncStorage.getItem(MISSED_CALLS_KEY).then((raw) => {
@@ -5021,6 +5038,7 @@ const handleClearNick = useCallback(async () => {
           callCancelled: undefined,
           openFriendsMenu: undefined,
           openFriendsTab: undefined,
+          pushMessageFrom: undefined,
         });
       } catch {}
     }
