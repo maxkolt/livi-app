@@ -87,6 +87,11 @@ class MainActivity : ReactActivity() {
     isPiPEnterAttemptRunning = false
   }
 
+  /** LiviAppModule при setEndingCallInProgress(true) — отменить отложенный вход в PiP после goBack. */
+  internal fun cancelPendingPiPEnterAttemptsForCallTeardown() {
+    cancelPendingPiPEnterAttempts()
+  }
+
   private fun tryStashPendingAnswerFromIntent(i: Intent?): Boolean {
     if (i == null) return false
     val callId = i.getStringExtra(EXTRA_PENDING_ANSWER_CALL_ID) ?: return false

@@ -114,7 +114,7 @@ import {
 } from "../sockets/socket";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLang } from "../store/lang";
-import { t } from "../utils/i18n";
+import { t, type Lang } from "../utils/i18n";
 import { setCurrentChatPeerId, dismissMessageNotificationForUser, syncAppBadgeFromMissedCount } from "../utils/pushNotifications";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 
@@ -427,6 +427,44 @@ function indexInChatListData(data: ChatListRow[], messageId: string): number {
   return data.findIndex((row) => row.type === 'message' && String((row as any).id) === id);
 }
 
+/** Animated "..." for peer typing/recording — isolated so ChatScreen doesn't re-render every ~420ms (send taps were dropped). */
+function ChatPeerActivityLabel({
+  peerActivity,
+  lang,
+  isDark,
+}: {
+  peerActivity: 'typing' | 'recording';
+  lang: Lang;
+  isDark: boolean;
+}) {
+  const [dots, setDots] = useState(1);
+  useEffect(() => {
+    setDots(1);
+    const id = setInterval(() => {
+      setDots((prev) => (prev % 3) + 1);
+    }, 420);
+    return () => clearInterval(id);
+  }, [peerActivity]);
+
+  const baseStyle = {
+    fontSize: 13,
+    fontStyle: 'italic' as const,
+    fontWeight: '500' as const,
+    letterSpacing: 0.2,
+  };
+  const text =
+    peerActivity === 'recording'
+      ? `${t('chatRecording', lang)}${'.'.repeat(dots)}`
+      : `${t('chatTyping', lang)}${'.'.repeat(dots)}`;
+  const color = isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.40)';
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      <Text style={{ ...baseStyle, color }}>{text}</Text>
+    </View>
+  );
+}
+
 export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
@@ -599,7 +637,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [messageText, setMessageText] = useState("");
   const [emojiPanelOpen, setEmojiPanelOpen] = useState(false);
   const [peerActivity, setPeerActivity] = useState<'typing' | 'recording' | null>(null);
-  const [peerTypingDots, setPeerTypingDots] = useState(1);
   const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
   const readStatusesRef = useRef(readStatuses);
   readStatusesRef.current = readStatuses;
@@ -1037,7 +1074,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         const next: 'typing' | 'recording' | null =
           recording ? 'recording' : (typing ? 'typing' : null);
 
-        setPeerActivity(next);
+        setPeerActivity((prev) => (prev === next ? prev : next));
 
         if (next) {
           // If "stop" event is lost, hide after a short grace period.
@@ -1054,18 +1091,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     };
   }, [peerId, currentUserId]);
 
-  useEffect(() => {
-    const active = peerActivity === 'typing' || peerActivity === 'recording';
-    if (!active) {
-      setPeerTypingDots(1);
-      return;
-    }
-    const id = setInterval(() => {
-      setPeerTypingDots((prev) => (prev % 3) + 1);
-    }, 420);
-    return () => clearInterval(id);
-  }, [peerActivity]);
-
   const GapCenterIndicator = React.useMemo(() => {
     const peerTyping = peerActivity === 'typing';
     const peerRecording = peerActivity === 'recording';
@@ -1080,12 +1105,6 @@ export default function ChatScreen({ route, navigation }: Props) {
       letterSpacing: 0.2,
     };
 
-    const text = peerRecording
-      ? `${t('chatRecording', lang)}${'.'.repeat(peerTypingDots)}`
-      : (peerTyping
-        ? `${t('chatTyping', lang)}${'.'.repeat(peerTypingDots)}`
-        : String(forwardToast.text || t('chatSent', lang)));
-
     const color = (peerTyping || peerRecording)
       ? (isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.40)')
       : (forwardToast.ok ? '#55d187' : '#FF5A67');
@@ -1099,12 +1118,22 @@ export default function ChatScreen({ route, navigation }: Props) {
           opacity: (peerTyping || peerRecording) ? 1 : forwardToastOpacity,
         }}
       >
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <Text style={{ ...baseStyle, color }}>{text}</Text>
-        </View>
+        {peerTyping || peerRecording ? (
+          <ChatPeerActivityLabel
+            peerActivity={peerRecording ? 'recording' : 'typing'}
+            lang={lang}
+            isDark={isDark}
+          />
+        ) : (
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={{ ...baseStyle, color }}>
+              {String(forwardToast.text || t('chatSent', lang))}
+            </Text>
+          </View>
+        )}
       </Animated.View>
     );
-  }, [peerActivity, peerTypingDots, isDark, forwardToast.visible, forwardToast.text, forwardToast.ok, forwardToastOpacity, lang]);
+  }, [peerActivity, isDark, forwardToast.visible, forwardToast.text, forwardToast.ok, forwardToastOpacity, lang]);
 
   const DeleteToastInline = React.useMemo(() => {
     if (!forwardToast.visible || String(forwardToast.text || '') !== t('chatDeleted', lang)) return null;
@@ -6168,7 +6197,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     <Ionicons
                       name={emojiPanelOpen ? 'keypad-outline' : 'happy-outline'}
                       size={26}
-                      color={emojiPanelOpen ? LIVI.accent : LIVI.titan}
+                      color={emojiPanelOpen ? LIVI.accent.bright : LIVI.titan}
                     />
                   </TouchableOpacity>
                 ) : null}
@@ -6553,7 +6582,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     <Ionicons
                       name={emojiPanelOpen ? 'keypad-outline' : 'happy-outline'}
                       size={26}
-                      color={emojiPanelOpen ? LIVI.accent : LIVI.titan}
+                      color={emojiPanelOpen ? LIVI.accent.bright : LIVI.titan}
                     />
                   </TouchableOpacity>
                 ) : null}

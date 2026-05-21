@@ -2186,17 +2186,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
       isEndingCallRef.current = true;
       isInactiveStateRef.current = true;
-      logger.info('[VideoCall] [end] refs установлены, закрываем экран');
-      logMicTraceRef.current('handleCallEnded — завершение звонка (далее deferred cleanup → session.cleanup / stopLocalTracks)', {
-        uiMicOn: micOnRef.current,
-        callId: callId ?? currentCallIdRef.current,
-      });
-
+      try {
+        const gEnd = global as any;
+        gEnd.__endingCallInProgressRef = gEnd.__endingCallInProgressRef || { current: false };
+        gEnd.__endingCallInProgressRef.current = true;
+      } catch (_) {}
       // Нативно блокируем вход в системный PiP при завершении (иначе пользователь улетает на главный экран с PiP).
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(true); } catch (_) {}
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
       }
+      logger.info('[VideoCall] [end] refs установлены, закрываем экран');
+      logMicTraceRef.current('handleCallEnded — завершение звонка (далее deferred cleanup → session.cleanup / stopLocalTracks)', {
+        uiMicOn: micOnRef.current,
+        callId: callId ?? currentCallIdRef.current,
+      });
 
       // Закрываем экран видеозвонка: goBack — пользователь остаётся на том же экране, что и до звонка (без мерцания). Если в стеке только VideoCall — reset на Home.
       const endSource = (global as any).__lastEndCallSourceRef?.current;

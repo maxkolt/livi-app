@@ -2050,6 +2050,14 @@ function AppContent() {
         g.__lastHandledCallEndedRef.key = eventKey;
         g.__lastHandledCallEndedRef.at = now;
       } catch (_) {}
+      try {
+        g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
+        g.__endingCallInProgressRef.current = true;
+      } catch (_) {}
+      if (Platform.OS === 'android') {
+        try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(true); } catch (_) {}
+        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+      }
       // КРИТИЧНО: Сразу сбрасываем refs и уведомляем HomeScreen (идемпотентно — те же refs трогает PiPContext и VideoCallSession).
       applyCallEndedGlobalRefsOnce(eventCallId || undefined, eventRoomId || undefined);
       // Сразу фиксируем online на сервере (force), чтобы не было гонки с повторным busy от VideoCall после сброса remoteStream.

@@ -37,10 +37,26 @@ function main() {
   }
 
   const out = runAdb(["devices"]);
-  const devices = parseDevices(out).filter((d) => d.state === "device");
+  const all = parseDevices(out);
+  const devices = all.filter((d) => d.state === "device");
 
   if (!devices.length) {
     console.error("No connected devices (state=device). Connect phone(s) and enable USB debugging.");
+    if (all.length) {
+      console.error("\nADB sees these entries (not ready to install):");
+      for (const { serial, state } of all) {
+        console.error(`  ${serial}\t${state}`);
+        if (state === "unauthorized") {
+          console.error("    → On the phone: unlock screen and tap «Allow USB debugging» (RSA fingerprint).");
+          console.error("    → Or: Developer options → Revoke USB debugging authorizations, replug USB.");
+        } else if (state === "offline") {
+          console.error("    → Replug cable / try another port; run: adb kill-server && adb start-server");
+        }
+      }
+      console.error("\nThen check: adb devices   (must show «device», not unauthorized)");
+    } else {
+      console.error("\nADB list is empty. Plug in phone(s) with USB debugging on, or start an emulator.");
+    }
     process.exit(1);
   }
 

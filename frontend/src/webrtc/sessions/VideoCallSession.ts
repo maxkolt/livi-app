@@ -2137,6 +2137,17 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
 
+    // До applyCallEndedGlobalRefsOnce / goBack: блокируем system PiP на onUserLeaveHint (remote end гонка с Home leaveHint).
+    if (Platform.OS === 'android') {
+      try {
+        const g = global as any;
+        g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
+        g.__endingCallInProgressRef.current = true;
+      } catch {}
+      try { (NativeModules as any)?.LiviAppModule?.setEndingCallInProgress?.(true); } catch {}
+      try { (NativeModules as any)?.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
+    }
+
     if (Platform.OS === 'android') {
       try { requestExitSystemPiPSoft(); } catch {}
     }
@@ -2173,10 +2184,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Сразу помечаем завершение, чтобы повторный вызов (socket call:ended + ParticipantDisconnected
     // почти одновременно) не выполнял очистку и emit('callEnded') дважды.
     this.ended = true;
-    if (Platform.OS === 'android') {
-      try { (NativeModules as any)?.LiviAppModule?.setEndingCallInProgress?.(true); } catch {}
-      try { (NativeModules as any)?.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch {}
-    }
     // КРИТИЧНО: Сразу уведомляем UI (выставить refs), чтобы колбэки при disconnectRoom (onRemoteCamStateChange и т.д.) не вызывали setState — без ререндеров при закрытии экрана.
     try { this.config.onCallEnding?.(); } catch (_) {}
 

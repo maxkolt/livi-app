@@ -1376,6 +1376,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     internal fun setEndingCallInProgressStatic(value: Boolean) {
       endingCallInProgress = value
+      if (value) {
+        val ctx = reactContextRef ?: return
+        val activity = ctx.currentActivity
+        if (activity is MainActivity) {
+          activity.runOnUiThread { activity.cancelPendingPiPEnterAttemptsForCallTeardown() }
+        }
+      }
     }
 
     /** Параметры для завершения звонка из системного PiP (кнопка в окне PiP). */
