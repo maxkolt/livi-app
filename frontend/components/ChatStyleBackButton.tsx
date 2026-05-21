@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from 'react-native-paper';
 import { useAppTheme } from '../theme/ThemeProvider';
-import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE } from '../constants/uiTokens';
+import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE, TOUCH_HIT_OUTER } from '../constants/uiTokens';
 
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -39,7 +39,7 @@ export default function ChatStyleBackButton({
         onPress();
       }}
       disabled={disabled}
-      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      hitSlop={{ top: TOUCH_HIT_OUTER, bottom: TOUCH_HIT_OUTER, left: TOUCH_HIT_OUTER, right: TOUCH_HIT_OUTER }}
       activeOpacity={0.5}
       style={[
         {

@@ -95,6 +95,7 @@
     "react-native-video": "^6.16.1",
     "react-native-view-shot": "^4.0.3",
     "react-native-webview": "13.13.5",
+    "rn-emoji-keyboard": "^1.7.0",
     "socket.io-client": "^4.8.1",
     "uuid": "^11.1.0",
     "zustand": "^5.0.8"

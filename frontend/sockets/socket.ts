@@ -567,6 +567,9 @@ if (SHOULD_FORCE_SAFE_API_BASE) {
 /** Первый коннект / смена сети (VPN, DNS): согласовано с io({ timeout }). Пуши и accept/decline ждут столько же. */
 export const SOCKET_CONNECT_WAIT_MS = 25000;
 
+/** In-app call signaling (accept / initiate) after warmCallSignaling or while app is active. */
+export const CALL_SIGNALING_CONNECT_MS = 8000;
+
 if (__DEV__) {
   const lk = (process.env.EXPO_PUBLIC_LIVEKIT_URL || '').trim();
   logger.debug('[socket] API_BASE / LIVEKIT', { API_BASE, livekit: lk || '—' });
@@ -1379,6 +1382,24 @@ export async function ensureSocketConnected(ms = 15000): Promise<void> {
   } catch {
     // Таймаут — всё равно вызываем declineCall ниже, emit может уйти в очередь
   }
+}
+
+/** Неблокирующий старт handshake до accept/initiate (входящий/исходящий звонок). */
+export function warmCallSignaling(): void {
+  if (socket.connected || reconnecting) return;
+  void (async () => {
+    try {
+      const installId = await getInstallId();
+      // @ts-ignore
+      const prevAuth =
+        (socket as any)?.auth && typeof (socket as any).auth === 'object' ? (socket as any).auth : {};
+      // @ts-ignore
+      socket.auth = { ...prevAuth, installId, ...(currentUserId ? { userId: currentUserId } : {}) };
+    } catch {}
+    try {
+      socket.connect();
+    } catch {}
+  })();
 }
 
 type AnyObj = Record<string, any>;
@@ -3457,7 +3478,8 @@ export function acceptCall(callId: string) {
   if (!id) return;
   void (async () => {
     try {
-      await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
+      warmCallSignaling();
+      await ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
       const resp = await emitAck<{ ok?: boolean; error?: string }>('call:accept', { callId: id }, 7000, 2);
       if (!resp?.ok) {
         logger.warn('[socket] call:accept ack returned not ok', { callId: id, error: resp?.error });

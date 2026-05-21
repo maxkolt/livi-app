@@ -35,7 +35,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Sharing from 'expo-sharing';
 import SplashLoader from '../components/SplashLoader';
-import { Swipeable, PinchGestureHandler, State, RectButton } from 'react-native-gesture-handler';
+import { Swipeable, PinchGestureHandler, State, RectButton, NativeViewGestureHandler } from 'react-native-gesture-handler';
 import { Avatar, Divider, IconButton, List, Surface, Portal, Dialog, Button, Icon } from 'react-native-paper';
 import { Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
@@ -51,7 +51,12 @@ import {
 } from '../utils/uploadAvatar';
 
 import LanguagePicker from '../components/LanguagePicker';
-import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE } from '../constants/uiTokens';
+import {
+  FRIEND_ACTION_BUTTON,
+  FRIEND_ACTION_ICON_SIZE,
+  FRIEND_ROW_HIT_CHAT,
+  FRIEND_ROW_HIT_VIDEO,
+} from '../constants/uiTokens';
 import { useAppTheme, ThemePreference } from '../theme/ThemeProvider';
 import { uiAccent } from '../theme/uiAccent';
 import { t, defaultLang } from '../utils/i18n';
@@ -113,6 +118,7 @@ import socket, {
   getMyUserId,
   API_BASE,
   startCall,
+  warmCallSignaling,
   cancelCall,
   getMyProfile,
   onCallAccepted,
@@ -193,6 +199,7 @@ const ANDROID_INSTANT_TOUCH =
   Platform.OS === 'android'
     ? ({ activeOpacity: 1 as const, delayPressIn: 0, delayPressOut: 0 })
     : ({} as const);
+/** Изолированные кнопки (меню «прочитано» и т.п.) — со всех сторон одинаково. */
 const ANDROID_FRIEND_ACTION_HIT_SLOP = { top: 14, bottom: 14, left: 14, right: 14 };
 const ANDROID_MENU_HIT_SLOP = { top: 12, bottom: 12, left: 12, right: 12 };
 const ANDROID_SEG_RIPPLE = { color: 'rgba(255,255,255,0.14)', borderless: false as const };
@@ -1116,6 +1123,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /* ===== Защита от дублирования вызовов ===== */
   const ensureIdentityRef = useRef<Promise<any> | null>(null);
   const attachIdentityRef = useRef<Promise<any> | null>(null);
+  const lastChatOpenRef = useRef<{ peerId: string; at: number } | null>(null);
+  const CHAT_OPEN_DEBOUNCE_MS = 450;
 
   /* ===== Сброс всего React state ===== */
   const resetAllState = useCallback(async () => {
@@ -1600,10 +1609,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   const handleStartVideoCall = useCallback(async (friend: Friend) => {
     const friendName = friend.name ?? '';
-    setSwipeActionsHiddenForCall(friend.id);
-    openSwipeableRef.current?.close?.();
+    requestAnimationFrame(() => {
+      setSwipeActionsHiddenForCall(friend.id);
+      openSwipeableRef.current?.close?.();
+    });
     clearOutgoingDeclineHandled();
     try {
+      warmCallSignaling();
       pendingCancelRef.current = false;
       outgoingCallUserCanceledRef.current = false;
       setCalling({ visible: true, friend, callId: null });
@@ -1703,6 +1715,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             forceResetCallBusyRefs();
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
+            setSwipeActionsHiddenForCall(null);
             stopWaves();
             showNotice(t('callDeclined', lang), 'error', 3000);
           });
@@ -4280,6 +4293,25 @@ const handleClearNick = useCallback(async () => {
     const count = unreadByUser[friendIdStr] || 0;
 
     const handlePress = React.useCallback(() => {
+      const peerIdStr = friendIdStr;
+      const now = Date.now();
+      const last = lastChatOpenRef.current;
+      if (last && last.peerId === peerIdStr && now - last.at < CHAT_OPEN_DEBOUNCE_MS) {
+        return;
+      }
+      try {
+        const state = navigation.getState?.();
+        const active = state?.routes?.[state.index ?? 0];
+        if (active?.name === 'Chat') {
+          const p = active.params as { peerId?: string | number } | undefined;
+          if (p && String(p.peerId) === peerIdStr) {
+            return;
+          }
+        }
+      } catch {
+        // ignore navigation state errors
+      }
+
       try {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       } catch {
@@ -4287,12 +4319,14 @@ const handleClearNick = useCallback(async () => {
       }
 
       const fullNickname = (friend.name && friend.name.trim()) || '—';
-      logger.info('[ChatButton] Открываем чат', {
-        friendId: friend.id,
-        friendName: friend.name,
-        fullNickname,
-        nameLength: friend.name?.length || 0,
-      });
+      lastChatOpenRef.current = { peerId: peerIdStr, at: now };
+      if (__DEV__) {
+        logger.info('[ChatButton] Открываем чат', {
+          friendId: friend.id,
+          friendName: friend.name,
+          fullNickname,
+        });
+      }
 
       navigation.navigate('Chat', {
         peerId: friend.id,
@@ -4301,7 +4335,7 @@ const handleClearNick = useCallback(async () => {
         peerAvatarThumbB64: friend.avatarThumbB64 || '',
         peerOnline: friend.online,
       });
-    }, [navigation, friend.id, friend.name, friend.avatarVer, friend.avatarThumbB64, friend.online]);
+    }, [navigation, friend.id, friend.name, friend.avatarVer, friend.avatarThumbB64, friend.online, friendIdStr]);
 
     return (
       <View style={styles.chatBtnOuter}>
@@ -4318,7 +4352,7 @@ const handleClearNick = useCallback(async () => {
               },
             ]}
             rippleColor="rgba(255,255,255,0.28)"
-            hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : { top: 10, bottom: 10, left: 10, right: 10 }}
+            hitSlop={FRIEND_ROW_HIT_CHAT}
             delayLongPress={280}
             onPress={handlePress}
             onLongPress={
@@ -4519,7 +4553,7 @@ const handleClearNick = useCallback(async () => {
               useBusyButtonStyle && Platform.OS !== 'android' ? styles.inviteBtnDisabled : null,
             ]}
             rippleColor="rgba(255,255,255,0.28)"
-            hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : { top: 10, bottom: 10, left: 10, right: 10 }}
+            hitSlop={FRIEND_ROW_HIT_VIDEO}
             delayLongPress={280}
             onLongPress={
               missedCount > 0 && !videoDisabled
@@ -4650,10 +4684,12 @@ const handleClearNick = useCallback(async () => {
             right={() => {
               const hidden = markReadMenu?.friendId === item.id;
               return (
-                <View style={[styles.rowRightActions, hidden && { opacity: 0 }]}>
-                  <InviteButton friend={item} />
-                  <ChatButton friend={item} />
-                </View>
+                <NativeViewGestureHandler disallowInterruption>
+                  <View style={[styles.rowRightActions, hidden && { opacity: 0 }]}>
+                    <InviteButton friend={item} />
+                    <ChatButton friend={item} />
+                  </View>
+                </NativeViewGestureHandler>
               );
             }}
           />

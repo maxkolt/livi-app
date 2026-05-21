@@ -15,7 +15,7 @@ import { View, Text, TextInput, Animated, TouchableOpacity, StyleSheet, Easing, 
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, acceptCall, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, wasAppliedFromReauth, recordAppliedFromPending, reportIncomingCallShown, emitPresenceUpdateIfChanged } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, warmCallSignaling, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, wasAppliedFromReauth, recordAppliedFromPending, reportIncomingCallShown, emitPresenceUpdateIfChanged } from "./sockets/socket";
 import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce } from './utils/globalEvents';
 import { buildCallEndSocketPayload } from './utils/callEndPayload';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -700,12 +700,9 @@ function AppContent() {
           try { setIncomingCallScreenVisible(false); } catch {}
           stopIncomingCallAlert();
           setIncoming(null);
-          try {
-            await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
-            rememberExpectedCallAccepted(callId, 'callkeep-answer');
-            setIncomingAnswerTransitionGuard(callId, true);
-            acceptCall(callId);
-          } catch {}
+          warmCallSignaling();
+          rememberExpectedCallAccepted(callId, 'callkeep-answer');
+          setIncomingAnswerTransitionGuard(callId, true);
           reportAnswerIncomingCall(callId);
           try { emitCloseHomeModals(); } catch {}
           // Push VideoCall поверх текущего экрана (не reset), чтобы после завершения звонка goBack() вернул на тот же экран (Chat, Friends и т.д.).
@@ -1814,6 +1811,7 @@ function AppContent() {
     }
     lastProcessedIncomingRef.current = callId ? { callId, at: now } : null;
     logger.debug('[call:incoming] received', { callId: d.callId, from: d.from, fromNick: d.fromNick });
+    warmCallSignaling();
 
     // КРИТИЧНО: Используем актуальное значение навигации напрямую, а не routeName (который обновляется асинхронно)
     // Fallback: если навигация не готова, разрешаем показать модалку (лучше показать, чем пропустить)

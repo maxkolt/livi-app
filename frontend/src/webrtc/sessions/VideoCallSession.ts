@@ -18,7 +18,7 @@ import {
 } from 'livekit-client';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, WebRTCSessionCallbacks, CamSide } from '../types';
-import socket, { API_BASE, emitAck, ensureSocketConnected, setActiveVideoCall } from '../../../sockets/socket';
+import socket, { API_BASE, emitAck, ensureSocketConnected, warmCallSignaling, CALL_SIGNALING_CONNECT_MS, setActiveVideoCall } from '../../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
 import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
@@ -280,13 +280,17 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Но partnerUserId уже есть, и компонент должен его получить через setPartnerUserId в VideoCall.tsx
     // Здесь мы только устанавливаем внутреннее состояние, компонент сам устанавливает partnerUserId
     this.notifyLoadingChange(true);
-    await this.ensureLocalTracks();
+    warmCallSignaling();
+    const localTracksPromise = this.ensureLocalTracks();
     
     try {
       const to = /^[a-f\d]{24}$/i.test(String(friendUserId || '').trim())
         ? String(friendUserId).trim().toLowerCase()
         : String(friendUserId || '').trim();
       socket.emit('call:initiate', { to });
+      void localTracksPromise.catch((e) => {
+        logger.warn('[VideoCallSession] ensureLocalTracks during callFriend failed', e);
+      });
     } catch (e) {
       logger.error('[VideoCallSession] Error initiating call', e);
       this.notifyLoadingChange(false);
@@ -340,10 +344,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.notifyLoadingChange(true);
     // Keep signaling in foreground policy during accept -> call:accepted transition.
     setActiveVideoCall(true);
+    warmCallSignaling();
     const localTracksPromise = this.ensureLocalTracks();
+    const socketReadyPromise = ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
     
     try {
-      await ensureSocketConnected(8000);
+      await socketReadyPromise;
       this.acceptAckStartedAt = Date.now();
       const resp = await emitAck<{ ok?: boolean; error?: string }>('call:accept', { callId }, 7000, 2);
       this.acceptAckCompletedAt = Date.now();
@@ -388,6 +394,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.partnerUserId = peerUserId;
     this.resetCallFlowMetrics();
     this.notifyLoadingChange(true);
+    warmCallSignaling();
     const localTracksPromise = this.ensureLocalTracks();
     
     // Генерируем roomId по тому же алгоритму что и backend
@@ -407,25 +414,26 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     logger.debug('[VideoCallSession] Requesting LiveKit token', { roomId, livekitUrl: envLivekitUrl || LIVEKIT_URL });
     
-    try {
-      // Запрашиваем токен через сокет (более надёжно чем HTTP)
-      const tokenData = await new Promise<{ ok: boolean; token?: string; url?: string; error?: string }>((resolve) => {
-        const timeout = setTimeout(() => {
-          logger.warn('[VideoCallSession] Token request timeout', { roomId });
-          resolve({ ok: false, error: 'timeout' });
-        }, 10000);
-        
-        socket.emit('livekit:token', { roomName: roomId }, (response: { ok: boolean; token?: string; url?: string; error?: string }) => {
-          clearTimeout(timeout);
-          logger.debug('[VideoCallSession] Token response received', { 
-            ok: response.ok, 
-            hasToken: !!response.token, 
-            error: response.error,
-            roomId,
-          });
-          resolve(response);
+    const tokenDataPromise = new Promise<{ ok: boolean; token?: string; url?: string; error?: string }>((resolve) => {
+      const timeout = setTimeout(() => {
+        logger.warn('[VideoCallSession] Token request timeout', { roomId });
+        resolve({ ok: false, error: 'timeout' });
+      }, 10000);
+      
+      socket.emit('livekit:token', { roomName: roomId }, (response: { ok: boolean; token?: string; url?: string; error?: string }) => {
+        clearTimeout(timeout);
+        logger.debug('[VideoCallSession] Token response received', { 
+          ok: response.ok, 
+          hasToken: !!response.token, 
+          error: response.error,
+          roomId,
         });
+        resolve(response);
       });
+    });
+
+    try {
+      const tokenData = (await Promise.all([tokenDataPromise, localTracksPromise]))[0];
       
       if (tokenData.ok && tokenData.token) {
         const resolvedLivekitUrl = ((envLivekitUrl || LIVEKIT_URL || (tokenData.url as string | undefined)) || '').trim();
@@ -444,7 +452,6 @@ export class VideoCallSession extends SimpleEventEmitter {
           url: resolvedLivekitUrl,
           tokenLength: tokenData.token.length,
         });
-        await localTracksPromise;
         const connectRequestId = ++this.connectRequestId;
         const connected = await this.connectToLiveKit(resolvedLivekitUrl, tokenData.token, connectRequestId, roomId);
         if (!connected) {

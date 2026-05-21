@@ -76,6 +76,7 @@ export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boo
   const lang = await loadLang();
 
   if (Platform.OS === 'ios') {
+    if (isSetup) return true;
     try {
       const RNCallKeep = require('react-native-callkeep');
       const settings = {
@@ -667,9 +668,15 @@ export type CallKeepEventCallbacks = {
  * Подписаться на события answer/end от нативного экрана звонка.
  * Возвращает функцию отписки.
  */
+let callKeepEventsUnsub: (() => void) | null = null;
+
 export function registerCallKeepEvents(callbacks: CallKeepEventCallbacks): () => void {
   if (Platform.OS !== 'android' && Platform.OS !== 'ios') return () => {};
   try {
+    if (callKeepEventsUnsub) {
+      try { callKeepEventsUnsub(); } catch {}
+      callKeepEventsUnsub = null;
+    }
     const RNCallKeep = require('react-native-callkeep');
     const syncPendingFromDisplay = (event: {
       callUUID?: string;
@@ -716,13 +723,16 @@ export function registerCallKeepEvents(callbacks: CallKeepEventCallbacks): () =>
         RNCallKeep.default.clearInitialEvents?.();
       })
       ?.catch?.(() => {});
-    return () => {
+    const unsub = () => {
       try {
         RNCallKeep.default.removeEventListener?.('answerCall', onAnswer);
         RNCallKeep.default.removeEventListener?.('endCall', onEnd);
         RNCallKeep.default.removeEventListener?.('didDisplayIncomingCall', onDisplay);
       } catch {}
+      if (callKeepEventsUnsub === unsub) callKeepEventsUnsub = null;
     };
+    callKeepEventsUnsub = unsub;
+    return unsub;
   } catch (e) {
     logger.warn('[callKeep] registerCallKeepEvents failed', e as Error);
     return () => {};

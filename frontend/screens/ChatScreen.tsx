@@ -42,10 +42,17 @@ import socket from '../sockets/socket';
 import { Ionicons } from "@expo/vector-icons";
 import { useAppTheme } from "../theme/ThemeProvider";
 import { uiAccent } from "../theme/uiAccent";
-import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE } from "../constants/uiTokens";
+import {
+  COMPOSER_HIT_ATTACH,
+  COMPOSER_HIT_SEND,
+  FRIEND_ACTION_BUTTON,
+  FRIEND_ACTION_ICON_SIZE,
+} from "../constants/uiTokens";
 import { Image as ExpoImage } from "expo-image";
 import AvatarImage from "../components/AvatarImage";
 import ChatStyleBackButton from "../components/ChatStyleBackButton";
+import ChatEmojiKeyboard, { CHAT_EMOJI_PANEL_HEIGHT } from "../components/ChatEmojiKeyboard";
+import type { EmojiType } from "rn-emoji-keyboard";
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { Audio } from 'expo-av';
@@ -380,6 +387,46 @@ function filterRemoveMessageAndOutgoingDupes(prev: any[], deletedId: string): an
   });
 }
 
+type ChatListRow =
+  | { type: 'date'; id: string; label: string }
+  | ({ type: 'message' } & Record<string, any>);
+
+function localDayKey(ts: Date): string {
+  return `${ts.getFullYear()}-${ts.getMonth() + 1}-${ts.getDate()}`;
+}
+
+/** Подпись дня в ленте: DD.MM.YYYY */
+function formatChatDateSeparator(ts: Date): string {
+  const day = ts.getDate().toString().padStart(2, '0');
+  const month = (ts.getMonth() + 1).toString().padStart(2, '0');
+  return `${day}.${month}.${ts.getFullYear()}`;
+}
+
+function buildChatListRows(messages: any[]): ChatListRow[] {
+  const rows: ChatListRow[] = [];
+  let lastDayKey: string | null = null;
+  for (const m of messages) {
+    const raw = m?.timestamp;
+    const ts = raw instanceof Date ? raw : new Date(raw || 0);
+    if (Number.isNaN(ts.getTime())) {
+      rows.push({ type: 'message', ...m });
+      continue;
+    }
+    const dk = localDayKey(ts);
+    if (dk !== lastDayKey) {
+      rows.push({ type: 'date', id: `date-${dk}`, label: formatChatDateSeparator(ts) });
+      lastDayKey = dk;
+    }
+    rows.push({ type: 'message', ...m });
+  }
+  return rows;
+}
+
+function indexInChatListData(data: ChatListRow[], messageId: string): number {
+  const id = String(messageId || '').trim();
+  return data.findIndex((row) => row.type === 'message' && String((row as any).id) === id);
+}
+
 export default function ChatScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
@@ -550,6 +597,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const estimatedInputHeight = 124 + Math.max(0, insets.bottom);
   const [inputHeight, setInputHeight] = useState(estimatedInputHeight);
   const [messageText, setMessageText] = useState("");
+  const [emojiPanelOpen, setEmojiPanelOpen] = useState(false);
   const [peerActivity, setPeerActivity] = useState<'typing' | 'recording' | null>(null);
   const [peerTypingDots, setPeerTypingDots] = useState(1);
   const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
@@ -752,6 +800,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Refs для автоскролла
   const flatListRef = useRef<FlatList>(null);
   const keyboardAwareListRef = useRef<any>(null);
+  const iosChatListDataRef = useRef<ChatListRow[]>([]);
+  const androidChatListDataRef = useRef<ChatListRow[]>([]);
 
   // Функция автоскролла к последнему сообщению
   const scrollToBottom = () => {
@@ -880,6 +930,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     Platform.OS === 'android'
       ? 0
       : (keyboardVisible ? Math.max(0, keyboardInset - systemResizeDelta) : 0);
+
+  const composerBottomLift = emojiPanelOpen ? CHAT_EMOJI_PANEL_HEIGHT : keyboardLift;
 
   // ===== Typing indicator (peer + local) =====
   // Высота видимого зазора между последним сообщением и верхом инпута
@@ -3395,6 +3447,10 @@ export default function ChatScreen({ route, navigation }: Props) {
         exitSelectionMode();
         return true;
       }
+      if (emojiPanelOpen) {
+        setEmojiPanelOpen(false);
+        return true;
+      }
       if (navigation?.goBack) {
         navigation.goBack();
         return true;
@@ -3402,7 +3458,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       return false;
     });
     return () => sub.remove();
-  }, [selectionMode, exitSelectionMode, navigation]);
+  }, [selectionMode, exitSelectionMode, navigation, emojiPanelOpen]);
 
   const toggleSelectMessage = React.useCallback((id: string) => {
     const mid = String(id || '').trim();
@@ -3508,16 +3564,13 @@ export default function ChatScreen({ route, navigation }: Props) {
       const id = String(quotedMessageId || '').trim();
       if (!id) return;
 
-      const idxInMessages = messages.findIndex((m: any) => String(m?.id) === id);
-      if (idxInMessages < 0) {
+      const listData =
+        Platform.OS === 'android' ? androidChatListDataRef.current : iosChatListDataRef.current;
+      const index = indexInChatListData(listData, id);
+      if (index < 0) {
         showNotice('info', 'LiVi', t('chatReplyOriginalNotFound', lang));
         return;
       }
-
-      const index =
-        Platform.OS === 'android' && messages.length > 0
-          ? Math.max(0, messages.length - 1 - idxInMessages)
-          : idxInMessages;
 
       if (highlightClearTimerRef.current) {
         clearTimeout(highlightClearTimerRef.current);
@@ -4069,6 +4122,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const sendMessage = async () => {
     if (!currentUserId) return;
+    setEmojiPanelOpen(false);
 
     // Во время записи голоса «Отправить» сразу завершает запись и уходит в чат (как отпускание микрофона)
     if (voiceIsRecording) {
@@ -4209,6 +4263,44 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
     })();
   };
+
+  const onPressSendButton = React.useCallback(() => {
+    if (!messageText.trim() && !voiceIsRecording) return;
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {
+      Vibration.vibrate(10);
+    }
+    setEmojiPanelOpen(false);
+    void sendMessage();
+  }, [messageText, voiceIsRecording, sendMessage]);
+
+  const toggleEmojiPanel = React.useCallback(() => {
+    setEmojiPanelOpen((open) => {
+      const next = !open;
+      if (next) {
+        try {
+          Keyboard.dismiss();
+        } catch {}
+      }
+      return next;
+    });
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {
+      Vibration.vibrate(10);
+    }
+  }, []);
+
+  const handleComposerEmojiSelected = React.useCallback(
+    (emoji: EmojiType) => {
+      const ch = String(emoji?.emoji || '');
+      if (!ch) return;
+      setMessageText((prev) => prev + ch);
+      signalLocalTyping();
+    },
+    [signalLocalTyping],
+  );
 
   const handleAttachments = () => {
     if (Platform.OS === 'ios') {
@@ -4545,7 +4637,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const micPanResponder = React.useMemo(() => {
     return PanResponder.create({
       onStartShouldSetPanResponder: () => true,
-      onStartShouldSetPanResponderCapture: () => true,
+      onStartShouldSetPanResponderCapture: () => false,
       onMoveShouldSetPanResponder: (_evt, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
       onMoveShouldSetPanResponderCapture: (_evt, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
       onPanResponderTerminationRequest: () => false,
@@ -5682,11 +5774,18 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // КРИТИЧНО: на каждый ввод нельзя пересоздавать массив data для FlatList,
   // иначе он будет перерисовывать (а иногда и переразмещать) все элементы -> мерцание изображений.
-  const androidMessagesData = React.useMemo(() => {
+  const iosChatListData = React.useMemo(
+    () => (isEmpty ? [] : buildChatListRows(messages)),
+    [isEmpty, messages],
+  );
+
+  const androidChatListData = React.useMemo(() => {
     if (isEmpty) return [];
-    // reverse создаёт новый массив, поэтому мемоизируем
-    return [...messages].reverse();
+    return [...buildChatListRows(messages)].reverse();
   }, [isEmpty, messages]);
+
+  iosChatListDataRef.current = iosChatListData;
+  androidChatListDataRef.current = androidChatListData;
 
   const handleToggleRetryUi = React.useCallback((id: string) => {
     setRetryUiForId((prev) => (prev === id ? null : id));
@@ -5724,37 +5823,83 @@ export default function ChatScreen({ route, navigation }: Props) {
         pointerEvents="box-none"
         style={{
           // Spacer so the last message doesn't hide under the input bar (and the keyboard on devices without resize).
-          height: Math.max(inputHeight, estimatedInputHeight) + TYPING_GAP_H + keyboardLift,
+          height: Math.max(inputHeight, estimatedInputHeight) + TYPING_GAP_H + composerBottomLift,
         }}
       />
     );
-  }, [isEmpty, inputHeight, estimatedInputHeight, keyboardLift]);
+  }, [isEmpty, inputHeight, estimatedInputHeight, composerBottomLift]);
 
-  const renderMessageRow = React.useCallback(({ item }: any) => (
-    <MessageItem
-      item={item}
-      currentUserId={currentUserId}
-      readStatus={readStatuses[item.id]}
-      uploadStatus={uploadStatus[item.id]}
-      onPressImage={openMediaViewer}
-      onPressAudio={togglePlayAudioMessage}
-      playingAudioId={playingAudioId}
-      playingAudioState={playingAudioState}
-      retryUiForId={retryUiForId}
-      onToggleRetryUi={handleToggleRetryUi}
-      onRetryFailed={retryFailedOutgoingMessage}
-      onLongPressMessage={handleLongPressMessage}
-      onMessagePress={handleMessagePress}
-      onReactionPress={handleReactionPress}
-      selectionMode={selectionMode}
-      isSelected={selectedMessageIds.has(String(item.id))}
-      onToggleSelect={toggleSelectMessage}
-      resolveMediaUri={resolveMediaUri}
-      peerDisplayName={peerNameState}
-      highlightedMessageId={highlightedMessageId}
-      onPressReplyQuote={scrollToQuotedMessage}
-    />
-  ), [MessageItem, currentUserId, readStatuses, uploadStatus, openMediaViewer, togglePlayAudioMessage, playingAudioId, playingAudioState, retryUiForId, handleToggleRetryUi, retryFailedOutgoingMessage, handleLongPressMessage, handleMessagePress, handleReactionPress, selectionMode, selectedMessageIds, toggleSelectMessage, resolveMediaUri, peerNameState, highlightedMessageId, scrollToQuotedMessage]);
+  const renderMessageRow = React.useCallback(
+    ({ item }: { item: ChatListRow }) => {
+      if (item.type === 'date') {
+        return (
+          <View style={{ paddingTop: 10, paddingBottom: 6, alignItems: 'center' }}>
+            <Text
+              style={{
+                fontSize: 12,
+                fontWeight: '300',
+                color: LIVI.text,
+                textAlign: 'center',
+              }}
+              allowFontScaling={false}
+            >
+              {item.label}
+            </Text>
+          </View>
+        );
+      }
+      const msg = item as any;
+      return (
+        <MessageItem
+          item={msg}
+          currentUserId={currentUserId}
+          readStatus={readStatuses[msg.id]}
+          uploadStatus={uploadStatus[msg.id]}
+          onPressImage={openMediaViewer}
+          onPressAudio={togglePlayAudioMessage}
+          playingAudioId={playingAudioId}
+          playingAudioState={playingAudioState}
+          retryUiForId={retryUiForId}
+          onToggleRetryUi={handleToggleRetryUi}
+          onRetryFailed={retryFailedOutgoingMessage}
+          onLongPressMessage={handleLongPressMessage}
+          onMessagePress={handleMessagePress}
+          onReactionPress={handleReactionPress}
+          selectionMode={selectionMode}
+          isSelected={selectedMessageIds.has(String(msg.id))}
+          onToggleSelect={toggleSelectMessage}
+          resolveMediaUri={resolveMediaUri}
+          peerDisplayName={peerNameState}
+          highlightedMessageId={highlightedMessageId}
+          onPressReplyQuote={scrollToQuotedMessage}
+        />
+      );
+    },
+    [
+      MessageItem,
+      currentUserId,
+      readStatuses,
+      uploadStatus,
+      openMediaViewer,
+      togglePlayAudioMessage,
+      playingAudioId,
+      playingAudioState,
+      retryUiForId,
+      handleToggleRetryUi,
+      retryFailedOutgoingMessage,
+      handleLongPressMessage,
+      handleMessagePress,
+      handleReactionPress,
+      selectionMode,
+      selectedMessageIds,
+      toggleSelectMessage,
+      resolveMediaUri,
+      peerNameState,
+      highlightedMessageId,
+      scrollToQuotedMessage,
+      LIVI,
+    ],
+  );
 
   return (
     <SafeAreaView 
@@ -5802,7 +5947,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           >
             <FlatList
               ref={flatListRef}
-              data={messages}
+              data={iosChatListData}
               keyExtractor={(item) => item.id}
               renderItem={renderMessageRow}
               style={{ flex: 1 }}
@@ -5812,11 +5957,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 paddingVertical: 16,
                 paddingBottom: 12,
               }}
-              ListFooterComponent={GapCenterIndicator ? (
-                <View style={{ height: 24, justifyContent: 'center', alignItems: 'center' }}>
-                  {GapCenterIndicator}
-                </View>
-              ) : null}
+              ListFooterComponent={null}
               keyboardShouldPersistTaps="always"
               showsVerticalScrollIndicator={false}
               inverted={false}
@@ -5871,6 +6012,21 @@ export default function ChatScreen({ route, navigation }: Props) {
             {DeleteToastInline ? (
               <View pointerEvents="none" style={{ alignItems: 'center', paddingTop: 8, paddingBottom: 8 }}>
                 {DeleteToastInline}
+              </View>
+            ) : null}
+            {!isEmpty && GapCenterIndicator ? (
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: Math.max(inputHeight > 0 ? inputHeight : estimatedInputHeight, 72) + 4,
+                  alignItems: 'center',
+                  zIndex: 8,
+                }}
+              >
+                {GapCenterIndicator}
               </View>
             ) : null}
             {/* Поле ввода для iOS */}
@@ -5992,6 +6148,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 ) : (
                   <TouchableOpacity
                     onPress={handleAttachments}
+                    hitSlop={COMPOSER_HIT_ATTACH}
                     style={{
                       padding: 2,
                       marginRight: 12,
@@ -6000,6 +6157,21 @@ export default function ChatScreen({ route, navigation }: Props) {
                     <Ionicons name="image" size={28} color={LIVI.titan} />
                   </TouchableOpacity>
                 )}
+
+                {!voiceIsRecording ? (
+                  <TouchableOpacity
+                    onPress={toggleEmojiPanel}
+                    hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+                    style={{ padding: 2, marginRight: 8 }}
+                    accessibilityLabel="Emoji"
+                  >
+                    <Ionicons
+                      name={emojiPanelOpen ? 'keypad-outline' : 'happy-outline'}
+                      size={26}
+                      color={emojiPanelOpen ? LIVI.accent : LIVI.titan}
+                    />
+                  </TouchableOpacity>
+                ) : null}
 
                 {/* minWidth:0 — иначе Android multiline TextInput раздувает hit-box и перекрывает микрофон/отправку */}
                 <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
@@ -6017,6 +6189,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       setMessageText(txt);
                       signalLocalTyping();
                     }}
+                    onFocus={() => setEmojiPanelOpen(false)}
                     multiline
                     onSubmitEditing={sendMessage}
                     returnKeyType="send"
@@ -6076,8 +6249,10 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </Animated.View>
 
                 <TouchableOpacity
-                  onPress={sendMessage}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  onPress={onPressSendButton}
+                  hitSlop={COMPOSER_HIT_SEND}
+                  disabled={!messageText.trim() && !voiceIsRecording}
+                  activeOpacity={messageText.trim() || voiceIsRecording ? 0.88 : 1}
                   style={{
                     backgroundColor:
                       messageText.trim() || voiceIsRecording
@@ -6089,7 +6264,6 @@ export default function ChatScreen({ route, navigation }: Props) {
                     borderWidth: 1,
                     borderColor: BORDER_COLOR,
                   }}
-                  disabled={!messageText.trim() && !voiceIsRecording}
                 >
                   <Ionicons
                     name="send"
@@ -6098,6 +6272,15 @@ export default function ChatScreen({ route, navigation }: Props) {
                   />
                 </TouchableOpacity>
               </View>
+              {emojiPanelOpen ? (
+                <ChatEmojiKeyboard
+                  isDark={isDark}
+                  surfaceBg={INPUT_BAR_BG}
+                  textColor={LIVI.text}
+                  langCode={lang}
+                  onEmojiSelected={handleComposerEmojiSelected}
+                />
+              ) : null}
             </View>
           </KeyboardAvoidingView>)
         ) : (
@@ -6106,7 +6289,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             {/** Если система уже "ужала" окно, поднимаем только остаток (без двойного подъёма). */}
             <FlatList
               ref={flatListRef}
-              data={androidMessagesData}
+              data={androidChatListData}
               keyExtractor={(item) => item.id}
               renderItem={renderMessageRow}
               style={{ flex: 1 }}
@@ -6173,7 +6356,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   position: 'absolute',
                   left: 0,
                   right: 0,
-                  bottom: keyboardLift + (inputHeight > 0 ? inputHeight : 96) + 8,
+                  bottom: composerBottomLift + (inputHeight > 0 ? inputHeight : 96) + 8,
                   alignItems: 'center',
                   zIndex: 8,
                   elevation: 8,
@@ -6191,7 +6374,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   left: 0,
                   right: 0,
                   bottom:
-                    keyboardLift +
+                    composerBottomLift +
                     Math.max(inputHeight > 0 ? inputHeight : estimatedInputHeight, 72) +
                     4,
                   alignItems: 'center',
@@ -6203,13 +6386,37 @@ export default function ChatScreen({ route, navigation }: Props) {
               </View>
             ) : null}
 
+            {emojiPanelOpen ? (
+              <View
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: CHAT_EMOJI_PANEL_HEIGHT,
+                  zIndex: 15,
+                  elevation: 15,
+                  backgroundColor: INPUT_BAR_BG,
+                  borderTopWidth: BORDER_WIDTH,
+                  borderTopColor: BORDER_COLOR,
+                }}
+              >
+                <ChatEmojiKeyboard
+                  isDark={isDark}
+                  surfaceBg={INPUT_BAR_BG}
+                  textColor={LIVI.text}
+                  langCode={lang}
+                  onEmojiSelected={handleComposerEmojiSelected}
+                />
+              </View>
+            ) : null}
             {/* Поле ввода для Android: поднимаем над клавиатурой, если система не ресайзит окно */}
             <View
               style={{
                 position: 'absolute',
                 left: 0,
                 right: 0,
-                bottom: keyboardLift,
+                bottom: composerBottomLift,
                 zIndex: 20,
                 elevation: 20,
                 borderTopWidth: BORDER_WIDTH,
@@ -6326,6 +6533,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 ) : (
                   <TouchableOpacity
                     onPress={handleAttachments}
+                    hitSlop={COMPOSER_HIT_ATTACH}
                     style={{
                       padding: 2,
                       marginRight: 12,
@@ -6334,6 +6542,21 @@ export default function ChatScreen({ route, navigation }: Props) {
                     <Ionicons name="image" size={28} color={LIVI.titan} />
                   </TouchableOpacity>
                 )}
+
+                {!voiceIsRecording ? (
+                  <TouchableOpacity
+                    onPress={toggleEmojiPanel}
+                    hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+                    style={{ padding: 2, marginRight: 8 }}
+                    accessibilityLabel="Emoji"
+                  >
+                    <Ionicons
+                      name={emojiPanelOpen ? 'keypad-outline' : 'happy-outline'}
+                      size={26}
+                      color={emojiPanelOpen ? LIVI.accent : LIVI.titan}
+                    />
+                  </TouchableOpacity>
+                ) : null}
 
                 <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
                   <TextInput
@@ -6345,6 +6568,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       setMessageText(txt);
                       signalLocalTyping();
                     }}
+                    onFocus={() => setEmojiPanelOpen(false)}
                     multiline
                     onSubmitEditing={sendMessage}
                     returnKeyType="send"
@@ -6403,13 +6627,12 @@ export default function ChatScreen({ route, navigation }: Props) {
                   </View>
                 </Animated.View>
 
-                <Pressable
-                  onPress={sendMessage}
-                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                  delayPressIn={0}
-                  delayPressOut={0}
+                <TouchableOpacity
+                  onPress={onPressSendButton}
+                  hitSlop={COMPOSER_HIT_SEND}
                   disabled={!messageText.trim() && !voiceIsRecording}
-                  style={({ pressed }) => ({
+                  activeOpacity={messageText.trim() || voiceIsRecording ? 0.88 : 1}
+                  style={{
                     backgroundColor:
                       messageText.trim() || voiceIsRecording ? LIVI.titan : 'rgba(255,255,255,0.2)',
                     borderRadius: 14,
@@ -6418,16 +6641,14 @@ export default function ChatScreen({ route, navigation }: Props) {
                     borderWidth: 1,
                     borderColor: BORDER_COLOR,
                     overflow: 'hidden',
-                    opacity:
-                      pressed && (messageText.trim() || voiceIsRecording) ? 0.88 : 1,
-                  })}
+                  }}
                 >
                   <Ionicons
                     name="send"
                     size={20}
                     color={messageText.trim() || voiceIsRecording ? LIVI.white : LIVI.titan}
                   />
-                </Pressable>
+                </TouchableOpacity>
               </View>
             </View>
           </View>)

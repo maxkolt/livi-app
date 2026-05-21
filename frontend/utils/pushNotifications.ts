@@ -9,9 +9,9 @@ import {
   setOutgoingCallScreenVisible,
   setIncomingCallScreenVisible,
   setActiveVideoCall,
-  acceptCall,
   declineCall,
   ensureSocketConnected,
+  warmCallSignaling,
   getUnreadCount,
 } from '../sockets/socket';
 import { getInstallId } from './installId';
@@ -48,6 +48,8 @@ type RegisterPushTokenOptions = {
 let lastRegisteredPushToken: PushTokenSnapshot | null = null;
 let registerPushInFlight: Promise<void> | null = null;
 let lastRegisteredPushTokenLoaded = false;
+/** Один startup-register за жизнь JS-контекста (dev reload / двойной mount не шлёт два «token registered»). */
+let pushStartupRegisterDone = false;
 
 async function loadPersistedPushTokenSnapshot(): Promise<void> {
   if (lastRegisteredPushTokenLoaded) return;
@@ -525,18 +527,13 @@ export async function openIncomingCallScreen(peerUserId: string, callId: string)
 }
 
 /** Открыть приложение и принять звонок (для livi://answer-call из нативного IncomingCallActivity).
- * Сначала навигация на VideoCall, затем session.acceptCall() отправит call:accept — так обработчик call:accepted
- * уже зарегистрирован и соединение гарантированно установится (нет гонки с ранним call:accepted). */
+ * Сразу VideoCall + session.acceptCall() (сокет греется параллельно). */
 export async function openAnswerCallScreen(peerUserId: string, callId: string): Promise<void> {
   try { setIncomingCallScreenVisible(false); } catch {}
   try {
     stopIncomingCallAlert();
   } catch {}
-  try {
-    await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
-  } catch (e) {
-    logger.warn('[push] ensureSocketConnected failed on answer-call', { callId, error: (e as Error)?.message });
-  }
+  warmCallSignaling();
   if (Platform.OS === 'android') {
     sendCallAnsweredBroadcast(callId);
   }
@@ -711,13 +708,7 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
         try {
           stopIncomingCallAlert();
         } catch {}
-        // Сначала ждём сокет и сообщаем серверу о принятии, чтобы звонящий получил call:accepted и оба попали на видеозвонок
-        try {
-          await ensureSocketConnected(SOCKET_CONNECT_WAIT_MS);
-          acceptCall(callId);
-        } catch (e) {
-          logger.warn('[push] acceptCall from notification failed', { callId, error: (e as Error)?.message });
-        }
+        warmCallSignaling();
         await navigateToVideoCallIncoming(peerUserId, callId);
         try {
           await clearNotificationIndicators();
@@ -823,6 +814,14 @@ export async function registerAndSendPushToken(userId?: string, options?: Regist
   const force = options?.force === true;
   const reason = options?.reason || 'manual';
   const uid = String(userId);
+
+  if (reason === 'startup') {
+    if (pushStartupRegisterDone && !force) {
+      logger.debug('[push] startup register skipped (already done this session)');
+      return;
+    }
+    pushStartupRegisterDone = true;
+  }
 
   // Не дергаем Expo Push API на каждом reconnect: токен за минуту не меняется, а 503 от Expo даёт шторм и тормозит UI.
   if (!force && (reason === 'socket_reconnect' || reason === 'app_active')) {

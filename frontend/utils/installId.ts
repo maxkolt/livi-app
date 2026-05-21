@@ -7,6 +7,8 @@ const KEY = 'livi.installId';
 const randomId = () => `inst_${Math.random().toString(36).slice(2, 10)}`;
 
 let installIdLoggedOnce = false;
+/** Сериализуем параллельные getInstallId(), чтобы не создать два разных id до записи в SecureStore. */
+let installIdLoadPromise: Promise<string> | null = null;
 
 /** На Android при первом запуске (нет сохранённого id) используем стабильный Android ID,
  * чтобы после переустановки приложения тот же телефон получил тот же installId и подтянул данные из MongoDB. */
@@ -57,7 +59,7 @@ async function getSecure(k: string) { try { return await SecureStore.getItemAsyn
 async function setSecure(k: string, v: string) { try { await SecureStore.setItemAsync(k, v); } catch {} }
 async function delSecure(k: string) { try { await SecureStore.deleteItemAsync(k); } catch {} }
 
-export async function getInstallId(): Promise<string> {
+async function loadOrCreateInstallId(): Promise<string> {
   let id = Platform.OS !== 'web' ? await getSecure(KEY) : null;
   if (!id) id = (await AsyncStorage.getItem(KEY)) || '';
   if (!id) {
@@ -80,7 +82,17 @@ export async function getInstallId(): Promise<string> {
   return id;
 }
 
+export async function getInstallId(): Promise<string> {
+  if (!installIdLoadPromise) {
+    installIdLoadPromise = loadOrCreateInstallId().finally(() => {
+      installIdLoadPromise = null;
+    });
+  }
+  return installIdLoadPromise;
+}
+
 export async function resetInstallId(): Promise<void> {
+  installIdLoadPromise = null;
   if (Platform.OS !== 'web') await delSecure(KEY);
   await AsyncStorage.removeItem(KEY);
 }

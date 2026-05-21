@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Keyboard, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { onCallIncoming, onCallCanceled, acceptCall, declineCall } from '../../../sockets/socket';
+import { onCallIncoming, onCallCanceled, acceptCall, declineCall, warmCallSignaling } from '../../../sockets/socket';
 import socket, { emitPresenceUpdateIfChanged } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { startIncomingCallAlert, stopIncomingCallAlert } from '../../../utils/incomingCallAlert';
@@ -105,6 +105,7 @@ export const useIncomingCall = ({
       setIncomingOverlay(true);
       setIncomingFriendCall({ from: d.from, nick: d.fromNick });
       hadIncomingCallRef.current = true;
+      warmCallSignaling();
       void (sessionRef.current as any)?.prewarmLocalTracks?.();
     });
 
@@ -236,6 +237,7 @@ export const useIncomingCall = ({
       }
       setIncomingOverlay(true);
       hadIncomingCallRef.current = true;
+      warmCallSignaling();
       void (currentSession as any)?.prewarmLocalTracks?.();
     };
 
