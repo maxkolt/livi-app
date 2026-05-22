@@ -3516,11 +3516,67 @@ export function startCall(toUserId: string) {
   const raw = String(toUserId || '').trim();
   if (!isOid(raw)) return Promise.reject(new Error('invalid ObjectId'));
   const to = /^[a-f\d]{24}$/i.test(raw) ? raw.toLowerCase() : raw;
-  return emitAck<{ ok: boolean; callId?: string; error?: string }>(
-    'call:initiate',
-    { to },
-    20000,
-  );
+
+  const viaSocket = () =>
+    emitAck<{ ok: boolean; callId?: string; error?: string }>(
+      'call:initiate',
+      { to },
+      20000,
+    );
+
+  const viaHttp = async () => {
+    const installId = await getInstallId().catch(() => '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (installId) headers['x-install-id'] = String(installId);
+    if (currentUserId) headers['x-user-id'] = String(currentUserId);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(`${API_BASE}/api/calls/initiate`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ to }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(async () => {
+          const txt = await res.text().catch(() => '');
+          return { ok: false, error: `http_${res.status}${txt ? `:${txt}` : ''}` };
+        });
+        return {
+          ok: false,
+          error: body?.error || `http_${res.status}`,
+        };
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  return (async () => {
+    if (!socket.connected || reconnecting) {
+      logger.info('[call:initiate] socket unavailable, using HTTP fallback', {
+        connected: socket.connected,
+        reconnecting,
+      });
+      return viaHttp();
+    }
+
+    try {
+      const socketResp = await viaSocket();
+      if (socketResp?.ok === true) return socketResp;
+      return socketResp;
+    } catch (e: any) {
+      logger.warn('[call:initiate] socket initiate failed, trying HTTP fallback', {
+        error: e?.message || String(e),
+        connected: socket.connected,
+        reconnecting,
+      });
+      return viaHttp();
+    }
+  })();
 }
 
 export function cancelCall(callId: string) {

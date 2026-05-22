@@ -402,13 +402,13 @@ app.get('/invite/:code', (req, res) => {
   const fs = require('fs');
   const projectRoot = path.resolve(__dirname, '..');
   const htmlPath = path.join(projectRoot, 'public/invite.html');
-  
+
   // Проверяем существование файла перед отправкой
   if (!fs.existsSync(htmlPath)) {
     logger.error('invite.html not found', { htmlPath, __dirname, projectRoot });
     return res.status(500).send('Invite page not found');
   }
-  
+
   res.sendFile(htmlPath, (err) => {
     if (err) {
       logger.error('Failed to send invite.html', {
@@ -958,12 +958,12 @@ const setFriendRoomState = (roomId: string, participants: string[]) => {
   } else {
     friendRooms.set(roomId, [...participants]);
   }
-  
+
   // Отправляем состояние комнаты всем участникам
   try {
     io.to(roomId).emit('friends:room_state', { roomId, participants });
   } catch {}
-  
+
   // Отправляем обновление статусов всем друзьям участников
   participants.forEach(userId => {
     try {
@@ -976,10 +976,10 @@ const setFriendRoomState = (roomId: string, participants: string[]) => {
 const updateFriendRoomState = (io: Server, roomId: string) => {
   // Проверяем, что это дружеская комната (не рандом)
   if (!roomId.startsWith('room_')) return;
-  
+
   const room = io.sockets.adapter.rooms.get(roomId);
   if (!room) return;
-  
+
   // Получаем userId всех участников комнаты
   const participants: string[] = [];
   room.forEach(socketId => {
@@ -1625,6 +1625,311 @@ async function saveMissedCall(calleeId: string, callerId: string, callerNick: st
     logger.warn('[saveMissedCall] failed', { calleeId, callerId, error: e?.message });
   }
 }
+
+type DirectCallInitiateSource = 'socket' | 'http';
+type DirectCallInitiateResult = { ok: boolean; callId?: string; error?: string };
+
+async function initiateDirectCall(params: {
+  callerId: string;
+  peerId: string;
+  initiatorSocket?: AuthedSocket;
+  source: DirectCallInitiateSource;
+}): Promise<DirectCallInitiateResult> {
+  const me = normalizeMongoObjectId(String(params.callerId || ''));
+  const peerId = normalizeMongoObjectId(String(params.peerId || ''));
+  if (!isOid(me)) return { ok: false, error: 'unauthorized' };
+  if (!isOid(peerId)) return { ok: false, error: 'bad_peer' };
+
+  pruneOrphanCallOfUserEntry(me);
+  pruneOrphanCallOfUserEntry(peerId);
+  await cleanupStaleRingingCallForImmediateRetry(me, peerId);
+
+  const initiatorSocket =
+    params.initiatorSocket ||
+    (Array.from(io.sockets.sockets.values()).find(
+      (s) => normalizeMongoObjectId(String((s as any)?.data?.userId || '')) === me
+    ) as AuthedSocket | undefined);
+
+  // Проверяем busy флаг инициатора
+  if (
+    initiatorSocket &&
+    (initiatorSocket as any)?.data?.busy === true &&
+    !(await getUserCallEntryFromAnyStore(me)) &&
+    !activeRoomByUserId.has(me)
+  ) {
+    (initiatorSocket as any).data.busy = false;
+    delete (initiatorSocket as any).data.roomId;
+    delete (initiatorSocket as any).data.partnerSid;
+    delete (initiatorSocket as any).data.inCall;
+  }
+  if (initiatorSocket && (initiatorSocket as any)?.data?.busy === true) {
+    return { ok: false, error: 'initiator_busy' };
+  }
+
+  // Убрано: проверка randomBusyByUser - рандомный поиск не блокирует звонки другу
+
+  // Уже в звонке?
+  if (await getUserCallEntryFromAnyStore(me)) return { ok: false, error: 'busy' };
+
+  // Найдём любой сокет получателя (может быть offline — тогда будем будить пушем)
+  const peerSocket = Array.from(io.sockets.sockets.values()).find(
+    (s) => normalizeMongoObjectId(String((s as any)?.data?.userId || '')) === peerId
+  ) as AuthedSocket | undefined;
+
+  // Если получатель онлайн — проверяем busy флаг
+  if (peerSocket && (peerSocket as any)?.data?.busy === true) {
+    try { initiatorSocket?.emit('call:busy', { from: peerId, userId: peerId }); } catch {}
+    return { ok: false, error: 'peer_busy' };
+  }
+
+  // Убрано: проверка randomBusyByUser - рандомный поиск не блокирует звонки другу
+
+  if (await getUserCallEntryFromAnyStore(peerId)) {
+    // Получатель уже в активном звонке
+    try { initiatorSocket?.emit('call:busy', { from: peerId, userId: peerId }); } catch {}
+    return { ok: false, error: 'peer_busy' };
+  }
+
+  const createdAtMs = Date.now();
+  const expiresAtMs = createdAtMs + CALL_RING_TIMEOUT_MS;
+  const callId = `${createdAtMs}_${Math.random().toString(36).slice(2, 8)}`;
+  callsById.set(callId, { a: me, b: peerId, createdAtMs, expiresAtMs });
+  createOrchestratedCall({ callId, callerId: me, calleeId: peerId });
+  callDeliveryById.set(callId, {
+    callerId: me,
+    calleeId: peerId,
+    createdAtMs,
+    expiresAtMs,
+  });
+  callOfUser.set(me, { with: peerId, callId });
+  callOfUser.set(peerId, { with: me, callId });
+  await persistDirectCallSharedState(callId, { a: me, b: peerId, createdAtMs, expiresAtMs });
+
+  // КРИТИЧНО: Создаем комнату при инициации звонка (инициатором)
+  // Используем user IDs для имени комнаты, чтобы совпадало с LiveKit roomName
+  const sortedUserIds = [me, peerId].sort();
+  const roomId = `room_${sortedUserIds[0]}_${sortedUserIds[1]}`;
+  console.log('[call:initiate] roomId created', { me, peerId, roomId, source: params.source });
+
+  if (initiatorSocket) {
+    // Инициатор сразу присоединяется к комнате, если его сокет сейчас доступен.
+    try {
+      evictExtraUserSocketsInDirectRoom(io, roomId, me, initiatorSocket.id);
+    } catch {}
+    try {
+      initiatorSocket.join(roomId);
+      logger.debug('Initiator joined room', { socketId: initiatorSocket.id, roomId, callId, source: params.source });
+    } catch {}
+    try {
+      sanitizeDirectCallSocketIoRoom(io, roomId, activeCallBySocket);
+    } catch {}
+
+    // КРИТИЧНО: Устанавливаем busy только для инициатора при инициации (для проверки initiator_busy). Получатель станет busy только после принятия (call:accept).
+    // Бейдж «Занято» не рассылаем друзьям до принятия: пока нативный экран входящего у одного и исходящего у другого — бейдж не показывается.
+    (initiatorSocket as any).data = (initiatorSocket as any).data || {};
+    (initiatorSocket as any).data.busy = true;
+    (initiatorSocket as any).data.roomId = roomId;
+    if (peerSocket) (initiatorSocket as any).data.partnerSid = peerSocket.id;
+
+    // КРИТИЧНО: Отправляем инициатору roomId для немедленного использования
+    // Включаем from (socket.id получателя) для сохранения partnerSocketId
+    try {
+      initiatorSocket.emit('call:room:created', { callId, roomId, partnerId: peerId, from: peerSocket ? peerSocket.id : null });
+      logger.debug('Room created event sent to initiator', { socketId: initiatorSocket.id, roomId, callId, from: peerSocket ? peerSocket.id : null });
+    } catch {}
+  } else {
+    logger.info('[call:initiate] caller socket unavailable; created ringing call via HTTP', { caller: me, peerId, callId, roomId });
+  }
+
+  // Получатель НЕ помечаем busy до принятия. Presence друзьям не рассылаем до call:accept — бейдж только после принятия и на всё время разговора.
+  logger.debug('Call initiated', { from: me, to: peerId, callId, roomId, source: params.source });
+
+  // таймаут 20с
+  const timer = setTimeout(async () => {
+    const link = await getCallLinkFromAnyStore(callId);
+    if (!link) {
+      cleanupCall(callId);
+      return;
+    }
+    const shouldProcess = transitionCall(callId, 'timeout', {
+      actionKey: `timeout:${callId}`,
+      source: 'timer_timeout',
+    });
+    if (!shouldProcess) return;
+
+    // Снимаем busy статус с обоих участников при таймауте
+    const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
+    const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
+
+    if (aSock) {
+      (aSock as any).data = (aSock as any).data || {};
+      (aSock as any).data.busy = false;
+    }
+    if (bSock) {
+      (bSock as any).data = (bSock as any).data || {};
+      (bSock as any).data.busy = false;
+    }
+    await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
+
+    try {
+      const sortedU = [link.a, link.b].sort();
+      dissolveSocketIoRoom(io, `room_${sortedU[0]}_${sortedU[1]}`);
+    } catch {}
+
+    // уведомляем инициатора о таймауте (from = caller, чтобы клиент не считал пропущенным у инициатора)
+    try {
+      io.to(`u:${link.a}`).emit('call:timeout', { callId, from: link.a });
+    } catch {}
+    // уведомим получателя, чтобы оба закрыли модалки
+    try {
+      io.to(`u:${link.b}`).emit('call:timeout', { callId, from: link.a });
+    } catch {}
+    // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации
+    let fromNick: string | undefined;
+    try {
+      if (isMongoReady()) {
+        const u = await User.findById(link.a).select('nick').lean();
+        if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+      }
+    } catch {}
+    try {
+      const missedTitle = 'Пропущенный вызов';
+      const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
+      await sendPushToUser(link.b, {
+        kind: 'call',
+        title: missedTitle,
+        body: missedBody,
+        channelId: 'missed_call',
+        data: { type: 'call_ended', callId, from: link.a, fromNick: fromNick || '' },
+      });
+    } catch (e: any) {
+      logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
+    }
+    // Сохраняем пропущенный только если получатель офлайн — иначе он уже получил socket+FCM и при reauth получит дубль через missed_calls:sync
+    if (!bSock) await saveMissedCall(link.b, link.a, fromNick || '');
+    logger.info('[call:timeout] call ended for both: callee notified (socket+missed push), caller gets timeout', { callId, caller: link.a, callee: link.b });
+    cleanupCall(callId, 'timeout');
+  }, CALL_RING_TIMEOUT_MS);
+  const link = callsById.get(callId);
+  if (link) link.timer = timer;
+
+  // отправим входящий вызов получателю (с ником инициатора, если есть)
+  let fromNick: string | undefined;
+  try {
+    try {
+      // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
+      if (isMongoReady()) {
+        const u = await User.findById(me).select('nick').lean();
+        if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
+      }
+    } catch {}
+
+    const tNick = callDeliveryById.get(callId);
+    if (tNick) tNick.callerNick = fromNick ?? '';
+
+    // Шлём либо напрямую в уже связанные сокеты пользователя, либо в user-room fallback.
+    // Одновременная отправка обоими путями давала дубль одного и того же call:incoming.
+    const room = io.sockets.adapter.rooms.get(`u:${peerId}`);
+    const recipientSockets = Array.from(io.sockets.sockets.values()).filter(
+      (s) => normalizeMongoObjectId(String((s as any)?.data?.userId || '')) === peerId
+    );
+    for (const recipientSocket of recipientSockets) {
+      try {
+        (recipientSocket as any).emit('call:incoming', {
+          callId,
+          callKitId: getCallKitUuid(callId),
+          from: me,
+          fromNick,
+          ts: createdAtMs,
+          expiresAt: expiresAtMs,
+        });
+        (recipientSocket as any).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
+      } catch {}
+    }
+    const roomSize = room ? room.size : 0;
+    logger.info('[call:initiate] emitting call:incoming to recipient', { peerId, callId, recipientSocketsCount: recipientSockets.length, roomUSize: roomSize });
+    if (recipientSockets.length === 0 && roomSize > 0) {
+      io.to(`u:${peerId}`).emit('call:incoming', {
+        callId,
+        callKitId: getCallKitUuid(callId),
+        from: me,
+        fromNick,
+        ts: createdAtMs,
+        expiresAt: expiresAtMs,
+      });
+      io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
+    }
+  } catch {}
+
+  // КРИТИЧНО: пуш всегда отправляем в отдельном шаге, чтобы исключение в блоке с Mongo/сокетами не пропустило доставку в глубоком сне
+  try {
+    const t = callDeliveryById.get(callId);
+    if (t) {
+      t.callerNick = fromNick ?? '';
+      callDeliveryById.set(callId, t);
+    }
+    logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
+    await sendCallPushToRecipient(peerId, {
+      callId,
+      from: me,
+      fromNick: fromNick ?? '',
+      createdAtMs,
+      expiresAtMs,
+    });
+    addCallEvent(callId, 'push_sent', 'backend_initial', {
+      providerMode: callProviderMode,
+      providerPrimary: callFeatureFlags.providerSignalingEnabled,
+      pushFallbackEnabled: callFeatureFlags.pushFallbackEnabled,
+    });
+    if (t && !t.pushSentAtMs) t.pushSentAtMs = Date.now();
+    logger.info('[call:initiate] call push sent', { peerId });
+  } catch (pushErr: any) {
+    logger.warn('[call:initiate] push to recipient failed', { peerId, error: pushErr?.message });
+  }
+
+  // Надёжная доставка: если incoming_shown ACK не пришёл, запускаем цикл retry + escalation.
+  scheduleCallPushRetry(callId, CALL_DELIVERY_ACK_WAIT_MS);
+
+  return { ok: true, callId };
+}
+
+/** Инициация звонка по HTTP для случаев, когда сокет инициатора reconnecting/offline. Auth по x-install-id. */
+app.post('/api/calls/initiate', async (req, res) => {
+  try {
+    const userId = (req as any).userId;
+    const installId = (req as any).installId;
+    if (!userId || !isOid(userId)) {
+      if (mongoose.connection.readyState !== 1) {
+        logger.warn('[api/calls/initiate] database_unavailable (cannot resolve installId)', {
+          hasInstallId: !!installId,
+          readyState: mongoose.connection.readyState,
+        });
+        return res.status(503).json({ ok: false, error: 'database_unavailable' });
+      }
+      logger.warn('[api/calls/initiate] unauthorized', { hasInstallId: !!installId, installIdPrefix: installId ? String(installId).slice(0, 20) : '' });
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    const peerRaw = String(req.body?.to || '').trim();
+    if (!peerRaw || !isOid(peerRaw)) {
+      return res.status(400).json({ ok: false, error: 'bad_peer' });
+    }
+
+    const result = await initiateDirectCall({
+      callerId: String(userId),
+      peerId: peerRaw,
+      source: 'http',
+    });
+    if (result.ok) return res.json(result);
+    const status =
+      result.error === 'bad_peer' ? 400 :
+      result.error === 'unauthorized' ? 401 :
+      result.error === 'busy' || result.error === 'initiator_busy' || result.error === 'peer_busy' ? 409 :
+      500;
+    return res.status(status).json(result);
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
 
 /** Отклонение звонка по HTTP (из IncomingCallActivity без открытия приложения). Auth по x-install-id. */
 app.post('/api/calls/decline', async (req, res) => {
@@ -2664,249 +2969,13 @@ io.on('connection', async (sock: AuthedSocket) => {
       const peerRaw = String(to || '').trim();
       if (!peerRaw || !peerRaw.match(/^[a-f\d]{24}$/i)) return ack?.({ ok: false, error: 'bad_peer' });
       const peerId = normalizeMongoObjectId(peerRaw);
-
-      pruneOrphanCallOfUserEntry(me);
-      pruneOrphanCallOfUserEntry(peerId);
-      await cleanupStaleRingingCallForImmediateRetry(me, peerId);
-
-      // Проверяем busy флаг инициатора
-      const initiatorSocket = io.sockets.sockets.get(sock.id);
-      if (
-        initiatorSocket &&
-        (initiatorSocket as any)?.data?.busy === true &&
-        !(await getUserCallEntryFromAnyStore(me)) &&
-        !activeRoomByUserId.has(me)
-      ) {
-        (initiatorSocket as any).data.busy = false;
-        delete (initiatorSocket as any).data.roomId;
-        delete (initiatorSocket as any).data.partnerSid;
-        delete (initiatorSocket as any).data.inCall;
-      }
-      if (initiatorSocket && (initiatorSocket as any)?.data?.busy === true) {
-        return ack?.({ ok: false, error: 'initiator_busy' });
-      }
-      
-      // Убрано: проверка randomBusyByUser - рандомный поиск не блокирует звонки другу
-
-      // Уже в звонке?
-      if (await getUserCallEntryFromAnyStore(me)) return ack?.({ ok: false, error: 'busy' });
-      
-      // Найдём любой сокет получателя (может быть offline — тогда будем будить пушем)
-      const peerSocket = Array.from(io.sockets.sockets.values()).find(
-        (s) => normalizeMongoObjectId(String((s as any)?.data?.userId || '')) === peerId
-      ) as AuthedSocket | undefined;
-      
-      // Если получатель онлайн — проверяем busy флаг
-      if (peerSocket && (peerSocket as any)?.data?.busy === true) {
-        try { sock.emit('call:busy', { from: peerId, userId: peerId }); } catch {}
-        return ack?.({ ok: false, error: 'peer_busy' });
-      }
-      
-      // Убрано: проверка randomBusyByUser - рандомный поиск не блокирует звонки другу
-      
-      if (await getUserCallEntryFromAnyStore(peerId)) {
-        // Получатель уже в активном звонке
-        try { sock.emit('call:busy', { from: peerId, userId: peerId }); } catch {}
-        return ack?.({ ok: false, error: 'peer_busy' });
-      }
-
-      const createdAtMs = Date.now();
-      const expiresAtMs = createdAtMs + CALL_RING_TIMEOUT_MS;
-      const callId = `${createdAtMs}_${Math.random().toString(36).slice(2, 8)}`;
-      callsById.set(callId, { a: me, b: peerId, createdAtMs, expiresAtMs });
-      createOrchestratedCall({ callId, callerId: me, calleeId: peerId });
-      callDeliveryById.set(callId, {
+      const result = await initiateDirectCall({
         callerId: me,
-        calleeId: peerId,
-        createdAtMs,
-        expiresAtMs,
+        peerId,
+        initiatorSocket: sock,
+        source: 'socket',
       });
-      callOfUser.set(me, { with: peerId, callId });
-      callOfUser.set(peerId, { with: me, callId });
-      await persistDirectCallSharedState(callId, { a: me, b: peerId, createdAtMs, expiresAtMs });
-
-      // КРИТИЧНО: Создаем комнату при инициации звонка (инициатором)
-      // Используем user IDs для имени комнаты, чтобы совпадало с LiveKit roomName
-      const sortedUserIds = [me, peerId].sort();
-      const roomId = `room_${sortedUserIds[0]}_${sortedUserIds[1]}`;
-      console.log('[call:initiate] roomId created', { me, peerId, roomId });
-      
-      // Инициатор сразу присоединяется к комнате
-      try {
-        evictExtraUserSocketsInDirectRoom(io, roomId, me, sock.id);
-      } catch {}
-      try { 
-        sock.join(roomId);
-        logger.debug('Initiator joined room', { socketId: sock.id, roomId, callId });
-      } catch {}
-      try {
-        sanitizeDirectCallSocketIoRoom(io, roomId, activeCallBySocket);
-      } catch {}
-      
-      // КРИТИЧНО: Устанавливаем busy только для инициатора при инициации (для проверки initiator_busy). Получатель станет busy только после принятия (call:accept).
-      // Бейдж «Занято» не рассылаем друзьям до принятия: пока нативный экран входящего у одного и исходящего у другого — бейдж не показывается.
-      (sock as any).data = (sock as any).data || {};
-      (sock as any).data.busy = true;
-      (sock as any).data.roomId = roomId;
-      if (peerSocket) (sock as any).data.partnerSid = peerSocket.id;
-      
-      // Получатель НЕ помечаем busy до принятия. Presence друзьям не рассылаем до call:accept — бейдж только после принятия и на всё время разговора.
-      logger.debug('Call initiated', { from: me, to: peerId, callId, roomId });
-      
-      // КРИТИЧНО: Отправляем инициатору roomId для немедленного использования
-      // Включаем from (socket.id получателя) для сохранения partnerSocketId
-      try {
-        sock.emit('call:room:created', { callId, roomId, partnerId: peerId, from: peerSocket ? peerSocket.id : null });
-        logger.debug('Room created event sent to initiator', { socketId: sock.id, roomId, callId, from: peerSocket ? peerSocket.id : null });
-      } catch {}
-
-      // таймаут 20с
-      const timer = setTimeout(async () => {
-        const link = await getCallLinkFromAnyStore(callId);
-        if (!link) {
-          cleanupCall(callId);
-          return;
-        }
-        const shouldProcess = transitionCall(callId, 'timeout', {
-          actionKey: `timeout:${callId}`,
-          source: 'timer_timeout',
-        });
-        if (!shouldProcess) return;
-        
-        // Снимаем busy статус с обоих участников при таймауте
-        const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
-        const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
-        
-        if (aSock) {
-          (aSock as any).data = (aSock as any).data || {};
-          (aSock as any).data.busy = false;
-        }
-        if (bSock) {
-          (bSock as any).data = (bSock as any).data || {};
-          (bSock as any).data.busy = false;
-        }
-        await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
-
-        try {
-          const sortedU = [link.a, link.b].sort();
-          dissolveSocketIoRoom(io, `room_${sortedU[0]}_${sortedU[1]}`);
-        } catch {}
-
-        // уведомляем инициатора о таймауте (from = caller, чтобы клиент не считал пропущенным у инициатора)
-        try {
-          io.to(`u:${link.a}`).emit('call:timeout', { callId, from: link.a });
-        } catch {}
-        // уведомим получателя, чтобы оба закрыли модалки
-        try {
-          io.to(`u:${link.b}`).emit('call:timeout', { callId, from: link.a });
-        } catch {}
-        // Пуш получателю: вибрация остановится (снимем уведомление), клиент покажет «Пропущенный от X» без вибрации
-        let fromNick: string | undefined;
-        try {
-          if (isMongoReady()) {
-            const u = await User.findById(link.a).select('nick').lean();
-            if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
-          }
-        } catch {}
-        try {
-          const missedTitle = 'Пропущенный вызов';
-          const missedBody = fromNick ? `От ${fromNick}` : 'Входящий видеозвонок';
-          await sendPushToUser(link.b, {
-            kind: 'call',
-            title: missedTitle,
-            body: missedBody,
-            channelId: 'missed_call',
-            data: { type: 'call_ended', callId, from: link.a, fromNick: fromNick || '' },
-          });
-        } catch (e: any) {
-          logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
-        }
-        // Сохраняем пропущенный только если получатель офлайн — иначе он уже получил socket+FCM и при reauth получит дубль через missed_calls:sync
-        if (!bSock) await saveMissedCall(link.b, link.a, fromNick || '');
-        logger.info('[call:timeout] call ended for both: callee notified (socket+missed push), caller gets timeout', { callId, caller: link.a, callee: link.b });
-        cleanupCall(callId, 'timeout');
-      }, CALL_RING_TIMEOUT_MS);
-      const link = callsById.get(callId);
-      if (link) link.timer = timer;
-
-      // отправим входящий вызов получателю (с ником инициатора, если есть)
-      let fromNick: string | undefined;
-      try {
-        try {
-          // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
-          if (isMongoReady()) {
-            const u = await User.findById(me).select('nick').lean();
-            if (u && typeof (u as any).nick === 'string') fromNick = String((u as any).nick).trim() || undefined;
-          }
-        } catch {}
-
-        const tNick = callDeliveryById.get(callId);
-        if (tNick) tNick.callerNick = fromNick ?? '';
-
-        // Шлём либо напрямую в уже связанные сокеты пользователя, либо в user-room fallback.
-        // Одновременная отправка обоими путями давала дубль одного и того же call:incoming.
-        const room = io.sockets.adapter.rooms.get(`u:${peerId}`);
-        const recipientSockets = Array.from(io.sockets.sockets.values()).filter(
-          (s) => normalizeMongoObjectId(String((s as any)?.data?.userId || '')) === peerId
-        );
-        for (const recipientSocket of recipientSockets) {
-          try {
-            (recipientSocket as any).emit('call:incoming', {
-              callId,
-              callKitId: getCallKitUuid(callId),
-              from: me,
-              fromNick,
-              ts: createdAtMs,
-              expiresAt: expiresAtMs,
-            });
-            (recipientSocket as any).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
-          } catch {}
-        }
-        const roomSize = room ? room.size : 0;
-        logger.info('[call:initiate] emitting call:incoming to recipient', { peerId, callId, recipientSocketsCount: recipientSockets.length, roomUSize: roomSize });
-        if (recipientSockets.length === 0 && roomSize > 0) {
-          io.to(`u:${peerId}`).emit('call:incoming', {
-            callId,
-            callKitId: getCallKitUuid(callId),
-            from: me,
-            fromNick,
-            ts: createdAtMs,
-            expiresAt: expiresAtMs,
-          });
-          io.to(`u:${peerId}`).emit('friend:call:incoming', { callId, from: me, nick: fromNick });
-        }
-      } catch {}
-
-      // КРИТИЧНО: пуш всегда отправляем в отдельном шаге, чтобы исключение в блоке с Mongo/сокетами не пропустило доставку в глубоком сне
-      try {
-        const t = callDeliveryById.get(callId);
-        if (t) {
-          t.callerNick = fromNick ?? '';
-          callDeliveryById.set(callId, t);
-        }
-        logger.info('[call:initiate] sending call push to recipient', { peerId, callId, from: me });
-        await sendCallPushToRecipient(peerId, {
-          callId,
-          from: me,
-          fromNick: fromNick ?? '',
-          createdAtMs,
-          expiresAtMs,
-        });
-        addCallEvent(callId, 'push_sent', 'backend_initial', {
-          providerMode: callProviderMode,
-          providerPrimary: callFeatureFlags.providerSignalingEnabled,
-          pushFallbackEnabled: callFeatureFlags.pushFallbackEnabled,
-        });
-        if (t && !t.pushSentAtMs) t.pushSentAtMs = Date.now();
-        logger.info('[call:initiate] call push sent', { peerId });
-      } catch (pushErr: any) {
-        logger.warn('[call:initiate] push to recipient failed', { peerId, error: pushErr?.message });
-      }
-
-      // Надёжная доставка: если incoming_shown ACK не пришёл, запускаем цикл retry + escalation.
-      scheduleCallPushRetry(callId, CALL_DELIVERY_ACK_WAIT_MS);
-
-      return ack?.({ ok: true, callId });
+      return ack?.(result);
     } catch (e: any) {
       return ack?.({ ok: false, error: e?.message || 'server_error' });
     }

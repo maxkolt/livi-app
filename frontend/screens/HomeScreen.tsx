@@ -1431,6 +1431,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [missedByUser, setMissedByUser] = useState<Record<string, number>>({});
   const [missedLoaded, setMissedLoaded] = useState(false);
   const [markReadMenu, setMarkReadMenu] = useState<{ friendId: string; type: 'video' | 'chat' } | null>(null);
+  const [friendActionsGestureResetSeq, setFriendActionsGestureResetSeq] = useState(0);
   const menuStripWidth = useRef(new Animated.Value(0)).current;
   const rowRefForMarkReadMenu = useRef<View>(null);
   const avatarRefForMarkReadMenu = useRef<View>(null);
@@ -1511,6 +1512,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /** Monotonic token for outgoing-call attempts: cancel/restart must make older async startCall results stale. */
   const outgoingAttemptSeqRef = useRef(0);
   const activeOutgoingAttemptRef = useRef(0);
+  const lastOutgoingExternalCloseResetAtRef = useRef(0);
 
   // ВАЖНО: не закрываем исходящий UI на socket 'connect'.
   // Иначе при старте звонка из вкладки «Друзья» (HomeScreen смонтирован) нативный исходящий экран
@@ -1527,23 +1529,68 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [calling.visible, calling.callId]);
 
   // Закрытие модалки исходящего по событию извне (абонент отклонил на нативном экране/отменил/таймаут — событие приходит в App, эмитится emitCloseOutgoingCall)
+  const resetOutgoingAfterExternalClose = useCallback((source = 'external') => {
+    const hadOutgoingState =
+      activeOutgoingAttemptRef.current > 0 ||
+      callingVisibleRef.current ||
+      calling.visible ||
+      !!calling.friend ||
+      !!calling.callId ||
+      !!openSwipeableRef.current ||
+      !!markReadMenu;
+    const now = Date.now();
+    const duplicateReset = !hadOutgoingState && now - lastOutgoingExternalCloseResetAtRef.current < 900;
+    if (duplicateReset) {
+      logger.info('[HomeScreen] reset outgoing after external close skipped duplicate', {
+        source,
+        appState: AppState.currentState,
+        sinceLastMs: now - lastOutgoingExternalCloseResetAtRef.current,
+      });
+      return;
+    }
+    lastOutgoingExternalCloseResetAtRef.current = now;
+    logger.info('[HomeScreen] reset outgoing after external close', {
+      source,
+      appState: AppState.currentState,
+      activeOutgoingAttempt: activeOutgoingAttemptRef.current,
+      callingVisibleRef: callingVisibleRef.current,
+      callingVisible: calling.visible,
+      hasMarkReadMenu: !!markReadMenu,
+      openSwipeable: !!openSwipeableRef.current,
+    });
+    activeOutgoingAttemptRef.current = 0;
+    outgoingAttemptSeqRef.current += 1;
+    pendingCancelRef.current = true;
+    outgoingCallUserCanceledRef.current = true;
+    try {
+      const g = global as any;
+      if (g.__outgoingCanceledByNativeRef) g.__outgoingCanceledByNativeRef.current = false;
+    } catch {}
+    try { setOutgoingCallScreenVisible(false); } catch {}
+    // Важно: ставим ref сразу, чтобы следующий tap не упёрся в stale calling.visible до рендера.
+    callingVisibleRef.current = false;
+    setCalling((prev) => (
+      prev.visible || prev.friend || prev.callId
+        ? { visible: false, friend: null, callId: null }
+        : prev
+    ));
+    setSwipeActionsHiddenForCall(null);
+    setMarkReadMenu(null);
+    try { openSwipeableRef.current?.close?.(); } catch {}
+    openSwipeableRef.current = null;
+    if (hadOutgoingState) {
+      setFriendActionsGestureResetSeq((seq) => seq + 1);
+    }
+    stopWaves();
+  }, [calling.visible, markReadMenu, stopWaves]);
+
   useEffect(() => {
     const unsub = onCloseOutgoingCall(() => {
-      // Дедуп: при отмене инициатором мы уже закрываем исходящий локально (handleCancelCall),
-      // а потом может прийти второе закрытие через App/push → лишнее setCalling даёт 2 мерцания.
-      if (!callingVisibleRef.current) return;
-      activeOutgoingAttemptRef.current = 0;
-      outgoingAttemptSeqRef.current += 1;
-      pendingCancelRef.current = true;
-      outgoingCallUserCanceledRef.current = true;
-      try { setOutgoingCallScreenVisible(false); } catch {}
-      // Важно: ставим ref сразу, чтобы подавить гонки до следующего рендера.
-      callingVisibleRef.current = false;
-      setCalling({ visible: false, friend: null, callId: null });
-      stopWaves();
+      // Даже если callingVisibleRef уже false, активная async-попытка могла ещё ждать startCall.
+      resetOutgoingAfterExternalClose('onCloseOutgoingCall');
     });
     return unsub;
-  }, [stopWaves]);
+  }, [resetOutgoingAfterExternalClose]);
 
   // Закрытие модалок «Поддержать LiVi» и «Пригласи друга» при переходе на видеозвонок (чтобы экран VideoCall был поверх)
   useEffect(() => {
@@ -1616,7 +1663,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [calling.visible]);
 
   const handleStartVideoCall = useCallback(async (friend: Friend) => {
-    if (activeOutgoingAttemptRef.current > 0 || callingVisibleRef.current) return;
+    const canceledByNative =
+      typeof global !== 'undefined' &&
+      (global as any).__outgoingCanceledByNativeRef?.current === true;
+    if (canceledByNative) {
+      resetOutgoingAfterExternalClose('video-start-native-flag');
+    }
+    if (activeOutgoingAttemptRef.current > 0) return;
+    if (callingVisibleRef.current) {
+      try { setOutgoingCallScreenVisible(false); } catch {}
+      callingVisibleRef.current = false;
+      setCalling({ visible: false, friend: null, callId: null });
+      stopWaves();
+    }
     const attemptId = ++outgoingAttemptSeqRef.current;
     activeOutgoingAttemptRef.current = attemptId;
     const isCurrentAttempt = () => activeOutgoingAttemptRef.current === attemptId;
@@ -1856,8 +1915,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       logger.warn('[outgoing] handleStartVideoCall failed', { error: e?.message ?? String(e) });
       if (isCurrentAttempt()) activeOutgoingAttemptRef.current = 0;
       try { setOutgoingCallScreenVisible(false); } catch {}
+      try { closeOutgoingCallActivity(); } catch {}
       callingVisibleRef.current = false;
       setCalling({ visible: false, friend: null, callId: null });
+      setSwipeActionsHiddenForCall(null);
       stopWaves();
       const canceledByNative =
         typeof global !== 'undefined' &&
@@ -1875,7 +1936,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         } catch {}
       }
     }
-  }, [navigation, showNotice, startWaves, stopWaves, lang]);
+  }, [navigation, showNotice, startWaves, stopWaves, resetOutgoingAfterExternalClose, lang]);
 
   const handleCancelCall = useCallback(() => {
     activeOutgoingAttemptRef.current = 0;
@@ -4331,7 +4392,24 @@ const handleClearNick = useCallback(async () => {
       const peerIdStr = friendIdStr;
       const now = Date.now();
       const last = lastChatOpenRef.current;
+      logger.info('[FriendAction] chat press', {
+        friendId: peerIdStr,
+        appState: AppState.currentState,
+        callingVisible: calling.visible,
+        callingVisibleRef: callingVisibleRef.current,
+        activeOutgoingAttempt: activeOutgoingAttemptRef.current,
+        hasMarkReadMenu: !!markReadMenu,
+        menuOpen,
+        donateVisible,
+        shareVisible,
+        inviteRequestVisible,
+        roomFullVisible: roomFull.visible,
+      });
       if (last && last.peerId === peerIdStr && now - last.at < CHAT_OPEN_DEBOUNCE_MS) {
+        logger.info('[FriendAction] chat press ignored: debounce', {
+          friendId: peerIdStr,
+          sinceLastMs: now - last.at,
+        });
         return;
       }
       try {
@@ -4340,6 +4418,7 @@ const handleClearNick = useCallback(async () => {
         if (active?.name === 'Chat') {
           const p = active.params as { peerId?: string | number } | undefined;
           if (p && String(p.peerId) === peerIdStr) {
+            logger.info('[FriendAction] chat press ignored: already on chat', { friendId: peerIdStr });
             return;
           }
         }
@@ -4370,7 +4449,7 @@ const handleClearNick = useCallback(async () => {
         peerAvatarThumbB64: friend.avatarThumbB64 || '',
         peerOnline: friend.online,
       });
-    }, [navigation, friend.id, friend.name, friend.avatarVer, friend.avatarThumbB64, friend.online, friendIdStr]);
+    }, [navigation, friend.id, friend.name, friend.avatarVer, friend.avatarThumbB64, friend.online, friendIdStr, calling.visible, markReadMenu, menuOpen, donateVisible, shareVisible, inviteRequestVisible, roomFull.visible]);
 
     return (
       <View style={styles.chatBtnOuter}>
@@ -4540,7 +4619,8 @@ const handleClearNick = useCallback(async () => {
     const showBusyBadge = isFriendBusy && !isIncomingFromThisFriend;
     // Стиль «занято» (серая кнопка) только у участника звонка или при дозвоне. У остальных друзей кнопка как обычно, просто не кликабельна.
     const useBusyButtonStyle = busy || isOutgoingToThisFriend || isIncomingFromThisFriend;
-    const videoDisabled = busy || outgoingInProgress || incomingInProgress || activeCallInProgress;
+    const hardVideoDisabled = busy || incomingInProgress || activeCallInProgress;
+    const videoDisabled = hardVideoDisabled || outgoingInProgress;
     const pulse = React.useRef(new Animated.Value(0)).current;
     useEffect(() => {
       if (showBusyBadge) {
@@ -4570,7 +4650,7 @@ const handleClearNick = useCallback(async () => {
         )}
         <View style={styles.friendActionBadgeAnchor}>
           <RectButton
-            enabled={!videoDisabled}
+            enabled={!hardVideoDisabled}
             accessibilityState={{ disabled: !!videoDisabled }}
             style={[
               styles.friendActionBtnSize,
@@ -4599,7 +4679,45 @@ const handleClearNick = useCallback(async () => {
                 : undefined
             }
             onPress={() => {
-              if (videoDisabled) return;
+              logger.info('[FriendAction] video press', {
+                friendId: friendIdStr,
+                appState: AppState.currentState,
+                hardVideoDisabled,
+                videoDisabled,
+                outgoingInProgress,
+                activeOutgoingAttempt: activeOutgoingAttemptRef.current,
+                callingVisible: calling.visible,
+                callingVisibleRef: callingVisibleRef.current,
+                incomingInProgress,
+                activeCallInProgress,
+                busy,
+                hasMarkReadMenu: !!markReadMenu,
+                menuOpen,
+                donateVisible,
+                shareVisible,
+                inviteRequestVisible,
+                roomFullVisible: roomFull.visible,
+              });
+              if (hardVideoDisabled) {
+                logger.info('[FriendAction] video press ignored: hard disabled', { friendId: friendIdStr });
+                return;
+              }
+              if (outgoingInProgress && activeOutgoingAttemptRef.current > 0) {
+                const shouldResetStaleOutgoing =
+                  Platform.OS === 'android' &&
+                  AppState.currentState === 'active' &&
+                  isCallKeepAvailable();
+                if (shouldResetStaleOutgoing) {
+                  resetOutgoingAfterExternalClose('video-press-stale-outgoing');
+                } else {
+                  logger.info('[FriendAction] video press ignored: outgoing in progress', {
+                    friendId: friendIdStr,
+                    appState: AppState.currentState,
+                    callKeepAvailable: isCallKeepAvailable(),
+                  });
+                  return;
+                }
+              }
               try {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               } catch {
@@ -4623,7 +4741,7 @@ const handleClearNick = useCallback(async () => {
             />
           </RectButton>
           {Platform.OS === 'android' && videoDisabled && (
-            <View style={styles.videoIconOverlay}>
+            <View pointerEvents="none" style={styles.videoIconOverlay}>
               <MaterialIcons name="videocam" size={23} color={ANDROID_VIDEO_CALL_DISABLED_ICON} />
             </View>
           )}
@@ -4649,12 +4767,14 @@ const handleClearNick = useCallback(async () => {
       removeClippedSubviews={false}
       data={friends}
       keyExtractor={(item) => item.id}
+      extraData={friendActionsGestureResetSeq}
       ItemSeparatorComponent={() => <View style={styles.friendSeparator} />}
       refreshing={refreshing}
       onRefresh={onRefreshFriends}
       onScrollBeginDrag={() => setMarkReadMenu(null)}
       renderItem={({ item }) => (
         <Swipeable
+          key={`${item.id}:${friendActionsGestureResetSeq}`}
           ref={(r) => { if (r) swipeableRefsMap.current[item.id] = r; }}
           onSwipeableOpen={() => { openSwipeableRef.current = swipeableRefsMap.current[item.id] ?? null; }}
           onSwipeableClose={() => { if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) openSwipeableRef.current = null; }}
@@ -6314,8 +6434,8 @@ const styles = StyleSheet.create({
     height: FRIEND_ACTION_BUTTON.height,
     borderRadius: FRIEND_ACTION_BUTTON.borderRadius,
   },
-  /** Отступ между видео и чатом — снаружи якоря 40×40, чтобы бейдж считался от угла кнопки */
-  chatBtnOuter: { marginLeft: 14 },
+  /** Отступ между видео и чатом — снаружи якоря кнопки, чтобы hitSlop-зоны не пересекались. */
+  chatBtnOuter: { marginLeft: 18 },
   friendActionBadgeAnchor: {
     width: FRIEND_ACTION_BUTTON.width,
     height: FRIEND_ACTION_BUTTON.height,
