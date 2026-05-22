@@ -70,6 +70,14 @@ type CallIncomingPayload = {
   fromNick?: string;
 };
 
+type CallEndedPayload = {
+  callId?: string;
+  roomId?: string;
+  reason?: string;
+  scope?: string;
+  from?: string;
+};
+
 type LiveKitConnectOptions = {
   forceRelayOnly?: boolean;
   reason?: string;
@@ -102,7 +110,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   private socketHandlers: {
     callAccepted?: (data: CallAcceptedPayload) => void;
     callIncoming?: (data: CallIncomingPayload) => void;
-    callEnded?: () => void;
+    callEnded?: (data?: CallEndedPayload) => void;
+    onCallEnded?: (data?: CallEndedPayload) => void;
+    onCallCancel?: (data?: CallEndedPayload) => void;
     callError?: (data: { callId?: string; reason?: string }) => void;
     callDeclined?: (data: { callId?: string; from?: string }) => void;
     disconnected?: () => void;
@@ -484,6 +494,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Idempotency: endCall can be invoked from multiple places (UI + cleanup + socket events).
     // Make it safe to call multiple times without triggering warnings or duplicate actions.
     if (this.ended || this.endCallInProgress) {
+      this.unregisterSocketHandlers('endCall-already-ended');
       return;
     }
     this.endCallInProgress = true;
@@ -504,6 +515,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.info('[VideoCallSession] 🔓 Сброшена блокировка __connectingToRoomRef в endCall');
     }
     this.liveKitConnectByRoom.clear();
+    this.unregisterSocketHandlers('endCall');
 
     // КРИТИЧНО: Используем переданные из UI callId/roomId как fallback (инициатор может не иметь их в сессии до завершения connectAsInitiatorAfterAccepted)
     const callIdToSend = overrideCallId ?? this.callId;
@@ -517,7 +529,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       overrideRoomId,
       callIdToSend,
       roomIdToSend,
-      partnerId: this.partnerId,
+      partnerSocketId: this.partnerId,
       partnerUserId: this.partnerUserId,
     });
     
@@ -560,8 +572,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.roomId = null;
     this.lastLiveKitUrl = null;
     this.lastLiveKitToken = null;
+    this.inPiP = false;
     this.lastSentPiPState = null;
     this.lastSentPiPRoomId = null;
+    this.partnerInPiP = false;
     this.partnerId = null;
     this.partnerUserId = null;
     this.notifyPartnerIdChange(null);
@@ -1162,11 +1176,13 @@ export class VideoCallSession extends SimpleEventEmitter {
    * чтобы не накапливать зомби-сессии со 2–4 звонка и не слать лишний call:end.
    */
   private detachFromCall(): void {
-    if (this.ended) return;
+    if (this.ended) {
+      this.unregisterSocketHandlers('detach-ended-session');
+      return;
+    }
     this.ended = true;
     this.clearSocketRecoveryTimer();
-    this.socketOffs.forEach((off) => off());
-    this.socketOffs = [];
+    this.unregisterSocketHandlers('detach');
     logger.info('[VideoCallSession] 🔌 Сессия отключена от сокета (skip path), handlers сняты');
   }
 
@@ -1181,8 +1197,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     void this.disconnectRoom('user');
     this.resetRemoteState();
     this.stopLocalTracks();
-    this.socketOffs.forEach((off) => off());
-    this.socketOffs = [];
+    this.unregisterSocketHandlers('cleanup');
   }
 
   // Методы для совместимости
@@ -1275,21 +1290,21 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   enterPiP?(): void {
-    logger.info('[VideoCallSession] enterPiP вызван');
-    this.setInPiP(true);
-    
     // Отправляем pip:state партнеру только если звонок ещё активен (гонка: call ended и PiP могут совпасть).
     const currentRoomId = this.getRoomId();
-    if (this.ended || this.endCallInProgress || !currentRoomId) {
+    if (this.ended || this.endCallInProgress || this.cleaned || !currentRoomId) {
       logger.debug('[VideoCallSession] pip:state не отправляем — звонок завершён или нет roomId', {
         ended: this.ended,
+        cleaned: this.cleaned,
         hasRoomId: !!currentRoomId,
       });
       return;
     }
     if (this.lastSentPiPState === true && this.lastSentPiPRoomId === currentRoomId) {
+      this.setInPiP(true);
       return;
     }
+    this.setInPiP(true);
     try {
       const payload = { inPiP: true, from: socket.id, roomId: currentRoomId };
       socket.emit('pip:state', payload);
@@ -1302,12 +1317,14 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   exitPiP?(): void {
-    logger.info('[VideoCallSession] exitPiP вызван');
-    this.setInPiP(false);
-    
     const currentRoomId = this.getRoomId();
-    if (this.ended || this.endCallInProgress || !currentRoomId) {
-      logger.debug('[VideoCallSession] pip:state не отправляем при exitPiP — звонок завершён или нет roomId');
+    this.setInPiP(false);
+    if (this.ended || this.endCallInProgress || this.cleaned || !currentRoomId) {
+      logger.debug('[VideoCallSession] pip:state не отправляем при exitPiP — звонок завершён или нет roomId', {
+        ended: this.ended,
+        cleaned: this.cleaned,
+        hasRoomId: !!currentRoomId,
+      });
       return;
     }
     if (this.lastSentPiPState === false && this.lastSentPiPRoomId === currentRoomId) {
@@ -1338,55 +1355,54 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /* ===================== Internal helpers ===================== */
 
-  private setupSocketHandlers(): void {
+  private unregisterSocketHandlers(reason: string): void {
     this.clearSocketRecoveryTimer();
 
+    if (this.socketOffs.length > 0) {
+      logger.info('[VideoCallSession] Removing socket handlers', {
+        reason,
+        handlersCount: this.socketOffs.length,
+        myUserId: this.config.myUserId,
+      });
+    }
+
+    this.socketOffs.forEach((off) => {
+      try {
+        off();
+      } catch (e) {
+        logger.warn('[VideoCallSession] Ошибка при удалении socket handler', {
+          reason,
+          error: e,
+        });
+      }
+    });
+    this.socketOffs = [];
+
+    const handlers = this.socketHandlers;
+    if (handlers.callAccepted) socket.off('call:accepted', handlers.callAccepted);
+    if (handlers.callIncoming) socket.off('call:incoming', handlers.callIncoming);
+    if (handlers.callEnded) {
+      socket.off('call:ended', handlers.callEnded);
+      socket.off('call:cancel', handlers.callEnded);
+    }
+    if (handlers.onCallEnded) socket.off('call:ended', handlers.onCallEnded);
+    if (handlers.onCallCancel) socket.off('call:cancel', handlers.onCallCancel);
+    if (handlers.callError) socket.off('call:error', handlers.callError);
+    if (handlers.callDeclined) socket.off('call:declined', handlers.callDeclined);
+    if (handlers.disconnected) socket.off('disconnected', handlers.disconnected);
+    if (handlers.pipState) socket.off('pip:state', handlers.pipState);
+    if (handlers.camToggle) socket.off('cam-toggle', handlers.camToggle);
+
+    this.socketHandlers = {};
+  }
+
+  private setupSocketHandlers(): void {
     logger.info('[VideoCallSession] 🔌 Setting up socket handlers', {
       myUserId: this.config.myUserId,
     });
-    
-    // КРИТИЧНО: Удаляем старые обработчики перед добавлением новых
-    // Это предотвращает дублирование обработчиков при повторном вызове
-    if (this.socketOffs.length > 0) {
-      logger.info('[VideoCallSession] Удаляем старые socket handlers перед добавлением новых', {
-        handlersCount: this.socketOffs.length
-      });
-      this.socketOffs.forEach((off) => {
-        try {
-          off();
-        } catch (e) {
-          logger.warn('[VideoCallSession] Ошибка при удалении старого обработчика', e);
-        }
-      });
-      this.socketOffs = [];
-    }
-    
-    // Удаляем обработчики напрямую если они были сохранены
-    if (this.socketHandlers.callAccepted) {
-      socket.off('call:accepted', this.socketHandlers.callAccepted);
-    }
-    if (this.socketHandlers.callIncoming) {
-      socket.off('call:incoming', this.socketHandlers.callIncoming);
-    }
-    if (this.socketHandlers.callEnded) {
-      socket.off('call:ended', this.socketHandlers.callEnded);
-      socket.off('call:cancel', this.socketHandlers.callEnded);
-    }
-    if (this.socketHandlers.callError) {
-      socket.off('call:error', this.socketHandlers.callError);
-    }
-    if (this.socketHandlers.callDeclined) {
-      socket.off('call:declined', this.socketHandlers.callDeclined);
-    }
-    if (this.socketHandlers.disconnected) {
-      socket.off('disconnected', this.socketHandlers.disconnected);
-    }
-    if (this.socketHandlers.pipState) {
-      socket.off('pip:state', this.socketHandlers.pipState);
-    }
-    if (this.socketHandlers.camToggle) {
-      socket.off('cam-toggle', this.socketHandlers.camToggle);
-    }
+
+    // КРИТИЧНО: повторный setup не должен наслаивать обработчики на тот же экземпляр.
+    this.unregisterSocketHandlers('setup');
     
     const callAcceptedHandler = (data: CallAcceptedPayload) => {
       logger.info('[VideoCallSession] 📡 Socket event call:accepted received in handler', {
@@ -1415,16 +1431,16 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.handleCallIncoming(data);
     };
     
-    const callEndedHandler = (data?: { callId?: string; roomId?: string; reason?: string; scope?: string }) => {
+    const callEndedHandler = (data?: CallEndedPayload) => {
       if (!this.matchesCurrentCallEvent(data)) return;
       this.handleCallEnded(data);
     };
 
-    const onCallEnded = (data?: { callId?: string; roomId?: string; reason?: string; scope?: string }) => {
+    const onCallEnded = (data?: CallEndedPayload) => {
       callEndedHandler(data);
     };
 
-    const onCallCancel = (data?: { callId?: string; from?: string; roomId?: string }) => {
+    const onCallCancel = (data?: CallEndedPayload) => {
       callEndedHandler(data);
     };
 
@@ -1571,8 +1587,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.socketHandlers.callAccepted = callAcceptedHandler;
     this.socketHandlers.callIncoming = callIncomingHandler;
     this.socketHandlers.callEnded = callEndedHandler;
-    (this.socketHandlers as any).onCallEnded = onCallEnded;
-    (this.socketHandlers as any).onCallCancel = onCallCancel;
+    this.socketHandlers.onCallEnded = onCallEnded;
+    this.socketHandlers.onCallCancel = onCallCancel;
     this.socketHandlers.callError = callErrorHandler;
     this.socketHandlers.callDeclined = callDeclinedHandler;
     this.socketHandlers.disconnected = disconnectedHandler;
@@ -2131,6 +2147,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private handleCallEnded(endEvent?: { callId?: string; roomId?: string }): void {
     // Повторный вход (echo call:ended, call:cancel+call:ended, LiveKit+socket): не дублируем PiP/globals/teardown.
     if (this.ended || this.endCallInProgress) {
+      this.unregisterSocketHandlers('callEnded-already-ended');
       if (Platform.OS === 'android') {
         try { requestExitSystemPiPSoft(); } catch {}
       }
@@ -2168,6 +2185,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     // Зомби-сессия (уже очищена cleanupFunction): не эмитить callEnded — иначе второй handleCallEnded в UI и мерцание при переходе на Home.
     if (!this.callId && !this.roomId) {
+      this.unregisterSocketHandlers('callEnded-without-ids');
       return;
     }
 
@@ -2178,12 +2196,14 @@ export class VideoCallSession extends SimpleEventEmitter {
     const hasLiveKitRoom = !!this.room && this.room.state !== 'disconnected';
     const hasAnyTracks = !!this.localStream || !!this.remoteStream || !!this.localAudioTrack || !!this.localVideoTrack;
     if (!hasAnyIdentifiers && !hasLiveKitRoom && !hasAnyTracks) {
+      this.unregisterSocketHandlers('callEnded-inactive');
       return;
     }
 
     // КРИТИЧНО: Сразу помечаем завершение, чтобы повторный вызов (socket call:ended + ParticipantDisconnected
     // почти одновременно) не выполнял очистку и emit('callEnded') дважды.
     this.ended = true;
+    this.unregisterSocketHandlers('callEnded');
     // КРИТИЧНО: Сразу уведомляем UI (выставить refs), чтобы колбэки при disconnectRoom (onRemoteCamStateChange и т.д.) не вызывали setState — без ререндеров при закрытии экрана.
     try { this.config.onCallEnding?.(); } catch (_) {}
 

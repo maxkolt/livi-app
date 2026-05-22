@@ -10,12 +10,16 @@ export interface IOfflineMessage extends Document {
     id: string;
     from: string;
     to: string;
-    type: 'text' | 'image' | 'audio';
+    type: 'text' | 'image' | 'audio' | 'sticker';
     text?: string;
     uri?: string;
     name?: string;
     size?: number;
     duration?: number;
+    stickerId?: string;
+    stickerPackId?: string;
+    stickerEmoji?: string;
+    stickerLabel?: string;
     timestamp: Date;
     read: boolean;
     replyTo?: { id: string; text?: string; from: string };
@@ -47,12 +51,16 @@ const OfflineMessageSchema = new Schema<IOfflineMessage>({
     id: { type: String, required: true },
     from: { type: String, required: true },
     to: { type: String, required: true },
-    type: { type: String, enum: ['text', 'image', 'audio'], required: true },
+    type: { type: String, enum: ['text', 'image', 'audio', 'sticker'], required: true },
     text: { type: String },
     uri: { type: String },
     name: { type: String },
     size: { type: Number },
     duration: { type: Number },
+    stickerId: { type: String },
+    stickerPackId: { type: String },
+    stickerEmoji: { type: String },
+    stickerLabel: { type: String },
     timestamp: { type: Date, required: true },
     read: { type: Boolean, default: false },
     replyTo: {

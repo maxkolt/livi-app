@@ -1,8 +1,11 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { EmojiKeyboard, en, ru, type EmojiType } from 'rn-emoji-keyboard';
+import { BUILT_IN_STICKER_PACKS, StickerView, type BuiltInSticker } from './chatStickers';
 
 export const CHAT_EMOJI_PANEL_HEIGHT = 280;
+const CHAT_EXPRESSION_SWITCH_HEIGHT = 42;
+const CHAT_STICKER_PACK_HEIGHT = 42;
 
 type Props = {
   isDark: boolean;
@@ -10,6 +13,7 @@ type Props = {
   textColor: string;
   langCode: string;
   onEmojiSelected: (emoji: EmojiType) => void;
+  onStickerSelected?: (sticker: BuiltInSticker) => void;
 };
 
 export default function ChatEmojiKeyboard({
@@ -18,8 +22,12 @@ export default function ChatEmojiKeyboard({
   textColor,
   langCode,
   onEmojiSelected,
+  onStickerSelected,
 }: Props) {
+  const [tab, setTab] = React.useState<'emoji' | 'stickers'>('emoji');
+  const [packId, setPackId] = React.useState(BUILT_IN_STICKER_PACKS[0]?.id || '');
   const translation = langCode === 'ru' ? ru : en;
+  const activePack = BUILT_IN_STICKER_PACKS.find((pack) => pack.id === packId) || BUILT_IN_STICKER_PACKS[0];
 
   const theme = React.useMemo(
     () =>
@@ -78,16 +86,100 @@ export default function ChatEmojiKeyboard({
   );
 
   return (
-    <View style={styles.wrap}>
-      <EmojiKeyboard
-        onEmojiSelected={onEmojiSelected}
-        enableSearchBar
-        enableRecentlyUsed
-        categoryPosition="top"
-        translation={translation}
-        theme={theme}
-        disableSafeArea
-      />
+    <View style={[styles.wrap, { backgroundColor: surfaceBg }]}>
+      <View style={styles.content}>
+        {tab === 'emoji' ? (
+          <EmojiKeyboard
+            onEmojiSelected={onEmojiSelected}
+            enableSearchBar
+            enableRecentlyUsed
+            categoryPosition="top"
+            translation={translation}
+            theme={theme}
+            disableSafeArea
+          />
+        ) : (
+          <View style={styles.stickersPage}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.packSelector}
+            >
+              {BUILT_IN_STICKER_PACKS.map((pack) => {
+                const active = pack.id === activePack.id;
+                return (
+                  <Pressable
+                    key={pack.id}
+                    onPress={() => setPackId(pack.id)}
+                    style={({ pressed }) => [
+                      styles.packButton,
+                      {
+                        backgroundColor: active
+                          ? (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)')
+                          : 'transparent',
+                        opacity: pressed ? 0.78 : 1,
+                      },
+                    ]}
+                  >
+                    <Text style={styles.packIcon}>{pack.icon}</Text>
+                    <Text style={[styles.packName, { color: textColor }]} numberOfLines={1}>
+                      {pack.name}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.stickerGrid}
+              keyboardShouldPersistTaps="always"
+            >
+              {activePack.stickers.map((sticker) => (
+                <Pressable
+                  key={sticker.id}
+                  onPress={() => onStickerSelected?.(sticker)}
+                  style={({ pressed }) => [
+                    styles.stickerCell,
+                    {
+                      backgroundColor: pressed
+                        ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
+                        : 'transparent',
+                      transform: [{ scale: pressed ? 0.96 : 1 }],
+                    },
+                  ]}
+                >
+                  <StickerView sticker={sticker} size={62} animated isDark={isDark} />
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+      </View>
+      <View style={[styles.switchBar, { borderTopColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.08)' }]}>
+        {(['emoji', 'stickers'] as const).map((id) => {
+          const active = tab === id;
+          const label = id === 'emoji' ? (langCode === 'ru' ? 'Эмодзи' : 'Emoji') : (langCode === 'ru' ? 'Стикеры' : 'Stickers');
+          return (
+            <Pressable
+              key={id}
+              onPress={() => setTab(id)}
+              style={({ pressed }) => [
+                styles.switchButton,
+                {
+                  backgroundColor: active
+                    ? (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)')
+                    : 'transparent',
+                  opacity: pressed ? 0.75 : 1,
+                },
+              ]}
+            >
+              <Text style={{ color: active ? textColor : (isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.45)'), fontWeight: active ? '700' : '600', fontSize: 13 }}>
+                {label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -96,5 +188,64 @@ const styles = StyleSheet.create({
   wrap: {
     height: CHAT_EMOJI_PANEL_HEIGHT,
     overflow: 'hidden',
+  },
+  content: {
+    height: CHAT_EMOJI_PANEL_HEIGHT - CHAT_EXPRESSION_SWITCH_HEIGHT,
+    overflow: 'hidden',
+  },
+  stickersPage: {
+    flex: 1,
+  },
+  packSelector: {
+    height: CHAT_STICKER_PACK_HEIGHT,
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  packButton: {
+    height: 32,
+    minWidth: 78,
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  packIcon: {
+    fontSize: 17,
+    marginRight: 5,
+  },
+  packName: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  stickerGrid: {
+    paddingHorizontal: 12,
+    paddingTop: 4,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  stickerCell: {
+    width: '25%',
+    height: 78,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  switchBar: {
+    height: CHAT_EXPRESSION_SWITCH_HEIGHT,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  switchButton: {
+    minWidth: 104,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

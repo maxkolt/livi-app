@@ -115,6 +115,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const [visible, setVisible] = useState(false);
   const [callId, setCallId] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
+  const callIdRef = useRef<string | null>(null);
+  const roomIdRef = useRef<string | null>(null);
   // хранит реальный ник партнёра (если есть); фоллбек-лейбл вычисляем в UI по текущему языку
   const [partnerName, setPartnerName] = useState<string>('');
   const [partnerAvatarUrl, setPartnerAvatarUrl] = useState<string | undefined>(undefined);
@@ -152,6 +154,33 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const pipSessionSyncRef = useRef<{ key: string; at: number }>({ key: '', at: 0 });
   /** iOS deferVisible: setVisible(true) в следующем кадре — отменяем в hidePiP, иначе PiP всплывёт после закрытия. */
   const deferVisibleRafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    callIdRef.current = callId;
+    roomIdRef.current = roomId;
+  }, [callId, roomId]);
+
+  const resolveStablePiPIds = useCallback((): { callId: string | null; roomId: string | null } => {
+    try {
+      const g = global as any;
+      const paramsRef = g.__currentCallPiPParamsRef?.current;
+      const lastCtx = g.__pipLastContextRef?.current;
+      const session = g.__webrtcSessionRef?.current;
+      const sessionCallId =
+        session && typeof (session as any).getCallId === 'function'
+          ? (session as any).getCallId()
+          : null;
+      const sessionRoomId =
+        session && typeof (session as any).getRoomId === 'function'
+          ? (session as any).getRoomId()
+          : null;
+      const cid = String(callIdRef.current || paramsRef?.callId || lastCtx?.callId || sessionCallId || '').trim();
+      const rid = String(roomIdRef.current || paramsRef?.roomId || lastCtx?.roomId || sessionRoomId || '').trim();
+      return { callId: cid || null, roomId: rid || null };
+    } catch {
+      return { callId: callIdRef.current, roomId: roomIdRef.current };
+    }
+  }, []);
 
   // suppressOverlayForReturn сбрасывается только при размонтировании экрана VideoCall (см. VideoCall.tsx),
   // чтобы in-app PiP не показывался поверх полноэкранного видеозвонка после возврата из системного PiP.
@@ -240,10 +269,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
     const sub = emitter.addListener('SystemPiPModeChanged', (payload: { isInPiP?: boolean }) => {
       const inPiP = !!payload?.isInPiP;
+      const stableIds = resolveStablePiPIds();
       trackReleaseEvent('pip_enter_exit', {
         phase: inPiP ? 'enter' : 'exit',
-        callId,
-        roomId,
+        callId: stableIds.callId,
+        roomId: stableIds.roomId,
       });
       const run = () => {
         const g = global as any;
@@ -319,7 +349,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
     });
     return () => sub.remove();
-  }, []);
+  }, [resolveStablePiPIds]);
 
   // SystemPiPExpanded обрабатывается только в App.tsx через __pipReturnToCallRef.current().
   // Подписка здесь не нужна — иначе событие обрабатывается дважды: второй вызов идёт с уже очищенным state (hidePiP) и ломает переход.
@@ -351,6 +381,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
     } catch {}
     
+    callIdRef.current = p.callId || null;
+    roomIdRef.current = p.roomId || null;
     setCallId(p.callId);
     setRoomId(p.roomId);
     // Если показываем PiP — это нормальный режим, оверлей не должен быть подавлен.
@@ -553,11 +585,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     try {
       const g = (global as any);
       g.__pipLastContextRef = g.__pipLastContextRef || { current: null };
-      g.__pipLastContextRef.current = {
-        callId,
-        roomId,
-        navParams: lastNavParams,
-      };
+      if (callId || roomId || lastNavParams) {
+        g.__pipLastContextRef.current = {
+          callId: callId || g.__pipLastContextRef.current?.callId || null,
+          roomId: roomId || g.__pipLastContextRef.current?.roomId || null,
+          navParams: lastNavParams ?? g.__pipLastContextRef.current?.navParams,
+        };
+      }
     } catch {}
   }, [callId, roomId, lastNavParams]);
 
@@ -577,6 +611,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       if (g.__endingCallInProgressRef?.current === true) {
         return;
       }
+      if (g.__videoCallActiveRef?.current === false) {
+        return;
+      }
       const session = g.__webrtcSessionRef?.current;
       if (session && typeof (session as any).isEnded === 'function' && (session as any).isEnded()) {
         return;
@@ -585,10 +622,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
         g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 2000;
       } catch (_) {}
+      const stableIds = resolveStablePiPIds();
       trackReleaseEvent('pip_enter_exit', {
         phase: 'about_to_enter',
-        callId,
-        roomId,
+        callId: stableIds.callId,
+        roomId: stableIds.roomId,
       });
 
       // Включаем отдельный fullscreen-host для system PiP capture. Native войдёт в PiP
@@ -646,7 +684,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
     });
     return () => sub.remove();
-  }, []);
+  }, [resolveStablePiPIds]);
 
   // Для системного PiP: натив шлёт AboutToEnterSystemPiP, App вызывает __pipShowPiPRef.current(params)
   useEffect(() => {
@@ -986,8 +1024,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   }, [visible, callId, roomId, onEndCall, endCall, hidePiP, inSystemPiPMode]);
 
   const updatePiPState = useCallback((patch: Partial<PiPState>) => {
-    if (patch.callId !== undefined) setCallId(patch.callId);
-    if (patch.roomId !== undefined) setRoomId(patch.roomId);
+    if (patch.callId !== undefined) {
+      callIdRef.current = patch.callId;
+      setCallId(patch.callId);
+    }
+    if (patch.roomId !== undefined) {
+      roomIdRef.current = patch.roomId;
+      setRoomId(patch.roomId);
+    }
     if (patch.partnerName !== undefined) setPartnerName(patch.partnerName);
     if (patch.partnerAvatarUrl !== undefined) setPartnerAvatarUrl(patch.partnerAvatarUrl);
     if (patch.visible !== undefined) setVisible(patch.visible);

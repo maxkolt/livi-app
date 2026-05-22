@@ -618,6 +618,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     setWasFriendCallEnded(true);
     setIsInactiveState(true);
     isInactiveStateRef.current = true;
+    partnerInPiPRef.current = false;
+    setPartnerInPiP(false);
     callEndedTransitionDoneRef.current = true;
     try {
       NativeModules.LiviAppModule?.setEndingCallInProgress?.(false);
@@ -653,6 +655,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // ложный onUserLeaveHint во время переходов (accept/закрытие нативных экранов),
     // и пользователя "выбрасывает" на рабочий стол с системным PiP.
     const sessionForSystemPiP = sessionRef.current || g.__webrtcSessionRef?.current;
+    const effectiveSystemPiPCallId =
+      callId || route?.params?.callId || sessionForSystemPiP?.getCallId?.() || null;
+    const effectiveSystemPiPRoomId =
+      roomId || route?.params?.roomId || sessionForSystemPiP?.getRoomId?.() || null;
     const sessionAliveForSystemPiP =
       !sessionForSystemPiP ||
       typeof (sessionForSystemPiP as any).isEnded !== 'function' ||
@@ -660,7 +666,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const globalVideoCallActiveForPiP = g.__videoCallActiveRef?.current !== false;
     const hasStableSystemPiPContext =
       Platform.OS === 'android' &&
-      !!roomId &&
+      !!effectiveSystemPiPRoomId &&
       !isInactiveState &&
       !!sessionForSystemPiP &&
       sessionAliveForSystemPiP &&
@@ -669,7 +675,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       Platform.OS === 'android' &&
       appState === 'active' &&
       isFocused &&
-      !!roomId &&
+      !!effectiveSystemPiPRoomId &&
       !isInactiveState &&
       !!sessionForSystemPiP &&
       sessionAliveForSystemPiP &&
@@ -699,7 +705,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       const isBackgroundWithActiveCall =
         appState === 'background' &&
         Platform.OS === 'android' &&
-        !!roomId &&
+        !!effectiveSystemPiPRoomId &&
         !isInactiveState &&
         !!hasSessionAny;
       if (!systemPiPEntryInProgress && !isBackgroundWithActiveCall && Platform.OS === 'android') {
@@ -725,8 +731,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       avatarUrl = a.startsWith('http') ? a : `${base.replace(/\/+$/, '')}${a.startsWith('/') ? '' : '/'}${a}`;
     }
     g.__currentCallPiPParamsRef.current = {
-      callId: callId || '',
-      roomId: roomId || '',
+      callId: effectiveSystemPiPCallId || '',
+      roomId: effectiveSystemPiPRoomId || '',
       partnerName: (partner as any)?.nick || '',
       partnerAvatarUrl: avatarUrl,
       localStream: localStream || null,
@@ -1302,6 +1308,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           syncPiPState(false, `VideoCall.${source}`);
         }
       }
+      partnerInPiPRef.current = false;
       const inSystemNow = (global as any).__pipInSystemModeRef?.current === true;
       if (inSystemNow && Platform.OS === 'android') {
         try { requestExitSystemPiPSoft(); } catch (_) {}
@@ -1863,6 +1870,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       onCallEnding: () => {
         isEndingCallRef.current = true;
         isInactiveStateRef.current = true;
+        partnerInPiPRef.current = false;
       },
     };
 
@@ -2186,6 +2194,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
       isEndingCallRef.current = true;
       isInactiveStateRef.current = true;
+      partnerInPiPRef.current = false;
+      setPartnerInPiP(false);
       try {
         const gEnd = global as any;
         gEnd.__endingCallInProgressRef = gEnd.__endingCallInProgressRef || { current: false };
@@ -2385,7 +2395,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (!isMountedRef.current) return;
       // КРИТИЧНО: Если звонок уже завершён — не обновляем state (никаких setState), чтобы не было ререндеров при закрытии экрана.
       if (isInactiveStateRef.current || isEndingCallRef.current) {
-        partnerInPiPRef.current = inPiP;
+        partnerInPiPRef.current = false;
         return;
       }
       
@@ -2607,6 +2617,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       isEndingCallRef.current = true;
       setIsEndingCall(true);
       isInactiveStateRef.current = true;
+      partnerInPiPRef.current = false;
+      setPartnerInPiP(false);
       const g = global as any;
       try {
         g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
@@ -2664,12 +2676,24 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
     const g = global as any;
     const wasInPiP = g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
+    const effectivePartnerSocketId =
+      (typeof (session as any)?.getPartnerId === 'function' ? (session as any).getPartnerId() : null) ?? partnerId;
+    const effectivePartnerUserId =
+      (typeof (session as any)?.getPartnerUserId === 'function' ? (session as any).getPartnerUserId() : null) ?? partnerUserId;
 
-    logger.info('[VideoCall] [end] onAbortCall начат', { roomId, callId, partnerId, source });
+    logger.info('[VideoCall] [end] onAbortCall начат', {
+      roomId,
+      callId,
+      partnerSocketId: effectivePartnerSocketId,
+      partnerUserId: effectivePartnerUserId,
+      source,
+    });
 
     // КРИТИЧНО: Сразу выставляем refs завершения (до навигации и session.endCall), чтобы колбэки сессии
     // (onRemoteCamStateChange, onPartnerIdChange, onRoomIdChange, onCallIdChange, handlePartnerPiPStateChanged) не вызывали setState и не давали ререндеров.
     isInactiveStateRef.current = true;
+    partnerInPiPRef.current = false;
+    setPartnerInPiP(false);
 
     setMicOn(false);
     setCamOn(false);
@@ -2791,7 +2815,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
       }, 100);
     }, 1000);
-  }, [isInactiveState, roomId, callId, localStream, getSystemPiPReturnGuard]);
+  }, [isInactiveState, roomId, callId, partnerId, partnerUserId, localStream, getSystemPiPReturnGuard]);
   
   // КРИТИЧНО: Обновляем глобальные ссылки при изменении сессии или функции очистки
   // Это гарантирует, что ссылки всегда актуальны

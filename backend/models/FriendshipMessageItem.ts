@@ -17,12 +17,16 @@ export interface IFriendshipMessageItem extends Document {
   id: string; // messageId (msg_...)
   from: mongoose.Types.ObjectId;
   to: mongoose.Types.ObjectId;
-  type: 'text' | 'image' | 'audio';
+  type: 'text' | 'image' | 'audio' | 'sticker';
   text?: string;
   uri?: string;
   name?: string;
   size?: number;
   duration?: number;
+  stickerId?: string;
+  stickerPackId?: string;
+  stickerEmoji?: string;
+  stickerLabel?: string;
   timestamp: Date;
   read: boolean;
   reactions?: IReaction[];
@@ -40,12 +44,16 @@ const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
     id: { type: String, required: true },
     from: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     to: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    type: { type: String, enum: ['text', 'image', 'audio'], required: true },
+    type: { type: String, enum: ['text', 'image', 'audio', 'sticker'], required: true },
     text: String,
     uri: String,
     name: String,
     size: Number,
     duration: Number,
+    stickerId: String,
+    stickerPackId: String,
+    stickerEmoji: String,
+    stickerLabel: String,
     timestamp: { type: Date, default: Date.now },
     read: { type: Boolean, default: false },
     reactions: [ReactionSchema],

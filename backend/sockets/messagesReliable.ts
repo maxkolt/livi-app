@@ -9,6 +9,22 @@ import { areFriendsCached, getOrCreateFriendship, invalidateFriendshipCache } fr
 import { sendMessagePushToUser } from '../utils/push';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
+const CLIENT_MESSAGE_ID_RE = /^[A-Za-z0-9:_-]{1,120}$/;
+
+function normalizeClientMessageId(payload: any): string {
+  const raw = String(payload?.clientMessageId || payload?.clientId || '').trim();
+  return CLIENT_MESSAGE_ID_RE.test(raw) ? raw : '';
+}
+
+function formatExistingMessageAck(doc: any, delivered: boolean) {
+  return {
+    ok: true,
+    duplicate: true,
+    messageId: String(doc?.id || ''),
+    timestamp: doc?.timestamp || new Date(),
+    delivered,
+  };
+}
 
 async function purgeMessageFromFriendship(friendshipId: mongoose.Types.ObjectId | null, messageId: string) {
   if (!friendshipId || !messageId) return;
@@ -19,6 +35,7 @@ async function purgeMessageFromFriendship(friendshipId: mongoose.Types.ObjectId 
         textMessages: { id: messageId },
         imageMessages: { id: messageId },
         audioMessages: { id: messageId },
+        stickerMessages: { id: messageId },
       },
       $set: { lastActivity: new Date() },
     }
@@ -47,11 +64,11 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
     const list = await FriendshipMessages.find({
       $and: [
         { $or: [{ user1: me }, { user2: me }] },
-        { $or: [{ 'textMessages.id': messageId }, { 'imageMessages.id': messageId }, { 'audioMessages.id': messageId }] },
+        { $or: [{ 'textMessages.id': messageId }, { 'imageMessages.id': messageId }, { 'audioMessages.id': messageId }, { 'stickerMessages.id': messageId }] },
       ],
     }).lean();
     const fd = list.find((f: any) => {
-      const arr = [...(f.textMessages || []), ...(f.imageMessages || []), ...(f.audioMessages || [])];
+      const arr = [...(f.textMessages || []), ...(f.imageMessages || []), ...(f.audioMessages || []), ...(f.stickerMessages || [])];
       const m = arr.find((x: any) => x.id === messageId);
       if (m) {
         fromUserId = String(m.from);
@@ -127,6 +144,10 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       name: message.name,
       size: message.size,
       duration: message.duration,
+      stickerId: message.stickerId,
+      stickerPackId: message.stickerPackId,
+      stickerEmoji: message.stickerEmoji,
+      stickerLabel: message.stickerLabel,
       timestamp: message.timestamp,
       read: message.read
     };
@@ -151,6 +172,10 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       name: message.name,
       size: message.size,
       duration: message.duration,
+      stickerId: message.stickerId,
+      stickerPackId: message.stickerPackId,
+      stickerEmoji: message.stickerEmoji,
+      stickerLabel: message.stickerLabel,
       timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp),
       read: !!message.read,
     };
@@ -369,11 +394,17 @@ function registerMessageHandlers(io: Server, sock: Socket) {
   sock.on('message:send', async (payload: {
     to: string;
     text?: string;
-    type: 'text' | 'image' | 'audio';
+    type: 'text' | 'image' | 'audio' | 'sticker';
     uri?: string;
     name?: string;
     size?: number;
     duration?: number;
+    stickerId?: string;
+    stickerPackId?: string;
+    stickerEmoji?: string;
+    stickerLabel?: string;
+    clientMessageId?: string;
+    clientId?: string;
     replyTo?: { id: string; text?: string; from: string };
   }, ack?: Function) => {
     try {
@@ -385,6 +416,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (!isOid(payload.to)) {
         return ack?.({ ok: false, error: 'invalid_to' });
       }
+      if (payload.type !== 'text' && payload.type !== 'image' && payload.type !== 'audio' && payload.type !== 'sticker') {
+        return ack?.({ ok: false, error: 'invalid_type' });
+      }
 
       // Проверяем дружбу
       const isFriend = await areFriendsCached(me, payload.to);
@@ -392,14 +426,28 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'not_friends' });
       }
 
-      // Создаем ID сообщения
-      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
       // Получаем или создаем документ дружбы
       const friendship = await getOrCreateFriendship(me, payload.to);
       if (!friendship) {
         return ack?.({ ok: false, error: 'friendship_not_found' });
       }
+
+      const friendshipId = (friendship as any)._id;
+      const clientMessageId = normalizeClientMessageId(payload);
+      if (clientMessageId) {
+        const existing = await FriendshipMessageItem.findOne({
+          friendshipId,
+          id: clientMessageId,
+          from: new mongoose.Types.ObjectId(me),
+          to: new mongoose.Types.ObjectId(payload.to),
+        }).select('id timestamp').lean();
+        if (existing) {
+          return ack?.(formatExistingMessageAck(existing, isUserOnline(io, payload.to)));
+        }
+      }
+
+      // Создаем ID сообщения. New clients provide an optimistic id, old clients keep generated ids.
+      const messageId = clientMessageId || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
       // Создаем объект сообщения
       const message: any = {
@@ -412,6 +460,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         name: payload.name,
         size: payload.size,
         duration: payload.duration,
+        stickerId: payload.stickerId,
+        stickerPackId: payload.stickerPackId,
+        stickerEmoji: payload.stickerEmoji,
+        stickerLabel: payload.stickerLabel,
         timestamp: new Date(),
         read: false
       };
@@ -447,6 +499,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         name: payload.name,
         size: payload.size,
         duration: payload.duration,
+        stickerId: payload.stickerId,
+        stickerPackId: payload.stickerPackId,
+        stickerEmoji: payload.stickerEmoji,
+        stickerLabel: payload.stickerLabel,
         timestamp: message.timestamp.toISOString(),
         read: false
       };
@@ -479,13 +535,15 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           } catch {}
 
           const unreadCount = (unreadMessages.get(payload.to) || []).length;
-          const msgType = payload.type === 'image' ? 'image' : payload.type === 'audio' ? 'audio' : 'text';
+          const msgType = payload.type === 'image' ? 'image' : payload.type === 'audio' ? 'audio' : payload.type === 'sticker' ? 'sticker' : 'text';
           const messagePreview =
             msgType === 'text'
               ? (typeof payload.text === 'string' ? String(payload.text).trim().slice(0, 80) : '')
               : msgType === 'image'
                 ? '[Фото]'
-                : '[Голосовое]';
+                : msgType === 'sticker'
+                  ? '[Стикер]'
+                  : '[Голосовое]';
 
           await sendMessagePushToUser(String(payload.to), {
           type: 'message',
@@ -566,6 +624,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           name: msg.name,
           size: msg.size,
           duration: msg.duration,
+          stickerId: msg.stickerId,
+          stickerPackId: msg.stickerPackId,
+          stickerEmoji: msg.stickerEmoji,
+          stickerLabel: msg.stickerLabel,
           timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
           read: !!msg.read,
           reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
@@ -585,6 +647,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         name: msg.name,
         size: msg.size,
         duration: msg.duration,
+        stickerId: msg.stickerId,
+        stickerPackId: msg.stickerPackId,
+        stickerEmoji: msg.stickerEmoji,
+        stickerLabel: msg.stickerLabel,
         timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
         read: !!msg.read,
         reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
@@ -635,6 +701,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
             'textMessages.$[t].read': true,
             'imageMessages.$[i].read': true,
             'audioMessages.$[a].read': true,
+            'stickerMessages.$[s].read': true,
           },
         },
         {
@@ -642,6 +709,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
             { 't.from': fromOid },
             { 'i.from': fromOid },
             { 'a.from': fromOid },
+            { 's.from': fromOid },
           ],
         }
       ).exec();
@@ -710,7 +778,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (messageId) {
         const fid: any = (friendship as any)?._id;
         try {
-          const tryUpdate = async (path: 'textMessages' | 'imageMessages' | 'audioMessages') => {
+          const tryUpdate = async (path: 'textMessages' | 'imageMessages' | 'audioMessages' | 'stickerMessages') => {
             const filter: any = { _id: fid };
             filter[`${path}.id`] = messageId;
             filter[`${path}.read`] = { $ne: true };
@@ -722,6 +790,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
           await tryUpdate('textMessages');
           await tryUpdate('imageMessages');
           await tryUpdate('audioMessages');
+          await tryUpdate('stickerMessages');
         } catch {}
 
         // Keep in-memory cached doc consistent (best-effort, no save)
@@ -785,7 +854,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         ? current.filter((r) => !(r.emoji === emoji && r.userId === me))
         : [...current, { emoji, userId: me }];
 
-      const path = msg.type === 'text' ? 'textMessages' : msg.type === 'image' ? 'imageMessages' : 'audioMessages';
+      const path = msg.type === 'text' ? 'textMessages' : msg.type === 'image' ? 'imageMessages' : msg.type === 'sticker' ? 'stickerMessages' : 'audioMessages';
       const fid = (friendship as any)._id;
       await FriendshipMessages.updateOne(
         { _id: fid, [`${path}.id`]: messageId },

@@ -37,6 +37,7 @@ async function run() {
       (doc as any).textMessages || [],
       (doc as any).imageMessages || [],
       (doc as any).audioMessages || [],
+      (doc as any).stickerMessages || [],
     ]) {
       for (const m of arr) {
         if (!m || !m.id) continue;
@@ -51,6 +52,10 @@ async function run() {
           name: m.name,
           size: m.size,
           duration: m.duration,
+          stickerId: m.stickerId,
+          stickerPackId: m.stickerPackId,
+          stickerEmoji: m.stickerEmoji,
+          stickerLabel: m.stickerLabel,
           timestamp: m.timestamp || new Date(),
           read: !!m.read,
           reactions: Array.isArray(m.reactions) ? m.reactions : undefined,

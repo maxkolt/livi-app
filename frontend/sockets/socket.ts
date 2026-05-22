@@ -39,6 +39,10 @@ export const globalMessageStorage = {
           name: message.name,
           size: message.size,
           duration: message.duration,
+          stickerId: message.stickerId,
+          stickerPackId: message.stickerPackId,
+          stickerEmoji: message.stickerEmoji,
+          stickerLabel: message.stickerLabel,
           sender: 'peer',
           from: message.from,
           to: message.to,
@@ -80,12 +84,18 @@ type MessageOutboxItem = {
   payload: {
     to: string;
     text?: string;
-    type: 'text' | 'image' | 'audio';
+    type: 'text' | 'image' | 'audio' | 'sticker';
     uri?: string;
     name?: string;
     size?: number;
     duration?: number;
+    stickerId?: string;
+    stickerPackId?: string;
+    stickerEmoji?: string;
+    stickerLabel?: string;
     replyTo?: { id: string; text?: string; from: string };
+    clientMessageId?: string;
+    clientId?: string;
   };
 };
 
@@ -2595,11 +2605,15 @@ export function onFriendProfile(
 export function sendMessage(payload: {
   to: string;
   text?: string;
-  type: 'text' | 'image' | 'audio' | 'video' | 'document';
+  type: 'text' | 'image' | 'audio' | 'video' | 'document' | 'sticker';
   uri?: string;
   name?: string;
   size?: number;
   duration?: number;
+  stickerId?: string;
+  stickerPackId?: string;
+  stickerEmoji?: string;
+  stickerLabel?: string;
   replyTo?: { id: string; text?: string; from: string; isOwn?: boolean };
   /** Не уходит на сервер — только для сопоставления с очередью при удалении до отправки. */
   clientUiMessageId?: string;
@@ -2609,7 +2623,23 @@ export function sendMessage(payload: {
 
   const optimisticUiId = String(payload.clientUiMessageId || '').trim() || undefined;
 
-  const socketPayload: any = { to: payload.to, text: payload.text, type: messageType, uri: payload.uri, name: payload.name, size: payload.size, duration: payload.duration };
+  const socketPayload: any = {
+    to: payload.to,
+    text: payload.text,
+    type: messageType,
+    uri: payload.uri,
+    name: payload.name,
+    size: payload.size,
+    duration: payload.duration,
+    stickerId: payload.stickerId,
+    stickerPackId: payload.stickerPackId,
+    stickerEmoji: payload.stickerEmoji,
+    stickerLabel: payload.stickerLabel,
+  };
+  if (optimisticUiId) {
+    socketPayload.clientMessageId = optimisticUiId;
+    socketPayload.clientId = optimisticUiId;
+  }
   if (payload.replyTo?.id) socketPayload.replyTo = { id: payload.replyTo.id, text: payload.replyTo.text, from: payload.replyTo.from };
 
   const viaSocket = () =>
@@ -2624,7 +2654,23 @@ export function sendMessage(payload: {
     if (installId) headers['x-install-id'] = String(installId);
     if (currentUserId) headers['x-user-id'] = String(currentUserId);
 
-    const body: any = { to: payload.to, text: payload.text, type: messageType, uri: payload.uri, name: payload.name, size: payload.size, duration: payload.duration };
+    const body: any = {
+      to: payload.to,
+      text: payload.text,
+      type: messageType,
+      uri: payload.uri,
+      name: payload.name,
+      size: payload.size,
+      duration: payload.duration,
+      stickerId: payload.stickerId,
+      stickerPackId: payload.stickerPackId,
+      stickerEmoji: payload.stickerEmoji,
+      stickerLabel: payload.stickerLabel,
+    };
+    if (optimisticUiId) {
+      body.clientMessageId = optimisticUiId;
+      body.clientId = optimisticUiId;
+    }
     if (payload.replyTo?.id) body.replyTo = { id: payload.replyTo.id, text: payload.replyTo.text, from: payload.replyTo.from };
 
     const url = `${API_BASE}/api/messages/send`;
@@ -2827,9 +2873,13 @@ export function fetchMessages(payload: {
         id: string;
         from: string;
         to: string;
-        type: 'text' | 'image';
+        type: 'text' | 'image' | 'audio' | 'sticker';
         text?: string;
         uri?: string;
+        stickerId?: string;
+        stickerPackId?: string;
+        stickerEmoji?: string;
+        stickerLabel?: string;
         timestamp: string;
         read: boolean;
       }>;
@@ -2899,9 +2949,13 @@ export function onMessageReceived(
     id: string;
     from: string;
     to: string;
-    type: 'text' | 'image';
+    type: 'text' | 'image' | 'audio' | 'sticker';
     text?: string;
     uri?: string;
+    stickerId?: string;
+    stickerPackId?: string;
+    stickerEmoji?: string;
+    stickerLabel?: string;
     timestamp: string;
     read: boolean;
   }) => void

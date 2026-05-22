@@ -9,6 +9,12 @@ import { removeUnreadMessage } from '../sockets/messagesReliable';
 const router = Router();
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
+const CLIENT_MESSAGE_ID_RE = /^[A-Za-z0-9:_-]{1,120}$/;
+
+function normalizeClientMessageId(payload: any): string {
+  const raw = String(payload?.clientMessageId || payload?.clientId || '').trim();
+  return CLIENT_MESSAGE_ID_RE.test(raw) ? raw : '';
+}
 
 async function purgeMessageFromFriendship(friendshipId: mongoose.Types.ObjectId | null, messageId: string) {
   if (!friendshipId || !messageId) return;
@@ -19,6 +25,7 @@ async function purgeMessageFromFriendship(friendshipId: mongoose.Types.ObjectId 
         textMessages: { id: messageId },
         imageMessages: { id: messageId },
         audioMessages: { id: messageId },
+        stickerMessages: { id: messageId },
       },
       $set: { lastActivity: new Date() },
     }
@@ -47,11 +54,11 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
     const list = await FriendshipMessages.find({
       $and: [
         { $or: [{ user1: me }, { user2: me }] },
-        { $or: [{ 'textMessages.id': messageId }, { 'imageMessages.id': messageId }, { 'audioMessages.id': messageId }] },
+        { $or: [{ 'textMessages.id': messageId }, { 'imageMessages.id': messageId }, { 'audioMessages.id': messageId }, { 'stickerMessages.id': messageId }] },
       ],
     }).lean();
     const fd = list.find((f: any) => {
-      const arr = [...(f.textMessages || []), ...(f.imageMessages || []), ...(f.audioMessages || [])];
+      const arr = [...(f.textMessages || []), ...(f.imageMessages || []), ...(f.audioMessages || []), ...(f.stickerMessages || [])];
       const m = arr.find((x: any) => x.id === messageId);
       if (m) {
         fromUserId = String(m.from);
@@ -83,7 +90,7 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
 
 /**
  * POST /api/messages/send
- * Body: { to, type: 'text'|'image'|'audio', text?, uri?, name?, size?, duration? }
+ * Body: { to, type: 'text'|'image'|'audio'|'sticker', text?, uri?, name?, size?, duration?, stickerId? }
  */
 router.post('/messages/send', async (req, res) => {
   try {
@@ -91,18 +98,23 @@ router.post('/messages/send', async (req, res) => {
     if (!isOid(me)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const to = String(req.body?.to || '').trim();
-    const type = String(req.body?.type || '').trim() as 'text' | 'image' | 'audio';
+    const type = String(req.body?.type || '').trim() as 'text' | 'image' | 'audio' | 'sticker';
     const text = typeof req.body?.text === 'string' ? String(req.body.text) : undefined;
     const uri = typeof req.body?.uri === 'string' ? String(req.body.uri) : undefined;
     const name = typeof req.body?.name === 'string' ? String(req.body.name) : undefined;
     const size = typeof req.body?.size === 'number' ? Number(req.body.size) : undefined;
     const duration = typeof req.body?.duration === 'number' ? Number(req.body.duration) : undefined;
+    const stickerId = typeof req.body?.stickerId === 'string' ? String(req.body.stickerId) : undefined;
+    const stickerPackId = typeof req.body?.stickerPackId === 'string' ? String(req.body.stickerPackId) : undefined;
+    const stickerEmoji = typeof req.body?.stickerEmoji === 'string' ? String(req.body.stickerEmoji) : undefined;
+    const stickerLabel = typeof req.body?.stickerLabel === 'string' ? String(req.body.stickerLabel) : undefined;
+    const clientMessageId = normalizeClientMessageId(req.body);
     const replyTo = req.body?.replyTo && typeof req.body.replyTo === 'object' && req.body.replyTo.id
       ? { id: String(req.body.replyTo.id), text: req.body.replyTo.text != null ? String(req.body.replyTo.text) : undefined, from: String(req.body.replyTo.from || '') }
       : undefined;
 
     if (!isOid(to)) return res.status(400).json({ ok: false, error: 'invalid_to' });
-    if (type !== 'text' && type !== 'image' && type !== 'audio') return res.status(400).json({ ok: false, error: 'invalid_type' });
+    if (type !== 'text' && type !== 'image' && type !== 'audio' && type !== 'sticker') return res.status(400).json({ ok: false, error: 'invalid_type' });
 
     const isFriend = await areFriendsCached(me, to);
     if (!isFriend) return res.status(403).json({ ok: false, error: 'not_friends' });
@@ -110,7 +122,29 @@ router.post('/messages/send', async (req, res) => {
     const friendship = await getOrCreateFriendship(me, to);
     if (!friendship) return res.status(500).json({ ok: false, error: 'friendship_not_found' });
 
-    const messageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const friendshipId = (friendship as any)._id;
+    if (clientMessageId) {
+      const existing = await FriendshipMessageItem.findOne({
+        friendshipId,
+        id: clientMessageId,
+        from: new mongoose.Types.ObjectId(me),
+        to: new mongoose.Types.ObjectId(to),
+      }).select('id timestamp').lean();
+      if (existing) {
+        const io = (req as any).io as any | undefined;
+        const delivered = !!io?.sockets?.sockets
+          && Array.from(io.sockets.sockets.values()).some((s: any) => String(s?.data?.userId) === String(to));
+        return res.json({
+          ok: true,
+          duplicate: true,
+          messageId: String((existing as any).id || ''),
+          timestamp: (existing as any).timestamp || new Date(),
+          delivered,
+        });
+      }
+    }
+
+    const messageId = clientMessageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const timestamp = new Date();
 
     const messageItem: any = {
@@ -123,6 +157,10 @@ router.post('/messages/send', async (req, res) => {
       name,
       size,
       duration,
+      stickerId,
+      stickerPackId,
+      stickerEmoji,
+      stickerLabel,
       timestamp,
       read: false,
     };
@@ -131,7 +169,7 @@ router.post('/messages/send', async (req, res) => {
     await (friendship as any).addMessage(messageItem);
 
     const createItem: any = {
-      friendshipId: (friendship as any)._id,
+      friendshipId,
       id: messageId,
       from: messageItem.from,
       to: messageItem.to,
@@ -141,6 +179,10 @@ router.post('/messages/send', async (req, res) => {
       name,
       size,
       duration,
+      stickerId,
+      stickerPackId,
+      stickerEmoji,
+      stickerLabel,
       timestamp,
       read: false,
     };
@@ -164,6 +206,10 @@ router.post('/messages/send', async (req, res) => {
           name,
           size,
           duration,
+          stickerId,
+          stickerPackId,
+          stickerEmoji,
+          stickerLabel,
           timestamp: timestamp.toISOString(),
           read: false,
         };
@@ -187,6 +233,10 @@ router.post('/messages/send', async (req, res) => {
         name,
         size,
         duration,
+        stickerId,
+        stickerPackId,
+        stickerEmoji,
+        stickerLabel,
         timestamp: timestamp.toISOString(),
         read: false,
       };
@@ -261,6 +311,10 @@ router.get('/messages', async (req, res) => {
         name: msg.name,
         size: msg.size,
         duration: msg.duration,
+        stickerId: msg.stickerId,
+        stickerPackId: msg.stickerPackId,
+        stickerEmoji: msg.stickerEmoji,
+        stickerLabel: msg.stickerLabel,
         timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
         read: !!msg.read,
         reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
@@ -280,6 +334,10 @@ router.get('/messages', async (req, res) => {
       name: msg.name,
       size: msg.size,
       duration: msg.duration,
+      stickerId: msg.stickerId,
+      stickerPackId: msg.stickerPackId,
+      stickerEmoji: msg.stickerEmoji,
+      stickerLabel: msg.stickerLabel,
       timestamp: msg.timestamp?.toISOString?.() || String(msg.timestamp),
       read: !!msg.read,
       reactions: Array.isArray(msg.reactions) ? msg.reactions.map((r: any) => ({ emoji: r.emoji, userId: String(r.userId) })) : [],
@@ -316,6 +374,7 @@ router.post('/messages/mark_read', async (req, res) => {
           'textMessages.$[t].read': true,
           'imageMessages.$[i].read': true,
           'audioMessages.$[a].read': true,
+          'stickerMessages.$[s].read': true,
         },
       },
       {
@@ -323,6 +382,7 @@ router.post('/messages/mark_read', async (req, res) => {
           { 't.from': fromOid },
           { 'i.from': fromOid },
           { 'a.from': fromOid },
+          { 's.from': fromOid },
         ],
       }
     ).exec();
@@ -508,7 +568,7 @@ router.post('/messages/clear_chat', async (req, res) => {
       const fid = (friendship as any)._id;
       await FriendshipMessages.updateOne(
         { _id: fid },
-        { $set: { textMessages: [], imageMessages: [], audioMessages: [], lastMessage: undefined, lastActivity: new Date() } }
+        { $set: { textMessages: [], imageMessages: [], audioMessages: [], stickerMessages: [], lastMessage: undefined, lastActivity: new Date() } }
       ).exec();
       await FriendshipMessageItem.deleteMany({ friendshipId: fid }).exec();
       invalidateFriendshipCache(me, withId);

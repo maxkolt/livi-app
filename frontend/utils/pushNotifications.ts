@@ -493,28 +493,139 @@ Notifications.setNotificationHandler({
   },
 });
 
-async function waitForNavReady(ms = 9000) {
+type ReadyNavigation = NonNullable<any>;
+type PendingNavigation = {
+  key: string;
+  createdAtMs: number;
+  run: (nav: ReadyNavigation) => void | Promise<void>;
+};
+
+const handledNotificationTaps = new Map<string, number>();
+const pendingNavigations = new Map<string, PendingNavigation>();
+let pendingNavigationDrainTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingNavigationDrainInFlight = false;
+const NOTIFICATION_TAP_DEDUPE_MS = 10_000;
+const PENDING_NAVIGATION_TTL_MS = 30_000;
+
+function getReadyNav(): ReadyNavigation | null {
+  const nav = (global as any).__navRef;
+  return nav?.isReady?.() ? nav : null;
+}
+
+async function waitForNavReady(ms = 1200) {
   const start = Date.now();
   while (Date.now() - start < ms) {
-    const nav = (global as any).__navRef;
-    if (nav?.isReady?.()) return nav;
+    const nav = getReadyNav();
+    if (nav) return nav;
     await new Promise((r) => setTimeout(r, 80));
   }
-  return null;
+  return getReadyNav();
+}
+
+function cleanupHandledNotificationTaps(now = Date.now()): void {
+  for (const [key, at] of handledNotificationTaps) {
+    if (now - at > NOTIFICATION_TAP_DEDUPE_MS) handledNotificationTaps.delete(key);
+  }
+}
+
+function buildNotificationTapKey(data: any, actionIdentifier: string, responseIdentifier?: string): string {
+  const type = String(data?.type || '').trim();
+  const callId = String(data?.callId || '').trim();
+  const messageId = String(data?.messageId || '').trim();
+  const from = String(data?.from || data?.fromUserId || '').trim();
+  const roomId = String(data?.roomId || '').trim();
+  return [
+    responseIdentifier ? `response:${responseIdentifier}` : 'data',
+    type,
+    actionIdentifier,
+    callId || messageId || roomId || from || 'unknown',
+  ].join(':');
+}
+
+function shouldHandleNotificationTap(data: any, actionIdentifier: string, responseIdentifier?: string): boolean {
+  const key = buildNotificationTapKey(data, actionIdentifier, responseIdentifier);
+  const now = Date.now();
+  cleanupHandledNotificationTaps(now);
+  const lastAt = handledNotificationTaps.get(key);
+  if (lastAt && now - lastAt < NOTIFICATION_TAP_DEDUPE_MS) {
+    logger.info('[push] duplicate notification response ignored', {
+      type: data?.type,
+      actionIdentifier,
+      responseIdentifier: responseIdentifier || null,
+    });
+    return false;
+  }
+  handledNotificationTaps.set(key, now);
+  return true;
+}
+
+function schedulePendingNavigationDrain(delayMs = 80): void {
+  if (pendingNavigationDrainTimer) return;
+  pendingNavigationDrainTimer = setTimeout(() => {
+    pendingNavigationDrainTimer = null;
+    void drainPendingNavigations();
+  }, delayMs);
+}
+
+async function drainPendingNavigations(): Promise<void> {
+  if (pendingNavigationDrainInFlight) return;
+  pendingNavigationDrainInFlight = true;
+  try {
+    const nav = getReadyNav();
+    const now = Date.now();
+    if (!nav) {
+      for (const [key, pending] of pendingNavigations) {
+        if (now - pending.createdAtMs > PENDING_NAVIGATION_TTL_MS) {
+          pendingNavigations.delete(key);
+          logger.warn('[push] pending notification navigation expired', { key });
+        }
+      }
+      if (pendingNavigations.size > 0) schedulePendingNavigationDrain(250);
+      return;
+    }
+
+    const entries = Array.from(pendingNavigations.entries());
+    pendingNavigations.clear();
+    for (const [, pending] of entries) {
+      try {
+        await pending.run(nav);
+      } catch (e) {
+        logger.warn('[push] pending notification navigation failed', { key: pending.key, error: (e as Error)?.message });
+      }
+    }
+  } finally {
+    pendingNavigationDrainInFlight = false;
+  }
+}
+
+async function runWhenNavReady(
+  key: string,
+  run: (nav: ReadyNavigation) => void | Promise<void>,
+  waitMs = 1200
+): Promise<boolean> {
+  const nav = await waitForNavReady(waitMs);
+  if (nav) {
+    await run(nav);
+    return true;
+  }
+  pendingNavigations.set(key, { key, createdAtMs: Date.now(), run });
+  schedulePendingNavigationDrain();
+  logger.info('[push] queued notification navigation until nav ready', { key });
+  return false;
 }
 
 async function navigateToVideoCallIncoming(peerUserId: string, callId: string) {
-  const nav = await waitForNavReady();
-  if (!nav) return;
-  setActiveVideoCall(true);
-  try { emitCloseHomeModals(); } catch {}
-  // Push VideoCall поверх текущего экрана (не reset), чтобы после завершения звонка goBack() вернул на тот же экран (Chat, Friends и т.д.).
-  nav.navigate('VideoCall' as any, {
-    peerUserId,
-    directCall: true,
-    directInitiator: false,
-    callId,
-    isIncoming: true,
+  await runWhenNavReady(`call:${callId || peerUserId}`, (nav) => {
+    setActiveVideoCall(true);
+    try { emitCloseHomeModals(); } catch {}
+    // Push VideoCall поверх текущего экрана (не reset), чтобы после завершения звонка goBack() вернул на тот же экран (Chat, Friends и т.д.).
+    nav.navigate('VideoCall' as any, {
+      peerUserId,
+      directCall: true,
+      directInitiator: false,
+      callId,
+      isIncoming: true,
+    });
   });
 }
 
@@ -579,10 +690,11 @@ export async function handleDeclineCallFromDeepLink(callId: string): Promise<voi
  * Обработка ответа на уведомление (тап по уведомлению или по кнопке «Поднять»/«Положить»).
  * actionIdentifier: 'answer' = Поднять, 'decline' = Положить, DEFAULT = тап по телу уведомления.
  */
-async function handleNotificationResponse(data: any, actionIdentifier: string) {
+async function handleNotificationResponse(data: any, actionIdentifier: string, responseIdentifier?: string) {
   try {
     const type = String(data?.type || '');
     if (!type) return;
+    if (!shouldHandleNotificationTap(data, actionIdentifier, responseIdentifier)) return;
     trackReleaseEvent('notification_tap', {
       type,
       actionIdentifier,
@@ -628,42 +740,42 @@ async function handleNotificationResponse(data: any, actionIdentifier: string) {
     }
 
     if (type === 'missed_call') {
-      const nav = await waitForNavReady();
-      if (!nav) return;
-      // Сразу помечаем «увидел» и снимаем уведомления в шторке (бейдж и шторка очищаются)
-      try {
-        await setMissedBadgeCleared();
-        await dismissMissedCallNotificationsOnly();
-        await clearCallRelatedNotificationsAndSyncBadge();
-      } catch {}
-      nav.dispatch(
-        CommonActions.reset({
-          index: 0,
-          routes: [{ name: 'Home' as never, params: { openFriendsMenu: true, openFriendsTab: true } }],
-        })
-      );
+      await runWhenNavReady(`missed_call:${String(data?.from || data?.fromUserId || 'unknown')}`, async (nav) => {
+        // Сразу помечаем «увидел» и снимаем уведомления в шторке (бейдж и шторка очищаются)
+        try {
+          await setMissedBadgeCleared();
+          await dismissMissedCallNotificationsOnly();
+          await clearCallRelatedNotificationsAndSyncBadge();
+        } catch {}
+        nav.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [{ name: 'Home' as never, params: { openFriendsMenu: true, openFriendsTab: true } }],
+          })
+        );
+      });
       return;
     }
 
     if (type === 'message') {
-      const nav = await waitForNavReady();
-      if (!nav) return;
       ensureInAppPiPBeforeOpeningFriendsFromMessageNotification();
-      await clearNotificationIndicators();
       const fromId = String(data?.from || data?.fromUserId || '').trim();
-      nav.dispatch(
-        CommonActions.reset({
-          index: 0,
-          routes: [{
-            name: 'Home' as never,
-            params: {
-              openFriendsMenu: true,
-              openFriendsTab: true,
-              ...(fromId ? { pushMessageFrom: fromId } : {}),
-            },
-          }],
-        })
-      );
+      await runWhenNavReady(`message:${fromId || String(data?.messageId || 'unknown')}`, async (nav) => {
+        await clearNotificationIndicators();
+        nav.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [{
+              name: 'Home' as never,
+              params: {
+                openFriendsMenu: true,
+                openFriendsTab: true,
+                ...(fromId ? { pushMessageFrom: fromId } : {}),
+              },
+            }],
+          })
+        );
+      });
       return;
     }
 
@@ -1028,9 +1140,10 @@ export function addNotificationListeners() {
       const last = await getColdStartNotificationResponse();
       const data = (last as any)?.notification?.request?.content?.data;
       const actionId = (last as any)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
+      const responseId = (last as any)?.notification?.request?.identifier;
       if (data) {
         logger.info('[push] cold start: handling notification response', { type: data?.type, actionId });
-        await handleNotificationResponse(data, actionId);
+        await handleNotificationResponse(data, actionId, responseId);
       }
     } catch (e) {
       logger.warn('[push] cold start handle failed', e as any);
@@ -1041,7 +1154,8 @@ export function addNotificationListeners() {
   const sub2 = Notifications.addNotificationResponseReceivedListener(async (r) => {
     const data = (r as any)?.notification?.request?.content?.data;
     const actionId = (r as any)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
-    if (data) await handleNotificationResponse(data, actionId);
+    const responseId = (r as any)?.notification?.request?.identifier;
+    if (data) await handleNotificationResponse(data, actionId, responseId);
   });
 
   // При получении пуша о звонке: на Android показываем только нативный IncomingCallActivity
@@ -1084,15 +1198,6 @@ export function addNotificationListeners() {
         }
         if (await isEndedCallId(data.callId)) {
           logger.info('[push] incoming call notification ignored (call already ended)', { callId: data.callId });
-          return;
-        }
-        const hasExplicitExpiry = data.expiresAt != null || data.ts != null;
-        if (Platform.OS === 'android' && !hasExplicitExpiry) {
-          // Android incoming UI should be driven by native FCM data path with expiresAt/ts.
-          // Notification-only or stripped payloads can arrive delayed and cause flash-open/close.
-          logger.info('[push] incoming call notification ignored (android payload without expiresAt/ts)', {
-            callId: data.callId,
-          });
           return;
         }
         if (isIncomingCallExpired({ expiresAt: data.expiresAt, ts: data.ts })) {

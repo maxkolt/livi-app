@@ -52,6 +52,12 @@ import { Image as ExpoImage } from "expo-image";
 import AvatarImage from "../components/AvatarImage";
 import ChatStyleBackButton from "../components/ChatStyleBackButton";
 import ChatEmojiKeyboard, { CHAT_EMOJI_PANEL_HEIGHT } from "../components/ChatEmojiKeyboard";
+import {
+  StickerView,
+  getBuiltInSticker,
+  getStickerFallbackText,
+  type BuiltInSticker,
+} from "../components/chatStickers";
 import type { EmojiType } from "rn-emoji-keyboard";
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
@@ -422,6 +428,30 @@ function buildChatListRows(messages: any[]): ChatListRow[] {
   return rows;
 }
 
+function stickerFieldsFromMessage(msg: any) {
+  return {
+    stickerId: msg?.stickerId,
+    stickerPackId: msg?.stickerPackId,
+    stickerEmoji: msg?.stickerEmoji,
+    stickerLabel: msg?.stickerLabel,
+  };
+}
+
+function getChatReplyPreviewText(message: any, langCode: string): string {
+  if (String(message?.type || '') === 'sticker') {
+    return getStickerFallbackText(
+      {
+        id: message?.stickerId,
+        packId: message?.stickerPackId,
+        emoji: message?.stickerEmoji,
+        label: message?.stickerLabel,
+      },
+      langCode,
+    );
+  }
+  return String(message?.text ?? message?.name ?? '');
+}
+
 function indexInChatListData(data: ChatListRow[], messageId: string): number {
   const id = String(messageId || '').trim();
   return data.findIndex((row) => row.type === 'message' && String((row as any).id) === id);
@@ -630,6 +660,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const onConfirmRef = useRef<(() => void) | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
+  const composerTextInputMaxHeight = 76;
   // Android: до первого onLayout нужен реалистичный размер нижней панели,
   // иначе входящее сообщение может стартово оказаться под инпутом.
   const estimatedInputHeight = 124 + Math.max(0, insets.bottom);
@@ -1543,6 +1574,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           name: (message as any).name,
           size: (message as any).size,
           duration: (message as any).duration,
+          ...stickerFieldsFromMessage(message),
           sender: isFromMe ? "me" : "peer",
           from: message.from,
           to: message.to,
@@ -1851,6 +1883,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         name: (msg as any).name,
         size: (msg as any).size,
         duration: (msg as any).duration,
+        ...stickerFieldsFromMessage(msg),
         sender: msg.from === currentUserId ? 'me' : 'peer',
         from: msg.from,
         to: msg.to,
@@ -2085,6 +2118,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 name: (msg as any).name,
                 size: (msg as any).size,
                 duration: (msg as any).duration,
+                ...stickerFieldsFromMessage(msg),
                 sender: msg.from === uid ? 'me' : 'peer',
                 from: msg.from,
                 to: msg.to,
@@ -2213,6 +2247,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               name: (msg as any).name,
               size: (msg as any).size,
               duration: (msg as any).duration,
+              ...stickerFieldsFromMessage(msg),
               sender: msg.from === uid ? 'me' : 'peer',
               from: msg.from,
               to: msg.to,
@@ -3111,6 +3146,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     const value =
       text ||
+      (type === 'sticker' ? getStickerFallbackText(m, lang) : '') ||
       ((type === 'image' || type === 'audio') && rawUri ? resolveMediaUri(rawUri) : '');
 
     if (!value) return;
@@ -3118,7 +3154,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       await Clipboard.setStringAsync(value);
       try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
     } catch {}
-  }, [resolveMediaUri]);
+  }, [resolveMediaUri, lang]);
 
   const showForwardToastBadge = React.useCallback((ok: boolean, text: string) => {
     try {
@@ -3189,7 +3225,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       };
 
       /** Сразу показать в текущем чате, если переслали собеседнику этого экрана (иначе ждём socket echo с задержкой). */
-      const appendIfForwardedToThisPeer = (r: any, partial: { type: string; text?: string; uri?: string; name?: any; size?: any; duration?: any }) => {
+      const appendIfForwardedToThisPeer = (r: any, partial: { type: string; text?: string; uri?: string; name?: any; size?: any; duration?: any; stickerId?: string; stickerPackId?: string; stickerEmoji?: string; stickerLabel?: string }) => {
         const uid = String(currentUserId || '').trim();
         const pid = String(peerId || '').trim();
         const t = String(to || '').trim();
@@ -3212,6 +3248,13 @@ export default function ChatScreen({ route, navigation }: Props) {
             reactions: [],
           };
           if (typ === 'text') row.text = String(partial.text || '');
+          else if (typ === 'sticker') {
+            row.text = partial.text || getStickerFallbackText({ label: partial.stickerLabel }, lang);
+            row.stickerId = partial.stickerId;
+            row.stickerPackId = partial.stickerPackId;
+            row.stickerEmoji = partial.stickerEmoji;
+            row.stickerLabel = partial.stickerLabel;
+          }
           else {
             if (partial.uri) row.uri = resolveMediaUri(String(partial.uri));
             if (partial.name != null) row.name = partial.name;
@@ -3252,6 +3295,15 @@ export default function ChatScreen({ route, navigation }: Props) {
             const rawUri = String(m?.uri || '').trim();
             const uri = rawUri ? normalizeForwardMediaUri(rawUri) : '';
             if (uri) forwardables.push({ type: 'audio', uri, name: m?.name, size: m?.size, duration: m?.duration });
+          } else if (type === 'sticker') {
+            const stickerId = String(m?.stickerId || '').trim();
+            if (stickerId) {
+              forwardables.push({
+                type: 'sticker',
+                text: getStickerFallbackText(m, lang),
+                ...stickerFieldsFromMessage(m),
+              });
+            }
           }
         }
         if (forwardables.length === 0) return 0;
@@ -3319,6 +3371,22 @@ export default function ChatScreen({ route, navigation }: Props) {
         }
         return 0;
       }
+      if (type === 'sticker') {
+        const stickerId = String(selectedMessage?.stickerId || '').trim();
+        if (!stickerId) return 0;
+        const payload = {
+          to,
+          type: 'sticker' as const,
+          text: getStickerFallbackText(selectedMessage, lang),
+          ...stickerFieldsFromMessage(selectedMessage),
+        };
+        const r: any = await sendSocketMessage(payload);
+        if (r?.ok && !r?.localCancelled) {
+          appendIfForwardedToThisPeer(r, payload);
+          return 1;
+        }
+        return 0;
+      }
       return 0;
     },
     [
@@ -3332,6 +3400,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       updateReadStatuses,
       scrollToBottom,
       scheduleScrollToBottom,
+      lang,
     ]
   );
 
@@ -3356,6 +3425,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         if (type === 'text' && String(m?.text || '').trim()) hasAny = true;
         else if (type === 'image' && normalizeForwardMediaUri(String(m?.uri || ''))) hasAny = true;
         else if (type === 'audio' && normalizeForwardMediaUri(String(m?.uri || ''))) hasAny = true;
+        else if (type === 'sticker' && String(m?.stickerId || '').trim()) hasAny = true;
         if (hasAny) break;
       }
       if (!hasAny) {
@@ -3370,6 +3440,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (type === 'text' && !String(selectedMessage?.text ?? '').trim()) return;
       if (type === 'image' && !normalizeForwardMediaUri(String(selectedMessage?.uri ?? ''))) return;
       if (type === 'audio' && !normalizeForwardMediaUri(String(selectedMessage?.uri ?? ''))) return;
+      if (type === 'sticker' && !String(selectedMessage?.stickerId ?? '').trim()) return;
     }
 
     let totalOk = 0;
@@ -3420,6 +3491,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         if (type === 'text') parts.push(String(m?.text ?? '').trim());
         else if (type === 'image') parts.push(t('mediaPhotoLabel', lang));
         else if (type === 'audio') parts.push(`🎤 ${t('chatVoiceMessage', lang)}`);
+        else if (type === 'sticker') parts.push(getStickerFallbackText(m, lang));
       }
       shareText = parts.filter(Boolean).join('\n');
       const firstMedia = selected.find((m) => String(m?.type || '').trim() !== 'text');
@@ -3435,6 +3507,8 @@ export default function ChatScreen({ route, navigation }: Props) {
         shareText = `🎤 ${t('chatVoiceMessage', lang)}`;
         const raw = String(selectedMessage?.uri ?? '').trim();
         if (raw) shareUrl = normalizeUri(raw);
+      } else if (type === 'sticker') {
+        shareText = getStickerFallbackText(selectedMessage, lang);
       }
     }
     if (!shareText && !shareUrl) return;
@@ -4023,7 +4097,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               setMessageText('');
               setReplyingToMessage({
                 id: String(m?.id ?? ''),
-                text: String(m?.text ?? m?.name ?? ''),
+                text: getChatReplyPreviewText(m, lang),
                 from: m?.from,
                 isOwn: isOwn,
               });
@@ -4329,6 +4403,90 @@ export default function ChatScreen({ route, navigation }: Props) {
       signalLocalTyping();
     },
     [signalLocalTyping],
+  );
+
+  const handleComposerStickerSelected = React.useCallback(
+    (sticker: BuiltInSticker) => {
+      if (!sticker?.id) return;
+      const replyTo = replyingToMessage
+        ? { id: replyingToMessage.id, text: replyingToMessage.text, from: replyingToMessage.from, isOwn: replyingToMessage.isOwn }
+        : undefined;
+      const messageId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const fallbackText = getStickerFallbackText(sticker, lang);
+      setReplyingToMessage(null);
+      stopLocalTyping();
+
+      const newMessage = {
+        id: messageId,
+        text: fallbackText,
+        sender: 'me',
+        from: currentUserId,
+        to: peerId,
+        timestamp: new Date(),
+        type: 'sticker',
+        stickerId: sticker.id,
+        stickerPackId: sticker.packId,
+        stickerEmoji: sticker.emoji,
+        stickerLabel: sticker.label,
+        ...(replyTo ? { replyTo } : {}),
+      };
+
+      setMessages((prev) => [...prev, newMessage]);
+      updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
+
+      void (async () => {
+        try {
+          const result = await sendSocketMessage({
+            to: peerId,
+            text: fallbackText,
+            type: 'sticker',
+            stickerId: sticker.id,
+            stickerPackId: sticker.packId,
+            stickerEmoji: sticker.emoji,
+            stickerLabel: sticker.label,
+            clientUiMessageId: messageId,
+            ...(replyTo
+              ? {
+                  replyTo: {
+                    id: replyTo.id,
+                    text: replyTo.text,
+                    from: replyTo.from ?? '',
+                    isOwn: replyTo.isOwn,
+                  },
+                }
+              : {}),
+          });
+
+          if ((result as any)?.localCancelled) return;
+          if (!result.ok) throw new Error((result as any).error || 'Failed to send sticker');
+
+          if (currentUserId) clearMessageCache(peerId, currentUserId);
+          const deliveryStatus: 'delivered' | 'sent' = result.delivered ? 'delivered' : 'sent';
+          updateReadStatuses((prev) => ({ ...prev, [messageId]: deliveryStatus }));
+
+          const serverMessageId = String(result.messageId || '');
+          if (serverMessageId && serverMessageId !== messageId) {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === messageId
+                  ? { ...msg, id: serverMessageId, from: currentUserId, to: peerId }
+                  : msg,
+              ),
+            );
+            updateReadStatuses((prev) => {
+              const next: Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'> = { ...prev, [serverMessageId]: deliveryStatus };
+              delete next[messageId];
+              return next;
+            });
+          }
+        } catch (e) {
+          console.error('❌ Failed to send sticker via socket:', e);
+          updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
+          setUploadStatus((prev) => ({ ...prev, [messageId]: 'failed' }));
+        }
+      })();
+    },
+    [currentUserId, peerId, replyingToMessage, lang, stopLocalTyping, updateReadStatuses],
   );
 
   const handleAttachments = () => {
@@ -5509,6 +5667,149 @@ export default function ChatScreen({ route, navigation }: Props) {
     const ANDROID_RING_PX = 1;
     const BUBBLE_RADIUS = 16;
 
+    if (String(item?.type || '') === 'sticker') {
+      const sticker = getBuiltInSticker(item.stickerId);
+      const reactions = Array.isArray(item.reactions) ? item.reactions : [];
+      const byEmoji: Record<string, number> = {};
+      reactions.forEach((r: { emoji: string }) => {
+        byEmoji[r.emoji] = (byEmoji[r.emoji] || 0) + 1;
+      });
+      const reactionList = Object.entries(byEmoji).map(([emoji, count]) => ({ emoji, count }));
+      const timeColor = isDark ? 'rgba(255,255,255,0.86)' : 'rgba(10,14,18,0.82)';
+      const metaBg = isDark ? 'rgba(10,14,18,0.42)' : 'rgba(255,255,255,0.72)';
+      const stickerSize = 132;
+
+      const checkbox = (
+        <Pressable
+          onPress={() => onToggleSelect?.(String(item.id))}
+          style={({ pressed }) => ({
+            width: 26,
+            height: 26,
+            borderRadius: 13,
+            borderWidth: 1.5,
+            borderColor: isSelected ? '#55d187' : (isDark ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.18)'),
+            backgroundColor: pressed
+              ? (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)')
+              : (isSelected ? 'rgba(85,209,135,0.18)' : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')),
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginRight: isMyMessage ? 0 : 10,
+            marginLeft: isMyMessage ? 10 : 0,
+            overflow: 'hidden',
+          })}
+        >
+          {isSelected ? <Ionicons name="checkmark" size={18} color="#55d187" /> : null}
+        </Pressable>
+      );
+
+      return (
+        <Animated.View
+          style={{
+            transform: [{ scale: messageAnimation }],
+            marginHorizontal: 16,
+            marginVertical: 4,
+            alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
+            flexDirection: 'row',
+            alignItems: 'center',
+            maxWidth: '92%',
+          }}
+        >
+          {selectionMode && !isMyMessage ? checkbox : null}
+          <View style={{ alignSelf: isMyMessage ? 'flex-end' : 'flex-start', maxWidth: 190 }}>
+            {item.replyTo && (
+              <Pressable
+                disabled={!!selectionMode}
+                onPress={() => onPressReplyQuote?.(String(item.replyTo.id))}
+                onLongPress={openMessageActionsFromBubble}
+                delayLongPress={280}
+                style={({ pressed }) => ({
+                  flexDirection: 'row',
+                  alignItems: 'flex-start',
+                  marginBottom: 4,
+                  paddingLeft: 8,
+                  paddingVertical: 4,
+                  paddingRight: 8,
+                  borderRadius: 10,
+                  borderLeftWidth: replyQuoteBarWidth,
+                  borderLeftColor: replyQuoteAccent,
+                  opacity: selectionMode ? 0.5 : pressed ? 0.85 : 1,
+                  backgroundColor: pressed && !selectionMode ? replyQuotePressBg : metaBg,
+                })}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: replyQuoteAccent, fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
+                    {item.replyTo.isOwn ? t('you', lang) : (peerDisplayName || '—')}
+                  </Text>
+                  <Text style={{ color: timeColor, fontSize: 13, opacity: 0.9 }} numberOfLines={2}>
+                    {item.replyTo.text || '—'}
+                  </Text>
+                </View>
+              </Pressable>
+            )}
+            <Pressable
+              ref={bubbleRef}
+              onPress={handleBubblePress}
+              onLongPress={openMessageActionsFromBubble}
+              delayLongPress={280}
+              style={({ pressed }) => ({
+                width: stickerSize,
+                minHeight: stickerSize,
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: pressed && !selectionMode ? 0.92 : 1,
+              })}
+            >
+              <StickerView stickerId={item.stickerId} sticker={sticker} size={stickerSize} animated isDark={isDark} />
+              <View
+                style={{
+                  position: 'absolute',
+                  right: 2,
+                  bottom: 0,
+                  borderRadius: 12,
+                  paddingHorizontal: 7,
+                  paddingVertical: 3,
+                  backgroundColor: metaBg,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ color: timeColor, fontSize: 11, marginRight: isMyMessage ? 4 : 0, fontWeight: '600' }}>
+                  {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+                {renderStatusIcons()}
+              </View>
+            </Pressable>
+            {reactionList.length > 0 ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: isMyMessage ? 'flex-end' : 'flex-start', marginTop: 2 }}>
+                {reactionList.map(({ emoji, count }) => (
+                  <Pressable
+                    key={emoji}
+                    onPress={() => onReactionPress?.(item.id, emoji)}
+                    onLongPress={openMessageActionsFromBubble}
+                    delayLongPress={280}
+                    style={({ pressed }) => ({
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      borderRadius: 12,
+                      paddingHorizontal: 8,
+                      paddingVertical: 4,
+                      backgroundColor: metaBg,
+                      opacity: pressed ? 0.85 : 1,
+                      marginLeft: 4,
+                    })}
+                  >
+                    <Text style={{ fontSize: 14 }}>{emoji}</Text>
+                    {count > 1 ? <Text style={{ fontSize: 11, color: timeColor, marginLeft: 2 }}>{count}</Text> : null}
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+          </View>
+          {selectionMode && isMyMessage ? checkbox : null}
+        </Animated.View>
+      );
+    }
+
     return (
       <Animated.View
         style={{
@@ -5799,6 +6100,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     LIVI.replyQuotePressBg,
     LIVI.replyHighlightAccent,
     isDark,
+    lang,
   ]);
 
   // КРИТИЧНО: на каждый ввод нельзя пересоздавать массив data для FlatList,
@@ -6209,7 +6511,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       flex: 1,
                       color: voiceIsRecording ? 'transparent' : LIVI.white,
                       fontSize: 16,
-                      maxHeight: 100,
+                      maxHeight: composerTextInputMaxHeight,
                     }}
                     placeholder={t('chatMessagePlaceholder', lang)}
                     placeholderTextColor={voiceIsRecording ? 'transparent' : LIVI.titan}
@@ -6220,6 +6522,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     }}
                     onFocus={() => setEmojiPanelOpen(false)}
                     multiline
+                    scrollEnabled
                     onSubmitEditing={sendMessage}
                     returnKeyType="send"
                     caretHidden={voiceIsRecording}
@@ -6308,6 +6611,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   textColor={LIVI.text}
                   langCode={lang}
                   onEmojiSelected={handleComposerEmojiSelected}
+                  onStickerSelected={handleComposerStickerSelected}
                 />
               ) : null}
             </View>
@@ -6436,6 +6740,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   textColor={LIVI.text}
                   langCode={lang}
                   onEmojiSelected={handleComposerEmojiSelected}
+                  onStickerSelected={handleComposerStickerSelected}
                 />
               </View>
             ) : null}
@@ -6589,7 +6894,12 @@ export default function ChatScreen({ route, navigation }: Props) {
 
                 <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
                   <TextInput
-                    style={{ flex: 1, color: voiceIsRecording ? 'transparent' : LIVI.white, fontSize: 16, maxHeight: 100 }}
+                    style={{
+                      flex: 1,
+                      color: voiceIsRecording ? 'transparent' : LIVI.white,
+                      fontSize: 16,
+                      maxHeight: composerTextInputMaxHeight,
+                    }}
                     placeholder={t('chatMessagePlaceholder', lang)}
                     placeholderTextColor={voiceIsRecording ? 'transparent' : LIVI.titan}
                     value={messageText}
@@ -6599,6 +6909,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     }}
                     onFocus={() => setEmojiPanelOpen(false)}
                     multiline
+                    scrollEnabled
                     onSubmitEditing={sendMessage}
                     returnKeyType="send"
                     caretHidden={voiceIsRecording}
@@ -7021,7 +7332,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   {/* Отступ 12px — виден фон модалки (на нём лежат оба блока) */}
                   {/* Блок 2: список действий */}
                   <View style={{ marginTop: 12, width: 245, borderRadius: 12, overflow: 'hidden', backgroundColor: LIVI.bg, borderWidth: 1, borderColor }}>
-                    {(String(selectedMessage?.text || '').trim() || String(selectedMessage?.uri || '').trim()) && (
+                    {(String(selectedMessage?.text || '').trim() || String(selectedMessage?.uri || '').trim() || String(selectedMessage?.stickerId || '').trim()) && (
                       <>
                         <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor }} />
                         <Pressable
@@ -7076,7 +7387,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                             setMessageText('');
                             setReplyingToMessage({
                               id: String(selectedMessage?.id ?? ''),
-                              text: String(selectedMessage?.text ?? selectedMessage?.name ?? ''),
+                              text: getChatReplyPreviewText(selectedMessage, lang),
                               from: selectedMessage?.from,
                               isOwn: selectedMessage?.from === currentUserId || selectedMessage?.sender === 'me',
                             });

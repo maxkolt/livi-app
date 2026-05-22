@@ -18,12 +18,16 @@ export interface IMessageItem {
   id: string; // Уникальный ID сообщения
   from: mongoose.Types.ObjectId;
   to: mongoose.Types.ObjectId;
-  type: 'text' | 'image' | 'audio';
+  type: 'text' | 'image' | 'audio' | 'sticker';
   text?: string; // Текст сообщения
   uri?: string; // URL изображения
   name?: string; // original filename (optional)
   size?: number; // bytes (optional)
   duration?: number; // seconds (optional, for audio)
+  stickerId?: string;
+  stickerPackId?: string;
+  stickerEmoji?: string;
+  stickerLabel?: string;
   timestamp: Date;
   read: boolean;
   reactions?: IMessageReaction[]; // Реакции (эмодзи + userId)
@@ -38,6 +42,7 @@ export interface IFriendshipMessages extends Document {
   textMessages: IMessageItem[]; // Массив текстовых сообщений
   imageMessages: IMessageItem[]; // Массив сообщений с изображениями
   audioMessages: IMessageItem[]; // Массив голосовых сообщений
+  stickerMessages: IMessageItem[]; // Массив сообщений со стикерами
   lastMessage?: IMessageItem; // Последнее сообщение для быстрого доступа
   lastActivity: Date; // Время последней активности
   createdAt: Date;
@@ -62,7 +67,7 @@ const MessageItemSchema = new Schema<IMessageItem>({
   },
   type: {
     type: String,
-    enum: ['text', 'image', 'audio'],
+    enum: ['text', 'image', 'audio', 'sticker'],
     required: true
   },
   text: {
@@ -79,6 +84,18 @@ const MessageItemSchema = new Schema<IMessageItem>({
   },
   duration: {
     type: Number
+  },
+  stickerId: {
+    type: String
+  },
+  stickerPackId: {
+    type: String
+  },
+  stickerEmoji: {
+    type: String
+  },
+  stickerLabel: {
+    type: String
   },
   timestamp: {
     type: Date,
@@ -120,6 +137,7 @@ const FriendshipMessagesSchema = new Schema<IFriendshipMessages>({
   textMessages: [MessageItemSchema],
   imageMessages: [MessageItemSchema],
   audioMessages: [MessageItemSchema],
+  stickerMessages: [MessageItemSchema],
   lastMessage: MessageItemSchema,
   lastActivity: {
     type: Date,
@@ -139,7 +157,8 @@ FriendshipMessagesSchema.methods.getAllMessages = function() {
   const allMessages = [
     ...(this.textMessages || []),
     ...(this.imageMessages || []),
-    ...(this.audioMessages || [])
+    ...(this.audioMessages || []),
+    ...(this.stickerMessages || [])
   ];
   
   return allMessages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
@@ -152,7 +171,7 @@ FriendshipMessagesSchema.methods.addMessage = function(message: IMessageItem) {
   this.lastMessage = message;
   this.lastActivity = new Date();
 
-  const path = message.type === 'text' ? 'textMessages' : message.type === 'image' ? 'imageMessages' : 'audioMessages';
+  const path = message.type === 'text' ? 'textMessages' : message.type === 'image' ? 'imageMessages' : message.type === 'sticker' ? 'stickerMessages' : 'audioMessages';
   return (this as any).constructor.updateOne(
     { _id: this._id },
     { $push: { [path]: message }, $set: { lastMessage: message, lastActivity: new Date() } }
@@ -165,6 +184,7 @@ FriendshipMessagesSchema.methods.getMessagesArray = function(type: string) {
     case 'text': return this.textMessages;
     case 'image': return this.imageMessages;
     case 'audio': return this.audioMessages || (this.audioMessages = []);
+    case 'sticker': return this.stickerMessages || (this.stickerMessages = []);
     default: return this.textMessages;
   }
 };
@@ -184,7 +204,7 @@ FriendshipMessagesSchema.methods.removeMessage = function(messageId: string) {
   if (index === -1) return Promise.resolve(false);
   array.splice(index, 1);
 
-  const path = message.type === 'text' ? 'textMessages' : message.type === 'image' ? 'imageMessages' : 'audioMessages';
+  const path = message.type === 'text' ? 'textMessages' : message.type === 'image' ? 'imageMessages' : message.type === 'sticker' ? 'stickerMessages' : 'audioMessages';
   return (this as any).constructor.updateOne(
     { _id: this._id },
     { $pull: { [path]: { id: messageId } }, $set: { lastActivity: new Date() } }

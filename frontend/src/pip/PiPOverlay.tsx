@@ -22,8 +22,17 @@ import AwayPlaceholder from '../../components/AwayPlaceholder';
 const PIP_W = 150;
 const PIP_H = 260;
 
-const isVideoCallScreen = (name?: string | null) =>
-  name === 'VideoCall' || name === 'RandomChat';
+const isRandomChatActive = () => {
+  try {
+    // RandomChat keeps this ref in sync: true means the screen is idle/inactive.
+    return (global as any).__isInactiveStateRef?.current !== true;
+  } catch {
+    return true;
+  }
+};
+
+const shouldSuppressInAppPiPOnRoute = (name?: string | null) =>
+  name === 'VideoCall' || (name === 'RandomChat' && isRandomChatActive());
 
 function usePiPContextSafe(): React.ContextType<typeof PiPContext> | null {
   try {
@@ -101,11 +110,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const localCamOn = ctx?.localCamOn ?? true;
   const remoteCamOn = ctx?.remoteCamOn ?? true;
   const isMuted = ctx?.isMuted ?? false;
-  const onVideoCallScreen = isVideoCallScreen(currentRouteName);
+  const suppressInAppPiPOnCurrentRoute = shouldSuppressInAppPiPOnRoute(currentRouteName);
 
   const toggleCamera = useCallback(() => {
     try {
-      const onVideoCallScreenNow = isVideoCallScreen(currentRouteName);
+      const onVideoCallScreenNow = shouldSuppressInAppPiPOnRoute(currentRouteName);
       const toggleFromVideoCall = (global as any).__toggleCamRef?.current;
       if (onVideoCallScreenNow && typeof toggleFromVideoCall === 'function') {
         toggleFromVideoCall();
@@ -123,7 +132,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
 
   const toggleMic = useCallback(() => {
     try {
-      const onVideoCallScreenNow = isVideoCallScreen(currentRouteName);
+      const onVideoCallScreenNow = shouldSuppressInAppPiPOnRoute(currentRouteName);
       const toggleFromVideoCall = (global as any).__toggleMicRef?.current;
       if (onVideoCallScreenNow && typeof toggleFromVideoCall === 'function') {
         toggleFromVideoCall();
@@ -147,7 +156,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   // иначе окно ждёт смены route и выглядит "задержанным".
   const showingInAppPiPDuringBackTransition =
     !isSystemPiPLayout &&
-    onVideoCallScreen &&
+    suppressInAppPiPOnCurrentRoute &&
     (global as any).__leavingVideoCallByBackRef?.current === true;
   // На экране VideoCall обычный in-app PiP не показываем. Исключение — явный уход по Back,
   // где маленькое окно нужно показать сразу. Для system PiP capture теперь используется
@@ -157,7 +166,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     !(systemPiPCaptureActive && systemPiPCaptureRequestId > 0) &&
     !suppressOverlayForReturn &&
     !isSystemPiPLayout &&
-    (!onVideoCallScreen || showingInAppPiPDuringBackTransition);
+    (!suppressInAppPiPOnCurrentRoute || showingInAppPiPDuringBackTransition);
 
   const translate = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const dragStartPos = useRef({ x: 0, y: 0 });

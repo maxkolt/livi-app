@@ -41,6 +41,7 @@ export async function getOrCreateFriendship(user1Id: string, user2Id: string): P
         textMessages: [],
         imageMessages: [],
         audioMessages: [],
+        stickerMessages: [],
         lastActivity: new Date(),
       });
       await friendship.save();

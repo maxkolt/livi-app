@@ -2917,8 +2917,30 @@ io.on('connection', async (sock: AuthedSocket) => {
       source: 'socket_accept',
     });
     if (!shouldProcess) {
-      ack?.({ ok: true, duplicate: true });
-      return;
+      const timeline = getCallTimeline(id);
+      const hasAcceptedRoom =
+        callIdToRoomId.has(id) ||
+        activeRoomByUserId.has(link.a) ||
+        activeRoomByUserId.has(link.b);
+      const isRealDuplicate =
+        !!timeline &&
+        (
+          timeline.state === 'declined' ||
+          timeline.state === 'canceled' ||
+          timeline.state === 'timeout' ||
+          timeline.state === 'ended' ||
+          (timeline.state === 'accepted' && hasAcceptedRoom)
+        );
+      if (isRealDuplicate) {
+        ack?.({ ok: true, duplicate: true });
+        return;
+      }
+      logger.warn('[call:accept] orchestration transition skipped but accept flow will continue', {
+        callId: id,
+        hasTimeline: !!timeline,
+        state: timeline?.state,
+        hasAcceptedRoom,
+      });
     }
     if (link.timer) {
       try { clearTimeout(link.timer); } catch {}
