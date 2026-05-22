@@ -91,7 +91,7 @@ export default function ChatEmojiKeyboard({
         {tab === 'emoji' ? (
           <EmojiKeyboard
             onEmojiSelected={onEmojiSelected}
-            enableSearchBar
+            enableSearchBar={false}
             enableRecentlyUsed
             categoryPosition="top"
             translation={translation}

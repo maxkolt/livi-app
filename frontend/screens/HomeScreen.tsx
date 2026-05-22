@@ -1508,6 +1508,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const outgoingCallSoundRef = useRef<Audio.Sound | null>(null);
   const callingVisibleRef = useRef(false);
   callingVisibleRef.current = calling.visible;
+  /** Monotonic token for outgoing-call attempts: cancel/restart must make older async startCall results stale. */
+  const outgoingAttemptSeqRef = useRef(0);
+  const activeOutgoingAttemptRef = useRef(0);
 
   // ВАЖНО: не закрываем исходящий UI на socket 'connect'.
   // Иначе при старте звонка из вкладки «Друзья» (HomeScreen смонтирован) нативный исходящий экран
@@ -1529,6 +1532,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Дедуп: при отмене инициатором мы уже закрываем исходящий локально (handleCancelCall),
       // а потом может прийти второе закрытие через App/push → лишнее setCalling даёт 2 мерцания.
       if (!callingVisibleRef.current) return;
+      activeOutgoingAttemptRef.current = 0;
+      outgoingAttemptSeqRef.current += 1;
+      pendingCancelRef.current = true;
+      outgoingCallUserCanceledRef.current = true;
+      try { setOutgoingCallScreenVisible(false); } catch {}
       // Важно: ставим ref сразу, чтобы подавить гонки до следующего рендера.
       callingVisibleRef.current = false;
       setCalling({ visible: false, friend: null, callId: null });
@@ -1608,6 +1616,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [calling.visible]);
 
   const handleStartVideoCall = useCallback(async (friend: Friend) => {
+    if (activeOutgoingAttemptRef.current > 0 || callingVisibleRef.current) return;
+    const attemptId = ++outgoingAttemptSeqRef.current;
+    activeOutgoingAttemptRef.current = attemptId;
+    const isCurrentAttempt = () => activeOutgoingAttemptRef.current === attemptId;
     const friendName = friend.name ?? '';
     requestAnimationFrame(() => {
       setSwipeActionsHiddenForCall(friend.id);
@@ -1626,6 +1638,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Запрашиваем разрешение до показа нативного экрана, чтобы диалог не появлялся поверх «Вы звоните».
       if (Platform.OS === 'android') {
         await setupCallKeep({ requestPermission: true });
+      }
+      if (!isCurrentAttempt()) {
+        try { setOutgoingCallScreenVisible(false); } catch {}
+        try { closeOutgoingCallActivity(); } catch {}
+        return;
       }
       // Нативный экран исходящего — только после завершения запроса разрешений
       displayOutgoingCallImmediate(friend.id, friendName);
@@ -1651,6 +1668,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const finishOutgoing = (body: () => void) => {
         if (outgoingFinished) return;
         outgoingFinished = true;
+        if (isCurrentAttempt()) activeOutgoingAttemptRef.current = 0;
         removeAllSocketSubs();
         body();
       };
@@ -1766,14 +1784,27 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       } catch (startErr) {
         if (!outgoingFinished) {
           outgoingFinished = true;
+          if (isCurrentAttempt()) activeOutgoingAttemptRef.current = 0;
           removeAllSocketSubs();
         }
         throw startErr;
       }
 
+      if (!isCurrentAttempt()) {
+        if (r?.callId) {
+          try { cancelCall(r.callId); } catch {}
+        }
+        if (!outgoingFinished) {
+          outgoingFinished = true;
+          removeAllSocketSubs();
+        }
+        return;
+      }
+
       if (!r?.ok) {
         if (!outgoingFinished) {
           outgoingFinished = true;
+          if (isCurrentAttempt()) activeOutgoingAttemptRef.current = 0;
           removeAllSocketSubs();
         }
         throw new Error(r?.error || 'call_failed');
@@ -1784,6 +1815,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (r.callId) {
           try { cancelCall(r.callId); } catch {}
         }
+        if (isCurrentAttempt()) activeOutgoingAttemptRef.current = 0;
         return;
       }
 
@@ -1822,6 +1854,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }, OUTGOING_CALL_TIMEOUT_MS);
     } catch (e: any) {
       logger.warn('[outgoing] handleStartVideoCall failed', { error: e?.message ?? String(e) });
+      if (isCurrentAttempt()) activeOutgoingAttemptRef.current = 0;
       try { setOutgoingCallScreenVisible(false); } catch {}
       callingVisibleRef.current = false;
       setCalling({ visible: false, friend: null, callId: null });
@@ -1845,14 +1878,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [navigation, showNotice, startWaves, stopWaves, lang]);
 
   const handleCancelCall = useCallback(() => {
+    activeOutgoingAttemptRef.current = 0;
+    outgoingAttemptSeqRef.current += 1;
     outgoingCallUserCanceledRef.current = true;
     // Важно: ставим ref сразу, чтобы внешние события (socket/push/native) не закрывали второй раз до рендера.
     callingVisibleRef.current = false;
+    try { setOutgoingCallScreenVisible(false); } catch {}
+    try { closeOutgoingCallActivity(); } catch {}
     if (calling.callId) {
       try {
         reportEndCallToCallKeep(calling.callId);
-        setOutgoingCallScreenVisible(false);
-        closeOutgoingCallActivity();
         cancelCall(calling.callId);
         // Повторно через 150мс на случай сетевой гонки
         setTimeout(() => { try { cancelCall(calling.callId!); } catch {} }, 150);
@@ -5181,8 +5216,6 @@ const handleClearNick = useCallback(async () => {
           >
             <Pressable
               hitSlop={Platform.OS === 'android' ? ANDROID_MENU_HIT_SLOP : { top: 8, bottom: 8, left: 8, right: 8 }}
-              delayPressIn={Platform.OS === 'android' ? 0 : undefined}
-              delayPressOut={Platform.OS === 'android' ? 0 : undefined}
               style={({ pressed }) => [
                 styles.menuBtnInner,
                 {

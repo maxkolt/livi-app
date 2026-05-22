@@ -1384,6 +1384,74 @@ function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'cancele
   }
 }
 
+function clearDirectCallSocketStateForUsers(userIds: string[]): void {
+  const ids = new Set(
+    userIds
+      .map((id) => normalizeMongoObjectId(String(id || '')))
+      .filter((id) => isOid(id))
+  );
+  if (ids.size === 0) return;
+  for (const s of io.sockets.sockets.values()) {
+    const uid = normalizeMongoObjectId(String((s as any)?.data?.userId || ''));
+    if (!ids.has(uid)) continue;
+    (s as any).data = (s as any).data || {};
+    (s as any).data.busy = false;
+    delete (s as any).data.roomId;
+    delete (s as any).data.partnerSid;
+    delete (s as any).data.inCall;
+    try { activeCallBySocket.delete(s.id); } catch {}
+  }
+}
+
+async function cleanupStaleRingingCallForImmediateRetry(callerId: string, calleeId: string): Promise<void> {
+  const caller = normalizeMongoObjectId(String(callerId || ''));
+  const callee = normalizeMongoObjectId(String(calleeId || ''));
+  if (!isOid(caller) || !isOid(callee)) return;
+
+  const entries = await Promise.all([
+    getUserCallEntryFromAnyStore(caller),
+    getUserCallEntryFromAnyStore(callee),
+  ]);
+  const callIds = Array.from(new Set(entries.map((entry) => entry?.callId).filter(Boolean) as string[]));
+
+  for (const callId of callIds) {
+    const link = await getCallLinkFromAnyStore(callId);
+    if (!link) continue;
+    const samePair = link.a === caller && link.b === callee;
+    if (!samePair) continue;
+
+    const timeline = getCallTimeline(callId);
+    if (timeline?.state === 'accepted') continue;
+
+    const alreadyAccepted =
+      callIdToRoomId.has(callId) ||
+      activeRoomByUserId.has(link.a) ||
+      activeRoomByUserId.has(link.b);
+    if (alreadyAccepted) continue;
+
+    logger.info('[call:initiate] cleaning stale ringing call before immediate retry', {
+      callId,
+      caller,
+      callee,
+      ageMs: Date.now() - Number(link.createdAtMs || Date.now()),
+    });
+
+    transitionCall(callId, 'canceled', {
+      actionKey: `retry_cancel:${callId}:${caller}`,
+      source: 'retry_cancel',
+    });
+    clearDirectCallSocketStateForUsers([link.a, link.b]);
+    await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
+    try {
+      const sortedU = [link.a, link.b].sort();
+      dissolveSocketIoRoom(io, `room_${sortedU[0]}_${sortedU[1]}`);
+    } catch {}
+    try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
+    try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
+    cleanupCall(callId, 'canceled');
+  }
+}
+
 /**
  * Найти ключ callsById по тому, что прислал клиент в call:end: сам callId, или roomId вида room_A_B.
  * Раньше call:end не вызывал cleanupCall — callsById/callOfUser оставались до таймаута, из‑за чего следующий call:initiate давал error: busy и пуш не уходил.
@@ -2599,9 +2667,21 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       pruneOrphanCallOfUserEntry(me);
       pruneOrphanCallOfUserEntry(peerId);
+      await cleanupStaleRingingCallForImmediateRetry(me, peerId);
 
       // Проверяем busy флаг инициатора
       const initiatorSocket = io.sockets.sockets.get(sock.id);
+      if (
+        initiatorSocket &&
+        (initiatorSocket as any)?.data?.busy === true &&
+        !(await getUserCallEntryFromAnyStore(me)) &&
+        !activeRoomByUserId.has(me)
+      ) {
+        (initiatorSocket as any).data.busy = false;
+        delete (initiatorSocket as any).data.roomId;
+        delete (initiatorSocket as any).data.partnerSid;
+        delete (initiatorSocket as any).data.inCall;
+      }
       if (initiatorSocket && (initiatorSocket as any)?.data?.busy === true) {
         return ack?.({ ok: false, error: 'initiator_busy' });
       }

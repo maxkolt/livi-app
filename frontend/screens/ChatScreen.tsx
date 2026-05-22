@@ -374,6 +374,30 @@ function approxSameOutgoingTextMessage(a: any, b: any): boolean {
   return dt < 180_000;
 }
 
+type ChatReadStatus = 'sending' | 'delivered' | 'read' | 'failed' | 'sent';
+
+function mergeChatReadStatuses(
+  localStatuses: Record<string, ChatReadStatus> = {},
+  serverStatuses: Record<string, ChatReadStatus> = {},
+): Record<string, ChatReadStatus> {
+  const rank: Record<ChatReadStatus, number> = {
+    failed: 0,
+    sending: 1,
+    sent: 2,
+    delivered: 3,
+    read: 4,
+  };
+  const next: Record<string, ChatReadStatus> = { ...localStatuses };
+  for (const [id, serverStatus] of Object.entries(serverStatuses)) {
+    const localStatus = next[id];
+    next[id] =
+      localStatus && rank[localStatus] > rank[serverStatus]
+        ? localStatus
+        : serverStatus;
+  }
+  return next;
+}
+
 /** Удалить сообщение и «близнеца» outbox/optimistic с тем же текстом (чтобы не остался второй пузырь). */
 function filterRemoveMessageAndOutgoingDupes(prev: any[], deletedId: string): any[] {
   const victim = prev.find((m) => String(m?.id || '') === deletedId);
@@ -666,6 +690,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const estimatedInputHeight = 124 + Math.max(0, insets.bottom);
   const [inputHeight, setInputHeight] = useState(estimatedInputHeight);
   const [messageText, setMessageText] = useState("");
+  const messageTextRef = useRef("");
+  messageTextRef.current = messageText;
   const [emojiPanelOpen, setEmojiPanelOpen] = useState(false);
   const [peerActivity, setPeerActivity] = useState<'typing' | 'recording' | null>(null);
   const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
@@ -718,9 +744,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   const forwardSheetTranslateY = useRef(new Animated.Value(0)).current;
   /** Чтобы PanGestureHandler (свайп закрытия) не перехватывал вертикальную прокрутку списка друзей. */
   const forwardFriendsListGestureRef = useRef<React.ComponentRef<typeof NativeViewGestureHandler>>(null);
-  /** Блокирует повторный вызов send до ре-рендера (двойной тап по «Отправить»). */
-  const textSendGuardRef = useRef(false);
-
   const forwardPickerSheetMaxH = React.useMemo(() => {
     const h = Dimensions.get('window').height;
     return Math.min(Math.round(h * 0.72), Math.round(h - insets.top - 12));
@@ -2072,15 +2095,16 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       let localPreloaded = false;
       try {
-        const localMessages = await getChatMessagesLocal(pid, uid);
+        const [localMessages, savedStatuses] = await Promise.all([
+          getChatMessagesLocal(pid, uid),
+          loadStatuses(),
+        ]);
         if (historySyncGenerationRef.current !== syncGen) return;
+        setReadStatuses(savedStatuses || {});
         if (Array.isArray(localMessages) && localMessages.length > 0) {
           setMessages(localMessages);
           localPreloaded = true;
         }
-        const savedStatuses = await loadStatuses();
-        if (historySyncGenerationRef.current !== syncGen) return;
-        setReadStatuses(savedStatuses);
       } catch {}
 
       if (historySyncGenerationRef.current !== syncGen) return;
@@ -2175,7 +2199,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 }
               }
               const savedStatuses = await loadStatuses();
-              updateReadStatuses(() => ({ ...(savedStatuses || {}), ...serverStatuses }));
+              updateReadStatuses(() => mergeChatReadStatuses(savedStatuses || {}, serverStatuses));
             } catch {}
           } else {
             if (!localPreloaded) {
@@ -2285,7 +2309,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 if (m.sender === 'me') serverStatuses[m.id] = m.read ? 'read' : 'sent';
               }
               if (Object.keys(serverStatuses).length) {
-                updateReadStatuses((prev) => ({ ...prev, ...serverStatuses }));
+                updateReadStatuses((prev) => mergeChatReadStatuses(prev, serverStatuses));
               }
             } catch {}
 
@@ -4094,6 +4118,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             if (action === 'cancel') return;
             if (action === 'reply') {
               setEditingMessageId(null);
+              messageTextRef.current = '';
               setMessageText('');
               setReplyingToMessage({
                 id: String(m?.id ?? ''),
@@ -4104,7 +4129,9 @@ export default function ChatScreen({ route, navigation }: Props) {
               return;
             }
             if (action === 'edit') {
-              setMessageText(String(m?.text ?? ''));
+              const text = String(m?.text ?? '');
+              messageTextRef.current = text;
+              setMessageText(text);
               setEditingMessageId(m?.id ?? null);
               setReplyingToMessage(null);
               return;
@@ -4233,11 +4260,13 @@ export default function ChatScreen({ route, navigation }: Props) {
       return;
     }
 
-    if (!messageText.trim()) return;
+    const composerText = messageTextRef.current;
+    if (!composerText.trim()) return;
 
     // Редактирование существующего сообщения
     if (editingMessageId) {
-      const newText = messageText.trim();
+      const newText = composerText.trim();
+      messageTextRef.current = '';
       setMessageText('');
       setEditingMessageId(null);
       const result = await editMessage(editingMessageId, newText);
@@ -4249,20 +4278,16 @@ export default function ChatScreen({ route, navigation }: Props) {
           return updated;
         });
       } else {
+        messageTextRef.current = newText;
         setMessageText(newText);
         setEditingMessageId(editingMessageId);
       }
       return;
     }
 
-    if (textSendGuardRef.current) return;
-    textSendGuardRef.current = true;
-    setTimeout(() => {
-      textSendGuardRef.current = false;
-    }, 90);
-
-    const messageToSend = messageText.trim();
+    const messageToSend = composerText.trim();
     const replyTo = replyingToMessage ? { id: replyingToMessage.id, text: replyingToMessage.text, from: replyingToMessage.from, isOwn: replyingToMessage.isOwn } : undefined;
+    messageTextRef.current = '';
     setMessageText(""); // Очищаем поле сразу
     setReplyingToMessage(null);
     // Если отправили сообщение — прекращаем "typing"
@@ -4368,7 +4393,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   };
 
   const onPressSendButton = React.useCallback(() => {
-    if (!messageText.trim() && !voiceIsRecording) return;
+    if (!messageTextRef.current.trim() && !voiceIsRecording) return;
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {
@@ -4376,7 +4401,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
     setEmojiPanelOpen(false);
     void sendMessage();
-  }, [messageText, voiceIsRecording, sendMessage]);
+  }, [voiceIsRecording, sendMessage]);
 
   const toggleEmojiPanel = React.useCallback(() => {
     setEmojiPanelOpen((open) => {
@@ -4399,7 +4424,11 @@ export default function ChatScreen({ route, navigation }: Props) {
     (emoji: EmojiType) => {
       const ch = String(emoji?.emoji || '');
       if (!ch) return;
-      setMessageText((prev) => prev + ch);
+      setMessageText((prev) => {
+        const next = prev + ch;
+        messageTextRef.current = next;
+        return next;
+      });
       signalLocalTyping();
     },
     [signalLocalTyping],
@@ -5074,7 +5103,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     const openMessageActionsFromBubble = React.useCallback(() => {
       animateMessagePress(item.id, fireLongPressWithLayout, { immediate: true });
     }, [item.id, animateMessagePress, fireLongPressWithLayout]);
-    const effectiveReadStatus = readStatus; // 'sending' | 'delivered' | 'read' | 'failed' | 'sent'
     // Fallback логика для определения отправителя если поле sender отсутствует
     let isMyMessage = item.sender === 'me';
     if (item.sender === undefined || item.sender === null) {
@@ -5083,7 +5111,16 @@ export default function ChatScreen({ route, navigation }: Props) {
       console.warn('Message without sender field: using fallback');
     }
 
-    const messageUploadStatus = uploadStatus || 'sent';
+    const effectiveReadStatus: ChatReadStatus | undefined =
+      readStatus ||
+      (isMyMessage
+        ? (item.read
+            ? 'read'
+            : isOfflineQueuedOrOptimisticOutgoingId(String(item?.id || ''))
+              ? 'sending'
+              : 'sent')
+        : undefined);
+    const messageUploadStatus = isMyMessage ? (uploadStatus || 'sent') : 'sent';
     
     // Сбрасываем ошибку и локальный URI при изменении URI
     React.useEffect(() => {
@@ -5629,16 +5666,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           );
           
         default:
-          // Неизвестный статус или undefined - показываем часы
-          return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 2 }}>
-              <Ionicons 
-                name="time-outline" 
-                size={14} 
-                color={LIVI.titan}
-              />
-            </View>
-          );
+          return null;
       }
     };
 
@@ -6180,12 +6208,13 @@ export default function ChatScreen({ route, navigation }: Props) {
         );
       }
       const msg = item as any;
+      const isOwnMessage = msg?.sender === 'me' || msg?.from === currentUserId;
       return (
         <MessageItem
           item={msg}
           currentUserId={currentUserId}
-          readStatus={readStatuses[msg.id]}
-          uploadStatus={uploadStatus[msg.id]}
+          readStatus={isOwnMessage ? readStatuses[msg.id] : undefined}
+          uploadStatus={isOwnMessage ? uploadStatus[msg.id] : undefined}
           onPressImage={openMediaViewer}
           onPressAudio={togglePlayAudioMessage}
           playingAudioId={playingAudioId}
@@ -6517,6 +6546,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     placeholderTextColor={voiceIsRecording ? 'transparent' : LIVI.titan}
                     value={messageText}
                     onChangeText={(txt) => {
+                      messageTextRef.current = txt;
                       setMessageText(txt);
                       signalLocalTyping();
                     }}
@@ -6583,7 +6613,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 <TouchableOpacity
                   onPress={onPressSendButton}
                   hitSlop={COMPOSER_HIT_SEND}
-                  disabled={!messageText.trim() && !voiceIsRecording}
+                  accessibilityState={{ disabled: !messageText.trim() && !voiceIsRecording }}
                   activeOpacity={messageText.trim() || voiceIsRecording ? 0.88 : 1}
                   style={{
                     backgroundColor:
@@ -6904,6 +6934,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     placeholderTextColor={voiceIsRecording ? 'transparent' : LIVI.titan}
                     value={messageText}
                     onChangeText={(txt) => {
+                      messageTextRef.current = txt;
                       setMessageText(txt);
                       signalLocalTyping();
                     }}
@@ -6970,7 +7001,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 <TouchableOpacity
                   onPress={onPressSendButton}
                   hitSlop={COMPOSER_HIT_SEND}
-                  disabled={!messageText.trim() && !voiceIsRecording}
+                  accessibilityState={{ disabled: !messageText.trim() && !voiceIsRecording }}
                   activeOpacity={messageText.trim() || voiceIsRecording ? 0.88 : 1}
                   style={{
                     backgroundColor:
@@ -7384,6 +7415,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                           onPress={() => {
                             hideMessageActions();
                             setEditingMessageId(null);
+                            messageTextRef.current = '';
                             setMessageText('');
                             setReplyingToMessage({
                               id: String(selectedMessage?.id ?? ''),
@@ -7410,7 +7442,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                             <Pressable
                               onPress={() => {
                                 hideMessageActions();
-                                setMessageText(String(selectedMessage?.text ?? ''));
+                                const text = String(selectedMessage?.text ?? '');
+                                messageTextRef.current = text;
+                                setMessageText(text);
                                 setEditingMessageId(selectedMessage?.id ?? null);
                                 setReplyingToMessage(null);
                               }}
