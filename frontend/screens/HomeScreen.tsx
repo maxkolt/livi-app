@@ -1915,10 +1915,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       logger.warn('[outgoing] handleStartVideoCall failed', { error: e?.message ?? String(e) });
       if (isCurrentAttempt()) activeOutgoingAttemptRef.current = 0;
       try { setOutgoingCallScreenVisible(false); } catch {}
-      try { closeOutgoingCallActivity(); } catch {}
       callingVisibleRef.current = false;
       setCalling({ visible: false, friend: null, callId: null });
-      setSwipeActionsHiddenForCall(null);
       stopWaves();
       const canceledByNative =
         typeof global !== 'undefined' &&
