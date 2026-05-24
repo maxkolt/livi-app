@@ -18,6 +18,9 @@ const PushTokenSchema = new mongoose.Schema(
 );
 
 PushTokenSchema.index({ userId: 1, platform: 1 });
+PushTokenSchema.index({ userId: 1, platform: 1, installId: 1 });
+PushTokenSchema.index({ userId: 1, fcmToken: 1 });
+PushTokenSchema.index({ userId: 1, voipToken: 1 });
 
 export default mongoose.models.PushToken || mongoose.model('PushToken', PushTokenSchema);
 

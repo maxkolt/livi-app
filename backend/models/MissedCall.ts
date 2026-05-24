@@ -20,5 +20,6 @@ const MissedCallSchema = new Schema<IMissedCall>(
 );
 
 MissedCallSchema.index({ calleeId: 1, createdAt: -1 });
+MissedCallSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });
 
 export default (models.MissedCall as any) || model<IMissedCall>('MissedCall', MissedCallSchema);

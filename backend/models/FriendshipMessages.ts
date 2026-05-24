@@ -165,16 +165,14 @@ FriendshipMessagesSchema.methods.getAllMessages = function() {
 };
 
 // Метод для добавления нового сообщения (updateOne вместо save для скорости)
+// Full message history lives in FriendshipMessageItem; this document keeps chat metadata.
 FriendshipMessagesSchema.methods.addMessage = function(message: IMessageItem) {
-  const messageArray = this.getMessagesArray(message.type);
-  messageArray.push(message);
   this.lastMessage = message;
   this.lastActivity = new Date();
 
-  const path = message.type === 'text' ? 'textMessages' : message.type === 'image' ? 'imageMessages' : message.type === 'sticker' ? 'stickerMessages' : 'audioMessages';
   return (this as any).constructor.updateOne(
     { _id: this._id },
-    { $push: { [path]: message }, $set: { lastMessage: message, lastActivity: new Date() } }
+    { $set: { lastMessage: message, lastActivity: new Date() } }
   ).exec();
 };
 

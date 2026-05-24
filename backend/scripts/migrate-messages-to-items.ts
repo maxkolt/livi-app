@@ -59,6 +59,7 @@ async function run() {
           timestamp: m.timestamp || new Date(),
           read: !!m.read,
           reactions: Array.isArray(m.reactions) ? m.reactions : undefined,
+          replyTo: m.replyTo && m.replyTo.id ? m.replyTo : undefined,
         });
       }
     }

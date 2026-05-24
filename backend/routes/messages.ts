@@ -16,6 +16,66 @@ function normalizeClientMessageId(payload: any): string {
   return CLIENT_MESSAGE_ID_RE.test(raw) ? raw : '';
 }
 
+function toFriendshipMessageSnapshot(message: any): any {
+  const snapshot: any = {
+    id: String(message.id),
+    from: message.from,
+    to: message.to,
+    type: message.type,
+    text: message.text,
+    uri: message.uri,
+    name: message.name,
+    size: message.size,
+    duration: message.duration,
+    stickerId: message.stickerId,
+    stickerPackId: message.stickerPackId,
+    stickerEmoji: message.stickerEmoji,
+    stickerLabel: message.stickerLabel,
+    timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp || Date.now()),
+    read: !!message.read,
+  };
+  if (Array.isArray(message.reactions)) snapshot.reactions = message.reactions;
+  if (message.replyTo && message.replyTo.id) snapshot.replyTo = message.replyTo;
+  return snapshot;
+}
+
+async function refreshFriendshipLastMessage(friendshipId: mongoose.Types.ObjectId | null) {
+  if (!friendshipId) return;
+  const latestItem = await FriendshipMessageItem.findOne({ friendshipId })
+    .sort({ timestamp: -1 })
+    .lean();
+  if (latestItem) {
+    const snapshot = toFriendshipMessageSnapshot(latestItem);
+    await FriendshipMessages.updateOne(
+      { _id: friendshipId },
+      { $set: { lastMessage: snapshot, lastActivity: snapshot.timestamp } }
+    ).exec();
+    return;
+  }
+
+  const friendship = await FriendshipMessages.findById(friendshipId).lean();
+  const legacyMessages = [
+    ...((friendship as any)?.textMessages || []),
+    ...((friendship as any)?.imageMessages || []),
+    ...((friendship as any)?.audioMessages || []),
+    ...((friendship as any)?.stickerMessages || []),
+  ].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  if (legacyMessages.length > 0) {
+    const snapshot = toFriendshipMessageSnapshot(legacyMessages[0]);
+    await FriendshipMessages.updateOne(
+      { _id: friendshipId },
+      { $set: { lastMessage: snapshot, lastActivity: snapshot.timestamp } }
+    ).exec();
+    return;
+  }
+
+  await FriendshipMessages.updateOne(
+    { _id: friendshipId },
+    { $unset: { lastMessage: '' }, $set: { lastActivity: new Date() } }
+  ).exec();
+}
+
 async function purgeMessageFromFriendship(friendshipId: mongoose.Types.ObjectId | null, messageId: string) {
   if (!friendshipId || !messageId) return;
   await FriendshipMessages.updateOne(
@@ -27,7 +87,6 @@ async function purgeMessageFromFriendship(friendshipId: mongoose.Types.ObjectId 
         audioMessages: { id: messageId },
         stickerMessages: { id: messageId },
       },
-      $set: { lastActivity: new Date() },
     }
   ).exec();
 }
@@ -50,6 +109,7 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
     if (fromUserId !== me && toUserId !== me) return { ok: false, error: 'not_found' };
     await FriendshipMessageItem.deleteOne({ id: messageId }).exec();
     await purgeMessageFromFriendship(friendshipId, messageId);
+    await refreshFriendshipLastMessage(friendshipId);
   } else {
     const list = await FriendshipMessages.find({
       $and: [
@@ -72,6 +132,7 @@ async function deleteMessageForBothUsers(me: string, messageId: string): Promise
     const friendship = await FriendshipMessages.findOne({ _id: (fd as any)._id });
     if (friendship) await (friendship as any).removeMessage(messageId);
     await purgeMessageFromFriendship(friendshipId, messageId);
+    await refreshFriendshipLastMessage(friendshipId);
   }
 
   try {
@@ -166,8 +227,6 @@ router.post('/messages/send', async (req, res) => {
     };
     if (replyTo) messageItem.replyTo = replyTo;
 
-    await (friendship as any).addMessage(messageItem);
-
     const createItem: any = {
       friendshipId,
       id: messageId,
@@ -188,6 +247,7 @@ router.post('/messages/send', async (req, res) => {
     };
     if (replyTo) createItem.replyTo = replyTo;
     await FriendshipMessageItem.create(createItem);
+    await (friendship as any).addMessage(messageItem);
 
     // If recipient is offline, persist as offline message (same semantics as socket flow)
     try {
@@ -249,7 +309,7 @@ router.post('/messages/send', async (req, res) => {
       });
       return res.json({ ok: true, messageId, timestamp, delivered: false });
     } catch {
-      // Even if push/emit/offline persistence fails, message is already persisted in FriendshipMessages.
+      // Even if push/emit/offline persistence fails, message is already persisted in FriendshipMessageItem.
       return res.json({ ok: true, messageId, timestamp, delivered: false });
     }
   } catch (e: any) {
@@ -390,6 +450,10 @@ router.post('/messages/mark_read', async (req, res) => {
       { friendshipId: fid, from: fromOid },
       { $set: { read: true } }
     ).exec();
+    await FriendshipMessages.updateOne(
+      { _id: fid, 'lastMessage.from': fromOid },
+      { $set: { 'lastMessage.read': true } }
+    ).exec();
 
     return res.json({ ok: true });
   } catch (e: any) {
@@ -428,6 +492,10 @@ router.post('/messages/edit', async (req, res) => {
         { _id: (doc as any).friendshipId, 'textMessages.id': messageId },
         { $set: { 'textMessages.$.text': text, lastActivity: new Date() } }
       ).exec();
+      await FriendshipMessages.updateOne(
+        { _id: (doc as any).friendshipId, 'lastMessage.id': messageId },
+        { $set: { 'lastMessage.text': text, lastActivity: new Date() } }
+      ).exec();
     } else {
       const friendship = await FriendshipMessages.findOne({
         $and: [
@@ -443,6 +511,10 @@ router.post('/messages/edit', async (req, res) => {
       await FriendshipMessages.updateOne(
         { _id: (friendship as any)._id, 'textMessages.id': messageId },
         { $set: { 'textMessages.$.text': text, lastActivity: new Date() } }
+      ).exec();
+      await FriendshipMessages.updateOne(
+        { _id: (friendship as any)._id, 'lastMessage.id': messageId },
+        { $set: { 'lastMessage.text': text, lastActivity: new Date() } }
       ).exec();
     }
 
@@ -568,7 +640,10 @@ router.post('/messages/clear_chat', async (req, res) => {
       const fid = (friendship as any)._id;
       await FriendshipMessages.updateOne(
         { _id: fid },
-        { $set: { textMessages: [], imageMessages: [], audioMessages: [], stickerMessages: [], lastMessage: undefined, lastActivity: new Date() } }
+        {
+          $set: { textMessages: [], imageMessages: [], audioMessages: [], stickerMessages: [], lastActivity: new Date() },
+          $unset: { lastMessage: '' },
+        }
       ).exec();
       await FriendshipMessageItem.deleteMany({ friendshipId: fid }).exec();
       invalidateFriendshipCache(me, withId);

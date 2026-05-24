@@ -103,5 +103,6 @@ const CallTimelineSchema = new Schema<ICallTimeline>(
 
 CallTimelineSchema.index({ createdAtMs: -1 });
 CallTimelineSchema.index({ state: 1, createdAtMs: -1 });
+CallTimelineSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });
 
 export default (models.CallTimeline as any) || model<ICallTimeline>('CallTimeline', CallTimelineSchema);
