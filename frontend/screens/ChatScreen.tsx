@@ -372,6 +372,13 @@ function isServerMessageId(messageId: string): boolean {
   return !!id && !isOfflineQueuedOrOptimisticOutgoingId(id);
 }
 
+/** Id может быть на сервере (в т.ч. clientMessageId вида 1734…-abc) — только outbox_* ещё не отправлен. */
+function isDeletableOnServerMessageId(messageId: string): boolean {
+  const id = String(messageId || '').trim();
+  if (!id) return false;
+  return !id.startsWith('outbox_');
+}
+
 /** Совпадение исходящего текста ± время — убрать дубликат outbox/optimistic, когда сервер уже отдал msg_*. */
 function approxSameOutgoingTextMessage(a: any, b: any): boolean {
   if (String(a?.sender || '') !== 'me' || String(b?.sender || '') !== 'me') return false;
@@ -716,7 +723,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const hiddenForMeMessageIdsRef = useRef<Set<string>>(new Set());
   const rememberDeletedServerMessageId = React.useCallback((rawId: string) => {
     const id = String(rawId || '').trim();
-    if (!id || !isServerMessageId(id)) return;
+    if (!id || !isDeletableOnServerMessageId(id)) return;
     const s = deletedServerMessageIdsRef.current;
     s.add(id);
     if (s.size > 400) {
@@ -3184,8 +3191,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (!mid) return;
     void removeQueuedEditsMatching([mid]).catch(() => {});
 
-    // Only known optimistic/outbox ids are local-only. Legacy numeric ids from history are server ids.
-    if (!isServerMessageId(mid)) {
+    // Только outbox_* ещё не на сервере. Id вида timestamp-random — clientMessageId в Mongo.
+    if (!isDeletableOnServerMessageId(mid)) {
       void removeQueuedMessagesMatching([mid]).catch(() => {});
       void dequeueMediaOutboxId(mid);
       setMessages((prev) => {
@@ -3994,8 +4001,8 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     const idSet = new Set(ids.map((x) => String(x)));
 
-    const serverIds = forBoth ? ids.filter((id) => isServerMessageId(String(id))) : [];
-    const localOnlyIds = ids.filter((id) => !forBoth || !isServerMessageId(String(id)));
+    const serverIds = forBoth ? ids.filter((id) => isDeletableOnServerMessageId(String(id))) : [];
+    const localOnlyIds = ids.filter((id) => !forBoth || !isDeletableOnServerMessageId(String(id)));
     if (!forBoth) {
       await rememberHiddenForMeMessageIds(ids);
     }

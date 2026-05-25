@@ -7,6 +7,7 @@ import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import OfflineMessage from '../models/OfflineMessage';
 import { areFriendsCached, getOrCreateFriendship, invalidateFriendshipCache } from '../utils/friendshipUtils';
 import { sendMessagePushToUser } from '../utils/push';
+import { emitToUser } from '../utils/emitToUser';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 const CLIENT_MESSAGE_ID_RE = /^[A-Za-z0-9:_-]{1,120}$/;
@@ -24,13 +25,11 @@ export function emitMessageDeletedToParticipants(
   toUserId: string | undefined,
   payload: { messageId: string; deletedBy: string },
 ): void {
-  const rooms = new Set<string>();
-  if (fromUserId) rooms.add(socketUserRoomId(fromUserId));
-  if (toUserId) rooms.add(socketUserRoomId(toUserId));
-  for (const uid of rooms) {
-    try {
-      io.to(`u:${uid}`).emit('message:deleted', payload);
-    } catch {}
+  const users = new Set<string>();
+  if (fromUserId) users.add(String(fromUserId));
+  if (toUserId) users.add(String(toUserId));
+  for (const uid of users) {
+    emitToUser(io, uid, 'message:deleted', payload);
   }
 }
 
@@ -39,15 +38,13 @@ export function emitMessagesDeletedToParticipants(
   recipientUserIds: Iterable<string>,
   payload: { messageIds: string[]; deletedBy: string },
 ): void {
-  const rooms = new Set<string>();
+  const users = new Set<string>();
   for (const userId of recipientUserIds) {
-    const uid = socketUserRoomId(String(userId || ''));
-    if (uid) rooms.add(uid);
+    const uid = String(userId || '').trim();
+    if (uid) users.add(uid);
   }
-  for (const uid of rooms) {
-    try {
-      io.to(`u:${uid}`).emit('messages:deleted', payload);
-    } catch {}
+  for (const uid of users) {
+    emitToUser(io, uid, 'messages:deleted', payload);
   }
 }
 export const MAX_MESSAGE_BATCH_SIZE = 100;
@@ -885,6 +882,10 @@ export async function deleteMessagesForBothUsersBatch(me: string, rawMessageIds:
 
   await Promise.all([
     FriendshipMessageItem.deleteMany({ _id: { $in: deleteDocIds } }).exec(),
+    FriendshipMessageItem.deleteMany({
+      id: { $in: deletedIds },
+      $or: [{ from: meOid }, { to: meOid }],
+    }).exec(),
     offlineDeleteClauses.length > 0 ? OfflineMessage.deleteMany({ $or: offlineDeleteClauses }).exec() : Promise.resolve(),
     ...[...legacyDeleteIdsByFriendship.entries()].map(([friendshipKey, ids]) =>
       removeLegacyFriendshipMessages(new mongoose.Types.ObjectId(friendshipKey), ids)
@@ -1504,9 +1505,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: result.error || 'server_error' });
       }
 
-      io.to(`u:${me}`).emit('message:chat_cleared', result.payload);
+      emitToUser(io, me, 'message:chat_cleared', result.payload);
       if (forAll) {
-        io.to(`u:${withId}`).emit('message:chat_cleared', result.payload);
+        emitToUser(io, withId, 'message:chat_cleared', result.payload);
       }
 
       return ack?.({ ok: true });

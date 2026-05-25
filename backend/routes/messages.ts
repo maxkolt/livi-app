@@ -19,6 +19,7 @@ import {
   removeLegacyFriendshipMessages,
   removeUnreadMessage,
 } from '../sockets/messagesReliable';
+import { emitToUser } from '../utils/emitToUser';
 
 const router = Router();
 
@@ -541,9 +542,9 @@ router.post('/messages/clear_chat', async (req, res) => {
     try {
       const io = (req as any).io as any | undefined;
       if (io) {
-        io.to(`u:${me}`).emit('message:chat_cleared', result.payload);
+        emitToUser(io, me, 'message:chat_cleared', result.payload);
         if (forAll) {
-          io.to(`u:${withId}`).emit('message:chat_cleared', result.payload);
+          emitToUser(io, withId, 'message:chat_cleared', result.payload);
         }
       }
     } catch {}
