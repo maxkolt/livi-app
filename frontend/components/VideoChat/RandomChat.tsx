@@ -119,6 +119,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const isNextingRef = useRef(false); // КРИТИЧНО: Ref для синхронной проверки состояния
   const [partnerId, setPartnerId] = useState<string | null>(null);
   const [partnerUserId, setPartnerUserId] = useState<string | null>(null);
+  const partnerUserIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    partnerUserIdRef.current = partnerUserId;
+  }, [partnerUserId]);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [friends, setFriends] = useState<any[]>([]);
   const [addPending, setAddPending] = useState(false);
@@ -323,14 +327,22 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     return () => clearTimeout(t);
   }, [banByModerationUntil]);
   
-  // Обработка заявок в друзья
+  // Входящая заявка: подписка один раз на монтирование (не пересоздавать при смене partnerUserId).
   useEffect(() => {
     const offReq = onFriendRequest?.(({ from, fromNick }) => {
+      const partner = partnerUserIdRef.current;
+      if (partner && String(from) !== String(partner)) return;
       setIncomingFriendFrom(from);
       setIncomingFriendNick(fromNick);
       setFriendModalVisible(true);
     });
-    
+    return () => {
+      offReq?.();
+    };
+  }, []);
+
+  // Прочие события дружбы (зависят от текущего partnerUserId).
+  useEffect(() => {
     const offAdded = onFriendAdded?.(({ userId }) => {
       fetchFriends?.().then((r: any) => setFriends(r?.list || [])).catch(() => {});
       if (String(userId) === String(partnerUserId)) {
@@ -373,7 +385,6 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     });
     
     return () => {
-      offReq?.();
       offAdded?.();
       offAccepted?.();
       offDecl?.();

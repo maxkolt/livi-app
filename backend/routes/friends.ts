@@ -10,6 +10,7 @@ import {
 import { getIoInstance } from '../utils/ioInstance';
 import { getEffectiveBusy } from '../utils/effectiveBusy';
 import { isFriendGloballyVisibleOnline } from '../utils/friendOnlinePresence';
+import { emitToUser } from '../utils/emitToUser';
 
 const router = Router();
 
@@ -101,7 +102,7 @@ router.post('/friends/add', async (req, res) => {
           const u = await User.findById(me).select('nick').lean();
           fromNick = (u as any)?.nick || undefined;
         } catch {}
-        io.to(`u:${String(to)}`).emit('friend:request', { from: me, fromNick });
+        emitToUser(io, to, 'friend:request', { from: me, fromNick });
       }
     } catch {}
 
@@ -136,7 +137,7 @@ router.post('/friends/respond', async (req, res) => {
         if (io) {
           const meProfile = await User.findById(me).select('nick avatar avatarVer avatarThumbB64').lean();
           if (meProfile) {
-            io.to(`u:${String(from)}`).emit('friend:profile', {
+            emitToUser(io, from, 'friend:profile', {
               userId: me,
               nick: String((meProfile as any).nick || '').trim(),
               avatar: String((meProfile as any).avatar || ''),
@@ -146,7 +147,7 @@ router.post('/friends/respond', async (req, res) => {
           }
           const fromProfile = await User.findById(from).select('nick avatar avatarVer avatarThumbB64').lean();
           if (fromProfile) {
-            io.to(`u:${String(me)}`).emit('friend:profile', {
+            emitToUser(io, me, 'friend:profile', {
               userId: from,
               nick: String((fromProfile as any).nick || '').trim(),
               avatar: String((fromProfile as any).avatar || ''),
@@ -154,8 +155,8 @@ router.post('/friends/respond', async (req, res) => {
               avatarThumbB64: String((fromProfile as any).avatarThumbB64 || ''),
             });
           }
-          io.to(`u:${String(me)}`).emit('friend:accepted', { userId: from });
-          io.to(`u:${String(from)}`).emit('friend:accepted', { userId: me });
+          emitToUser(io, me, 'friend:accepted', { userId: from });
+          emitToUser(io, from, 'friend:accepted', { userId: me });
         }
       } catch {}
 
@@ -166,8 +167,8 @@ router.post('/friends/respond', async (req, res) => {
     try {
       const io = (req as any).io as any | undefined;
       if (io) {
-        io.to(`u:${String(me)}`).emit('friend:declined', { userId: from });
-        io.to(`u:${String(from)}`).emit('friend:declined', { userId: me });
+        emitToUser(io, me, 'friend:declined', { userId: from });
+        emitToUser(io, from, 'friend:declined', { userId: me });
       }
     } catch {}
 
@@ -203,8 +204,8 @@ router.post('/friends/acceptInvite', async (req, res) => {
     try {
       const io = (req as any).io as any | undefined;
       if (io) {
-        io.to(`u:${String(me)}`).emit('friend:accepted', { userId: inviterId });
-        io.to(`u:${String(inviterId)}`).emit('friend:accepted', { userId: me });
+        emitToUser(io, me, 'friend:accepted', { userId: inviterId });
+        emitToUser(io, inviterId, 'friend:accepted', { userId: me });
       }
     } catch {}
 
@@ -235,8 +236,8 @@ router.post('/friends/remove', async (req, res) => {
     try {
       const io = (req as any).io as any | undefined;
       if (io) {
-        io.to(`u:${String(me)}`).emit('friend:removed', { userId: peerId });
-        io.to(`u:${String(peerId)}`).emit('friend:removed', { userId: me });
+        emitToUser(io, me, 'friend:removed', { userId: peerId });
+        emitToUser(io, peerId, 'friend:removed', { userId: me });
       }
     } catch {}
 

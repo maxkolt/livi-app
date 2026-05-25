@@ -1540,8 +1540,13 @@ export type FriendListItem = {
 
 export function addFriend(toUserId: string) {
   if (!isOid(toUserId)) return Promise.reject(new Error("invalid ObjectId"));
-  const viaSocket = () =>
-    emitAck<{ ok: boolean; status?: string; error?: string }>('friends:add', { to: toUserId });
+  const viaSocket = async () => {
+    if (socket.connected && currentUserId) {
+      const ok = await ensureReauthBeforePrivilegedSocketOp();
+      if (!ok) throw new Error('reauth_before_friends_add_failed');
+    }
+    return emitAck<{ ok: boolean; status?: string; error?: string }>('friends:add', { to: toUserId });
+  };
 
   const viaHttp = async () => {
     const installId = await getInstallId().catch(() => '');

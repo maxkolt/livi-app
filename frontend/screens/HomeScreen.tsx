@@ -2767,14 +2767,23 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             logger.debug('[HomeScreen] Profile data', { nick: profile.nick, hasAvatar: !!avatarB64, hasAvatarThumb: !!avatarThumbB64, avatarVer: profile.avatarVer });
             logger.debug('Loaded profile from backend', { nick: profile.nick, hasAvatar: !!avatarB64 });
             
-            // Обновляем никнейм из backend
-            if (profile.nick && typeof profile.nick === 'string' && profile.nick.trim()) {
-              loadedNick = profile.nick;
-              setNick(profile.nick);
-              setSavedNick(profile.nick);
-              setSavedNickDebug(profile.nick);
-              logger.debug('[HomeScreen] Set nick from backend', { nick: profile.nick });
+            // Обновляем никнейм из backend (если на сервере пусто — не затираем локальный кэш/UI)
+            const serverNick = typeof profile.nick === 'string' ? profile.nick.trim() : '';
+            if (serverNick) {
+              loadedNick = serverNick;
+              setNick(serverNick);
+              setSavedNick(serverNick);
+              setSavedNickDebug(serverNick);
+              logger.debug('[HomeScreen] Set nick from backend', { nick: serverNick });
               hasActualData = true;
+            } else if (cachedNick) {
+              loadedNick = cachedNick;
+              setNick((n) => (String(n || '').trim() ? n : cachedNick));
+              setSavedNick((s) => (String(s || '').trim() ? s : cachedNick));
+              setSavedNickDebug(cachedNick);
+              logger.debug('[HomeScreen] Server nick empty, kept cached nick', { nick: cachedNick });
+              // Догоняем сервер, если ник есть только локально (например, save не дошёл из‑за offline/reauth)
+              void updateProfile({ nick: cachedNick }).catch(() => {});
             }
             
             // Обновляем аватар из backend
@@ -2810,11 +2819,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               } catch {}
             }
             
-            // Сохраняем профиль даже если он пустой (для нового пользователя это нормально)
-            // Важно: сохраняем ответ от backend, даже если все поля пустые
+            const persistedAvatar = avatarB64
+              ? toDataUri(avatarB64)
+              : (avatarThumbB64 ? toDataUri(avatarThumbB64) : '');
+            const persistedNick =
+              serverNick ||
+              cachedNick ||
+              String(nickLiveRef.current || '').trim() ||
+              String(loadedNick || '').trim();
+
             await saveProfileToStorage({
-              nick: profile.nick || '',
-              avatar: avatarB64 ? toDataUri(avatarB64) : (avatarThumbB64 ? toDataUri(avatarThumbB64) : '')
+              nick: persistedNick,
+              avatar: persistedAvatar || cachedAvatar || '',
             });
             
             // Если есть реальные данные (nick или avatar), отмечаем как успешную загрузку

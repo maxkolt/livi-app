@@ -12,6 +12,7 @@ import {
 import { logger } from '../utils/logger';
 import { getEffectiveBusy } from '../utils/effectiveBusy';
 import { isFriendGloballyVisibleOnline } from '../utils/friendOnlinePresence';
+import { emitToUser } from '../utils/emitToUser';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
@@ -102,7 +103,7 @@ export default function registerFriendSockets(io: Server) {
         // Шлем событие получателю
         let fromNick: string | undefined;
         try { const u = await User.findById(me).select('nick').lean(); fromNick = (u as any)?.nick || undefined; } catch {}
-        io.to(`u:${String(to)}`).emit('friend:request', { from: me, fromNick });
+        emitToUser(io, to, 'friend:request', { from: me, fromNick });
 
         return ack?.({ ok: true, status: 'pending' });
       } catch (e: any) {
@@ -142,7 +143,7 @@ export default function registerFriendSockets(io: Server) {
               avatarVer: (meProfile as any).avatarVer || 0,
               avatarThumbB64: String((meProfile as any).avatarThumbB64 || ''),
             };
-            io.to(`u:${String(inviterId)}`).emit('friend:profile', mePayload);
+            emitToUser(io, inviterId, 'friend:profile', mePayload);
           }
 
           const inviterProfile = await User.findById(inviterId).select('nick avatar avatarVer avatarThumbB64').lean();
@@ -154,15 +155,15 @@ export default function registerFriendSockets(io: Server) {
               avatarVer: (inviterProfile as any).avatarVer || 0,
               avatarThumbB64: String((inviterProfile as any).avatarThumbB64 || ''),
             };
-            io.to(`u:${String(me)}`).emit('friend:profile', inviterPayload);
+            emitToUser(io, me, 'friend:profile', inviterPayload);
           }
         } catch (profileError: any) {
           logger.warn('Failed to send profile on invite accept:', profileError);
         }
 
         // Уведомления
-        io.to(`u:${String(me)}`).emit('friend:accepted', { userId: inviterId });
-        io.to(`u:${String(inviterId)}`).emit('friend:accepted', { userId: me });
+        emitToUser(io, me, 'friend:accepted', { userId: inviterId });
+        emitToUser(io, inviterId, 'friend:accepted', { userId: me });
 
         return ack?.({ ok: true, status: 'accepted' });
       } catch (e: any) {
@@ -199,7 +200,7 @@ export default function registerFriendSockets(io: Server) {
                 avatarThumbB64: String((meProfile as any).avatarThumbB64 || ''),
               };
               // Отправляем профиль "me" пользователю "from"
-              io.to(`u:${String(from)}`).emit('friend:profile', mePayload);
+              emitToUser(io, from, 'friend:profile', mePayload);
             }
 
             // Получаем профиль "from" для отправки "me"
@@ -213,7 +214,7 @@ export default function registerFriendSockets(io: Server) {
                 avatarThumbB64: String((fromProfile as any).avatarThumbB64 || ''),
               };
               // Отправляем профиль "from" пользователю "me"
-              io.to(`u:${String(me)}`).emit('friend:profile', fromPayload);
+              emitToUser(io, me, 'friend:profile', fromPayload);
             }
           } catch (profileError: any) {
             logger.warn('Failed to send profile on friend accept:', profileError);
@@ -222,8 +223,8 @@ export default function registerFriendSockets(io: Server) {
         }
 
         // Уведомления
-        io.to(`u:${String(me)}`).emit(accept ? 'friend:accepted' : 'friend:declined', { userId: from });
-        io.to(`u:${String(from)}`).emit(accept ? 'friend:accepted' : 'friend:declined', { userId: me });
+        emitToUser(io, me, accept ? 'friend:accepted' : 'friend:declined', { userId: from });
+        emitToUser(io, from, accept ? 'friend:accepted' : 'friend:declined', { userId: me });
 
         return ack?.({ ok: true, status: accept ? 'accepted' : 'declined' });
       } catch (e: any) {
@@ -256,8 +257,8 @@ export default function registerFriendSockets(io: Server) {
         clearFriendshipCache(peerId);
 
         // Уведомляем обе стороны
-        io.to(`u:${String(me)}`).emit('friend_removed', { userId: String(peerId) });
-        io.to(`u:${String(peerId)}`).emit('friend_removed', { userId: String(me) });
+        emitToUser(io, me, 'friend_removed', { userId: String(peerId) });
+        emitToUser(io, peerId, 'friend_removed', { userId: String(me) });
 
         return ack?.({ ok: true });
       } catch (e: any) {
