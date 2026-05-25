@@ -129,6 +129,7 @@ import socket, {
   onDisconnected,
   isReconnecting,
   waitForCreateUserCompletion,
+  refreshUserIdFromInstall,
   checkInviteLink,
   requestFriend,
   acceptInvite,
@@ -1153,17 +1154,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     setUnreadByUser({});
     setProfileKey(k => k + 1);
     setAvatarRefreshKey(k => k + 1);
-    setCurrentUserId('');
 
-    // Очищаем версию аватара из AsyncStorage
     try {
-      const currentUserId = getCurrentUserId();
-      if (currentUserId) {
-        await AsyncStorage.removeItem(`avatarVer_${currentUserId}`);
+      const uid = getCurrentUserId();
+      if (uid) {
+        await AsyncStorage.removeItem(`avatarVer_${uid}`);
       }
     } catch (e) {
       logger.warn('Failed to remove avatar version:', e);
     }
+
+    clearCurrentUserId();
   }, []);
   
 
@@ -2423,13 +2424,33 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         return true; // Продолжаем загрузку данных
       }
 
-      const currentUserId = getCurrentUserId();
+      if (isCreateUserInProgress()) {
+        try {
+          await waitForCreateUserCompletion();
+        } catch (e) {
+          console.warn('[syncUserData] Waiting for createUser failed:', e);
+        }
+      }
+
+      let currentUserId = getCurrentUserId();
       if (!currentUserId) {
         return true; // Продолжаем загрузку данных
       }
 
       // Проверяем существует ли пользователь в MongoDB
-      const userExists = await checkUserExists(currentUserId);
+      let userExists = await checkUserExists(currentUserId);
+
+      if (userExists === false) {
+        const fromInstall = await refreshUserIdFromInstall();
+        if (fromInstall) {
+          currentUserId = fromInstall;
+          userExists = await checkUserExists(fromInstall);
+        }
+      }
+
+      if (userExists === null) {
+        return true;
+      }
       
       if (userExists === false) {
         console.warn('[syncUserData] User not found on server, performing hard reset...');
@@ -2532,6 +2553,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           userExistsOnServer = await checkUserExists(existingUserId);
 
           if (userExistsOnServer === false) {
+            const fromInstall = await refreshUserIdFromInstall();
+            if (fromInstall && fromInstall !== existingUserId) {
+              userExistsOnServer = await checkUserExists(fromInstall);
+            }
+          }
+
+          if (userExistsOnServer === null) {
+            userExistsOnServer = null;
+          } else if (userExistsOnServer === false) {
             console.warn('[ensureIdentity] User not found on server, performing hard reset...');
 
             // Пользователь мог уже начать вводить ник, пока мы ждали checkUserExists.
@@ -2782,7 +2812,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               setSavedNick((s) => (String(s || '').trim() ? s : cachedNick));
               setSavedNickDebug(cachedNick);
               logger.debug('[HomeScreen] Server nick empty, kept cached nick', { nick: cachedNick });
-              // Догоняем сервер, если ник есть только локально (например, save не дошёл из‑за offline/reauth)
+              if (isCreateUserInProgress()) {
+                try { await waitForCreateUserCompletion(); } catch {}
+              }
               void updateProfile({ nick: cachedNick }).catch(() => {});
             }
             

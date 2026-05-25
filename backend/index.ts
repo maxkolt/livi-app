@@ -679,7 +679,8 @@ app.get('/api/exists/:userId', async (req, res) => {
 
     // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
     if (!isMongoReady()) {
-      return res.json({ ok: true, exists: false }); // Если БД недоступна, считаем что пользователь не существует
+      // Не возвращаем exists:false — клиент делает hard reset и теряет identity (см. socket user:exists).
+      return res.status(503).json({ ok: false, error: 'database_unavailable' });
     }
     const exists = await User.exists({ _id: userId });
     return res.json({ ok: true, exists: !!exists });

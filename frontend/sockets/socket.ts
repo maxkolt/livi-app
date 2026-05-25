@@ -1019,10 +1019,8 @@ async function boot() {
         logger.debug('Reauth successful');
       } else {
         logger.warn('Reauth failed:', reauthResponse?.error);
-        if (reauthResponse?.error === 'user_not_found') {
-          logger.warn('User not found on server, clearing local userId and creating new user...');
-          clearCurrentUserId();
-          await createUser();
+        if (reauthResponse?.error === 'user_not_found' || reauthResponse?.error === 'not_found') {
+          await recoverFromReauthFailure(reauthResponse?.error);
         }
       }
     } catch (e) {
@@ -1233,10 +1231,8 @@ socket.on("connect", async () => {
         logger.debug('[socket] Reauth successful after connect');
       } else {
         logger.warn('[socket] Reauth failed after connect:', reauthResponse?.error);
-        if (reauthResponse?.error === 'user_not_found') {
-          logger.warn('[socket] User not found on server, clearing local userId and creating new user...');
-          clearCurrentUserId();
-          await createUser();
+        if (reauthResponse?.error === 'user_not_found' || reauthResponse?.error === 'not_found') {
+          await recoverFromReauthFailure(reauthResponse?.error);
         }
       }
     } catch (e) {
@@ -1499,6 +1495,34 @@ async function emitReauthDeduped(
 
   reauthInFlight = p;
   return p;
+}
+
+/** Reauth failed: restore install mapping or recreate user (handles race with in-flight createUser). */
+async function recoverFromReauthFailure(error?: string): Promise<void> {
+  const err = String(error || '');
+  if (err !== 'user_not_found' && err !== 'not_found') return;
+
+  if (err === 'not_found' && isCreateUserInProgress()) {
+    try {
+      await waitForCreateUserCompletion();
+    } catch {}
+    const uid = getCurrentUserId();
+    if (uid) {
+      const retry = await emitReauthDeduped(uid);
+      if (retry?.ok) return;
+    }
+  }
+
+  if (err === 'not_found') {
+    const mapped = await refreshUserIdFromInstall();
+    if (mapped) {
+      const retry = await emitReauthDeduped(mapped);
+      if (retry?.ok) return;
+    }
+  }
+
+  clearCurrentUserId();
+  await createUser();
 }
 
 // После разрыва Manager шлёт `reconnect`, а namespace socket всегда шлёт `connect` — reauth делаем только в обработчике `connect` (через emitReauthDeduped), иначе двойной emit.
@@ -2136,12 +2160,17 @@ export function updateProfile(patch: { nick?: string; avatar?: string }) {
     }
   }
 
-  const viaSocket = () =>
-    emitAck<{ ok: boolean; profile?: { nick?: string; avatar?: string }; error?: string }>(
+  const viaSocket = async () => {
+    if (currentUserId && socket.connected) {
+      const ok = await ensureReauthBeforePrivilegedSocketOp();
+      if (!ok) return { ok: false, error: 'unauthorized' };
+    }
+    return emitAck<{ ok: boolean; profile?: { nick?: string; avatar?: string }; error?: string }>(
       'profile:update',
       clean,
       5000
     );
+  };
 
   const viaHttp = async () => {
     const installId = await getInstallId().catch(() => '');
@@ -2182,6 +2211,9 @@ export function updateProfile(patch: { nick?: string; avatar?: string }) {
   };
 
   const promise = (async () => {
+    if (!currentUserId || !isOid(currentUserId)) {
+      return { ok: false, error: 'no_userId' };
+    }
     try {
       return await viaSocket();
     } catch {
@@ -2191,7 +2223,12 @@ export function updateProfile(patch: { nick?: string; avatar?: string }) {
 
   promise.then((result) => {
     if (result?.ok) {} else {
-      console.error('[updateProfile] ❌ Server response error:', result?.error);
+      const err = String(result?.error || '');
+      if (err === 'unauthorized' || err === 'no_userId') {
+        logger.debug('[updateProfile] skipped — identity not ready yet', { error: err });
+      } else {
+        console.error('[updateProfile] ❌ Server response error:', result?.error);
+      }
     }
   }).catch((error) => {
     console.error('[updateProfile] ❌ Request failed:', error);
@@ -2433,10 +2470,20 @@ async function createUserInternal(): Promise<string | null> {
         const candidateId = String(response.userId);
         const exists = await checkUserExists(candidateId);
 
-        if (exists) {
+        if (exists === true) {
           setCurrentUserId(candidateId);
           await applyAuthAndConnect();
           console.log('[createUser] User created successfully:', candidateId);
+          return candidateId;
+        }
+
+        if (exists === null) {
+          setCurrentUserId(candidateId);
+          await applyAuthAndConnect();
+          try {
+            await emitReauthDeduped(candidateId);
+          } catch {}
+          console.log('[createUser] User created (existence check inconclusive, trusting attach):', candidateId);
           return candidateId;
         }
 
@@ -2537,6 +2584,10 @@ export function getCurrentUserId(): string | undefined {
 }
 
 export function setCurrentUserId(userId: string) {
+  if (!userId || !isOid(String(userId))) {
+    clearCurrentUserId();
+    return;
+  }
   // Логи setCurrentUserId убраны - показывают только рабочее состояние
   currentUserId = userId;
   __notifyCurrentUserId();
@@ -2572,6 +2623,16 @@ async function whoamiViaRest(): Promise<string | null> {
     }
   } catch (e) {
     console.warn('whoamiViaRest failed:', e);
+  }
+  return null;
+}
+
+/** installId → user mapping with REST whoami (ignores in-memory currentUserId). */
+export async function refreshUserIdFromInstall(): Promise<string | null> {
+  const userId = await whoamiViaRest();
+  if (userId && isOid(userId)) {
+    setCurrentUserId(userId);
+    return userId;
   }
   return null;
 }
