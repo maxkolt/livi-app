@@ -10,6 +10,46 @@ import { sendMessagePushToUser } from '../utils/push';
 
 const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 const CLIENT_MESSAGE_ID_RE = /^[A-Za-z0-9:_-]{1,120}$/;
+const OID_HEX_24 = /^[a-f\d]{24}$/i;
+
+/** Socket rooms use lowercase Mongo ids (see identity.ts bindUser). */
+export function socketUserRoomId(userId: string): string {
+  const raw = String(userId || '').trim();
+  return OID_HEX_24.test(raw) ? raw.toLowerCase() : raw;
+}
+
+export function emitMessageDeletedToParticipants(
+  io: Server,
+  fromUserId: string | undefined,
+  toUserId: string | undefined,
+  payload: { messageId: string; deletedBy: string },
+): void {
+  const rooms = new Set<string>();
+  if (fromUserId) rooms.add(socketUserRoomId(fromUserId));
+  if (toUserId) rooms.add(socketUserRoomId(toUserId));
+  for (const uid of rooms) {
+    try {
+      io.to(`u:${uid}`).emit('message:deleted', payload);
+    } catch {}
+  }
+}
+
+export function emitMessagesDeletedToParticipants(
+  io: Server,
+  recipientUserIds: Iterable<string>,
+  payload: { messageIds: string[]; deletedBy: string },
+): void {
+  const rooms = new Set<string>();
+  for (const userId of recipientUserIds) {
+    const uid = socketUserRoomId(String(userId || ''));
+    if (uid) rooms.add(uid);
+  }
+  for (const uid of rooms) {
+    try {
+      io.to(`u:${uid}`).emit('messages:deleted', payload);
+    } catch {}
+  }
+}
 export const MAX_MESSAGE_BATCH_SIZE = 100;
 export const READ_RECEIPT_CHUNK_SIZE = 500;
 
@@ -22,7 +62,12 @@ export function normalizeMessageIdBatch(input: unknown): string[] {
   return Array.from(new Set(
     (Array.isArray(input) ? input : [])
       .map((id: any) => String(id || '').trim())
-      .filter((id: string) => CLIENT_MESSAGE_ID_RE.test(id))
+      .filter((id: string) => {
+        if (!id || id.length > 120) return false;
+        if (CLIENT_MESSAGE_ID_RE.test(id)) return true;
+        // Legacy numeric / mixed ids from older clients (e.g. Date.now() message ids).
+        return /^[\d_a-zA-Z:-]{1,120}$/.test(id);
+      })
   ));
 }
 
@@ -1399,8 +1444,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (!result.ok) return ack?.({ ok: false, error: result.error || 'not_found' });
 
       const eventPayload = { messageId, deletedBy: me };
-      if (result.fromUserId) io.to(`u:${String(result.fromUserId)}`).emit('message:deleted', eventPayload);
-      if (result.toUserId) io.to(`u:${String(result.toUserId)}`).emit('message:deleted', eventPayload);
+      emitMessageDeletedToParticipants(io, result.fromUserId, result.toUserId, eventPayload);
 
       return ack?.({ ok: true });
     } catch (e: any) {
@@ -1431,9 +1475,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
       if (result.deletedIds.length > 0) {
         const eventPayload = { messageIds: result.deletedIds, deletedBy: me };
-        for (const uid of result.recipients) {
-          io.to(`u:${uid}`).emit('messages:deleted', eventPayload);
-        }
+        emitMessagesDeletedToParticipants(io, result.recipients, eventPayload);
       }
 
       return ack?.({

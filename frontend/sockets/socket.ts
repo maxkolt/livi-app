@@ -3127,6 +3127,76 @@ export async function getChatHistory(peerId: string): Promise<any[]> {
 const messageCache = new Map<string, { messages: any[], timestamp: number }>();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 минут
 
+const GLOBALLY_DELETED_MESSAGE_IDS_KEY = 'chat_globally_deleted_message_ids';
+const GLOBALLY_DELETED_MESSAGE_IDS_MAX = 600;
+let globallyDeletedMessageIdsMem: Set<string> | null = null;
+let globallyDeletedMessageIdsLoadPromise: Promise<Set<string>> | null = null;
+
+function trimMessageId(raw: unknown): string {
+  return String(raw || '').trim();
+}
+
+export async function ensureGloballyDeletedMessageIdsLoaded(): Promise<Set<string>> {
+  if (globallyDeletedMessageIdsMem) return globallyDeletedMessageIdsMem;
+  if (globallyDeletedMessageIdsLoadPromise) return globallyDeletedMessageIdsLoadPromise;
+  globallyDeletedMessageIdsLoadPromise = (async () => {
+    const set = new Set<string>();
+    try {
+      const raw = await AsyncStorage.getItem(GLOBALLY_DELETED_MESSAGE_IDS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          for (const id of parsed) {
+            const t = trimMessageId(id);
+            if (t) set.add(t);
+          }
+        }
+      }
+    } catch {}
+    globallyDeletedMessageIdsMem = set;
+    return set;
+  })();
+  return globallyDeletedMessageIdsLoadPromise;
+}
+
+export function isGloballyDeletedMessageId(messageId: string): boolean {
+  const id = trimMessageId(messageId);
+  if (!id) return false;
+  return globallyDeletedMessageIdsMem?.has(id) ?? false;
+}
+
+export function filterOutGloballyDeletedMessages<T extends { id?: unknown }>(messages: T[]): T[] {
+  const tombstones = globallyDeletedMessageIdsMem;
+  if (!tombstones || tombstones.size === 0) return messages;
+  return messages.filter((msg) => !tombstones.has(trimMessageId(msg?.id)));
+}
+
+export async function rememberGloballyDeletedMessageIds(rawIds: readonly string[]): Promise<void> {
+  const incoming = rawIds.map(trimMessageId).filter(Boolean);
+  if (incoming.length === 0) return;
+  const set = await ensureGloballyDeletedMessageIdsLoaded();
+  let changed = false;
+  for (const id of incoming) {
+    if (!set.has(id)) {
+      set.add(id);
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  while (set.size > GLOBALLY_DELETED_MESSAGE_IDS_MAX) {
+    const first = set.values().next().value;
+    if (first == null) break;
+    set.delete(first);
+  }
+  try {
+    await AsyncStorage.setItem(GLOBALLY_DELETED_MESSAGE_IDS_KEY, JSON.stringify(Array.from(set)));
+  } catch (error) {
+    logger.warn('[messages] failed to persist globally deleted message ids:', error);
+  }
+}
+
+void ensureGloballyDeletedMessageIdsLoaded();
+
 // Очистка кэша для конкретного чата (при получении новых сообщений)
 export function clearMessageCache(peerId: string, userId?: string) {
   const currentUser = userId || currentUserId;
@@ -3136,13 +3206,66 @@ export function clearMessageCache(peerId: string, userId?: string) {
   messageCache.delete(cacheKey);
 }
 
+async function removeDeletedMessagesFromLocalStorage(rawIds: readonly string[]): Promise<void> {
+  const ids = new Set(rawIds.map((id) => String(id || '').trim()).filter(Boolean));
+  if (ids.size === 0) return;
+
+  await rememberGloballyDeletedMessageIds([...ids]);
+
+  try {
+    for (const [cacheKey, cached] of Array.from(messageCache.entries())) {
+      const before = Array.isArray(cached?.messages) ? cached.messages : [];
+      const next = before.filter((msg: any) => !ids.has(String(msg?.id || '').trim()));
+      if (next.length !== before.length) {
+        messageCache.set(cacheKey, { ...cached, messages: next, timestamp: Date.now() });
+      }
+    }
+  } catch {}
+
+  try {
+    const keys = (await AsyncStorage.getAllKeys()).filter((key) => String(key || '').startsWith('chat_messages_'));
+    if (keys.length === 0) return;
+    const rows = await AsyncStorage.multiGet(keys);
+    await Promise.all(
+      rows.map(async ([key, value]) => {
+        if (!key || !value) return;
+        try {
+          const parsed = JSON.parse(value);
+          if (!Array.isArray(parsed)) return;
+          const next = parsed.filter((msg: any) => !ids.has(String(msg?.id || '').trim()));
+          if (next.length === parsed.length) return;
+          if (next.length === 0) {
+            await AsyncStorage.removeItem(key);
+          } else {
+            await AsyncStorage.setItem(key, JSON.stringify(next));
+          }
+        } catch {}
+      }),
+    );
+  } catch (error) {
+    logger.warn('[messages] failed to remove deleted messages from local storage:', error);
+  }
+}
+
+const deleteCleanupGlobal = globalThis as any;
+if (!deleteCleanupGlobal.__liviMessageDeleteCacheCleanupRegistered) {
+  deleteCleanupGlobal.__liviMessageDeleteCacheCleanupRegistered = true;
+  socket.on('message:deleted', (data: any) => {
+    void removeDeletedMessagesFromLocalStorage([String(data?.messageId || '')]);
+  });
+  socket.on('messages:deleted', (data: any) => {
+    const ids = Array.isArray(data?.messageIds) ? data.messageIds.map((id: any) => String(id || '')) : [];
+    void removeDeletedMessagesFromLocalStorage(ids);
+  });
+}
+
 function parseStoredChatMessagesJson(
   savedMessages: string,
   currentUser: string,
   peerId: string,
 ): any[] {
   const parsed = JSON.parse(savedMessages);
-  return parsed
+  const mapped = parsed
     .filter((msg: any) => {
       const isFromCurrentUser = msg.from === currentUser && msg.to === peerId;
       const isToCurrentUser = msg.from === peerId && msg.to === currentUser;
@@ -3165,6 +3288,7 @@ function parseStoredChatMessagesJson(
         sender: correctedMsg.from === currentUser ? 'me' : 'peer',
       };
     });
+  return filterOutGloballyDeletedMessages(mapped);
 }
 
 /**
@@ -3300,10 +3424,17 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
     try {
       const r: any = await viaSocket();
       // IMPORTANT: if socket responds with ok=false (no throw), fall back to HTTP for reliability.
-      if (r?.ok === true) return true;
-      return await viaHttp();
+      if (r?.ok === true) {
+        await rememberGloballyDeletedMessageIds([messageId]);
+        return true;
+      }
+      const httpOk = await viaHttp();
+      if (httpOk) await rememberGloballyDeletedMessageIds([messageId]);
+      return httpOk;
     } catch {
-      return await viaHttp();
+      const httpOk = await viaHttp();
+      if (httpOk) await rememberGloballyDeletedMessageIds([messageId]);
+      return httpOk;
     }
   } catch (error) {
     console.error('Failed to delete message:', error);
@@ -3351,15 +3482,30 @@ export async function deleteMessages(messageIds: string[]): Promise<{ deletedIds
 
     try {
       const r: any = await viaSocket();
-      if (r?.ok === true) {
+      const deletedFromSocket = Array.isArray(r?.deletedIds) ? r.deletedIds.map(String) : [];
+      const failedFromSocket = Array.isArray(r?.failedIds) ? r.failedIds.map(String) : [];
+      if (r?.ok === true || deletedFromSocket.length > 0) {
+        if (deletedFromSocket.length > 0) {
+          await rememberGloballyDeletedMessageIds(deletedFromSocket);
+        }
         return {
-          deletedIds: Array.isArray(r?.deletedIds) ? r.deletedIds.map(String) : [],
-          failedIds: Array.isArray(r?.failedIds) ? r.failedIds.map(String) : [],
+          deletedIds: deletedFromSocket,
+          failedIds: failedFromSocket.length > 0
+            ? failedFromSocket
+            : normalized.filter((id) => !deletedFromSocket.includes(String(id))),
         };
       }
-      return await viaHttp();
+      const httpResult = await viaHttp();
+      if (httpResult.deletedIds.length > 0) {
+        await rememberGloballyDeletedMessageIds(httpResult.deletedIds);
+      }
+      return httpResult;
     } catch {
-      return await viaHttp();
+      const httpResult = await viaHttp();
+      if (httpResult.deletedIds.length > 0) {
+        await rememberGloballyDeletedMessageIds(httpResult.deletedIds);
+      }
+      return httpResult;
     }
   } catch (error) {
     console.error('Failed to delete messages:', error);

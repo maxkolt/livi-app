@@ -9,6 +9,8 @@ import {
   backfillFriendshipMessageItems,
   clearChatMessagesForUsers,
   deleteMessagesForBothUsersBatch,
+  emitMessageDeletedToParticipants,
+  emitMessagesDeletedToParticipants,
   fetchFriendshipMessagesPage,
   findLegacyMessageFriendshipId,
   findLegacyMessageForUser,
@@ -463,8 +465,7 @@ router.post('/messages/delete', async (req, res) => {
       const io = (req as any).io as any | undefined;
       if (io && (result.fromUserId || result.toUserId)) {
         const payload = { messageId, deletedBy: me };
-        if (result.fromUserId) io.to(`u:${result.fromUserId}`).emit('message:deleted', payload);
-        if (result.toUserId) io.to(`u:${result.toUserId}`).emit('message:deleted', payload);
+        emitMessageDeletedToParticipants(io, result.fromUserId, result.toUserId, payload);
       }
     } catch {}
 
@@ -497,9 +498,7 @@ router.post('/messages/delete_many', async (req, res) => {
       const io = (req as any).io as any | undefined;
       if (io && result.deletedIds.length > 0) {
         const payload = { messageIds: result.deletedIds, deletedBy: me };
-        for (const uid of result.recipients) {
-          io.to(`u:${uid}`).emit('messages:deleted', payload);
-        }
+        emitMessagesDeletedToParticipants(io, result.recipients, payload);
       }
     } catch {}
 
