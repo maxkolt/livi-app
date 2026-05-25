@@ -44,6 +44,17 @@ export function createRedisStore(redisUrl: string) {
   redis.on('error', (err) => logger.warn('[queueStore:redis]', { message: err?.message ?? String(err) }));
   redis.on('connect', () => logger.info('[queueStore:redis] connected'));
 
+  async function scanKeys(pattern: string): Promise<string[]> {
+    const keys: string[] = [];
+    let cursor = '0';
+    do {
+      const [nextCursor, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+      cursor = nextCursor;
+      keys.push(...batch);
+    } while (cursor !== '0');
+    return keys;
+  }
+
   return {
     async addToQueue(sid: string): Promise<void> {
       const id = String(sid);
@@ -64,8 +75,9 @@ export function createRedisStore(redisUrl: string) {
       return (await redis.sismember(PREFIX + 'inQueue', String(sid))) === 1;
     },
 
-    async getWaitingQueue(): Promise<string[]> {
-      return redis.lrange(PREFIX + 'queue', 0, -1);
+    async getWaitingQueue(limit?: number): Promise<string[]> {
+      const n = Math.floor(Number(limit) || 0);
+      return redis.lrange(PREFIX + 'queue', 0, n > 0 ? n - 1 : -1);
     },
 
     async getQueueSize(): Promise<number> {
@@ -203,7 +215,7 @@ export function createRedisStore(redisUrl: string) {
       let cleanedLocks = 0;
       let cleanedPairs = 0;
 
-      const banKeys = await redis.keys(PREFIX + 'ban:*');
+      const banKeys = await scanKeys(PREFIX + 'ban:*');
       for (const key of banKeys) {
         const ttl = await redis.pttl(key);
         if (ttl === -2) continue;
@@ -213,7 +225,7 @@ export function createRedisStore(redisUrl: string) {
         }
       }
 
-      const lockKeys = await redis.keys(PREFIX + 'lock:*');
+      const lockKeys = await scanKeys(PREFIX + 'lock:*');
       for (const key of lockKeys) {
         const socketId = key.slice((PREFIX + 'lock:').length);
         const ttl = await redis.ttl(key);

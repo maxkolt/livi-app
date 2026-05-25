@@ -4,7 +4,7 @@ import { logger } from '../utils/logger';
 import { isShuttingDown } from '../utils/shutdownState';
 import { createToken, getLiveKitUrl } from '../routes/livekit';
 import * as queueStore from '../utils/queueStore';
-import User from '../models/User';
+import { getFriendIds } from '../utils/friendshipUtils';
 import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
 
 const MODERATION_BAN_MS = 60 * 60 * 1000; // 1 час
@@ -32,6 +32,7 @@ const START_RATE_LIMIT_MS = 2000; // Максимум 1 start в 2 секунд�
 const MATCH_RATE_LIMIT_MS = 1500; // Максимум 1 попытка матчинга в 1.5 секунды (защита от перегрузки CPU)
 const QUEUE_TIMEOUT_MS = 5 * 60 * 1000; // 5 минут - максимальное время ожидания в очереди
 const QUEUE_CLEANUP_INTERVAL_MS = 30 * 1000; // Очистка каждые 30 секунд
+const MATCH_CANDIDATE_SCAN_LIMIT = 64; // Не читаем всю очередь на один подбор
 
 // === Вспомогательные =========================================================
 function safeGet(io: Server, sid: string): AuthedSocket | undefined {
@@ -83,16 +84,14 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
   try {
     if (!userId) return;
     
-    // Получаем список друзей пользователя
-    const user = await User.findById(userId).select('friends').lean();
-    if (!user || !Array.isArray(user.friends) || user.friends.length === 0) {
+    const friends = await getFriendIds(userId);
+    if (friends.length === 0) {
       // Если друзей нет, отправляем только самому пользователю (для синхронизации состояния)
       io.to(`u:${userId}`).emit('presence:update', { userId, busy });
       return;
     }
     
     // Отправляем обновление только друзьям через их комнаты
-    const friends = user.friends.map(f => String(f));
     for (const friendId of friends) {
       try {
         io.to(`u:${friendId}`).emit('presence:update', { userId, busy });
@@ -115,7 +114,7 @@ async function markBusy(io: Server, s: AuthedSocket, busy: boolean) {
   const userId = String(s.data.userId || '');
   if (userId) {
     await emitPresenceUpdateToFriends(io, userId, busy);
-    scheduleGlobalFriendPresenceEmit(io);
+    scheduleGlobalFriendPresenceEmit(io, userId);
   }
 }
 async function lockPair(a: AuthedSocket, b: AuthedSocket) {
@@ -220,15 +219,20 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
     return false;
   }
 
-  const waitQueue = await queueStore.getWaitingQueue();
+  const waitQueue = await queueStore.getWaitingQueue(MATCH_CANDIDATE_SCAN_LIMIT);
   let candidateSid: string | undefined;
+  let cleanedSkipped = 0;
   
   for (const sid of waitQueue) {
     if (sid === socket.id) continue;
     const isLocked = await queueStore.isLocked(sid);
     if (isLocked) continue;
     const other = safeGet(io, sid);
-    if (!other || other.data.partnerSid) continue;
+    if (!other || other.data.partnerSid || other.data.inCall) {
+      await removeFromQueue(sid);
+      cleanedSkipped++;
+      continue;
+    }
     
     // Проверяем, что это не один и тот же пользователь (по userId)
     const myUserId = String(socket.data.userId || '');
@@ -240,6 +244,8 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
     // Пропускаем пользователей, забаненных модерацией (нарушение правил)
     if (otherUserId && (await queueStore.isModerationBanned(otherUserId))) {
       logger.debug('Skipping moderation-banned user', { socketId: socket.id, otherUserId, otherSocketId: sid });
+      await removeFromQueue(sid);
+      cleanedSkipped++;
       continue;
     }
     
@@ -273,7 +279,13 @@ export async function tryMatch(io: Server, socket: AuthedSocket): Promise<boolea
   }
 
   if (!candidateSid) {
-    logger.debug('No candidate found', { socketId: socket.id });
+    logger.debug('No candidate found', {
+      socketId: socket.id,
+      queueSize,
+      scanned: waitQueue.length,
+      scanLimit: MATCH_CANDIDATE_SCAN_LIMIT,
+      cleanedSkipped,
+    });
     return false;
   }
 

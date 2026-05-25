@@ -203,6 +203,8 @@ const ANDROID_INSTANT_TOUCH =
 const ANDROID_FRIEND_ACTION_HIT_SLOP = { top: 14, bottom: 14, left: 14, right: 14 };
 const ANDROID_MENU_HIT_SLOP = { top: 12, bottom: 12, left: 12, right: 12 };
 const ANDROID_SEG_RIPPLE = { color: 'rgba(255,255,255,0.14)', borderless: false as const };
+const FRIENDS_PAGE_SIZE = 50;
+const FRIENDS_MAX_PAGES_PER_LOAD = 10;
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 const displayName = (name?: string) => (name && name.trim().length ? name : '—');
@@ -238,6 +240,16 @@ const UNREAD_BY_USER_KEY = 'unread_by_user_v1';
 const PROFILE_KEY = 'livi.profile.v1';
 const INSTALL_ID_KEY = 'livi.installId';
 const USER_ID_KEY = 'userId';
+const FRIENDS_CACHE_KEY_LEGACY = 'friends_cache_v1';
+const FRIENDS_CACHE_PREFIX = 'friends_cache_v1';
+
+function friendsCacheKeyForIdentity(userId?: string, installId?: string): string {
+  const uid = String(userId || '').trim();
+  const iid = String(installId || '').trim();
+  if (uid) return `${FRIENDS_CACHE_PREFIX}:user:${uid}`;
+  if (iid) return `${FRIENDS_CACHE_PREFIX}:install:${iid}`;
+  return '';
+}
 
 /* draft storage */
 async function saveDraftProfile(d: { nick?: string; avatar?: string }) {
@@ -266,17 +278,19 @@ async function hardLocalReset() {
       USER_ID_KEY,            // userId
       MISSED_CALLS_KEY,       // missed_calls_by_user_v1
       UNREAD_BY_USER_KEY,
+      FRIENDS_CACHE_KEY_LEGACY,
     ];
 
     // Удаляем основные ключи
     await AsyncStorage.multiRemove(keysToRemove);
 
-    // 2. Очищаем все чаты и статусы (паттерны chat_messages_, chat_statuses_)
+    // 2. Очищаем все чаты, статусы и identity-scoped friends cache
     try {
       const allKeys = await AsyncStorage.getAllKeys();
       const chatKeys = allKeys.filter(k => 
         k.startsWith('chat_messages_') || 
-        k.startsWith('chat_statuses_')
+        k.startsWith('chat_statuses_') ||
+        k.startsWith(`${FRIENDS_CACHE_PREFIX}:`)
       );
       if (chatKeys.length > 0) {
         await AsyncStorage.multiRemove(chatKeys);
@@ -794,8 +808,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // ===== friends cache (cold start UX) =====
   // При холодном старте сокет/идентификация могут занять 1-3+ сек, из-за чего вкладка "Друзья" выглядит пустой.
   // Решение: показываем последний кэшированный список друзей сразу, а потом обновляем через loadFriends().
-  const FRIENDS_CACHE_KEY = 'friends_cache_v1';
-  const friendsCacheLoadedRef = useRef(false);
+  const friendsCacheLoadedKeyRef = useRef('');
   // Чтобы не ловить TS "использовано до объявления" (loadFriends объявлен ниже),
   // используем ref-обёртку для вызова loadFriends из ранних колбэков (например инвайты).
   const loadFriendsFnRef = useRef<() => void>(() => {});
@@ -1962,11 +1975,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   /* friends fetch */
   const loadFriendsRef = useRef<Promise<void> | null>(null);
-  const loadFriends = useCallback(async () => {
+  const loadFriends = useCallback(async (options: { includeAvatarThumbs?: boolean } = {}) => {
     // Защита от дублирования запросов
     if (loadFriendsRef.current) {
       return loadFriendsRef.current;
     }
+    const includeAvatarThumbs = options.includeAvatarThumbs !== false;
     
     const promise = (async () => {
       try {
@@ -1974,20 +1988,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         // Если сокет уже подключён — берём socket-ack. Если нет — используем REST /api/friends (по installId),
         // чтобы не ждать handshake/reauth и не держать вкладку пустой.
         let res: any = null;
+        const fetchFriendsPage = async (page: number): Promise<any> => {
+          const s: any = socket as any;
+          if (s?.connected) {
+            try {
+              const socketRes = await fetchFriends?.(page, FRIENDS_PAGE_SIZE, { includeAvatarThumbs });
+              if (socketRes?.ok) return socketRes;
+            } catch {}
+          }
 
-        const s: any = socket as any;
-        if (s?.connected) {
-          try {
-            res = await fetchFriends?.();
-          } catch {}
-        }
-
-        if (!res?.ok) {
           // REST fallback (не зависит от сокета). Два таймаута для VPN: быстрая сеть 7s, медленная 20s.
           const base = String(API_BASE || 'https://api.liviapp.com').replace(/\/+$/, '');
           const id = await getInstallId().catch(() => '');
           if (id) {
-            const url = `${base}/api/friends?page=1&limit=50`;
+            const url = `${base}/api/friends?page=${encodeURIComponent(String(page))}&limit=${FRIENDS_PAGE_SIZE}&includeAvatarThumbs=${includeAvatarThumbs ? '1' : '0'}`;
             const timeouts = [7000, 20000];
             for (const ms of timeouts) {
               try {
@@ -2005,8 +2019,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 if (httpRes.ok) {
                   const json = await httpRes.json().catch(() => null);
                   if (json?.ok) {
-                    res = json;
-                    break;
+                    return json;
                   }
                 }
               } catch (_) {
@@ -2014,6 +2027,21 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               }
             }
           }
+          return { ok: false, list: [], error: 'friends_fetch_failed' };
+        };
+
+        const allFriends: any[] = [];
+        for (let page = 1; page <= FRIENDS_MAX_PAGES_PER_LOAD; page += 1) {
+          const pageRes = await fetchFriendsPage(page);
+          if (!pageRes?.ok || !Array.isArray(pageRes?.list)) {
+            if (page === 1) res = pageRes;
+            break;
+          }
+
+          allFriends.push(...pageRes.list);
+          res = { ...pageRes, list: allFriends };
+
+          if (pageRes?.pagination?.hasMore !== true) break;
         }
         
         // КРИТИЧНО: Убираем avatarThumbB64 из логов (очень большой base64)
@@ -2039,6 +2067,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
         const incoming: any[] = res.list;
         const fresh: Friend[] = incoming.map(mapToFriend);
+        const cacheKey = friendsCacheKeyForIdentity(getCurrentUserId(), installId || (await getInstallId().catch(() => '')));
         setFriends((prev) => {
           const merged: Friend[] = fresh.map((f: Friend) => {
             const prevOne = prev.find((p) => p.id === f.id) as any;
@@ -2167,10 +2196,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               // но сохраняем avatarThumbB64 если он есть, чтобы сразу показывать без доп. async.
               avatarThumbB64: String(f.avatarThumbB64 || ''),
             }));
-            AsyncStorage.setItem(
-              FRIENDS_CACHE_KEY,
-              JSON.stringify({ v: 1, ts: Date.now(), list: cacheList })
-            ).catch(() => {});
+            if (cacheKey) {
+              AsyncStorage.setItem(
+                cacheKey,
+                JSON.stringify({ v: 1, ts: Date.now(), list: cacheList })
+              ).catch(() => {});
+            }
+            AsyncStorage.removeItem(FRIENDS_CACHE_KEY_LEGACY).catch(() => {});
           } catch {}
 
           return merged;
@@ -2189,12 +2221,20 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   // Поднимаем кэш друзей сразу (до socket/ensureIdentity), чтобы вкладка "Друзья" не была пустой при холодном старте.
   useEffect(() => {
-    if (friendsCacheLoadedRef.current) return;
-    friendsCacheLoadedRef.current = true;
+    const cacheKey = friendsCacheKeyForIdentity(resolvedUserId || getCurrentUserId(), installId);
+    if (!cacheKey) return;
+    if (friendsCacheLoadedKeyRef.current === cacheKey) return;
+
+    const previousKey = friendsCacheLoadedKeyRef.current;
+    friendsCacheLoadedKeyRef.current = cacheKey;
+    if (previousKey && previousKey !== cacheKey) {
+      setFriends([]);
+      friendLastOnlineTrueAtRef.current.clear();
+    }
 
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(FRIENDS_CACHE_KEY);
+        const raw = await AsyncStorage.getItem(cacheKey);
         if (!raw) return;
         const parsed = JSON.parse(raw);
         const list = Array.isArray(parsed?.list) ? parsed.list : (Array.isArray(parsed) ? parsed : []);
@@ -2219,12 +2259,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
         if (cached.length > 0) {
           // Не затираем уже загруженный список, если он успел прийти
-          setFriends((prev) => (prev && prev.length > 0 ? prev : cached));
+          setFriends((prev) => {
+            if (friendsCacheLoadedKeyRef.current !== cacheKey) return prev;
+            return prev && prev.length > 0 ? prev : cached;
+          });
           setInitialized(true);
         }
       } catch {}
     })();
-  }, []);
+  }, [resolvedUserId, installId]);
 
   // Делаем стабильный "вызоватор" loadFriends для ранних колбэков (инвайты и т.п.)
   useEffect(() => {
@@ -3064,7 +3107,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (menuOpen && tab === 'friends' && appIsActive) {
       setInitialized(true);
       void loadFriends();
-      const tmr = setInterval(() => void loadFriends(), 10_000);
+      // Realtime changes arrive via presence/profile/friend socket events; keep a sparse
+      // reconciliation pass for missed events without repeatedly downloading avatar thumbs.
+      const tmr = setInterval(() => void loadFriends({ includeAvatarThumbs: false }), 2 * 60_000);
       return () => clearInterval(tmr);
     }
   }, [menuOpen, tab, appIsActive, loadFriends]);
@@ -4756,13 +4801,26 @@ const handleClearNick = useCallback(async () => {
   };
   
 
+  const FRIEND_ROW_HEIGHT = 72;
+  const FRIEND_SEPARATOR_HEIGHT = StyleSheet.hairlineWidth;
+  const FRIEND_ITEM_HEIGHT = FRIEND_ROW_HEIGHT + FRIEND_SEPARATOR_HEIGHT;
+
   const FriendsTab = () => (
     <FlatList
       // Первый тап по action-кнопкам (чат/звонок) должен срабатывать даже при открытой клавиатуре.
       keyboardShouldPersistTaps="always"
       showsVerticalScrollIndicator={false}
       overScrollMode="never"
-      removeClippedSubviews={false}
+      removeClippedSubviews={Platform.OS === 'android'}
+      initialNumToRender={12}
+      maxToRenderPerBatch={10}
+      windowSize={7}
+      updateCellsBatchingPeriod={50}
+      getItemLayout={(_, index) => ({
+        length: FRIEND_ROW_HEIGHT,
+        offset: FRIEND_ITEM_HEIGHT * index,
+        index,
+      })}
       data={friends}
       keyExtractor={(item) => item.id}
       extraData={friendActionsGestureResetSeq}
@@ -4773,7 +4831,15 @@ const handleClearNick = useCallback(async () => {
       renderItem={({ item }) => (
         <Swipeable
           key={`${item.id}:${friendActionsGestureResetSeq}`}
-          ref={(r) => { if (r) swipeableRefsMap.current[item.id] = r; }}
+          ref={(r) => {
+            if (r) {
+              swipeableRefsMap.current[item.id] = r;
+              return;
+            }
+            const existing = swipeableRefsMap.current[item.id];
+            if (openSwipeableRef.current === existing) openSwipeableRef.current = null;
+            delete swipeableRefsMap.current[item.id];
+          }}
           onSwipeableOpen={() => { openSwipeableRef.current = swipeableRefsMap.current[item.id] ?? null; }}
           onSwipeableClose={() => { if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) openSwipeableRef.current = null; }}
           renderRightActions={() => renderRightActions(item.id)}

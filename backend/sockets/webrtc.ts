@@ -3,7 +3,7 @@ import type { Server } from "socket.io";
 import type { AuthedSocket } from "./types";
 import { logger } from '../utils/logger';
 import { isShuttingDown } from '../utils/shutdownState';
-import User from '../models/User';
+import { getFriendIds } from '../utils/friendshipUtils';
 import {
   evictExtraUserSocketsInDirectRoom,
   parseDirectCallRoomParticipants,
@@ -19,16 +19,14 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
   try {
     if (!userId) return;
     
-    // Получаем список друзей пользователя
-    const user = await User.findById(userId).select('friends').lean();
-    if (!user || !Array.isArray(user.friends) || user.friends.length === 0) {
+    const friends = await getFriendIds(userId);
+    if (friends.length === 0) {
       // Если друзей нет, отправляем только самому пользователю (для синхронизации состояния)
       io.to(`u:${userId}`).emit('presence:update', { userId, busy });
       return;
     }
     
     // Отправляем обновление только друзьям через их комнаты
-    const friends = user.friends.map(f => String(f));
     for (const friendId of friends) {
       try {
         io.to(`u:${friendId}`).emit('presence:update', { userId, busy });
@@ -155,7 +153,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     const myUserId = (socket as any)?.data?.userId;
     if (myUserId) {
       await emitPresenceUpdateToFriends(io, myUserId, true);
-      scheduleGlobalFriendPresenceEmit(io);
+      scheduleGlobalFriendPresenceEmit(io, String(myUserId));
       logger.debug('Set busy for user', { userId: myUserId });
     }
   });
@@ -303,7 +301,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
         const peerUserId = (peerSocket as any)?.data?.userId;
         if (peerUserId) {
           await emitPresenceUpdateToFriends(io, peerUserId, false);
-          scheduleGlobalFriendPresenceEmit(io);
+          scheduleGlobalFriendPresenceEmit(io, String(peerUserId));
         }
       }
     }
@@ -311,7 +309,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     // Отправляем presence:update для уходящего (только друзьям)
     if (leavingUserId) {
       await emitPresenceUpdateToFriends(io, leavingUserId, false);
-      scheduleGlobalFriendPresenceEmit(io);
+      scheduleGlobalFriendPresenceEmit(io, String(leavingUserId));
     }
     
     socket.leave(roomId);

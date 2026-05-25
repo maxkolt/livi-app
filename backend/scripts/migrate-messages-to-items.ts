@@ -13,7 +13,6 @@ dotenv.config();
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 import mongoose from 'mongoose';
-import FriendshipMessages from '../models/FriendshipMessages';
 import FriendshipMessageItem from '../models/FriendshipMessageItem';
 
 const MONGO_URI =
@@ -28,7 +27,9 @@ async function run() {
     process.exit(1);
   }
   await mongoose.connect(MONGO_URI);
-  const docs = await FriendshipMessages.find({}).lean();
+  // Read the legacy embedded arrays directly from MongoDB, because the runtime
+  // FriendshipMessages schema no longer defines those fields.
+  const docs = await mongoose.connection.collection('friendshipmessages').find({}).toArray();
   let inserted = 0;
   for (const doc of docs) {
     const friendshipId = (doc as any)._id;
@@ -65,7 +66,7 @@ async function run() {
     }
     if (items.length) {
       const ids = items.map((i) => i.id);
-      const existing = await FriendshipMessageItem.find({ id: { $in: ids } }).select('id').lean();
+      const existing = await FriendshipMessageItem.find({ friendshipId, id: { $in: ids } }).select('id').lean();
       const existingSet = new Set((existing as any[]).map((e) => e.id));
       const toInsert = items.filter((i) => !existingSet.has(i.id));
       if (toInsert.length) {

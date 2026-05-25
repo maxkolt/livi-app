@@ -9,6 +9,7 @@ import { getPushLog, pushLog } from '../utils/pushLogBuffer';
 import { logger } from '../utils/logger';
 import { auditNickChange } from '../utils/profileNickAudit';
 import { checkRateLimit } from '../utils/rateLimit';
+import { getFriendIds } from '../utils/friendshipUtils';
 
 const router = Router();
 
@@ -141,7 +142,7 @@ router.patch('/me', async (req, res) => {
 
     // получаем текущие данные пользователя для проверки изменений
     const current = await UserModel.findById(userId)
-      .select('nick avatar avatarVer friends')
+      .select('nick avatar avatarVer')
       .lean();
     if (!current) {
       return res.status(404).json({ ok: false, error: 'user_not_found' });
@@ -155,7 +156,7 @@ router.patch('/me', async (req, res) => {
           id: String(current._id),
           nick: current.nick || '',
           avatar: (current as any).avatar || '',
-          friends: current.friends || [],
+          friends: await getFriendIds(userId),
         },
       });
     }
@@ -174,7 +175,7 @@ router.patch('/me', async (req, res) => {
           id: String(current._id),
           nick: current.nick || '',
           avatar: (current as any).avatar || '',
-          friends: current.friends || [],
+          friends: await getFriendIds(userId),
         },
       });
     }
@@ -205,7 +206,7 @@ router.patch('/me', async (req, res) => {
       { $set },
       { new: true, runValidators: true }
     )
-      .select('nick avatar avatarVer avatarThumbB64 friends')
+      .select('nick avatar avatarVer avatarThumbB64')
       .lean();
 
 
@@ -225,7 +226,7 @@ router.patch('/me', async (req, res) => {
           avatarVer: (me as any).avatarVer || 0,
           avatarThumbB64: (me as any).avatarThumbB64 || '',
         };
-        const friends = Array.isArray(me.friends) ? me.friends.map(String) : [];
+        const friends = await getFriendIds(userId);
         for (const fid of friends) {
           io.to(`u:${fid}`).emit('friend:profile', payload);
         }
@@ -242,7 +243,7 @@ router.patch('/me', async (req, res) => {
         avatar: (me as any).avatar || '',
         avatarVer: (me as any).avatarVer || 0,
         avatarThumbB64: (me as any).avatarThumbB64 || '',
-        friends: me.friends || [],
+        friends: await getFriendIds(userId),
       },
     });
   } catch (e: any) {
@@ -265,7 +266,9 @@ router.post('/push-token', async (req, res) => {
     }
 
     // Защита от спама: лимит щедрый, т.к. приложение перерегистрирует токен при каждом запуске и при реконнекте сокета
-    const rl = checkRateLimit(`push_token:${installId}`, 60, 60 * 60_000);
+    const rl = await checkRateLimit(`push_token:${installId}`, 60, 60 * 60_000, {
+      sensitive: true,
+    });
     if (!rl.ok) {
       res.setHeader('Retry-After', String(rl.retryAfterSec || 3600));
       return res.status(429).json({ ok: false, error: 'rate_limited' });

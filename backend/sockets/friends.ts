@@ -2,7 +2,13 @@
 import { Server } from 'socket.io';
 import mongoose from 'mongoose';
 import User from '../models/User';
-import { areFriendsCached, getFriendsPaginated, clearFriendshipCache } from '../utils/friendshipUtils';
+import {
+  areFriendsCached,
+  clearFriendshipCache,
+  ensureFriendshipEdges,
+  getFriendsPaginated,
+  removeFriendshipEdges,
+} from '../utils/friendshipUtils';
 import { logger } from '../utils/logger';
 import { getEffectiveBusy } from '../utils/effectiveBusy';
 import { isFriendGloballyVisibleOnline } from '../utils/friendOnlinePresence';
@@ -25,6 +31,7 @@ export default function registerFriendSockets(io: Server) {
     /** ===== Список друзей ===== */
     sock.on('friends:fetch', async (params: any = {}, ack?: Function) => {
       const { page = 1, limit = 50 } = params || {};
+      const includeAvatarThumbs = params?.includeAvatarThumbs !== false;
       try {
         const me = meId();
         if (!isOid(me)) {
@@ -46,7 +53,7 @@ export default function registerFriendSockets(io: Server) {
             nick: friend.nick || '',
             avatar: (friend as any).avatar || '',
             avatarVer: (friend as any).avatarVer || 0,
-            avatarThumbB64: (friend as any).avatarThumbB64 || '', // мини сразу в список
+            ...(includeAvatarThumbs ? { avatarThumbB64: (friend as any).avatarThumbB64 || '' } : {}),
             online: isOnline(friendId),
             isBusy: isFriendBusy,
           };
@@ -95,12 +102,7 @@ export default function registerFriendSockets(io: Server) {
         // Шлем событие получателю
         let fromNick: string | undefined;
         try { const u = await User.findById(me).select('nick').lean(); fromNick = (u as any)?.nick || undefined; } catch {}
-        for (const s of io.sockets.sockets.values()) {
-          const uid = String((s as any).data?.userId || '');
-          if (uid === String(to)) {
-            (s as any).emit('friend:request', { from: me, fromNick });
-          }
-        }
+        io.to(`u:${String(to)}`).emit('friend:request', { from: me, fromNick });
 
         return ack?.({ ok: true, status: 'pending' });
       } catch (e: any) {
@@ -120,9 +122,8 @@ export default function registerFriendSockets(io: Server) {
         const alreadyFriends = await areFriendsCached(me, inviterId);
         if (alreadyFriends) return ack?.({ ok: true, status: 'already' });
 
-        // Сразу добавляем дружбу в обе стороны (без заявки)
-        await (User as any).updateOne({ _id: me }, { $addToSet: { friends: inviterId } });
-        await (User as any).updateOne({ _id: inviterId }, { $addToSet: { friends: me } });
+        // Сразу добавляем дружбу в отдельную коллекцию связей (без заявки)
+        await ensureFriendshipEdges(me, inviterId);
         clearFriendshipCache(me);
         clearFriendshipCache(inviterId);
 
@@ -160,15 +161,8 @@ export default function registerFriendSockets(io: Server) {
         }
 
         // Уведомления
-        for (const s of io.sockets.sockets.values()) {
-          const uid = String((s as any).data?.userId || '');
-          if (uid === String(me)) {
-            (s as any).emit('friend:accepted', { userId: inviterId });
-          }
-          if (uid === String(inviterId)) {
-            (s as any).emit('friend:accepted', { userId: me });
-          }
-        }
+        io.to(`u:${String(me)}`).emit('friend:accepted', { userId: inviterId });
+        io.to(`u:${String(inviterId)}`).emit('friend:accepted', { userId: me });
 
         return ack?.({ ok: true, status: 'accepted' });
       } catch (e: any) {
@@ -188,9 +182,8 @@ export default function registerFriendSockets(io: Server) {
         await (User as any).updateOne({ _id: me }, { $pull: { friendRequests: from } });
 
         if (accept) {
-          // Добавляем дружбу в обе стороны
-          await (User as any).updateOne({ _id: me },  { $addToSet: { friends: from } });
-          await (User as any).updateOne({ _id: from }, { $addToSet: { friends: me } });
+          // Добавляем дружбу в отдельную коллекцию связей
+          await ensureFriendshipEdges(me, from);
           clearFriendshipCache(me); clearFriendshipCache(from);
 
           // Отправляем актуальную информацию о профиле друг другу
@@ -229,15 +222,8 @@ export default function registerFriendSockets(io: Server) {
         }
 
         // Уведомления
-        for (const s of io.sockets.sockets.values()) {
-          const uid = String((s as any).data?.userId || '');
-          if (uid === String(me)) {
-            (s as any).emit(accept ? 'friend:accepted' : 'friend:declined', { userId: from });
-          }
-          if (uid === String(from)) {
-            (s as any).emit(accept ? 'friend:accepted' : 'friend:declined', { userId: me });
-          }
-        }
+        io.to(`u:${String(me)}`).emit(accept ? 'friend:accepted' : 'friend:declined', { userId: from });
+        io.to(`u:${String(from)}`).emit(accept ? 'friend:accepted' : 'friend:declined', { userId: me });
 
         return ack?.({ ok: true, status: accept ? 'accepted' : 'declined' });
       } catch (e: any) {
@@ -254,7 +240,8 @@ export default function registerFriendSockets(io: Server) {
         if (!isOid(peerId)) return ack?.({ ok: false, error: 'invalid_peer' });
         if (String(me) === String(peerId)) return ack?.({ ok: false, error: 'self' });
 
-        // Удаляем дружбу в обе стороны
+        // Удаляем дружбу в отдельной коллекции и чистим legacy-массивы.
+        await removeFriendshipEdges(me, peerId);
         await (User as any).updateOne(
           { _id: me },
           { $pull: { friends: peerId } }
@@ -269,11 +256,8 @@ export default function registerFriendSockets(io: Server) {
         clearFriendshipCache(peerId);
 
         // Уведомляем обе стороны
-        for (const s of io.sockets.sockets.values()) {
-          const uid = String((s as any).data?.userId || '');
-          if (uid === String(me)) (s as any).emit('friend_removed', { userId: String(peerId) });
-          if (uid === String(peerId)) (s as any).emit('friend_removed', { userId: String(me) });
-        }
+        io.to(`u:${String(me)}`).emit('friend_removed', { userId: String(peerId) });
+        io.to(`u:${String(peerId)}`).emit('friend_removed', { userId: String(me) });
 
         return ack?.({ ok: true });
       } catch (e: any) {

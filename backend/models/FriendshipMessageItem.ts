@@ -70,7 +70,9 @@ const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
 );
 
 FriendshipMessageItemSchema.index({ friendshipId: 1, timestamp: -1 });
-FriendshipMessageItemSchema.index({ id: 1 }, { unique: true });
+FriendshipMessageItemSchema.index({ friendshipId: 1, id: 1 }, { unique: true });
+FriendshipMessageItemSchema.index({ friendshipId: 1, from: 1, to: 1, read: 1, timestamp: 1, _id: 1 });
+FriendshipMessageItemSchema.index({ id: 1 });
 
 export default mongoose.model<IFriendshipMessageItem>(
   'FriendshipMessageItem',

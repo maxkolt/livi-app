@@ -8,10 +8,12 @@ import FriendshipMessages from '../models/FriendshipMessages';
 import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import Install from '../models/Install';
 import MissedCall from '../models/MissedCall';
+import FriendshipEdge from '../models/FriendshipEdge';
 // Cloudinary удален, используем только MongoDB
 import { getAndClearOfflineMessages, getAndClearOfflineChatClearedQueue } from './messagesReliable';
 import { auditNickChange } from '../utils/profileNickAudit';
-import { emitGlobalFriendPresence } from '../utils/friendOnlinePresence';
+import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
+import { getFriendIds } from '../utils/friendshipUtils';
 
 type AttachPayload = {
   installId?: string | null;
@@ -41,7 +43,7 @@ export async function bindUser(io: Server, sock: any, userId: string) {
     console.error(`❌ Failed to join room u:${canonical}:`, error);
   }
 
-  emitGlobalFriendPresence(io);
+  scheduleGlobalFriendPresenceEmit(io, canonical);
 
   // Отключаем старые сокеты уже после успешного bind нового.
   // Так статус пользователя остаётся online без кратковременного провала.
@@ -112,7 +114,7 @@ export async function broadcastProfileToFriends(io: Server, userId: string) {
   if (mongoose.connection.readyState !== 1) {
     return; // Если БД недоступна, просто выходим
   }
-  const u = await User.findById(userId).select('nick avatar avatarVer avatarThumbB64 friends').lean();
+  const u = await User.findById(userId).select('nick avatar avatarVer avatarThumbB64').lean();
   if (!u) return;
   
   // Теперь avatar - просто маркер, avatarVer - версия для кеша
@@ -127,7 +129,7 @@ export async function broadcastProfileToFriends(io: Server, userId: string) {
     avatarVer, // версия для инвалидации кеша клиента
     avatarThumbB64, // миниатюра для списков
   };
-  const friends = Array.isArray(u.friends) ? (u.friends as any[]) : [];
+  const friends = await getFriendIds(userId);
   for (const fid of friends) {
     try { io.to(`u:${String(fid)}`).emit('friend:profile', payload); } catch {}
   }
@@ -402,6 +404,15 @@ export default function registerIdentitySockets(io: Server) {
             { $pull: { friends: userId } },
             opt as any,
           );
+          await FriendshipEdge.deleteMany(
+            {
+              $or: [
+                { userId: new mongoose.Types.ObjectId(userId) },
+                { friendId: new mongoose.Types.ObjectId(userId) },
+              ],
+            },
+            opt as any,
+          );
 
           // 2) Удаляем входящие заявки у других
           await User.updateMany(
@@ -458,7 +469,7 @@ export default function registerIdentitySockets(io: Server) {
         // отвязываем сокет и обновляем presence
         (sock as any).data.userId = undefined;
         try { sock.leave(`u:${userId}`); } catch {}
-        emitGlobalFriendPresence(io);
+        scheduleGlobalFriendPresenceEmit(io, userId);
 
         ack?.({ ok: true });
       } catch (e: any) {

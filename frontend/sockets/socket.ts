@@ -1530,8 +1530,12 @@ export type FriendListItem = {
   _id: string;
   nick?: string;
   avatar?: string; // локальный путь /uploads/... или пусто
+  avatarVer?: number;
+  avatarThumbB64?: string;
   online: boolean;
   isBusy?: boolean; // статус занятости для видеозвонков
+  isRandomBusy?: boolean;
+  inCall?: boolean;
 };
 
 export function addFriend(toUserId: string) {
@@ -1656,7 +1660,12 @@ export function acceptInvite(inviterId: string) {
   })();
 }
 
-export function fetchFriends(page: number = 1, limit: number = 50) {
+export function fetchFriends(
+  page: number = 1,
+  limit: number = 50,
+  options: { includeAvatarThumbs?: boolean } = {},
+) {
+  const includeAvatarThumbs = options.includeAvatarThumbs !== false;
   const viaSocket = async () => {
     // Защита от гонки: socket connected, но reauth на бэкенде ещё не успел завершиться.
     if (socket.connected && currentUserId) {
@@ -1673,7 +1682,7 @@ export function fetchFriends(page: number = 1, limit: number = 50) {
         hasMore: boolean;
       };
       error?: string;
-    }>('friends:fetch', { page, limit });
+    }>('friends:fetch', { page, limit, includeAvatarThumbs });
   };
 
   // Fallback for networks/VPNs that break socket connectivity:
@@ -1690,7 +1699,7 @@ export function fetchFriends(page: number = 1, limit: number = 50) {
     // - second attempt: longer timeout (slow VPN still succeeds)
     const timeouts = [7000, 20000];
     let lastErr: any = null;
-    const url = `${API_BASE}/api/friends?page=${encodeURIComponent(String(page))}&limit=${encodeURIComponent(String(limit))}`;
+    const url = `${API_BASE}/api/friends?page=${encodeURIComponent(String(page))}&limit=${encodeURIComponent(String(limit))}&includeAvatarThumbs=${includeAvatarThumbs ? '1' : '0'}`;
 
     for (const ms of timeouts) {
       const controller = new AbortController();
@@ -2590,7 +2599,7 @@ export async function getMyUserId(): Promise<string | null> {
 }
 
 export function onFriendProfile(
-  cb: (p: { userId: string; nick?: string; avatar?: string; avatarVer?: number }) => void,
+  cb: (p: { userId: string; nick?: string; avatar?: string; avatarVer?: number; avatarThumbB64?: string }) => void,
 ): () => void {
   const h = (p: any) => cb(p);
   socket.on("friend:profile", h);
@@ -2998,9 +3007,23 @@ export function onMessageReadReceipt(
     timestamp: string;
   }) => void
 ): () => void {
-  const h = (receipt: any) => cb(receipt);
-  socket.on("message:read_receipt", h);
-  return () => { socket.off("message:read_receipt", h); };
+  const single = (receipt: any) => cb(receipt);
+  const batch = (receipt: any) => {
+    const messageIds = Array.isArray(receipt?.messageIds) ? receipt.messageIds : [];
+    for (const messageId of messageIds) {
+      cb({
+        messageId: String(messageId),
+        readBy: String(receipt?.readBy || ''),
+        timestamp: String(receipt?.timestamp || new Date().toISOString()),
+      });
+    }
+  };
+  socket.on("message:read_receipt", single);
+  socket.on("messages:read_receipt", batch);
+  return () => {
+    socket.off("message:read_receipt", single);
+    socket.off("messages:read_receipt", batch);
+  };
 }
 
 /** Поставить/снять реакцию на сообщение. with = peerId чата. */
@@ -3027,10 +3050,7 @@ export function getUnreadMessageCount(fromUserId: string) {
 }
 
 export function loadMessagesFromServer(fromUserId: string, limit?: number) {
-  return emitAck<{ ok: boolean; messages?: any[]; error?: string }>(
-    "message:load",
-    { from: fromUserId, limit }
-  );
+  return fetchMessages({ with: fromUserId, limit });
 }
 
 /* ========= User Validation ========= */

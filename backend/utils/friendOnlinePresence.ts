@@ -1,4 +1,6 @@
 import type { Server } from 'socket.io';
+import mongoose from 'mongoose';
+import { getFriendIdsForUsers } from './friendshipUtils';
 
 /**
  * Два состояния для друзей: онлайн = пользователь в приложении, офлайн = вне приложения.
@@ -27,6 +29,19 @@ function cancelForegroundAckForUser(userId: string): void {
 
 function normalizeUid(userId: string): string {
   return String(userId || '').trim();
+}
+
+function isOid(userId: string): boolean {
+  return /^[a-f\d]{24}$/i.test(normalizeUid(userId));
+}
+
+function getConnectedUserIds(io: Server): string[] {
+  const uids = new Set<string>();
+  for (const s of io.sockets.sockets.values()) {
+    const u = normalizeUid(String((s as any)?.data?.userId || ''));
+    if (u) uids.add(u);
+  }
+  return [...uids];
 }
 
 function hasAnySocketForUser(io: Server, uid: string): boolean {
@@ -157,7 +172,7 @@ export function armInAppOfflinePresenceEmit(io: Server, userId: string): void {
   const wait = Math.max(0, IN_APP_OFFLINE_DEBOUNCE_MS - elapsed + 15);
   const t = setTimeout(() => {
     inAppOfflinePresenceTimers.delete(key);
-    scheduleGlobalFriendPresenceEmit(io);
+    scheduleGlobalFriendPresenceEmit(io, key);
   }, wait);
   inAppOfflinePresenceTimers.set(key, t);
 }
@@ -177,7 +192,7 @@ export function applyFastOfflineAfterCallIfAllSocketsBackground(io: Server, user
   }
   cancelInAppOfflinePresenceEmit(key);
   userAllBackgroundSince.set(key, Date.now() - IN_APP_OFFLINE_DEBOUNCE_MS - 1);
-  scheduleGlobalFriendPresenceEmit(io);
+  scheduleGlobalFriendPresenceEmit(io, key);
 }
 
 /** После syncInAppTrackingForAllConnectedUsers: онлайн ли пользователь «в приложении». */
@@ -211,20 +226,85 @@ export function getFriendVisibleOnlineUserIds(io: Server): string[] {
 /** @deprecated используйте isUserOnlineInApplication — то же имя для HTTP/сокетов друзей */
 export const isFriendGloballyVisibleOnline = isUserOnlineInApplication;
 
-export function emitGlobalFriendPresence(io: Server): void {
-  const list = getFriendVisibleOnlineUserIds(io);
-  io.emit('presence_update', list);
-  io.emit('presence:update', list);
+function emitPresenceSnapshotToUser(io: Server, userId: string, onlineFriendIds: string[]): void {
+  io.to(`u:${userId}`).emit('presence_update', onlineFriendIds);
+  io.to(`u:${userId}`).emit('presence:update', onlineFriendIds);
+}
+
+async function loadFriendIdsForUsers(userIds: string[]): Promise<Map<string, string[]>> {
+  const uniqueIds = [...new Set(userIds.map(normalizeUid).filter(isOid))];
+  if (uniqueIds.length === 0 || mongoose.connection.readyState !== 1) return new Map<string, string[]>();
+  return getFriendIdsForUsers(uniqueIds);
+}
+
+export async function emitFriendPresenceForUsers(io: Server, changedUserIds: string | string[]): Promise<void> {
+  const changed = [...new Set((Array.isArray(changedUserIds) ? changedUserIds : [changedUserIds])
+    .map(normalizeUid)
+    .filter(isOid))];
+  if (changed.length === 0) return;
+
+  try {
+    syncInAppTrackingForAllConnectedUsers(io);
+    const online = new Set(getFriendVisibleOnlineUserIds(io));
+    const changedFriends = await loadFriendIdsForUsers(changed);
+    const recipientIds = new Set<string>(changed);
+
+    for (const userId of changed) {
+      const friends = changedFriends.get(userId) || [];
+      for (const friendId of friends) recipientIds.add(friendId);
+    }
+
+    const recipientFriends = await loadFriendIdsForUsers([...recipientIds]);
+    for (const recipientId of recipientIds) {
+      const friends = recipientFriends.get(recipientId) || [];
+      const onlineFriends = friends.filter((friendId) => online.has(friendId));
+      emitPresenceSnapshotToUser(io, recipientId, onlineFriends);
+    }
+  } catch {
+    // Presence is best-effort: skip noisy failures and let the next scheduled update heal state.
+  }
+}
+
+export async function emitGlobalFriendPresence(io: Server): Promise<void> {
+  try {
+    const recipientIds = getConnectedUserIds(io);
+    if (recipientIds.length === 0) return;
+
+    const online = new Set(getFriendVisibleOnlineUserIds(io));
+    const recipientFriends = await loadFriendIdsForUsers(recipientIds);
+
+    for (const recipientId of recipientIds) {
+      const friends = recipientFriends.get(recipientId) || [];
+      const onlineFriends = friends.filter((friendId) => online.has(friendId));
+      emitPresenceSnapshotToUser(io, recipientId, onlineFriends);
+    }
+  } catch {
+    // Presence snapshots are opportunistic; avoid breaking socket flows on DB/emit errors.
+  }
 }
 
 let presenceBroadcastDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const pendingPresenceChangedUserIds = new Set<string>();
 const PRESENCE_BROADCAST_DEBOUNCE_MS = 80;
 
-export function scheduleGlobalFriendPresenceEmit(io: Server): void {
+export function scheduleGlobalFriendPresenceEmit(io: Server, changedUserIds?: string | string[]): void {
+  if (changedUserIds) {
+    const ids = Array.isArray(changedUserIds) ? changedUserIds : [changedUserIds];
+    for (const id of ids) {
+      const normalized = normalizeUid(id);
+      if (isOid(normalized)) pendingPresenceChangedUserIds.add(normalized);
+    }
+  }
   if (presenceBroadcastDebounceTimer) clearTimeout(presenceBroadcastDebounceTimer);
   presenceBroadcastDebounceTimer = setTimeout(() => {
     presenceBroadcastDebounceTimer = null;
-    emitGlobalFriendPresence(io);
+    const changed = [...pendingPresenceChangedUserIds];
+    pendingPresenceChangedUserIds.clear();
+    if (changed.length > 0) {
+      void emitFriendPresenceForUsers(io, changed);
+    } else {
+      void emitGlobalFriendPresence(io);
+    }
   }, PRESENCE_BROADCAST_DEBOUNCE_MS);
 }
 
@@ -237,7 +317,7 @@ export function scheduleDebouncedClearBackgroundOnForeground(io: Server, userId:
   const t = setTimeout(() => {
     foregroundAckTimers.delete(key);
     userAllBackgroundSince.delete(key);
-    scheduleGlobalFriendPresenceEmit(io);
+    scheduleGlobalFriendPresenceEmit(io, key);
   }, FOREGROUND_ACK_CLEAR_BACKGROUND_MS);
   foregroundAckTimers.set(key, t);
 }

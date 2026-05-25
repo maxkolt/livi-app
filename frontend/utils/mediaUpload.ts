@@ -1,18 +1,12 @@
 // utils/mediaUpload.ts
-import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { logger } from './logger';
 import { getInstallId } from './installId';
+import { API_BASE } from '../sockets/socket';
 
-// Получаем BASE_URL из переменных окружения
-// Приоритет: платформо-специфичная переменная > общая переменная > fallback
-// КРИТИЧНО: В production используйте домен с HTTPS, не IP адреса!
-const DEFAULT_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
-const IOS_URL = process.env.EXPO_PUBLIC_SERVER_URL_IOS || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
-const ANDROID_URL = process.env.EXPO_PUBLIC_SERVER_URL_ANDROID || process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
-
-const API_BASE_URL = (Platform.OS === 'android' ? ANDROID_URL : IOS_URL).replace(/\/+$/, '');
+const API_BASE_URL = API_BASE;
+const LEGACY_BASE64_MAX_MB = 10;
 
 // Some production deployments may not have multipart endpoint enabled yet.
 // Cache support after the first request to avoid spamming logs and wasting time on repeated 404s.
@@ -173,7 +167,17 @@ export const uploadMediaToServer = async (
       }
     }
 
-    // Legacy base64-in-JSON upload (fallback)
+    // Legacy base64-in-JSON upload (small-file fallback only).
+    try {
+      const info = await FileSystem.getInfoAsync(normalizedUri);
+      const size = Number((info as any)?.size || 0);
+      if (size > LEGACY_BASE64_MAX_MB * 1024 * 1024) {
+        return { success: false, error: `Multipart upload failed and legacy fallback is limited to ${LEGACY_BASE64_MAX_MB}MB` };
+      }
+    } catch {
+      // If size lookup is unavailable, keep existing fallback behavior.
+    }
+
     const dataUri = await fileToDataUri(normalizedUri);
     if (!dataUri) {
       logger.error('Failed to convert file to dataUri');
@@ -181,7 +185,7 @@ export const uploadMediaToServer = async (
     }
     
     const fileSizeMB = Math.round(dataUri.length / 1024 / 1024);
-    const maxSizeMB = 100;
+    const maxSizeMB = LEGACY_BASE64_MAX_MB;
     if (fileSizeMB > maxSizeMB) {
       logger.error(`File too large: ${fileSizeMB}MB (max: ${maxSizeMB}MB)`);
       return { success: false, error: `File too large: ${fileSizeMB}MB (maximum allowed: ${maxSizeMB}MB)` };

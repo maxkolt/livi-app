@@ -1,5 +1,6 @@
 import type { Server } from 'socket.io';
 import type { AuthedSocket, UserID } from './types';
+import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
 
 export const online: Map<UserID, Set<string>> = new Map();
 
@@ -11,8 +12,8 @@ export function bindPresence(io: Server, socket: AuthedSocket) {
   // можно слать себе подтверждение
   socket.emit('presence:me', { online: true });
 
-  // и всем — что я онлайн (фронт может фильтровать по друзьям)
-  socket.broadcast.emit('presence:update', { userId, online: true });
+  // Presence отправляем только друзьям пользователя, не broadcast всем сокетам.
+  scheduleGlobalFriendPresenceEmit(io, userId);
 
   socket.on('disconnect', () => {
     const set = online.get(userId);
@@ -20,7 +21,7 @@ export function bindPresence(io: Server, socket: AuthedSocket) {
     set.delete(socket.id);
     if (set.size === 0) {
       online.delete(userId);
-      socket.broadcast.emit('presence:update', { userId, online: false });
+      scheduleGlobalFriendPresenceEmit(io, userId);
     }
   });
 }

@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import User from '../models/User';
 import Install from '../models/Install';
 import { buildAvatarDataUris } from '../utils/avatars';
+import { getFriendIds } from '../utils/friendshipUtils';
 
 const router = Router();
 
@@ -60,7 +61,7 @@ router.post('/upload/avatar/dataUri', async (req, res) => {
         },
         $inc: { avatarVer: 1 },
       },
-      { new: true, select: '_id nick avatarVer avatarB64 avatarThumbB64 friends' }
+      { new: true, select: '_id nick avatarVer avatarB64 avatarThumbB64' }
     ).lean();
 
     if (!updated) return res.status(404).json({ ok: false, error: 'user_not_found' });
@@ -79,7 +80,7 @@ router.post('/upload/avatar/dataUri', async (req, res) => {
     try {
       if (io) {
         io.to(`u:${String(updated._id)}`).emit('user.avatar', payloadMe);
-        const friends = Array.isArray(updated.friends) ? updated.friends : [];
+        const friends = await getFriendIds(String(updated._id));
         friends.forEach((fid: any) => {
           io.to(`u:${String(fid)}`).emit('user.avatarUpdated', payloadFriends);
           io.to(`u:${String(fid)}`).emit('friend:profile', payloadFriendProfile);
@@ -145,7 +146,7 @@ router.delete('/avatar/:userId', async (req, res) => {
         $set: { avatar: '', avatarB64: '', avatarThumbB64: '' },
         $inc: { avatarVer: 1 },
       },
-      { new: true, select: '_id nick avatarVer friends' }
+      { new: true, select: '_id nick avatarVer' }
     ).lean();
 
     if (!updated) return res.status(404).json({ ok: false, error: 'user_not_found' });
@@ -164,7 +165,7 @@ router.delete('/avatar/:userId', async (req, res) => {
     try {
       if (io) {
         io.to(`u:${String(updated._id)}`).emit('user.avatar', payloadMe);
-        const friends = Array.isArray(updated.friends) ? updated.friends : [];
+        const friends = await getFriendIds(String(updated._id));
         friends.forEach((fid: any) => {
           io.to(`u:${String(fid)}`).emit('user.avatarUpdated', payloadFriends);
           io.to(`u:${String(fid)}`).emit('friend:profile', payloadFriendProfile);

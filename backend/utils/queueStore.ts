@@ -31,7 +31,7 @@ export type CleanupStatesResult = { cleanedBans: number; cleanedLocks: number; c
 export const addToQueue = (sid: string) => store.addToQueue(sid);
 export const removeFromQueue = (sid: string) => store.removeFromQueue(sid);
 export const isInQueue = (sid: string) => store.isInQueue(sid);
-export const getWaitingQueue = () => store.getWaitingQueue();
+export const getWaitingQueue = (limit?: number) => store.getWaitingQueue(limit);
 export const getQueueSize = () => store.getQueueSize();
 export const setPair = (aSid: string, bSid: string) => store.setPair(aSid, bSid);
 export const getPartner = (sid: string) => store.getPartner(sid);

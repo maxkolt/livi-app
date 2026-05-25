@@ -57,8 +57,9 @@ export function createMemoryStore() {
       return inQueue.has(String(sid));
     },
 
-    async getWaitingQueue(): Promise<string[]> {
-      return waitingQueue.slice();
+    async getWaitingQueue(limit?: number): Promise<string[]> {
+      const n = Number(limit);
+      return Number.isFinite(n) && n > 0 ? waitingQueue.slice(0, n) : waitingQueue.slice();
     },
 
     async getQueueSize(): Promise<number> {

@@ -47,6 +47,7 @@ import {
 } from './utils/push';
 import { pushLog } from './utils/pushLogBuffer';
 import * as queueStore from './utils/queueStore';
+import * as rateLimitStore from './utils/rateLimit';
 import * as capacityMetrics from './utils/capacityMetrics';
 import { startQueueCleanup, stopQueueCleanup, tryMatch } from './sockets/match';
 import { onSocketDisconnectWebRTC } from './sockets/webrtc';
@@ -87,6 +88,7 @@ import {
   armInAppOfflinePresenceEmit,
   cancelInAppOfflinePresenceEmit,
 } from './utils/friendOnlinePresence';
+import { areFriendsCached, getFriendIds, getFriendIdsForUsers } from './utils/friendshipUtils';
 import { isSocketIoRedisAdapterActive, setupSocketIoRedisAdapter } from './utils/socketIoRedisAdapter';
 
 /* ========= Типы ========= */
@@ -232,10 +234,15 @@ app.use(
   })
 );
 
-// json/urlencoded парсеры — один раз и до роутеров
-app.use(express.json({ limit: '500mb' })); // Увеличиваем лимит для очень больших видео
+// json/urlencoded парсеры — один раз и до роутеров.
+// Legacy base64 media upload owns a smaller route-local JSON limit; large media must use multipart streaming.
+const defaultJsonParser = express.json({ limit: '50mb' });
+app.use((req, res, next) => {
+  if (req.method === 'POST' && req.path === '/api/upload/media') return next();
+  return defaultJsonParser(req, res, next);
+});
 app.use('/chat', createChatRouter());
-app.use(express.urlencoded({ extended: true, limit: '500mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 /** Резолвим userId ТОЛЬКО по installId (не доверяем x-user-id). */
 app.use(async (req, _res, next) => {
@@ -310,6 +317,7 @@ app.get('/health', (_req, res) =>
     ok: true,
     mongo: mongoose.connection.readyState,
     socketIoRedisAdapter: isSocketIoRedisAdapterActive(),
+    rateLimit: rateLimitStore.getRateLimitHealth(),
   })
 );
 
@@ -451,10 +459,11 @@ app.post('/chat/ensure-dm', async (req, res) => {
       return res.status(503).json({ ok: false, error: 'database_unavailable' });
     }
 
-    const [me, peer] = (await Promise.all([
-      User.findById(meId).select('nick avatar friends').lean(),
-      User.findById(peerId).select('nick avatar friends').lean(),
-    ])) as [LeanUser | null, LeanUser | null];
+    const [me, peer, meFriendWithPeer] = await Promise.all([
+      User.findById(meId).select('nick avatar').lean(),
+      User.findById(peerId).select('nick avatar').lean(),
+      areFriendsCached(meId, peerId),
+    ]) as [LeanUser | null, LeanUser | null, boolean];
 
     if (!me || !peer) {
       return res.status(404).json({
@@ -465,8 +474,6 @@ app.post('/chat/ensure-dm', async (req, res) => {
       });
     }
 
-    const meFriendWithPeer =
-      Array.isArray(me.friends) && me.friends.some((x: any) => String(x) === peerId);
     if (!meFriendWithPeer) {
       return res.status(403).json({ ok: false, error: 'not_friends' });
     }
@@ -642,7 +649,7 @@ app.get('/me', async (req, res) => {
     if (!isMongoReady()) {
       return res.status(503).json({ ok: false, error: 'database_unavailable' });
     }
-    const user = await User.findById(userId).select('nick avatar avatarVer friends').lean();
+    const user = await User.findById(userId).select('nick avatar avatarVer').lean();
     if (!user) {
       return res.status(404).json({ ok: false, error: 'user_not_found' });
     }
@@ -654,7 +661,7 @@ app.get('/me', async (req, res) => {
         nick: user.nick || '',
         avatar: (user as any).avatar || '',
         avatarVer: (user as any).avatarVer || 0,
-        friends: user.friends || [],
+        friends: await getFriendIds(String(userId)),
       },
     });
   } catch (e: any) {
@@ -753,8 +760,41 @@ function unbindUser(sock: AuthedSocket) {
     } catch {}
   }
 }
-function emitPresence(io: Server) {
-  emitGlobalFriendPresence(io);
+
+function getSocketsForUser(io: Server, userId: string): AuthedSocket[] {
+  const uid = normalizeMongoObjectId(String(userId || ''));
+  if (!uid) return [];
+  const room = io.sockets.adapter.rooms.get(`u:${uid}`);
+  if (!room || room.size === 0) return [];
+  const sockets: AuthedSocket[] = [];
+  for (const sid of room) {
+    const s = io.sockets.sockets.get(sid) as AuthedSocket | undefined;
+    if (!s) continue;
+    const suid = normalizeMongoObjectId(String((s as any)?.data?.userId || ''));
+    if (suid === uid) sockets.push(s);
+  }
+  return sockets;
+}
+
+function findSocketForUser(io: Server, userId: string): AuthedSocket | undefined {
+  return getSocketsForUser(io, userId)[0];
+}
+
+function hasSocketForUser(io: Server, userId: string): boolean {
+  return getSocketsForUser(io, userId).length > 0;
+}
+
+function forEachSocketForUser(io: Server, userId: string, fn: (sock: AuthedSocket) => void): void {
+  for (const s of getSocketsForUser(io, userId)) fn(s);
+}
+
+function emitPresence(io: Server, userId?: string | null) {
+  const key = String(userId || '').trim();
+  if (key) {
+    scheduleGlobalFriendPresenceEmit(io, key);
+    return;
+  }
+  void emitGlobalFriendPresence(io);
 }
 
 const PRESENCE_DISCONNECT_GRACE_MS = 2500;
@@ -789,7 +829,7 @@ function armStickyForegroundPresenceResolution(io: Server, userId: string): void
   const t = setTimeout(() => {
     stickyForegroundPresenceTimers.delete(key);
     clearStickyForegroundOnline(key);
-    emitPresence(io);
+    emitPresence(io, key);
   }, STICKY_FOREGROUND_ONLINE_MS);
   stickyForegroundPresenceTimers.set(key, t);
 }
@@ -802,10 +842,7 @@ function clearStickyPresenceStateForUser(userId: string): void {
 }
 
 function hasAnyOnlineSocketForUser(io: Server, userId: string): boolean {
-  for (const s of io.sockets.sockets.values()) {
-    if (String((s as any)?.data?.userId || '') === userId) return true;
-  }
-  return false;
+  return hasSocketForUser(io, userId);
 }
 
 function schedulePresenceEmitAfterDisconnect(io: Server, userId?: string | null): void {
@@ -820,7 +857,7 @@ function schedulePresenceEmitAfterDisconnect(io: Server, userId?: string | null)
     // Пользователь мог переподключиться в пределах grace-окна.
     if (hasAnyOnlineSocketForUser(io, key)) return;
     lastBroadcastBusyByUserId.delete(key);
-    emitPresence(io);
+    emitPresence(io, key);
   }, PRESENCE_DISCONNECT_GRACE_MS);
   pendingPresenceOfflineByUserId.set(key, t);
 }
@@ -841,16 +878,14 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
       io.to(`u:${userId}`).emit('presence:update', { userId, busy });
       return;
     }
-    // Получаем список друзей пользователя
-    const user = await User.findById(userId).select('friends').lean();
-    if (!user || !Array.isArray(user.friends) || user.friends.length === 0) {
+    const friends = await getFriendIds(userId);
+    if (friends.length === 0) {
       // Если друзей нет, отправляем только самому пользователю (для синхронизации состояния)
       io.to(`u:${userId}`).emit('presence:update', { userId, busy });
       return;
     }
 
     // Отправляем обновление только друзьям через их комнаты
-    const friends = user.friends.map(f => String(f));
     for (const friendId of friends) {
       try {
         io.to(`u:${friendId}`).emit('presence:update', { userId, busy });
@@ -865,7 +900,7 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
       io.to(`u:${userId}`).emit('presence:update', { userId, busy });
     } catch {}
   } finally {
-    scheduleGlobalFriendPresenceEmit(io);
+    scheduleGlobalFriendPresenceEmit(io, userId);
   }
 }
 
@@ -890,16 +925,9 @@ async function emitPresenceUpdateCallToFriends(
       io.to(`u:${userIdB}`).emit('presence:update', { userId: userIdB, busy });
       return;
     }
-    const [userA, userB] = await Promise.all([
-      User.findById(userIdA).select('friends').lean(),
-      User.findById(userIdB).select('friends').lean(),
-    ]);
-    const friendsA = (userA as any)?.friends && Array.isArray((userA as any).friends)
-      ? (userA as any).friends.map((f: any) => String(f))
-      : [];
-    const friendsB = (userB as any)?.friends && Array.isArray((userB as any).friends)
-      ? (userB as any).friends.map((f: any) => String(f))
-      : [];
+    const friendMap = await getFriendIdsForUsers([userIdA, userIdB]);
+    const friendsA = friendMap.get(userIdA) || [];
+    const friendsB = friendMap.get(userIdB) || [];
     const allFriendIds = [...new Set([...friendsA, ...friendsB])];
     for (const friendId of allFriendIds) {
       try {
@@ -952,6 +980,19 @@ const setRandomBusy = async (uid?: string | null, busy?: boolean) => {
 
 // Отслеживание дружеских комнат (roomId -> participants[])
 const friendRooms = new Map<string, string[]>();
+
+function emitFriendRoomState(roomId: string, participants: string[]) {
+  const payload = { roomId, participants };
+  try {
+    io.to(roomId).emit('friends:room_state', payload);
+  } catch {}
+  for (const userId of participants) {
+    try {
+      io.to(`u:${String(userId)}`).emit('friends:room_state', payload);
+    } catch {}
+  }
+}
+
 const setFriendRoomState = (roomId: string, participants: string[]) => {
   if (participants.length === 0) {
     friendRooms.delete(roomId);
@@ -959,47 +1000,28 @@ const setFriendRoomState = (roomId: string, participants: string[]) => {
     friendRooms.set(roomId, [...participants]);
   }
 
-  // Отправляем состояние комнаты всем участникам
-  try {
-    io.to(roomId).emit('friends:room_state', { roomId, participants });
-  } catch {}
-
-  // Отправляем обновление статусов всем друзьям участников
-  participants.forEach(userId => {
-    try {
-      io.emit('friends:room_state', { roomId, participants });
-    } catch {}
-  });
+  emitFriendRoomState(roomId, participants);
 };
 
 // Функция для обновления состояния дружеской комнаты
-const updateFriendRoomState = (io: Server, roomId: string) => {
+const updateFriendRoomState = async (io: Server, roomId: string) => {
   // Проверяем, что это дружеская комната (не рандом)
   if (!roomId.startsWith('room_')) return;
 
-  const room = io.sockets.adapter.rooms.get(roomId);
-  if (!room) return;
-
-  // Получаем userId всех участников комнаты
-  const participants: string[] = [];
-  room.forEach(socketId => {
-    const socket = io.sockets.sockets.get(socketId) as AuthedSocket;
-    if (socket && (socket as any)?.data?.userId) {
-      participants.push(String((socket as any).data.userId));
-    }
-  });
-
-  // Отправляем состояние комнаты
+  let sockets: Awaited<ReturnType<Server['fetchSockets']>> = [];
   try {
-    io.to(roomId).emit('friends:room_state', { roomId, participants });
+    sockets = await io.in(roomId).fetchSockets();
+  } catch {
+    return;
+  }
+  if (sockets.length === 0) return;
 
-    // Отправляем обновление статусов всем друзьям участников
-    participants.forEach(userId => {
-      try {
-        io.emit('friends:room_state', { roomId, participants });
-      } catch {}
-    });
-  } catch {}
+  const participants = Array.from(new Set(
+    sockets
+      .map((socket: any) => String(socket?.data?.userId || ''))
+      .filter((userId: string) => isOid(userId))
+  ));
+  emitFriendRoomState(roomId, participants);
 };
 
 // tryPairFor и pairAndNotify удалены - теперь используется единая система матчинга через match.ts
@@ -1196,15 +1218,15 @@ function clearAcceptedCallStateForUser(userId: string, reason: string): string |
       if (activeRoom === roomId) activeCallBySocket.delete(sid);
     }
   }
-  for (const s of io.sockets.sockets.values()) {
-    const suid = normalizeMongoObjectId(String((s as any)?.data?.userId || ''));
-    if (!ids.includes(suid)) continue;
-    (s as any).data = (s as any).data || {};
-    (s as any).data.busy = false;
-    delete (s as any).data.roomId;
-    delete (s as any).data.partnerSid;
-    delete (s as any).data.inCall;
-    try { activeCallBySocket.delete(s.id); } catch {}
+  for (const id of ids) {
+    forEachSocketForUser(io, id, (s) => {
+      (s as any).data = (s as any).data || {};
+      (s as any).data.busy = false;
+      delete (s as any).data.roomId;
+      delete (s as any).data.partnerSid;
+      delete (s as any).data.inCall;
+      try { activeCallBySocket.delete(s.id); } catch {}
+    });
   }
   return callId;
 }
@@ -1267,9 +1289,7 @@ function userAlreadyHasSocketAttachedToPendingRoom(
   pendingRoom: PendingAcceptedRoom,
   excludeSocketId?: string,
 ): boolean {
-  for (const candidate of io.sockets.sockets.values()) {
-    const sameUser = String((candidate as any)?.data?.userId || '') === String(userId);
-    if (!sameUser) continue;
+  for (const candidate of getSocketsForUser(io, userId)) {
     if (excludeSocketId && candidate.id === excludeSocketId) continue;
     if (socketAlreadyAttachedToPendingRoom(candidate as AuthedSocket, pendingRoom)) {
       return true;
@@ -1391,15 +1411,15 @@ function clearDirectCallSocketStateForUsers(userIds: string[]): void {
       .filter((id) => isOid(id))
   );
   if (ids.size === 0) return;
-  for (const s of io.sockets.sockets.values()) {
-    const uid = normalizeMongoObjectId(String((s as any)?.data?.userId || ''));
-    if (!ids.has(uid)) continue;
-    (s as any).data = (s as any).data || {};
-    (s as any).data.busy = false;
-    delete (s as any).data.roomId;
-    delete (s as any).data.partnerSid;
-    delete (s as any).data.inCall;
-    try { activeCallBySocket.delete(s.id); } catch {}
+  for (const uid of ids) {
+    forEachSocketForUser(io, uid, (s) => {
+      (s as any).data = (s as any).data || {};
+      (s as any).data.busy = false;
+      delete (s as any).data.roomId;
+      delete (s as any).data.partnerSid;
+      delete (s as any).data.inCall;
+      try { activeCallBySocket.delete(s.id); } catch {}
+    });
   }
 }
 
@@ -1598,8 +1618,7 @@ async function runCallPushRetryCycle(callId: string): Promise<void> {
 
 /** Callee в ожидающем звонке (без inCall) не считается занятым при отображении в списке друзей. */
 function getEffectiveBusyForExport(io: Server, userId: string): boolean {
-  for (const s of io.sockets.sockets.values()) {
-    if (String((s as any).data?.userId) !== String(userId)) continue;
+  for (const s of getSocketsForUser(io, userId)) {
     if ((s as any).data?.busy !== true) continue;
     const entry = callOfUser.get(userId);
     if (entry) {
@@ -1661,16 +1680,8 @@ app.post('/api/calls/decline', async (req, res) => {
       return res.json({ ok: true, deduped: true });
     }
     logger.info('[api/calls/decline] callee declined via HTTP', { callId, caller: link.a, callee: link.b });
-    const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
-    const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
-    if (aSock) {
-      (aSock as any).data = (aSock as any).data || {};
-      (aSock as any).data.busy = false;
-    }
-    if (bSock) {
-      (bSock as any).data = (bSock as any).data || {};
-      (bSock as any).data.busy = false;
-    }
+    forEachSocketForUser(io, link.a, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
+    forEachSocketForUser(io, link.b, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
     await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
     try { io.to(`u:${link.a}`).emit('call:declined', { callId, from: link.b }); } catch {}
     logger.info('[api/calls/decline] sending call_declined push to caller', { callId, caller: link.a, callee: link.b });
@@ -1779,16 +1790,8 @@ app.post('/api/calls/cancel', async (req, res) => {
       return res.json({ ok: true, deduped: true });
     }
     logger.info('[api/calls/cancel] caller canceled via HTTP (timeout)', { callId, caller: link.a, callee: link.b });
-    const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
-    const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
-    if (aSock) {
-      (aSock as any).data = (aSock as any).data || {};
-      (aSock as any).data.busy = false;
-    }
-    if (bSock) {
-      (bSock as any).data = (bSock as any).data || {};
-      (bSock as any).data.busy = false;
-    }
+    forEachSocketForUser(io, link.a, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
+    forEachSocketForUser(io, link.b, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
     await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
@@ -1801,7 +1804,7 @@ app.post('/api/calls/cancel', async (req, res) => {
       }
     } catch {}
     try { await sendCallCanceledToRecipient(link.b, callId, link.a, fromNick); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    if (!bSock) await saveMissedCall(link.b, link.a, fromNick || '');
+    if (!hasSocketForUser(io, link.b)) await saveMissedCall(link.b, link.a, fromNick || '');
     logger.info('[api/calls/cancel] call ended for both: callee got missed from native', { callId, caller: link.a, callee: link.b });
     cleanupCall(callId, 'canceled');
     return res.json({ ok: true });
@@ -1942,7 +1945,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         clearStickyPresenceStateForUser(mappedUserId);
         await replayIncomingToCalleeIfRinging(sock, mappedUserId);
       });
-      emitPresence(io);
+      emitPresence(io, mappedUserId);
 
       // Если пользователь был в ожидании принятого звонка (принятие было вне приложения) — отправляем call:accepted и подключаем в комнату
       const pendingRoom = activeRoomByUserId.get(mappedUserId);
@@ -2030,7 +2033,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       clearStickyPresenceStateForUser(boundUid);
       await replayIncomingToCalleeIfRinging(sock, boundUid);
     });
-    emitPresence(io);
+    emitPresence(io, boundUid);
     // Replay call:accepted здесь не делаем: после connect клиент всегда шлёт reauth,
     // и duplicate source (connect + reauth + call:getAccepted) порождал лишние accepted.
   }
@@ -2299,9 +2302,8 @@ io.on('connection', async (sock: AuthedSocket) => {
       const idleOnline = !busy && payload?.idle === true;
 
       if (idleOnline) {
-        const hasLiveSameUserCallSocket = Array.from(io.sockets.sockets.values()).some((s) => {
+        const hasLiveSameUserCallSocket = getSocketsForUser(io, userId).some((s) => {
           if (s.id === sock.id) return false;
-          if (String((s as any)?.data?.userId || '') !== userId) return false;
           const sdata = (s as any)?.data || {};
           if (!sdata.inCall && !sdata.roomId && !sdata.partnerSid) return false;
           const rid = String(sdata.roomId || activeCallBySocket.get(s.id) || '');
@@ -2327,10 +2329,8 @@ io.on('connection', async (sock: AuthedSocket) => {
       // Другие сокеты того же userId: пока хоть один в звонке/рандоме — не даём сбросить «занят» для друзей.
       // Текущий сокет сюда не включаем: иначе его же устаревшие busy/roomId (гонка со stop после рандома)
       // не дают перейти в online и оставляют initiator_busy на call:initiate.
-      const hasAnotherBusySocket = Array.from(io.sockets.sockets.values()).some((s) => {
+      const hasAnotherBusySocket = getSocketsForUser(io, userId).some((s) => {
         if (s.id === sock.id) return false;
-        const suid = String((s as any)?.data?.userId || '');
-        if (suid !== userId) return false;
         const sdata = (s as any)?.data || {};
         return !!(sdata.inCall || sdata.busy || sdata.roomId);
       });
@@ -2351,7 +2351,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             }
             // Инициатор: не рассылаем его busy друзьям (в т.ч. получателю), пока получатель не принял (у получателя нет inCall).
             if (link.a === userId) {
-              const calleeSock = Array.from(io.sockets.sockets.values()).find((s) => String((s as any)?.data?.userId || '') === link.b);
+              const calleeSock = findSocketForUser(io, link.b);
               const calleeInCall = !!(calleeSock && (calleeSock as any).data?.inCall);
               if (!calleeInCall) {
                 ignoreBusyForCaller = true;
@@ -2431,7 +2431,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         clearStickyPresenceStateForUser(userId);
         armInAppOfflinePresenceEmit(io, userId);
       }
-      scheduleGlobalFriendPresenceEmit(io);
+      scheduleGlobalFriendPresenceEmit(io, userId);
     } catch (e) {
       logger.error('❌ [app:visibility] Error', { error: (e as any)?.message || String(e) });
     }
@@ -2471,7 +2471,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
       // текущий документ
       const current = (await User.findById(me)
-        .select('nick avatar avatarVer avatarB64 avatarThumbB64 friends')
+        .select('nick avatar avatarVer avatarB64 avatarThumbB64')
         .lean()) as any;
       if (!current) {
         if (typeof ack === 'function') ack({ ok: false, error: 'not_found' });
@@ -2576,7 +2576,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       // Получаем свежие данные после обновления
       const fresh = (changed
-        ? await User.findById(me).select('nick avatar avatarVer avatarB64 avatarThumbB64 friends').lean()
+        ? await User.findById(me).select('nick avatar avatarVer avatarB64 avatarThumbB64').lean()
         : current) as any;
 
       const rawOut = String(fresh?.avatar || '');
@@ -2593,8 +2593,9 @@ io.on('connection', async (sock: AuthedSocket) => {
       // КРИТИЧНО: Отправляем обновление друзьям ВСЕГДА при изменении профиля
       // Это включает случаи: изменение никнейма, удаление никнейма, изменение аватара, удаление аватара
       // Отправляем даже если значение стало пустым - это важно для синхронизации
-      if (changed && Array.isArray(fresh?.friends) && (fresh!.friends as any[]).length) {
-        for (const fid of fresh!.friends as any[]) {
+      if (changed) {
+        const friendIds = await getFriendIds(me);
+        for (const fid of friendIds) {
           try {
             io.to(`u:${String(fid)}`).emit('friend:profile', {
               userId: me,
@@ -2692,9 +2693,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (await getUserCallEntryFromAnyStore(me)) return ack?.({ ok: false, error: 'busy' });
 
       // Найдём любой сокет получателя (может быть offline — тогда будем будить пушем)
-      const peerSocket = Array.from(io.sockets.sockets.values()).find(
-        (s) => normalizeMongoObjectId(String((s as any)?.data?.userId || '')) === peerId
-      ) as AuthedSocket | undefined;
+      const peerSocket = findSocketForUser(io, peerId);
 
       // Если получатель онлайн — проверяем busy флаг
       if (peerSocket && (peerSocket as any)?.data?.busy === true) {
@@ -2774,17 +2773,8 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (!shouldProcess) return;
 
         // Снимаем busy статус с обоих участников при таймауте
-        const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
-        const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
-
-        if (aSock) {
-          (aSock as any).data = (aSock as any).data || {};
-          (aSock as any).data.busy = false;
-        }
-        if (bSock) {
-          (bSock as any).data = (bSock as any).data || {};
-          (bSock as any).data.busy = false;
-        }
+        forEachSocketForUser(io, link.a, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
+        forEachSocketForUser(io, link.b, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
         await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
 
         try {
@@ -2822,7 +2812,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
         }
         // Сохраняем пропущенный только если получатель офлайн — иначе он уже получил socket+FCM и при reauth получит дубль через missed_calls:sync
-        if (!bSock) await saveMissedCall(link.b, link.a, fromNick || '');
+        if (!hasSocketForUser(io, link.b)) await saveMissedCall(link.b, link.a, fromNick || '');
         logger.info('[call:timeout] call ended for both: callee notified (socket+missed push), caller gets timeout', { callId, caller: link.a, callee: link.b });
         cleanupCall(callId, 'timeout');
       }, CALL_RING_TIMEOUT_MS);
@@ -2846,9 +2836,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         // Шлём либо напрямую в уже связанные сокеты пользователя, либо в user-room fallback.
         // Одновременная отправка обоими путями давала дубль одного и того же call:incoming.
         const room = io.sockets.adapter.rooms.get(`u:${peerId}`);
-        const recipientSockets = Array.from(io.sockets.sockets.values()).filter(
-          (s) => normalizeMongoObjectId(String((s as any)?.data?.userId || '')) === peerId
-        );
+        const recipientSockets = getSocketsForUser(io, peerId);
         for (const recipientSocket of recipientSockets) {
           try {
             (recipientSocket as any).emit('call:incoming', {
@@ -2985,8 +2973,8 @@ io.on('connection', async (sock: AuthedSocket) => {
     logger.debug('Call accepted', { callId: id });
 
     // КРИТИЧНО: Принятие возможно даже если инициатор (A) офлайн — он получит call:accepted при reauth
-    const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a) as AuthedSocket | undefined;
-    const bSock = (sock as any)?.data?.userId === link.b ? (sock as AuthedSocket) : Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b) as AuthedSocket | undefined;
+    const aSock = findSocketForUser(io, link.a);
+    const bSock = (sock as any)?.data?.userId === link.b ? (sock as AuthedSocket) : findSocketForUser(io, link.b);
 
     if (!bSock) {
       ack?.({ ok: false, error: 'callee_socket_not_found' });
@@ -3267,7 +3255,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       const emitted = await emitPendingCallAcceptedToSocket(io, sock, String(userId), pendingRoom, 'call:getAccepted');
       if (emitted) {
         logger.info('[call:getAccepted] Sent call:accepted to caller', { userId, callId: id });
-        scheduleGlobalFriendPresenceEmit(io);
+        scheduleGlobalFriendPresenceEmit(io, userId);
       }
     } catch (e: any) {
       logger.warn('[call:getAccepted] Failed to send call:accepted', { userId, callId: id, error: e?.message });
@@ -3326,17 +3314,8 @@ io.on('connection', async (sock: AuthedSocket) => {
     if (!shouldProcess) return;
 
     // Снимаем busy статус с обоих участников при отклонении
-    const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
-    const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
-
-    if (aSock) {
-      (aSock as any).data = (aSock as any).data || {};
-      (aSock as any).data.busy = false;
-    }
-    if (bSock) {
-      (bSock as any).data = (bSock as any).data || {};
-      (bSock as any).data.busy = false;
-    }
+    forEachSocketForUser(io, link.a, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
+    forEachSocketForUser(io, link.b, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
     await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
 
     try {
@@ -3363,17 +3342,8 @@ io.on('connection', async (sock: AuthedSocket) => {
     if (!shouldProcess) return;
 
     // Снимаем busy статус с обоих участников при отмене
-    const aSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.a);
-    const bSock = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
-
-    if (aSock) {
-      (aSock as any).data = (aSock as any).data || {};
-      (aSock as any).data.busy = false;
-    }
-    if (bSock) {
-      (bSock as any).data = (bSock as any).data || {};
-      (bSock as any).data.busy = false;
-    }
+    forEachSocketForUser(io, link.a, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
+    forEachSocketForUser(io, link.b, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
     await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
 
     try {
@@ -3395,8 +3365,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     } catch {}
     // FCM data-only получателю: снимаем «входящий вызов», показываем «пропущенный вызов», счётчик на иконке
     try { await sendCallCanceledToRecipient(link.b, id, link.a, fromNick); } catch (e: any) { logger.warn('[call:cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
-    const bSockCancel = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === link.b);
-    if (!bSockCancel) await saveMissedCall(link.b, link.a, fromNick || '');
+    if (!hasSocketForUser(io, link.b)) await saveMissedCall(link.b, link.a, fromNick || '');
     logger.info('[call:cancel] call ended for both: both notified (socket+FCM, callee got missed from native)', { callId: id, caller: link.a, callee: link.b });
     cleanupCall(id, 'canceled');
   });
@@ -3411,7 +3380,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       // Находим сокет партнера и отправляем ему уведомление
       if (partnerUserId) {
-        const partnerSocket = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === partnerUserId);
+        const partnerSocket = findSocketForUser(io, partnerUserId);
         if (partnerSocket) {
           (partnerSocket as any).emit('partner:away');
           logger.debug('Sent partner:away to partner', { partnerUserId });
@@ -3432,7 +3401,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       // Находим сокет партнера и отправляем ему уведомление
       if (partnerUserId) {
-        const partnerSocket = Array.from(io.sockets.sockets.values()).find((s) => (s as any)?.data?.userId === partnerUserId);
+        const partnerSocket = findSocketForUser(io, partnerUserId);
         if (partnerSocket) {
           (partnerSocket as any).emit('partner:returned');
           logger.debug('Sent partner:returned to partner', { partnerUserId });
@@ -3492,9 +3461,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       const uidStr = userId ? String(userId) : '';
       if (uidStr) {
         const appFg = (sock as any)?.data?.appForeground;
-        const otherSocketsSameUser = Array.from(io.sockets.sockets.values()).filter(
-          (s) => s.id !== sock.id && String((s as any)?.data?.userId || '') === uidStr
-        );
+        const otherSocketsSameUser = getSocketsForUser(io, uidStr).filter((s) => s.id !== sock.id);
         if (otherSocketsSameUser.length === 0 && appFg !== false) {
           touchStickyForegroundOnline(uidStr);
           armStickyForegroundPresenceResolution(io, uidStr);
@@ -3520,7 +3487,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       // Обновляем состояние всех комнат, где был этот пользователь
       sock.rooms.forEach((roomId) => {
         if (roomId.startsWith('room_')) {
-          updateFriendRoomState(io, roomId);
+          void updateFriendRoomState(io, roomId);
         }
       });
     }
@@ -3645,6 +3612,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
     await queueStore.close();
   } catch (e: any) {
     logger.warn('queueStore.close failed', { error: e?.message });
+  }
+  try {
+    await rateLimitStore.close();
+  } catch (e: any) {
+    logger.warn('rateLimit.close failed', { error: e?.message });
   }
   clearTimeout(forceExit);
   logger.info('Shutdown complete');

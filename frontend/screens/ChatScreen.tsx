@@ -275,6 +275,10 @@ function ReactionBarModal({
 
 const SHEET_REACTIONS_ALL = [...SHEET_REACTIONS_ROW_1, ...SHEET_REACTIONS_ROW_2];
 const REACTIONS_PAGE_SIZE = 4;
+const CHAT_LIST_INITIAL_NUM_TO_RENDER = 12;
+const CHAT_LIST_MAX_TO_RENDER_PER_BATCH = 8;
+const CHAT_LIST_WINDOW_SIZE = 7;
+const CHAT_LIST_UPDATE_CELLS_BATCHING_PERIOD = 50;
 
 /** Один ряд реакций: по 4 эмодзи на страницу, на первой — стрелка «свайп вправо» */
 function ReactionsRowWithSwipe({
@@ -662,7 +666,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   /** Always points at latest `messages` for background/unmount persistence (avoid stale closures). */
   const latestMessagesForPersistRef = useRef(messages);
   latestMessagesForPersistRef.current = messages;
-  /** Для каких id уже слали `message:read` — без этого при каждом своём сообщении шли read по всей истории peer и забивали сокет. */
+  /** Для каких live id уже слали `message:read`; history/initial sync закрывается batch `markMessagesAsRead`. */
   const readReceiptSentIdsRef = useRef<Set<string>>(new Set());
   // Чтобы не показывать "пустую заглушку" до загрузки истории (иначе она мелькает на входе в чат)
   const [historyReady, setHistoryReady] = useState(false);
@@ -1618,6 +1622,10 @@ export default function ChatScreen({ route, navigation }: Props) {
           });
         }
 
+        const existedBeforeLiveReceive = isFromPeer
+          ? latestMessagesForPersistRef.current.some((msg: any) => String(msg?.id || '') === String(newMessage.id || ''))
+          : false;
+
         setMessages((prev) => {
           // Проверяем, есть ли уже сообщение с таким ID
           const existingMessage = prev.find(msg => msg.id === newMessage.id);
@@ -1628,6 +1636,14 @@ export default function ChatScreen({ route, navigation }: Props) {
           const updated = [...prev, newMessage];
           return updated;
         });
+
+        if (isFromPeer && !existedBeforeLiveReceive) {
+          const id = String(newMessage.id || '').trim();
+          if (id && !readReceiptSentIdsRef.current.has(id)) {
+            readReceiptSentIdsRef.current.add(id);
+            sendReadReceipt(id, peerId);
+          }
+        }
 
         // Для получателя: первый скролл часто случается до фактического layout нового пузыря.
         // Делаем принудительный post-layout double-pass, чтобы сообщение не "проваливалось" под input bar.
@@ -2016,22 +2032,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   useEffect(() => {
     readReceiptSentIdsRef.current = new Set();
   }, [peerId, currentUserId]);
-
-  // Read receipt только для новых входящих id (не при каждом изменении списка — иначе O(N) emit'ов на каждую свою отправку).
-  useEffect(() => {
-    if (!peerId || !currentUserId) return;
-    if (!messages.length) {
-      readReceiptSentIdsRef.current.clear();
-      return;
-    }
-    for (const m of messages) {
-      if (m?.sender !== 'peer') continue;
-      const id = String(m?.id || '').trim();
-      if (!id || readReceiptSentIdsRef.current.has(id)) continue;
-      readReceiptSentIdsRef.current.add(id);
-      sendReadReceipt(id, peerId);
-    }
-  }, [messages, peerId, currentUserId]);
 
   // Подписываемся на изменения онлайн-статуса собеседника
   useEffect(() => {
@@ -6322,6 +6322,10 @@ export default function ChatScreen({ route, navigation }: Props) {
               showsVerticalScrollIndicator={false}
               inverted={false}
               onScrollToIndexFailed={handleScrollToIndexFailed}
+              initialNumToRender={CHAT_LIST_INITIAL_NUM_TO_RENDER}
+              maxToRenderPerBatch={CHAT_LIST_MAX_TO_RENDER_PER_BATCH}
+              windowSize={CHAT_LIST_WINDOW_SIZE}
+              updateCellsBatchingPeriod={CHAT_LIST_UPDATE_CELLS_BATCHING_PERIOD}
               onContentSizeChange={() => setTimeout(() => scrollToBottom(), 0)}
               ListEmptyComponent={() => {
                 if (!historyReady) {
@@ -6666,6 +6670,10 @@ export default function ChatScreen({ route, navigation }: Props) {
               removeClippedSubviews={false}
               inverted={!showEmpty}
               onScrollToIndexFailed={handleScrollToIndexFailed}
+              initialNumToRender={CHAT_LIST_INITIAL_NUM_TO_RENDER}
+              maxToRenderPerBatch={CHAT_LIST_MAX_TO_RENDER_PER_BATCH}
+              windowSize={CHAT_LIST_WINDOW_SIZE}
+              updateCellsBatchingPeriod={CHAT_LIST_UPDATE_CELLS_BATCHING_PERIOD}
               ListHeaderComponent={androidListHeader}
               ListEmptyComponent={() => {
                 if (!historyReady) {

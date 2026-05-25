@@ -1,5 +1,5 @@
 // backend/routes/upload.ts
-import { Router } from 'express';
+import express, { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
@@ -8,6 +8,27 @@ import Install from '../models/Install';
 import { checkRateLimit } from '../utils/rateLimit';
 
 const router = Router();
+const MAX_MULTIPART_BYTES = 100 * 1024 * 1024;
+const MAX_BASE64_BINARY_BYTES = 10 * 1024 * 1024;
+const BASE64_JSON_LIMIT = '14mb';
+const ALLOWED_MEDIA_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+  // audio (voice messages)
+  'audio/mp4',
+  'audio/m4a',
+  'audio/aac',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/webm',
+  'audio/wav',
+  'audio/x-wav',
+]);
 
 // IMPORTANT: save uploads into the same PUBLIC_DIR that the server serves from.
 // In production, backend runs from dist/ but serves static files from backend/public.
@@ -46,30 +67,77 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+function extensionForMimeType(mimeType: string): string {
+  if (mimeType.startsWith('image/')) {
+    const ext = mimeType.split('/')[1];
+    return ext === 'jpeg' ? 'jpg' : ext;
+  }
+  if (mimeType.startsWith('video/')) {
+    const ext = mimeType.split('/')[1];
+    return ext === 'quicktime' ? 'mov' : ext;
+  }
+  if (mimeType.startsWith('audio/')) {
+    const ext = mimeType.split('/')[1];
+    if (ext === 'mp4' || ext === 'm4a') return 'm4a';
+    if (ext === 'mpeg') return 'mp3';
+    if (ext === 'x-wav') return 'wav';
+    return ext;
+  }
+  return 'bin';
+}
+
+function createUploadFileName(mimeType: string): string {
+  return `${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${extensionForMimeType(mimeType)}`;
+}
+
+async function authenticateUpload(req: express.Request, res: express.Response, rateLimitKey: string, maxRequests: number): Promise<string | null> {
+  // SECURITY: require installId-based auth (do not accept x-user-id alone).
+  const installId = String(req.header('x-install-id') || '').trim();
+  if (!installId) {
+    res.status(401).json({ ok: false, error: 'no_installId' });
+    return null;
+  }
+
+  const rl = await checkRateLimit(`${rateLimitKey}:${installId}`, maxRequests, 60_000, {
+    sensitive: true,
+  });
+  if (!rl.ok) {
+    res.setHeader('Retry-After', String(rl.retryAfterSec || 60));
+    res.status(429).json({ ok: false, error: 'rate_limited' });
+    return null;
+  }
+
+  if (mongoose.connection.readyState !== 1) {
+    res.status(503).json({ ok: false, error: 'database_unavailable' });
+    return null;
+  }
+  const inst = await Install.findOne({ installId }).select('user').lean();
+  const authedUserId = inst?.user ? String((inst as any).user) : '';
+  if (!authedUserId) {
+    res.status(401).json({ ok: false, error: 'unauthorized' });
+    return null;
+  }
+  return authedUserId;
+}
+
+function requireUploadAuth(rateLimitKey: string, maxRequests: number): express.RequestHandler {
+  return async (req, res, next) => {
+    try {
+      const authedUserId = await authenticateUpload(req, res, rateLimitKey, maxRequests);
+      if (!authedUserId) return;
+      (req as any).uploadUserId = authedUserId;
+      next();
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error?.message || 'Upload failed' });
+    }
+  };
+}
+
 // POST /api/upload/media
-router.post('/upload/media', async (req, res) => {
+// Legacy base64 JSON fallback. Keep this intentionally small; use multipart for large media.
+router.post('/upload/media', requireUploadAuth('upload_media', 25), express.json({ limit: BASE64_JSON_LIMIT }), async (req, res) => {
   try {
-    // SECURITY: require installId-based auth (do not accept x-user-id alone).
-    const installId = String(req.header('x-install-id') || '').trim();
-    if (!installId) {
-      return res.status(401).json({ ok: false, error: 'no_installId' });
-    }
-
-    // Basic abuse protection
-    const rl = checkRateLimit(`upload_media:${installId}`, 25, 60_000);
-    if (!rl.ok) {
-      res.setHeader('Retry-After', String(rl.retryAfterSec || 60));
-      return res.status(429).json({ ok: false, error: 'rate_limited' });
-    }
-
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ ok: false, error: 'database_unavailable' });
-    }
-    const inst = await Install.findOne({ installId }).select('user').lean();
-    const authedUserId = inst?.user ? String((inst as any).user) : '';
-    if (!authedUserId) {
-      return res.status(401).json({ ok: false, error: 'unauthorized' });
-    }
+    const authedUserId = String((req as any).uploadUserId || '');
 
     const { dataUri, type, from, to } = req.body;
 
@@ -95,64 +163,22 @@ router.post('/upload/media', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
-    // Restrict allowed content types (reduce abuse surface)
-    const allowed = new Set([
-      'image/jpeg',
-      'image/png',
-      'image/webp',
-      'image/gif',
-      'video/mp4',
-      'video/quicktime',
-      'video/webm',
-      // audio (voice messages)
-      'audio/mp4',    // m4a (common)
-      'audio/m4a',    // some clients report this
-      'audio/aac',
-      'audio/mpeg',   // mp3
-      'audio/ogg',
-      'audio/webm',
-      'audio/wav',
-      'audio/x-wav',
-    ]);
-    if (!allowed.has(mimeType)) {
+    if (!ALLOWED_MEDIA_MIME_TYPES.has(mimeType)) {
       return res.status(400).json({ ok: false, error: 'unsupported_mime' });
     }
 
-    // Определяем расширение файла по MIME типу
-    let extension = 'bin';
-    if (mimeType.startsWith('image/')) {
-      const ext = mimeType.split('/')[1];
-      extension = ext === 'jpeg' ? 'jpg' : ext;
-    } else if (mimeType.startsWith('video/')) {
-      const ext = mimeType.split('/')[1];
-      extension = ext === 'quicktime' ? 'mov' : ext;
-    } else if (mimeType.startsWith('audio/')) {
-      const ext = mimeType.split('/')[1];
-      // Normalize common audio extensions
-      if (ext === 'mp4' || ext === 'm4a') extension = 'm4a';
-      else if (ext === 'mpeg') extension = 'mp3';
-      else if (ext === 'x-wav') extension = 'wav';
-      else extension = ext;
-    }
-
-    // Генерируем уникальное имя файла
-    const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${extension}`;
+    const fileName = createUploadFileName(mimeType);
     const filePath = path.join(uploadsDir, fileName);
 
-    // Сохраняем файл
     const buffer = Buffer.from(base64Data, 'base64');
-
-    // Basic size limit: 100MB (matches client expectation; protects server disk/CPU)
-    const maxBytes = 100 * 1024 * 1024;
     if (buffer.length <= 0) {
       return res.status(400).json({ ok: false, error: 'empty_file' });
     }
-    if (buffer.length > maxBytes) {
+    if (buffer.length > MAX_BASE64_BINARY_BYTES) {
       return res.status(413).json({ ok: false, error: 'file_too_large' });
     }
-    fs.writeFileSync(filePath, buffer);
+    await fs.promises.writeFile(filePath, buffer);
 
-    // Возвращаем публичный URL
     const url = `/uploads/media/${fileName}`;
 
     console.log(`📤 Media uploaded: ${fileName} (${mimeType}, ${Math.round(buffer.length / 1024)}KB)`);
@@ -166,88 +192,46 @@ router.post('/upload/media', async (req, res) => {
 
 // POST /api/upload/media/multipart
 // Field: file
-const MAX_BYTES = 100 * 1024 * 1024;
+const multipartStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadsDir),
+  filename: (_req, file, cb) => cb(null, createUploadFileName(String(file.mimetype || ''))),
+});
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_BYTES },
+  storage: multipartStorage,
+  limits: { fileSize: MAX_MULTIPART_BYTES, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const mimeType = String(file.mimetype || '');
+    if (!ALLOWED_MEDIA_MIME_TYPES.has(mimeType)) {
+      return cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'unsupported_mime'));
+    }
+    cb(null, true);
+  },
 });
 
-router.post('/upload/media/multipart', upload.single('file'), async (req, res) => {
+router.post('/upload/media/multipart', async (req, res) => {
   try {
-    // SECURITY: require installId-based auth (do not accept x-user-id alone).
-    const installId = String(req.header('x-install-id') || '').trim();
-    if (!installId) {
-      return res.status(401).json({ ok: false, error: 'no_installId' });
-    }
+    const authedUserId = await authenticateUpload(req, res, 'upload_media_mp', 60);
+    if (!authedUserId) return;
 
-    // Basic abuse protection
-    const rl = checkRateLimit(`upload_media_mp:${installId}`, 60, 60_000);
-    if (!rl.ok) {
-      res.setHeader('Retry-After', String(rl.retryAfterSec || 60));
-      return res.status(429).json({ ok: false, error: 'rate_limited' });
-    }
+    upload.single('file')(req, res, async (error: any) => {
+      if (error) {
+        if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ ok: false, error: 'file_too_large' });
+        }
+        if (error instanceof multer.MulterError && error.code === 'LIMIT_UNEXPECTED_FILE') {
+          return res.status(400).json({ ok: false, error: 'unsupported_mime' });
+        }
+        return res.status(400).json({ ok: false, error: error?.message || 'upload_failed' });
+      }
 
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ ok: false, error: 'database_unavailable' });
-    }
-    const inst = await Install.findOne({ installId }).select('user').lean();
-    const authedUserId = inst?.user ? String((inst as any).user) : '';
-    if (!authedUserId) {
-      return res.status(401).json({ ok: false, error: 'unauthorized' });
-    }
+      const file = (req as any).file as { path: string; filename: string; mimetype: string; size: number } | undefined;
+      if (!file?.path || !file?.filename || !file.size) {
+        return res.status(400).json({ ok: false, error: 'missing_file' });
+      }
 
-    const file = (req as any).file as { buffer: Buffer; mimetype: string; originalname: string } | undefined;
-    if (!file?.buffer?.length) {
-      return res.status(400).json({ ok: false, error: 'missing_file' });
-    }
-
-    const allowed = new Set([
-      'image/jpeg',
-      'image/png',
-      'image/webp',
-      'image/gif',
-      'video/mp4',
-      'video/quicktime',
-      'video/webm',
-      // audio (voice messages)
-      'audio/mp4',
-      'audio/m4a',
-      'audio/aac',
-      'audio/mpeg',
-      'audio/ogg',
-      'audio/webm',
-      'audio/wav',
-      'audio/x-wav',
-    ]);
-    if (!allowed.has(String(file.mimetype || ''))) {
-      return res.status(400).json({ ok: false, error: 'unsupported_mime' });
-    }
-
-    let extension = 'bin';
-    if (file.mimetype.startsWith('image/')) {
-      const ext = file.mimetype.split('/')[1];
-      extension = ext === 'jpeg' ? 'jpg' : ext;
-    } else if (file.mimetype.startsWith('video/')) {
-      const ext = file.mimetype.split('/')[1];
-      extension = ext === 'quicktime' ? 'mov' : ext;
-    } else if (file.mimetype.startsWith('audio/')) {
-      const ext = file.mimetype.split('/')[1];
-      if (ext === 'mp4' || ext === 'm4a') extension = 'm4a';
-      else if (ext === 'mpeg') extension = 'mp3';
-      else if (ext === 'x-wav') extension = 'wav';
-      else extension = ext;
-    }
-
-    const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${extension}`;
-    const filePath = path.join(uploadsDir, fileName);
-
-    if (file.buffer.length > MAX_BYTES) {
-      return res.status(413).json({ ok: false, error: 'file_too_large' });
-    }
-
-    fs.writeFileSync(filePath, file.buffer);
-    const url = `/uploads/media/${fileName}`;
-    return res.json({ ok: true, url });
+      const url = `/uploads/media/${file.filename}`;
+      return res.json({ ok: true, url });
+    });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message || 'Upload failed' });
   }

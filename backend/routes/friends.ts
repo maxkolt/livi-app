@@ -1,7 +1,12 @@
 // routes/friends.ts
 import { Router } from 'express';
 import User from '../models/User';
-import { getFriendsPaginated, areFriendsCached } from '../utils/friendshipUtils';
+import {
+  areFriendsCached,
+  ensureFriendshipEdges,
+  getFriendsPaginated,
+  removeFriendshipEdges,
+} from '../utils/friendshipUtils';
 import { getIoInstance } from '../utils/ioInstance';
 import { getEffectiveBusy } from '../utils/effectiveBusy';
 import { isFriendGloballyVisibleOnline } from '../utils/friendOnlinePresence';
@@ -27,6 +32,8 @@ router.get('/friends', async (req, res) => {
 
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 50;
+    const includeAvatarThumbs = String(req.query.includeAvatarThumbs ?? '1') !== '0'
+      && String(req.query.includeAvatarThumbs ?? 'true') !== 'false';
 
     // Используем оптимизированную функцию с пагинацией
     const result = await getFriendsPaginated(userId, page, limit);
@@ -40,7 +47,7 @@ router.get('/friends', async (req, res) => {
         nick: friend.nick || '',
         avatar: (friend as any).avatar || '',
         avatarVer: (friend as any).avatarVer || 0,
-        avatarThumbB64: (friend as any).avatarThumbB64 || '', // мини сразу в список
+        ...(includeAvatarThumbs ? { avatarThumbB64: (friend as any).avatarThumbB64 || '' } : {}),
         online: isOnline(friendId),
         isBusy: isBusy(friendId),
       };
@@ -121,8 +128,7 @@ router.post('/friends/respond', async (req, res) => {
     await (User as any).updateOne({ _id: me }, { $pull: { friendRequests: from } });
 
     if (accept) {
-      await (User as any).updateOne({ _id: me }, { $addToSet: { friends: from } });
-      await (User as any).updateOne({ _id: from }, { $addToSet: { friends: me } });
+      await ensureFriendshipEdges(me, from);
 
       // Send profile snapshots to both sides (best-effort)
       try {
@@ -187,8 +193,7 @@ router.post('/friends/acceptInvite', async (req, res) => {
     const alreadyFriends = await areFriendsCached(me, inviterId);
     if (alreadyFriends) return res.json({ ok: true, status: 'already' });
 
-    await (User as any).updateOne({ _id: me }, { $addToSet: { friends: inviterId } });
-    await (User as any).updateOne({ _id: inviterId }, { $addToSet: { friends: me } });
+    await ensureFriendshipEdges(me, inviterId);
 
     // remove pending requests if present
     await (User as any).updateOne({ _id: me }, { $pull: { friendRequests: inviterId } });
@@ -222,6 +227,7 @@ router.post('/friends/remove', async (req, res) => {
     if (!isOid(peerId)) return res.status(400).json({ ok: false, error: 'invalid_peer' });
     if (String(me) === String(peerId)) return res.status(400).json({ ok: false, error: 'self' });
 
+    await removeFriendshipEdges(me, peerId);
     await (User as any).updateOne({ _id: me }, { $pull: { friends: peerId } });
     await (User as any).updateOne({ _id: peerId }, { $pull: { friends: me } });
 

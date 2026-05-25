@@ -1,6 +1,7 @@
 // backend/sockets/profile.ts
 import { Server, Socket } from 'socket.io';
 import User from '../models/User';
+import { getFriendIds } from '../utils/friendshipUtils';
 
 type Ack = (resp: { ok: boolean; error?: string; profile?: { nick?: string; avatarUrl?: string; avatarVer?: number; avatarB64?: string; avatarThumbB64?: string } }) => void;
 
@@ -63,7 +64,7 @@ export function registerProfileSockets(io: Server, socket: Socket) {
       }
 
       const user = await User.findByIdAndUpdate(userId, { $set: update }, { new: true })
-        .select('nick avatar avatarVer avatarThumbB64 friends')
+        .select('nick avatar avatarVer avatarThumbB64')
         .lean();
 
       if (!user) {
@@ -91,7 +92,7 @@ export function registerProfileSockets(io: Server, socket: Socket) {
           avatarVer: (user as any).avatarVer || 0,
           avatarThumbB64: (user as any).avatarThumbB64 || '',
         };
-        const friends = Array.isArray((user as any).friends) ? (user as any).friends.map(String) : [];
+        const friends = await getFriendIds(userId);
         for (const fid of friends) {
           io.to(`u:${String(fid)}`).emit('friend:profile', payload);
         }

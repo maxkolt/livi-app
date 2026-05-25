@@ -2,6 +2,7 @@
 import { Server, Socket } from 'socket.io';
 import User from '../models/User';
 import { buildAvatarDataUris } from '../utils/avatars';
+import { getFriendIds } from '../utils/friendshipUtils';
 
 export function bindAvatarSockets(io: Server, socket: Socket) {
   // Загрузка аватара
@@ -34,7 +35,7 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
           }, 
           $inc: { avatarVer: 1 } 
         },
-        { new: true, select: '_id avatarVer avatarThumbB64 avatarB64 friends' }
+        { new: true, select: '_id avatarVer avatarThumbB64 avatarB64' }
       ).lean();
 
       if (!updated) {
@@ -55,7 +56,7 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
         avatarThumbB64: updated.avatarThumbB64 || '',
       };
 
-      const friends = Array.isArray(updated.friends) ? updated.friends : [];
+      const friends = await getFriendIds(userId);
       friends.forEach((fid: any) => {
         try {
           io.to(`u:${String(fid)}`).emit('user.avatarUpdated', payload);
@@ -91,7 +92,7 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
           }, 
           $inc: { avatarVer: 1 } 
         },
-        { new: true, select: '_id avatarVer friends' }
+        { new: true, select: '_id avatarVer' }
       ).lean();
 
       if (!updated) {
@@ -112,7 +113,7 @@ export function bindAvatarSockets(io: Server, socket: Socket) {
         avatarThumbB64: '' 
       };
 
-      const friends = Array.isArray(updated.friends) ? updated.friends : [];
+      const friends = await getFriendIds(userId);
       friends.forEach((fid: any) => {
         try {
           io.to(`u:${String(fid)}`).emit('user.avatarUpdated', payload);
