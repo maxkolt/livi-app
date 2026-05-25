@@ -1,5 +1,5 @@
 // components/SettingsTab.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ScrollView,
   View,
@@ -158,6 +158,10 @@ const SettingsAvatar = memo(({
 
 SettingsAvatar.displayName = 'SettingsAvatar';
 
+const NICK_FIELD_BORDER_RADIUS = 15;
+/** На 1px ниже стандартной высоты outlined TextInput — визуально чуть компактнее. */
+const NICK_FIELD_HEIGHT_TRIM = 1;
+
 export default function SettingsTab({
   nick,
   setNick,
@@ -184,6 +188,12 @@ export default function SettingsTab({
   const [langState, setLangState] = useState<Lang>('ru');
   const lang = langProp || langState;
   const busy = (saving ?? isSaving) || false;
+  const [nickInputMeasured, setNickInputMeasured] = useState(56);
+  const nickFieldHeight = nickInputMeasured - NICK_FIELD_HEIGHT_TRIM;
+  const nickFieldFill = useMemo(() => {
+    const bg = StyleSheet.flatten(styles.input)?.backgroundColor;
+    return typeof bg === 'string' && bg.length > 0 ? bg : 'rgba(255,255,255,0.04)';
+  }, [styles.input]);
 
   // загружаем язык из AsyncStorage
   useEffect(() => {
@@ -241,40 +251,60 @@ export default function SettingsTab({
           {/* --- Никнейм --- */}
           <PaperText style={styles.fieldLabel}>{t('nickname', lang)}</PaperText>
 
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <TextInput
-              value={nick ?? ''}
-              onChangeText={setNick}
-              mode="outlined"
-              outlineStyle={{ borderColor: LIVI.border, borderRadius: 15 }}
-              style={[styles.input, { flex: 1 }]}
-              textColor={LIVI.white}
-              placeholder={t('enter_nick', lang)}
-              placeholderTextColor={LIVI.text2}
-              autoCorrect={false}
-              autoCapitalize="none"
-              returnKeyType="done"
-              blurOnSubmit
-              editable={!busy}
-            />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+            <View
+              style={{ flex: 1, justifyContent: 'center' }}
+              onLayout={(e) => {
+                const h = Math.round(e.nativeEvent.layout.height);
+                const base = h + NICK_FIELD_HEIGHT_TRIM;
+                if (base > 0 && base !== nickInputMeasured) setNickInputMeasured(base);
+              }}
+            >
+              <TextInput
+                value={nick ?? ''}
+                onChangeText={setNick}
+                mode="outlined"
+                outlineStyle={{ borderColor: LIVI.border, borderRadius: NICK_FIELD_BORDER_RADIUS }}
+                style={[
+                  styles.input,
+                  {
+                    flex: 1,
+                    marginBottom: 0,
+                    marginTop: 0,
+                    marginVertical: 0,
+                    height: nickFieldHeight,
+                    backgroundColor: nickFieldFill,
+                  },
+                ]}
+                contentStyle={{ paddingVertical: 0 }}
+                textColor={LIVI.white}
+                placeholder={t('enter_nick', lang)}
+                placeholderTextColor={LIVI.text2}
+                autoCorrect={false}
+                autoCapitalize="none"
+                returnKeyType="done"
+                blurOnSubmit
+                editable={!busy}
+              />
+            </View>
 
             <View
               style={{
-                marginTop: -12,
                 borderWidth: 1,
                 borderColor: LIVI.border,
-                borderRadius: 32,
-                width: 60,
-                height: 60,
+                borderRadius: NICK_FIELD_BORDER_RADIUS,
+                width: nickFieldHeight,
+                height: nickFieldHeight,
                 justifyContent: 'center',
                 alignItems: 'center',
-                backgroundColor: '#1E1E1E',
+                backgroundColor: nickFieldFill,
               }}
             >
               <IconButton
                 icon="delete"
-                size={28}
+                size={22}
                 iconColor={LIVI.text}
+                style={{ margin: 0, width: nickFieldHeight, height: nickFieldHeight }}
                 onPress={onClearNick}
               />
             </View>

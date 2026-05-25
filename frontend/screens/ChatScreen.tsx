@@ -777,39 +777,32 @@ export default function ChatScreen({ route, navigation }: Props) {
   const forwardToastOpacity = useRef(new Animated.Value(0)).current;
   const forwardToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const forwardSheetTranslateY = useRef(new Animated.Value(0)).current;
-  /** Чтобы PanGestureHandler (свайп закрытия) не перехватывал вертикальную прокрутку списка друзей. */
-  const forwardFriendsListGestureRef = useRef<React.ComponentRef<typeof NativeViewGestureHandler>>(null);
   const forwardPickerSheetMaxH = React.useMemo(() => {
     const h = Dimensions.get('window').height;
     return Math.min(Math.round(h * 0.72), Math.round(h - insets.top - 12));
   }, [insets.top, showForwardPicker]);
 
-  /** Высота шита и списка по числу друзей — без лишней пустоты при 1–3 контактах. */
+  /** Высота шита по числу друзей; список внутри — flex + скролл без конфликта с Pan. */
   const forwardPickerLayout = React.useMemo(() => {
     const maxSheet = forwardPickerSheetMaxH;
     const padBottom = ANDROID_SHEET_BOTTOM_PAD;
     const padTop = 30;
-    // Шапка (ручка + заголовок) + разделитель с отступами — оценка по вёрстке.
     const headerAndSep = 86;
-    // Зазор под списком + «Переслать» + «Отмена» + margin между кнопками (как раньше по отступу от списка).
     const footerBlock = 140;
     const maxList = Math.max(110, maxSheet - padTop - padBottom - headerAndSep - footerBlock);
     const rowApprox = 62;
     const listPadding = 16;
-    let listHeight: number;
+    let listNeed: number;
     if (forwardLoading) {
-      listHeight = Math.min(168, maxList);
+      listNeed = Math.min(168, maxList);
     } else if (forwardFriends.length === 0) {
-      listHeight = Math.min(96, maxList);
+      listNeed = Math.min(96, maxList);
     } else {
       const contentH = forwardFriends.length * rowApprox + listPadding;
-      listHeight = Math.min(Math.max(contentH, 72), maxList);
+      listNeed = Math.min(Math.max(contentH, 72), maxList);
     }
-    const sheetHeight = Math.min(maxSheet, padTop + headerAndSep + listHeight + footerBlock + padBottom);
-    const wantListContent = forwardFriends.length * rowApprox + listPadding;
-    const friendsScrollEnabled =
-      !forwardLoading && forwardFriends.length > 0 && wantListContent > listHeight + 4;
-    return { sheetHeight, listHeight, friendsScrollEnabled };
+    const sheetHeight = Math.min(maxSheet, padTop + headerAndSep + listNeed + footerBlock + padBottom);
+    return { sheetHeight };
   }, [
     forwardPickerSheetMaxH,
     forwardLoading,
@@ -4151,6 +4144,12 @@ export default function ChatScreen({ route, navigation }: Props) {
       <ChatStyleBackButton
         icon={selectionMode ? 'close' : 'arrow-back'}
         iconColor={LIVI.titan}
+        iconSize={FRIEND_ACTION_ICON_SIZE - 2}
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: FRIEND_ACTION_BUTTON.borderRadius - 1,
+        }}
         onPress={() => {
           if (selectionMode) exitSelectionMode();
           else navigation.goBack();
@@ -7842,14 +7841,6 @@ export default function ChatScreen({ route, navigation }: Props) {
             onPress={() => setShowForwardPicker(false)}
             style={{ flex: 1, backgroundColor: isDark ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.40)', justifyContent: 'flex-end' }}
           >
-          <PanGestureHandler
-            // Широкий мёртвый диапазон по Y вверх: иначе Pan перехватывает вертикальную прокрутку списка друзей.
-            // Закрытие шита — при явном свайпе вниз (translationY больше порога).
-            activeOffsetY={[-1e4, 14]}
-            waitFor={forwardFriendsListGestureRef}
-            onGestureEvent={onForwardSheetGestureEvent}
-            onHandlerStateChange={onForwardSheetHandlerStateChange}
-          >
             <Animated.View
               style={{
                 transform: [{ translateY: forwardSheetTranslateY }],
@@ -7873,10 +7864,12 @@ export default function ChatScreen({ route, navigation }: Props) {
               }}
             >
               <View style={{ paddingBottom: 2 }}>
-                <View
-                  style={{ width: '100%', alignItems: 'center', paddingTop: 2, paddingBottom: 4, minHeight: 28 }}
-                  pointerEvents="box-only"
+                <PanGestureHandler
+                  activeOffsetY={10}
+                  onGestureEvent={onForwardSheetGestureEvent}
+                  onHandlerStateChange={onForwardSheetHandlerStateChange}
                 >
+                <View style={{ width: '100%', alignItems: 'center', paddingTop: 2, paddingBottom: 4, minHeight: 28 }}>
                   <View
                     style={{
                       width: 42,
@@ -7886,6 +7879,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     }}
                   />
                 </View>
+                </PanGestureHandler>
                 <View
                   style={{
                     flexDirection: 'row',
@@ -7939,8 +7933,8 @@ export default function ChatScreen({ route, navigation }: Props) {
                 }}
               />
 
-              <View style={{ height: forwardPickerLayout.listHeight, minHeight: 0 }}>
-                <NativeViewGestureHandler ref={forwardFriendsListGestureRef}>
+              <View style={{ flex: 1, minHeight: 0 }}>
+                <NativeViewGestureHandler disallowInterruption>
                 {forwardLoading ? (
                   <View style={{ flex: 1, minHeight: 0, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' }}>
                     <ActivityIndicator />
@@ -7949,8 +7943,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                   <GHFlatList
                     data={forwardFriends}
                     keyExtractor={(it: any, index: number) => String(it?._id || `fwd-friend-${index}`)}
-                    style={{ flex: 1, minHeight: 0, height: forwardPickerLayout.listHeight }}
-                    scrollEnabled={forwardPickerLayout.friendsScrollEnabled}
+                    style={{ flex: 1, minHeight: 0 }}
+                    nestedScrollEnabled
+                    scrollEnabled={forwardFriends.length > 0}
                     contentContainerStyle={
                       forwardFriends.length === 0
                         ? { flexGrow: 1, paddingVertical: 8 }
@@ -8040,7 +8035,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 </NativeViewGestureHandler>
               </View>
 
-              <View style={{ height: 60 }} />
+              <View style={{ paddingTop: 8 }}>
               <TouchableOpacity
                 onPress={() => void forwardToSelectedFriends()}
                 disabled={forwardSelectedFriendIds.size === 0}
@@ -8091,9 +8086,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                   {t('cancelAction', lang)}
                 </Text>
               </TouchableOpacity>
+              </View>
             </Pressable>
             </Animated.View>
-          </PanGestureHandler>
           </Pressable>
           </GestureHandlerRootView>
         </Modal>

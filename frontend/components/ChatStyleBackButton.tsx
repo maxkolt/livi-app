@@ -14,6 +14,7 @@ type Props = {
   style?: StyleProp<ViewStyle>;
   disabled?: boolean;
   iconColor?: string;
+  iconSize?: number;
 };
 
 /** Та же кнопка «назад», что в шапке экрана переписки (ChatScreen). */
@@ -23,6 +24,7 @@ export default function ChatStyleBackButton({
   style,
   disabled,
   iconColor,
+  iconSize = FRIEND_ACTION_ICON_SIZE,
 }: Props) {
   const theme = useTheme();
   const { isDark } = useAppTheme();
@@ -55,7 +57,7 @@ export default function ChatStyleBackButton({
         style,
       ]}
     >
-      <Ionicons name={icon} size={FRIEND_ACTION_ICON_SIZE} color={tint} />
+      <Ionicons name={icon} size={iconSize} color={tint} />
     </TouchableOpacity>
   );
 }

@@ -5466,14 +5466,14 @@ const handleClearNick = useCallback(async () => {
                 pointerEvents="none"
                 intensity={isDark ? 15 : 20}
                 tint={isDark ? 'dark' : 'light'}
-                style={[StyleSheet.absoluteFillObject, { borderRadius: 13 }]}
+                style={[StyleSheet.absoluteFillObject, { borderRadius: 12 }]}
               />
               <View
                 pointerEvents="none"
                 style={[
                   StyleSheet.absoluteFillObject,
                   {
-                    borderRadius: 13,
+                    borderRadius: 12,
                     backgroundColor: isDark ? '#8A8F99' : '#3B4453',
                     opacity: isDark ? 0.25 : 0.14,
                   },
@@ -6407,9 +6407,18 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: LIVI.bg, paddingHorizontal: 14, paddingBottom: 10, justifyContent: 'center' },
   topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
   brand: { color: LIVI.text, fontSize: 41, lineHeight: 40, fontWeight: '600', letterSpacing: 0.3 },
-  menuBtn: { backgroundColor: LIVI.glass, borderRadius: 14 },
-  menuBtnOuter: { borderRadius: 14, padding: 1, alignSelf: 'flex-start', overflow: 'hidden' },
-  menuBtnInner: { borderRadius: 13, overflow: 'hidden', minWidth: 40, minHeight: 40, justifyContent: 'center', alignItems: 'center' },
+  menuBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
+  menuBtnOuter: { borderRadius: 12, padding: 1, alignSelf: 'flex-start', overflow: 'hidden' },
+  menuBtnInner: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    width: 42,
+    height: 42,
+    minWidth: 42,
+    minHeight: 42,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   menuBtnPressed: { opacity: 0.9 },
   menuBtnIconWrap: { margin: 0, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' },
   menuBtnIcon: { margin: 0, backgroundColor: 'transparent' },
