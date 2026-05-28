@@ -33,7 +33,7 @@ npx expo start --dev-client
 ### Нативный экран входящего звонка (Android) не показывается
 
 1. **Бэкенд:** В логах при звонке ищи `[push] sendCallPushToRecipient` — должны быть `hasFirebase: true` и `androidTokensWithFcm: 1` (или больше). Если `hasFirebase: false` — задай на сервере `FIREBASE_SERVICE_ACCOUNT_JSON` (JSON ключа сервисного аккаунта Firebase) и перезапусти бэкенд. Если `androidTokensWithFcm: 0` — открой приложение на телефоне получателя, дождись успешной регистрации пуша (в логах приложения `token register response: ok: true`), затем проверь снова.
-2. **Приложение получателя:** Должен быть установлен dev-билд (не Expo Go), с разрешением «Доступ к звонкам» (READ_PHONE_NUMBERS). При входящем звонке в фоне/убитом приложении в logcat должны появляться строки `LiviFCM: FCM onMessageReceived` и `[headless] RNCallKeepBackgroundMessage received`. Если их нет — пуш идёт через Expo (см. п. 1).
+2. **Приложение получателя:** Должен быть установлен dev-билд (не Expo Go). При входящем звонке в фоне/убитом приложении в logcat должны появляться строки `LiviFCM: FCM onMessageReceived` и `[headless] RNCallKeepBackgroundMessage received`. Если их нет — пуш идёт через Expo (см. п. 1).
 
 ## TURN (важно для VPN/моб.сети/CGNAT)
 

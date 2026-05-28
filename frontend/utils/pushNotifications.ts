@@ -1187,15 +1187,9 @@ export function addNotificationListeners() {
         return;
       }
       if (data?.type === 'call' && data?.callId && data?.from) {
-        if (Platform.OS === 'android') {
-          // Android incoming call UI is handled only by native FCM path.
-          // Ignoring Expo "call" here prevents flash-open/close when delayed
-          // notifications arrive after offline recovery.
-          logger.info('[push] ignore Expo call notification on Android (native FCM owns incoming/missed)', {
-            callId: data.callId,
-          });
-          return;
-        }
+        // Android: keep native FCM as primary path, but do not ignore Expo payloads completely.
+        // On unstable networks native/data delivery can be delayed or dropped while Expo listener still fires.
+        // Existing de-dup + stale guards below prevent flash-open for old notifications.
         if (await isEndedCallId(data.callId)) {
           logger.info('[push] incoming call notification ignored (call already ended)', { callId: data.callId });
           return;

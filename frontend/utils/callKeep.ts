@@ -2,7 +2,7 @@
  * CallKeep (ConnectionService) — нативный экран входящего звонка на Android.
  * Инициализация, displayIncomingCall, обработка answer/end.
  */
-import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
+import { Platform, NativeModules } from 'react-native';
 import { logger } from './logger';
 import { setIncomingCallScreenVisible } from '../sockets/socket';
 import { loadLang, t } from './i18n';
@@ -11,8 +11,8 @@ import { loadLang, t } from './i18n';
 export const OUTGOING_CALL_TIMEOUT_MS = 27_000;
 
 let isSetup = false;
-/** Разрешение READ_PHONE_NUMBERS выдано (иначе VoiceConnectionService падает с SecurityException) */
-let hasPhoneNumbersPermission = false;
+/** Android: CallKeep успешно инициализирован и готов к показу системного UI звонка. */
+let isAndroidCallKeepReady = false;
 /** raw callId -> { from, fromNick, callKitId } для навигации при answer из нативного UI */
 const pendingCallById: Record<string, { from: string; fromNick?: string; callKitId?: string }> = {};
 const callKitUuidByCallId: Record<string, string> = {};
@@ -116,33 +116,9 @@ export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boo
   }
 
   if (Platform.OS !== 'android') return false;
-
-  try {
-    const status = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS);
-    if (status) {
-      hasPhoneNumbersPermission = true;
-    } else if (requestPermission) {
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS,
-        {
-          title: t('callPermissionTitle', lang),
-          message: t('callPermissionMessage', lang),
-          buttonPositive: t('allowAction', lang),
-        }
-      );
-      hasPhoneNumbersPermission = granted === PermissionsAndroid.RESULTS.GRANTED;
-      if (!hasPhoneNumbersPermission) {
-        logger.warn('[callKeep] READ_PHONE_NUMBERS not granted — нативный экран звонка отключён, только модалка в приложении');
-      }
-    } else {
-      hasPhoneNumbersPermission = false;
-      logger.info('[callKeep] READ_PHONE_NUMBERS not granted yet — skipping CallKeep setup without prompt');
-    }
-  } catch (e) {
-    logger.warn('[callKeep] READ_PHONE_NUMBERS check/request failed', e as Error);
+  if (requestPermission) {
+    logger.info('[callKeep] setup requested with permission prompt flag; no dangerous runtime permission is requested on Android');
   }
-
-  if (!hasPhoneNumbersPermission) return false;
   if (isSetup) return true;
 
   try {
@@ -165,6 +141,7 @@ export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boo
     };
     await RNCallKeep.default.setup(options);
     isSetup = true;
+    isAndroidCallKeepReady = true;
     try {
       RNCallKeep.default.setReachable?.();
     } catch {}
@@ -174,6 +151,7 @@ export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boo
     logger.info('[callKeep] setup OK (selfManaged)');
     return true;
   } catch (e) {
+    isAndroidCallKeepReady = false;
     logger.warn('[callKeep] setup failed (non-fatal)', e as Error);
     return false;
   }
@@ -181,7 +159,7 @@ export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boo
 
 export function isCallKeepAvailable(): boolean {
   if (Platform.OS === 'ios') return isSetup;
-  return Platform.OS === 'android' && isSetup && hasPhoneNumbersPermission;
+  return Platform.OS === 'android' && isSetup && isAndroidCallKeepReady;
 }
 
 /** Один раз закрываем исходящий при decline: сокет и пуш оба могут прийти — закрываем только по первому. */
@@ -463,16 +441,16 @@ export function displayOutgoingCallImmediate(toUserId: string, toNick?: string):
     toNick: toNick ?? '',
     platform: Platform.OS,
     isSetup,
-    hasPhoneNumbersPermission,
+    isAndroidCallKeepReady,
   });
   if (Platform.OS !== 'android') {
     logger.info('[outgoing] skip: not Android');
     return;
   }
-  if (!isSetup || !hasPhoneNumbersPermission) {
-    logger.warn('[outgoing] skip: нативный экран не показывается — isSetup=false или нет разрешения', {
+  if (!isSetup || !isAndroidCallKeepReady) {
+    logger.warn('[outgoing] skip: нативный экран не показывается — CallKeep не готов', {
       isSetup,
-      hasPhoneNumbersPermission,
+      isAndroidCallKeepReady,
     });
     return;
   }
@@ -517,7 +495,7 @@ export function notifyOutgoingCallId(callId: string): void {
  */
 export function displayOutgoingCall(callId: string, toUserId: string, toNick?: string, _hasVideo = true): void {
   if (Platform.OS !== 'android') return;
-  if (!isSetup || !hasPhoneNumbersPermission) return;
+  if (!isSetup || !isAndroidCallKeepReady) return;
   try {
     const LiviAppModule = NativeModules.LiviAppModule;
     if (LiviAppModule?.launchOutgoingCallActivity) {
@@ -535,11 +513,11 @@ export function displayOutgoingCall(callId: string, toUserId: string, toNick?: s
  */
 export function displayIncomingCall(callId: string, fromUserId: string, fromNick?: string, hasVideo = true, callKitId?: string): void {
   if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
-  if (!isSetup || (Platform.OS === 'android' && !hasPhoneNumbersPermission)) {
-    logger.warn('[callKeep] displayIncomingCall skipped (no setup or no READ_PHONE_NUMBERS)', {
+  if (!isSetup || (Platform.OS === 'android' && !isAndroidCallKeepReady)) {
+    logger.warn('[callKeep] displayIncomingCall skipped (CallKeep not ready)', {
       callId,
       isSetup,
-      hasPhoneNumbersPermission,
+      isAndroidCallKeepReady,
     });
     return;
   }

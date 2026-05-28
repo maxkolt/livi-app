@@ -5257,12 +5257,6 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const handleImagePicker = async () => {
     try {
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        showNotice('error', t('errorTitle', lang), t('needGalleryPermission', lang));
-        return;
-      }
-
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         // Не обрезаем принудительно: даём предпросмотр и возможность обрезать/не обрезать

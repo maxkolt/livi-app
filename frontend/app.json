@@ -30,7 +30,7 @@
     },
     "android": {
       "package": "com.kolt12max.livi",
-      "versionCode": 123,
+      "versionCode": 127,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -43,9 +43,7 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.WAKE_LOCK",
-        "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.READ_EXTERNAL_STORAGE"
+        "android.permission.WAKE_LOCK"
       ],
       "intentFilters": [
         {

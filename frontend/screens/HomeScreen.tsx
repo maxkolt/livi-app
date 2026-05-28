@@ -4199,31 +4199,54 @@ const handleClearNick = useCallback(async () => {
   /* delete avatar */
   const handleDeleteAvatar = useCallback(async () => {
     try {
-      // Проверяем подключение к серверу
-      if (!(socket as any)?.connected) {
-        showNotice(t('noServer', lang), 'error', 3000);
-        return;
-      }
+      const currentUserId = String(getCurrentUserId() || '').trim();
+      const resolvedInstallId = String(installId || (await getInstallId().catch(() => ''))).trim();
 
-      const result = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
-        const timeout = setTimeout(() => {
-          resolve({ ok: false, error: 'timeout' });
-        }, 10000); // 10 секунд таймаут
+      const deleteViaSocket = async (): Promise<{ ok: boolean; error?: string }> => {
+        return new Promise((resolve) => {
+          const timeout = setTimeout(() => {
+            resolve({ ok: false, error: 'timeout' });
+          }, 10_000);
 
-        socket.emit('user.deleteAvatar', {}, (ack: any) => {
-          clearTimeout(timeout);
-          resolve(ack || { ok: false, error: 'no_response' });
+          try {
+            socket.emit('user.deleteAvatar', {}, (ack: any) => {
+              clearTimeout(timeout);
+              resolve(ack || { ok: false, error: 'no_response' });
+            });
+          } catch {
+            clearTimeout(timeout);
+            resolve({ ok: false, error: 'socket_emit_failed' });
+          }
         });
-      });
+      };
 
-      if (!result.ok) {
-        const errorMessage = result.error === 'unauthorized' 
-          ? t('unauthorized', lang)
-          : result.error === 'timeout'
-          ? t('timeoutExceeded', lang)
-          : result.error || 'delete_failed';
-        throw new Error(errorMessage);
+      const deleteViaHttp = async (): Promise<{ ok: boolean; error?: string }> => {
+        if (!currentUserId) return { ok: false, error: 'no_user_id' };
+        const headers: Record<string, string> = { 'x-user-id': currentUserId };
+        if (resolvedInstallId) headers['x-install-id'] = resolvedInstallId;
+        try {
+          const r = await fetch(`${API_BASE}/api/avatar/${encodeURIComponent(currentUserId)}`, {
+            method: 'DELETE',
+            headers,
+          });
+          const text = await r.text();
+          let payload: any = {};
+          try { payload = text ? JSON.parse(text) : {}; } catch {}
+          if (r.ok && payload?.ok) return { ok: true };
+          return { ok: false, error: String(payload?.error || `http_${r.status}`) };
+        } catch {
+          return { ok: false, error: 'network_error' };
+        }
+      };
+
+      let result: { ok: boolean; error?: string } = { ok: false, error: 'unknown' };
+      if ((socket as any)?.connected) {
+        result = await deleteViaSocket();
       }
+      if (!result.ok) {
+        result = await deleteViaHttp();
+      }
+      if (!result.ok) throw new Error(result.error || 'delete_failed');
 
       // Очищаем локальное состояние
       setAvatarUri('');
@@ -4232,13 +4255,13 @@ const handleClearNick = useCallback(async () => {
       setMyFullAvatarUri(''); // Также очищаем кешированный data URI
 
       // Очищаем кэш для текущего пользователя
-      const currentUserId = getCurrentUserId();
-      if (currentUserId) {
-        await clearAvatarCacheFor(currentUserId);
+      const currentUserIdForCache = getCurrentUserId();
+      if (currentUserIdForCache) {
+        await clearAvatarCacheFor(currentUserIdForCache);
 
         // Удаляем сохранённую версию аватара
         try {
-          await AsyncStorage.removeItem(`avatarVer_${currentUserId}`);
+          await AsyncStorage.removeItem(`avatarVer_${currentUserIdForCache}`);
         } catch (e) {
           console.warn('[handleDeleteAvatar] Failed to remove avatar version:', e);
         }
@@ -4251,9 +4274,19 @@ const handleClearNick = useCallback(async () => {
       showNotice(t('avatarDeleted', lang) || 'Avatar deleted', 'success');
     } catch (e: any) {
       console.error('[handleDeleteAvatar] Error:', e);
-      showNotice(t('deleteFailed', lang) || 'Delete failed', 'error');
+      const raw = String(e?.message || '').trim();
+      const errorCode = raw.toLowerCase();
+      const errorToast =
+        errorCode === 'unauthorized'
+          ? (t('unauthorized', lang) || 'Unauthorized')
+          : (errorCode === 'timeout' || errorCode === 'network_error' || errorCode === 'socket_emit_failed' || errorCode === 'no_response')
+          ? (t('timeoutExceeded', lang) || t('noServer', lang) || 'Network timeout')
+          : (errorCode === 'no_user_id')
+          ? (t('noUserIdTryReopen', lang) || 'No user id')
+          : (t('deleteFailed', lang) || 'Delete failed');
+      showNotice(errorToast, 'error');
     }
-  }, [nick, lang, showNotice]);
+  }, [nick, lang, showNotice, installId]);
 
 
   /* avatar pick flow (gallery/camera/files) */
@@ -4281,11 +4314,6 @@ const handleClearNick = useCallback(async () => {
         let localUri: string | undefined;
 
         if (pendingPicker === 'gallery') {
-          let perm = await ImagePicker.getMediaLibraryPermissionsAsync();
-          if (!perm.granted) perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          const granted = perm.granted || (perm as any)?.accessPrivileges === 'limited';
-          if (!granted) { showNotice(t('noPhotosAccess', lang), 'error'); return; }
-
           const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1, 1], quality: 0.9 });
           if (!res.canceled) {
             const a = res.assets?.[0];

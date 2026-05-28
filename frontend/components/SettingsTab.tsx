@@ -217,16 +217,6 @@ export default function SettingsTab({
     return () => clearTimeout(tmo);
   }, [savedToast, setSavedToast, busy]);
 
-  // запрашиваем доступ к библиотеке фото
-  useEffect(() => {
-    (async () => {
-      try {
-        const p = await ImagePicker.getMediaLibraryPermissionsAsync();
-        if (!p.granted) await ImagePicker.requestMediaLibraryPermissionsAsync();
-      } catch {}
-    })();
-  }, []);
-
   /** Выбор аватара - используем переданную функцию */
   const pickAvatar = () => {
     if (openAvatarSheet) {

@@ -30,7 +30,7 @@ AppRegistry.registerHeadlessTask('RNCallKeepBackgroundMessage', () => async (dat
       console.log('[headless] skip (call already ended)', data.callId);
       return;
     }
-    // Без READ_PHONE_NUMBERS не показываем prompt в фоне: используем CallKeep только если он уже доступен,
+    // В фоне не запрашиваем runtime-permissions: используем CallKeep только если он уже готов,
     // иначе переключаемся на нативный системный fallback.
     const ready = await setupCallKeep({ requestPermission: false });
     if (ready) {
