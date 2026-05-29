@@ -9,14 +9,13 @@ import {
   StatusBar,
   Animated,
   Platform,
-  ToastAndroid,
   Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView, PinchGestureHandler, PanGestureHandler, State } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import * as MediaLibrary from 'expo-media-library';
+import { saveImageToGallery } from '../utils/saveToGallery';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
@@ -456,18 +455,9 @@ export default function MediaViewer({
     if (busy) return;
     setBusy(true);
     try {
-      // Android: request write-only photo permission to avoid "audio" prompt
-      const perm =
-        Platform.OS === 'android'
-          ? await MediaLibrary.requestPermissionsAsync(true, ['photo'])
-          : await MediaLibrary.requestPermissionsAsync();
-      if (!perm.granted) return;
       const local = await ensureLocalFile();
-      await MediaLibrary.saveToLibraryAsync(local);
-      if (Platform.OS === 'android') {
-        ToastAndroid.show('Saved to gallery', ToastAndroid.SHORT);
-      }
-    } catch (e) {
+      await saveImageToGallery(local);
+    } catch {
       // ignore
     } finally {
       setBusy(false);

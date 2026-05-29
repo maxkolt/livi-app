@@ -1,5 +1,5 @@
 // utils/uploadAvatar.ts
-import * as MediaLibrary from 'expo-media-library';
+import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { API_BASE } from '../sockets/socket';
@@ -18,8 +18,10 @@ function guessMime(filename: string, fallback = 'application/octet-stream') {
   return fallback;
 }
 
-async function ensureMediaPermissions() {
+async function ensureMediaPermissions(): Promise<boolean> {
+  if (Platform.OS !== 'ios') return true;
   try {
+    const MediaLibrary = await import('expo-media-library');
     const perm = await MediaLibrary.getPermissionsAsync();
     if (!perm.granted) {
       const req = await MediaLibrary.requestPermissionsAsync();
@@ -62,6 +64,7 @@ export async function normalizeLocalImageUri(
     const id = assetId || s.replace(/^ph:\/\//, '');
     if (!id) throw new Error('No asset id');
 
+    const MediaLibrary = await import('expo-media-library');
     const info = await MediaLibrary.getAssetInfoAsync(id);
     const local = (info?.localUri || info?.uri) as string | undefined;
     if (local?.startsWith('file://')) return local;

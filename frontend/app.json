@@ -30,7 +30,7 @@
     },
     "android": {
       "package": "com.kolt12max.livi",
-      "versionCode": 130,
+      "versionCode": 131,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -51,6 +51,7 @@
         "android.permission.READ_MEDIA_AUDIO",
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
         "android.permission.READ_PHONE_NUMBERS"
       ],
       "intentFilters": [
@@ -77,14 +78,6 @@
       "expo-video",
       "expo-audio",
       "expo-asset",
-      [
-        "expo-media-library",
-        {
-          "granularPermissions": [
-            "photo"
-          ]
-        }
-      ],
       [
         "expo-navigation-bar",
         {
