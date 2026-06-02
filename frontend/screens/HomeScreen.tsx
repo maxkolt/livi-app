@@ -35,7 +35,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Sharing from 'expo-sharing';
 import SplashLoader from '../components/SplashLoader';
-import { Swipeable, PinchGestureHandler, State, RectButton, NativeViewGestureHandler } from 'react-native-gesture-handler';
+import { Swipeable, PinchGestureHandler, State, NativeViewGestureHandler } from 'react-native-gesture-handler';
 import { Avatar, Divider, IconButton, List, Surface, Portal, Dialog, Button, Icon } from 'react-native-paper';
 import { Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
@@ -203,10 +203,86 @@ const ANDROID_INSTANT_TOUCH =
 /** Изолированные кнопки (меню «прочитано» и т.п.) — со всех сторон одинаково. */
 const ANDROID_FRIEND_ACTION_HIT_SLOP = { top: 14, bottom: 14, left: 14, right: 14 };
 const ANDROID_MENU_HIT_SLOP = { top: 12, bottom: 12, left: 12, right: 12 };
+const MENU_BTN_BORDER = 1;
+const MENU_BTN_RADIUS = 12;
+const MENU_BTN_INNER_RADIUS = MENU_BTN_RADIUS - MENU_BTN_BORDER;
 const ANDROID_SEG_RIPPLE = { color: 'rgba(255,255,255,0.14)', borderless: false as const };
 const FRIENDS_PAGE_SIZE = 50;
 const FRIENDS_MAX_PAGES_PER_LOAD = 10;
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+
+const FRIEND_ACTION_BTN_SURFACE = {
+  backgroundColor: '#2B2B2B',
+  borderWidth: 1,
+  borderColor: 'rgba(255,255,255,0.12)',
+  justifyContent: 'center' as const,
+  alignItems: 'center' as const,
+};
+
+/** Одинаковый оттенок иконки чата и видео при удержании пальца (не busy/outgoing state). */
+const FRIEND_ACTION_ICON_PRESSED = '#ddd';
+
+type FriendRowIconActionButtonProps = {
+  icon: 'chat-processing' | 'video';
+  hitSlop?: { top?: number; bottom?: number; left?: number; right?: number };
+  delayLongPress?: number;
+  disabled?: boolean;
+  accessibilityState?: { disabled?: boolean };
+  onPress?: () => void;
+  onLongPress?: () => void;
+};
+
+function FriendRowIconActionButton({
+  icon,
+  hitSlop,
+  delayLongPress,
+  disabled,
+  accessibilityState,
+  onPress,
+  onLongPress,
+}: FriendRowIconActionButtonProps) {
+  return (
+    <Pressable
+      disabled={disabled}
+      accessibilityState={accessibilityState}
+      hitSlop={hitSlop}
+      delayLongPress={delayLongPress}
+      android_disableSound
+      android_ripple={null}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      style={[
+        {
+          width: FRIEND_ACTION_BUTTON.width,
+          height: FRIEND_ACTION_BUTTON.height,
+          borderRadius: FRIEND_ACTION_BUTTON.borderRadius,
+        },
+        FRIEND_ACTION_BTN_SURFACE,
+        disabled
+          ? {
+              backgroundColor: ANDROID_VIDEO_CALL_DISABLED_BG,
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.08)',
+            }
+          : null,
+      ]}
+    >
+      {({ pressed }) => (
+        <MaterialCommunityIcons
+          name={icon}
+          size={FRIEND_ACTION_ICON_SIZE}
+          color={
+            disabled
+              ? ANDROID_VIDEO_CALL_DISABLED_ICON
+              : pressed
+                ? FRIEND_ACTION_ICON_PRESSED
+                : LIVI.white
+          }
+        />
+      )}
+    </Pressable>
+  );
+}
 
 const displayName = (name?: string) => (name && name.trim().length ? name : '—');
 const displayAvatarLetter = (name?: string) => {
@@ -1528,6 +1604,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const activeOutgoingAttemptRef = useRef(0);
   const lastOutgoingExternalCloseResetAtRef = useRef(0);
 
+  /** UI без исходящего, но ref попытки остался после async — иначе video onPress/handleStartVideoCall молча игнорируют тап. */
+  const clearStaleOutgoingAttemptIfIdle = useCallback(() => {
+    if (activeOutgoingAttemptRef.current <= 0) return;
+    if (callingVisibleRef.current) return;
+    logger.info('[HomeScreen] cleared stale outgoing attempt (UI idle)');
+    activeOutgoingAttemptRef.current = 0;
+    outgoingAttemptSeqRef.current += 1;
+  }, []);
+
   // ВАЖНО: не закрываем исходящий UI на socket 'connect'.
   // Иначе при старте звонка из вкладки «Друзья» (HomeScreen смонтирован) нативный исходящий экран
   // может закрываться сразу же, если сокет в этот момент переподключается/доподключается.
@@ -1683,7 +1768,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (canceledByNative) {
       resetOutgoingAfterExternalClose('video-start-native-flag');
     }
-    if (activeOutgoingAttemptRef.current > 0) return;
+    if (activeOutgoingAttemptRef.current > 0) {
+      clearStaleOutgoingAttemptIfIdle();
+      if (activeOutgoingAttemptRef.current > 0) return;
+    }
     if (callingVisibleRef.current) {
       try { setOutgoingCallScreenVisible(false); } catch {}
       callingVisibleRef.current = false;
@@ -1948,7 +2036,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         } catch {}
       }
     }
-  }, [navigation, showNotice, startWaves, stopWaves, resetOutgoingAfterExternalClose, lang]);
+  }, [navigation, showNotice, startWaves, stopWaves, resetOutgoingAfterExternalClose, clearStaleOutgoingAttemptIfIdle, lang]);
 
   const handleCancelCall = useCallback(() => {
     activeOutgoingAttemptRef.current = 0;
@@ -4573,18 +4661,8 @@ const handleClearNick = useCallback(async () => {
     return (
       <View style={styles.chatBtnOuter}>
         <View style={styles.friendActionBadgeAnchor}>
-          <RectButton
-            style={[
-              styles.friendActionBtnSize,
-              {
-                backgroundColor: '#2B2B2B',
-                borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.12)',
-                justifyContent: 'center',
-                alignItems: 'center',
-              },
-            ]}
-            rippleColor="rgba(255,255,255,0.28)"
+          <FriendRowIconActionButton
+            icon="chat-processing"
             hitSlop={FRIEND_ROW_HIT_CHAT}
             delayLongPress={280}
             onPress={handlePress}
@@ -4596,9 +4674,7 @@ const handleClearNick = useCallback(async () => {
                   }
                 : undefined
             }
-          >
-            <MaterialCommunityIcons name="chat-processing" size={23} color={LIVI.white} />
-          </RectButton>
+          />
           {count > 0 && (
             <View style={styles.badgeBubble} pointerEvents="none">
               <Text style={styles.badgeBubbleText}>{count > 99 ? '99+' : count}</Text>
@@ -4730,14 +4806,11 @@ const handleClearNick = useCallback(async () => {
     const busy = isFriendBusy || (activeCallInProgress && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
     // Исходящий вызов в процессе (инициатор свернул нативный экран в шторку): у того, кому звоним — стиль «занято» без бейджа; у остальных — просто неактивная кнопка
     const outgoingInProgress = calling.visible;
-    const isOutgoingToThisFriend = outgoingInProgress && !!calling.friend && String(calling.friend.id) === friendIdStr;
     // Входящий вызов в процессе (нативный экран входящего): у звонящего — стиль «занято» без бейджа; у остальных — неактивная кнопка. На всё время активного звонка все кнопки неактивны.
     const incomingInProgress = incomingCallScreen.visible;
     const isIncomingFromThisFriend = incomingInProgress && incomingCallScreen.fromUserId != null && String(incomingCallScreen.fromUserId) === friendIdStr;
     // Бейдж «Занято» только когда друг реально в звонке (принят вызов). Не показывать: (1) при входящем от этого друга — защита от старого busy и от незадеплоенного бэкенда; (2) при исходящем к этому другу уже учтено (showBusyBadge не использует isOutgoingToThisFriend).
     const showBusyBadge = isFriendBusy && !isIncomingFromThisFriend;
-    // Стиль «занято» (серая кнопка) только у участника звонка или при дозвоне. У остальных друзей кнопка как обычно, просто не кликабельна.
-    const useBusyButtonStyle = busy || isOutgoingToThisFriend || isIncomingFromThisFriend;
     const hardVideoDisabled = busy || incomingInProgress || activeCallInProgress;
     const videoDisabled = hardVideoDisabled || outgoingInProgress;
     const pulse = React.useRef(new Animated.Value(0)).current;
@@ -4768,29 +4841,14 @@ const handleClearNick = useCallback(async () => {
           </Animated.View>
         )}
         <View style={styles.friendActionBadgeAnchor}>
-          <RectButton
-            enabled={!hardVideoDisabled}
+          <FriendRowIconActionButton
+            icon="video"
+            disabled={hardVideoDisabled}
             accessibilityState={{ disabled: !!videoDisabled }}
-            style={[
-              styles.friendActionBtnSize,
-              {
-                justifyContent: 'center',
-                alignItems: 'center',
-              },
-              Platform.OS === 'android' && videoDisabled
-                ? styles.androidVideoCallBtnDisabled
-                : {
-                    backgroundColor: '#2B2B2B',
-                    borderWidth: 1,
-                    borderColor: 'rgba(255,255,255,0.12)',
-                  },
-              useBusyButtonStyle && Platform.OS !== 'android' ? styles.inviteBtnDisabled : null,
-            ]}
-            rippleColor="rgba(255,255,255,0.28)"
             hitSlop={FRIEND_ROW_HIT_VIDEO}
             delayLongPress={280}
             onLongPress={
-              missedCount > 0 && !videoDisabled
+              missedCount > 0 && !hardVideoDisabled
                 ? () => {
                     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(15); }
                     setMarkReadMenu({ friendId: friendIdStr, type: 'video' });
@@ -4821,6 +4879,9 @@ const handleClearNick = useCallback(async () => {
                 logger.info('[FriendAction] video press ignored: hard disabled', { friendId: friendIdStr });
                 return;
               }
+              if (activeOutgoingAttemptRef.current > 0 && !callingVisibleRef.current) {
+                clearStaleOutgoingAttemptIfIdle();
+              }
               if (outgoingInProgress && activeOutgoingAttemptRef.current > 0) {
                 const shouldResetStaleOutgoing =
                   Platform.OS === 'android' &&
@@ -4846,24 +4907,7 @@ const handleClearNick = useCallback(async () => {
               clearMissedCallsForFriend(fid);
               handleStartVideoCall(friend);
             }}
-          >
-            <MaterialCommunityIcons
-              name="video"
-              size={23}
-              color={
-                Platform.OS === 'android' && videoDisabled
-                  ? ANDROID_VIDEO_CALL_DISABLED_BG
-                  : useBusyButtonStyle
-                    ? '#ddd'
-                    : LIVI.white
-              }
-            />
-          </RectButton>
-          {Platform.OS === 'android' && videoDisabled && (
-            <View pointerEvents="none" style={styles.videoIconOverlay}>
-              <MaterialIcons name="videocam" size={23} color={ANDROID_VIDEO_CALL_DISABLED_ICON} />
-            </View>
-          )}
+          />
           {missedCount > 0 && (
             <View style={styles.badgeBubble} pointerEvents="none">
               <Text style={styles.badgeBubbleText}>
@@ -4887,7 +4931,7 @@ const handleClearNick = useCallback(async () => {
       keyboardShouldPersistTaps="always"
       showsVerticalScrollIndicator={false}
       overScrollMode="never"
-      removeClippedSubviews={Platform.OS === 'android'}
+      removeClippedSubviews={false}
       initialNumToRender={12}
       maxToRenderPerBatch={10}
       windowSize={7}
@@ -4980,7 +5024,10 @@ const handleClearNick = useCallback(async () => {
               const hidden = markReadMenu?.friendId === item.id;
               return (
                 <NativeViewGestureHandler disallowInterruption>
-                  <View style={[styles.rowRightActions, hidden && { opacity: 0 }]}>
+                  <View
+                    style={[styles.rowRightActions, hidden && { opacity: 0 }]}
+                    pointerEvents={hidden ? 'none' : 'auto'}
+                  >
                     <InviteButton friend={item} />
                     <ChatButton friend={item} />
                   </View>
@@ -5494,14 +5541,14 @@ const handleClearNick = useCallback(async () => {
                 pointerEvents="none"
                 intensity={isDark ? 15 : 20}
                 tint={isDark ? 'dark' : 'light'}
-                style={[StyleSheet.absoluteFillObject, { borderRadius: 12 }]}
+                style={[StyleSheet.absoluteFillObject, { borderRadius: MENU_BTN_INNER_RADIUS }]}
               />
               <View
                 pointerEvents="none"
                 style={[
                   StyleSheet.absoluteFillObject,
                   {
-                    borderRadius: 12,
+                    borderRadius: MENU_BTN_INNER_RADIUS,
                     backgroundColor: isDark ? '#8A8F99' : '#3B4453',
                     opacity: isDark ? 0.25 : 0.14,
                   },
@@ -6436,9 +6483,9 @@ const styles = StyleSheet.create({
   topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
   brand: { color: LIVI.text, fontSize: 41, lineHeight: 40, fontWeight: '600', letterSpacing: 0.3 },
   menuBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
-  menuBtnOuter: { borderRadius: 12, padding: 1, alignSelf: 'flex-start', overflow: 'hidden' },
+  menuBtnOuter: { borderRadius: MENU_BTN_RADIUS, padding: MENU_BTN_BORDER, alignSelf: 'flex-start', overflow: 'hidden' },
   menuBtnInner: {
-    borderRadius: 12,
+    borderRadius: MENU_BTN_INNER_RADIUS,
     overflow: 'hidden',
     width: 42,
     height: 42,

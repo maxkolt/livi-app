@@ -11,6 +11,13 @@ export const FRIEND_ACTION_BUTTON = {
 /** Ionicons — та же визуальная грубина, что у иконки видео на кнопке звонка (23). */
 export const FRIEND_ACTION_ICON_SIZE = 23;
 
+/** Squircle «назад» в шапках — один вид в светлой и тёмной теме (как в dark). */
+export const CHAT_BACK_BUTTON_SURFACE = {
+  backgroundColor: 'rgba(255,255,255,0.06)',
+  borderColor: 'rgba(255,255,255,0.12)',
+  borderWidth: 1,
+} as const;
+
 /** У соседних кнопок: большой hitSlop снаружи, маленький к соседу — меньше перехвата тапов. */
 export const TOUCH_HIT_OUTER = 19;
 export const TOUCH_HIT_INNER = 4;
