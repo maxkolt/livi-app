@@ -1618,15 +1618,24 @@ async function runCallPushRetryCycle(callId: string): Promise<void> {
 }
 
 /** Callee в ожидающем звонке (без inCall) не считается занятым при отображении в списке друзей. */
+function isSocketBusyForFriendsExport(data: Record<string, unknown> | undefined, userId: string): boolean {
+  const d = data || {};
+  const inCall = d.inCall === true;
+  const busy = d.busy === true;
+  const inSession = !!(inCall || busy || d.roomId || d.partnerSid);
+  if (!inSession) return false;
+
+  const entry = callOfUser.get(userId);
+  if (entry) {
+    const link = callsById.get(entry.callId);
+    if (link && link.b === userId && !inCall && !busy) return false;
+  }
+  return true;
+}
+
 function getEffectiveBusyForExport(io: Server, userId: string): boolean {
   for (const s of getSocketsForUser(io, userId)) {
-    if ((s as any).data?.busy !== true) continue;
-    const entry = callOfUser.get(userId);
-    if (entry) {
-      const link = callsById.get(entry.callId);
-      if (link && link.b === userId && !(s as any).data.inCall) continue;
-    }
-    return true;
+    if (isSocketBusyForFriendsExport((s as any).data, userId)) return true;
   }
   return false;
 }
@@ -2302,6 +2311,12 @@ io.on('connection', async (sock: AuthedSocket) => {
       const busy = status === 'busy';
       const idleOnline = !busy && payload?.idle === true;
 
+      const hasAnotherBusySocket = getSocketsForUser(io, userId).some((s) => {
+        if (s.id === sock.id) return false;
+        const sdata = (s as any)?.data || {};
+        return !!(sdata.inCall || sdata.busy || sdata.roomId);
+      });
+
       if (idleOnline) {
         const hasLiveSameUserCallSocket = getSocketsForUser(io, userId).some((s) => {
           if (s.id === sock.id) return false;
@@ -2312,7 +2327,11 @@ io.on('connection', async (sock: AuthedSocket) => {
           return !!room && room.size > 1;
         });
 
-        if (!hasLiveSameUserCallSocket) {
+        const sockData = (sock as any)?.data || {};
+        const sockStillBusy =
+          !!(sockData.busy || sockData.inCall || sockData.roomId || sockData.partnerSid);
+
+        if (!hasLiveSameUserCallSocket && !sockStillBusy && !hasAnotherBusySocket) {
           const pending = activeRoomByUserId.get(userId);
           const entry = callOfUser.get(userId);
           const peerId = pending?.peerUserId || entry?.with || null;
@@ -2330,11 +2349,6 @@ io.on('connection', async (sock: AuthedSocket) => {
       // Другие сокеты того же userId: пока хоть один в звонке/рандоме — не даём сбросить «занят» для друзей.
       // Текущий сокет сюда не включаем: иначе его же устаревшие busy/roomId (гонка со stop после рандома)
       // не дают перейти в online и оставляют initiator_busy на call:initiate.
-      const hasAnotherBusySocket = getSocketsForUser(io, userId).some((s) => {
-        if (s.id === sock.id) return false;
-        const sdata = (s as any)?.data || {};
-        return !!(sdata.inCall || sdata.busy || sdata.roomId);
-      });
       const busyRequested = busy || hasAnotherBusySocket;
 
       // КРИТИЧНО: Получатель (callee) не должен показывать бейдж «Занято» до принятия вызова.
