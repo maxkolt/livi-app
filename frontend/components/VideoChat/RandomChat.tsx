@@ -71,9 +71,7 @@ type Props = {
   } 
 };
 
-/** Fallback, если сервер прислал событие без текста (старый бэкенд) */
-const MODERATION_FIRST_WARNING_FALLBACK =
-  'Уважаемый пользователь, вы нарушаете правила приложения, при продолжении данных действий вы будете забанены на один час.';
+/** Fallback moderation copy comes from i18n (`moderationWarningFallback`). */
 
 const CARD_BASE = {
   backgroundColor: 'rgba(13,14,16,0.85)',
@@ -870,7 +868,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const onStartStop = useCallback(async () => {
     if (!canRunAction()) return;
     if (!startedRef.current && isModerationBanned) {
-      showToast('Вы заблокированы на 1 час за повторные нарушения.', 4000, true);
+      showToast(t('moderationBannedSelf', lang), 4000, true);
       return;
     }
     const session = sessionRef.current;
@@ -939,7 +937,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         loadingRef.current = false;
       }
     }
-  }, [requestPermissions, isModerationBanned, showToast]);
+  }, [requestPermissions, isModerationBanned, showToast, lang]);
   
   // Дополнительная защита от спама кнопок: минимальный интервал между действиями
   const lastActionRef = useRef<number>(0);
@@ -1271,10 +1269,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   
   // Отправка статуса "busy" при активном общении или поиске в рандомном чате
   useEffect(() => {
+    const g = global as any;
+    if (!g.__randomChatPresenceBusyRef) g.__randomChatPresenceBusyRef = { current: false };
+
     const hasActiveCall = !!partnerId || !!roomId;
     const isSearching = started && !partnerId && !roomId;
-    
-    if (hasActiveCall || isSearching) {
+    const shouldBeBusy = hasActiveCall || isSearching;
+    g.__randomChatPresenceBusyRef.current = shouldBeBusy;
+
+    if (shouldBeBusy) {
       // Отправляем статус "busy" когда есть активное общение или идет поиск
       try {
         const rid = roomId ? String(roomId).trim() : '';
@@ -1290,6 +1293,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         logger.warn('[RandomChat] Error sending presence:update online:', e);
       }
     }
+
+    return () => {
+      g.__randomChatPresenceBusyRef.current = false;
+    };
   }, [partnerId, roomId, started]);
   
   const forceStopRandomChat = useCallback(() => {
@@ -1357,12 +1364,12 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           (err: Error | null, res?: { ok?: boolean; reason?: string }) => {
             if (err) {
               logger.warn('[RandomChat] moderation:reportPartner ack failed', { message: err?.message });
-              showToast('Не удалось подтвердить действие на сервере. Нажмите «Далее», чтобы продолжить.', 4000, true);
+              showToast(t('moderationReportAckFailed', lang), 4000, true);
               sessionRef.current?.next();
               return;
             }
             if (res?.ok) {
-              showToast('Собеседник забанен на час. Он нарушил правила пользования.', 4000, true);
+              showToast(t('moderationPartnerBanned', lang), 4000, true);
               sessionRef.current?.next();
             } else {
               logger.warn('[RandomChat] moderation:reportPartner rejected', { res });
@@ -1393,6 +1400,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     onBan: banUser,
     onRemoteWarning,
     onRemoteViolation,
+    lang,
   });
 
   // Слушаем предупреждение от модерации (мы — нарушитель, первое нарушение)
@@ -1401,14 +1409,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       const text =
         payload && typeof payload.message === 'string' && payload.message.trim()
           ? payload.message.trim()
-          : MODERATION_FIRST_WARNING_FALLBACK;
+          : t('moderationWarningFallback', lang);
       showToast(text, 4000, true);
     };
     socket.on('moderation:warning', handler);
     return () => {
       socket.off('moderation:warning', handler);
     };
-  }, [showToast]);
+  }, [showToast, lang]);
 
   // Слушаем бан от модерации (сервер шлёт bannedUntil — один час с момента бана, без продления при повторном start)
   useEffect(() => {
@@ -1417,13 +1425,13 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         typeof payload?.bannedUntil === 'number' && payload.bannedUntil > Date.now()
           ? payload.bannedUntil
           : Date.now() + 3600_000;
-      applyModerationBanUntil(until, 'Вы заблокированы на 1 час за повторные нарушения.', true);
+      applyModerationBanUntil(until, t('moderationBannedSelf', lang), true);
     };
     socket.on('moderation:banned', handler);
     return () => {
       socket.off('moderation:banned', handler);
     };
-  }, [applyModerationBanUntil]);
+  }, [applyModerationBanUntil, lang]);
 
   // Обработка AppState - при уходе приложения в фон рандомный чат должен
   // немедленно завершаться, чтобы при возврате экран был в неактивном состоянии.

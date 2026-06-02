@@ -311,6 +311,17 @@ const mapToFriend = (u: any): Friend => {
   return mapped;
 };
 
+/** Не гасим «Занято» из одного ответа friends:fetch — актуальный busy приходит через presence:update. */
+function mergeFriendBusyFromFetch(
+  serverBusy: boolean,
+  prevBusy: boolean | undefined,
+  friendLooksOnline: boolean,
+): boolean {
+  if (serverBusy) return true;
+  if (!!prevBusy && friendLooksOnline) return true;
+  return false;
+}
+
 const DRAFT_KEY = 'profile_draft_v1';
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 const UNREAD_BY_USER_KEY = 'unread_by_user_v1';
@@ -2211,7 +2222,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 avatarVer: newAvatarVer,
                 avatarThumbB64: finalAvatarThumbB64,
                 online: mergedOnlineCorr,
-                isBusy: f.isBusy !== undefined ? !!f.isBusy : !!prevOne?.isBusy,
+                isBusy: mergeFriendBusyFromFetch(!!f.isBusy, !!prevOne?.isBusy, mergedOnlineCorr),
                 isRandomBusy: !!prevOne?.isRandomBusy,
                 inCall: !!prevOne?.inCall,
               } as any;
@@ -2254,7 +2265,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               avatarVer: newAvatarVer,
               avatarThumbB64: finalAvatarThumbB64,
               online: mergedOnlineMain,
-              isBusy: f.isBusy !== undefined ? !!f.isBusy : !!prevOne?.isBusy,
+              isBusy: mergeFriendBusyFromFetch(!!f.isBusy, !!prevOne?.isBusy, mergedOnlineMain),
               isRandomBusy: !!prevOne?.isRandomBusy,
               inCall: !!prevOne?.inCall,
             } as any;
@@ -3297,6 +3308,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         (!!session && typeof session.getRoomId === 'function' && !!session.getRoomId());
       const hasActiveLocalCall =
         g.__videoCallActiveRef?.current === true ||
+        g.__randomChatPresenceBusyRef?.current === true ||
         g.__pipVisibleRef?.current === true ||
         g.__pipInSystemModeRef?.current === true ||
         incomingAnswerTransitionActive ||
@@ -4115,7 +4127,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const newUserId = getCurrentUserId();
         if (!newUserId) {
           console.error('[handleSaveProfile] Still no userId after ensureIdentity');
-          showNotice(t('unauthorized', lang) || 'Not authorized', 'error');
+          showNotice(t('unauthorized', lang), 'error');
           await ensureMinSpinner();
           setSaving(false);
           return;
@@ -4359,19 +4371,19 @@ const handleClearNick = useCallback(async () => {
       await saveProfileToStorage({ nick: nick || '', avatar: '' });
       await saveDraftProfile({ nick: nick || '', avatar: '' });
 
-      showNotice(t('avatarDeleted', lang) || 'Avatar deleted', 'success');
+      showNotice(t('avatarDeleted', lang), 'success');
     } catch (e: any) {
       console.error('[handleDeleteAvatar] Error:', e);
       const raw = String(e?.message || '').trim();
       const errorCode = raw.toLowerCase();
       const errorToast =
         errorCode === 'unauthorized'
-          ? (t('unauthorized', lang) || 'Unauthorized')
+          ? t('unauthorized', lang)
           : (errorCode === 'timeout' || errorCode === 'network_error' || errorCode === 'socket_emit_failed' || errorCode === 'no_response')
-          ? (t('timeoutExceeded', lang) || t('noServer', lang) || 'Network timeout')
+          ? (t('timeoutExceeded', lang) || t('noServer', lang))
           : (errorCode === 'no_user_id')
-          ? (t('noUserIdTryReopen', lang) || 'No user id')
-          : (t('deleteFailed', lang) || 'Delete failed');
+          ? t('noUserIdTryReopen', lang)
+          : t('deleteFailed', lang);
       showNotice(errorToast, 'error');
     }
   }, [nick, lang, showNotice, installId]);

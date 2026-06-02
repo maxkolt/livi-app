@@ -1837,10 +1837,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       getPipRemoteStream: () => pip.remoteStream,
       getPartnerDisplayName: () => {
         const uid = partnerUserId;
-        if (!uid) return 'кто-то';
+        if (!uid) return t('someone', lang);
         const partner = friendsRef.current?.find((f: any) => String(f._id) === String(uid));
         const nick = (partner as any)?.nick?.trim();
-        return nick || 'кто-то';
+        return nick || t('someone', lang);
       },
       onSwitchToConnectingSession: (connectingSession: unknown) => {
         const s = connectingSession as any;

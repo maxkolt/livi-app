@@ -2,6 +2,7 @@ import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { EmojiKeyboard, en, ru, type EmojiType } from 'rn-emoji-keyboard';
 import { BUILT_IN_STICKER_PACKS, StickerView, type BuiltInSticker } from './chatStickers';
+import { t, type Lang } from '../utils/i18n';
 
 export const CHAT_EMOJI_PANEL_HEIGHT = 280;
 const CHAT_EXPRESSION_SWITCH_HEIGHT = 42;
@@ -24,9 +25,10 @@ export default function ChatEmojiKeyboard({
   onEmojiSelected,
   onStickerSelected,
 }: Props) {
+  const lang = (langCode || 'ru') as Lang;
   const [tab, setTab] = React.useState<'emoji' | 'stickers'>('emoji');
   const [packId, setPackId] = React.useState(BUILT_IN_STICKER_PACKS[0]?.id || '');
-  const translation = langCode === 'ru' ? ru : en;
+  const translation = lang === 'ru' ? ru : en;
   const activePack = BUILT_IN_STICKER_PACKS.find((pack) => pack.id === packId) || BUILT_IN_STICKER_PACKS[0];
 
   const theme = React.useMemo(
@@ -158,7 +160,7 @@ export default function ChatEmojiKeyboard({
       <View style={[styles.switchBar, { borderTopColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.08)' }]}>
         {(['emoji', 'stickers'] as const).map((id) => {
           const active = tab === id;
-          const label = id === 'emoji' ? (langCode === 'ru' ? 'Эмодзи' : 'Emoji') : (langCode === 'ru' ? 'Стикеры' : 'Stickers');
+          const label = id === 'emoji' ? t('chatEmojiTab', lang) : t('chatStickersTab', lang);
           return (
             <Pressable
               key={id}

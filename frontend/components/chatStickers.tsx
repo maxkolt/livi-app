@@ -1,5 +1,6 @@
 import React from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
+import { t, type Lang } from '../utils/i18n';
 
 export type BuiltInStickerAnimation = 'none' | 'bounce' | 'pulse' | 'wiggle';
 
@@ -58,9 +59,10 @@ export function getBuiltInSticker(stickerId?: string): BuiltInSticker | undefine
 }
 
 export function getStickerFallbackText(sticker?: Partial<BuiltInSticker> | null, langCode?: string): string {
+  const lang = (langCode || 'ru') as Lang;
   const label = String(sticker?.label || (sticker as any)?.stickerLabel || '').trim();
-  if (label) return langCode === 'ru' ? `[Стикер: ${label}]` : `[Sticker: ${label}]`;
-  return langCode === 'ru' ? '[Стикер]' : '[Sticker]';
+  if (label) return t('chatStickerFallbackNamed', lang).replace('{label}', label);
+  return t('chatStickerFallback', lang);
 }
 
 export function StickerView({

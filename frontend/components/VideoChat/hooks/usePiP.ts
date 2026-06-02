@@ -89,18 +89,21 @@ export const usePiP = ({
   }, [session, roomId, callId, partnerId, isInactiveState, wasFriendCallEnded]);
 
   // Функция для входа в PiP
-  const enterPiPMode = useCallback((opts?: { deferVisible?: boolean }) => {
+  const enterPiPMode = useCallback((opts?: { deferVisible?: boolean; fromVideoCallBack?: boolean }) => {
     const now = Date.now();
     const g = global as any;
-    const suppressInAppPiPUntil = Number(g.__suppressInAppPiPUntilRef?.current || 0);
-    const systemPiPEntryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
-    if (now < suppressInAppPiPUntil || now < systemPiPEntryUntil) {
-      return;
+    const fromVideoCallBack = opts?.fromVideoCallBack === true;
+    if (!fromVideoCallBack) {
+      const suppressInAppPiPUntil = Number(g.__suppressInAppPiPUntilRef?.current || 0);
+      const systemPiPEntryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
+      if (now < suppressInAppPiPUntil || now < systemPiPEntryUntil) {
+        return;
+      }
+      if (now < pipTransitionUntilRef.current) {
+        return;
+      }
     }
-    if (now < pipTransitionUntilRef.current) {
-      return;
-    }
-    pipTransitionUntilRef.current = now + 800;
+    pipTransitionUntilRef.current = now + (fromVideoCallBack ? 250 : 800);
 
     // КРИТИЧНО: Проверяем по refs (актуальное состояние), чтобы при отложенном вызове после Back
     // не показывать PiP, если звонок успел завершиться. Пропы могут быть устаревшими в замыкании.
@@ -243,47 +246,7 @@ export const usePiP = ({
       return;
     }
     
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      try {
-        const g = global as any;
-        const now = Date.now();
-        const suppressInAppPiPUntil = Number(g.__suppressInAppPiPUntilRef?.current || 0);
-        const systemPiPEntryUntil = Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
-        if (now < suppressInAppPiPUntil || now < systemPiPEntryUntil) {
-          return true;
-        }
-      } catch {}
-
-      // КРИТИЧНО: Проверяем актуальное состояние звонка через ref
-      // Если звонок завершён — сами делаем шаг назад (goBack/navigate Home) и потребляем событие.
-      // Иначе при return false на части устройств Back доходит до Activity и вызывает finish() → при следующем открытии приложения показывается заглушка (холодный старт).
-      if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
-        requestAnimationFrame(() => {
-          if (navigation.canGoBack && navigation.canGoBack()) {
-            navigation.goBack();
-          } else {
-            navigation.navigate('Home' as never);
-          }
-        });
-        return true;
-      }
-
-      if (!hasActiveCallRef.current) return false;
-
-      // Refs и goBack() синхронно — переход начинается сразу. PiP после завершения анимации перехода.
-      try {
-        const g = global as any;
-        g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
-        g.__leavingVideoCallByBackRef.current = true;
-        g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
-        g.__disableSystemPiPUntilRef.current = Date.now() + 2000;
-        g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
-        g.__pipVisibleRef.current = true;
-      } catch {}
-      // Показываем PiP сразу (без runAfterInteractions), чтобы не было заметной задержки
-      // между быстрым goBack и появлением in-app PiP.
-      enterPiPMode({ deferVisible: true });
-
+    const navigateBackFromCallScreen = () => {
       const returnTo = (routeParams as any)?.returnTo;
       if (navigation.canGoBack && navigation.canGoBack()) {
         navigation.goBack();
@@ -291,6 +254,71 @@ export const usePiP = ({
         (navigation as any).navigate(returnTo.name, returnTo.params);
       } else {
         navigation.navigate('Home' as never);
+      }
+    };
+
+    const revealInAppPiPAfterBack = () => {
+      enterPiPMode({ deferVisible: true, fromVideoCallBack: true });
+      try {
+        if (isPipOverlayVisibleSync()) return;
+        const g = global as any;
+        const showPiP = g.__pipShowPiPRef?.current;
+        const params = g.__currentCallPiPParamsRef?.current;
+        if (typeof showPiP !== 'function' || !params?.callId || !params?.roomId) return;
+        showPiP({
+          callId: params.callId,
+          roomId: params.roomId,
+          partnerName: params.partnerName,
+          partnerAvatarUrl: params.partnerAvatarUrl,
+          localStream: params.localStream ?? null,
+          remoteStream: params.remoteStream ?? null,
+          muteLocal: params.muteLocal,
+          muteRemote: params.muteRemote,
+          localCamOn: params.localCamOn,
+          remoteCamOn: params.remoteCamOn,
+          navParams: params.navParams,
+          deferVisible: true,
+        });
+      } catch {}
+    };
+
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      // КРИТИЧНО: Проверяем актуальное состояние звонка через ref
+      // Если звонок завершён — сами делаем шаг назад (goBack/navigate Home) и потребляем событие.
+      // Иначе при return false на части устройств Back доходит до Activity и вызывает finish() → при следующем открытии приложения показывается заглушка (холодный старт).
+      if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
+        navigateBackFromCallScreen();
+        return true;
+      }
+
+      if (!hasActiveCallRef.current) return false;
+
+      const now = Date.now();
+      try {
+        const g = global as any;
+        g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+        g.__leavingVideoCallByBackRef.current = true;
+        g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+        g.__disableSystemPiPUntilRef.current = now + 2000;
+        g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+        g.__pipVisibleRef.current = true;
+        // Явный Back с экрана звонка: не блокируем уход in-app PiP из-за недавней попытки системного PiP.
+        g.__suppressInAppPiPUntilRef = g.__suppressInAppPiPUntilRef || { current: 0 };
+        g.__suppressInAppPiPUntilRef.current = 0;
+        g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+        g.__systemPiPEntryInProgressUntilRef.current = 0;
+        const upd = g.__pipUpdateStateRef?.current;
+        if (typeof upd === 'function') {
+          upd({ pendingSystemPiP: false, systemPiPCaptureActive: false, decorSizeForPiP: null });
+        }
+      } catch {}
+
+      // Сначала навигация — пользователь сразу видит уход со звонка; PiP на следующем кадре (VideoCall уже размонтируется).
+      navigateBackFromCallScreen();
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(revealInAppPiPAfterBack);
+      } else {
+        revealInAppPiPAfterBack();
       }
       return true;
     });

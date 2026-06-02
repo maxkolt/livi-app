@@ -5,6 +5,7 @@ import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { API_BASE } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
+import { t, type Lang } from '../../../utils/i18n';
 
 type ModerationResponse = {
   ok?: boolean;
@@ -31,11 +32,8 @@ type UseModerationOptions = {
   onRemoteWarning?: (partnerUserId: string) => void;
   /** Второе нарушение: бан партнёра, зрителю — «Собеседник забанен на час» */
   onRemoteViolation?: (partnerUserId: string) => void;
+  lang: Lang;
 };
-
-const WARNING_TEXT = 'Пожалуйста, соблюдайте правила. Обнаружен нежелательный контент.';
-const BAN_TEXT = 'Вы заблокированы на 1 час за повторные нарушения.';
-const WARNING_TO_BAN_DELAY_MS = 10_000;
 
 /** Задержка после подключения перед началом захвата — избегаем race с обновлением view hierarchy (IndexOutOfBoundsException в gatherTransparentRegion) */
 const STABLE_DELAY_MS = 3000;
@@ -56,7 +54,9 @@ export function useModeration({
   onBan,
   onRemoteWarning,
   onRemoteViolation,
+  lang,
 }: UseModerationOptions) {
+  const WARNING_TO_BAN_DELAY_MS = 10_000;
   const [isChecking, setIsChecking] = useState(false);
   const [strikes, setStrikes] = useState(0);
 
@@ -135,7 +135,7 @@ export function useModeration({
       strikesRef.current = 1;
       firstWarningAtRef.current = now;
       setStrikes(1);
-      onWarning(WARNING_TEXT);
+      onWarning(t('moderationContentWarning', lang));
       return;
     }
 
@@ -145,7 +145,7 @@ export function useModeration({
 
     strikesRef.current = 2;
     setStrikes(2);
-    onBan(3600, BAN_TEXT);
+    onBan(3600, t('moderationBannedSelf', lang));
   };
 
   const runCheck = async () => {

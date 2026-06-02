@@ -4149,6 +4149,13 @@ export default function ChatScreen({ route, navigation }: Props) {
           width: 40,
           height: 40,
           borderRadius: FRIEND_ACTION_BUTTON.borderRadius - 1,
+          ...(isDark
+            ? null
+            : {
+                backgroundColor: 'rgba(0,0,0,0.06)',
+                borderWidth: 1,
+                borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
+              }),
         }}
         onPress={() => {
           if (selectionMode) exitSelectionMode();
@@ -7728,7 +7735,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               <Pressable
                 onPress={() => {}}
                 style={{
-                  backgroundColor: isDark ? LIVI.bg : LIVI.surface,
+                  backgroundColor: LIVI.bg,
                   borderTopLeftRadius: 20,
                   borderTopRightRadius: 20,
                   paddingTop: 8,
@@ -7808,8 +7815,14 @@ export default function ChatScreen({ route, navigation }: Props) {
                     borderRadius: 14,
                     overflow: 'hidden',
                     backgroundColor: pressed
-                      ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)')
-                      : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
+                      ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)')
+                      : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'),
+                    ...(isDark
+                      ? null
+                      : {
+                          borderWidth: 1,
+                          borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
+                        }),
                   })}
                 >
                   <Text style={{ color: LIVI.titan, fontSize: 16, fontWeight: '600', textAlign: 'center' }}>
@@ -8267,16 +8280,16 @@ export default function ChatScreen({ route, navigation }: Props) {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: isDark ? LIVI.white : 'rgba(0,0,0,0.88)', fontSize: 15, fontWeight: '700' }}>
-                  {lang === 'ru' ? 'Удалить для обоих?' : 'Delete for everyone?'}
+                  {t('chatDeleteForEveryoneTitle', lang)}
                 </Text>
                 <Text style={{ marginTop: 3, color: isDark ? 'rgba(255,255,255,0.50)' : 'rgba(0,0,0,0.50)', fontSize: 13, lineHeight: 17 }}>
                   {deleteForBoth
                     ? (deleteConfirmKind === 'multi'
-                      ? (lang === 'ru' ? 'Сообщения исчезнут у вас и у собеседника.' : 'The messages will disappear for both people.')
-                      : (lang === 'ru' ? 'Сообщение исчезнет у вас и у собеседника.' : 'The message will disappear for both people.'))
+                      ? t('chatDeleteForEveryoneBothMulti', lang)
+                      : t('chatDeleteForEveryoneBothSingle', lang))
                     : (deleteConfirmKind === 'multi'
-                      ? (lang === 'ru' ? 'Сообщения исчезнут только у вас.' : 'The messages will disappear only for you.')
-                      : (lang === 'ru' ? 'Сообщение исчезнет только у вас.' : 'The message will disappear only for you.'))}
+                      ? t('chatDeleteForEveryoneMeMulti', lang)
+                      : t('chatDeleteForEveryoneMeSingle', lang))}
                 </Text>
               </View>
             </Pressable>
