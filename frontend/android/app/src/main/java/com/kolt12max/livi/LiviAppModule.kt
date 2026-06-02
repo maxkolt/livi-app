@@ -855,7 +855,15 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
     try {
       ctx.startActivity(intent)
-    } catch (_: Exception) {}
+      return
+    } catch (_: Exception) { }
+    val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+      data = android.net.Uri.parse("package:${ctx.packageName}")
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    try {
+      ctx.startActivity(fallback)
+    } catch (_: Exception) { }
   }
 
   /** Открыть настройки уведомлений приложения (Android 8+). Включите «Полноэкранные уведомления» или «Показ как всплывающее окно» для входящих звонков. */

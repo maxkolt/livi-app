@@ -8,6 +8,8 @@
   <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
   <uses-permission android:name="android.permission.WAKE_LOCK"/>
+  <!-- Показ поверх других окон: LiVi появляется в системных настройках; включение только вручную пользователем. -->
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
   <!-- CallKeep: foreground service для микрофона в фоне при звонке (Android 11+) -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>

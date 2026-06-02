@@ -74,9 +74,6 @@ try {
   };
 }
 
-/** Модалки «Вызовы на заблокированном экране» показываются только один раз при первом запуске после установки. */
-const OVERLAY_PERMISSION_MODAL_SHOWN_KEY = 'overlay_permission_modal_shown_v1';
-
 // Экспортируем функции для использования в других компонентах
 export { activateKeepAwakeAsync, deactivateKeepAwakeAsync };
 
@@ -309,12 +306,37 @@ function AppContent() {
   const insets = useSafeAreaInsets();
   /** Пока true — не скрываем оверлей. После обработки initial URL (в т.ч. answer-call) ставим true, чтобы не мелькала Home у принимающего. */
   const [initialUrlProcessed, setInitialUrlProcessed] = React.useState(false);
-  /** Android: модалка «Разрешить отображение поверх других окон» при первом заходе (как камера/микрофон). */
+  /** Android: модалка «Разрешить отображение поверх других окон», пока разрешение не выдано. */
   const [overlayPermissionModalVisible, setOverlayPermissionModalVisible] = React.useState(false);
+
+  const syncOverlayPermissionModal = React.useCallback(async () => {
+    if (Platform.OS !== 'android') return;
+    try {
+      const can = await canDrawOverlays();
+      if (can) {
+        setOverlayPermissionModalVisible(false);
+        return;
+      }
+      setOverlayPermissionModalVisible(true);
+    } catch (_) {}
+  }, []);
 
   React.useEffect(() => {
     void hydrateLang();
   }, [hydrateLang]);
+
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const prevRef = { current: AppState.currentState };
+    const sub = AppState.addEventListener('change', (next) => {
+      const prev = prevRef.current;
+      prevRef.current = next;
+      if (next === 'active' && (prev === 'background' || prev === 'inactive')) {
+        void syncOverlayPermissionModal();
+      }
+    });
+    return () => sub.remove();
+  }, [syncOverlayPermissionModal]);
 
   // Ref для различения в onEnd: мы принимающий (отклонили входящий) или звонящий (отменили исходящий)
   const incomingCallIdRef = React.useRef<string | null>(null);
@@ -923,24 +945,17 @@ function AppContent() {
         await setupCallKeep({ requestPermission: Platform.OS === 'android' });
       } catch {}
 
-        // 📱 Android: модалка «показ поверх других окон» — только один раз при первом запуске после установки.
+        // 📱 Android: модалка «показ поверх других окон» — пока пользователь не включит в системе.
       if (Platform.OS === 'android') {
         try {
-          const overlayShown = await AsyncStorage.getItem(OVERLAY_PERMISSION_MODAL_SHOWN_KEY);
-          if (overlayShown !== '1') {
-            const can = await canDrawOverlays();
-            if (!can) {
-              await AsyncStorage.setItem(OVERLAY_PERMISSION_MODAL_SHOWN_KEY, '1');
-              setOverlayPermissionModalVisible(true);
-            }
-          }
+          await syncOverlayPermissionModal();
         } catch (_) {}
       }
 
       })();
     });
     return () => cancel.cancel();
-  }, []);
+  }, [syncOverlayPermissionModal]);
 
   // 🔔 Push notifications: register token once we have userId
   React.useEffect(() => {
@@ -1861,6 +1876,10 @@ function AppContent() {
       });
       try { addEndedCallId(d.callId); } catch {}
       return;
+    }
+
+    if (Platform.OS === 'android') {
+      setOverlayPermissionModalVisible(false);
     }
 
     // Android: мы отказались от кастомных модалок — входящий всегда открываем нативным экраном
@@ -2930,7 +2949,7 @@ function AppContent() {
                   </Text>
                   <View style={overlayPermissionModalStyles.overlayPermissionNote}>
                     <Text style={overlayPermissionModalStyles.overlayPermissionNoteText}>
-                      Это нужно, чтобы принимать входящие вызовы, когда экран телефона заблокирован.
+                      Это нужно, чтобы принимать входящие вызовы, когда экран телефона заблокирован. В системных настройках найдите LiVi (не LiVi Dev) и включите «Поверх других приложений» / «Всегда сверху».
                     </Text>
                   </View>
                   <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
