@@ -200,9 +200,9 @@ const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
     color: isDark ? a.bright : '#8B7BC8',
   },
   overlayPermissionText: {
-    fontSize: 15,
+    fontSize: 13,
     color: isDark ? '#AEB6C6' : '#444444',
-    lineHeight: 22,
+    lineHeight: 19,
     marginBottom: 16,
   },
   overlayPermissionNote: {
@@ -308,9 +308,39 @@ function AppContent() {
   const [initialUrlProcessed, setInitialUrlProcessed] = React.useState(false);
   /** Android: модалка «Разрешить отображение поверх других окон», пока разрешение не выдано. */
   const [overlayPermissionModalVisible, setOverlayPermissionModalVisible] = React.useState(false);
+  /** Пока false — не показываем overlay-модалку (ждём уведомления, камеру, микрофон, BT, CallKeep). */
+  const androidInitialPermissionsDoneRef = React.useRef(false);
+  /**
+   * Overlay-модалка: максимум один показ за запуск процесса (после полного закрытия приложения).
+   * При каждом новом запуске ref снова false — если «поверх других окон» не включено, модалка показывается снова.
+   * Не показываем при возврате из фона и при повторном переходе на Home в том же сеансе.
+   */
+  const overlayColdStartPromptAttemptedRef = React.useRef(false);
+  /** Актуальный экран навигации (дублирует routeName, обновляется в onStateChange до setState). */
+  const activeRouteNameRef = React.useRef<string | undefined>(undefined);
+
+  const isHomeRouteNow = React.useCallback((): boolean => {
+    try {
+      if (navRef.isReady()) {
+        const name = navRef.getCurrentRoute()?.name;
+        if (name) return name === 'Home';
+      }
+    } catch {}
+    return activeRouteNameRef.current === 'Home';
+  }, []);
 
   const syncOverlayPermissionModal = React.useCallback(async () => {
     if (Platform.OS !== 'android') return;
+    if (!androidInitialPermissionsDoneRef.current) {
+      setOverlayPermissionModalVisible(false);
+      return;
+    }
+    if (overlayColdStartPromptAttemptedRef.current) {
+      if (!isHomeRouteNow()) setOverlayPermissionModalVisible(false);
+      return;
+    }
+    if (!isHomeRouteNow()) return;
+    overlayColdStartPromptAttemptedRef.current = true;
     try {
       const can = await canDrawOverlays();
       if (can) {
@@ -319,12 +349,13 @@ function AppContent() {
       }
       setOverlayPermissionModalVisible(true);
     } catch (_) {}
-  }, []);
+  }, [isHomeRouteNow]);
 
   React.useEffect(() => {
     void hydrateLang();
   }, [hydrateLang]);
 
+  /** После включения overlay в системных настройках — скрыть модалку при возврате в приложение (без повторного показа). */
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
     const prevRef = { current: AppState.currentState };
@@ -332,11 +363,15 @@ function AppContent() {
       const prev = prevRef.current;
       prevRef.current = next;
       if (next === 'active' && (prev === 'background' || prev === 'inactive')) {
-        void syncOverlayPermissionModal();
+        void (async () => {
+          try {
+            if (await canDrawOverlays()) setOverlayPermissionModalVisible(false);
+          } catch (_) {}
+        })();
       }
     });
     return () => sub.remove();
-  }, [syncOverlayPermissionModal]);
+  }, []);
 
   // Ref для различения в onEnd: мы принимающий (отклонили входящий) или звонящий (отменили исходящий)
   const incomingCallIdRef = React.useRef<string | null>(null);
@@ -787,6 +822,11 @@ function AppContent() {
 
   // Убрали постоянные логи для уменьшения шума
   const [routeName, setRouteName] = React.useState<string | undefined>(undefined);
+  React.useEffect(() => {
+    activeRouteNameRef.current = routeName;
+    if (Platform.OS !== 'android' || !androidInitialPermissionsDoneRef.current) return;
+    void syncOverlayPermissionModal();
+  }, [routeName, syncOverlayPermissionModal]);
   const lastLoggedRouteRef = React.useRef<string | undefined>(undefined);
   const systemPiPDecisionLogRef = React.useRef<string>('');
   /** Форсирует пересчёт Android leaveHint/PiP guard после call:end/call:ended (refs меняются без смены route/pip). */
@@ -945,8 +985,12 @@ function AppContent() {
         await setupCallKeep({ requestPermission: Platform.OS === 'android' });
       } catch {}
 
-        // 📱 Android: модалка «показ поверх других окон» — пока пользователь не включит в системе.
+      // 📱 Android: overlay — только после всех стартовых runtime-разрешений (последний шаг).
       if (Platform.OS === 'android') {
+        androidInitialPermissionsDoneRef.current = true;
+        await new Promise<void>((resolve) => {
+          InteractionManager.runAfterInteractions(() => resolve());
+        });
         try {
           await syncOverlayPermissionModal();
         } catch (_) {}
@@ -2841,6 +2885,7 @@ function AppContent() {
                 }
                 // После отмены входящего на Home не дергаем setRouteName — иначе ре-рендер App и двойная отрисовка Home
                 if ((global as any).__skipAppStateActiveSetAppIsActiveRef?.current !== true) {
+                  activeRouteNameRef.current = currentRoute;
                   setRouteName(currentRoute);
                 }
               }
@@ -2857,6 +2902,7 @@ function AppContent() {
                 }
                 // После отмены входящего на Home не дергаем setRouteName — иначе ре-рендер App и двойная отрисовка Home
                 if ((global as any).__skipAppStateActiveSetAppIsActiveRef?.current !== true) {
+                  activeRouteNameRef.current = currentRoute;
                   setRouteName(currentRoute);
                 }
               }
@@ -2945,13 +2991,8 @@ function AppContent() {
                     </View>
                   </View>
                   <Text style={overlayPermissionModalStyles.overlayPermissionText}>
-                    Включите для LiVi показ поверх других приложений.
+                    Включите «Поверх других приложений» (или «Всегда сверху»), чтобы входящие видеозвонки приходили на заблокированном экране и когда вы в других приложениях.
                   </Text>
-                  <View style={overlayPermissionModalStyles.overlayPermissionNote}>
-                    <Text style={overlayPermissionModalStyles.overlayPermissionNoteText}>
-                      Это нужно, чтобы принимать входящие вызовы, когда экран телефона заблокирован. В системных настройках найдите LiVi (не LiVi Dev) и включите «Поверх других приложений» / «Всегда сверху».
-                    </Text>
-                  </View>
                   <View style={overlayPermissionModalStyles.overlayPermissionButtons}>
                     <TouchableOpacity style={overlayPermissionModalStyles.overlayPermissionButtonSecondary} onPress={() => setOverlayPermissionModalVisible(false)}>
                       <Text style={overlayPermissionModalStyles.overlayPermissionButtonSecondaryText}>Не сейчас</Text>
