@@ -80,6 +80,7 @@ const LinearGradient: any = (() => {
 
 import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
+import { trimNick } from '../utils/userDisplayName';
 import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, onMessagesDeleted, getUnreadCount, getUnreadCounts, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onCometChatStatus } from '../utils/globalEvents';
@@ -1441,7 +1442,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           // Показываем модалку приглашения
           setInviteRequestData({
             code: inviteCode,
-            inviter: result.inviter,
+            inviter: {
+              ...result.inviter,
+              nick: trimNick(result.inviter.nick),
+            },
             areFriends: result.areFriends,
             hasPendingRequest: result.hasPendingRequest,
           });
@@ -1465,6 +1469,31 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       return () => clearTimeout(timer);
     }
   }, [route?.params?.showInviteModal, route?.params?.inviteCode, showNotice]);
+
+  useEffect(() => {
+    if (!inviteRequestVisible || !inviteRequestData?.inviter?.id) return;
+    if (trimNick(inviteRequestData.inviter.nick)) return;
+    const inviterId = inviteRequestData.inviter.id;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await checkInviteLink(inviterId);
+        const loaded = trimNick(r?.inviter?.nick);
+        if (!cancelled && loaded) {
+          setInviteRequestData((prev) =>
+            prev && prev.inviter.id === inviterId
+              ? { ...prev, inviter: { ...prev.inviter, nick: loaded } }
+              : prev,
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteRequestVisible, inviteRequestData?.inviter?.id, inviteRequestData?.inviter?.nick]);
 
   // ===== Обработка принятия/отклонения приглашения =====
   const handleAcceptInvite = useCallback(async () => {
@@ -6321,7 +6350,10 @@ const handleClearNick = useCallback(async () => {
               {inviteRequestData.areFriends ? (
                 <View style={{ marginBottom: 20 }}>
                   <Text style={{ color: LIVI.text2, fontSize: 14, textAlign: 'center', marginBottom: 12 }}>
-                    {t('alreadyFriendsWithUser', lang).replace('{user}', inviteRequestData.inviter.nick || t('thisUser', lang))}
+                    {t('alreadyFriendsWithUser', lang).replace(
+                      '{user}',
+                      trimNick(inviteRequestData.inviter.nick) || t('thisUser', lang),
+                    )}
                   </Text>
                   <TouchableOpacity
                     onPress={handleDeclineInvite}
@@ -6348,7 +6380,7 @@ const handleClearNick = useCallback(async () => {
                         avatarVer={inviteRequestData.inviter.avatarVer}
                         uri={inviteRequestData.inviter.avatarThumbB64}
                         size={64}
-                        fallbackText={inviteRequestData.inviter.nick?.[0]?.toUpperCase() || '?'}
+                        fallbackText={trimNick(inviteRequestData.inviter.nick)?.[0]?.toUpperCase() || '?'}
                         containerStyle={{ marginBottom: 12 }}
                       />
                     ) : (
@@ -6362,12 +6394,12 @@ const handleClearNick = useCallback(async () => {
                         marginBottom: 12
                       }}>
                         <Text style={{ color: LIVI.white, fontSize: 24, fontWeight: '800' }}>
-                          {inviteRequestData.inviter.nick?.[0]?.toUpperCase() || '?'}
+                          {trimNick(inviteRequestData.inviter.nick)?.[0]?.toUpperCase() || '?'}
                         </Text>
                       </View>
                     )}
                     <Text style={{ color: LIVI.white, fontSize: 16, fontWeight: '700', marginBottom: 8, textAlign: 'center' }}>
-                      {inviteRequestData.inviter.nick || t('user', lang)}
+                      {trimNick(inviteRequestData.inviter.nick) || t('user', lang)}
                     </Text>
                     <Text style={{ color: LIVI.text2, fontSize: 14, textAlign: 'center' }}>
                       {t('wantsToAddYouAsFriend', lang)}

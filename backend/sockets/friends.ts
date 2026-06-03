@@ -102,7 +102,11 @@ export default function registerFriendSockets(io: Server) {
 
         // Шлем событие получателю
         let fromNick: string | undefined;
-        try { const u = await User.findById(me).select('nick').lean(); fromNick = (u as any)?.nick || undefined; } catch {}
+        try {
+          const u = await User.findById(me).select('nick').lean();
+          const n = String((u as any)?.nick ?? '').trim();
+          fromNick = n || undefined;
+        } catch {}
         emitToUser(io, to, 'friend:request', { from: me, fromNick });
 
         return ack?.({ ok: true, status: 'pending' });

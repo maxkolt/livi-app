@@ -4631,6 +4631,14 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
   }, []);
 
+  /** Тап по пустой области списка / скролл — закрыть клавиатуру и панель эмодзи. */
+  const dismissComposerKeyboard = React.useCallback(() => {
+    try {
+      Keyboard.dismiss();
+    } catch {}
+    setEmojiPanelOpen(false);
+  }, []);
+
   const handleComposerEmojiSelected = React.useCallback(
     (emoji: EmojiType) => {
       const ch = String(emoji?.emoji || '');
@@ -6523,7 +6531,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                 paddingBottom: 12,
               }}
               ListFooterComponent={null}
-              keyboardShouldPersistTaps="always"
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              onScrollBeginDrag={dismissComposerKeyboard}
               showsVerticalScrollIndicator={false}
               inverted={false}
               onScrollToIndexFailed={handleScrollToIndexFailed}
@@ -6871,7 +6881,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                 paddingTop: 12,
               }}
               showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="always"
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              onScrollBeginDrag={dismissComposerKeyboard}
               removeClippedSubviews={false}
               inverted={!showEmpty}
               onScrollToIndexFailed={handleScrollToIndexFailed}

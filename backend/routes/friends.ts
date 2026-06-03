@@ -100,7 +100,8 @@ router.post('/friends/add', async (req, res) => {
         let fromNick: string | undefined;
         try {
           const u = await User.findById(me).select('nick').lean();
-          fromNick = (u as any)?.nick || undefined;
+          const n = String((u as any)?.nick ?? '').trim();
+          fromNick = n || undefined;
         } catch {}
         emitToUser(io, to, 'friend:request', { from: me, fromNick });
       }
@@ -305,7 +306,7 @@ router.get('/invite/:code', async (req, res) => {
       ok: true,
       inviter: {
         id: String(inviter._id),
-        nick: inviter.nick || '',
+        nick: String((inviter as any).nick ?? '').trim(),
         avatar: (inviter as any).avatar || '',
         avatarVer: (inviter as any).avatarVer || 0,
         avatarThumbB64: (inviter as any).avatarThumbB64 || '',

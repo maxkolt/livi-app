@@ -37,10 +37,12 @@ import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
+import { trimNick } from '../../utils/userDisplayName';
 import socket, {
   fetchFriends,
   requestFriend,
   respondFriend,
+  checkInviteLink,
   onFriendRequest,
   onFriendAdded,
   onFriendAccepted,
@@ -331,13 +333,36 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       const partner = partnerUserIdRef.current;
       if (partner && String(from) !== String(partner)) return;
       setIncomingFriendFrom(from);
-      setIncomingFriendNick(fromNick);
+      setIncomingFriendNick(trimNick(fromNick) || undefined);
       setFriendModalVisible(true);
     });
     return () => {
       offReq?.();
     };
   }, []);
+
+  const friendRequestDisplayName = useMemo(() => {
+    const n = trimNick(incomingFriendNick);
+    return n || t('user', lang);
+  }, [incomingFriendNick, lang]);
+
+  useEffect(() => {
+    if (!friendModalVisible || !incomingFriendFrom) return;
+    if (trimNick(incomingFriendNick)) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await checkInviteLink(incomingFriendFrom);
+        const loaded = trimNick(r?.inviter?.nick);
+        if (!cancelled && loaded) setIncomingFriendNick(loaded);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [friendModalVisible, incomingFriendFrom, incomingFriendNick]);
 
   // Прочие события дружбы (зависят от текущего partnerUserId).
   useEffect(() => {
@@ -2073,10 +2098,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{L('friend_request')}</Text>
             <Text style={styles.modalText}>
-              {t('friend_request_text', lang).replace(
-                '{user}',
-                incomingFriendNick || incomingFriendFrom || t('thisUser', lang)
-              )}
+              {t('friend_request_text', lang).replace('{user}', friendRequestDisplayName)}
             </Text>
             <View style={{ flexDirection: "row", gap: 12, marginTop: 16 }}>
               <TouchableOpacity
