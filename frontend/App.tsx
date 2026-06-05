@@ -3209,9 +3209,8 @@ export default function App() {
     };
   }, []);
 
-  // Android: при 2–3 нажатиях «Назад» пользователь выходит из приложения на главный экран телефона.
-  // Если на корне стека (Back закрыл бы приложение) и при этом либо видим in-app PiP, либо идёт активный звонок (ушли по Back без PiP) — входим в системный PiP вместо выхода.
-  // Если PiP ещё не показывали (ушли по Back без оверлея) — сначала показываем PiP с видео, затем через задержку входим в системный PiP.
+  // Android: системный PiP только по кнопке «Домой» (MainActivity.onUserLeaveHint + homekey).
+  // VideoCall + активный звонок — Back в usePiP (in-app PiP). На корне с активным звонком Back не закрывает приложение.
   React.useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -3230,93 +3229,19 @@ export default function App() {
       }
 
       if (navRef.canGoBack()) return false; // не на корне — пусть экран/навигация обработает Back
-      try {
-        const SYSTEM_PIP_PREP_DELAY_MS = pipVisible ? 700 : 420;
-        const prepSystemPiPUI = (onPrepared?: () => void) => {
-          try {
-            const upd = (global as any).__pipUpdateStateRef?.current;
-            const apply = (size: { width: number; height: number } | null) => {
-              try {
-                if (typeof upd === 'function') {
-                  upd({
-                    pendingSystemPiP: true,
-                    systemPiPCaptureActive: true,
-                    systemPiPCaptureRequestId: Date.now(),
-                    allowVideoRender: true,
-                    ...(size ? { decorSizeForPiP: size } : {}),
-                  });
-                }
-              } catch (_) {}
-              setTimeout(() => {
-                try {
-                  const upd2 = (global as any).__pipUpdateStateRef?.current;
-                  if (typeof upd2 === 'function') upd2({ pendingSystemPiP: false, systemPiPCaptureActive: false, decorSizeForPiP: null });
-                } catch (_) {}
-              }, 1500);
-              setTimeout(() => {
-                try { onPrepared?.(); } catch (_) {}
-              }, SYSTEM_PIP_PREP_DELAY_MS);
-            };
-            const getDecor = NativeModules.LiviAppModule?.getDecorViewSize;
-            if (typeof getDecor === 'function') {
-              getDecor().then((size: { width: number; height: number }) => apply(size)).catch(() => apply(null));
-            } else {
-              apply(null);
-            }
-          } catch (_) {
-            setTimeout(() => {
-              try { onPrepared?.(); } catch (_) {}
-            }, SYSTEM_PIP_PREP_DELAY_MS);
-          }
-        };
-        const requestSystemPiP = () => {
-          const raf = (typeof requestAnimationFrame !== 'undefined')
-            ? requestAnimationFrame
-            : ((fn: any) => setTimeout(fn, 0));
-          raf(() => {
-            raf(() => {
-              try { NativeModules.LiviAppModule?.requestEnterPictureInPicture?.(); } catch (_) {}
-            });
-          });
-        };
-        const params = (global as any).__currentCallPiPParamsRef?.current;
-        const callId = params?.callId ?? (typeof session.getCallId === 'function' ? session.getCallId() : null);
-        const roomId = params?.roomId ?? (typeof session.getRoomId === 'function' ? session.getRoomId() : null);
-        const g = global as any;
-        const now = Date.now();
-        const returningUntil = Number(g.__returningFromSystemPiPUntilRef?.current || 0);
-        const disableUntil = Number(g.__disableSystemPiPUntilRef?.current || 0);
-        const returnState = g.__systemPiPReturnStateRef?.current;
-        const settledUntil = Number(returnState?.settledUntil || 0);
-        if (currentRoute !== 'VideoCall' && callId && roomId) {
-          if (now < returningUntil || now < disableUntil || now < settledUntil) {
-            return true;
-          }
-          g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
-          g.__enterSystemPiPAfterVideoCallRef.current = {
-            callId,
-            roomId,
-            source: 'back-root',
-            requestedAt: Date.now(),
-          };
-          g.__suppressInAppPiPUntilRef = g.__suppressInAppPiPUntilRef || { current: 0 };
-          g.__suppressInAppPiPUntilRef.current = Date.now() + 5000;
-          try {
-            const hidePiP = g.__pipHidePiPRef?.current;
-            if (typeof hidePiP === 'function') hidePiP();
-          } catch (_) {}
-          navRef.navigate('VideoCall' as any, {
-            ...(params?.navParams ?? {}),
-            callId,
-            roomId,
-            directCall: true,
-          });
-          return true;
-        }
-        if (!pipVisible && hasActiveCall) {
-          // Сначала показываем in-app PiP с видео, чтобы в системном PiP было видео собеседника
+
+      if (!hasActiveCall) return false;
+
+      // Корень + активный звонок: не выходим из приложения и не входим в системный PiP по Back.
+      if (!pipVisible) {
+        try {
+          const params = (global as any).__currentCallPiPParamsRef?.current;
+          const callId = params?.callId ?? (typeof session.getCallId === 'function' ? session.getCallId() : null);
+          const roomId = params?.roomId ?? (typeof session.getRoomId === 'function' ? session.getRoomId() : null);
           const showPiP = (global as any).__pipShowPiPRef?.current;
-          const remoteStream = params?.remoteStream ?? (typeof session.getRemoteStream === 'function' ? session.getRemoteStream() : null);
+          const remoteStream =
+            params?.remoteStream ??
+            (typeof session.getRemoteStream === 'function' ? session.getRemoteStream() : null);
           if (typeof showPiP === 'function' && callId && roomId) {
             showPiP({
               callId,
@@ -3336,15 +3261,10 @@ export default function App() {
               NativeModules.LiviAppModule.setPiPEndCallParams(callId, roomId);
             }
             if (session && typeof session.enterPiP === 'function') session.enterPiP();
-            prepSystemPiPUI(requestSystemPiP);
-          } else {
-            prepSystemPiPUI(requestSystemPiP);
           }
-        } else {
-          prepSystemPiPUI(requestSystemPiP);
-        }
-      } catch (_) {}
-      return true; // перехватываем — уходим в системный PiP, не закрываем приложение
+        } catch (_) {}
+      }
+      return true;
     });
     return () => sub.remove();
   }, []);

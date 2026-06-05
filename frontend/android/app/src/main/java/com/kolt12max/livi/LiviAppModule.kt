@@ -623,8 +623,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     // ВАЖНО: сознательно НЕ включаем Activity#setAutoEnterPictureInPictureEnabled на Android 12+.
     // Причина: авто-вход в PiP может срабатывать в неожиданные моменты (особенно на Samsung/OneUI)
     // во время переходов/закрытия нативных экранов, что выглядит как "само выбросило из приложения".
-    // Мы хотим вход в системный PiP только по явным действиям пользователя (выход из приложения),
-    // поэтому полагаемся на onUserLeaveHint() в MainActivity и/или явный requestEnterPictureInPicture() в обработчиках Back на корне.
+    // Мы хотим вход в системный PiP только по системной кнопке «Домой» (homekey + onUserLeaveHint в MainActivity).
   }
 
   /** JS выставляет true, когда виден маленький in-app PiP. Home из этого состояния требует задержки перед system PiP, чтобы не захватить zoomed cover-кадр. */

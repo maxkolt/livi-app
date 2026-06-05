@@ -63,6 +63,10 @@ class MainActivity : ReactActivity() {
   private var isPiPEnterAttemptRunning = false
   /** Анти-реэнтри: сразу после выхода из system PiP игнорируем ложный onUserLeaveHint этого же transition. */
   private var suppressPiPReenterUntilMs = 0L
+  /** Системный PiP по onUserLeaveHint (Home / уход в фон), но не сразу после Recents. */
+  private var suppressSystemPiPOnLeaveHintUntilMs = 0L
+  private var homeKeyForPiPReceiver: BroadcastReceiver? = null
+  private var clearRecentsSuppressRunnable: Runnable? = null
 
   private fun requestFinish(reason: String) {
     val now = System.currentTimeMillis()
@@ -234,14 +238,19 @@ class MainActivity : ReactActivity() {
   }
 
   /**
-   * При Home во время звонка сначала просим JS подготовить dedicated fullscreen-host
-   * для system PiP capture, а затем несколько раз пробуем войти в PiP нативно.
-   * Так поведение остаётся таким же стабильным, как раньше, но кадр берётся уже
-   * из отдельного fullscreen-host, а не из маленького in-app PiP.
+   * Системный PiP при Home (onUserLeaveHint). Recents помечаем через ACTION_CLOSE_SYSTEM_DIALOGS
+   * и кратко подавляем PiP — на Samsung homekey часто приходит после leaveHint, поэтому не требуем его заранее.
    */
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
     val now = System.currentTimeMillis()
+    if (now < suppressSystemPiPOnLeaveHintUntilMs) {
+      android.util.Log.i(
+        "MainActivity",
+        "onUserLeaveHint: skip system PiP — recent Recents (remainingMs=${suppressSystemPiPOnLeaveHintUntilMs - now})"
+      )
+      return
+    }
     if (now < suppressPiPReenterUntilMs) {
       android.util.Log.i(
         "MainActivity",
@@ -398,6 +407,7 @@ class MainActivity : ReactActivity() {
       setTheme(R.style.AppTheme)
     }
     super.onCreate(null)
+    registerHomeKeyForSystemPiPReceiver()
     if (backPressLoggingCallback == null) {
       backPressLoggingCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
@@ -461,8 +471,50 @@ class MainActivity : ReactActivity() {
     }
   }
 
+  private fun registerHomeKeyForSystemPiPReceiver() {
+    if (homeKeyForPiPReceiver != null) return
+    homeKeyForPiPReceiver = object : BroadcastReceiver() {
+      override fun onReceive(context: Context?, intent: Intent?) {
+        if (intent?.action != Intent.ACTION_CLOSE_SYSTEM_DIALOGS) return
+        when (intent.getStringExtra("reason")) {
+          "homekey" -> {
+            suppressSystemPiPOnLeaveHintUntilMs = 0L
+            clearRecentsSuppressRunnable?.let { pipHandler.removeCallbacks(it) }
+            clearRecentsSuppressRunnable = null
+          }
+          "recentapps" -> {
+            val until = System.currentTimeMillis() + 2000L
+            suppressSystemPiPOnLeaveHintUntilMs = until
+            clearRecentsSuppressRunnable?.let { pipHandler.removeCallbacks(it) }
+            clearRecentsSuppressRunnable = Runnable {
+              if (System.currentTimeMillis() >= suppressSystemPiPOnLeaveHintUntilMs - 50L) {
+                suppressSystemPiPOnLeaveHintUntilMs = 0L
+              }
+              clearRecentsSuppressRunnable = null
+            }
+            pipHandler.postDelayed(clearRecentsSuppressRunnable!!, 2100L)
+          }
+        }
+      }
+    }
+    val filter = IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      registerReceiver(homeKeyForPiPReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+    } else {
+      @Suppress("DEPRECATION")
+      registerReceiver(homeKeyForPiPReceiver, filter)
+    }
+  }
+
   override fun onDestroy() {
     cancelPendingPiPEnterAttempts()
+    clearRecentsSuppressRunnable?.let { pipHandler.removeCallbacks(it) }
+    clearRecentsSuppressRunnable = null
+    suppressSystemPiPOnLeaveHintUntilMs = 0L
+    homeKeyForPiPReceiver?.let {
+      try { unregisterReceiver(it) } catch (_: Exception) {}
+      homeKeyForPiPReceiver = null
+    }
     closePipCallEndedReceiver?.let {
       try { unregisterReceiver(it) } catch (_: Exception) {}
       closePipCallEndedReceiver = null

@@ -236,8 +236,8 @@ export const usePiP = ({
 
   // Обработка BackHandler для Android:
   // при уходе со страницы внутри приложения показываем in-app PiP.
-  // Системный PiP должен включаться только при РЕАЛЬНОМ выходе из приложения (Home/Recents/Back на корне),
-  // это обрабатывается нативным onUserLeaveHint() и глобальными обработчиками корневого Back.
+  // Системный PiP только по системной кнопке «Домой» (MainActivity onUserLeaveHint + homekey).
+  // Back на корне с активным звонком перехватывается в App.tsx без системного PiP.
   useEffect(() => {
     if (Platform.OS !== 'android') {
       return;
