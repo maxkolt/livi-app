@@ -260,25 +260,58 @@ export const usePiP = ({
     const revealInAppPiPAfterBack = () => {
       enterPiPMode({ deferVisible: true, fromVideoCallBack: true });
       try {
-        if (isPipOverlayVisibleSync()) return;
         const g = global as any;
         const showPiP = g.__pipShowPiPRef?.current;
         const params = g.__currentCallPiPParamsRef?.current;
-        if (typeof showPiP !== 'function' || !params?.callId || !params?.roomId) return;
+        const sessionForPiP = session || g.__webrtcSessionRef?.current;
+        const resolvedCallId =
+          params?.callId ||
+          (typeof sessionForPiP?.getCallId === 'function' ? sessionForPiP.getCallId() : null) ||
+          callId ||
+          '';
+        const resolvedRoomId =
+          params?.roomId ||
+          (typeof sessionForPiP?.getRoomId === 'function' ? sessionForPiP.getRoomId() : null) ||
+          roomId ||
+          '';
+        if (typeof showPiP !== 'function' || !resolvedCallId || !resolvedRoomId) {
+          g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+          g.__leavingVideoCallByBackRef.current = false;
+          return;
+        }
+        // __pipVisibleRef может быть true до showPiP (prefetch в BackHandler) — не пропускаем showPiP.
         showPiP({
-          callId: params.callId,
-          roomId: params.roomId,
-          partnerName: params.partnerName,
-          partnerAvatarUrl: params.partnerAvatarUrl,
-          localStream: params.localStream ?? null,
-          remoteStream: params.remoteStream ?? null,
-          muteLocal: params.muteLocal,
-          muteRemote: params.muteRemote,
-          localCamOn: params.localCamOn,
-          remoteCamOn: params.remoteCamOn,
-          navParams: params.navParams,
+          callId: resolvedCallId,
+          roomId: resolvedRoomId,
+          partnerName: params?.partnerName,
+          partnerAvatarUrl: params?.partnerAvatarUrl,
+          localStream:
+            params?.localStream ??
+            localStream ??
+            (typeof sessionForPiP?.getLocalStream === 'function' ? sessionForPiP.getLocalStream() : null),
+          remoteStream:
+            params?.remoteStream ??
+            remoteStream ??
+            (typeof sessionForPiP?.getRemoteStream === 'function' ? sessionForPiP.getRemoteStream() : null),
+          muteLocal: params?.muteLocal,
+          muteRemote: params?.muteRemote,
+          localCamOn: params?.localCamOn ?? camOn,
+          remoteCamOn: params?.remoteCamOn ?? remoteCamOn,
+          navParams: params?.navParams ?? routeParams,
           deferVisible: true,
         });
+      } catch {}
+      try {
+        const g = global as any;
+        const clearLeaving = () => {
+          g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
+          g.__leavingVideoCallByBackRef.current = false;
+        };
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => requestAnimationFrame(clearLeaving));
+        } else {
+          setTimeout(clearLeaving, 32);
+        }
       } catch {}
     };
 

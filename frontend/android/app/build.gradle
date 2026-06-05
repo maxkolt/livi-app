@@ -118,7 +118,7 @@ android {
         applicationId 'com.kolt12max.livi'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 143
+        versionCode 144
         versionName "1.1.20"
     }
     signingConfigs {
@@ -192,10 +192,6 @@ android {
         minifyEnabled enableProguardInReleaseBuilds
         proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         crunchPngs (findProperty('android.enablePngCrunchInReleaseBuilds')?.toBoolean() ?: true)
-        // Native .so crash stacks for Play Console / Android vitals (no Java obfuscation change).
-        ndk {
-            debugSymbolLevel 'SYMBOL_TABLE'
-        }
     }
 }
     packagingOptions {

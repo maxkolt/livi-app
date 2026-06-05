@@ -748,7 +748,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       const leavingByBack = g.__leavingVideoCallByBackRef?.current === true;
       const leavingByHome = g.__leavingVideoCallByHomeRef?.current === true;
       if (leavingByBack) {
-        g.__leavingVideoCallByBackRef.current = false;
+        // Флаг сбрасывает usePiP после showPiP (revealInAppPiPAfterBack). Если обнулить здесь,
+        // PiPOverlay на кадре goBack() не покажет in-app PiP на VideoCall (suppress route).
         return;
       }
       if (leavingByHome) {
