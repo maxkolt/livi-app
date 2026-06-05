@@ -426,6 +426,7 @@ class MainActivity : ReactActivity() {
     }
     // Тап по уведомлению «Пропущенный вызов»: ставим флаг для JS; снятие уведомлений из шторки — в onResume (при холодном старте в onCreate система уведомлений может быть ещё не готова).
     if (intent?.getBooleanExtra(EXTRA_OPEN_TAB_FRIENDS, false) == true) {
+      intent.removeExtra(EXTRA_OPEN_TAB_FRIENDS)
       LiviAppModule.setPendingOpenTabFriends(this)
     }
     if (tryStashPendingAnswerFromIntent(intent)) {

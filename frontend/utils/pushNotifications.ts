@@ -506,6 +506,9 @@ let pendingNavigationDrainTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingNavigationDrainInFlight = false;
 const NOTIFICATION_TAP_DEDUPE_MS = 10_000;
 const PENDING_NAVIGATION_TTL_MS = 30_000;
+/** Не повторять cold start navigation (Друзья) при обычном запуске с иконки — Expo хранит last notification response между сессиями. */
+const PUSH_HANDLED_NOTIFICATION_RESPONSES_KEY = 'push_handled_notification_responses_v1';
+const MAX_STORED_HANDLED_NOTIFICATION_RESPONSES = 80;
 
 function getReadyNav(): ReadyNavigation | null {
   const nav = (global as any).__navRef;
@@ -557,6 +560,42 @@ function shouldHandleNotificationTap(data: any, actionIdentifier: string, respon
   }
   handledNotificationTaps.set(key, now);
   return true;
+}
+
+async function loadPersistedHandledNotificationResponseKeys(): Promise<Set<string>> {
+  try {
+    const raw = await AsyncStorage.getItem(PUSH_HANDLED_NOTIFICATION_RESPONSES_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((x) => typeof x === 'string' && x.length > 0));
+  } catch {
+    return new Set();
+  }
+}
+
+async function wasNotificationResponseHandledInPastSession(
+  data: any,
+  actionIdentifier: string,
+  responseIdentifier?: string
+): Promise<boolean> {
+  const key = buildNotificationTapKey(data, actionIdentifier, responseIdentifier);
+  const set = await loadPersistedHandledNotificationResponseKeys();
+  return set.has(key);
+}
+
+async function persistHandledNotificationResponseKey(
+  data: any,
+  actionIdentifier: string,
+  responseIdentifier?: string
+): Promise<void> {
+  const key = buildNotificationTapKey(data, actionIdentifier, responseIdentifier);
+  const set = await loadPersistedHandledNotificationResponseKeys();
+  if (set.has(key)) return;
+  set.delete(key);
+  set.add(key);
+  const arr = [...set];
+  while (arr.length > MAX_STORED_HANDLED_NOTIFICATION_RESPONSES) arr.shift();
+  await AsyncStorage.setItem(PUSH_HANDLED_NOTIFICATION_RESPONSES_KEY, JSON.stringify(arr));
 }
 
 function schedulePendingNavigationDrain(delayMs = 80): void {
@@ -691,10 +730,12 @@ export async function handleDeclineCallFromDeepLink(callId: string): Promise<voi
  * actionIdentifier: 'answer' = Поднять, 'decline' = Положить, DEFAULT = тап по телу уведомления.
  */
 async function handleNotificationResponse(data: any, actionIdentifier: string, responseIdentifier?: string) {
+  let persistAfterHandle = false;
   try {
     const type = String(data?.type || '');
     if (!type) return;
     if (!shouldHandleNotificationTap(data, actionIdentifier, responseIdentifier)) return;
+    persistAfterHandle = true;
     trackReleaseEvent('notification_tap', {
       type,
       actionIdentifier,
@@ -835,6 +876,12 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
       actionIdentifier,
     });
     logger.warn('[push] handleNotificationResponse failed', e as any);
+  } finally {
+    if (persistAfterHandle) {
+      try {
+        await persistHandledNotificationResponseKey(data, actionIdentifier, responseIdentifier);
+      } catch {}
+    }
   }
 }
 
@@ -1141,10 +1188,16 @@ export function addNotificationListeners() {
       const data = (last as any)?.notification?.request?.content?.data;
       const actionId = (last as any)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
       const responseId = (last as any)?.notification?.request?.identifier;
-      if (data) {
-        logger.info('[push] cold start: handling notification response', { type: data?.type, actionId });
-        await handleNotificationResponse(data, actionId, responseId);
+      if (!data) return;
+      if (await wasNotificationResponseHandledInPastSession(data, actionId, responseId)) {
+        logger.info('[push] cold start: skip notification already handled in past session', {
+          type: data?.type,
+          responseId: responseId || null,
+        });
+        return;
       }
+      logger.info('[push] cold start: handling notification response', { type: data?.type, actionId });
+      await handleNotificationResponse(data, actionId, responseId);
     } catch (e) {
       logger.warn('[push] cold start handle failed', e as any);
     }
