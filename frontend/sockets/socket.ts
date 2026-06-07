@@ -2,6 +2,7 @@
 import { io, Socket } from "socket.io-client";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { logger } from '../utils/logger';
+import { startActiveCallNotification, stopActiveCallNotification } from '../utils/activeCallNotification';
 
 // Глобальное хранение сообщений
 export const globalMessageStorage = {
@@ -932,7 +933,7 @@ async function boot() {
 
   // Снимаем уведомление «Видеозвонок от...», если оно осталось от прошлого запуска (сервис не закрылся).
   if (Platform.OS === 'android') {
-    try { NativeModules.LiviAppModule?.stopActiveCallForegroundService?.(); } catch (_) {}
+    stopActiveCallNotification();
   }
   
   try {
@@ -1139,11 +1140,14 @@ export function onIncomingCallScreenChange(cb: (visible: boolean, fromUserId: st
   return () => { __incomingCallScreenChangeListeners.delete(cb); };
 }
 
-export function setActiveVideoCall(active: boolean, _partnerDisplayName?: string | null): void {
+export function setActiveVideoCall(active: boolean, partnerDisplayName?: string | null): void {
   __activeVideoCall = active;
-  // При завершении звонка снимаем уведомление «Видеозвонок от...», если оно осталось от прошлого запуска.
-  if (!active && Platform.OS === 'android') {
-    try { NativeModules.LiviAppModule?.stopActiveCallForegroundService?.(); } catch (_) {}
+  if (Platform.OS === 'android') {
+    if (active) {
+      startActiveCallNotification(partnerDisplayName);
+    } else {
+      stopActiveCallNotification();
+    }
   }
   if (
     !SOCKET_KEEP_ALIVE_IN_BACKGROUND &&

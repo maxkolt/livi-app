@@ -91,6 +91,11 @@ class MainActivity : ReactActivity() {
     isPiPEnterAttemptRunning = false
   }
 
+  /** После явного возврата на VideoCall (тап PiP / уведомление) — снова разрешить Home → system PiP. */
+  internal fun clearSuppressPiPReenterCooldown() {
+    suppressPiPReenterUntilMs = 0L
+  }
+
   /** LiviAppModule при setEndingCallInProgress(true) — отменить отложенный вход в PiP после goBack. */
   internal fun cancelPendingPiPEnterAttemptsForCallTeardown() {
     cancelPendingPiPEnterAttempts()
@@ -157,6 +162,7 @@ class MainActivity : ReactActivity() {
       LiviAppModule.dismissAllMissedCallNotificationsFromContext(this)
       LiviAppModule.setPendingOpenTabFriends(this)
     }
+    handleReturnToActiveCallIntent(intent)
     if (tryStashPendingAnswerFromIntent(intent)) {
       pendingAnswerFromIntent = true
     }
@@ -193,6 +199,7 @@ class MainActivity : ReactActivity() {
         LiviAppModule.dismissAllMissedCallNotificationsFromContext(this@MainActivity)
       }, 150)
     }
+    handleReturnToActiveCallIntent(intent)
     // FCM call_accepted запустил MainActivity — закрыть нативный экран исходящего (если ещё открыт) и уведомить JS
     val pendingCallId = intent?.getStringExtra(EXTRA_PENDING_CALL_ACCEPTED_CALL_ID)
     if (!pendingCallId.isNullOrBlank()) {
@@ -326,7 +333,8 @@ class MainActivity : ReactActivity() {
         if (!isInPictureInPictureMode) {
           if (!inAppPiPVisible) android.util.Log.i("MainActivity", "onUserLeaveHint: scheduling direct-path retries")
           else android.util.Log.i("MainActivity", "onUserLeaveHint: scheduling prewarmed in-app PiP retries")
-          val delays = longArrayOf(0L, 120L, 280L, 520L, 900L)
+          // Ретраи до ~2.5s: на release/медленных Samsung enterPictureInPictureMode часто false на первых кадрах.
+          val delays = longArrayOf(0L, 120L, 280L, 520L, 900L, 1300L, 1800L, 2400L)
           for (d in delays) {
             val r = Runnable { tryEnterPiP.run() }
             pendingPiPEnterRunnables.add(r)
@@ -439,6 +447,7 @@ class MainActivity : ReactActivity() {
       intent.removeExtra(EXTRA_OPEN_TAB_FRIENDS)
       LiviAppModule.setPendingOpenTabFriends(this)
     }
+    handleReturnToActiveCallIntent(intent)
     if (tryStashPendingAnswerFromIntent(intent)) {
       pendingAnswerFromIntent = true
     }
@@ -576,12 +585,21 @@ class MainActivity : ReactActivity() {
       super.invokeDefaultOnBackPressed()
   }
 
+  private fun handleReturnToActiveCallIntent(intent: Intent?) {
+    if (intent?.getBooleanExtra(EXTRA_RETURN_TO_ACTIVE_CALL, false) != true) return
+    intent.removeExtra(EXTRA_RETURN_TO_ACTIVE_CALL)
+    LiviAppModule.setPendingReturnToActiveCall(this)
+    LiviAppModule.emitReturnToActiveCallFromNotification()
+  }
+
   companion object {
     const val EXTRA_PENDING_CALL_ACCEPTED_CALL_ID = "pending_call_accepted_call_id"
     const val EXTRA_PENDING_ANSWER_CALL_ID = "pending_answer_call_id"
     const val EXTRA_PENDING_ANSWER_FROM = "pending_answer_from"
     const val EXTRA_PENDING_ANSWER_FROM_NICK = "pending_answer_from_nick"
     const val EXTRA_OPEN_TAB_FRIENDS = "open_tab_friends"
+    /** Тап по ongoing-уведомлению активного видеозвонка — вернуться на экран звонка. */
+    const val EXTRA_RETURN_TO_ACTIVE_CALL = "return_to_active_call"
 
     /** true когда приложение на переднем плане (в т.ч. во время видеозвонка) — тогда не показываем heads-up уведомление о звонке */
     @JvmField

@@ -10,6 +10,7 @@ import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
 import { requestExitSystemPiPSoft } from '../../utils/callKeep';
+import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn } from '../../utils/activeCallNotification';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
 
@@ -494,6 +495,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     } else {
       setVisible(true);
     }
+    if (Platform.OS === 'android' && p.callId && p.roomId) {
+      startActiveCallNotification(p.partnerName);
+    }
   }, []);
 
   const hidePiP = useCallback(() => {
@@ -620,7 +624,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
       try {
         g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
-        g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 2000;
+        g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 4500;
       } catch (_) {}
       const stableIds = resolveStablePiPIds();
       trackReleaseEvent('pip_enter_exit', {
@@ -666,7 +670,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             g.__systemPiPEntryInProgressUntilRef.current = 0;
           }
         } catch (_) {}
-      }, 2200);
+      }, 4500);
 
       let params = g.__currentCallPiPParamsRef?.current;
       if (!params && session) {
@@ -749,24 +753,44 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (returnToCallInFlightRef.current) {
       return;
     }
+    if (Platform.OS === 'android') {
+      try { NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.(); } catch (_) {}
+    }
     returnToCallInFlightRef.current = true;
     try {
       g.__pipReturnToCallInFlightRef = g.__pipReturnToCallInFlightRef || { current: false };
       g.__pipReturnToCallInFlightRef.current = true;
     } catch (_) {}
-    // При возвращении в VideoCall подавляем in-app overlay, чтобы он не мелькнул поверх нового экрана.
-    setSuppressOverlayForReturn(true);
-    const clearSuppressLater = () => {
-      // Даем навигации/перерисовке 1-2 кадра и отпускаем подавление.
+
+    const releaseReturnToCallInFlight = () => {
+      returnToCallInFlightRef.current = false;
+      try {
+        const g2 = global as any;
+        g2.__pipReturnToCallInFlightRef = g2.__pipReturnToCallInFlightRef || { current: false };
+        g2.__pipReturnToCallInFlightRef.current = false;
+      } catch (_) {}
+    };
+
+    /** Навигация не удалась — PiP должен остаться на экране (не скрывать overlay заранее). */
+    const abortReturnToCallKeepPiP = () => {
+      setSuppressOverlayForReturn(false);
+      releaseReturnToCallInFlight();
+    };
+
+    const finishReturnToCallAfterNav = () => {
       setTimeout(() => {
         setSuppressOverlayForReturn(false);
-        returnToCallInFlightRef.current = false;
-        try {
-          const g = global as any;
-          g.__pipReturnToCallInFlightRef = g.__pipReturnToCallInFlightRef || { current: false };
-          g.__pipReturnToCallInFlightRef.current = false;
-        } catch (_) {}
+        releaseReturnToCallInFlight();
+        reenableAndroidSystemPiPLeaveHintAfterReturn();
       }, 800);
+    };
+
+    const isOnVideoCallRoute = (): boolean => {
+      try {
+        return nav?.getCurrentRoute?.()?.name === 'VideoCall';
+      } catch {
+        return false;
+      }
     };
     // Флаг для App: при выходе из PiP по SystemPiPModeChanged не завершать звонок (пользователь тапнул «вернуться», а не системную X).
     try {
@@ -802,7 +826,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const session = (global as any).__webrtcSessionRef?.current;
     if (session && typeof session.isEnded === 'function' && session.isEnded()) {
       hidePiP();
-      clearSuppressLater();
+      releaseReturnToCallInFlight();
       return;
     }
 
@@ -836,24 +860,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     
     // Guard от двойной навигации
     if (navigatingRef.current) {
-      clearSuppressLater();
+      releaseReturnToCallInFlight();
       return;
     }
 
     const doNavigate = (cid: string, rid: string, navParams?: any) => {
-      // Сразу скрываем PiP, чтобы не показывать «приветствие с PiP» перед переходом на VideoCall
-      // Скрываем in-app PiP ДО навигации, иначе при открытии экрана VideoCall pip.visible
-      // ещё true один кадр — и на экране видеозвонка показывается оверлей PiP поверх всего.
-      hidePiP();
-
-      if (!nav || !nav.isReady || !nav.isReady()) {
-        console.warn('[PiPContext] returnToCall: Navigation not ready, using onReturnToCall fallback');
-        onReturnToCall?.(cid, rid);
-        clearSuppressLater();
-        return;
-      }
-
-      navigatingRef.current = true;
       const params = {
         ...(navParams ?? {}),
         resume: true,
@@ -864,6 +875,42 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         callId: cid,
         roomId: rid,
       };
+
+      const completeAfterNavAttempt = (source: string) => {
+        const finalize = () => {
+          if (!isOnVideoCallRoute()) {
+            abortReturnToCallKeepPiP();
+            logger.warn('[PiPContext] returnToCall: navigation did not reach VideoCall, keeping PiP visible', {
+              source,
+            });
+            return;
+          }
+          setSuppressOverlayForReturn(true);
+          hidePiP();
+          finishReturnToCallAfterNav();
+        };
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => requestAnimationFrame(finalize));
+        } else {
+          setTimeout(finalize, 32);
+        }
+      };
+
+      if (!nav || !nav.isReady || !nav.isReady()) {
+        console.warn('[PiPContext] returnToCall: Navigation not ready, using onReturnToCall fallback');
+        try {
+          onReturnToCall?.(cid, rid);
+        } catch (e) {
+          console.error('[PiPContext] returnToCall onReturnToCall error:', e);
+          abortReturnToCallKeepPiP();
+          return;
+        }
+        completeAfterNavAttempt('onReturnToCall');
+        return;
+      }
+
+      navigatingRef.current = true;
+      setSuppressOverlayForReturn(true);
       try {
         nav.dispatch(
           CommonActions.reset({
@@ -871,12 +918,21 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             routes: [{ name: 'Home' as any }, { name: 'VideoCall' as any, params }],
           })
         );
+        hidePiP();
+        finishReturnToCallAfterNav();
       } catch (e) {
         console.error('[PiPContext] Navigation error:', e);
-        onReturnToCall?.(cid, rid);
+        setSuppressOverlayForReturn(false);
+        try {
+          onReturnToCall?.(cid, rid);
+        } catch (fallbackErr) {
+          console.error('[PiPContext] returnToCall fallback after dispatch error:', fallbackErr);
+          abortReturnToCallKeepPiP();
+          return;
+        }
+        completeAfterNavAttempt('dispatch-catch-fallback');
       } finally {
         navigatingRef.current = false;
-        clearSuppressLater();
       }
     };
 
@@ -895,12 +951,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
               const cid = p?.callId ? String(p.callId) : '';
               const rid = p?.roomId ? String(p.roomId) : '';
               if (!cid || !rid) {
-                clearSuppressLater();
+                abortReturnToCallKeepPiP();
                 return;
               }
               doNavigate(cid, rid, effectiveNavParams);
             })
-            .catch(() => clearSuppressLater());
+            .catch(() => abortReturnToCallKeepPiP());
           return;
         }
       } catch (_) {}
@@ -911,7 +967,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       callId: effectiveCallId,
       roomId: effectiveRoomId,
     });
-    clearSuppressLater();
+    abortReturnToCallKeepPiP();
   }, [callId, roomId, lastNavParams, onReturnToCall, hidePiP, syncSessionPiPState]);
 
   // Чтобы по кнопке «развернуть» в системном PiP возвращать на экран видеозвонка (App слушает SystemPiPExpanded и дергает этот ref).

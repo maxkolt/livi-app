@@ -613,6 +613,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   /** Включить/выключить системный PiP при нажатии Home: true = при уходе в фон перейти в Picture-in-Picture (окно поверх лаунчера). Вызывать из JS при активном видеозвонке или при показе in-app PiP. На Android 12+ дополнительно включается авто-вход в PiP для совместимости со всеми устройствами. */
+  /** Сбросить 3s cooldown после выхода из system PiP — пользователь снова на полноэкранном звонке и жмёт Home. */
+  @ReactMethod
+  fun clearSystemPiPReenterSuppress() {
+    try {
+      (currentActivity as? MainActivity)?.clearSuppressPiPReenterCooldown()
+    } catch (_: Exception) {}
+  }
+
   @ReactMethod
   fun setShouldEnterPiPOnLeaveHint(enabled: Boolean) {
     val prev = LiviAppModule.getShouldEnterPiPOnLeaveHint()
@@ -694,6 +702,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         handler.postDelayed(tryEnterPiP, 450)
         handler.postDelayed(tryEnterPiP, 700)
         handler.postDelayed(tryEnterPiP, 1000)
+        handler.postDelayed(tryEnterPiP, 1500)
+        handler.postDelayed(tryEnterPiP, 2200)
       } catch (e: Exception) {
         Log.w("LiviAppModule", "requestEnterPictureInPicture failed", e)
       }
@@ -1009,6 +1019,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun getAndClearPendingOpenTabFriends(promise: Promise) {
     try {
       val value = getAndClearPendingOpenTabFriends(reactApplicationContext)
+      promise.resolve(value)
+    } catch (e: Exception) {
+      promise.resolve(false)
+    }
+  }
+
+  /** Тап по ongoing-уведомлению активного видеозвонка (холодный старт / до подписки на событие). */
+  @ReactMethod
+  fun getAndClearPendingReturnToActiveCall(promise: Promise) {
+    try {
+      val value = getAndClearPendingReturnToActiveCall(reactApplicationContext)
       promise.resolve(value)
     } catch (e: Exception) {
       promise.resolve(false)
@@ -1449,6 +1470,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       reactContextRef?.emitDeviceEvent("SystemPiPExpanded", null)
     }
 
+    /** Тап по ongoing-уведомлению «Видеозвонок от …» — вернуться на экран звонка. */
+    @JvmStatic
+    fun emitReturnToActiveCallFromNotification() {
+      reactContextRef?.runOnUiQueueThread {
+        reactContextRef?.emitDeviceEvent("ReturnToActiveCallFromNotification", null)
+      }
+    }
+
     /** Запуск мелодии звонка и вибрации звонка из нативного кода (FGS, без React).
      * Системная мелодия звонка и вибрация звонка (не уведомления) — и при заблокированном, и при разблокированном экране. */
     /**
@@ -1600,6 +1629,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     const val KEY_OUTGOING_CALL_TIMEOUT_MS = "outgoing_call_timeout_ms"
     private const val PREFS_OPEN_TAB = "LiviOpenTab"
     private const val KEY_PENDING_OPEN_TAB_FRIENDS = "pending_open_tab_friends"
+    private const val KEY_PENDING_RETURN_TO_ACTIVE_CALL = "pending_return_to_active_call"
     private const val HEADLESS_TASK_CALL_KEEP = "RNCallKeepBackgroundMessage"
 
     private var reactContextRef: ReactApplicationContext? = null
@@ -1625,6 +1655,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun setPendingOpenTabFriends(context: Context) {
       context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE).edit().putBoolean(KEY_PENDING_OPEN_TAB_FRIENDS, true).apply()
+    }
+
+    @JvmStatic
+    fun setPendingReturnToActiveCall(context: Context) {
+      context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE).edit().putBoolean(KEY_PENDING_RETURN_TO_ACTIVE_CALL, true).apply()
     }
 
     /** Снять все уведомления «пропущенный вызов» из шторки. Вызывать из MainActivity при тапе по уведомлению (без ожидания JS). */
@@ -1661,6 +1696,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       val prefs = context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE)
       val value = prefs.getBoolean(KEY_PENDING_OPEN_TAB_FRIENDS, false)
       prefs.edit().remove(KEY_PENDING_OPEN_TAB_FRIENDS).apply()
+      return value
+    }
+
+    @JvmStatic
+    fun getAndClearPendingReturnToActiveCall(context: Context): Boolean {
+      val prefs = context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE)
+      val value = prefs.getBoolean(KEY_PENDING_RETURN_TO_ACTIVE_CALL, false)
+      prefs.edit().remove(KEY_PENDING_RETURN_TO_ACTIVE_CALL).apply()
       return value
     }
 

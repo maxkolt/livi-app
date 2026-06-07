@@ -41,6 +41,7 @@ import { addVoipTokenListener } from './utils/voipPush';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 import { connectStreamIfNeeded } from './chat/cometchat';
+import { reenableAndroidSystemPiPLeaveHintAfterReturn } from './utils/activeCallNotification';
 
 // Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
 const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
@@ -528,6 +529,57 @@ function AppContent() {
   const completeAndroidIncomingAnswerRef = React.useRef(completeAndroidIncomingAnswer);
   completeAndroidIncomingAnswerRef.current = completeAndroidIncomingAnswer;
 
+  const invokeReturnToVideoCallFromNotification = React.useCallback(() => {
+    const g = global as any;
+    const session = g.__webrtcSessionRef?.current;
+    const sessionEnded =
+      session && typeof session.isEnded === 'function' && session.isEnded();
+    if (sessionEnded) return;
+    const endingCall =
+      g.__endingCallInProgressRef?.current === true ||
+      g.__callEndedFromPiPNoOpenRef?.current === true ||
+      g.__endingFromPiPButtonRef?.current === true;
+    if (endingCall) return;
+
+    // Не копируем логику SystemPiPExpanded (leaveHint=false + disable 6s): иначе после возврата
+    // на VideoCall повторный Home сворачивает приложение без system PiP.
+    try {
+      NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
+    } catch (_) {}
+
+    const fn = g.__pipReturnToCallRef?.current;
+    if (typeof fn === 'function') {
+      fn();
+      reenableAndroidSystemPiPLeaveHintAfterReturn();
+      return;
+    }
+    const params = g.__currentCallPiPParamsRef?.current;
+    const nav = g.__navRef;
+    if (params?.callId && params?.roomId && nav?.isReady?.()) {
+      const returnToken = Number(g.__systemPiPReturnTokenRef?.current || Date.now());
+      nav.dispatch(
+        CommonActions.reset({
+          index: 1,
+          routes: [
+            { name: 'Home' as const },
+            {
+              name: 'VideoCall' as const,
+              params: {
+                resume: true,
+                fromPiP: true,
+                systemPiPReturnToken: returnToken,
+                callId: params.callId,
+                roomId: params.roomId,
+                directCall: true,
+              },
+            },
+          ],
+        })
+      );
+      reenableAndroidSystemPiPLeaveHintAfterReturn();
+    }
+  }, []);
+
   React.useEffect(() => {
     return () => {
       if (incomingAnswerTransitionTimerRef.current) {
@@ -695,6 +747,7 @@ function AppContent() {
         g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
         g.__enterSystemPiPAfterVideoCallRef.current = null;
         NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+        NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
         requestExitSystemPiPSoft();
       } catch (_) {}
       const fn = (global as any).__pipReturnToCallRef?.current;
@@ -731,6 +784,9 @@ function AppContent() {
         console.log('[App] SystemPiPExpanded fallback: dispatched reset to VideoCall');
       }
     });
+    const subReturnActive = emitter.addListener('ReturnToActiveCallFromNotification', () => {
+      invokeReturnToVideoCallFromNotification();
+    });
     // AboutToEnterSystemPiP обрабатывается в PiPContext (как в WhatsApp/Telegram: компактный вид + requestEnterPictureInPicture, без смены экрана).
     return () => {
       sub1.remove();
@@ -740,8 +796,9 @@ function AppContent() {
       sub4.remove();
       sub5.remove();
       sub7.remove();
+      subReturnActive.remove();
     };
-  }, [completeAndroidIncomingAnswer, rememberExpectedCallAccepted, shouldRequestPendingCallAccepted]);
+  }, [completeAndroidIncomingAnswer, rememberExpectedCallAccepted, shouldRequestPendingCallAccepted, invokeReturnToVideoCallFromNotification]);
 
   // События answer/end от нативного экрана звонка (Android) — регистрируем после возможного setup
   React.useEffect(() => {
@@ -1181,6 +1238,22 @@ function AppContent() {
       cancelled = true;
     };
   }, [ensureInAppPiPBeforeOpenFriends]);
+
+  // Android: тап по ongoing-уведомлению активного видеозвонка (холодный старт / до подписки на событие).
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const LiviAppModule = NativeModules.LiviAppModule;
+    const tryPending = () => {
+      LiviAppModule?.getAndClearPendingReturnToActiveCall?.()?.then?.((pending: boolean) => {
+        if (pending) invokeReturnToVideoCallFromNotification();
+      });
+    };
+    tryPending();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') tryPending();
+    });
+    return () => sub.remove();
+  }, [invokeReturnToVideoCallFromNotification]);
 
   // Android: при возврате в приложение (тап по уведомлению «Пропущенный вызов») — открыть меню и вкладку Друзья; сразу помечаем «увидел», чтобы синхронизация с нативом не пересоздала уведомление
   React.useEffect(() => {

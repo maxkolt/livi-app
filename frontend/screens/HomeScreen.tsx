@@ -312,15 +312,13 @@ const mapToFriend = (u: any): Friend => {
   return mapped;
 };
 
-/** Не гасим «Занято» из одного ответа friends:fetch — актуальный busy приходит через presence:update. */
+/** Не залипаем «Занято» локально, если сервер уже вернул busy: false (напр. после отмены исходящего). */
 function mergeFriendBusyFromFetch(
   serverBusy: boolean,
-  prevBusy: boolean | undefined,
-  friendLooksOnline: boolean,
+  _prevBusy?: boolean,
+  _friendLooksOnline?: boolean,
 ): boolean {
-  if (serverBusy) return true;
-  if (!!prevBusy && friendLooksOnline) return true;
-  return false;
+  return !!serverBusy;
 }
 
 const DRAFT_KEY = 'profile_draft_v1';
@@ -1099,6 +1097,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [avatarRefreshKey, setAvatarRefreshKey] = useState(0); // для принудительного обновления на Android
   const [videoCallEndedTick, setVideoCallEndedTick] = useState(0); // при завершении звонка вызываем setVideoCallEndedTick → ре-рендер списка друзей, снимаются бейдж «Занят» и disabled
   const lastVideoCallPartnerRef = useRef<string | null>(null);
+  const lastOutgoingPeerIdRef = useRef<string | null>(null);
   const [resolvedAvatarUri, resolvedAvatarReady] = useResolvedImageUri(avatarUri || ''); // на Android data: -> file: для Glide
   const [, myFullAvatarResolvedReady] = useResolvedImageUri(myFullAvatarUri || ''); // кешированный аватар (data:) -> file: для Glide на Android
   const [savedNick, setSavedNick] = useState<string>('');      // сохранённый ник
@@ -1348,7 +1347,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const n = raw ? Number(raw) || 0 : 0;
       const next = String(n + 1);
       await AsyncStorage.setItem(key, next);
-      console.warn(`[analytics] ${key} -> ${next}`);
+      logger.info(`[analytics] ${key} -> ${next}`);
       return Number(next);
     } catch {
       return 0;
@@ -1566,10 +1565,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const rowRefForMarkReadMenu = useRef<View>(null);
   const avatarRefForMarkReadMenu = useRef<View>(null);
   const [markReadOverlayLeft, setMarkReadOverlayLeft] = useState<number | null>(null);
-  const GAP_AFTER_AVATAR = 12;
+  const GAP_AFTER_AVATAR = 20;
   const MAX_MARK_READ_STRIP_WIDTH = 320;
   const LIST_PADDING_H = 16;
-  const STRIP_RIGHT_MARGIN = 8;
+  const STRIP_RIGHT_MARGIN = 20;
   useEffect(() => {
     if (markReadMenu) {
       const overlayLeft = markReadOverlayLeft ?? (Platform.OS === 'ios' ? 52 + GAP_AFTER_AVATAR : 44 + GAP_AFTER_AVATAR);
@@ -1653,6 +1652,33 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     outgoingAttemptSeqRef.current += 1;
   }, []);
 
+  const clearFriendsCallBusy = useCallback((userIds: Array<string | null | undefined>) => {
+    const ids = new Set(
+      userIds.map((id) => String(id || '').trim()).filter(Boolean),
+    );
+    if (!ids.size) return;
+    setFriends((prev) =>
+      prev.map((f) => (ids.has(String(f.id)) ? { ...f, isBusy: false } : f)),
+    );
+  }, []);
+
+  const forceResetCallBusyRefs = useCallback(() => {
+    try {
+      const g = global as any;
+      g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
+      g.__videoCallPartnerUserIdRef.current = null;
+      g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
+      g.__videoCallActiveRef.current = false;
+      g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+      g.__pipVisibleRef.current = false;
+      g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
+      g.__pipInSystemModeRef.current = false;
+      g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
+      g.__currentCallPiPParamsRef.current = null;
+      g.__onVideoCallEndedRef?.current?.();
+    } catch {}
+  }, []);
+
   // ВАЖНО: не закрываем исходящий UI на socket 'connect'.
   // Иначе при старте звонка из вкладки «Друзья» (HomeScreen смонтирован) нативный исходящий экран
   // может закрываться сразу же, если сокет в этот момент переподключается/доподключается.
@@ -1697,6 +1723,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       hasMarkReadMenu: !!markReadMenu,
       openSwipeable: !!openSwipeableRef.current,
     });
+    const outgoingPeerId =
+      (calling.friend?.id != null ? String(calling.friend.id) : '') ||
+      String(lastOutgoingPeerIdRef.current || '');
     activeOutgoingAttemptRef.current = 0;
     outgoingAttemptSeqRef.current += 1;
     pendingCancelRef.current = true;
@@ -1720,8 +1749,31 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     if (hadOutgoingState) {
       setFriendActionsGestureResetSeq((seq) => seq + 1);
     }
+    forceResetCallBusyRefs();
+    clearFriendsCallBusy([outgoingPeerId, lastOutgoingPeerIdRef.current]);
+    lastOutgoingPeerIdRef.current = null;
     stopWaves();
-  }, [calling.visible, markReadMenu, stopWaves]);
+  }, [calling.visible, calling.friend, markReadMenu, stopWaves, forceResetCallBusyRefs, clearFriendsCallBusy]);
+
+  useEffect(() => {
+    const off = onCallCanceled?.((d) => {
+      const callerId = String((d as any)?.from || '').trim();
+      const peerId = String(lastOutgoingPeerIdRef.current || '').trim();
+      forceResetCallBusyRefs();
+      clearFriendsCallBusy([callerId, peerId]);
+      lastOutgoingPeerIdRef.current = null;
+      activeOutgoingAttemptRef.current = 0;
+      callingVisibleRef.current = false;
+      setCalling((prev) =>
+        prev.visible || prev.friend || prev.callId
+          ? { visible: false, friend: null, callId: null }
+          : prev,
+      );
+      setSwipeActionsHiddenForCall(null);
+      stopWaves();
+    });
+    return off;
+  }, [clearFriendsCallBusy, forceResetCallBusyRefs, stopWaves]);
 
   useEffect(() => {
     const unsub = onCloseOutgoingCall(() => {
@@ -1831,6 +1883,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       warmCallSignaling();
       pendingCancelRef.current = false;
       outgoingCallUserCanceledRef.current = false;
+      lastOutgoingPeerIdRef.current = String(friend.id);
       setCalling({ visible: true, friend, callId: null });
       startWaves();
       // Сразу помечаем «исходящий на экране», чтобы сокет не отключался при уходе в фон (диалог разрешений).
@@ -1872,23 +1925,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         if (isCurrentAttempt()) activeOutgoingAttemptRef.current = 0;
         removeAllSocketSubs();
         body();
-      };
-
-      const forceResetCallBusyRefs = () => {
-        try {
-          const g = global as any;
-          g.__videoCallPartnerUserIdRef = g.__videoCallPartnerUserIdRef || { current: null };
-          g.__videoCallPartnerUserIdRef.current = null;
-          g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
-          g.__videoCallActiveRef.current = false;
-          g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
-          g.__pipVisibleRef.current = false;
-          g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
-          g.__pipInSystemModeRef.current = false;
-          g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
-          g.__currentCallPiPParamsRef.current = null;
-          g.__onVideoCallEndedRef?.current?.();
-        } catch {}
       };
 
       const sub = (off: (() => void) | undefined) => {
@@ -2034,6 +2070,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         finishOutgoing(() => {
           try { setOutgoingCallScreenVisible(false); } catch {}
           try { closeOutgoingCallActivity(); } catch {}
+          forceResetCallBusyRefs();
+          clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
+          lastOutgoingPeerIdRef.current = null;
           callingVisibleRef.current = false;
           setCalling({ visible: false, friend: null, callId: null });
           stopWaves();
@@ -2076,12 +2115,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         } catch {}
       }
     }
-  }, [navigation, showNotice, startWaves, stopWaves, resetOutgoingAfterExternalClose, clearStaleOutgoingAttemptIfIdle, lang]);
+  }, [navigation, showNotice, startWaves, stopWaves, resetOutgoingAfterExternalClose, clearStaleOutgoingAttemptIfIdle, forceResetCallBusyRefs, clearFriendsCallBusy, lang]);
 
   const handleCancelCall = useCallback(() => {
     activeOutgoingAttemptRef.current = 0;
     outgoingAttemptSeqRef.current += 1;
     outgoingCallUserCanceledRef.current = true;
+    const outgoingPeerId =
+      (calling.friend?.id != null ? String(calling.friend.id) : '') ||
+      String(lastOutgoingPeerIdRef.current || '');
     // Важно: ставим ref сразу, чтобы внешние события (socket/push/native) не закрывали второй раз до рендера.
     callingVisibleRef.current = false;
     try { setOutgoingCallScreenVisible(false); } catch {}
@@ -2097,10 +2139,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // callId ещё не пришёл — отметим, чтобы отменить сразу после ack
       pendingCancelRef.current = true;
     }
+    forceResetCallBusyRefs();
+    clearFriendsCallBusy([outgoingPeerId]);
+    lastOutgoingPeerIdRef.current = null;
     setCalling({ visible: false, friend: null, callId: null });
     stopWaves();
     showNotice(t('callCancelled', lang), 'error', 3000);
-  }, [calling.callId, stopWaves, showNotice, lang]);
+  }, [calling.callId, calling.friend, stopWaves, showNotice, lang, forceResetCallBusyRefs, clearFriendsCallBusy]);
 
   /* friends fetch */
   const loadFriendsRef = useRef<Promise<void> | null>(null);
@@ -3533,10 +3578,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     g.__onVideoCallEndedRef.current = () => {
       const currentPartner = String((g.__videoCallPartnerUserIdRef?.current ?? '') || '').trim();
       const lastPartner = String((lastVideoCallPartnerRef.current ?? '') || '').trim();
-      const partnerToClear = currentPartner || lastPartner;
+      const lastOutgoingPeer = String(lastOutgoingPeerIdRef.current ?? '').trim();
+      const partnerToClear = currentPartner || lastPartner || lastOutgoingPeer;
       if (partnerToClear) {
         setFriends((prev) => prev.map((f) => String(f.id) === partnerToClear ? { ...f, isBusy: false } : f));
       }
+      lastOutgoingPeerIdRef.current = null;
       setVideoCallEndedTick((t) => t + 1);
     };
     return () => {
@@ -5093,10 +5140,12 @@ const handleClearNick = useCallback(async () => {
                       style={styles.markReadMenuStripText}
                       allowFontScaling={false}
                     >
-                      {markReadMenu.type === 'video' ? t('markAsViewed', lang) : t('markAsRead', lang)}
+                      {markReadMenu.type === 'video'
+                        ? `${t('markAsViewed', lang)}...`
+                        : `${t('markAsRead', lang)}...`}
                     </Text>
                     <TouchableOpacity
-                      style={styles.markReadMenuBtn}
+                      style={[styles.markReadMenuBtn, styles.markReadMenuBtnAfterText]}
                       activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
                       {...ANDROID_INSTANT_TOUCH}
                       hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
@@ -5116,16 +5165,16 @@ const handleClearNick = useCallback(async () => {
                         }
                       }}
                     >
-                      <Ionicons name="checkmark" size={18} color={LIVI.white} />
+                      <Ionicons name="checkmark" size={17} color={LIVI.white} />
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={styles.markReadMenuBtn}
+                      style={[styles.markReadMenuBtn, styles.markReadMenuBtnAfterBtn]}
                       activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
                       {...ANDROID_INSTANT_TOUCH}
                       hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
                       onPress={() => setMarkReadMenu(null)}
                     >
-                      <MaterialIcons name="close" size={18} color={LIVI.text2} />
+                      <MaterialIcons name="close" size={17} color={LIVI.text2} />
                     </TouchableOpacity>
                   </View>
                 </Animated.View>
@@ -6098,7 +6147,7 @@ const handleClearNick = useCallback(async () => {
                       utm_content: 'boosty',
                       utm_count: String(clicks),
                     });
-                    console.warn('[support] Open Boosty', { url });
+                    logger.info('[support] Open Boosty', { url });
                     Linking.openURL(url);
                   }}
                   onPressIn={() => setPressedButton('boosty')}
@@ -6142,7 +6191,7 @@ const handleClearNick = useCallback(async () => {
                       utm_content: 'patreon',
                       utm_count: String(clicks),
                     });
-                    console.warn('[support] Open Patreon', { url });
+                    logger.info('[support] Open Patreon', { url });
                     Linking.openURL(url);
                   }}
                   onPressIn={() => setPressedButton('patreon')}
@@ -6685,7 +6734,15 @@ const styles = StyleSheet.create({
 
   segmentBottomArc: { position: 'absolute', left: 18, right: 18, bottom: 0, height: 44, borderRadius: 114, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: LIVI.border },
 
-  menuDot: { position: 'absolute', top: 0, right: 0, width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(255,90,103,0.95)' },
+  menuDot: {
+    position: 'absolute',
+    top: -4,
+    right: 2,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,90,103,0.95)',
+  },
 
   // Центр круга на вершине правого верхнего угла кнопки (половина снаружи кнопки) — как в макете.
   badgeBubble: {
@@ -6718,12 +6775,13 @@ const styles = StyleSheet.create({
   },
   markReadMenuStripGap: {
     marginLeft: 0,
+    marginRight: 14,
     alignSelf: 'flex-end',
   },
   markReadMenuStrip: {
     overflow: 'hidden',
-    height: 40,
-    borderRadius: 50,
+    height: 35,
+    borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: LIVI.border,
     backgroundColor: LIVI.glass,
@@ -6733,8 +6791,9 @@ const styles = StyleSheet.create({
   markReadMenuStripInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 15,
-    height: 48,
+    paddingLeft: 15,
+    paddingRight: 12,
+    height: 32,
     minWidth: 260,
   },
   markReadMenuStripText: {
@@ -6745,15 +6804,20 @@ const styles = StyleSheet.create({
     marginRight: 16,
   },
   markReadMenuBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: LIVI.border,
     backgroundColor: 'rgba(255,255,255,0.06)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 14,
+  },
+  markReadMenuBtnAfterText: {
+    marginLeft: 10,
+  },
+  markReadMenuBtnAfterBtn: {
+    marginLeft: 16,
   },
 
   rightWrap: { width: 80, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' as const },

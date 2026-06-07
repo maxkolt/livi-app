@@ -21,6 +21,7 @@
   <string name="active_call_notification_title">Видеозвонок</string>
   <string name="active_call_notification_title_from">Видеозвонок от %s</string>
   <string name="active_call_notification_title_someone">Видеозвонок от кого-то</string>
+  <string name="active_call_notification_text">Нажмите, чтобы вернуться к звонку</string>
   <!-- Missed call notification -->
   <string name="missed_call_title">Пропущенный вызов</string>
   <string name="missed_call_video">Пропущенный видеозвонок</string>
