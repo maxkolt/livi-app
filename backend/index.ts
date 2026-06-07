@@ -1629,8 +1629,20 @@ function isSocketBusyForFriendsExport(data: Record<string, unknown> | undefined,
   if (entry) {
     const link = callsById.get(entry.callId);
     if (link && link.b === userId && !inCall && !busy) return false;
+    // Инициатор на дозвоне (нативный исходящий, вызов ещё не принят) — не «Занято» в списке друзей.
+    if (link && link.a === userId && !inCall) return false;
   }
   return true;
+}
+
+function clearDirectCallSessionForUser(io: Server, userId: string) {
+  forEachSocketForUser(io, userId, (s) => {
+    (s as any).data = (s as any).data || {};
+    (s as any).data.busy = false;
+    (s as any).data.inCall = false;
+    delete (s as any).data.roomId;
+    delete (s as any).data.partnerSid;
+  });
 }
 
 function getEffectiveBusyForExport(io: Server, userId: string): boolean {
@@ -1690,8 +1702,8 @@ app.post('/api/calls/decline', async (req, res) => {
       return res.json({ ok: true, deduped: true });
     }
     logger.info('[api/calls/decline] callee declined via HTTP', { callId, caller: link.a, callee: link.b });
-    forEachSocketForUser(io, link.a, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
-    forEachSocketForUser(io, link.b, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
+    clearDirectCallSessionForUser(io, link.a);
+    clearDirectCallSessionForUser(io, link.b);
     await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
     try { io.to(`u:${link.a}`).emit('call:declined', { callId, from: link.b }); } catch {}
     logger.info('[api/calls/decline] sending call_declined push to caller', { callId, caller: link.a, callee: link.b });
@@ -1800,8 +1812,8 @@ app.post('/api/calls/cancel', async (req, res) => {
       return res.json({ ok: true, deduped: true });
     }
     logger.info('[api/calls/cancel] caller canceled via HTTP (timeout)', { callId, caller: link.a, callee: link.b });
-    forEachSocketForUser(io, link.a, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
-    forEachSocketForUser(io, link.b, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
+    clearDirectCallSessionForUser(io, link.a);
+    clearDirectCallSessionForUser(io, link.b);
     await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
     try { io.to(`u:${link.a}`).emit('call:cancel', { callId, from: link.a }); } catch {}
     try { io.to(`u:${link.b}`).emit('call:cancel', { callId, from: link.a }); } catch {}
@@ -2788,8 +2800,8 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (!shouldProcess) return;
 
         // Снимаем busy статус с обоих участников при таймауте
-        forEachSocketForUser(io, link.a, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
-        forEachSocketForUser(io, link.b, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
+        clearDirectCallSessionForUser(io, link.a);
+        clearDirectCallSessionForUser(io, link.b);
         await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
 
         try {
@@ -3329,8 +3341,8 @@ io.on('connection', async (sock: AuthedSocket) => {
     if (!shouldProcess) return;
 
     // Снимаем busy статус с обоих участников при отклонении
-    forEachSocketForUser(io, link.a, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
-    forEachSocketForUser(io, link.b, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
+    clearDirectCallSessionForUser(io, link.a);
+    clearDirectCallSessionForUser(io, link.b);
     await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
 
     try {
@@ -3357,8 +3369,8 @@ io.on('connection', async (sock: AuthedSocket) => {
     if (!shouldProcess) return;
 
     // Снимаем busy статус с обоих участников при отмене
-    forEachSocketForUser(io, link.a, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
-    forEachSocketForUser(io, link.b, (s) => { (s as any).data = (s as any).data || {}; (s as any).data.busy = false; });
+    clearDirectCallSessionForUser(io, link.a);
+    clearDirectCallSessionForUser(io, link.b);
     await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
 
     try {
