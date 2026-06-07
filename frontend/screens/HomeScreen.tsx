@@ -1561,28 +1561,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [missedLoaded, setMissedLoaded] = useState(false);
   const [markReadMenu, setMarkReadMenu] = useState<{ friendId: string; type: 'video' | 'chat' } | null>(null);
   const [friendActionsGestureResetSeq, setFriendActionsGestureResetSeq] = useState(0);
-  const menuStripWidth = useRef(new Animated.Value(0)).current;
   const rowRefForMarkReadMenu = useRef<View>(null);
   const avatarRefForMarkReadMenu = useRef<View>(null);
   const [markReadOverlayLeft, setMarkReadOverlayLeft] = useState<number | null>(null);
   const GAP_AFTER_AVATAR = 20;
-  const MAX_MARK_READ_STRIP_WIDTH = 320;
-  const LIST_PADDING_H = 16;
-  const STRIP_RIGHT_MARGIN = 20;
   useEffect(() => {
-    if (markReadMenu) {
-      const overlayLeft = markReadOverlayLeft ?? (Platform.OS === 'ios' ? 52 + GAP_AFTER_AVATAR : 44 + GAP_AFTER_AVATAR);
-      const windowWidth = Dimensions.get('window').width;
-      const targetWidth = Math.min(
-        MAX_MARK_READ_STRIP_WIDTH,
-        Math.max(0, windowWidth - LIST_PADDING_H * 2 - overlayLeft - STRIP_RIGHT_MARGIN)
-      );
-      Animated.timing(menuStripWidth, { toValue: targetWidth, duration: 220, useNativeDriver: false }).start();
-    } else {
-      setMarkReadOverlayLeft(null);
-      Animated.timing(menuStripWidth, { toValue: 0, duration: 180, useNativeDriver: false }).start();
-    }
-  }, [markReadMenu, markReadOverlayLeft, menuStripWidth]);
+    if (!markReadMenu) setMarkReadOverlayLeft(null);
+  }, [markReadMenu]);
   const measureAvatarForOverlay = useCallback(() => {
     const row = rowRefForMarkReadMenu.current;
     const avatar = avatarRefForMarkReadMenu.current;
@@ -5131,8 +5116,7 @@ const handleClearNick = useCallback(async () => {
                 ]}
                 pointerEvents="box-none"
               >
-                <View style={styles.markReadMenuStripGap}>
-                  <Animated.View style={[styles.markReadMenuStrip, { width: menuStripWidth }]} collapsable={false}>
+                <View style={styles.markReadMenuStrip} collapsable={false}>
                   <View style={styles.markReadMenuStripInner} pointerEvents="box-none">
                     <Text
                       numberOfLines={1}
@@ -5144,40 +5128,41 @@ const handleClearNick = useCallback(async () => {
                         ? `${t('markAsViewed', lang)}...`
                         : `${t('markAsRead', lang)}...`}
                     </Text>
-                    <TouchableOpacity
-                      style={[styles.markReadMenuBtn, styles.markReadMenuBtnAfterText]}
-                      activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
-                      {...ANDROID_INSTANT_TOUCH}
-                      hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
-                      onPress={() => {
-                        const { friendId, type } = markReadMenu;
-                        setMarkReadMenu(null);
-                        if (type === 'video') {
-                          clearMissedCallsForFriend(friendId);
-                        } else {
-                          markMessagesAsRead(friendId).then((r) => {
-                            setUnreadByUser((prev) => ({ ...prev, [friendId]: 0 }));
-                            if (r?.ok) {
-                              dismissMessageNotificationForUser(friendId).catch(() => {});
-                              syncAppBadgeFromMissedCount().catch(() => {});
-                            }
-                          }).catch(() => {});
-                        }
-                      }}
-                    >
-                      <Ionicons name="checkmark" size={17} color={LIVI.white} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.markReadMenuBtn, styles.markReadMenuBtnAfterBtn]}
-                      activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
-                      {...ANDROID_INSTANT_TOUCH}
-                      hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
-                      onPress={() => setMarkReadMenu(null)}
-                    >
-                      <MaterialIcons name="close" size={17} color={LIVI.text2} />
-                    </TouchableOpacity>
+                    <View style={styles.markReadMenuBtnRow} pointerEvents="box-none">
+                      <TouchableOpacity
+                        style={styles.markReadMenuBtn}
+                        activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
+                        {...ANDROID_INSTANT_TOUCH}
+                        hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
+                        onPress={() => {
+                          const { friendId, type } = markReadMenu;
+                          setMarkReadMenu(null);
+                          if (type === 'video') {
+                            clearMissedCallsForFriend(friendId);
+                          } else {
+                            markMessagesAsRead(friendId).then((r) => {
+                              setUnreadByUser((prev) => ({ ...prev, [friendId]: 0 }));
+                              if (r?.ok) {
+                                dismissMessageNotificationForUser(friendId).catch(() => {});
+                                syncAppBadgeFromMissedCount().catch(() => {});
+                              }
+                            }).catch(() => {});
+                          }
+                        }}
+                      >
+                        <Ionicons name="checkmark" size={17} color={LIVI.white} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.markReadMenuBtn}
+                        activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
+                        {...ANDROID_INSTANT_TOUCH}
+                        hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
+                        onPress={() => setMarkReadMenu(null)}
+                      >
+                        <MaterialIcons name="close" size={17} color={LIVI.text2} />
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                </Animated.View>
                 </View>
               </View>
             )}
@@ -6766,42 +6751,48 @@ const styles = StyleSheet.create({
   // left задаётся инлайн по measureLayout аватара + GAP_AFTER_AVATAR, чтобы отступ был одинаков на всех устройствах
   markReadMenuOverlay: {
     position: 'absolute',
-    right: 0,
+    right: 14,
     top: 0,
     bottom: 3,
     justifyContent: 'center',
     alignItems: 'flex-end',
     zIndex: 10,
   },
-  markReadMenuStripGap: {
-    marginLeft: 0,
-    marginRight: 14,
-    alignSelf: 'flex-end',
-  },
   markReadMenuStrip: {
     overflow: 'hidden',
+    width: '100%',
+    maxWidth: 320,
+    alignSelf: 'flex-end',
     height: 35,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: LIVI.border,
     backgroundColor: LIVI.glass,
     justifyContent: 'center',
-    alignSelf: 'flex-end',
   },
   markReadMenuStripInner: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingLeft: 15,
     paddingRight: 12,
     height: 32,
-    minWidth: 260,
+    width: '100%',
   },
   markReadMenuStripText: {
-    flex: 1,
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 0,
     color: LIVI.white,
     fontSize: 12,
     fontWeight: '400',
-    marginRight: 16,
+    marginRight: 12,
+  },
+  markReadMenuBtnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: 16,
   },
   markReadMenuBtn: {
     width: 26,
@@ -6812,12 +6803,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.06)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  markReadMenuBtnAfterText: {
-    marginLeft: 10,
-  },
-  markReadMenuBtnAfterBtn: {
-    marginLeft: 16,
   },
 
   rightWrap: { width: 80, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' as const },

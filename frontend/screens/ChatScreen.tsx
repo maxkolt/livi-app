@@ -623,6 +623,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   // Не показывать системное уведомление о сообщении от текущего собеседника, пока пользователь в этом чате.
   // Сообщить серверу «смотрю этот чат» (не слать пуш), снять уведомление этого чата из шторки.
   const isChatScreenFocused = useIsFocused();
+  const isFocusedRef = useRef(isChatScreenFocused);
+  isFocusedRef.current = isChatScreenFocused;
   useFocusEffect(
     useCallback(() => {
       if (peerId) {
@@ -1717,7 +1719,10 @@ export default function ChatScreen({ route, navigation }: Props) {
           return updated;
         });
 
-        if (isFromPeer && !existedBeforeLiveReceive) {
+        const chatIsActiveForRead =
+          isFocusedRef.current && AppState.currentState === 'active';
+
+        if (isFromPeer && !existedBeforeLiveReceive && chatIsActiveForRead) {
           const id = String(newMessage.id || '').trim();
           if (id && !readReceiptSentIdsRef.current.has(id)) {
             readReceiptSentIdsRef.current.add(id);
@@ -1740,9 +1745,11 @@ export default function ChatScreen({ route, navigation }: Props) {
           globalMessageStorage.saveMessage(message, currentUserId);
         }
 
-        // Отмечаем как прочитанное только сообщения от собеседника
-        if (isFromPeer) {
+        // Отмечаем прочитанным только если чат реально открыт (экран в фокусе). Иначе при возврате на «Друзья»
+        // ChatScreen остаётся в стеке и гасит unread на Home сразу после появления бейджа.
+        if (isFromPeer && chatIsActiveForRead) {
           setTimeout(() => {
+            if (!isFocusedRef.current || AppState.currentState !== 'active') return;
             markMessagesAsRead(senderId);
             try {
               void dismissMessageNotificationForUser(senderId);
@@ -2360,8 +2367,6 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [peerId, currentUserId]);
 
   // Догоняем сообщения с сервера после reconnect, пока чат в фокусе (закрывает окно без message:received).
-  const isFocusedRef = useRef(isChatScreenFocused);
-  isFocusedRef.current = isChatScreenFocused;
   const historyReadyRef = useRef(false);
   useEffect(() => {
     historyReadyRef.current = historyReady;
