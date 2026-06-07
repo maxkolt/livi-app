@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.kolt12max.livi",
-      "buildNumber": "145",
+      "buildNumber": "144",
       "infoPlist": {
         "CFBundleDisplayName": "LiVi",
         "ITSAppUsesNonExemptEncryption": false,
