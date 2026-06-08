@@ -118,6 +118,14 @@ class IncomingCallActivity : AppCompatActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         setContentView(R.layout.activity_incoming_call)
+        // Пауза + transient media focus на время входящего/звонка (рингтон остаётся на STREAM_RING).
+        window?.decorView?.post {
+            try {
+                LiviAppModule.beginBackgroundMediaSuppressionStatic(applicationContext)
+            } catch (_: Exception) {}
+        } ?: try {
+            LiviAppModule.beginBackgroundMediaSuppressionStatic(applicationContext)
+        } catch (_: Exception) {}
         // Качелька громкости регулирует поток звонка, а не медиа.
         @Suppress("DEPRECATION")
         volumeControlStream = AudioManager.STREAM_RING
@@ -175,6 +183,9 @@ class IncomingCallActivity : AppCompatActivity() {
             stopCallRingtone()
             stopRepeatingVibration()
             closingForCompletion = true
+            try {
+                LiviAppModule.releaseBackgroundMediaSuppressionStatic(applicationContext)
+            } catch (_: Exception) {}
             LiviAppModule.emitIncomingCallDeclinedByUser(callId)
             EndedCallIds.add(this, callId)
             isInForeground = false
@@ -678,6 +689,9 @@ class IncomingCallActivity : AppCompatActivity() {
             stopRepeatingVibration()
             closingForCompletion = true
             isInForeground = false
+            try {
+                LiviAppModule.releaseBackgroundMediaSuppressionStatic(applicationContext)
+            } catch (_: Exception) {}
             android.util.Log.e(TAG, "IncomingCallActivity timeout 20s: isInForeground=false calling finish() callId=$callId")
             finish()
         }
@@ -774,6 +788,11 @@ class IncomingCallActivity : AppCompatActivity() {
         closeHandled = true
         closingForCompletion = true
         isInForeground = false
+        if (!acceptInProgress) {
+            try {
+                LiviAppModule.releaseBackgroundMediaSuppressionStatic(applicationContext)
+            } catch (_: Exception) {}
+        }
         android.util.Log.e(TAG, "IncomingCallActivity closeIncomingScreen: setting isInForeground=false, calling finish()")
         finish()
     }

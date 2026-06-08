@@ -10,6 +10,7 @@ import android.content.Intent
 import android.app.KeyguardManager
 import android.graphics.Rect
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
@@ -25,6 +26,7 @@ import android.os.VibratorManager
 import android.os.VibrationAttributes
 import android.provider.Settings
 import android.util.Log
+import android.view.KeyEvent
 import org.json.JSONObject
 import com.google.firebase.analytics.FirebaseAnalytics
 import com.google.firebase.crashlytics.FirebaseCrashlytics
@@ -558,6 +560,26 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       stopIncomingCallRingtoneAndVibrationStatic(reactApplicationContext)
     } catch (e: Exception) {
       Log.w(NAME, "stopIncomingCallRingtoneAndVibration failed", e)
+    }
+  }
+
+  /** Удерживать паузу фонового медиа на время входящего/активного звонка (pause + transient media focus). */
+  @ReactMethod
+  fun beginBackgroundMediaSuppression() {
+    try {
+      beginBackgroundMediaSuppressionStatic(reactApplicationContext)
+    } catch (e: Exception) {
+      Log.w(NAME, "beginBackgroundMediaSuppression failed", e)
+    }
+  }
+
+  /** После завершения видеозвонка: снять media focus и повторно отправить PAUSE (без автовозобновления). */
+  @ReactMethod
+  fun pauseBackgroundMediaAfterCall() {
+    try {
+      endBackgroundMediaSuppressionAfterCallStatic(reactApplicationContext)
+    } catch (e: Exception) {
+      Log.w(NAME, "pauseBackgroundMediaAfterCall failed", e)
     }
   }
 
@@ -1254,6 +1276,116 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           am.mode = AudioManager.MODE_RINGTONE
         } catch (_: Exception) {}
       }
+    }
+
+    @Volatile
+    private var backgroundMediaFocusRequest: AudioFocusRequest? = null
+
+    @Volatile
+    private var backgroundMediaFocusLegacyHeld: Boolean = false
+
+    /**
+     * Глобальная пауза активной медиасессии (YouTube, Spotify, браузер и т.д.).
+     * Не трогает логику звонка — только dispatch MEDIA_PAUSE.
+     */
+    @JvmStatic
+    internal fun pauseBackgroundMediaPlaybackStatic(ctx: Context) {
+      try {
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val down = KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE)
+        val up = KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE)
+        am.dispatchMediaKeyEvent(down)
+        am.dispatchMediaKeyEvent(up)
+        Log.d(NAME, "pauseBackgroundMediaPlayback: dispatched MEDIA_PAUSE")
+      } catch (e: Exception) {
+        Log.w(NAME, "pauseBackgroundMediaPlayback failed", e)
+      }
+    }
+
+    /** Входящий/активный звонок: PAUSE + transient AUDIOFOCUS на USAGE_MEDIA (удерживает фон тихим). */
+    @JvmStatic
+    internal fun beginBackgroundMediaSuppressionStatic(ctx: Context) {
+      pauseBackgroundMediaPlaybackStatic(ctx)
+      val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+      synchronized(LiviAppModule::class.java) {
+        if (backgroundMediaFocusRequest != null || backgroundMediaFocusLegacyHeld) {
+          Log.d(NAME, "beginBackgroundMediaSuppression: already active")
+          return
+        }
+        try {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val attrs = AudioAttributes.Builder()
+              .setUsage(AudioAttributes.USAGE_MEDIA)
+              .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+              .build()
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+              .setAudioAttributes(attrs)
+              .setAcceptsDelayedFocusGain(false)
+              .setOnAudioFocusChangeListener { }
+              .build()
+            if (am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+              backgroundMediaFocusRequest = req
+              Log.d(NAME, "beginBackgroundMediaSuppression: media focus granted (O+)")
+            }
+          } else {
+            @Suppress("DEPRECATION")
+            val granted = am.requestAudioFocus(
+              null,
+              AudioManager.STREAM_MUSIC,
+              AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
+            )
+            if (granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+              backgroundMediaFocusLegacyHeld = true
+              Log.d(NAME, "beginBackgroundMediaSuppression: media focus granted (legacy)")
+            }
+          }
+        } catch (e: Exception) {
+          Log.w(NAME, "beginBackgroundMediaSuppression: requestAudioFocus failed", e)
+        }
+      }
+    }
+
+    private fun abandonBackgroundMediaFocusLocked(am: AudioManager) {
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          backgroundMediaFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+          backgroundMediaFocusRequest = null
+        } else if (backgroundMediaFocusLegacyHeld) {
+          @Suppress("DEPRECATION")
+          am.abandonAudioFocus(null)
+          backgroundMediaFocusLegacyHeld = false
+        }
+      } catch (_: Exception) {}
+    }
+
+    /** Отклонение/таймаут входящего без разговора — только снять media focus, без повторных PAUSE. */
+    @JvmStatic
+    internal fun releaseBackgroundMediaSuppressionStatic(ctx: Context) {
+      val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+      synchronized(LiviAppModule::class.java) {
+        abandonBackgroundMediaFocusLocked(am)
+      }
+      Log.d(NAME, "releaseBackgroundMediaSuppression")
+    }
+
+    /** Конец видеозвонка: PAUSE → abandon media focus → отложенные PAUSE (против автовозобновления). */
+    @JvmStatic
+    internal fun endBackgroundMediaSuppressionAfterCallStatic(ctx: Context) {
+      val appCtx = ctx.applicationContext
+      pauseBackgroundMediaPlaybackStatic(appCtx)
+      releaseBackgroundMediaSuppressionStatic(appCtx)
+      val handler = Handler(Looper.getMainLooper())
+      handler.postDelayed({
+        try {
+          pauseBackgroundMediaPlaybackStatic(appCtx)
+        } catch (_: Exception) {}
+      }, 200)
+      handler.postDelayed({
+        try {
+          pauseBackgroundMediaPlaybackStatic(appCtx)
+        } catch (_: Exception) {}
+      }, 650)
+      Log.d(NAME, "endBackgroundMediaSuppressionAfterCall")
     }
 
     @JvmStatic

@@ -335,6 +335,22 @@ export function stopIncomingCallRingtoneAndVibration(): void {
   } catch {}
 }
 
+/** Android: PAUSE + transient media focus на время входящего/активного звонка. */
+export function beginBackgroundMediaSuppression(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.beginBackgroundMediaSuppression?.();
+  } catch {}
+}
+
+/** Android: снять подавление и повторно PAUSE после звонка (против автовозобновления фонового медиа). */
+export function pauseBackgroundMediaAfterCall(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.LiviAppModule?.pauseBackgroundMediaAfterCall?.();
+  } catch {}
+}
+
 /** Инициатор отменил вызов — пуш пришёл через Expo. Закрыть IncomingCallActivity и снять уведомление (то же, что FCM call_canceled). */
 export function notifyCallCanceled(callId: string): void {
   if (Platform.OS !== 'android' || !callId?.trim()) return;

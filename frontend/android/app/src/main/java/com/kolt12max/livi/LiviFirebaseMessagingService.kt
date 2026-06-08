@@ -188,6 +188,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 }
                 ensureCallChannel(this@LiviFirebaseMessagingService)
                 try {
+                    LiviAppModule.beginBackgroundMediaSuppressionStatic(this@LiviFirebaseMessagingService)
+                } catch (_: Exception) {}
+                try {
                     val launchIntent = buildIncomingCallActivityIntent(this@LiviFirebaseMessagingService, callId, from, fromNick).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { DeviceEventEmitter, InteractionManager, PermissionsAndroid, Platform } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
+import { beginBackgroundMediaSuppression, pauseBackgroundMediaAfterCall } from '../../../utils/callKeep';
 import { logger } from '../../../utils/logger';
 
 /**
@@ -72,6 +73,9 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
   };
 
   const applyRouting = () => {
+    if (Platform.OS === 'android') {
+      beginBackgroundMediaSuppression();
+    }
     try { InCallManager.start({ media: 'video', ringback: '' }); } catch {}
     // Ensure Android audio focus is requested (some devices won't switch routes reliably without it).
     try { (InCallManager as any).requestAudioFocus?.(); } catch {}
@@ -141,6 +145,7 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
     try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
     try { InCallManager.setSpeakerphoneOn(false); } catch {}
     try { InCallManager.stop(); } catch {}
+    pauseBackgroundMediaAfterCall();
     try { (InCallManager as any).abandonAudioFocus?.(); } catch {}
     didStartRef.current = false;
   };

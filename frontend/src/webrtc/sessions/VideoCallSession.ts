@@ -158,6 +158,11 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastSocketRecoveryAttemptAt = 0;
   private cameraSwitchInProgress = false;
   private ensureLocalTracksPromise: Promise<void> | null = null;
+  /**
+   * Входящий accept: не открываем камеру в acceptCall / параллельном prewarm до connectToLiveKit,
+   * чтобы захват не стартовал в момент перехода из landscape (YouTube) в звонок.
+   */
+  private incomingAcceptDeferCapture = false;
   private fastStartVideoProfileActive = false;
   private fastStartVideoUpgradeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Set when camera flip ends; used to ignore late TrackUnsubscribed for ~2s and avoid black remote view. */
@@ -355,7 +360,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Keep signaling in foreground policy during accept -> call:accepted transition.
     setActiveVideoCall(true);
     warmCallSignaling();
-    const localTracksPromise = this.ensureLocalTracks();
+    this.incomingAcceptDeferCapture = true;
     const socketReadyPromise = ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
     
     try {
@@ -371,8 +376,9 @@ export class VideoCallSession extends SimpleEventEmitter {
           acceptAckLatencyMs: this.acceptAckCompletedAt - this.acceptAckStartedAt,
         }).catch(() => {});
       }
-      await localTracksPromise;
+      // Камера/мик — в connectToLiveKit после стабилизации UI (см. incomingAcceptDeferCapture).
     } catch (e) {
+      this.incomingAcceptDeferCapture = false;
       logger.error('[VideoCallSession] Error accepting call', e);
       this.notifyLoadingChange(false);
       setActiveVideoCall(false);
@@ -1787,14 +1793,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     // Если токен пришел в событии (новый формат)
     if (data.livekitToken && data.livekitRoomName) {
-      // Раньше начинаем захват камеры/микрофона параллельно с блокировками/ретраями подключения,
-      // чтобы к моменту publish в connectToLiveKit треки чаще уже были готовы (уменьшает окно «в комнате без видео»).
-      void this.ensureLocalTracks().catch((e) => {
-        logger.warn('[VideoCallSession] ensureLocalTracks (call:accepted token path) failed', {
-          error: (e as Error)?.message || String(e),
-          callId: data.callId,
+      // Параллельный prewarm пропускаем для входящего accept: иначе камера стартует до portrait UI.
+      if (!this.incomingAcceptDeferCapture) {
+        void this.ensureLocalTracks().catch((e) => {
+          logger.warn('[VideoCallSession] ensureLocalTracks (call:accepted token path) failed', {
+            error: (e as Error)?.message || String(e),
+            callId: data.callId,
+          });
         });
-      });
+      }
       logger.info('[VideoCallSession] 🔑 Connecting to LiveKit with token from call:accepted', {
         roomName: data.livekitRoomName,
         tokenLength: data.livekitToken.length,
@@ -1941,12 +1948,14 @@ export class VideoCallSession extends SimpleEventEmitter {
           this.emit('callAnswered');
           return;
         }
+        this.incomingAcceptDeferCapture = false;
         this.notifyLoadingChange(false);
         return;
       }
       
       // КРИТИЧНО: Если звонок уже завершён (call:ended), не обновлять UI и не эмитить callAnswered
       if (this.ended) {
+        this.incomingAcceptDeferCapture = false;
         logger.info('[VideoCallSession] ⏭️ Skipping post-connect (call already ended)');
         return;
       }
@@ -3498,6 +3507,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     options?: LiveKitConnectOptions
   ): Promise<boolean> {
     if (this.ended) {
+      this.incomingAcceptDeferCapture = false;
       logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
       return false;
     }
@@ -3540,6 +3550,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     options?: LiveKitConnectOptions
   ): Promise<boolean> {
     if (this.ended) {
+      this.incomingAcceptDeferCapture = false;
       logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
       return false;
     }
@@ -3694,6 +3705,11 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     }
     
+    if (this.incomingAcceptDeferCapture) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      this.incomingAcceptDeferCapture = false;
+      logger.info('[VideoCallSession] Deferred incoming capture: starting local tracks before LiveKit connect');
+    }
     if (!this.localVideoTrack || !this.localAudioTrack) {
       await this.ensureLocalTracks();
     }

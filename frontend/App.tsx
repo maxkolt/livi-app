@@ -35,7 +35,7 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, requestExitSystemPiPSoft, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, stopIncomingCallRingtoneAndVibration, canDrawOverlays, openOverlayPermissionSettings, notifyCallCanceled, addEndedCallId } from './utils/callKeep';
+import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, requestExitSystemPiPSoft, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, stopIncomingCallRingtoneAndVibration, pauseBackgroundMediaAfterCall, canDrawOverlays, openOverlayPermissionSettings, notifyCallCanceled, addEndedCallId } from './utils/callKeep';
 import { isIncomingCallExpired } from './utils/callExpiry';
 import { addVoipTokenListener } from './utils/voipPush';
 import { useLang } from './store/lang';
@@ -3170,6 +3170,7 @@ export default function App() {
         (InCallManager as any).setForceSpeakerphoneOn?.('auto');
         InCallManager.setSpeakerphoneOn(false);
         InCallManager.stop();
+        pauseBackgroundMediaAfterCall();
         (InCallManager as any).abandonAudioFocus?.();
       } catch (_) {}
     }

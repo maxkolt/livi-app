@@ -49,7 +49,12 @@ import { usePiP as usePiPHook } from './hooks/usePiP';
 import { useIncomingCall } from './hooks/useIncomingCall';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import InCallManager from 'react-native-incall-manager';
-import { reportEndCallToCallKeep, bringMainActivityToFront, requestExitSystemPiPSoft } from '../../utils/callKeep';
+import {
+  reportEndCallToCallKeep,
+  bringMainActivityToFront,
+  requestExitSystemPiPSoft,
+  pauseBackgroundMediaAfterCall,
+} from '../../utils/callKeep';
 import { clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount } from '../../utils/pushNotifications';
 import { emitMissedClear, emitCallEndedOnHome } from '../../utils/globalEvents';
 
@@ -323,9 +328,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   const currentCallIdRef = useRef<string | null>(route?.params?.callId || null);
   const acceptCallTimeRef = useRef<number>(0);
-  /** Один раз за callId: переоткрыть камеру с portrait rotation после входа в звонок (Chrome/YouTube в landscape → accept). */
-  const portraitCaptureFixedCallIdRef = useRef<string | null>(null);
-  const portraitCaptureFixTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionRef = useRef<VideoCallSession | null>(null);
   const screenInstanceIdRef = useRef(`video-call-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   
@@ -1488,6 +1490,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
         try { InCallManager.setSpeakerphoneOn(false); } catch {}
         try { InCallManager.stop(); } catch {}
+        pauseBackgroundMediaAfterCall();
+        try { (InCallManager as any).abandonAudioFocus?.(); } catch {}
       } catch (e) {
         logger.error('[VideoCall] Error in cleanupFunction:', e);
       }
@@ -1576,83 +1580,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     return () => sub.remove();
   }, [roomId, callId, partnerId, wasFriendCallEnded, isInactiveState, camOn]);
 
-  // Один раз за звонок: выровнять rotation локальной камеры (UI всегда portrait, capture мог стартовать из landscape-контекста).
-  useEffect(() => {
-    const clearFixTimer = () => {
-      if (portraitCaptureFixTimerRef.current) {
-        clearTimeout(portraitCaptureFixTimerRef.current);
-        portraitCaptureFixTimerRef.current = null;
-      }
-    };
-
-    const activeCallId = callId || currentCallIdRef.current;
-    const hasActiveCall =
-      !!(roomId || activeCallId || partnerId) && !wasFriendCallEnded && !isInactiveState;
-
-    if (!hasActiveCall || !started || !camOn || !activeCallId) {
-      clearFixTimer();
-      return;
-    }
-    if (route?.params?.fromPiP && route?.params?.resume) {
-      return;
-    }
-    if (portraitCaptureFixedCallIdRef.current === activeCallId) {
-      return;
-    }
-
-    const session = sessionRef.current;
-    if (!session?.restartLocalCamera) {
-      return;
-    }
-
-    const stream = localStreamRef.current;
-    const videoTrack = stream?.getVideoTracks?.()?.[0];
-    if (!videoTrack) {
-      return;
-    }
-
-    if (portraitCaptureFixTimerRef.current) {
-      return;
-    }
-
-    portraitCaptureFixTimerRef.current = setTimeout(() => {
-      portraitCaptureFixTimerRef.current = null;
-      if (portraitCaptureFixedCallIdRef.current === activeCallId) {
-        return;
-      }
-      const s = sessionRef.current;
-      if (!s?.getIsCamOn?.()) {
-        return;
-      }
-      portraitCaptureFixedCallIdRef.current = activeCallId;
-      logger.info('[VideoCall] One-shot portrait capture realign', { callId: activeCallId });
-      void s
-        .restartLocalCamera()
-        .then(() => {
-          setLocalRenderKey((k) => k + 1);
-        })
-        .catch((e) => {
-          logger.warn('[VideoCall] Portrait capture realign failed', {
-            callId: activeCallId,
-            error: (e as any)?.message || String(e || ''),
-          });
-        });
-    }, 650);
-
-    return clearFixTimer;
-  }, [
-    started,
-    camOn,
-    callId,
-    roomId,
-    partnerId,
-    wasFriendCallEnded,
-    isInactiveState,
-    localStream,
-    route?.params?.fromPiP,
-    route?.params?.resume,
-  ]);
-  
   // Инициализация session и восстановление состояния звонка
   useEffect(() => {
     if (route?.params?.endedFromRemoteSystemPiP) {
