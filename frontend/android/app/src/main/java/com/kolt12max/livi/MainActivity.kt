@@ -181,6 +181,7 @@ class MainActivity : ReactActivity() {
 
   override fun onResume() {
     super.onResume()
+    lastResumedInstance = this
     isInForeground = true
     // Выход из системного PiP по кнопке «развернуть»: надёжно обрабатываем только тот resume,
     // который пришёл после onPictureInPictureModeChanged(false). Старый fallback по wasInPip
@@ -516,6 +517,9 @@ class MainActivity : ReactActivity() {
   }
 
   override fun onDestroy() {
+    if (lastResumedInstance === this) {
+      lastResumedInstance = null
+    }
     cancelPendingPiPEnterAttempts()
     clearRecentsSuppressRunnable?.let { pipHandler.removeCallbacks(it) }
     clearRecentsSuppressRunnable = null
@@ -604,5 +608,9 @@ class MainActivity : ReactActivity() {
     /** true когда приложение на переднем плане (в т.ч. во время видеозвонка) — тогда не показываем heads-up уведомление о звонке */
     @JvmField
     var isInForeground = false
+
+    /** Последний MainActivity в onResume — для закрытия system PiP при call:ended, когда currentActivity == null. */
+    @JvmField
+    var lastResumedInstance: MainActivity? = null
   }
 }

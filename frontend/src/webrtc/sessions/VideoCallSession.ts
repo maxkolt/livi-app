@@ -27,7 +27,8 @@ import { getIceConfiguration } from '../../../utils/iceConfig';
 import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
 import { getInstallId } from '../../../utils/installId';
-import { requestExitSystemPiPSoft } from '../../../utils/callKeep';
+import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../../utils/callKeep';
+import { setAndroidSystemPiPLeaveHintEnabled } from '../../../utils/activeCallNotification';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
@@ -1894,6 +1895,9 @@ export class VideoCallSession extends SimpleEventEmitter {
               myUserId: this.config.myUserId,
               attempt,
             });
+            if (Platform.OS === 'android') {
+              try { setAndroidSystemPiPLeaveHintEnabled(true); } catch (_) {}
+            }
             break;
           } else {
             // Если подключение не удалось, но это не из-за stale request, пробуем еще раз
@@ -2158,7 +2162,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.ended || this.endCallInProgress) {
       this.unregisterSocketHandlers('callEnded-already-ended');
       if (Platform.OS === 'android') {
-        try { requestExitSystemPiPSoft(); } catch {}
+        try { dismissSystemPiPAfterCallEnded(); } catch {}
       }
       return;
     }
@@ -2175,7 +2179,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
 
     if (Platform.OS === 'android') {
-      try { requestExitSystemPiPSoft(); } catch {}
+      try { dismissSystemPiPAfterCallEnded(); } catch {}
     }
     try {
       const hidePiP = (global as any).__pipHidePiPRef?.current;
@@ -5185,7 +5189,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
             // Сразу закрываем системный и in-app PiP при уходе партнёра (без задержки 1.5s — UX).
             if (Platform.OS === 'android') {
-              try { requestExitSystemPiPSoft(); } catch {}
+              try { dismissSystemPiPAfterCallEnded(); } catch {}
             }
             try {
               const hidePiP = (global as any).__pipHidePiPRef?.current;
@@ -5231,7 +5235,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (!this.disconnectPromise && !this.ended) {
           this.clearPendingRemoteDisconnectTimer();
           if (Platform.OS === 'android') {
-            try { requestExitSystemPiPSoft(); } catch {}
+            try { dismissSystemPiPAfterCallEnded(); } catch {}
           }
         }
         // Флаги будут сброшены в disconnectRoom через промис, если он активен

@@ -43,7 +43,10 @@ import socket, {
   emitPresenceUpdateIfChanged,
 } from '../../sockets/socket';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/keepAwake';
-import { reenableAndroidSystemPiPLeaveHintAfterReturn } from '../../utils/activeCallNotification';
+import {
+  reenableAndroidSystemPiPLeaveHintAfterReturn,
+  setAndroidSystemPiPLeaveHintEnabled,
+} from '../../utils/activeCallNotification';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
 import { useIncomingCall } from './hooks/useIncomingCall';
@@ -675,8 +678,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       !!effectiveSystemPiPRoomId &&
       !isInactiveState &&
       !!sessionForSystemPiP &&
-      sessionAliveForSystemPiP &&
-      globalVideoCallActiveForPiP;
+      sessionAliveForSystemPiP;
     const canEnableSystemPiP =
       Platform.OS === 'android' &&
       appState === 'active' &&
@@ -690,65 +692,73 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const systemPiPEntryInProgress =
       typeof systemPiPEntryUntil === 'number' && systemPiPEntryUntil > Date.now();
 
+    const syncPiPParamsRef = () => {
+      const partner = partnerUserId
+        ? friendsRef.current?.find((f: any) => String(f._id) === String(partnerUserId))
+        : null;
+      let avatarUrl: string | undefined;
+      if (partner?.avatarThumbB64?.trim()) {
+        const t = String(partner.avatarThumbB64).trim();
+        avatarUrl = t.startsWith('data:') ? t : `data:image/jpeg;base64,${t}`;
+      } else if (partner?.avatarB64?.trim()) {
+        const t = String(partner.avatarB64).trim();
+        avatarUrl = t.startsWith('data:') ? t : `data:image/jpeg;base64,${t}`;
+      } else if (partner?.avatar?.trim()) {
+        const base = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
+        const a = String(partner.avatar).trim();
+        avatarUrl = a.startsWith('http') ? a : `${base.replace(/\/+$/, '')}${a.startsWith('/') ? '' : '/'}${a}`;
+      }
+      g.__currentCallPiPParamsRef.current = {
+        callId: effectiveSystemPiPCallId || '',
+        roomId: effectiveSystemPiPRoomId || '',
+        partnerName: (partner as any)?.nick || '',
+        partnerAvatarUrl: avatarUrl,
+        localStream: localStream || null,
+        remoteStream: remoteStream || null,
+        localCamOn: getTrackEnabled(localStream, 'video') ?? camOn,
+        muteLocal: !(getTrackEnabled(localStream, 'audio') ?? micOn),
+        muteRemote: getDesiredRemoteMutedForPiPReturn(),
+        remoteCamOn,
+        navParams: { ...route?.params, peerUserId: partnerUserId, partnerId } as any,
+      };
+    };
+
     // Не очищаем ref при !canEnableSystemPiP — иначе при возврате из системного PiP returnToCall получит null.
     // Очищаем только в cleanup эффекта, когда сессия реально завершена (stillActive === false).
     if (!hasStableSystemPiPContext) {
+      const transitionalLeaveHint =
+        Platform.OS === 'android' &&
+        sessionAliveForSystemPiP &&
+        !isInactiveState &&
+        globalVideoCallActiveForPiP &&
+        (!!effectiveSystemPiPRoomId || !!effectiveSystemPiPCallId);
       if (Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+        setAndroidSystemPiPLeaveHintEnabled(!!transitionalLeaveHint);
+      }
+      if (transitionalLeaveHint && (effectiveSystemPiPRoomId || effectiveSystemPiPCallId)) {
+        syncPiPParamsRef();
       }
       return;
     }
-    if (canEnableSystemPiP) {
-      if (Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
-      }
-    } else {
-      // Не выключать leaveHint при уходе в background при активном звонке — иначе по нажатию Home
-      // эффект перезапускается (appState='background'), canEnableSystemPiP=false, и мы гасим системный PiP.
-      // Учитываем background+звонок даже без завершённого grace: иначе у одного пользователя (напр. звонящий,
-      // только что открывший VideoCall) PiP не сработает, если он нажал Home до истечения grace.
-      const hasSessionAny = !!sessionRef.current || !!g.__webrtcSessionRef?.current;
-      const isBackgroundWithActiveCall =
-        appState === 'background' &&
-        Platform.OS === 'android' &&
-        !!effectiveSystemPiPRoomId &&
-        !isInactiveState &&
-        !!hasSessionAny;
-      if (!systemPiPEntryInProgress && !isBackgroundWithActiveCall && Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
-      }
-      if (isBackgroundWithActiveCall && Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true); } catch (_) {}
-      }
+    const pipInAppOrLeavingBack =
+      g.__pipVisibleRef?.current === true || g.__leavingVideoCallByBackRef?.current === true;
+    const hasSessionAny = !!sessionRef.current || !!g.__webrtcSessionRef?.current;
+    const isBackgroundWithActiveCall =
+      appState === 'background' &&
+      Platform.OS === 'android' &&
+      !!effectiveSystemPiPRoomId &&
+      !isInactiveState &&
+      !!hasSessionAny;
+    const shouldKeepLeaveHintOn =
+      canEnableSystemPiP ||
+      systemPiPEntryInProgress ||
+      isBackgroundWithActiveCall ||
+      pipInAppOrLeavingBack ||
+      !isInactiveState;
+    if (Platform.OS === 'android') {
+      setAndroidSystemPiPLeaveHintEnabled(!!shouldKeepLeaveHintOn);
     }
-    const partner = partnerUserId
-      ? friendsRef.current?.find((f: any) => String(f._id) === String(partnerUserId))
-      : null;
-    let avatarUrl: string | undefined;
-    if (partner?.avatarThumbB64?.trim()) {
-      const t = String(partner.avatarThumbB64).trim();
-      avatarUrl = t.startsWith('data:') ? t : `data:image/jpeg;base64,${t}`;
-    } else if (partner?.avatarB64?.trim()) {
-      const t = String(partner.avatarB64).trim();
-      avatarUrl = t.startsWith('data:') ? t : `data:image/jpeg;base64,${t}`;
-    } else if (partner?.avatar?.trim()) {
-      const base = process.env.EXPO_PUBLIC_SERVER_URL || 'https://api.liviapp.com';
-      const a = String(partner.avatar).trim();
-      avatarUrl = a.startsWith('http') ? a : `${base.replace(/\/+$/, '')}${a.startsWith('/') ? '' : '/'}${a}`;
-    }
-    g.__currentCallPiPParamsRef.current = {
-      callId: effectiveSystemPiPCallId || '',
-      roomId: effectiveSystemPiPRoomId || '',
-      partnerName: (partner as any)?.nick || '',
-      partnerAvatarUrl: avatarUrl,
-      localStream: localStream || null,
-      remoteStream: remoteStream || null,
-      localCamOn: getTrackEnabled(localStream, 'video') ?? camOn,
-      muteLocal: !(getTrackEnabled(localStream, 'audio') ?? micOn),
-      muteRemote: getDesiredRemoteMutedForPiPReturn(),
-      remoteCamOn,
-      navParams: { ...route?.params, peerUserId: partnerUserId, partnerId } as any,
-    };
+    syncPiPParamsRef();
     return () => {
       // При уходе по «Назад» (in-app PiP) или по «Домой» (системный PiP) не сбрасываем params и hint.
       const leavingByBack = g.__leavingVideoCallByBackRef?.current === true;
@@ -767,7 +777,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (stillActive) return;
       g.__currentCallPiPParamsRef.current = null;
       if (Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+        setAndroidSystemPiPLeaveHintEnabled(false);
       }
     };
   }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, micOn, remoteMuted, remoteCamOn, route?.params, isFocused, appState, getTrackEnabled, getDesiredRemoteMutedForPiPReturn]);

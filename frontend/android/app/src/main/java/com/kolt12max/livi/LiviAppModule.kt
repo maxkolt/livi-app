@@ -776,10 +776,42 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /** MainActivity для PiP, если RN currentActivity временно null (фон / system PiP). */
+  private fun mainActivityForPiP(): MainActivity? {
+    (currentActivity as? MainActivity)?.let { return it }
+    return MainActivity.lastResumedInstance
+  }
+
+  @ReactMethod
+  fun dismissSystemPiPAfterCallEnded() {
+    val activity = mainActivityForPiP() ?: return
+    val runDismiss = Runnable {
+      tryExitSystemPiPFromRunnable(activity, 0, true)
+      Handler(Looper.getMainLooper()).postDelayed({
+        tryExitSystemPiPFromRunnable(activity, 0, true)
+      }, 380)
+      Handler(Looper.getMainLooper()).postDelayed({
+        try {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !activity.isFinishing &&
+            activity.isInPictureInPictureMode
+          ) {
+            LiviAppModule.hardExitFromSystemPiPNoDebounce(activity)
+          }
+        } catch (_: Exception) {}
+      }, 920)
+    }
+    if (Looper.myLooper() == Looper.getMainLooper()) {
+      runDismiss.run()
+    } else {
+      activity.runOnUiThread(runDismiss)
+    }
+  }
+
   /** Выйти из системного PiP без открытия приложения: только закрыть окно PiP. Сначала уводим задачу в фон (moveTaskToBack), затем finish() — чтобы приложение не открывалось на экране приветствия. */
   @ReactMethod
   fun requestExitSystemPiP() {
-    val activity = currentActivity ?: return
+    val activity = mainActivityForPiP() ?: return
     if (Looper.myLooper() == Looper.getMainLooper()) {
       tryExitSystemPiPFromRunnable(activity, 0, false)
     } else {
@@ -793,7 +825,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
    */
   @ReactMethod
   fun requestExitSystemPiPSoft() {
-    val activity = currentActivity ?: return
+    val activity = mainActivityForPiP() ?: return
     if (Looper.myLooper() == Looper.getMainLooper()) {
       tryExitSystemPiPFromRunnable(activity, 0, true)
     } else {

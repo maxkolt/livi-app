@@ -222,6 +222,16 @@ export function requestExitSystemPiPSoft(): void {
   } catch {}
 }
 
+/** Закрыть system PiP при завершении звонка (несколько попыток + fallback hard exit). */
+export function dismissSystemPiPAfterCallEnded(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    (NativeModules.LiviAppModule as any)?.dismissSystemPiPAfterCallEnded?.();
+  } catch {
+    requestExitSystemPiPSoft();
+  }
+}
+
 /** Дедупликация: один и тот же callId не показываем повторно (сокет + пуш могут вызвать несколько раз). */
 const lastDisplayedCallId = { id: '' as string, at: 0 };
 const DISPLAY_DEBOUNCE_MS = 3000;

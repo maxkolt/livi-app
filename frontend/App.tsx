@@ -35,13 +35,46 @@ import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
-import { setupCallKeep, launchIncomingCallActivityScreen, showIncomingCallSystemUI, sendCallAnsweredBroadcast, displayIncomingCall, isCallKeepAvailable, registerCallKeepEvents, reportAnswerIncomingCall, reportRejectCall, reportEndCallToCallKeep, setCallKeepAvailable, getPendingCallInfo, closeOutgoingCallActivity, bringMainActivityToFront, requestExitSystemPiPSoft, OUTGOING_CALL_TIMEOUT_MS, setOutgoingCallTimeoutMs, isOutgoingDeclineHandled, markOutgoingDeclineHandled, getAndClearPendingIncomingCallForCallKeep, stopIncomingCallForegroundService, stopIncomingCallRingtoneAndVibration, pauseBackgroundMediaAfterCall, canDrawOverlays, openOverlayPermissionSettings, notifyCallCanceled, addEndedCallId } from './utils/callKeep';
+import {
+  setupCallKeep,
+  launchIncomingCallActivityScreen,
+  showIncomingCallSystemUI,
+  sendCallAnsweredBroadcast,
+  displayIncomingCall,
+  isCallKeepAvailable,
+  registerCallKeepEvents,
+  reportAnswerIncomingCall,
+  reportRejectCall,
+  reportEndCallToCallKeep,
+  setCallKeepAvailable,
+  getPendingCallInfo,
+  closeOutgoingCallActivity,
+  bringMainActivityToFront,
+  requestExitSystemPiPSoft,
+  dismissSystemPiPAfterCallEnded,
+  OUTGOING_CALL_TIMEOUT_MS,
+  setOutgoingCallTimeoutMs,
+  isOutgoingDeclineHandled,
+  markOutgoingDeclineHandled,
+  getAndClearPendingIncomingCallForCallKeep,
+  stopIncomingCallForegroundService,
+  stopIncomingCallRingtoneAndVibration,
+  pauseBackgroundMediaAfterCall,
+  canDrawOverlays,
+  openOverlayPermissionSettings,
+  notifyCallCanceled,
+  addEndedCallId,
+} from './utils/callKeep';
 import { isIncomingCallExpired } from './utils/callExpiry';
 import { addVoipTokenListener } from './utils/voipPush';
 import { useLang } from './store/lang';
 import { t } from './utils/i18n';
 import { connectStreamIfNeeded } from './chat/cometchat';
-import { reenableAndroidSystemPiPLeaveHintAfterReturn } from './utils/activeCallNotification';
+import {
+  isAndroidActiveCallEligibleForLeaveHint,
+  reenableAndroidSystemPiPLeaveHintAfterReturn,
+  setAndroidSystemPiPLeaveHintEnabled,
+} from './utils/activeCallNotification';
 
 // Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
 const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
@@ -743,16 +776,17 @@ function AppContent() {
       try {
         const g = (global as any);
         g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
-        g.__disableSystemPiPUntilRef.current = Date.now() + 6000;
+        // Короткое окно только против повторного auto-PiP при развороте; leaveHint не гасим — натив уже сбросил при exit PiP.
+        g.__disableSystemPiPUntilRef.current = Date.now() + 2200;
         g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
         g.__enterSystemPiPAfterVideoCallRef.current = null;
-        NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
         NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
         requestExitSystemPiPSoft();
       } catch (_) {}
       const fn = (global as any).__pipReturnToCallRef?.current;
       if (typeof fn === 'function') {
         fn();
+        reenableAndroidSystemPiPLeaveHintAfterReturn();
         return;
       }
       // Fallback: если ref не установлен (тайминг), берём callId/roomId из глобального ref и навигируем сами
@@ -783,6 +817,7 @@ function AppContent() {
         );
         console.log('[App] SystemPiPExpanded fallback: dispatched reset to VideoCall');
       }
+      reenableAndroidSystemPiPLeaveHintAfterReturn();
     });
     const subReturnActive = emitter.addListener('ReturnToActiveCallFromNotification', () => {
       invokeReturnToVideoCallFromNotification();
@@ -1637,20 +1672,35 @@ function AppContent() {
         const sessionNotEndedForGuard =
           !!sessionForGuard && (typeof sessionForGuard.isEnded === 'function' ? !sessionForGuard.isEnded() : true);
         const videoCallStillActiveByRef = g.__videoCallActiveRef?.current !== false;
+        const paramsForGuard = g.__currentCallPiPParamsRef?.current;
+        const hasCallIdsForGuard =
+          !!paramsForGuard?.callId ||
+          !!paramsForGuard?.roomId ||
+          (!!sessionForGuard &&
+            typeof sessionForGuard.getRoomId === 'function' &&
+            !!String(sessionForGuard.getRoomId() || '').trim());
+        const activeCallOnAnyScreen =
+          sessionNotEndedForGuard && videoCallStillActiveByRef && hasCallIdsForGuard;
         // При активном звонке (экран VideoCall или in-app PiP) guard не должен гасить leaveHint —
         // иначе по нажатию Home системный PiP не покажется.
         const allowWhileGuardActive =
+          activeCallOnAnyScreen ||
           (!!pipVisible && !isVideoSessionRoute(currentRoute)) ||
           (isVideoSessionRoute(currentRoute) && sessionNotEndedForGuard && videoCallStillActiveByRef);
         // Глобальный guard: после завершения звонка запрещаем системный PiP на короткое время,
         // чтобы исключить гонку (cleanup/reset → onUserLeaveHint → PiP + лаунчер).
         const disableUntil = g.__disableSystemPiPUntilRef?.current;
-        if (typeof disableUntil === 'number' && disableUntil > Date.now() && !allowWhileGuardActive) {
+        if (
+          typeof disableUntil === 'number' &&
+          disableUntil > Date.now() &&
+          !allowWhileGuardActive &&
+          !isAndroidActiveCallEligibleForLeaveHint()
+        ) {
           const logKey = `guard:disableUntil:${currentRoute}:${disableUntil}:${allowWhileGuardActive}`;
           if (systemPiPDecisionLogRef.current !== logKey) {
             systemPiPDecisionLogRef.current = logKey;
           }
-          NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+          setAndroidSystemPiPLeaveHintEnabled(false);
         } else {
         const systemPiPEntryUntil = g.__systemPiPEntryInProgressUntilRef?.current;
         const systemPiPEntryInProgress =
@@ -1694,7 +1744,7 @@ function AppContent() {
         if (systemPiPDecisionLogRef.current !== logKey) {
           systemPiPDecisionLogRef.current = logKey;
         }
-        NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(!!allowSystemPiP);
+        setAndroidSystemPiPLeaveHintEnabled(!!allowSystemPiP);
         }
       } catch (_) {}
     }
@@ -2176,7 +2226,7 @@ function AppContent() {
               g2.__pipInSystemModeRef?.current === true ||
               g2.__pipCallEndedWasInSystemRef?.current === true;
             if (Platform.OS === 'android' && dupInSystem) {
-              requestExitSystemPiPSoft();
+              dismissSystemPiPAfterCallEnded();
               const h = g2.__pipHidePiPRef?.current;
               if (typeof h === 'function') h();
             }
@@ -2193,6 +2243,7 @@ function AppContent() {
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(true); } catch (_) {}
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}
+        try { dismissSystemPiPAfterCallEnded(); } catch (_) {}
       }
       // КРИТИЧНО: Сразу сбрасываем refs и уведомляем HomeScreen (идемпотентно — те же refs трогает PiPContext и VideoCallSession).
       applyCallEndedGlobalRefsOnce(eventCallId || undefined, eventRoomId || undefined);
@@ -2244,7 +2295,7 @@ function AppContent() {
       // Кто в системном PiP при call:ended — только закрываем PiP, приложение не открываем.
       if (inSystem) {
         if (Platform.OS === 'android') {
-          try { requestExitSystemPiPSoft(); } catch (_) {}
+          try { dismissSystemPiPAfterCallEnded(); } catch (_) {}
         }
         console.log('[App] [call:ended] inSystem=true → ставим __callEndedFromPiPNoOpenRef, return (НЕ вызываем goHome)');
         try {
@@ -2347,7 +2398,7 @@ function AppContent() {
       const roomDisconnected = session?.room?.state === 'disconnected';
       const sessionEnded = typeof session?.ended === 'boolean' && session.ended;
       if (roomDisconnected || sessionEnded || !session) {
-        try { requestExitSystemPiPSoft(); } catch (_) {}
+        try { dismissSystemPiPAfterCallEnded(); } catch (_) {}
         try {
           const hidePiP = g.__pipHidePiPRef?.current;
           if (typeof hidePiP === 'function') hidePiP();
@@ -2374,7 +2425,7 @@ function AppContent() {
       const hidePiP = g.__pipHidePiPRef?.current;
       if (inSystem) {
         if (Platform.OS === 'android') {
-          try { requestExitSystemPiPSoft(); } catch (_) {}
+          try { dismissSystemPiPAfterCallEnded(); } catch (_) {}
         }
         if (typeof hidePiP === 'function') hidePiP();
       } else if (pipVisible) {

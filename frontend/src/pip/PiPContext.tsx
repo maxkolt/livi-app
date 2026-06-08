@@ -9,7 +9,7 @@ import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
 import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
-import { requestExitSystemPiPSoft } from '../../utils/callKeep';
+import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../utils/callKeep';
 import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn } from '../../utils/activeCallNotification';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
@@ -1059,7 +1059,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
       // Сначала закрываем системный PiP, чтобы окно исчезло быстрее у того, кто получил call:ended.
       if (Platform.OS === 'android') {
-        try { requestExitSystemPiPSoft(); } catch (_) {}
+        try { dismissSystemPiPAfterCallEnded(); } catch (_) {}
       }
       hidePiP();
       setCallId(null);
@@ -1140,7 +1140,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
-    const inAppPiPVisible = visible && !inSystemPiPMode && !pendingSystemPiP;
+    const g = global as any;
+    const inAppFromContext = visible && !inSystemPiPMode && !pendingSystemPiP;
+    const inAppFromSyncRef =
+      g.__pipForceHiddenRef?.current !== true &&
+      g.__pipVisibleRef?.current === true &&
+      !inSystemPiPMode &&
+      !pendingSystemPiP;
+    const inAppPiPVisible = inAppFromContext || inAppFromSyncRef;
     try {
       NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(inAppPiPVisible);
     } catch (_) {}
