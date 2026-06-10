@@ -1165,6 +1165,115 @@ export async function sendCallCanceledToRecipient(
 }
 
 /**
+ * Таймаут входящего (получатель не ответил) — пропущенный вызов.
+ * Android: FCM data-only call_ended (без endedFromActive) → нативный showMissedCallNotification.
+ * iOS: VoIP закрывает CallKit; Expo с title/body → локальное missed в JS.
+ * Не sendPushToUser-only: иначе на Android Expo notification payload → только счётчик без шторки.
+ */
+export async function sendCallTimeoutToRecipient(
+  calleeUserId: string,
+  callId: string,
+  fromUserId: string,
+  fromNick?: string
+): Promise<void> {
+  logger.info('[push] sendCallTimeoutToRecipient start', { calleeUserId, callId, fromUserId });
+  const messaging = getFirebaseMessaging();
+  const recs = await PushTokenModel.find({ userId: calleeUserId })
+    .select('token platform fcmToken voipToken')
+    .lean();
+  type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string };
+  const list = (recs || []) as unknown as Rec[];
+  let androidSent = false;
+  const title = 'Пропущенный вызов';
+  const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий видеозвонок';
+
+  const iosVoipRecs = list.filter((r) => r.platform === 'ios' && r.voipToken);
+  if (iosVoipRecs.length > 0) {
+    const voipSent = await sendVoipPushToRecipient(
+      calleeUserId,
+      iosVoipRecs,
+      {
+        type: 'call_ended',
+        callId: String(callId),
+        callKitId: getCallKitUuid(callId),
+        fromUserId: String(fromUserId),
+        fromNick: String(fromNick ?? ''),
+      }
+    );
+    pushLog('call_timeout_sent_via_apns_voip', { userId: calleeUserId, callId, voipSent });
+  }
+  if (messaging) {
+    for (const r of list) {
+      if (r.platform === 'android' && r.fcmToken) {
+        try {
+          await messaging.send({
+            token: r.fcmToken,
+            data: {
+              type: 'call_ended',
+              callId: String(callId),
+              callKitId: getCallKitUuid(callId),
+              fromUserId: String(fromUserId),
+              fromNick: String(fromNick ?? ''),
+            },
+            android: { priority: 'high' },
+          });
+          logger.info('[push] call_timeout (call_ended missed) sent via FCM (data-only)', { userId: calleeUserId, callId });
+          androidSent = true;
+        } catch (e) {
+          const errMsg = String((e as Error)?.message ?? (e as { errorInfo?: { message?: string } })?.errorInfo?.message ?? '');
+          const isInvalidToken =
+            isFcmInvalidTokenError(e) || /requested entity was not found|not found|unregistered/i.test(errMsg);
+          if (shouldRemoveFcmTokenFromDb(e)) await removeInvalidFcmToken(calleeUserId, r);
+          logger.warn('[push] FCM call_timeout failed', { userId: calleeUserId, callId, error: errMsg, isInvalidToken });
+        }
+      }
+    }
+  }
+  const iosTokens = list.filter((r) => r.platform === 'ios').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
+  if (iosTokens.length > 0) {
+    try {
+      const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
+        to,
+        sound: 'default',
+        priority: 'high',
+        title,
+        body,
+        channelId: 'missed_call',
+        data: {
+          type: 'call_ended',
+          callId: String(callId),
+          callKitId: getCallKitUuid(callId),
+          from: fromUserId,
+          fromNick: fromNick ?? '',
+        },
+      }));
+      const chunks = expo.chunkPushNotifications(messages);
+      for (const chunk of chunks) await expo.sendPushNotificationsAsync(chunk);
+      logger.info('[push] call_timeout sent via Expo (iOS)', { userId: calleeUserId, callId, count: iosTokens.length });
+    } catch (e) {
+      logger.warn('[push] Expo call_timeout to callee failed', { userId: calleeUserId, callId, error: (e as Error)?.message });
+    }
+  }
+  if (!androidSent && list.some((r) => r.platform === 'android')) {
+    try {
+      await sendPushToUser(calleeUserId, {
+        kind: 'call',
+        data: {
+          type: 'call_ended',
+          callId: String(callId),
+          callKitId: getCallKitUuid(callId),
+          from: fromUserId,
+          fromNick: fromNick ?? '',
+        },
+      });
+      logger.info('[push] call_timeout sent via Expo (Android data-only fallback)', { userId: calleeUserId, callId });
+    } catch (e) {
+      logger.warn('[push] Expo call_timeout Android fallback failed', { userId: calleeUserId, callId, error: (e as Error)?.message });
+    }
+  }
+}
+
+/**
  * Активный звонок завершён другим участником.
  * Android получает только FCM data-only, чтобы закрыть PiP/экран без видимого системного уведомления.
  * На iOS оставляем Expo push, чтобы сохранить текущую доставку в фоне/убитом приложении.
