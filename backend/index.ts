@@ -40,7 +40,7 @@ import {
   sendCallPushToRecipient,
   sendCallEscalationPushToRecipient,
   sendCallCanceledToRecipient,
-  sendCallTimeoutToRecipient,
+  sendCallMissedToRecipient,
   sendCallEndedToPeer,
   sendCallDeclinedToCaller,
   sendCallAcceptedToCaller,
@@ -2827,9 +2827,9 @@ io.on('connection', async (sock: AuthedSocket) => {
           }
         } catch {}
         try {
-          await sendCallTimeoutToRecipient(link.b, callId, link.a, fromNick || '');
+          await sendCallMissedToRecipient(link.b, callId, link.a, fromNick || '');
         } catch (e: any) {
-          logger.warn('[call:timeout] missed-call push failed', { peerId: link.b, error: e?.message });
+          logger.warn('[call:timeout] call_ended push failed', { peerId: link.b, error: e?.message });
         }
         // Сохраняем пропущенный только если получатель офлайн — иначе он уже получил socket+FCM и при reauth получит дубль через missed_calls:sync
         if (!hasSocketForUser(io, link.b)) await saveMissedCall(link.b, link.a, fromNick || '');
