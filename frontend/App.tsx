@@ -15,8 +15,8 @@ import { View, Text, TextInput, Animated, TouchableOpacity, StyleSheet, Easing, 
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, warmCallSignaling, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, wasAppliedFromReauth, recordAppliedFromPending, reportIncomingCallShown, emitPresenceUpdateIfChanged } from "./sockets/socket";
-import { emitMissedIncrement, emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce } from './utils/globalEvents';
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, warmCallSignaling, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, reportIncomingCallShown, emitPresenceUpdateIfChanged } from "./sockets/socket";
+import { emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce } from './utils/globalEvents';
 import { buildCallEndSocketPayload } from './utils/callEndPayload';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
@@ -32,7 +32,7 @@ import SystemPiPCaptureHost from "./src/pip/SystemPiPCaptureHost";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native';
-import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, setMissedBadgeCleared } from './utils/pushNotifications';
+import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
 import {
@@ -1002,7 +1002,6 @@ function AppContent() {
   const canceledCallsRef = React.useRef<Map<string, number>>(new Map());
   const timedOutCallsRef = React.useRef<Map<string, number>>(new Map());
   // Время последнего инкремента пропущенного по userId (из сокета) — чтобы не дублировать при применении pending с FCM
-  const lastMissedIncrementTimeByUserRef = React.useRef<Record<string, number>>({});
   // Ref для хранения обработчика входящего звонка, чтобы он всегда был доступен
   const incomingCallHandlerRef = React.useRef<((d: { callId: string; callKitId?: string; from: string; fromNick?: string; ts?: number | string; expiresAt?: number | string }) => void) | null>(null);
 
@@ -1207,7 +1206,6 @@ function AppContent() {
       // Fast-path: если открыли по уведомлению, сразу показываем Friends (+PiP), а тяжелые синки уводим в фон.
       const open = await (LiviAppModule?.getAndClearPendingOpenTabFriends?.() ?? Promise.resolve(false));
       if (open) {
-        setMissedBadgeCleared().catch(() => {});
         goToFriends();
       }
       setTimeout(() => {
@@ -1216,32 +1214,7 @@ function AppContent() {
           try {
             const arr = (await (LiviAppModule?.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]))) as string[];
             if (arr?.length && !cancelled) {
-              const raw = await AsyncStorage.getItem(key);
-              const map = raw ? JSON.parse(raw) : {};
-              const MISSED_APPLY_SKIP_MS = 15000;
-              // Считаем количество пропущенных по каждому userId (массив — по одному элементу на каждый показ «Пропущенный вызов» из FCM)
-              const countByUid: Record<string, number> = {};
-              for (const u of arr) {
-                if (!u) continue;
-                countByUid[u] = (countByUid[u] || 0) + 1;
-              }
-              for (const uid of Object.keys(countByUid)) {
-                const lastInc = lastMissedIncrementTimeByUserRef.current[uid];
-                if (lastInc && Date.now() - lastInc < MISSED_APPLY_SKIP_MS) continue;
-                if (wasAppliedFromReauth(uid)) continue;
-                const add = countByUid[uid] || 1;
-                map[uid] = (map[uid] || 0) + add;
-                try { recordAppliedFromPending(uid); } catch {}
-                try { emitMissedIncrement(uid); } catch {}
-              }
-              await AsyncStorage.setItem(key, JSON.stringify(map));
-              // If app was opened from missed notification, keep "seen" state.
-              // Otherwise pending native missed sync immediately recreates summary in shade
-              // after MainActivity just dismissed it (visible flicker).
-              if (!open) {
-                await clearMissedBadgeCleared();
-              }
-              await syncAppBadgeFromMissedCount();
+              await applyPendingMissedCallsFromNative(arr);
             } else if (!cancelled) {
               await syncAppBadgeFromMissedCount();
             }
@@ -1253,15 +1226,12 @@ function AppContent() {
           // Синхронизировать счётчик в шторке с источником истины (AsyncStorage) при каждом старте.
           if (Platform.OS === 'android') {
             try {
-              const badgeCleared = await AsyncStorage.getItem('missed_calls_badge_cleared_v1');
               const raw2 = await AsyncStorage.getItem(key);
               const map2 = raw2 ? JSON.parse(raw2) as Record<string, number> : {};
-              const setOnly = badgeCleared === 'true';
               for (const uid of Object.keys(map2 || {})) {
                 const c = map2[uid];
                 if (uid && typeof c === 'number' && c > 0) {
-                  if (setOnly) LiviAppModule?.setMissedCountForUserOnly?.(uid, c);
-                  else LiviAppModule?.syncMissedCountForUser?.(uid, c);
+                  LiviAppModule?.syncMissedCountForUser?.(uid, c);
                 }
               }
             } catch (_) {}
@@ -1297,7 +1267,6 @@ function AppContent() {
       if (state !== 'active') return;
       NativeModules.LiviAppModule?.getAndClearPendingOpenTabFriends?.()?.then?.((open: boolean) => {
         if (!open) return;
-        setMissedBadgeCleared().catch(() => {});
         const go = (retry = 0) => {
           if (navRef.isReady()) {
             ensureInAppPiPBeforeOpenFriends();
@@ -2522,48 +2491,9 @@ function AppContent() {
           // Пропущенные, показанные из нативного кода (FCM call_ended) — обновить счётчик и бейдж (без дубля, если уже учли по сокету)
           LiviAppModule?.getAndClearPendingMissedCalls?.()?.then?.((arr: string[]) => {
             if (arr?.length) {
-              (async () => {
-                try {
-                  const key = 'missed_calls_by_user_v1';
-                  const badgeCleared = await AsyncStorage.getItem('missed_calls_badge_cleared_v1');
-                  const alreadySeen = badgeCleared === 'true';
-                  const raw = await AsyncStorage.getItem(key);
-                  const map = raw ? JSON.parse(raw) : {};
-                  const MISSED_APPLY_SKIP_MS = 15000;
-                  const countByUid: Record<string, number> = {};
-                  for (const u of arr) {
-                    if (!u) continue;
-                    countByUid[u] = (countByUid[u] || 0) + 1;
-                  }
-                  for (const uid of Object.keys(countByUid)) {
-                    const lastInc = lastMissedIncrementTimeByUserRef.current[uid];
-                    if (lastInc && Date.now() - lastInc < MISSED_APPLY_SKIP_MS) continue;
-                    if (wasAppliedFromReauth(uid)) continue;
-                    const add = countByUid[uid] || 1;
-                    map[uid] = (map[uid] || 0) + add;
-                    try { recordAppliedFromPending(uid); } catch {}
-                    try { emitMissedIncrement(uid); } catch {}
-                  }
-                  await AsyncStorage.setItem(key, JSON.stringify(map));
-                  if (!alreadySeen) {
-                    await clearMissedBadgeCleared();
-                    await syncAppBadgeFromMissedCount();
-                  }
-                  if (Platform.OS === 'android' && NativeModules.LiviAppModule) {
-                    try {
-                      for (const uid of Object.keys(map || {})) {
-                        const c = map[uid];
-                        if (uid && typeof c === 'number' && c > 0) {
-                          if (alreadySeen) NativeModules.LiviAppModule.setMissedCountForUserOnly?.(uid, c);
-                          else NativeModules.LiviAppModule.syncMissedCountForUser?.(uid, c);
-                        }
-                      }
-                    } catch (_) {}
-                  }
-                } catch (e) {
-                  logger.warn('[App] getAndClearPendingMissedCalls apply failed', e);
-                }
-              })();
+              applyPendingMissedCallsFromNative(arr).catch((e) => {
+                logger.warn('[App] getAndClearPendingMissedCalls apply failed', e);
+              });
             }
           });
         }
@@ -2696,15 +2626,10 @@ function AppContent() {
           try { emitCallCancelledOnHome(); } catch (_) {}
           try {
             if (callerId) {
-              lastMissedIncrementTimeByUserRef.current[callerId] = Date.now();
-              const key = 'missed_calls_by_user_v1';
-              const raw = await AsyncStorage.getItem(key);
-              const map = raw ? JSON.parse(raw) : {};
-              map[callerId] = (map[callerId] || 0) + 1;
-              await AsyncStorage.setItem(key, JSON.stringify(map));
-              try { emitMissedIncrement(callerId); } catch {}
-              await clearMissedBadgeCleared();
-              await syncAppBadgeFromMissedCount();
+              await recordMissedCallForUser(callerId, {
+                callId: callIdStr,
+                source: 'call:cancel:deferred',
+              });
               try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
             }
           } catch (_) {}
@@ -2724,15 +2649,10 @@ function AppContent() {
       // Инкремент пропущенного только у получателя (callee); для callee на Home делаем в setTimeout выше
       try {
         if (callerId && isCallee && !calleeAlreadyOnHome) {
-          lastMissedIncrementTimeByUserRef.current[callerId] = Date.now();
-          const key = 'missed_calls_by_user_v1';
-          const raw = await AsyncStorage.getItem(key);
-          const map = raw ? JSON.parse(raw) : {};
-          map[callerId] = (map[callerId] || 0) + 1;
-          await AsyncStorage.setItem(key, JSON.stringify(map));
-          try { emitMissedIncrement(callerId); } catch {}
-          await clearMissedBadgeCleared();
-          await syncAppBadgeFromMissedCount();
+          await recordMissedCallForUser(callerId, {
+            callId: callIdStr,
+            source: 'call:cancel',
+          });
           try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
         }
       } catch {}
@@ -2912,23 +2832,15 @@ function AppContent() {
       } catch {}
       // Инкремент пропущенного только у получателя (callee), не у инициатора
       try {
-        const uid = await AsyncStorage.getItem('last_incoming_from');
+        const myUserId = getCurrentUserId?.() ?? '';
         const callerId = String((d as any)?.from || '');
-        if (uid && callerId && uid === callerId) {
-          lastMissedIncrementTimeByUserRef.current[uid] = Date.now();
-          const key = 'missed_calls_by_user_v1';
-          const raw = await AsyncStorage.getItem(key);
-          const map = raw ? JSON.parse(raw) : {};
-          map[uid] = (map[uid] || 0) + 1;
-          await AsyncStorage.setItem(key, JSON.stringify(map));
-          try { emitMissedIncrement(uid); } catch {}
-          await clearMissedBadgeCleared();
-          await syncAppBadgeFromMissedCount();
+        const callId = String((d as any)?.callId || '');
+        if (callerId && myUserId && callerId !== myUserId) {
+          await recordMissedCallForUser(callerId, {
+            callId,
+            source: 'call:timeout',
+          });
           try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
-          // Дедуп: убрать этого пользователя из нативного pending, чтобы при getAndClearPendingMissedCalls не инкрементировать повторно (FCM call_ended тоже добавляет в pending)
-          try {
-            if (Platform.OS === 'android') NativeModules.LiviAppModule?.removePendingMissedCall?.(uid);
-          } catch (_) {}
         }
       } catch {}
     });
@@ -2952,20 +2864,15 @@ function AppContent() {
               stopIncomingCallAlert(); setIncoming(null); stopAnim();
               return;
             }
-            const key = 'missed_calls_by_user_v1';
-            const raw = await AsyncStorage.getItem(key);
-            const map = raw ? JSON.parse(raw) : {};
             const uid = String(cur.from || '');
             if (uid) {
-              lastMissedIncrementTimeByUserRef.current[uid] = Date.now();
-              map[uid] = (map[uid] || 0) + 1;
-              await AsyncStorage.setItem(key, JSON.stringify(map));
-              try { emitMissedIncrement(uid); } catch {}
-              await clearMissedBadgeCleared();
-              await syncAppBadgeFromMissedCount();
+              await recordMissedCallForUser(uid, {
+                callId: cid,
+                source: 'incoming:fallback-timeout',
+              });
               try { await AsyncStorage.removeItem('last_incoming_from'); } catch {}
             }
-            } catch {}
+          } catch {}
           try { setIncomingCallScreenVisible(false); } catch {}
           stopIncomingCallAlert(); setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
         }

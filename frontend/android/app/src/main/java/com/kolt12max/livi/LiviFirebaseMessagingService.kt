@@ -77,6 +77,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         vLog("FCM parsed typeNorm=$typeNorm callId=$callId")
 
         if (typeNorm == "call" && callId != null && from != null) {
+            LiviAppModule.saveIncomingCallMeta(this, callId, from, fromNick)
             // Пуш «call» пришёл с задержкой (устройство было офлайн): показываем только «Пропущенный вызов», не полноэкранный входящий.
             val CALL_RING_TIMEOUT_MS = 27_000L
             val MIN_REMAINING_WINDOW_TO_OPEN_UI_MS = 2_000L
@@ -109,10 +110,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                         nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
                     } catch (_: Exception) {}
-                    if (!LiviAppModule.wasMissedShownForCallId(this, callId)) {
-                        LiviAppModule.markMissedShownForCallId(this, callId)
-                        showMissedCallNotification(callId, from, fromNick)
-                    }
+                    showMissedCallNotification(callId, from, fromNick)
                     return
             }
             // Inclusive end of ring window (same as JS callExpiry / backend). No grace after expiresAt:
@@ -124,10 +122,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                         nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
                     } catch (_: Exception) {}
-                    if (!LiviAppModule.wasMissedShownForCallId(this, callId)) {
-                        LiviAppModule.markMissedShownForCallId(this, callId)
-                        showMissedCallNotification(callId, from, fromNick)
-                    }
+                    showMissedCallNotification(callId, from, fromNick)
                     return
             }
             // Don't flash incoming UI when call is about to auto-end anyway.
@@ -140,10 +135,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                         nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
                     } catch (_: Exception) {}
-                    if (!LiviAppModule.wasMissedShownForCallId(this, callId)) {
-                        LiviAppModule.markMissedShownForCallId(this, callId)
-                        showMissedCallNotification(callId, from, fromNick)
-                    }
+                    showMissedCallNotification(callId, from, fromNick)
                     return
                 }
             }
@@ -228,16 +220,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             return
         }
         if (typeNorm == "call_canceled" && callId != null) {
-            EndedCallIds.add(this, callId)
             LiviOngoingCallHelper.clearOngoingCall(applicationContext)
             LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
-            val intent = Intent(ACTION_CALL_CANCELED).apply {
-                setPackage(packageName)
-                putExtra(EXTRA_CALL_ID, callId)
-            }
-            sendBroadcast(intent)
+            deliverIncomingCallCanceled(applicationContext, callId)
             // Инициатор отменил — показываем «пропущенный вызов» и счётчик (fromUserId/fromNick в data или body)
             var fromCanceled = data["fromUserId"] ?: data["from"]
             var fromNickCanceled = data["fromNick"] ?: ""
@@ -250,19 +237,13 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 } catch (_: Exception) {}
             }
             if (fromCanceled != null && fromCanceled.toString().isNotEmpty()) {
-                if (!LiviAppModule.wasMissedShownForCallId(this, callId)) {
-                    LiviAppModule.markMissedShownForCallId(this, callId)
-                    showMissedCallNotification(callId, fromCanceled.toString(), fromNickCanceled)
-                }
+                showMissedCallNotification(callId, fromCanceled.toString(), fromNickCanceled)
+            } else {
+                showMissedCallNotification(callId, "", fromNickCanceled)
             }
-            // ВАЖНО: не запускаем IncomingCallActivity повторно ради "just_close".
-            // Если экран входящего существует, broadcast ACTION_CALL_CANCELED его уже закроет.
-            // Если процесса/активности нет, закрывать уже нечего, а повторный startActivity
-            // после Expo body-push даёт заметное мерцание (экран успевает открыться и сразу закрыться).
-            val shouldLaunchCloseActivity = false
             Log.d(
                 TAG,
-                "FCM call_canceled: ended id stored, incoming canceled, missed shown, closeFallback=$shouldLaunchCloseActivity callId=$callId"
+                "FCM call_canceled: incoming canceled, missed shown, alive=${IncomingCallActivity.isAlive} activeCallId=${IncomingCallActivity.activeCallId} callId=$callId"
             )
             return
         }
@@ -329,23 +310,22 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val endedFromActiveRaw = data["endedFromActive"] ?: bodyEndedFromActive ?: ""
             val endedFromActive = "true" == endedFromActiveRaw
             if (!endedFromActive) {
-                if (!LiviAppModule.wasMissedShownForCallId(this, callId)) {
-                    LiviAppModule.markMissedShownForCallId(this, callId)
-                    var fromNickEnded = data["fromNick"] ?: ""
-                    if (fromNickEnded.isEmpty() && data["body"] != null) {
-                        try {
-                            fromNickEnded = org.json.JSONObject(data["body"]!!).optString("fromNick", "")
-                        } catch (_: Exception) {}
-                    }
-                    val fromUserId = from ?: ""
-                    if (remoteMessage.notification != null) {
-                        // Expo уже показал уведомление (title/body) — только обновляем счётчик, своё не показываем (без дубля и пустого).
-                        recordMissedCallStateOnly(fromUserId, fromNickEnded)
-                        Log.d(TAG, "FCM call_ended: notification payload present, state only (no duplicate)")
-                    } else {
-                        showMissedCallNotification(callId, fromUserId, fromNickEnded)
-                    }
+                var fromNickEnded = data["fromNick"] ?: ""
+                if (fromNickEnded.isEmpty() && data["body"] != null) {
+                    try {
+                        fromNickEnded = org.json.JSONObject(data["body"]!!).optString("fromNick", "")
+                    } catch (_: Exception) {}
                 }
+                var fromUserId = from ?: data["fromUserId"] ?: ""
+                if (fromUserId.isEmpty() && data["body"] != null) {
+                    try {
+                        val body = org.json.JSONObject(data["body"]!!)
+                        fromUserId = body.optString("fromUserId", "").takeIf { it.isNotEmpty() }
+                            ?: body.optString("from", "").takeIf { it.isNotEmpty() }
+                            ?: ""
+                    } catch (_: Exception) {}
+                }
+                showMissedCallNotification(callId, fromUserId, fromNickEnded)
             }
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(packageName)
@@ -443,24 +423,9 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         }
     }
 
-    /** Только обновить счётчик пропущенных (без показа уведомления), когда Expo уже показал уведомление. */
-    private fun recordMissedCallStateOnly(fromUserId: String, fromNick: String) {
-        ensureMissedCallChannel(this)
-        LiviAppModule.addPendingMissedCall(this, fromUserId)
-        LiviAppModule.saveMissedCallNick(this, fromUserId, fromNick)
-        LiviAppModule.incrementMissedCountForUser(this, fromUserId)
-        LiviAppModule.updateAppIconBadgeFromMissedCount(this)
-    }
-
     /** Учёт пропущенного звонка и обновление общего summary-уведомления в шторке. */
     private fun showMissedCallNotification(callId: String, fromUserId: String, fromNick: String) {
-        ensureMissedCallChannel(this)
-        LiviAppModule.addPendingMissedCall(this, fromUserId)
-        LiviAppModule.saveMissedCallNick(this, fromUserId, fromNick)
-        LiviAppModule.incrementMissedCountForUser(this, fromUserId)
-        val total = LiviAppModule.getTotalMissedCount(this)
-        updateSummaryMissedCallsNotification(this, total)
-        LiviAppModule.updateAppIconBadgeFromMissedCount(this)
+        notifyMissedCallFromPush(this, callId, fromUserId, fromNick)
     }
 
     private fun startIncomingCallForegroundService(
@@ -517,7 +482,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         /** Тихий канал для входящего: без heads-up, только иконка/шторка (когда телефон разблокирован). */
         const val CHANNEL_ID_CALLS_SILENT = "livi_incoming_call_silent_v1"
         const val NOTIFICATION_ID_INCOMING_CALL = 1001
-        private const val CHANNEL_ID_MISSED_CALL = "missed_call"
+        private const val CHANNEL_ID_MISSED_CALL = "missed_call_v2"
         const val ACTION_CALL_CANCELED = "com.kolt12max.livi.CALL_CANCELED"
         /** Broadcast: закрыть системный PiP при пуше call_ended (MainActivity — только если isInPictureInPictureMode). */
         const val ACTION_CLOSE_PIP_CALL_ENDED = "com.kolt12max.livi.CLOSE_PIP_CALL_ENDED"
@@ -591,13 +556,92 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 val channel = NotificationChannel(
                     CHANNEL_ID_MISSED_CALL,
                     context.getString(R.string.missed_call_title),
-                    NotificationManager.IMPORTANCE_DEFAULT
+                    NotificationManager.IMPORTANCE_HIGH
                 ).apply {
                     setSound(null, null)
                     setVibrationPattern(longArrayOf(0))
+                    enableVibration(false)
                     setLockscreenVisibility(Notification.VISIBILITY_PUBLIC)
+                    setShowBadge(true)
                 }
                 nm.createNotificationChannel(channel)
+            }
+        }
+
+        /**
+         * Пропущенный вызов: summary в шторке + счётчик. Дедуп по callId (FCM + локальный таймаут экрана входящего).
+         */
+        @JvmStatic
+        fun notifyMissedCallFromPush(context: Context, callId: String, fromUserId: String, fromNick: String) {
+            val appCtx = context.applicationContext
+            Handler(Looper.getMainLooper()).post {
+                try {
+                    notifyMissedCallFromPushOnMain(appCtx, callId, fromUserId, fromNick)
+                } catch (e: Exception) {
+                    Log.w(TAG, "notifyMissedCallFromPush failed", e)
+                }
+            }
+        }
+
+        @JvmStatic
+        private fun notifyMissedCallFromPushOnMain(
+            context: Context,
+            callId: String,
+            fromUserId: String,
+            fromNick: String
+        ) {
+            if (callId.isNotEmpty() && LiviAppModule.wasMissedShownForCallId(context, callId)) return
+            var uid = fromUserId.trim()
+            var nick = fromNick
+            if (uid.isEmpty() && callId.isNotEmpty()) {
+                val meta = LiviAppModule.resolveIncomingCallMeta(context, callId)
+                if (meta != null) {
+                    uid = meta.first.trim()
+                    if (nick.isBlank()) nick = meta.second
+                }
+            }
+            if (uid.isEmpty()) {
+                Log.w(TAG, "notifyMissedCallFromPushOnMain: missing caller userId callId=$callId")
+                return
+            }
+            if (callId.isNotEmpty()) LiviAppModule.markMissedShownForCallId(context, callId)
+            ensureMissedCallChannel(context)
+            LiviAppModule.addPendingMissedCall(context, uid)
+            LiviAppModule.saveMissedCallNick(context, uid, nick)
+            val countForUser = LiviAppModule.incrementMissedCountForUser(context, uid)
+            refreshMissedCallNotificationsInShade(context)
+            LiviAppModule.updateAppIconBadgeFromMissedCount(context)
+            Log.i(TAG, "notifyMissedCallFromPushOnMain: shown callId=$callId from=$uid countUser=$countForUser total=${LiviAppModule.getTotalMissedCount(context)}")
+        }
+
+        /**
+         * Перерисовать уведомления о пропущенных в шторке по нативному счётчику:
+         * 1 пропущенный — карточка «от кого», несколько — одно summary.
+         */
+        @JvmStatic
+        fun refreshMissedCallNotificationsInShade(context: Context) {
+            val total = LiviAppModule.getTotalMissedCount(context)
+            ensureMissedCallChannel(context)
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (total <= 0) {
+                try { nm.cancel(NOTIFICATION_ID_SUMMARY_MISSED_CALLS) } catch (_: Exception) {}
+                return
+            }
+            if (total > 1) {
+                updateSummaryMissedCallsNotification(context, total)
+                return
+            }
+            try { nm.cancel(NOTIFICATION_ID_SUMMARY_MISSED_CALLS) } catch (_: Exception) {}
+            try {
+                val raw = LiviAppModule.getMissedCountByUserJson(context)
+                val map = JSONObject(raw)
+                val keys = map.keys().asSequence().toList()
+                for (k in keys) {
+                    val c = map.optInt(k, 0)
+                    if (c > 0) updateMissedCallNotification(context, k, c)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "refreshMissedCallNotificationsInShade failed", e)
             }
         }
 
@@ -640,8 +684,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setContentIntent(contentPending)
                 .setDeleteIntent(deletePending)
                 .setAutoCancel(true)
-                .setOnlyAlertOnce(true)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setOnlyAlertOnce(false)
+                .setNumber(count.coerceAtLeast(1))
+                .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build()
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -848,6 +894,44 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 .setOnlyAlertOnce(true)
                 .build()
             nm.notify(notificationId, notification)
+        }
+
+        /**
+         * Инициатор отменил: EndedCallIds, broadcast (+ повторы), при живом IncomingCallActivity — onNewIntent JUST_CLOSE.
+         * Нужно, если cancel пришёл до registerReceiver в onCreate (иначе экран продолжает «дозваниваться»).
+         */
+        @JvmStatic
+        fun deliverIncomingCallCanceled(context: Context, callId: String, from: String = "", fromNick: String = "") {
+            if (callId.isBlank()) return
+            EndedCallIds.add(context, callId)
+            val cancelIntent = Intent(ACTION_CALL_CANCELED).apply {
+                setPackage(context.packageName)
+                putExtra(EXTRA_CALL_ID, callId)
+            }
+            try {
+                context.sendBroadcast(cancelIntent)
+            } catch (e: Exception) {
+                Log.w(TAG, "deliverIncomingCallCanceled broadcast failed", e)
+            }
+            val handler = Handler(Looper.getMainLooper())
+            for (delayMs in longArrayOf(250L, 650L)) {
+                handler.postDelayed({
+                    try {
+                        context.sendBroadcast(cancelIntent)
+                    } catch (_: Exception) {}
+                }, delayMs)
+            }
+            if (IncomingCallActivity.isAlive && IncomingCallActivity.activeCallId == callId) {
+                try {
+                    val closeIntent = buildIncomingCallActivityIntent(context, callId, from, fromNick).apply {
+                        putExtra(IncomingCallActivity.EXTRA_JUST_CLOSE, true)
+                    }
+                    context.startActivity(closeIntent)
+                    Log.d(TAG, "deliverIncomingCallCanceled: JUST_CLOSE for alive activity callId=$callId")
+                } catch (e: Exception) {
+                    Log.w(TAG, "deliverIncomingCallCanceled JUST_CLOSE failed callId=$callId", e)
+                }
+            }
         }
 
         /** Intent для IncomingCallActivity (поверх блокировки и домашнего экрана). */

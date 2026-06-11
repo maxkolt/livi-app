@@ -337,6 +337,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun launchIncomingCallActivity(callId: String, from: String, fromNick: String?) {
     val ctx = reactApplicationContext
+    if (callId.isNotBlank() && EndedCallIds.isEnded(ctx, callId)) {
+      Log.d(NAME, "launchIncomingCallActivity skipped (call already ended) callId=$callId")
+      return
+    }
     // НЕ шлём ACTION_INCOMING_CALL_ACTIVITY_SHOWN до реального onCreate IncomingCallActivity:
     // иначе FGS делает detach до старта рингтона на экране — на keyguard/фоне плеер Activity часто
     // не успевает, а FGS уже заглушён через stopRingtonePlayerForCallKeepOnly → тишина.
@@ -356,6 +360,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun showIncomingCallSystemUI(callId: String, from: String, fromNick: String?) {
     if (callId.isBlank() || from.isBlank()) return
     val ctx = reactApplicationContext
+    if (EndedCallIds.isEnded(ctx, callId)) {
+      Log.d(NAME, "showIncomingCallSystemUI skipped (call already ended) callId=$callId")
+      return
+    }
     try {
       LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
     } catch (_: Exception) {}
@@ -493,13 +501,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun notifyCallCanceled(callId: String) {
     if (callId.isBlank()) return
-    EndedCallIds.add(reactApplicationContext, callId)
     (reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
-    val intent = Intent(LiviFirebaseMessagingService.ACTION_CALL_CANCELED).apply {
-      setPackage(reactApplicationContext.packageName)
-      putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
-    }
-    reactApplicationContext.sendBroadcast(intent)
+    LiviFirebaseMessagingService.deliverIncomingCallCanceled(reactApplicationContext, callId)
   }
 
   /** Вибрация звонка (Настройки → Вибрация звонка) для входящего, когда UI показывается внутри приложения. USAGE_RINGTONE на API 33+. */
@@ -1090,6 +1093,38 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /** Снять только уведомление входящего звонка (FGS / full-screen), не трогая «пропущенный». */
+  @ReactMethod
+  fun dismissIncomingCallNotificationOnly() {
+    Handler(Looper.getMainLooper()).post {
+      try {
+        val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+      } catch (_: Exception) {}
+    }
+  }
+
+  /** Показать нативное уведомление «пропущенный вызов» (Expo fallback / JS при call_canceled|call_ended). */
+  @ReactMethod
+  fun wasMissedShownForCallId(callId: String, promise: Promise) {
+    try {
+      promise.resolve(LiviAppModule.wasMissedShownForCallId(reactApplicationContext, callId ?: ""))
+    } catch (e: Exception) {
+      promise.reject("E_MISSED_SHOWN", e.message, e)
+    }
+  }
+
+  /** Показать нативное уведомление «пропущенный вызов» (Expo fallback / JS при call_canceled|call_ended). */
+  @ReactMethod
+  fun showMissedCallNotification(callId: String, fromUserId: String, fromNick: String?) {
+    LiviFirebaseMessagingService.notifyMissedCallFromPush(
+      reactApplicationContext,
+      callId ?: "",
+      fromUserId ?: "",
+      fromNick ?: ""
+    )
+  }
+
   /** Снять уведомление «Пропущенный вызов» для userId и обнулить счётчик (при принятии вызова или открытии чата с этим пользователем). */
   @ReactMethod
   fun cancelMissedCallNotificationForUser(userId: String) {
@@ -1100,7 +1135,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       nm.cancel(getMissedNotificationIdForUser(userId))
       val total = getTotalMissedCount(reactApplicationContext)
       if (total > 0) {
-        LiviFirebaseMessagingService.updateSummaryMissedCallsNotification(reactApplicationContext, total)
+        LiviFirebaseMessagingService.refreshMissedCallNotificationsInShade(reactApplicationContext)
       } else {
         nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
       }
@@ -1113,10 +1148,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     if (userId.isBlank()) return
     try {
       setMissedCountForUser(reactApplicationContext, userId, count.coerceAtLeast(0))
-      val total = getTotalMissedCount(reactApplicationContext)
-      if (total > 0) {
-        LiviFirebaseMessagingService.updateSummaryMissedCallsNotification(reactApplicationContext, total)
-      }
+      LiviFirebaseMessagingService.refreshMissedCallNotificationsInShade(reactApplicationContext)
     } catch (_: Exception) {}
   }
 
@@ -1138,6 +1170,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun dismissAllMissedCallNotifications() {
     Handler(Looper.getMainLooper()).post {
       try {
+        Log.i("LiviMissed", "dismissAllMissedCallNotifications (JS)")
         val prefs = reactApplicationContext.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
         val raw = prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"
         val map = try { JSONObject(raw) } catch (_: Exception) { JSONObject() }
@@ -1159,10 +1192,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     try {
       val c = count.coerceAtLeast(0)
       setMissedCountForUser(reactApplicationContext, userId, c)
-      val total = getTotalMissedCount(reactApplicationContext)
-      if (total > 0) {
-        LiviFirebaseMessagingService.updateSummaryMissedCallsNotification(reactApplicationContext, total)
-      }
+      LiviFirebaseMessagingService.refreshMissedCallNotificationsInShade(reactApplicationContext)
     } catch (_: Exception) {}
   }
 
@@ -1173,15 +1203,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       try {
         val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (missedTotal > 0) {
-          val prefs = reactApplicationContext.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
-          val raw = prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"
-          val map = try { JSONObject(raw) } catch (_: Exception) { JSONObject() }
-          val it = map.keys()
-          while (it.hasNext()) {
-            val key = it.next().toString().trim()
-            if (key.isNotEmpty()) cancelNotificationIfPresent(nm, getMissedNotificationIdForUser(key))
-          }
-          LiviFirebaseMessagingService.updateSummaryMissedCallsNotification(reactApplicationContext, missedTotal)
+          LiviFirebaseMessagingService.refreshMissedCallNotificationsInShade(reactApplicationContext)
         } else {
           cancelNotificationIfPresent(nm, LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
         }
@@ -1258,11 +1280,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** Очистить нативное хранилище пропущенных вызовов и выставить бейдж иконки в 0. Вызывать из JS при «просмотрено»/«прочитано», чтобы следующий FCM не прибавлял старые пропущенные к unreadCount. */
+  /** Очистить нативное хранилище пропущенных и снять карточки из шторки. Бейдж иконки обновляет JS. */
   @ReactMethod
   fun clearAllMissedCountsAndSetBadgeZero() {
     Handler(Looper.getMainLooper()).post {
       try {
+        Log.i("LiviMissed", "clearAllMissedCountsAndSetBadgeZero (JS badge cleared)")
         LiviAppModule.clearAllMissedCountsAndSetBadgeZeroStatic(reactApplicationContext)
       } catch (_: Exception) {}
     }
@@ -1777,6 +1800,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private const val PREFS_PENDING_MISSED_REMOVED = "LiviPendingMissedRemoved"
     private const val KEY_REMOVED_UID_TS = "uid_ts"
     private const val REMOVED_EXPIRY_MS = 30_000L
+    private const val PREFS_INCOMING_CALL_META = "LiviIncomingCallMeta"
+    private const val KEY_INCOMING_CALL_META = "by_call_id"
+    private const val INCOMING_CALL_META_EXPIRY_MS = 10 * 60_000L
     private const val PREFS_MISSED_COUNT = "LiviMissedCount"
     private const val KEY_MISSED_COUNT_BY_USER = "by_user"
     /** callIds, для которых уже показали «пропущенный вызов» (дедуп FCM+Expo). Формат: "callId1:ts,callId2:ts". */
@@ -1829,6 +1855,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     /** Снять все уведомления «пропущенный вызов» из шторки. Вызывать из MainActivity при тапе по уведомлению (без ожидания JS). */
     @JvmStatic
     fun dismissAllMissedCallNotificationsFromContext(context: Context) {
+      Log.i("LiviMissed", "dismissAllMissedCallNotificationsFromContext (notification tap / open Friends)")
       try {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
@@ -1991,6 +2018,50 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       prefs.edit().putString(KEY_MISSED_SHOWN_IDS, entries.takeLast(50).joinToString(",")).apply()
     }
 
+    /** Запомнить инициатора входящего (для пропущенного, если в FCM call_ended/canceled нет fromUserId). */
+    @JvmStatic
+    fun saveIncomingCallMeta(context: Context, callId: String, fromUserId: String, fromNick: String) {
+      if (callId.isBlank() || fromUserId.isBlank()) return
+      val prefs = context.getSharedPreferences(PREFS_INCOMING_CALL_META, Context.MODE_PRIVATE)
+      val raw = prefs.getString(KEY_INCOMING_CALL_META, "{}") ?: "{}"
+      val map = try {
+        JSONObject(raw)
+      } catch (_: Exception) {
+        JSONObject()
+      }
+      val now = System.currentTimeMillis()
+      val entry = JSONObject()
+        .put("from", fromUserId.trim())
+        .put("fromNick", fromNick)
+        .put("ts", now)
+      map.put(callId.trim(), entry)
+      val keys = map.keys().asSequence().toList()
+      for (k in keys) {
+        val ts = map.optJSONObject(k)?.optLong("ts", 0L) ?: 0L
+        if (now - ts > INCOMING_CALL_META_EXPIRY_MS) map.remove(k)
+      }
+      prefs.edit().putString(KEY_INCOMING_CALL_META, map.toString()).apply()
+    }
+
+    @JvmStatic
+    fun resolveIncomingCallMeta(context: Context, callId: String): Pair<String, String>? {
+      if (callId.isBlank()) return null
+      val prefs = context.getSharedPreferences(PREFS_INCOMING_CALL_META, Context.MODE_PRIVATE)
+      val raw = prefs.getString(KEY_INCOMING_CALL_META, "{}") ?: "{}"
+      val map = try {
+        JSONObject(raw)
+      } catch (_: Exception) {
+        return null
+      }
+      val entry = map.optJSONObject(callId.trim()) ?: return null
+      val ts = entry.optLong("ts", 0L)
+      if (System.currentTimeMillis() - ts > INCOMING_CALL_META_EXPIRY_MS) return null
+      val from = entry.optString("from", "").trim()
+      if (from.isEmpty()) return null
+      val nick = entry.optString("fromNick", "")
+      return from to nick
+    }
+
     /** Сохранить nick для обновления текста уведомления «пропущенный вызов». */
     @JvmStatic
     fun saveMissedCallNick(context: Context, userId: String, nick: String) {
@@ -2090,13 +2161,23 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       } catch (_: Exception) {}
     }
 
-    /** Очистить все счётчики пропущенных в нативном хранилище и выставить бейдж в 0. После этого при новом FCM бейдж будет считаться только по unreadCount из пуша. */
+    /** Снять пропущенные из шторки и обнулить нативный счётчик. Бейдж иконки обновляет JS (unread + missed). */
     @JvmStatic
     fun clearAllMissedCountsAndSetBadgeZeroStatic(context: Context) {
       try {
         val prefs = context.getSharedPreferences(PREFS_MISSED_COUNT, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_MISSED_COUNT_BY_USER, "{}") ?: "{}"
+        val map = try { JSONObject(raw) } catch (_: Exception) { JSONObject() }
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val it = map.keys()
+        while (it.hasNext()) {
+          val key = it.next().toString().trim()
+          if (key.isNotEmpty()) nm.cancel(getMissedNotificationIdForUser(key))
+        }
+        try {
+          nm.cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
+        } catch (_: Exception) {}
         prefs.edit().putString(KEY_MISSED_COUNT_BY_USER, "{}").apply()
-        BadgeHelper.setBadgeCount(context.applicationContext, 0)
       } catch (_: Exception) {}
     }
 

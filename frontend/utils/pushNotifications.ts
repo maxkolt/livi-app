@@ -19,7 +19,8 @@ import { logger } from './logger';
 import { trackReleaseError, trackReleaseEvent } from './telemetry';
 import { stopIncomingCallAlert } from './incomingCallAlert';
 import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration } from './callKeep';
-import { emitCloseOutgoingCall, emitCloseHomeModals } from './globalEvents';
+import { emitCloseOutgoingCall, emitCloseHomeModals, emitMissedClear, emitMissedIncrement } from './globalEvents';
+import { recordAppliedFromPending } from '../sockets/socket';
 import { loadLang, t } from './i18n';
 import { isIncomingCallExpired } from './callExpiry';
 import { getVoipPushToken } from './voipPush';
@@ -27,11 +28,36 @@ import { getVoipPushToken } from './voipPush';
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 /** Флаг: пользователь заходил во вкладку «Друзья» и «увидел» пропущенные — бейдж и уведомления в шторке скрываем, счётчики в приложении не трогаем. */
 const MISSED_BADGE_CLEARED_KEY = 'missed_calls_badge_cleared_v1';
+const MISSED_CALL_APPLIED_ID_PREFIX = 'missed_call_applied_v1:';
 const PUSH_TOKEN_SNAPSHOT_KEY = 'push_token_snapshot_v1';
 
 /** ID категории уведомления входящего звонка с кнопками «Поднять» / «Положить» */
 export const INCOMING_CALL_CATEGORY_ID = 'incoming_call';
 const PUSH_TOKEN_REGISTER_COOLDOWN_MS = 60_000;
+
+let syncBadgeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let syncBadgeWaiters: Array<() => void> = [];
+
+/** Дедуп: setNotificationHandler и addNotificationReceivedListener оба получают один Expo-пуш. */
+const missedNativeAndroidShownAt = new Map<string, number>();
+const MISSED_NATIVE_ANDROID_DEDUP_MS = 30_000;
+
+/** Android: нативное уведомление «пропущенный» (Expo fallback / foreground). FCM data-only обрабатывает LiviFirebaseMessagingService. */
+function notifyMissedCallNativeAndroid(callId: string, fromUserId: string, fromNick?: string): void {
+  if (Platform.OS !== 'android' || !callId) return;
+  const now = Date.now();
+  const prev = missedNativeAndroidShownAt.get(callId);
+  if (prev != null && now - prev < MISSED_NATIVE_ANDROID_DEDUP_MS) {
+    logger.info('[push] notifyMissedCallNativeAndroid skipped (duplicate JS path)', { callId });
+    return;
+  }
+  missedNativeAndroidShownAt.set(callId, now);
+  try {
+    NativeModules.LiviAppModule?.showMissedCallNotification?.(callId, fromUserId || '', fromNick ?? '');
+  } catch (e) {
+    logger.warn('[push] showMissedCallNotification native failed', e as any);
+  }
+}
 
 type PushTokenSnapshot = {
   userId: string;
@@ -150,11 +176,188 @@ export async function setMissedBadgeCleared(): Promise<void> {
   } catch {}
 }
 
+let applyMissedViewInFlight: Promise<void> | null = null;
+
+/**
+ * Пользователь открыл «Друзья» / тап по пропущенному: один атомарный проход — флаг «увидел»,
+ * снять карточки в шторке, обнулить нативный счётчик пропущенных, синхронизировать бейдж (unread без missed).
+ */
+export async function applyMissedCallsViewedByUser(reason?: string): Promise<void> {
+  if (applyMissedViewInFlight) return applyMissedViewInFlight;
+  applyMissedViewInFlight = (async () => {
+    logger.info('[push] applyMissedCallsViewedByUser', { reason: reason || 'friends' });
+    if (syncBadgeDebounceTimer) {
+      clearTimeout(syncBadgeDebounceTimer);
+      syncBadgeDebounceTimer = null;
+    }
+    await setMissedBadgeCleared();
+    await dismissMissedCallNotificationsOnly();
+    try {
+      const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+      const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+      for (const uid of Object.keys(map || {})) {
+        if (uid && typeof map[uid] === 'number' && map[uid] > 0) {
+          try { emitMissedClear(String(uid)); } catch (_) {}
+        }
+      }
+      await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify({}));
+    } catch (_) {}
+    if (Platform.OS === 'android' && NativeModules.LiviAppModule?.clearAllMissedCountsAndSetBadgeZero) {
+      try {
+        NativeModules.LiviAppModule.clearAllMissedCountsAndSetBadgeZero();
+      } catch (_) {}
+      try {
+        await (NativeModules.LiviAppModule.getAndClearPendingMissedCalls?.() ?? Promise.resolve([]));
+      } catch (_) {}
+      await new Promise((r) => setTimeout(r, 64));
+    }
+    await syncAppBadgeFromMissedCountNow();
+    const waiters = syncBadgeWaiters.splice(0);
+    waiters.forEach((w) => w());
+  })().finally(() => {
+    applyMissedViewInFlight = null;
+  });
+  return applyMissedViewInFlight;
+}
+
+async function fetchUnreadTotalForBadge(): Promise<number> {
+  try {
+    let unreadResult = await getUnreadCount();
+    if (!unreadResult?.ok) {
+      await new Promise((r) => setTimeout(r, 400));
+      unreadResult = await getUnreadCount();
+    }
+    if (unreadResult?.ok) return Math.max(0, Number(unreadResult.count || 0));
+  } catch (e) {
+    logger.debug('[push] fetchUnreadTotalForBadge: offline or error', (e as Error)?.message);
+  }
+  return 0;
+}
+
 /** Сбросить флаг «увидел» при новом пропущенном — бейдж и шторка снова показываются. */
 export async function clearMissedBadgeCleared(): Promise<void> {
   try {
     await AsyncStorage.removeItem(MISSED_BADGE_CLEARED_KEY);
   } catch {}
+}
+
+async function wasMissedCallIdApplied(callId: string): Promise<boolean> {
+  if (!callId) return false;
+  try {
+    return (await AsyncStorage.getItem(MISSED_CALL_APPLIED_ID_PREFIX + callId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+async function markMissedCallIdApplied(callId: string): Promise<void> {
+  if (!callId) return;
+  try {
+    await AsyncStorage.setItem(MISSED_CALL_APPLIED_ID_PREFIX + callId, '1');
+  } catch {}
+}
+
+/**
+ * Один пропущенный звонок = +1 (не дублируем FCM native + socket/pending).
+ * На Android FCM уже увеличивает нативный счётчик — JS подтягивает max(storage, native).
+ */
+export async function recordMissedCallForUser(
+  userId: string,
+  options?: { callId?: string; source?: string },
+): Promise<boolean> {
+  const uid = String(userId || '').trim();
+  const callId = String(options?.callId || '').trim();
+  const source = options?.source || 'unknown';
+  if (!uid) return false;
+
+  if (callId && (await wasMissedCallIdApplied(callId))) {
+    logger.info('[push] recordMissedCallForUser skip (callId dup)', { callId, uid, source });
+    await syncAppBadgeFromMissedCount();
+    return false;
+  }
+
+  const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+  const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+  const storageN = typeof map[uid] === 'number' ? map[uid] : 0;
+
+  let nativeN = 0;
+  if (Platform.OS === 'android') {
+    try {
+      const native = await getMissedCountByUserFromNative();
+      nativeN = typeof native[uid] === 'number' ? native[uid] : 0;
+    } catch (_) {}
+  }
+
+  let nativeAlreadyForCallId = false;
+  if (callId && Platform.OS === 'android') {
+    try {
+      nativeAlreadyForCallId = !!(await NativeModules.LiviAppModule?.wasMissedShownForCallId?.(callId));
+    } catch (_) {}
+  }
+
+  let next: number;
+  if (nativeAlreadyForCallId) {
+    next = Math.max(storageN, nativeN);
+  } else if (nativeN > storageN) {
+    next = nativeN;
+  } else {
+    next = storageN + 1;
+    if (Platform.OS === 'android') {
+      try { NativeModules.LiviAppModule?.syncMissedCountForUser?.(uid, next); } catch (_) {}
+    }
+  }
+
+  if (next <= storageN && nativeN <= storageN) {
+    if (callId) await markMissedCallIdApplied(callId);
+    if (Platform.OS === 'android' && nativeAlreadyForCallId) {
+      try { NativeModules.LiviAppModule?.removePendingMissedCall?.(uid); } catch (_) {}
+      await syncAppBadgeFromMissedCount();
+    }
+    return false;
+  }
+
+  map[uid] = next;
+  await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(map));
+  if (callId) await markMissedCallIdApplied(callId);
+  if (Platform.OS === 'android') {
+    try { NativeModules.LiviAppModule?.removePendingMissedCall?.(uid); } catch (_) {}
+  }
+  await clearMissedBadgeCleared();
+  emitMissedIncrement(uid, next);
+  logger.info('[push] recordMissedCallForUser', { uid, next, callId, source, storageN, nativeN, nativeAlreadyForCallId });
+  await syncAppBadgeFromMissedCount();
+  return true;
+}
+
+/** FCM уже учёл пропущенный в native — подтянуть в AsyncStorage/UI без +1 за каждый элемент pending. */
+export async function applyPendingMissedCallsFromNative(pendingUserIds: string[]): Promise<void> {
+  if (!pendingUserIds?.length) return;
+  const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+  const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+  let native: Record<string, number> = {};
+  if (Platform.OS === 'android') {
+    try {
+      native = await getMissedCountByUserFromNative();
+    } catch (_) {}
+  }
+  let changed = false;
+  for (const u of pendingUserIds) {
+    const uid = String(u || '').trim();
+    if (!uid) continue;
+    const prev = typeof map[uid] === 'number' ? map[uid] : 0;
+    const target = Math.max(prev, typeof native[uid] === 'number' ? native[uid] : 0);
+    if (target > prev) {
+      map[uid] = target;
+      changed = true;
+      emitMissedIncrement(uid, target);
+    }
+    try { recordAppliedFromPending(uid); } catch (_) {}
+  }
+  if (changed) {
+    await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(map));
+    await clearMissedBadgeCleared();
+  }
+  await syncAppBadgeFromMissedCount();
 }
 
 /** На Android: счётчики пропущенных из нативного хранилища (источник истины при FCM). На iOS — пустой объект. */
@@ -244,6 +447,7 @@ export async function dismissMessageNotificationsOnly(): Promise<void> {
 /** Снять только уведомления «пропущенный вызов» в шторке (без обнуления счётчиков). Вызывать при заходе в Друзья. Android: нативный список; iOS: Expo getPresentedNotificationsAsync + dismiss по type === 'missed_call'. */
 export async function dismissMissedCallNotificationsOnly(): Promise<void> {
   try {
+    logger.info('[push] dismissMissedCallNotificationsOnly');
     if (Platform.OS === 'android') {
       if (NativeModules.LiviAppModule?.dismissAllMissedCallNotifications) {
         NativeModules.LiviAppModule.dismissAllMissedCallNotifications();
@@ -276,34 +480,70 @@ export async function dismissMissedCallNotificationsOnly(): Promise<void> {
  * Если пользователь «увидел» (зашёл во вкладку Друзья) — бейдж = 0 (на иконке и в шторке ничего не показываем).
  * Иначе бейдж = пропущенные звонки + непрочитанные сообщения.
  */
-export async function syncAppBadgeFromMissedCount(): Promise<void> {
+async function syncAppBadgeFromMissedCountNow(): Promise<void> {
   try {
-    const cleared = await AsyncStorage.getItem(MISSED_BADGE_CLEARED_KEY);
-    if (cleared === 'true') {
-      await Notifications.setBadgeCountAsync(0);
-      if (Platform.OS === 'android' && NativeModules.LiviAppModule) {
-        try { NativeModules.LiviAppModule.clearAllMissedCountsAndSetBadgeZero?.(); } catch (_) {}
-        try { NativeModules.LiviAppModule.dismissSummaryNotifications(); } catch (_) {}
+    const unreadTotal = await fetchUnreadTotalForBadge();
+    const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
+    const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+    if (Platform.OS === 'android') {
+      try {
+        const nativeMissed = await getMissedCountByUserFromNative();
+        for (const [uid, n] of Object.entries(nativeMissed)) {
+          if (!uid) continue;
+          const prev = typeof map[uid] === 'number' ? map[uid] : 0;
+          if (n > 0 && prev > n) {
+            map[uid] = n;
+          } else {
+            map[uid] = Math.max(prev, n);
+          }
+        }
+      } catch (_) {}
+    }
+    const missedTotal = Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
+    try {
+      await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(map));
+    } catch (_) {}
+
+    let cleared = await AsyncStorage.getItem(MISSED_BADGE_CLEARED_KEY);
+    if (cleared === 'true' && missedTotal > 0) {
+      await clearMissedBadgeCleared();
+      cleared = null;
+    }
+    if (cleared === 'true' && missedTotal === 0) {
+      const total = Math.min(99, unreadTotal);
+      logger.info('[push] syncAppBadgeFromMissedCount (legacy cleared, no missed)', { missedTotal: 0, unreadTotal, total });
+      await Notifications.setBadgeCountAsync(total);
+      if (Platform.OS === 'android' && NativeModules.LiviAppModule?.updateSummaryNotifications) {
+        try { NativeModules.LiviAppModule.updateSummaryNotifications(0, unreadTotal); } catch (_) {}
       }
       return;
     }
-    const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
-    const map = raw ? JSON.parse(raw) : {};
-    const missedTotal = Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
-    let unreadResult = await getUnreadCount();
-    if (!unreadResult?.ok) {
-      await new Promise((r) => setTimeout(r, 400));
-      unreadResult = await getUnreadCount();
-    }
-    const unreadTotal = unreadResult?.ok ? Math.max(0, Number(unreadResult.count || 0)) : 0;
+
     const total = Math.min(99, missedTotal + unreadTotal);
+    logger.info('[push] syncAppBadgeFromMissedCount', { missedTotal, unreadTotal, total });
     await Notifications.setBadgeCountAsync(total);
     if (Platform.OS === 'android' && NativeModules.LiviAppModule?.updateSummaryNotifications) {
       try { NativeModules.LiviAppModule.updateSummaryNotifications(missedTotal, unreadTotal); } catch (_) {}
     }
   } catch (e) {
+    logger.warn('[push] syncAppBadgeFromMissedCount failed', e as any);
     try { await Notifications.setBadgeCountAsync(0); } catch {}
   }
+}
+
+/** Сливаем параллельные вызовы (App + HomeScreen после emitMissedIncrement) в один проход. */
+export function syncAppBadgeFromMissedCount(): Promise<void> {
+  return new Promise((resolve) => {
+    syncBadgeWaiters.push(resolve);
+    if (syncBadgeDebounceTimer) clearTimeout(syncBadgeDebounceTimer);
+    syncBadgeDebounceTimer = setTimeout(() => {
+      syncBadgeDebounceTimer = null;
+      const waiters = syncBadgeWaiters.splice(0);
+      void syncAppBadgeFromMissedCountNow().finally(() => {
+        waiters.forEach((w) => w());
+      });
+    }, 48);
+  });
 }
 
 async function dismissPresentedNotificationsByTypes(types: Set<string>): Promise<void> {
@@ -320,14 +560,13 @@ async function dismissPresentedNotificationsByTypes(types: Set<string>): Promise
   } catch (_) {}
 }
 
-/** Снимает только уведомления, связанные со звонками (без глобального dismissAll). */
+/** Снимает только уведомления активного/входящего звонка. Пропущенные не трогаем — их снимают только после просмотра во «Друзья». */
 async function dismissCallRelatedNotificationsOnly(): Promise<void> {
   if (Platform.OS === 'android') {
-    try { NativeModules.LiviAppModule?.dismissSummaryNotifications?.(); } catch {}
-    try { NativeModules.LiviAppModule?.dismissAllMissedCallNotifications?.(); } catch {}
+    try { NativeModules.LiviAppModule?.dismissIncomingCallNotificationOnly?.(); } catch {}
     return;
   }
-  await dismissPresentedNotificationsByTypes(new Set(['call', 'call_canceled', 'call_declined', 'call_ended', 'missed_call']));
+  await dismissPresentedNotificationsByTypes(new Set(['call', 'call_canceled', 'call_declined', 'call_ended']));
 }
 
 /** Убрать уведомления из шторки и выставить бейдж по пропущенным (после отклонения/завершения звонка). */
@@ -375,7 +614,15 @@ Notifications.setNotificationHandler({
         stopIncomingCallAlert();
       } catch {}
       await dismissCallRelatedNotificationsOnly();
-      if (!endedFromActive && Platform.OS !== 'android') {
+      if (Platform.OS === 'android') {
+        if (!endedFromActive && data?.callId) {
+          notifyMissedCallNativeAndroid(
+            String(data.callId),
+            String(data.from || data.fromUserId || ''),
+            String(data.fromNick || '')
+          );
+        }
+      } else if (!endedFromActive) {
         const fromNick = String(data.fromNick || '').trim();
         const fromUserId = String(data.from || '');
         try {
@@ -432,6 +679,13 @@ Notifications.setNotificationHandler({
         try { notifyCallCanceled(String(data.callId)); } catch {}
         try { addEndedCallId(String(data.callId)); } catch {}
         logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled');
+      }
+      if (Platform.OS === 'android' && data?.callId) {
+        notifyMissedCallNativeAndroid(
+          String(data.callId),
+          String(data.from || data.fromUserId || ''),
+          String(data.fromNick || '')
+        );
       }
       return {
         shouldShowBanner: false,
@@ -782,12 +1036,6 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
 
     if (type === 'missed_call') {
       await runWhenNavReady(`missed_call:${String(data?.from || data?.fromUserId || 'unknown')}`, async (nav) => {
-        // Сразу помечаем «увидел» и снимаем уведомления в шторке (бейдж и шторка очищаются)
-        try {
-          await setMissedBadgeCleared();
-          await dismissMissedCallNotificationsOnly();
-          await clearCallRelatedNotificationsAndSyncBadge();
-        } catch {}
         nav.dispatch(
           CommonActions.reset({
             index: 0,
@@ -1237,6 +1485,12 @@ export function addNotificationListeners() {
         try { notifyCallCanceled(String(data.callId)); } catch {}
         try { addEndedCallId(String(data.callId)); } catch {}
         logger.info('[push] notifyCallCanceled + addEndedCallId called after call_canceled (received)');
+        return;
+      }
+      if (data?.type === 'call_ended' && data?.callId) {
+        const endedFromActive = !!data.endedFromActive;
+        if (data?.callId) addEndedCallId(String(data.callId));
+        // Android: см. call_canceled — не дублируем notifyMissedCallNativeAndroid.
         return;
       }
       if (data?.type === 'call' && data?.callId && data?.from) {

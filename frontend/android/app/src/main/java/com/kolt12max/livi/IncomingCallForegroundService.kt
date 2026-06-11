@@ -90,6 +90,7 @@ class IncomingCallForegroundService : Service() {
         currentCallId = callId
         currentFrom = from
         currentFromNick = fromNick
+        LiviAppModule.saveIncomingCallMeta(applicationContext, callId, from, fromNick)
         unregisterAllReceivers()
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
@@ -223,15 +224,24 @@ class IncomingCallForegroundService : Service() {
         if (!minimized || remainingTimeoutMs > 0L) {
             val timeoutMsToUse = if (minimized) remainingTimeoutMs else TIMEOUT_MS
             timeoutRunnable = Runnable {
-                vl("[INCOMING_FGS] timeout 20s closing")
+                vl("[INCOMING_FGS] timeout closing — show missed + stop incoming")
                 val cid = currentCallId
-                if (!cid.isNullOrEmpty()) {
-                    // Закрываем IncomingCallActivity через broadcast (startActivity из сервиса блокируется BAL на Android 14+).
-                    val cancelIntent = Intent(LiviFirebaseMessagingService.ACTION_CALL_CANCELED).apply {
-                        setPackage(packageName)
-                        putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, cid)
+                val fromUid = currentFrom
+                val nick = currentFromNick ?: ""
+                if (!cid.isNullOrEmpty() && !fromUid.isNullOrEmpty()) {
+                    try {
+                        LiviFirebaseMessagingService.notifyMissedCallFromPush(
+                            applicationContext,
+                            cid,
+                            fromUid,
+                            nick
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "[INCOMING_FGS] notifyMissedCallFromPush failed", e)
                     }
-                    sendBroadcast(cancelIntent)
+                }
+                if (!cid.isNullOrEmpty()) {
+                    LiviFirebaseMessagingService.deliverIncomingCallCanceled(applicationContext, cid, fromUid ?: "", nick)
                 }
                 cleanupAndStopFully()
             }

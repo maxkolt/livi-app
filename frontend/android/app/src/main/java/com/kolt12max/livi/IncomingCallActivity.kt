@@ -96,6 +96,14 @@ class IncomingCallActivity : AppCompatActivity() {
             closeIncomingScreen()
             return
         }
+        currentCallId = callIdFromIntent
+        if (callIdFromIntent.isNotEmpty()) {
+            activeCallId = callIdFromIntent
+        }
+        registerCallCanceledReceiverIfNeeded()
+        if (closeIfCallAlreadyEnded(callIdFromIntent)) {
+            return
+        }
         isAlive = true
         android.util.Log.e(TAG, "IncomingCallActivity onCreate: isAlive=true isInForeground=(set in onResume) callId=$callIdFromIntent")
         // Сначала broadcast: FGS делает stopForeground(DETACH) и оставляет уведомление в шторке (без отмены — иначе ломаем
@@ -148,8 +156,6 @@ class IncomingCallActivity : AppCompatActivity() {
 
         startCallRingtone()
         startRepeatingVibration()
-        currentCallId = callIdFromIntent
-        activeCallId = currentCallId
         val callId = currentCallId
         val from = intent.getStringExtra(EXTRA_FROM) ?: ""
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
@@ -198,21 +204,6 @@ class IncomingCallActivity : AppCompatActivity() {
             declineCallFromNative(callId)
         }
 
-        callCanceledReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                val canceledCallId = intent?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
-                if (canceledCallId == currentCallId) {
-                    closeIncomingScreen()
-                }
-            }
-        }
-        val filter = IntentFilter(LiviFirebaseMessagingService.ACTION_CALL_CANCELED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(callCanceledReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(callCanceledReceiver, filter)
-        }
-
         // После ответа JS шлёт broadcast (deep link или pending extras) — закрываем экран.
         callAnsweredReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -240,9 +231,39 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (currentCallId.isNotEmpty() && EndedCallIds.isEnded(this, currentCallId)) {
+            closeIncomingScreen(currentCallId)
+            return
+        }
         isInForeground = true
         android.util.Log.e(TAG, "IncomingCallActivity onResume: isInForeground=true callId=$currentCallId")
         reportIncomingShownFromNative(currentCallId)
+    }
+
+    private fun registerCallCanceledReceiverIfNeeded() {
+        if (callCanceledReceiver != null) return
+        callCanceledReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val canceledCallId = intent?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
+                if (canceledCallId == currentCallId) {
+                    closeIncomingScreen()
+                }
+            }
+        }
+        val filter = IntentFilter(LiviFirebaseMessagingService.ACTION_CALL_CANCELED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(callCanceledReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(callCanceledReceiver, filter)
+        }
+    }
+
+    /** true если экран закрыт как уже отменённый/завершённый. */
+    private fun closeIfCallAlreadyEnded(callId: String): Boolean {
+        if (callId.isEmpty() || !EndedCallIds.isEnded(this, callId)) return false
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+        closeIncomingScreen(callId)
+        return true
     }
 
     override fun onPause() {
@@ -684,6 +705,15 @@ class IncomingCallActivity : AppCompatActivity() {
                 sendBroadcast(cancelIntent)
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "scheduleIncomingTimeout broadcast failed", e)
+            }
+            val fromUserId = intent.getStringExtra(EXTRA_FROM) ?: ""
+            val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
+            if (fromUserId.isNotEmpty()) {
+                try {
+                    LiviFirebaseMessagingService.notifyMissedCallFromPush(applicationContext, callId, fromUserId, fromNick)
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "scheduleIncomingTimeout missed notification failed", e)
+                }
             }
             stopCallRingtone()
             stopRepeatingVibration()

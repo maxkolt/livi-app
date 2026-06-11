@@ -3,7 +3,7 @@
 
 type Listener<T> = (payload: T) => void;
 
-const missedListeners = new Set<Listener<{ userId: string }>>();
+const missedListeners = new Set<Listener<{ userId: string; count?: number }>>();
 const missedClearListeners = new Set<Listener<{ userId: string }>>();
 const closeIncomingListeners = new Set<Listener<{}>>();
 const closeIncomingRequestListeners = new Set<Listener<{}>>();
@@ -21,16 +21,19 @@ type CometChatStatusPayload = {
 };
 const cometchatStatusListeners = new Set<Listener<CometChatStatusPayload>>();
 
-export function onMissedIncrement(cb: Listener<{ userId: string }>): () => void {
+export function onMissedIncrement(cb: Listener<{ userId: string; count?: number }>): () => void {
   missedListeners.add(cb);
   return () => {
     missedListeners.delete(cb);
   };
 }
 
-export function emitMissedIncrement(userId: string) {
+export function emitMissedIncrement(userId: string, count?: number) {
+  const uid = String(userId || '').trim();
+  if (!uid) return;
+  const payload = typeof count === 'number' ? { userId: uid, count } : { userId: uid };
   for (const l of missedListeners) {
-    try { l({ userId }); } catch {}
+    try { l(payload); } catch {}
   }
 }
 

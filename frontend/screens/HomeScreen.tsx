@@ -85,7 +85,7 @@ import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, onMessagesDeleted, getUnreadCount, getUnreadCounts, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onCometChatStatus } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
-import { setMissedBadgeCleared, clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMissedCallNotificationsOnly, dismissMessageNotificationsOnly, dismissMessageNotificationForUser, getMissedCountByUserFromNative } from '../utils/pushNotifications';
+import { clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, dismissMessageNotificationForUser, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import ChatStyleBackButton from '../components/ChatStyleBackButton';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
@@ -907,15 +907,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const menuOverlayOpacity = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     tabRef.current = tab;
-  }, [tab]);
-
-  // При переходе на вкладку «Друзья» — сразу помечаем «увидел», снимаем все уведомления из шторки и обнуляем бейдж, чтобы они не появлялись снова до нового звонка/сообщения.
-  useEffect(() => {
-    if (tab !== 'friends') return;
-    setMissedBadgeCleared()
-      .then(() => dismissMissedCallNotificationsOnly())
-      .then(() => syncAppBadgeFromMissedCount())
-      .catch(() => {});
   }, [tab]);
 
   // Плавное появление оверлея меню — короткая анимация для быстрого отклика
@@ -3332,16 +3323,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
   }, [menuOpen, tab, friends]);
 
-  // При заходе во вкладку «Друзья» — помечаем «увидел», снимаем уведомления в шторке и обнуляем бейдж
-  useEffect(() => {
-    if (tab === 'friends') {
-      setMissedBadgeCleared()
-        .then(() => dismissMissedCallNotificationsOnly())
-        .then(() => syncAppBadgeFromMissedCount())
-        .catch(() => {});
-    }
-  }, [tab]);
-
   // Бейдж «Занято» у участников видеозвонка: сервер при инициации (call:initiate) и при принятии (call:accept)
   // рассылает presence:update({ userId, busy: true }) друзьям обоих участников; при завершении/отмене/отклонении
   // — presence:update({ userId, busy: false }). Обновление isBusy приходит в onPresenceUpdate выше.
@@ -3455,7 +3436,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Обновляем пропущенные видеозвонки из AsyncStorage при возврате на экран (iOS/Android)
   // КРИТИЧНО: Нормализуем ключи (преобразуем в строки) и фильтруем только значения > 0
   // Также обновляем счетчики непрочитанных сообщений при фокусе
-  // При фокусе: если открыта вкладка «Друзья» — помечаем «увидел», снимаем уведомления и не показываем их снова; иначе при не-cleared обновляем бейдж (без повторного появления в шторке — только если уже были показаны).
+  // При фокусе Home: подтянуть пропущенные из storage/natив для UI; бейдж не сбрасываем при открытии вкладки «Друзья».
   useEffect(() => {
     const unsub = navigation?.addListener?.('focus', async () => {
       try {
@@ -3465,13 +3446,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         }
         syncSelfPresenceOnlineIfIdle('home-focus');
         const onFriendsTab = tabRef.current === 'friends';
-        if (onFriendsTab) {
-          await setMissedBadgeCleared();
-          await dismissMissedCallNotificationsOnly();
-          await dismissMessageNotificationsOnly();
-          await syncAppBadgeFromMissedCount();
-        }
-        // Обновляем пропущенные звонки: синхронизируем с нативным хранилищем (Android — источник истины при FCM), чтобы не было рассинхрона с шторкой и бейджем
         const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
         const nativeMissed = await getMissedCountByUserFromNative();
@@ -3480,15 +3454,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         allKeys.forEach((key) => {
           const fromStorage = typeof parsed?.[key] === 'number' ? parsed[key] : 0;
           const fromNative = typeof nativeMissed?.[key] === 'number' ? nativeMissed[key] : 0;
-          const value = Math.max(fromStorage, fromNative);
+          let value = Math.max(fromStorage, fromNative);
+          if (fromNative > 0 && fromStorage > fromNative) value = fromNative;
           if (value > 0) merged[String(key)] = value;
         });
         await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(merged));
         setMissedByUser(merged);
         setMissedLoaded(true);
-        // Не пересоздаём уведомления в шторке при фокусе, если пользователь уже «увидел» (вкладка Друзья) или cleared
-        const badgeCleared = await AsyncStorage.getItem('missed_calls_badge_cleared_v1');
-        if (badgeCleared !== 'true' && !onFriendsTab) {
+        if (!onFriendsTab) {
           await syncAppBadgeFromMissedCount();
         }
 
@@ -4019,15 +3992,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   // Мгновенное обновление UI при инкременте в App.tsx (главная/меню). Запись в AsyncStorage только в App — здесь только state, чтобы не было двух писателей и гонок.
   useEffect(() => {
-    const off = onMissedIncrement(({ userId }) => {
+    const off = onMissedIncrement(({ userId, count }) => {
       if (!userId) return;
       const userIdStr = String(userId);
       setMissedByUser((prev) => {
-        const next = { ...prev, [userIdStr]: (prev[userIdStr] || 0) + 1 };
-        logger.debug('[HomeScreen] Missed call incremented (UI only, App already persisted)', { userId: userIdStr, count: next[userIdStr] });
+        const nextCount =
+          typeof count === 'number' ? count : (prev[userIdStr] || 0) + 1;
+        const next = { ...prev, [userIdStr]: nextCount };
+        logger.debug('[HomeScreen] Missed call updated (UI)', { userId: userIdStr, count: nextCount });
         return next;
       });
-      syncAppBadgeFromMissedCount().catch(() => {});
     });
     return () => off?.();
   }, []);
@@ -5457,12 +5431,8 @@ const handleClearNick = useCallback(async () => {
     }
     if (openFriendsTab) {
       setTab('friends');
-      dismissMissedCallNotificationsOnly().catch(() => {});
-      dismissMessageNotificationsOnly().catch(() => {});
-      setMissedBadgeCleared()
-        .then(() => syncAppBadgeFromMissedCount())
-        .catch(() => {});
       if (pushMessageFrom && /^[a-f\d]{24}$/i.test(pushMessageFrom)) {
+        dismissMessageNotificationsOnly().catch(() => {});
         setUnreadByUser((prev) => ({
           ...prev,
           [pushMessageFrom]: Math.max(1, prev[pushMessageFrom] || 0),

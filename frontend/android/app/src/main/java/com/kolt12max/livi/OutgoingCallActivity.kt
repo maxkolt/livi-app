@@ -117,9 +117,16 @@ class OutgoingCallActivity : AppCompatActivity() {
         installPressFeedback(cancelButton)
 
         cancelButton.setOnClickListener {
-            LiviAppModule.emitOutgoingCallCanceledByUser(callId)
-            if (callId.isNotEmpty()) {
-                LiviOutgoingCallService.cancelCallOnServer(this, callId)
+            var effectiveCallId = callId
+            if (effectiveCallId.isEmpty()) {
+                effectiveCallId = LiviOngoingCallHelper.peekOutgoingCall(this)?.first ?: ""
+                if (effectiveCallId.isNotEmpty()) {
+                    this@OutgoingCallActivity.callId = effectiveCallId
+                }
+            }
+            LiviAppModule.emitOutgoingCallCanceledByUser(effectiveCallId)
+            if (effectiveCallId.isNotEmpty()) {
+                LiviOutgoingCallService.cancelCallOnServer(this, effectiveCallId)
             }
             LiviOutgoingCallService.stop(this)
             finish()
