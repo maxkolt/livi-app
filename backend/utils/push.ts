@@ -684,6 +684,7 @@ export type CallPushData = {
   fromNick: string;
   createdAtMs: number;
   expiresAtMs: number;
+  media?: 'audio' | 'video';
 };
 
 /**
@@ -704,12 +705,14 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
   const callTs = Number(data.createdAtMs) > 0 ? Number(data.createdAtMs) : Date.now();
   const callExpiresAtMs = Number(data.expiresAtMs) > 0 ? Number(data.expiresAtMs) : callTs + 27_000;
   const callKitId = getCallKitUuid(data.callId);
+  const callMedia = data.media === 'audio' ? 'audio' : 'video';
   const fcmData = {
     type: 'call',
     callId: data.callId,
     callKitId,
     from: data.from,
     fromNick: data.fromNick || '',
+    media: callMedia,
     ts: String(callTs),
     expiresAt: String(callExpiresAtMs),
   };
@@ -720,6 +723,7 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
     callKitId,
     fromUserId: data.from,
     fromNick: data.fromNick || '',
+    media: callMedia,
     ts: String(callTs),
     expiresAt: String(callExpiresAtMs),
   };

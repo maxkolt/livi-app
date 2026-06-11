@@ -1040,6 +1040,7 @@ type CallLink = {
   expiresAtMs: number;
   timer?: NodeJS.Timeout;
   retryPushTimer?: NodeJS.Timeout;
+  media?: 'audio' | 'video';
 };
 const callsById = new Map<string, CallLink>();
 const callOfUser = new Map<string, { with: string; callId: string }>();
@@ -2851,7 +2852,7 @@ io.on('connection', async (sock: AuthedSocket) => {
   });
 
   /* ---- Direct Calls ---- */
-  sock.on('call:initiate', async ({ to }: { to?: string }, ack?: Function) => {
+  sock.on('call:initiate', async ({ to, media: mediaRaw }: { to?: string; media?: string }, ack?: Function) => {
     try {
       const meRaw = String((sock as any).data?.userId || '');
       if (!meRaw) return ack?.({ ok: false, error: 'unauthorized' });
@@ -2859,6 +2860,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       const peerRaw = String(to || '').trim();
       if (!peerRaw || !peerRaw.match(/^[a-f\d]{24}$/i)) return ack?.({ ok: false, error: 'bad_peer' });
       const peerId = normalizeMongoObjectId(peerRaw);
+      const callMedia = String(mediaRaw || '').trim().toLowerCase() === 'audio' ? 'audio' : 'video';
 
       pruneOrphanCallOfUserEntry(me);
       pruneOrphanCallOfUserEntry(peerId);
@@ -2906,7 +2908,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       const createdAtMs = Date.now();
       const expiresAtMs = createdAtMs + CALL_RING_TIMEOUT_MS;
       const callId = `${createdAtMs}_${Math.random().toString(36).slice(2, 8)}`;
-      callsById.set(callId, { a: me, b: peerId, createdAtMs, expiresAtMs });
+      callsById.set(callId, { a: me, b: peerId, createdAtMs, expiresAtMs, media: callMedia });
       createOrchestratedCall({ callId, callerId: me, calleeId: peerId });
       callDeliveryById.set(callId, {
         callerId: me,
@@ -3034,6 +3036,7 @@ io.on('connection', async (sock: AuthedSocket) => {
               callKitId: getCallKitUuid(callId),
               from: me,
               fromNick,
+              media: callMedia,
               ts: createdAtMs,
               expiresAt: expiresAtMs,
             });
@@ -3048,6 +3051,7 @@ io.on('connection', async (sock: AuthedSocket) => {
             callKitId: getCallKitUuid(callId),
             from: me,
             fromNick,
+            media: callMedia,
             ts: createdAtMs,
             expiresAt: expiresAtMs,
           });
@@ -3069,6 +3073,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           fromNick: fromNick ?? '',
           createdAtMs,
           expiresAtMs,
+          media: callMedia,
         });
         addCallEvent(callId, 'push_sent', 'backend_initial', {
           providerMode: callProviderMode,
