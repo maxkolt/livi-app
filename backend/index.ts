@@ -1445,6 +1445,18 @@ function logCallEndSkipped(callId: string, action: 'cancel' | 'timeout', source:
   });
 }
 
+/** Late cancel after accept (or duplicate cancel): never emit canceled delivery_summary for an active call. */
+function handleCancelDeduped(callId: string, link: { a: string; b: string }, source: 'socket_deduped' | 'http_deduped'): void {
+  logCallEndSkipped(callId, 'cancel', source);
+  if (isDirectCallAcceptedOrActive(callId, link)) {
+    void purgeStaleRingingDirectCallArtifacts(callId, link, `cancel_${source}`).catch((e: any) => {
+      logger.warn('[call:cancel] dedupe stale purge failed', { callId, source, error: e?.message });
+    });
+    return;
+  }
+  if (callsById.has(callId)) cleanupCall(callId, 'canceled');
+}
+
 function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'canceled' | 'timeout' | 'ended') {
   if (reason === 'timeout' && isDirectCallAcceptedOrActive(callId)) {
     logger.warn('[call:cleanup] skip timeout cleanup for accepted/active call', { callId });
@@ -1932,8 +1944,7 @@ app.post('/api/calls/cancel', async (req, res) => {
       source: 'http_cancel',
     });
     if (!shouldProcess) {
-      logCallEndSkipped(callId, 'cancel', 'http_deduped');
-      if (callsById.has(callId)) cleanupCall(callId, 'canceled');
+      handleCancelDeduped(callId, link, 'http_deduped');
       return res.json({ ok: true, deduped: true });
     }
     logger.info('[api/calls/cancel] caller canceled via HTTP', { callId, caller: link.a, callee: link.b });
@@ -3520,8 +3531,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       source: 'socket_cancel',
     });
     if (!shouldProcess) {
-      logCallEndSkipped(id, 'cancel', 'socket_deduped');
-      if (callsById.has(id)) cleanupCall(id, 'canceled');
+      handleCancelDeduped(id, link, 'socket_deduped');
       return;
     }
 
