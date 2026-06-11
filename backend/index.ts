@@ -1348,6 +1348,16 @@ async function emitPendingCallAcceptedToSocket(
   return true;
 }
 
+function logCallEndSkipped(callId: string, action: 'cancel' | 'timeout', source: string) {
+  const timeline = getCallTimeline(callId);
+  logger.info(`[call:${action}] skipped (${source})`, {
+    callId,
+    orchestrationState: timeline?.state ?? null,
+    closeReason: timeline?.closeReason ?? null,
+    stillTrackedInMemory: callsById.has(callId),
+  });
+}
+
 function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'canceled' | 'timeout' | 'ended') {
   const link = callsById.get(callId);
   if (!link) {
@@ -1810,9 +1820,11 @@ app.post('/api/calls/cancel', async (req, res) => {
       source: 'http_cancel',
     });
     if (!shouldProcess) {
+      logCallEndSkipped(callId, 'cancel', 'http_deduped');
+      if (callsById.has(callId)) cleanupCall(callId, 'canceled');
       return res.json({ ok: true, deduped: true });
     }
-    logger.info('[api/calls/cancel] caller canceled via HTTP (timeout)', { callId, caller: link.a, callee: link.b });
+    logger.info('[api/calls/cancel] caller canceled via HTTP', { callId, caller: link.a, callee: link.b });
     clearDirectCallSessionForUser(io, link.a);
     clearDirectCallSessionForUser(io, link.b);
     await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
@@ -1828,6 +1840,10 @@ app.post('/api/calls/cancel', async (req, res) => {
     } catch {}
     try { await sendCallCanceledToRecipient(link.b, callId, link.a, fromNick); } catch (e: any) { logger.warn('[api/calls/cancel] sendCallCanceledToRecipient failed', { error: e?.message }); }
     if (!hasSocketForUser(io, link.b)) await saveMissedCall(link.b, link.a, fromNick || '');
+    logger.info('[call:cancel] processed (http), clearing ring timer if any', {
+      callId,
+      hadTimer: !!callsById.get(callId)?.timer,
+    });
     logger.info('[api/calls/cancel] call ended for both: callee got missed from native', { callId, caller: link.a, callee: link.b });
     cleanupCall(callId, 'canceled');
     return res.json({ ok: true });
@@ -2798,7 +2814,11 @@ io.on('connection', async (sock: AuthedSocket) => {
           actionKey: `timeout:${callId}`,
           source: 'timer_timeout',
         });
-        if (!shouldProcess) return;
+        if (!shouldProcess) {
+          logCallEndSkipped(callId, 'timeout', 'timer_after_cancel_or_dedup');
+          if (callsById.has(callId)) cleanupCall(callId);
+          return;
+        }
 
         // Снимаем busy статус с обоих участников при таймауте
         clearDirectCallSessionForUser(io, link.a);
@@ -3359,7 +3379,11 @@ io.on('connection', async (sock: AuthedSocket) => {
       actionKey: `socket_cancel:${id}:${String((sock as any)?.data?.userId || '')}`,
       source: 'socket_cancel',
     });
-    if (!shouldProcess) return;
+    if (!shouldProcess) {
+      logCallEndSkipped(id, 'cancel', 'socket_deduped');
+      if (callsById.has(id)) cleanupCall(id, 'canceled');
+      return;
+    }
 
     // Снимаем busy статус с обоих участников при отмене
     clearDirectCallSessionForUser(io, link.a);
@@ -3370,6 +3394,11 @@ io.on('connection', async (sock: AuthedSocket) => {
       const sortedU = [link.a, link.b].sort();
       dissolveSocketIoRoom(io, `room_${sortedU[0]}_${sortedU[1]}`);
     } catch {}
+
+    logger.info('[call:cancel] processed (socket), clearing ring timer if any', {
+      callId: id,
+      hadTimer: !!callsById.get(id)?.timer,
+    });
 
     // уведомим получателя и инициатора одинаковым событием call:cancel,
     // чтобы оба клиента синхронно закрыли UI входящего/исходящего звонка
