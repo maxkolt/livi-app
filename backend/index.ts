@@ -1227,11 +1227,13 @@ async function replayIncomingToCalleeIfRinging(sock: AuthedSocket, userId: strin
         ? String(telemetry.callerNick).trim()
         : undefined;
     try {
+      const replayMedia = link.media === 'video' ? 'video' : 'audio';
       sock.emit('call:incoming', {
         callId: entry.callId,
         callKitId: getCallKitUuid(entry.callId),
         from: link.a,
         fromNick,
+        media: replayMedia,
         ts: link.createdAtMs,
         expiresAt: link.expiresAtMs,
       });
