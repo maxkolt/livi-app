@@ -1569,13 +1569,16 @@ async function cleanupStaleRingingCallForImmediateRetry(callerId: string, callee
     if (!samePair) continue;
 
     const timeline = getCallTimeline(callId);
-    if (timeline?.state === 'accepted') continue;
-
-    const alreadyAccepted =
-      callIdToRoomId.has(callId) ||
-      activeRoomByUserId.has(link.a) ||
-      activeRoomByUserId.has(link.b);
-    if (alreadyAccepted) continue;
+    const hasActivePendingRoom =
+      activeRoomByUserId.has(link.a) || activeRoomByUserId.has(link.b);
+    // Реальный активный звонок (reconnect / LiveKit) — не трогаем.
+    if (hasActivePendingRoom) continue;
+    // Принятый, но без pending reconnect — зомби после сбоя клиента; разрешаем новый звонок.
+    const isZombieAccepted = timeline?.state === 'accepted' && !hasActivePendingRoom;
+    const isStaleRinging =
+      timeline?.state !== 'accepted' &&
+      !callIdToRoomId.has(callId);
+    if (!isZombieAccepted && !isStaleRinging) continue;
 
     logger.info('[call:initiate] cleaning stale ringing call before immediate retry', {
       callId,
