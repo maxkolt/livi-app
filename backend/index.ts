@@ -1092,6 +1092,79 @@ async function clearDirectCallSharedState(callId: string, link?: { a: string; b:
   if (resolved.b) await queueStore.clearUserDirectCall(resolved.b, callId);
 }
 
+/** Accepted / in-call: ringing maps and Redis must not drive incoming_replay or false timeouts. */
+function isDirectCallAcceptedOrActive(callId: string, link?: { a: string; b: string } | null): boolean {
+  const timeline = getCallTimeline(callId);
+  if (timeline?.state === 'accepted') return true;
+  if (callIdToRoomId.has(callId)) return true;
+  if (link) {
+    if (activeRoomByUserId.has(link.a) || activeRoomByUserId.has(link.b)) return true;
+  } else {
+    for (const pending of activeRoomByUserId.values()) {
+      if (pending.callId === callId) return true;
+    }
+  }
+  return false;
+}
+
+/** After accept: drop ringing occupancy (memory + Redis) while keeping activeRoom / callIdToRoomId for call:end. */
+async function releaseRingingCallPersistence(callId: string, link: { a: string; b: string }): Promise<void> {
+  const local = callsById.get(callId);
+  if (local?.timer) {
+    try {
+      clearTimeout(local.timer);
+    } catch {}
+  }
+  if (local?.retryPushTimer) {
+    try {
+      clearTimeout(local.retryPushTimer);
+    } catch {}
+  }
+  callsById.delete(callId);
+  callOfUser.delete(link.a);
+  callOfUser.delete(link.b);
+  try {
+    await clearDirectCallSharedState(callId, link);
+  } catch (e: any) {
+    logger.warn('[call:accept] release ringing persistence failed', { callId, error: e?.message });
+  }
+}
+
+/** Stale Redis/user entries left after accept or reconnect — no delivery_summary / no call:timeout. */
+async function purgeStaleRingingDirectCallArtifacts(
+  callId: string,
+  link: { a: string; b: string },
+  reason: string,
+): Promise<void> {
+  if (isDirectCallAcceptedOrActive(callId, link)) {
+    logger.info('[call:ringing_state] purging stale ringing persistence (call active)', {
+      callId,
+      reason,
+      caller: link.a,
+      callee: link.b,
+    });
+    callOfUser.delete(link.a);
+    callOfUser.delete(link.b);
+    try {
+      await clearDirectCallSharedState(callId, link);
+    } catch (e: any) {
+      logger.warn('[call:ringing_state] clear shared state failed', { callId, error: e?.message });
+    }
+    if (!isDirectCallAcceptedOrActive(callId, link)) {
+      callsById.delete(callId);
+    }
+    return;
+  }
+  callOfUser.delete(link.a);
+  callOfUser.delete(link.b);
+  callsById.delete(callId);
+  try {
+    await clearDirectCallSharedState(callId, link);
+  } catch (e: any) {
+    logger.warn('[call:ringing_state] clear shared state failed', { callId, error: e?.message });
+  }
+}
+
 async function getCallLinkFromAnyStore(callId: string): Promise<CallLink | null> {
   const local = callsById.get(callId);
   if (local) return local;
@@ -1131,6 +1204,10 @@ async function replayIncomingToCalleeIfRinging(sock: AuthedSocket, userId: strin
     if (!entry) return;
     const link = await getCallLinkFromAnyStore(entry.callId);
     if (!link || link.b !== uid) return;
+    if (isDirectCallAcceptedOrActive(entry.callId, link)) {
+      await purgeStaleRingingDirectCallArtifacts(entry.callId, link, 'incoming_replay_active');
+      return;
+    }
     if (link.expiresAtMs <= Date.now()) {
       logger.info('[call:incoming_replay] skipped expired ringing call', {
         callId: entry.callId,
@@ -1212,8 +1289,18 @@ function clearAcceptedCallStateForUser(userId: string, reason: string): string |
     if (callId) callAcceptedDeliveryByKey.delete(getCallAcceptedDeliveryKey(callId, id));
   }
   if (callId) {
+    const linkForRedis = callsById.get(callId);
     callsById.delete(callId);
     callIdToRoomId.delete(callId);
+    const peerForRedis =
+      linkForRedis != null
+        ? { a: linkForRedis.a, b: linkForRedis.b }
+        : peerId && isOid(normalizeMongoObjectId(String(peerId)))
+          ? { a: uid, b: normalizeMongoObjectId(String(peerId)) }
+          : undefined;
+    void clearDirectCallSharedState(callId, peerForRedis).catch((e) => {
+      logger.warn('[call:clearAccepted] clear shared state failed', { callId, error: (e as Error)?.message });
+    });
   }
   if (roomId) {
     for (const [sid, activeRoom] of activeCallBySocket.entries()) {
@@ -1359,6 +1446,22 @@ function logCallEndSkipped(callId: string, action: 'cancel' | 'timeout', source:
 }
 
 function cleanupCall(callId: string, reason?: 'accepted' | 'declined' | 'canceled' | 'timeout' | 'ended') {
+  if (reason === 'timeout' && isDirectCallAcceptedOrActive(callId)) {
+    logger.warn('[call:cleanup] skip timeout cleanup for accepted/active call', { callId });
+    const linkOnly = callsById.get(callId);
+    if (linkOnly) {
+      void purgeStaleRingingDirectCallArtifacts(callId, { a: linkOnly.a, b: linkOnly.b }, 'cleanup_guard').catch(
+        (e: any) => {
+          logger.warn('[call:cleanup] stale purge failed', { callId, error: e?.message });
+        },
+      );
+    } else {
+      void clearDirectCallSharedState(callId).catch((e) => {
+        logger.warn('[call:cleanup] clear shared state failed', { callId, error: (e as Error)?.message });
+      });
+    }
+    return;
+  }
   const link = callsById.get(callId);
   if (!link) {
     void clearDirectCallSharedState(callId).catch((e) => {
@@ -1490,16 +1593,25 @@ async function cleanupStaleRingingCallForImmediateRetry(callerId: string, callee
  */
 function resolveCallIdFromEndIdentifier(roomOrCallId: string, explicitCallId?: string): string | null {
   const ex = explicitCallId ? String(explicitCallId).trim() : '';
-  if (ex && callsById.has(ex)) return ex;
+  if (ex) {
+    if (callsById.has(ex)) return ex;
+    if (callIdToRoomId.has(ex)) return ex;
+    for (const pending of activeRoomByUserId.values()) {
+      if (pending.callId === ex) return ex;
+    }
+  }
   const id = String(roomOrCallId || '').trim();
   if (!id) return null;
   if (callsById.has(id)) return id;
+  if (callIdToRoomId.has(id)) return id;
   const rm = id.match(/^room_([a-f\d]{24})_([a-f\d]{24})$/i);
   if (!rm) return null;
   const u1 = normalizeMongoObjectId(rm[1]);
   const u2 = normalizeMongoObjectId(rm[2]);
   if (!isOid(u1) || !isOid(u2)) return null;
   for (const uid of [u1, u2]) {
+    const pending = activeRoomByUserId.get(uid);
+    if (pending?.callId) return pending.callId;
     const entry = callOfUser.get(uid);
     if (!entry?.callId) continue;
     const link = callsById.get(entry.callId);
@@ -1990,7 +2102,10 @@ io.on('connection', async (sock: AuthedSocket) => {
       const pendingRoom = activeRoomByUserId.get(mappedUserId);
       if (pendingRoom) {
         try {
-          const callStillTracked = callsById.has(pendingRoom.callId);
+          const callStillTracked =
+            callsById.has(pendingRoom.callId) ||
+            callIdToRoomId.has(pendingRoom.callId) ||
+            activeRoomByUserId.has(mappedUserId);
           const recentlyEnded =
             recentlyEndedCalls.has(pendingRoom.callId) ||
             recentlyEndedCalls.has(pendingRoom.roomId);
@@ -2361,18 +2476,38 @@ io.on('connection', async (sock: AuthedSocket) => {
           !!(sockData.busy || sockData.inCall || sockData.roomId || sockData.partnerSid);
 
         if (!hasLiveSameUserCallSocket && !sockStillBusy && !hasAnotherBusySocket) {
-          const pending = activeRoomByUserId.get(userId);
-          const entry = callOfUser.get(userId);
-          const peerId = pending?.peerUserId || entry?.with || null;
-          const staleCallId = clearAcceptedCallStateForUser(userId, 'presence-idle-online');
+          const pendingActive = activeRoomByUserId.get(userId);
+          if (pendingActive?.callId) {
+            const timeline = getCallTimeline(pendingActive.callId);
+            if (
+              timeline?.state === 'accepted' ||
+              callIdToRoomId.has(pendingActive.callId)
+            ) {
+              // In an accepted LiveKit call — do not tear down activeRoom / callIdToRoomId on idle presence.
+            } else {
+              const pending = pendingActive;
+              const entry = callOfUser.get(userId);
+              const peerId = pending?.peerUserId || entry?.with || null;
+              clearAcceptedCallStateForUser(userId, 'presence-idle-online');
+              lastBroadcastBusyByUserId.set(userId, false);
+              await emitPresenceUpdateToFriends(io, userId, false);
+              if (peerId && peerId !== userId) {
+                lastBroadcastBusyByUserId.set(String(peerId), false);
+                await emitPresenceUpdateToFriends(io, String(peerId), false);
+              }
+            }
+          } else {
+            const entry = callOfUser.get(userId);
+            const peerId = entry?.with || null;
+            clearAcceptedCallStateForUser(userId, 'presence-idle-online');
 
-          lastBroadcastBusyByUserId.set(userId, false);
-          await emitPresenceUpdateToFriends(io, userId, false);
-          if (peerId && peerId !== userId) {
-            lastBroadcastBusyByUserId.set(String(peerId), false);
-            await emitPresenceUpdateToFriends(io, String(peerId), false);
+            lastBroadcastBusyByUserId.set(userId, false);
+            await emitPresenceUpdateToFriends(io, userId, false);
+            if (peerId && peerId !== userId) {
+              lastBroadcastBusyByUserId.set(String(peerId), false);
+              await emitPresenceUpdateToFriends(io, String(peerId), false);
+            }
           }
-
         }
       }
       // Другие сокеты того же userId: пока хоть один в звонке/рандоме — не даём сбросить «занят» для друзей.
@@ -2389,14 +2524,18 @@ io.on('connection', async (sock: AuthedSocket) => {
         if (entry) {
           const link = callsById.get(entry.callId);
           if (link) {
-            if (link.b === userId && !(sock as any).data.inCall) {
+            const callAlreadyAccepted = isDirectCallAcceptedOrActive(entry.callId, link);
+            if (link.b === userId && !(sock as any).data.inCall && !callAlreadyAccepted) {
               ignoreBusyForCallee = true;
               logger.info('📍 [presence:update] Callee busy ignored until call accepted', { userId, callId: entry.callId });
             }
             // Инициатор: не рассылаем его busy друзьям (в т.ч. получателю), пока получатель не принял (у получателя нет inCall).
             if (link.a === userId) {
               const calleeSock = findSocketForUser(io, link.b);
-              const calleeInCall = !!(calleeSock && (calleeSock as any).data?.inCall);
+              const calleeInCall =
+                callAlreadyAccepted ||
+                !!(calleeSock && (calleeSock as any).data?.inCall) ||
+                activeRoomByUserId.has(link.b);
               if (!calleeInCall) {
                 ignoreBusyForCaller = true;
                 logger.info('📍 [presence:update] Caller busy ignored until callee accepted (no badge during incoming)', { userId, callerId: link.a, calleeId: link.b, callId: entry.callId });
@@ -3256,6 +3395,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         rememberCallAcceptedDelivery(id, link.a, pendingRoomForA);
         rememberCallAcceptedDelivery(id, link.b, pendingRoomForB);
         if (!aSock) logger.info('[call:accept] Caller offline, stored pending call for reauth', { userId: link.a, roomId, callId: id });
+        await releaseRingingCallPersistence(id, { a: link.a, b: link.b });
       } catch {}
       // Всегда шлём FCM инициатору: при экране исходящего сокет может быть отключён или событие не доходит — FCM выведет приложение, по getAccepted получим call:accepted
       try {

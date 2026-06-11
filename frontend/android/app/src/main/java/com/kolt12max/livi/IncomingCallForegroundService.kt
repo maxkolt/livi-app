@@ -87,6 +87,11 @@ class IncomingCallForegroundService : Service() {
 
         vl("[INCOMING_FGS] onStartCommand callId=$callId minimized=$minimized")
 
+        if (EndedCallIds.isEnded(applicationContext, callId)) {
+            vl("[INCOMING_FGS] onStartCommand SKIP call already ended callId=$callId")
+            return stopAndReturn()
+        }
+
         currentCallId = callId
         currentFrom = from
         currentFromNick = fromNick
@@ -204,6 +209,10 @@ class IncomingCallForegroundService : Service() {
                     }
                     if (shouldSkipActivityLaunch(callId)) {
                         vl("[INCOMING_FGS] startActivity attempt $attemptIndex SKIP IncomingCallActivity already alive callId=$callId")
+                        return@Runnable
+                    }
+                    if (EndedCallIds.isEnded(applicationContext, callId)) {
+                        vl("[INCOMING_FGS] startActivity attempt $attemptIndex SKIP ended callId=$callId")
                         return@Runnable
                     }
                     try {

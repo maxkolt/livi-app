@@ -2803,8 +2803,15 @@ function AppContent() {
     // Обработчик таймаута
     const offTimeout = onCallTimeout?.(async (d) => {
       logger.debug('Call timeout received', { callId: d?.callId });
+      const callId = String((d as any)?.callId || '');
+      const wasCanceled = !!(callId && canceledCallsRef.current.has(callId));
       incomingCallIdRef.current = null;
-      if (d?.callId) try { reportEndCallToCallKeep(d.callId); } catch {}
+      if (callId) try { reportEndCallToCallKeep(callId); } catch {}
+      if (callId) {
+        try { notifyCallCanceled(callId); } catch {}
+        try { addEndedCallId(callId); } catch {}
+      }
+      stopIncomingCallRingtoneAndVibration();
       try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
       // Сбрасываем refs активного звонка, чтобы кнопки видеозвонка у инициатора снова стали активными
@@ -2815,8 +2822,8 @@ function AppContent() {
       } catch (_) {}
       // Мгновенно закрываем UI
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
-      // Переход на Home с бейджем «Вызов отменен»
-      if (navRef.isReady()) {
+      // Переход на Home с бейджем «Вызов отменен» (не дублируем, если уже обработали call:cancel)
+      if (!wasCanceled && navRef.isReady()) {
         const routeName = String(navRef.getCurrentRoute()?.name ?? '');
         if (routeName !== 'Home') {
           navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
@@ -2825,17 +2832,15 @@ function AppContent() {
         }
       }
       try {
-        const id = String((d as any)?.callId || '');
-        if (id) {
-          timedOutCallsRef.current.set(id, Date.now());
+        if (callId && !wasCanceled) {
+          timedOutCallsRef.current.set(callId, Date.now());
         }
       } catch {}
       // Инкремент пропущенного только у получателя (callee), не у инициатора
       try {
         const myUserId = getCurrentUserId?.() ?? '';
         const callerId = String((d as any)?.from || '');
-        const callId = String((d as any)?.callId || '');
-        if (callerId && myUserId && callerId !== myUserId) {
+        if (!wasCanceled && callerId && myUserId && callerId !== myUserId && callId) {
           await recordMissedCallForUser(callerId, {
             callId,
             source: 'call:timeout',

@@ -37,6 +37,45 @@ const PUSH_TOKEN_REGISTER_COOLDOWN_MS = 60_000;
 
 let syncBadgeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let syncBadgeWaiters: Array<() => void> = [];
+const SYNC_BADGE_DEBOUNCE_MS = 160;
+let syncBadgeInFlight = false;
+let syncBadgeRunAgain = false;
+type BadgeSnapshot = { total: number; missed: number; unread: number; legacyCleared: boolean };
+let lastAppliedBadge: BadgeSnapshot | null = null;
+
+function shouldApplyBadgeToOs(missedTotal: number, unreadTotal: number, total: number, legacyCleared: boolean): boolean {
+  const snap: BadgeSnapshot = { total, missed: missedTotal, unread: unreadTotal, legacyCleared };
+  if (
+    lastAppliedBadge &&
+    lastAppliedBadge.total === snap.total &&
+    lastAppliedBadge.missed === snap.missed &&
+    lastAppliedBadge.unread === snap.unread &&
+    lastAppliedBadge.legacyCleared === snap.legacyCleared
+  ) {
+    return false;
+  }
+  lastAppliedBadge = snap;
+  return true;
+}
+
+async function readNativeMissedCountsWithRetry(): Promise<Record<string, number>> {
+  if (Platform.OS !== 'android') return {};
+  let nativeMissed: Record<string, number> = {};
+  try {
+    nativeMissed = await getMissedCountByUserFromNative();
+  } catch (_) {}
+  const sum = Object.values(nativeMissed).reduce(
+    (s, n) => s + (typeof n === 'number' && n > 0 ? n : 0),
+    0,
+  );
+  if (sum === 0) {
+    await new Promise((r) => setTimeout(r, 48));
+    try {
+      nativeMissed = await getMissedCountByUserFromNative();
+    } catch (_) {}
+  }
+  return nativeMissed;
+}
 
 /** Дедуп: setNotificationHandler и addNotificationReceivedListener оба получают один Expo-пуш. */
 const missedNativeAndroidShownAt = new Map<string, number>();
@@ -190,6 +229,7 @@ export async function applyMissedCallsViewedByUser(reason?: string): Promise<voi
       clearTimeout(syncBadgeDebounceTimer);
       syncBadgeDebounceTimer = null;
     }
+    lastAppliedBadge = null;
     await setMissedBadgeCleared();
     await dismissMissedCallNotificationsOnly();
     try {
@@ -272,7 +312,6 @@ export async function recordMissedCallForUser(
 
   if (callId && (await wasMissedCallIdApplied(callId))) {
     logger.info('[push] recordMissedCallForUser skip (callId dup)', { callId, uid, source });
-    await syncAppBadgeFromMissedCount();
     return false;
   }
 
@@ -311,7 +350,9 @@ export async function recordMissedCallForUser(
     if (callId) await markMissedCallIdApplied(callId);
     if (Platform.OS === 'android' && nativeAlreadyForCallId) {
       try { NativeModules.LiviAppModule?.removePendingMissedCall?.(uid); } catch (_) {}
-      await syncAppBadgeFromMissedCount();
+      if (nativeN > storageN || nativeN > 0) {
+        await syncAppBadgeFromMissedCount();
+      }
     }
     return false;
   }
@@ -487,7 +528,7 @@ async function syncAppBadgeFromMissedCountNow(): Promise<void> {
     const map: Record<string, number> = raw ? JSON.parse(raw) : {};
     if (Platform.OS === 'android') {
       try {
-        const nativeMissed = await getMissedCountByUserFromNative();
+        const nativeMissed = await readNativeMissedCountsWithRetry();
         for (const [uid, n] of Object.entries(nativeMissed)) {
           if (!uid) continue;
           const prev = typeof map[uid] === 'number' ? map[uid] : 0;
@@ -499,10 +540,13 @@ async function syncAppBadgeFromMissedCountNow(): Promise<void> {
         }
       } catch (_) {}
     }
-    const missedTotal = Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
-    try {
-      await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(map));
-    } catch (_) {}
+    let missedTotal = Object.values(map).reduce((s: number, n: unknown) => s + (typeof n === 'number' && n > 0 ? n : 0), 0);
+    const mapJson = JSON.stringify(map);
+    if (mapJson !== (raw || '{}')) {
+      try {
+        await AsyncStorage.setItem(MISSED_CALLS_KEY, mapJson);
+      } catch (_) {}
+    }
 
     let cleared = await AsyncStorage.getItem(MISSED_BADGE_CLEARED_KEY);
     if (cleared === 'true' && missedTotal > 0) {
@@ -511,23 +555,44 @@ async function syncAppBadgeFromMissedCountNow(): Promise<void> {
     }
     if (cleared === 'true' && missedTotal === 0) {
       const total = Math.min(99, unreadTotal);
-      logger.info('[push] syncAppBadgeFromMissedCount (legacy cleared, no missed)', { missedTotal: 0, unreadTotal, total });
-      await Notifications.setBadgeCountAsync(total);
-      if (Platform.OS === 'android' && NativeModules.LiviAppModule?.updateSummaryNotifications) {
-        try { NativeModules.LiviAppModule.updateSummaryNotifications(0, unreadTotal); } catch (_) {}
+      if (shouldApplyBadgeToOs(0, unreadTotal, total, true)) {
+        logger.info('[push] syncAppBadgeFromMissedCount (legacy cleared, no missed)', { missedTotal: 0, unreadTotal, total });
+        await Notifications.setBadgeCountAsync(total);
+        if (Platform.OS === 'android' && NativeModules.LiviAppModule?.updateSummaryNotifications) {
+          try { NativeModules.LiviAppModule.updateSummaryNotifications(0, unreadTotal); } catch (_) {}
+        }
       }
       return;
     }
 
     const total = Math.min(99, missedTotal + unreadTotal);
-    logger.info('[push] syncAppBadgeFromMissedCount', { missedTotal, unreadTotal, total });
-    await Notifications.setBadgeCountAsync(total);
-    if (Platform.OS === 'android' && NativeModules.LiviAppModule?.updateSummaryNotifications) {
-      try { NativeModules.LiviAppModule.updateSummaryNotifications(missedTotal, unreadTotal); } catch (_) {}
+    if (shouldApplyBadgeToOs(missedTotal, unreadTotal, total, false)) {
+      logger.info('[push] syncAppBadgeFromMissedCount', { missedTotal, unreadTotal, total });
+      await Notifications.setBadgeCountAsync(total);
+      if (Platform.OS === 'android' && NativeModules.LiviAppModule?.updateSummaryNotifications) {
+        try { NativeModules.LiviAppModule.updateSummaryNotifications(missedTotal, unreadTotal); } catch (_) {}
+      }
     }
   } catch (e) {
     logger.warn('[push] syncAppBadgeFromMissedCount failed', e as any);
+    lastAppliedBadge = null;
     try { await Notifications.setBadgeCountAsync(0); } catch {}
+  }
+}
+
+async function runSyncBadgeCoalesced(): Promise<void> {
+  if (syncBadgeInFlight) {
+    syncBadgeRunAgain = true;
+    return;
+  }
+  syncBadgeInFlight = true;
+  try {
+    do {
+      syncBadgeRunAgain = false;
+      await syncAppBadgeFromMissedCountNow();
+    } while (syncBadgeRunAgain);
+  } finally {
+    syncBadgeInFlight = false;
   }
 }
 
@@ -539,10 +604,10 @@ export function syncAppBadgeFromMissedCount(): Promise<void> {
     syncBadgeDebounceTimer = setTimeout(() => {
       syncBadgeDebounceTimer = null;
       const waiters = syncBadgeWaiters.splice(0);
-      void syncAppBadgeFromMissedCountNow().finally(() => {
+      void runSyncBadgeCoalesced().finally(() => {
         waiters.forEach((w) => w());
       });
-    }, 48);
+    }, SYNC_BADGE_DEBOUNCE_MS);
   });
 }
 
@@ -1437,6 +1502,13 @@ export function addNotificationListeners() {
       const actionId = (last as any)?.actionIdentifier ?? Notifications.DEFAULT_ACTION_IDENTIFIER;
       const responseId = (last as any)?.notification?.request?.identifier;
       if (!data) return;
+      const coldStartType = String(data?.type || '').trim();
+      if (!coldStartType) {
+        logger.info('[push] cold start: skip notification response without type', {
+          responseId: responseId || null,
+        });
+        return;
+      }
       if (await wasNotificationResponseHandledInPastSession(data, actionId, responseId)) {
         logger.info('[push] cold start: skip notification already handled in past session', {
           type: data?.type,
@@ -1444,7 +1516,7 @@ export function addNotificationListeners() {
         });
         return;
       }
-      logger.info('[push] cold start: handling notification response', { type: data?.type, actionId });
+      logger.info('[push] cold start: handling notification response', { type: coldStartType, actionId });
       await handleNotificationResponse(data, actionId, responseId);
     } catch (e) {
       logger.warn('[push] cold start handle failed', e as any);

@@ -84,7 +84,7 @@ import { trimNick } from '../utils/userDisplayName';
 import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, onMessagesDeleted, getUnreadCount, getUnreadCounts, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onCometChatStatus } from '../utils/globalEvents';
-import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
+import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
 import { clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, dismissMessageNotificationForUser, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import ChatStyleBackButton from '../components/ChatStyleBackButton';
@@ -121,6 +121,8 @@ import socket, {
   startCall,
   warmCallSignaling,
   cancelCall,
+  ensureSocketConnected,
+  SOCKET_CONNECT_WAIT_MS,
   getMyProfile,
   onCallAccepted,
   onCallDeclined,
@@ -1690,6 +1692,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       return;
     }
     lastOutgoingExternalCloseResetAtRef.current = now;
+    const canceledByNative = (global as any).__outgoingCanceledByNativeRef?.current === true;
+    const callIdToCancel = String(
+      calling.callId || (global as any).__outgoingCallIdRef?.current || '',
+    ).trim();
     logger.info('[HomeScreen] reset outgoing after external close', {
       source,
       appState: AppState.currentState,
@@ -1703,9 +1709,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       (calling.friend?.id != null ? String(calling.friend.id) : '') ||
       String(lastOutgoingPeerIdRef.current || '');
     activeOutgoingAttemptRef.current = 0;
-    outgoingAttemptSeqRef.current += 1;
     pendingCancelRef.current = true;
     outgoingCallUserCanceledRef.current = true;
+    const declinedAlready = callIdToCancel ? isOutgoingDeclineHandled(callIdToCancel) : false;
+    if (callIdToCancel && !canceledByNative && !declinedAlready) {
+      const sendCancel = () => {
+        try { cancelCall(callIdToCancel); } catch {}
+      };
+      sendCancel();
+      setTimeout(sendCancel, 150);
+      void ensureSocketConnected(SOCKET_CONNECT_WAIT_MS)
+        .then(sendCancel)
+        .catch(() => {});
+    }
     try {
       const g = global as any;
       if (g.__outgoingCanceledByNativeRef) g.__outgoingCanceledByNativeRef.current = false;
