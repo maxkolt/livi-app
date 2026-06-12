@@ -2575,12 +2575,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       // КРИТИЧНО: Когда партнер возвращается из PiP (inPiP: false), включаем видеотрек обратно
       // Только если звонок ещё активен (проверка выше).
       if (previousState === true && inPiP === false) {
-        logger.info('[VideoCall] 🔄 Партнер вернулся из PiP - включаем видеотрек обратно', {
+        logger.info('[VideoCall] 🔄 Партнер вернулся из PiP — синхронизируем камеру и PiP', {
           hasRemoteStream: !!remoteStream,
           currentRemoteCamOn: remoteCamOn,
-          sessionRemoteStream: !!session?.getRemoteStream?.()
+          sessionRemoteStream: !!session?.getRemoteStream?.(),
+          sessionRemoteCamOn: session?.getRemoteCamEnabled?.(),
         });
-        
+
         const sessionRemoteStream = session?.getRemoteStream?.();
         if (sessionRemoteStream && (!remoteStream || remoteStream.id !== sessionRemoteStream.id)) {
           setRemoteStream(sessionRemoteStream);
@@ -2591,8 +2592,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             hasVideoTrack: !!(sessionRemoteStream as any)?.getVideoTracks?.()?.[0],
           });
         }
-        
-        setRemoteCamOn(true);
+
+        const camEnabled = !!session?.getRemoteCamEnabled?.();
+        setRemoteCamOn(camEnabled);
+        try {
+          pip.updatePiPState({ remoteCamOn: camEnabled });
+        } catch (_) {}
       }
     };
 
@@ -3190,7 +3195,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const returnToAudioCallUi = useCallback(
     async (opts?: { fromPiP?: boolean; skipNavigation?: boolean }) => {
       if (!route?.params?.directCall) return;
-      if (inAudioOnlyUiRef.current) return;
+      if (inAudioOnlyUiRef.current && !opts?.skipNavigation) return;
       const session =
         (sessionRef.current || (global as any).__webrtcSessionRef?.current) as VideoCallSession | null;
       if (!session || session.isEnded?.()) return;
@@ -3220,7 +3225,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
       if (opts?.fromPiP && !opts?.skipNavigation) {
         try {
-          const returnFn = (global as any).__pipReturnToCallRef?.current;
+          const returnFn = (global as any).__pipReturnToAudioCallRef?.current;
           if (typeof returnFn === 'function') returnFn();
         } catch {}
       }

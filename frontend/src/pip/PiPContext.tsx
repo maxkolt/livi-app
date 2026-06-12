@@ -75,7 +75,7 @@ type PiPState = {
   hidePiP: () => void;
   updatePiPPosition: (x: number, y: number) => void;
 
-  returnToCall: () => void;
+  returnToCall: (opts?: { preferAudioOnlyUi?: boolean }) => void;
   endCall: () => void;
 
   /** Разрешать рендер RTCView в PiP только после задержки (экран звонка успел размонтироваться). */
@@ -782,7 +782,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // returnToCall вызывается из App.tsx по событию SystemPiPExpanded (кнопка «развернуть» в системном PiP).
   // Параметры для навигации берутся из state (callId, roomId, lastNavParams), при null — из __currentCallPiPParamsRef
   // и __pipLastContextRef (см. комментарий выше), чтобы возврат работал даже при гонках.
-  const returnToCall = useCallback(() => {
+  const returnToCall = useCallback((opts?: { preferAudioOnlyUi?: boolean }) => {
     const g = (global as any);
     const nav = g.__navRef;
     const currentRouteName = nav?.getCurrentRoute?.()?.name as string | undefined;
@@ -920,13 +920,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const effectiveCallId = callId || paramsRef?.callId || lastCtx?.callId || sessionCallId || null;
     const effectiveRoomId = roomId || paramsRef?.roomId || lastCtx?.roomId || sessionRoomId || null;
     const effectiveNavParams = lastNavParams ?? paramsRef?.navParams ?? lastCtx?.navParams;
+    const preferAudioOnlyUi = opts?.preferAudioOnlyUi === true;
     try {
       g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
-      g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
       g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-      g.__expandToVideoCallUiFromPiPRef.current = true;
+      if (preferAudioOnlyUi) {
+        g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+        g.__expandToVideoCallUiFromPiPRef.current = false;
+      } else {
+        g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+        g.__expandToVideoCallUiFromPiPRef.current = true;
+      }
     } catch (_) {}
-    syncSessionPiPState(false, 'returnToCall');
+    syncSessionPiPState(false, preferAudioOnlyUi ? 'returnToAudioCall' : 'returnToCall');
     
     // Guard от двойной навигации
     if (navigatingRef.current) {
@@ -939,7 +945,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         ...(navParams ?? {}),
         resume: true,
         fromPiP: true,
-        preferVideoCallUi: true,
+        ...(preferAudioOnlyUi ? {} : { preferVideoCallUi: true }),
         systemPiPReturnToken: Number(g.__systemPiPReturnTokenRef?.current || Date.now()),
         directCall: true,
         directInitiator: undefined,
@@ -1043,9 +1049,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   // Чтобы по кнопке «развернуть» в системном PiP возвращать на экран видеозвонка (App слушает SystemPiPExpanded и дергает этот ref).
   useEffect(() => {
-    (global as any).__pipReturnToCallRef = { current: returnToCall };
+    const g = global as any;
+    g.__pipReturnToCallRef = { current: () => returnToCall() };
+    g.__pipReturnToAudioCallRef = { current: () => returnToCall({ preferAudioOnlyUi: true }) };
     return () => {
-      delete (global as any).__pipReturnToCallRef;
+      delete g.__pipReturnToCallRef;
+      delete g.__pipReturnToAudioCallRef;
     };
   }, [returnToCall]);
 

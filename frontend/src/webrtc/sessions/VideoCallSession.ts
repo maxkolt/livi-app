@@ -1769,6 +1769,9 @@ export class VideoCallSession extends SimpleEventEmitter {
         // Уведомляем компонент об изменении состояния партнера
         this.emit('partnerPiPStateChanged', { inPiP: data.inPiP });
         logger.info('[VideoCallSession] ✅ Событие partnerPiPStateChanged отправлено компоненту', { inPiP: data.inPiP });
+        if (previousState === true && data.inPiP === false) {
+          this.flushPiPRemoteVideoState();
+        }
       } else {
         logger.warn('[VideoCallSession] ⚠️ pip:state событие проигнорировано - не совпадает roomId', {
           receivedRoomId: data.roomId,

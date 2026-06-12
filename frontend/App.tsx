@@ -830,17 +830,56 @@ function AppContent() {
         const g = global as any;
         g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
         g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
-        const fn = g.__returnToAudioCallRef?.current;
-        if (typeof fn === 'function') {
-          void fn({ fromPiP: true });
+        g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+        g.__expandToVideoCallUiFromPiPRef.current = false;
+
+        try {
+          NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
+        } catch (_) {}
+
+        const onCall = g.__returnToAudioCallRef?.current;
+        if (typeof onCall === 'function') {
+          void onCall({ skipNavigation: true });
+        } else {
+          const session = g.__webrtcSessionRef?.current;
+          if (session?.getIsCamOn?.()) {
+            void session.toggleCam();
+          }
+          session?.deferRemoteVideoConsumption?.();
+        }
+
+        const navFn = g.__pipReturnToAudioCallRef?.current;
+        if (typeof navFn === 'function') {
+          navFn();
+          reenableAndroidSystemPiPLeaveHintAfterReturn();
           return;
         }
-        const session = g.__webrtcSessionRef?.current;
-        if (session?.getIsCamOn?.()) {
-          void session.toggleCam();
+
+        const params = g.__currentCallPiPParamsRef?.current;
+        const nav = g.__navRef;
+        if (params?.callId && params?.roomId && nav?.isReady?.()) {
+          const returnToken = Number(g.__systemPiPReturnTokenRef?.current || Date.now());
+          nav.dispatch(
+            CommonActions.reset({
+              index: 1,
+              routes: [
+                { name: 'Home' as const },
+                {
+                  name: 'VideoCall' as const,
+                  params: {
+                    resume: true,
+                    fromPiP: true,
+                    systemPiPReturnToken: returnToken,
+                    callId: params.callId,
+                    roomId: params.roomId,
+                    directCall: true,
+                  },
+                },
+              ],
+            })
+          );
+          reenableAndroidSystemPiPLeaveHintAfterReturn();
         }
-        session?.deferRemoteVideoConsumption?.();
-        invokeReturnToVideoCallFromNotification();
       } catch (e) {
         logger.warn('[App] ReturnToAudioCallFromPiP handler failed', e);
       }

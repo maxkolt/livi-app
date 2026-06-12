@@ -157,19 +157,25 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       const g = global as any;
       g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
       g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+      g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+      g.__expandToVideoCallUiFromPiPRef.current = false;
+      const onVideoCallScreen = shouldSuppressInAppPiPOnRoute(currentRouteName);
       const fn = g.__returnToAudioCallRef?.current;
-      if (typeof fn === 'function') {
-        void fn({ fromPiP: true });
+      if (onVideoCallScreen && typeof fn === 'function') {
+        void fn({ skipNavigation: true });
         return;
       }
-      const session = g.__webrtcSessionRef?.current;
-      if (session?.getIsCamOn?.()) {
-        void session.toggleCam();
+      if (typeof fn === 'function') {
+        void fn({ fromPiP: true, skipNavigation: true });
       }
-      session?.deferRemoteVideoConsumption?.();
-      returnToCall();
+      const navFn = g.__pipReturnToAudioCallRef?.current;
+      if (typeof navFn === 'function') {
+        navFn();
+        return;
+      }
+      returnToCall({ preferAudioOnlyUi: true });
     } catch (_) {}
-  }, [returnToCall]);
+  }, [returnToCall, currentRouteName]);
 
   const dims = Dimensions.get('window');
   const W = typeof dims?.width === 'number' && dims.width > 0 ? dims.width : 400;
@@ -252,11 +258,12 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       return false;
     }
   }, [remoteStream, remoteStreamVersion, pipRemoteViewKey]);
-  const showPartnerAway = remoteCamOn === false && !pipHasLiveRemoteVideo;
+  const showPartnerAway = remoteCamOn === false;
   const canRenderVideo =
     shouldShowOverlay &&
     allowVideoRender &&
     remoteStream &&
+    remoteCamOn !== false &&
     pipHasLiveRemoteVideo &&
     (Platform.OS !== 'ios' || (streamURL && streamURL.length > 0));
   const pipRtcViewKey = `pip-inapp-${remoteStream?.id ?? 'none'}-${remoteStreamVersion}-${pipRemoteViewKey}`;

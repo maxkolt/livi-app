@@ -56,7 +56,6 @@ class MainApplication : Application(), ReactApplication {
     override fun onReceive(context: Context?, intent: Intent?) {
       when (intent?.action) {
         LiviAppModule.ACTION_END_CALL_FROM_PIP -> LiviAppModule.emitEndCallFromPiP()
-        LiviAppModule.ACTION_AUDIO_ONLY_FROM_PIP -> LiviAppModule.emitReturnToAudioCallFromPiP()
       }
     }
   }
@@ -73,7 +72,6 @@ class MainApplication : Application(), ReactApplication {
     LiviFirebaseMessagingService.ensureMissedCallChannel(this)
     val pipFilter = IntentFilter().apply {
       addAction(LiviAppModule.ACTION_END_CALL_FROM_PIP)
-      addAction(LiviAppModule.ACTION_AUDIO_ONLY_FROM_PIP)
     }
     if (Build.VERSION.SDK_INT >= 33) {
       registerReceiver(pipActionReceiver, pipFilter, Context.RECEIVER_NOT_EXPORTED)

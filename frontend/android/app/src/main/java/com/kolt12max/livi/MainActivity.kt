@@ -88,16 +88,20 @@ class MainActivity : ReactActivity() {
   internal fun buildSystemPiPActions(): List<RemoteAction> {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return emptyList()
     return try {
-      val intent = Intent(LiviAppModule.ACTION_AUDIO_ONLY_FROM_PIP).setPackage(packageName)
-      val pending = PendingIntent.getBroadcast(
+      val intent = Intent(this, MainActivity::class.java).apply {
+        action = LiviAppModule.ACTION_AUDIO_ONLY_FROM_PIP
+        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+      }
+      val pending = PendingIntent.getActivity(
         this,
         4102,
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
       val icon = Icon.createWithResource(this, R.drawable.ic_phone_in_talk)
-      val label = getString(R.string.pip_action_audio_call)
-      listOf(RemoteAction(icon, label, label, pending))
+      val title = getString(R.string.pip_action_audio_call)
+      val description = getString(R.string.pip_action_audio_call_desc)
+      listOf(RemoteAction(icon, title, description, pending))
     } catch (e: Exception) {
       android.util.Log.w("MainActivity", "buildSystemPiPActions failed", e)
       emptyList()
@@ -184,6 +188,7 @@ class MainActivity : ReactActivity() {
       LiviAppModule.setPendingOpenTabFriends(this)
     }
     handleReturnToActiveCallIntent(intent)
+    handleAudioOnlyFromPiPIntent(intent)
     if (tryStashPendingAnswerFromIntent(intent)) {
       pendingAnswerFromIntent = true
     }
@@ -222,6 +227,7 @@ class MainActivity : ReactActivity() {
       }, 150)
     }
     handleReturnToActiveCallIntent(intent)
+    handleAudioOnlyFromPiPIntent(intent)
     // FCM call_accepted запустил MainActivity — закрыть нативный экран исходящего (если ещё открыт) и уведомить JS
     val pendingCallId = intent?.getStringExtra(EXTRA_PENDING_CALL_ACCEPTED_CALL_ID)
     if (!pendingCallId.isNullOrBlank()) {
@@ -468,10 +474,11 @@ class MainActivity : ReactActivity() {
       LiviAppModule.setPendingOpenTabFriends(this)
     }
     handleReturnToActiveCallIntent(intent)
+    handleAudioOnlyFromPiPIntent(intent)
     if (tryStashPendingAnswerFromIntent(intent)) {
       pendingAnswerFromIntent = true
     }
-    // Кнопка Домой свернула приложение во время звонка → при тапе по иконке снова показываем экран звонка, а не главный.
+    // Кнопка Домой свернула приложение во время звонка
     if (isLaunchedFromLauncher(intent) && LiviOngoingCallHelper.launchOngoingCallActivityIfNeeded(this)) {
       requestFinish("launcher-redirect-to-ongoing-call")
     }
@@ -613,6 +620,15 @@ class MainActivity : ReactActivity() {
     intent.removeExtra(EXTRA_RETURN_TO_ACTIVE_CALL)
     LiviAppModule.setPendingReturnToActiveCall(this)
     LiviAppModule.emitReturnToActiveCallFromNotification()
+  }
+
+  /** Кнопка «Аудио» в системном PiP — развернуть приложение и открыть экран аудиозвонка. */
+  private fun handleAudioOnlyFromPiPIntent(intent: Intent?) {
+    if (intent?.action != LiviAppModule.ACTION_AUDIO_ONLY_FROM_PIP) return
+    intent.action = null
+    setIntent(intent)
+    android.util.Log.i("MainActivity", "PiP action: return to audio call screen")
+    LiviAppModule.emitReturnToAudioCallFromPiP()
   }
 
   companion object {
