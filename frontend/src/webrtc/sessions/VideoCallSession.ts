@@ -101,6 +101,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private isCamOn = true;
   private remoteAudioMuted = false;
   private remoteCamEnabled = false;
+  /** Audio-first UI: не подписываемся на remote video до явного перехода пользователя на видео-экран. */
+  private deferRemoteVideoSubscription = false;
   private remoteCamSide: CamSide = 'front';
   /** Партнёр прислал cam-toggle: камера выкл — не поднимать remoteCam по первому «живому» видеотреку (гонка с публикацией). */
   private remotePartnerDeclaredCamOff = false;
@@ -206,6 +208,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config = config;
     if (config.startWithCamOff) {
       this.isCamOn = false;
+      this.deferRemoteVideoSubscription = true;
     }
 
     logger.info('[VideoCallSession] 🆕 Constructor called', {
@@ -340,7 +343,72 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.subscribeFirstSeenAt = 0;
   }
 
+  private acceptCallInFlight: Promise<void> | null = null;
+  private acceptCallInFlightId: string | null = null;
+
+  private async recoverFromAcceptFailure(callId: string, error: string): Promise<boolean> {
+    const id = String(callId || '').trim();
+    const err = String(error || '').trim();
+    if (!id) return false;
+
+    if (this.consumedPendingCallAcceptedAtConstruct && this.callId === id) {
+      logger.warn('[VideoCallSession] acceptCall failed but pending call:accepted already scheduled', {
+        callId: id,
+        error: err,
+      });
+      return true;
+    }
+
+    const roomState = this.room?.state;
+    if (roomState === 'connected' || roomState === 'connecting') {
+      logger.warn('[VideoCallSession] acceptCall failed but LiveKit room is active', {
+        callId: id,
+        error: err,
+        roomState,
+      });
+      return true;
+    }
+
+    if (err === 'not_found' || err === 'call_not_found') {
+      try {
+        const got = await emitAck<{ ok?: boolean }>('call:getAccepted', { callId: id }, 7000, 1);
+        if (got?.ok) {
+          logger.info('[VideoCallSession] acceptCall recovered via call:getAccepted', { callId: id });
+          return true;
+        }
+      } catch (e) {
+        logger.warn('[VideoCallSession] call:getAccepted recovery failed', {
+          callId: id,
+          error: (e as Error)?.message || String(e),
+        });
+      }
+    }
+
+    return false;
+  }
+
   async acceptCall(callId: string, fromUserId: string): Promise<void> {
+    const id = String(callId || '').trim();
+    if (!id) return;
+
+    if (this.acceptCallInFlight && this.acceptCallInFlightId === id) {
+      return this.acceptCallInFlight;
+    }
+
+    // Уже подключены к комнате этого звонка — повторный accept не нужен (ремount / двойная навигация).
+    if (
+      this.callId === id &&
+      this.room &&
+      (this.room.state === 'connected' || this.room.state === 'connecting')
+    ) {
+      this.partnerUserId = fromUserId;
+      logger.info('[VideoCallSession] acceptCall skipped — room already active', {
+        callId: id,
+        roomState: this.room.state,
+      });
+      return;
+    }
+
     // КРИТИЧНО: Очищаем старую комнату перед принятием звонка. disconnect() только если комната уже connected,
     // иначе LiveKit бросает "cannot send signal request before connected, type: leave" и первая попытка подключения падает.
     if (this.room) {
@@ -357,37 +425,63 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.connectingPromise = null;
       this.currentRoomName = null;
     }
-    
-    this.callId = callId;
+
+    this.callId = id;
     this.partnerUserId = fromUserId;
     this.resetCallFlowMetrics();
     this.notifyLoadingChange(true);
-    // Keep signaling in foreground policy during accept -> call:accepted transition.
     setActiveVideoCall(true);
     warmCallSignaling();
     this.incomingAcceptDeferCapture = true;
     const socketReadyPromise = ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
-    
-    try {
-      await socketReadyPromise;
-      this.acceptAckStartedAt = Date.now();
-      const resp = await emitAck<{ ok?: boolean; error?: string }>('call:accept', { callId }, 7000, 2);
-      this.acceptAckCompletedAt = Date.now();
-      if (!resp?.ok) {
-        throw new Error(resp?.error || 'call_accept_failed');
+
+    const run = (async () => {
+      try {
+        await socketReadyPromise;
+        this.acceptAckStartedAt = Date.now();
+        const resp = await emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
+          'call:accept',
+          { callId: id },
+          7000,
+          2,
+        );
+        this.acceptAckCompletedAt = Date.now();
+        if (!resp?.ok) {
+          const err = resp?.error || 'call_accept_failed';
+          if (await this.recoverFromAcceptFailure(id, err)) {
+            return;
+          }
+          throw new Error(err);
+        }
+        if (resp.duplicate) {
+          logger.info('[VideoCallSession] call:accept duplicate ack — continuing', { callId: id });
+        }
+        if (this.acceptAckStartedAt > 0 && this.acceptAckCompletedAt >= this.acceptAckStartedAt) {
+          void sendClientMetrics(API_BASE, {
+            acceptAckLatencyMs: this.acceptAckCompletedAt - this.acceptAckStartedAt,
+          }).catch(() => {});
+        }
+      } catch (e) {
+        const err = (e as Error)?.message || String(e);
+        if (await this.recoverFromAcceptFailure(id, err)) {
+          this.incomingAcceptDeferCapture = false;
+          return;
+        }
+        this.incomingAcceptDeferCapture = false;
+        logger.error('[VideoCallSession] Error accepting call', e);
+        this.notifyLoadingChange(false);
+        setActiveVideoCall(false);
       }
-      if (this.acceptAckStartedAt > 0 && this.acceptAckCompletedAt >= this.acceptAckStartedAt) {
-        void sendClientMetrics(API_BASE, {
-          acceptAckLatencyMs: this.acceptAckCompletedAt - this.acceptAckStartedAt,
-        }).catch(() => {});
+    })();
+
+    this.acceptCallInFlight = run.finally(() => {
+      if (this.acceptCallInFlightId === id) {
+        this.acceptCallInFlight = null;
+        this.acceptCallInFlightId = null;
       }
-      // Камера/мик — в connectToLiveKit после стабилизации UI (см. incomingAcceptDeferCapture).
-    } catch (e) {
-      this.incomingAcceptDeferCapture = false;
-      logger.error('[VideoCallSession] Error accepting call', e);
-      this.notifyLoadingChange(false);
-      setActiveVideoCall(false);
-    }
+    });
+    this.acceptCallInFlightId = id;
+    return this.acceptCallInFlight;
   }
 
   /**
@@ -1269,6 +1363,41 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** Текущее состояние камеры собеседника (синхронно обновляется при cam-toggle/LiveKit). Используется в showPiP, чтобы заглушка «Отошел» показывалась сразу при входе в PiP без гонки с React state. */
   getRemoteCamEnabled(): boolean {
     return this.remoteCamEnabled;
+  }
+
+  /** Пользователь перешёл с audio-only UI на видеозвонок — подписаться на remote video и подтянуть треки. */
+  enableRemoteVideoConsumption(): void {
+    if (!this.deferRemoteVideoSubscription) return;
+    this.deferRemoteVideoSubscription = false;
+    logger.info('[VideoCallSession] Remote video consumption enabled (left audio-only UI)');
+
+    const room = this.room;
+    if (room && room.state === 'connected') {
+      room.remoteParticipants.forEach((participant) => {
+        participant.videoTrackPublications.forEach((publication) => {
+          try {
+            if (!publication.isSubscribed) publication.setSubscribed(true);
+          } catch {}
+          if (publication.track) {
+            this.handleTrackSubscribed(publication.track, publication, participant);
+          }
+        });
+      });
+    }
+    this.notifyRemoteCamStateChange(this.remoteCamEnabled);
+  }
+
+  private deferRemoteVideoPublication(publication: RemoteTrackPublication, context: string): boolean {
+    if (publication.kind !== Track.Kind.Video) return false;
+    if (!this.deferRemoteVideoSubscription) return false;
+    try {
+      if (publication.isSubscribed) publication.setSubscribed(false);
+    } catch {}
+    logger.debug('[VideoCallSession] Skipping remote video subscription (audio-only consumer)', {
+      context,
+      trackSid: publication.trackSid,
+    });
+    return true;
   }
 
   /** True only when the peer explicitly reported camera OFF via cam-toggle. */
@@ -2458,6 +2587,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         if (publication.track) this.handleTrackSubscribed(publication.track, publication, participant);
       });
       participant.videoTrackPublications.forEach((publication) => {
+        if (this.deferRemoteVideoPublication(publication, 'remote_media_watchdog')) return;
         if (!publication.isSubscribed) publication.setSubscribed(true);
         if (publication.track) this.handleTrackSubscribed(publication.track, publication, participant);
       });
@@ -4059,6 +4189,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         
         // Подписываемся на все видео треки
         participant.videoTrackPublications.forEach((publication) => {
+          if (this.deferRemoteVideoPublication(publication, context)) return;
           // КРИТИЧНО: Всегда подписываемся явно, даже если уже подписаны
           // Это гарантирует, что событие TrackSubscribed будет отправлено
           // КРИТИЧНО: Если трек уже подписан, но не загружен - принудительно переподписываемся
@@ -4171,6 +4302,7 @@ export class VideoCallSession extends SimpleEventEmitter {
               }
             });
             participant.videoTrackPublications.forEach((publication) => {
+              if (this.deferRemoteVideoPublication(publication, 'delayed_check_500ms')) return;
               // Подписываемся явно если еще не подписаны
               if (!publication.isSubscribed) {
                 publication.setSubscribed(true);
@@ -4239,6 +4371,7 @@ export class VideoCallSession extends SimpleEventEmitter {
               }
             });
             participant.videoTrackPublications.forEach((publication) => {
+              if (this.deferRemoteVideoPublication(publication, 'delayed_check_1000ms')) return;
               if (!publication.isSubscribed) {
                 publication.setSubscribed(true);
                 logger.info('[VideoCallSession] Second delayed subscription to video track', {
@@ -5030,6 +5163,7 @@ export class VideoCallSession extends SimpleEventEmitter {
             });
             
             participant.videoTrackPublications.forEach((publication) => {
+              if (this.deferRemoteVideoPublication(publication, 'ParticipantConnected')) return;
               // КРИТИЧНО: Всегда подписываемся явно, даже если autoSubscribe включен
               // Это гарантирует, что трек будет получен
               if (!publication.isSubscribed || !publication.track) {
@@ -5094,6 +5228,10 @@ export class VideoCallSession extends SimpleEventEmitter {
             isSubscribed: publication.isSubscribed,
             hasTrack: !!publication.track,
           });
+
+          if (this.deferRemoteVideoPublication(publication, 'TrackPublished')) {
+            return;
+          }
           
           // КРИТИЧНО: Всегда подписываемся явно, даже если autoSubscribe включен
           if (!publication.isSubscribed) {
@@ -5149,6 +5287,12 @@ export class VideoCallSession extends SimpleEventEmitter {
           return;
         }
         participant = liveParticipant;
+        if (publication.kind === Track.Kind.Video && this.deferRemoteVideoSubscription) {
+          try {
+            if (publication.isSubscribed) publication.setSubscribed(false);
+          } catch {}
+          return;
+        }
         this.handleTrackSubscribed(track, publication, participant);
       })
       .on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
@@ -5398,6 +5542,12 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     const isVideoTrack = publication.kind === Track.Kind.Video;
     const isAudioTrack = publication.kind === Track.Kind.Audio;
+    if (isVideoTrack && this.deferRemoteVideoSubscription) {
+      try {
+        if (publication.isSubscribed) publication.setSubscribed(false);
+      } catch {}
+      return;
+    }
     const oldVideoTrackSid = this.remoteVideoTrack?.sid;
     const mediaTrack = track.mediaStreamTrack;
 

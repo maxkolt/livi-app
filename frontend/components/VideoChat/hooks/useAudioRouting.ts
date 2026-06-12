@@ -135,11 +135,18 @@ export const useAudioRouting = (
     }
     const earpieceProductMode = !!routingOptionsRef.current?.defaultToEarpiece;
     const media = earpieceProductMode || preferAudioMode ? 'audio' : 'video';
+    const alreadyActive = didStartRef.current;
     // Native start() применяет defaultSpeaker только при первой активации; после video-start earpiece не включится без stop().
-    if (Platform.OS === 'android' && earpieceProductMode) {
+    if (Platform.OS === 'android' && earpieceProductMode && !alreadyActive) {
       try { InCallManager.stop(); } catch {}
     }
-    try { InCallManager.start({ media, ringback: '' }); } catch {}
+    if (!alreadyActive) {
+      try { InCallManager.start({ media, ringback: '' }); } catch {}
+    } else if (earpieceProductMode) {
+      applyHardOutputRoute('applyRouting_repin', true);
+    } else {
+      try { InCallManager.start({ media, ringback: '' }); } catch {}
+    }
     try { (InCallManager as any).requestAudioFocus?.(); } catch {}
     applyHardOutputRoute('applyRouting', true);
     log('[useAudioRouting] applyRouting()', {
@@ -296,7 +303,13 @@ export const useAudioRouting = (
     // Start routing after permission check; defer InCallManager.start until after navigation/animations
     // to avoid main-thread contention (Choreographer "Skipped N frames" / AudioDeviceBroker lock).
     (async () => {
-      if (didStartRef.current) return;
+      if (didStartRef.current) {
+        InteractionManager.runAfterInteractions(() => {
+          if (cancelled) return;
+          applyHardOutputRoute('session_re_enable', true);
+        });
+        return;
+      }
       const ok = await ensureBluetoothConnectPermission();
       didStartRef.current = true;
       InteractionManager.runAfterInteractions(() => {
@@ -364,12 +377,14 @@ export const useAudioRouting = (
     };
   }, [enabled]);
 
+  const syncRouteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // LiveKit/WebRTC на Android иногда снова включает speaker после появления remote audio.
   useEffect(() => {
     if (!enabled || !routingOptionsRef.current?.defaultToEarpiece) return;
     if (!remoteStream?.getAudioTracks?.()?.length) return;
     applyHardOutputRoute('remote_stream', true);
-    const delays = [400, 1200, 2500, 5000, 8000];
+    const delays = [1200, 3500];
     const timers = delays.map((ms) =>
       setTimeout(() => applyHardOutputRoute(`remote_stream+${ms}ms`, true), ms),
     );
@@ -380,8 +395,16 @@ export const useAudioRouting = (
 
   return {
     syncRouteNow: () => {
-      applyHardOutputRoute('manualSync', true);
-      void applyDesiredRoute(lastAvailableRef.current, 'manualSync', true);
+      if (syncRouteDebounceRef.current) {
+        clearTimeout(syncRouteDebounceRef.current);
+      }
+      syncRouteDebounceRef.current = setTimeout(() => {
+        syncRouteDebounceRef.current = null;
+        applyHardOutputRoute('manualSync', true);
+        if (!routingOptionsRef.current?.defaultToEarpiece) {
+          void applyDesiredRoute(lastAvailableRef.current, 'manualSync', true);
+        }
+      }, 140);
     },
     stopSpeaker,
     applyHardOutputRoute,

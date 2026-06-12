@@ -33,6 +33,7 @@ import { RemoteVideo } from './shared/RemoteVideo';
 import { t, loadLang, defaultLang } from '../../utils/i18n';
 import type { Lang } from '../../utils/i18n';
 import { useAppTheme } from '../../theme/ThemeProvider';
+import { uiAccent } from '../../theme/uiAccent';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { usePiP, isPipOverlayVisibleSync } from '../../src/pip/PiPContext';
@@ -199,6 +200,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
+  const accent = useMemo(() => uiAccent(isDark), [isDark]);
   
   const [lang, setLang] = useState<Lang>(defaultLang);
   const androidScreenPadding = 4;
@@ -246,6 +248,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const [inAudioOnlyUi, setInAudioOnlyUi] = useState(initialCamOff);
   const inAudioOnlyUiRef = useRef(inAudioOnlyUi);
   inAudioOnlyUiRef.current = inAudioOnlyUi;
+  /** Собеседник включил видео (cam-toggle), мы ещё на audio UI — пульс кнопки «видео». */
+  const [peerInvitedVideo, setPeerInvitedVideo] = useState(false);
   useEffect(() => {
     const pending = (global as any).__pendingCallAcceptedRef?.current;
     const pendingCallId = pending ? String(pending?.callId ?? '') : null;
@@ -333,9 +337,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const incomingCallBounce = useRef(new Animated.Value(0)).current;
   const incomingWaveA = useRef(new Animated.Value(0)).current;
   const incomingWaveB = useRef(new Animated.Value(0)).current;
+  const peerVideoPulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (isInactiveStateRef.current || isEndingCallRef.current) return;
+    if (inAudioOnlyUiRef.current) return;
     if (!remoteStream) {
       // Не сбрасываем remoteCamStateKnownRef: состояние камеры уже известно из cam-toggle.
       // Пока стрима нет, не затираем remoteCamOn в true — иначе после cam-toggle(false) до прихода
@@ -618,20 +624,22 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const { syncRouteNow } = useAudioRouting(
     hasActiveCallForAudio && !isInactiveState,
     currentRemoteStream,
-    inAudioOnlyUi || initialCamOff,
-    directCallRoute ? { defaultToEarpiece: true, speakerOnRef } : undefined,
+    inAudioOnlyUi,
+    directCallRoute ? { defaultToEarpiece: inAudioOnlyUi, speakerOnRef } : undefined,
   );
   const syncRouteNowRef = useRef(syncRouteNow);
   syncRouteNowRef.current = syncRouteNow;
   const scheduleDirectCallAudioRepinRef = useRef<() => void>(() => {});
+  const directCallAudioRepinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleDirectCallAudioRepin = useCallback(() => {
     if (!directCallRoute) return;
-    const run = () => {
+    if (directCallAudioRepinTimerRef.current) {
+      clearTimeout(directCallAudioRepinTimerRef.current);
+    }
+    directCallAudioRepinTimerRef.current = setTimeout(() => {
+      directCallAudioRepinTimerRef.current = null;
       try { syncRouteNowRef.current?.(); } catch {}
-    };
-    run();
-    setTimeout(run, 400);
-    setTimeout(run, 1500);
+    }, 280);
   }, [directCallRoute]);
   scheduleDirectCallAudioRepinRef.current = scheduleDirectCallAudioRepin;
   const [speakerOn, setSpeakerOn] = useState(false);
@@ -647,13 +655,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     });
   }, []);
 
-  useEffect(() => {
-    if (!directCallRoute || isInactiveState) return;
-    const t = setTimeout(() => {
-      try { syncRouteNowRef.current?.(); } catch {}
-    }, 0);
-    return () => clearTimeout(t);
-  }, [speakerOn, directCallRoute, isInactiveState]);
   
   // Refs
   const focusEffectGuardRef = useRef(false);
@@ -1211,6 +1212,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     if (g.__endCallCleanupOwnerRef && cleanupOwner === screenInstanceIdRef.current) {
       g.__endCallCleanupOwnerRef.current = null;
     }
+    try {
+      if (g.__incomingAcceptSentRef) g.__incomingAcceptSentRef.current = null;
+    } catch {}
     // НЕ очищаем __pendingCallAcceptedRef здесь: при ремаунте (двойная навигация) новая сессия должна прочитать payload и подключиться. Очищает только VideoCallSession после использования.
     currentCallIdRef.current = null;
   }, []);
@@ -1919,13 +1923,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         },
         onRemoteCamStateChange: (enabled) => {
           if (isInactiveStateRef.current || isEndingCallRef.current) return;
-          // Партнёр выключил/включил камеру — обновляем только remoteCamOn, звонок не завершаем
           logger.info('[VideoCall] onRemoteCamStateChange вызван', {
             enabled,
             previousRemoteCamOn: remoteCamOn,
             partnerInPiP: partnerInPiPRef.current,
           });
           remoteCamStateKnownRef.current = true;
+          if (inAudioOnlyUiRef.current) {
+            setPeerInvitedVideo(!!enabled);
+            return;
+          }
           setRemoteCamOn(enabled);
           // ВАЖНО: Не дергаем remoteViewKey из UI.
           // Этим управляет сессия через событие remoteViewKeyChanged, иначе на Android легко получить мерцания из-за частых remount RTCView.
@@ -2196,11 +2203,29 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         callId: incomingCallId,
         fromUserId
       });
-      
+
       setPartnerUserId(fromUserId);
       currentCallIdRef.current = incomingCallId;
       setStarted(true);
       setLoading(true);
+
+      if (session.didSchedulePendingCallAcceptedConnect()) {
+        logger.info('[VideoCall] Callee: call:accepted already pending in session ctor, skipping acceptCall', {
+          callId: incomingCallId,
+        });
+        return;
+      }
+
+      const g = global as any;
+      g.__incomingAcceptSentRef = g.__incomingAcceptSentRef || { current: null as string | null };
+      if (g.__incomingAcceptSentRef.current === incomingCallId) {
+        logger.info('[VideoCall] Callee: acceptCall already in flight for callId, skipping duplicate', {
+          callId: incomingCallId,
+        });
+        return;
+      }
+      g.__incomingAcceptSentRef.current = incomingCallId;
+
       session.acceptCall(incomingCallId, fromUserId).catch((e) => {
         logger.error('[VideoCall] Error accepting incoming call:', e);
         setStarted(false);
@@ -3104,11 +3129,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const toggleCam = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
     if (session && typeof session.toggleCam === 'function') {
+      const leavingAudioOnlyUi = inAudioOnlyUiRef.current && !camOn;
+      if (leavingAudioOnlyUi) {
+        inAudioOnlyUiRef.current = false;
+        setPeerInvitedVideo(false);
+        setInAudioOnlyUi(false);
+        try {
+          (session as VideoCallSession).enableRemoteVideoConsumption();
+        } catch {}
+      }
       setCamOn((prev) => {
         const next = !prev;
         if (next) {
           setLocalRenderKey((k: number) => k + 1);
-          setInAudioOnlyUi(false);
         }
         if (pip.visible) pip.updatePiPState({ localCamOn: next });
         return next;
@@ -3119,7 +3152,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     } else {
       logger.warn('[VideoCall] Session не найдена для toggleCam');
     }
-  }, [pip]);
+  }, [pip, camOn]);
   
   const toggleRemoteAudio = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
@@ -3169,6 +3202,54 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     !isInactiveState &&
     !wasFriendCallEnded &&
     inAudioOnlyUi;
+
+  const pulsePeerVideoButton =
+    showAudioPresentation && peerInvitedVideo;
+
+  useEffect(() => {
+    if (!pulsePeerVideoButton) {
+      peerVideoPulse.stopAnimation();
+      peerVideoPulse.setValue(0);
+      return;
+    }
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(peerVideoPulse, {
+          toValue: 1,
+          duration: 720,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(peerVideoPulse, {
+          toValue: 0,
+          duration: 720,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    anim.start();
+    return () => {
+      anim.stop();
+      peerVideoPulse.setValue(0);
+    };
+  }, [pulsePeerVideoButton, peerVideoPulse]);
+
+  const peerVideoPulseHaloStyle = useMemo(
+    () => ({
+      position: 'absolute' as const,
+      width: 64,
+      height: 64,
+      borderRadius: 32,
+      borderWidth: 2,
+      borderColor: accent.solid,
+      opacity: peerVideoPulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.75] }),
+      transform: [
+        { scale: peerVideoPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.14] }) },
+      ],
+    }),
+    [accent.solid, peerVideoPulse],
+  );
 
   const partnerDisplayName = useMemo(() => {
     if (route?.params?.partnerNick) return String(route.params.partnerNick);
@@ -3742,15 +3823,38 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               />
             </TouchableOpacity>
             <AudioCallEndButton onPress={() => onAbortCall('end_button')} />
-            <TouchableOpacity
-              style={styles.audioRoundBtn}
-              onPress={() => toggleCam()}
-              activeOpacity={0.85}
-            >
-              <MaterialIcons name="videocam" size={28} color="#FFFFFF" />
-            </TouchableOpacity>
+            <View style={styles.audioVideoBtnWrap}>
+              {pulsePeerVideoButton ? (
+                <Animated.View style={peerVideoPulseHaloStyle} pointerEvents="none" />
+              ) : null}
+              <TouchableOpacity
+                style={[
+                  styles.audioRoundBtn,
+                  pulsePeerVideoButton && {
+                    borderWidth: 2,
+                    borderColor: accent.solid,
+                    backgroundColor: accent.solid15,
+                  },
+                ]}
+                onPress={() => toggleCam()}
+                activeOpacity={0.85}
+              >
+                <MaterialIcons
+                  name="videocam"
+                  size={28}
+                  color={pulsePeerVideoButton ? accent.softText : '#FFFFFF'}
+                />
+              </TouchableOpacity>
+            </View>
           </View>
-          <Text style={styles.audioCallHint}>{t('enableVideo', lang)}</Text>
+          <Text
+            style={[
+              styles.audioCallHint,
+              pulsePeerVideoButton && { color: accent.softText },
+            ]}
+          >
+            {pulsePeerVideoButton ? t('peerEnabledVideo', lang) : t('enableVideo', lang)}
+          </Text>
         </View>
       </SafeAreaView>
     );
@@ -3990,6 +4094,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 28,
     marginBottom: 16,
+  },
+  audioVideoBtnWrap: {
+    width: 64,
+    height: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   audioRoundBtn: {
     width: 64,
