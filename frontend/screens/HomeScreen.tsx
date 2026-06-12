@@ -56,6 +56,7 @@ import {
   FRIEND_ACTION_ICON_SIZE,
   FRIEND_ROW_HIT_CHAT,
   FRIEND_ROW_HIT_VIDEO,
+  FRIEND_ROW_HIT_AUDIO,
 } from '../constants/uiTokens';
 import { useAppTheme, ThemePreference } from '../theme/ThemeProvider';
 import { uiAccent } from '../theme/uiAccent';
@@ -84,7 +85,7 @@ import { trimNick } from '../utils/userDisplayName';
 import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, onMessagesDeleted, getUnreadCount, getUnreadCounts, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onCometChatStatus } from '../utils/globalEvents';
-import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep } from '../utils/callKeep';
+import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, setCallMediaHint } from '../utils/callKeep';
 import { clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, dismissMessageNotificationForUser, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import ChatStyleBackButton from '../components/ChatStyleBackButton';
@@ -119,6 +120,7 @@ import socket, {
   getMyUserId,
   API_BASE,
   startCall,
+  forceEndDirectCallWithPeer,
   warmCallSignaling,
   cancelCall,
   ensureSocketConnected,
@@ -226,7 +228,8 @@ const FRIEND_ACTION_BTN_SURFACE = {
 const FRIEND_ACTION_ICON_PRESSED = '#ddd';
 
 type FriendRowIconActionButtonProps = {
-  icon: 'chat-processing' | 'video';
+  icon: 'chat-processing-outline' | 'video' | 'phone-in-talk-outline';
+  flipIcon?: boolean;
   hitSlop?: { top?: number; bottom?: number; left?: number; right?: number };
   delayLongPress?: number;
   disabled?: boolean;
@@ -237,6 +240,7 @@ type FriendRowIconActionButtonProps = {
 
 function FriendRowIconActionButton({
   icon,
+  flipIcon,
   hitSlop,
   delayLongPress,
   disabled,
@@ -271,17 +275,19 @@ function FriendRowIconActionButton({
       ]}
     >
       {({ pressed }) => (
-        <MaterialCommunityIcons
-          name={icon}
-          size={FRIEND_ACTION_ICON_SIZE}
-          color={
-            disabled
-              ? ANDROID_VIDEO_CALL_DISABLED_ICON
-              : pressed
-                ? FRIEND_ACTION_ICON_PRESSED
-                : LIVI.white
-          }
-        />
+        <View style={flipIcon ? { transform: [{ scaleX: -1 }] } : undefined}>
+          <MaterialCommunityIcons
+            name={icon}
+            size={FRIEND_ACTION_ICON_SIZE}
+            color={
+              disabled
+                ? ANDROID_VIDEO_CALL_DISABLED_ICON
+                : pressed
+                  ? FRIEND_ACTION_ICON_PRESSED
+                  : LIVI.white
+            }
+          />
+        </View>
       )}
     </Pressable>
   );
@@ -321,6 +327,27 @@ function mergeFriendBusyFromFetch(
   _friendLooksOnline?: boolean,
 ): boolean {
   return !!serverBusy;
+}
+
+/** Есть ли реально активный direct-call (не залипшие global refs после завершения). */
+function isDirectCallSessionLive(g: any): boolean {
+  if (g.__videoCallActiveRef?.current !== true) return false;
+  const session = g.__webrtcSessionRef?.current;
+  if (session && typeof session.isEnded === 'function' && session.isEnded()) {
+    return false;
+  }
+  const sessionNotEnded =
+    !!session &&
+    (typeof session.isEnded === 'function'
+      ? !session.isEnded()
+      : session?.room?.state !== 'disconnected');
+  const params = g.__currentCallPiPParamsRef?.current;
+  const hasAnyCallIds =
+    !!params?.callId ||
+    !!params?.roomId ||
+    (!!session && typeof session.getCallId === 'function' && !!session.getCallId()) ||
+    (!!session && typeof session.getRoomId === 'function' && !!session.getRoomId());
+  return !!(sessionNotEnded || hasAnyCallIds);
 }
 
 const DRAFT_KEY = 'profile_draft_v1';
@@ -1653,6 +1680,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       g.__pipInSystemModeRef.current = false;
       g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
       g.__currentCallPiPParamsRef.current = null;
+      g.__outgoingCallMediaRef = g.__outgoingCallMediaRef || { current: null };
+      g.__outgoingCallMediaRef.current = null;
       g.__onVideoCallEndedRef?.current?.();
     } catch {}
   }, []);
@@ -1845,7 +1874,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     };
   }, [calling.visible]);
 
-  const handleStartVideoCall = useCallback(async (friend: Friend) => {
+  const handleStartDirectCall = useCallback(async (friend: Friend, media: 'audio' | 'video' = 'video') => {
     const canceledByNative =
       typeof global !== 'undefined' &&
       (global as any).__outgoingCanceledByNativeRef?.current === true;
@@ -1876,6 +1905,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       pendingCancelRef.current = false;
       outgoingCallUserCanceledRef.current = false;
       lastOutgoingPeerIdRef.current = String(friend.id);
+      try {
+        (global as any).__outgoingCallMediaRef = { current: media };
+      } catch {}
       setCalling({ visible: true, friend, callId: null });
       startWaves();
       // Сразу помечаем «исходящий на экране», чтобы сокет не отключался при уходе в фон (диалог разрешений).
@@ -1890,10 +1922,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         try { closeOutgoingCallActivity(); } catch {}
         return;
       }
-      // Нативный экран исходящего — только после завершения запроса разрешений
-      displayOutgoingCallImmediate(friend.id, friendName);
 
-      // Подписки ДО await startCall: иначе call:declined может прийти раньше регистрации → calling остаётся true → кнопки видео глобально disabled.
+      // Подписки ДО await startCall: иначе call:declined может прийти раньше регистрации → calling остаётся true → кнопки звонка глобально disabled.
       const socketUnsubs: Array<() => void> = [];
       let outgoingFinished = false;
       let safeguardTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2009,7 +2039,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       let r: any;
       try {
-        r = await startCall(friend.id);
+        r = await startCall(friend.id, media === 'audio' ? { media: 'audio' } : undefined);
       } catch (startErr) {
         if (!outgoingFinished) {
           outgoingFinished = true;
@@ -2050,8 +2080,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       setCalling((c) => ({ ...c, callId: r.callId || null }));
 
+      displayOutgoingCallImmediate(friend.id, friendName, media !== 'audio');
+
       if (r.callId) {
         notifyOutgoingCallId(r.callId);
+        try { setCallMediaHint(r.callId, media); } catch {}
       }
 
       const canceledByNative = (global as any).__outgoingCanceledByNativeRef?.current === true;
@@ -2085,9 +2118,22 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         });
       }, OUTGOING_CALL_TIMEOUT_MS);
     } catch (e: any) {
-      logger.warn('[outgoing] handleStartVideoCall failed', { error: e?.message ?? String(e) });
+      const errCode = String(e?.message ?? e ?? '').trim();
+      logger.warn('[outgoing] handleStartDirectCall failed', { error: errCode, media });
       if (isCurrentAttempt()) activeOutgoingAttemptRef.current = 0;
       try { setOutgoingCallScreenVisible(false); } catch {}
+      try { closeOutgoingCallActivity(); } catch {}
+      forceResetCallBusyRefs();
+      clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
+      if (errCode === 'initiator_busy' || errCode === 'busy') {
+        try {
+          const staleCallId =
+            String((global as any).__pendingCallAcceptedRef?.current?.callId || '').trim() ||
+            String((global as any).__outgoingCallIdRef?.current || '').trim() ||
+            undefined;
+          forceEndDirectCallWithPeer(String(friend.id), staleCallId || undefined);
+        } catch {}
+      }
       callingVisibleRef.current = false;
       setCalling({ visible: false, friend: null, callId: null });
       stopWaves();
@@ -2108,6 +2154,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
     }
   }, [navigation, showNotice, startWaves, stopWaves, resetOutgoingAfterExternalClose, clearStaleOutgoingAttemptIfIdle, forceResetCallBusyRefs, clearFriendsCallBusy, lang]);
+
+  const handleStartFriendCall = useCallback(
+    (friend: Friend) => handleStartDirectCall(friend, 'audio'),
+    [handleStartDirectCall],
+  );
 
   const handleCancelCall = useCallback(() => {
     activeOutgoingAttemptRef.current = 0;
@@ -3382,7 +3433,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   useEffect(() => {
     if (tab !== 'friends') return;
     syncSelfPresenceOnlineIfIdle('friends-tab');
-  }, [tab, syncSelfPresenceOnlineIfIdle]);
+    try {
+      const g = global as any;
+      if (g.__videoCallActiveRef?.current === true && !isDirectCallSessionLive(g)) {
+        forceResetCallBusyRefs();
+      }
+    } catch {}
+    void loadFriends();
+  }, [tab, syncSelfPresenceOnlineIfIdle, forceResetCallBusyRefs, loadFriends]);
 
   useEffect(() => {
     const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -4725,7 +4783,7 @@ const handleClearNick = useCallback(async () => {
       <View style={styles.chatBtnOuter}>
         <View style={styles.friendActionBadgeAnchor}>
           <FriendRowIconActionButton
-            icon="chat-processing"
+            icon="chat-processing-outline"
             hitSlop={FRIEND_ROW_HIT_CHAT}
             delayLongPress={280}
             onPress={handlePress}
@@ -4851,21 +4909,8 @@ const handleClearNick = useCallback(async () => {
     // при потере call:ended ref мог остаться true уже после падения LiveKit-комнаты.
     const isFriendBusy = friend.isBusy || false; // Флаг от сервера через presence:update (только когда вызов принят и оба в видеосвязи)
     const g = global as any;
-    const videoCallActive = g.__videoCallActiveRef?.current;
     const videoCallPartner = g.__videoCallPartnerUserIdRef?.current;
-    const session = g.__webrtcSessionRef?.current;
-    const sessionNotEnded =
-      !!session &&
-      (typeof session.isEnded === 'function'
-        ? !session.isEnded()
-        : session?.room?.state !== 'disconnected');
-    const params = g.__currentCallPiPParamsRef?.current;
-    const hasAnyCallIds =
-      !!params?.callId ||
-      !!params?.roomId ||
-      (!!session && typeof session.getRoomId === 'function' && !!session.getRoomId()) ||
-      (!!session && typeof session.getCallId === 'function' && !!session.getCallId());
-    const activeCallInProgress = !!videoCallActive && (sessionNotEnded || hasAnyCallIds);
+    const activeCallInProgress = isDirectCallSessionLive(g);
     const busy = isFriendBusy || (activeCallInProgress && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
     // Исходящий вызов в процессе (инициатор свернул нативный экран в шторку): у того, кому звоним — стиль «занято» без бейджа; у остальных — просто неактивная кнопка
     const outgoingInProgress = calling.visible;
@@ -4903,12 +4948,12 @@ const handleClearNick = useCallback(async () => {
             <Text style={styles.busyText}>{t('busy', lang)}</Text>
           </Animated.View>
         )}
-        <View style={styles.friendActionBadgeAnchor}>
+        <View style={styles.friendCallActionsAnchor}>
           <FriendRowIconActionButton
-            icon="video"
+            icon="phone-in-talk-outline"
             disabled={hardVideoDisabled}
             accessibilityState={{ disabled: !!videoDisabled }}
-            hitSlop={FRIEND_ROW_HIT_VIDEO}
+            hitSlop={FRIEND_ROW_HIT_AUDIO}
             delayLongPress={280}
             onLongPress={
               missedCount > 0 && !hardVideoDisabled
@@ -4919,29 +4964,7 @@ const handleClearNick = useCallback(async () => {
                 : undefined
             }
             onPress={() => {
-              logger.info('[FriendAction] video press', {
-                friendId: friendIdStr,
-                appState: AppState.currentState,
-                hardVideoDisabled,
-                videoDisabled,
-                outgoingInProgress,
-                activeOutgoingAttempt: activeOutgoingAttemptRef.current,
-                callingVisible: calling.visible,
-                callingVisibleRef: callingVisibleRef.current,
-                incomingInProgress,
-                activeCallInProgress,
-                busy,
-                hasMarkReadMenu: !!markReadMenu,
-                menuOpen,
-                donateVisible,
-                shareVisible,
-                inviteRequestVisible,
-                roomFullVisible: roomFull.visible,
-              });
-              if (hardVideoDisabled) {
-                logger.info('[FriendAction] video press ignored: hard disabled', { friendId: friendIdStr });
-                return;
-              }
+              if (hardVideoDisabled) return;
               if (activeOutgoingAttemptRef.current > 0 && !callingVisibleRef.current) {
                 clearStaleOutgoingAttemptIfIdle();
               }
@@ -4951,13 +4974,8 @@ const handleClearNick = useCallback(async () => {
                   AppState.currentState === 'active' &&
                   isCallKeepAvailable();
                 if (shouldResetStaleOutgoing) {
-                  resetOutgoingAfterExternalClose('video-press-stale-outgoing');
+                  resetOutgoingAfterExternalClose('call-press-stale-outgoing');
                 } else {
-                  logger.info('[FriendAction] video press ignored: outgoing in progress', {
-                    friendId: friendIdStr,
-                    appState: AppState.currentState,
-                    callKeepAvailable: isCallKeepAvailable(),
-                  });
                   return;
                 }
               }
@@ -4968,7 +4986,7 @@ const handleClearNick = useCallback(async () => {
               }
               const fid = String(friend.id);
               clearMissedCallsForFriend(fid);
-              handleStartVideoCall(friend);
+              handleStartFriendCall(friend);
             }}
           />
           {missedCount > 0 && (
@@ -5501,28 +5519,21 @@ const handleClearNick = useCallback(async () => {
     return off;
   }, [showNotice, lang, suppressUpdateBadgeForCallNotice]);
 
-  // Обработка «занято» от друга
+  // «Занято» при неудачном дозвоне — toast; бейдж isBusy только с presence:update (реальный звонок).
   useEffect(() => {
-    const onBusy = ({ from }: { from: string }) => {
-      // Скрываем модалку вызова, если открыта
+    const onBusy = (_payload: { from: string }) => {
       setCalling({ visible: false, friend: null, callId: null });
-
-      // Помечаем друга как "занят"
-      setFriends(prev =>
-        prev.map(f =>
-          String((f as any).id) === String(from)
-            ? { ...f, isBusy: true }
-            : f
-        )
-      );
-
-      // Не снимаем статус автоматически: бэйдж «Занято» должен сохраняться,
-      // пока собеседник реально занят (снимется событиями сервера)
+      try { setOutgoingCallScreenVisible(false); } catch {}
+      try { closeOutgoingCallActivity(); } catch {}
+      activeOutgoingAttemptRef.current = 0;
+      callingVisibleRef.current = false;
+      stopWaves();
+      showNotice(t('user_busy', lang), 'error', 3000);
     };
 
     socket.on('call:busy', onBusy);
     return () => { socket.off('call:busy', onBusy as any); };
-  }, []);
+  }, [showNotice, lang, stopWaves]);
 
   // Старый обработчик удален - используем новую систему статусов
 
@@ -5541,7 +5552,8 @@ const handleClearNick = useCallback(async () => {
     pip.inSystemPiPMode ||
     pip.pendingSystemPiP ||
     calling.visible ||
-    incomingCallScreen.visible;
+    incomingCallScreen.visible ||
+    (global as any).__videoCallActiveRef?.current === true;
   const handleBlockedStartSearchPress = useCallback(() => {
     setShowCallSearchLockBadge(true);
   }, []);
@@ -6702,6 +6714,13 @@ const styles = StyleSheet.create({
     position: 'relative' as const,
     overflow: 'visible' as const,
   },
+  friendCallActionsAnchor: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    position: 'relative' as const,
+    overflow: 'visible' as const,
+  },
 
   segmentBottomArc: { position: 'absolute', left: 18, right: 18, bottom: 0, height: 44, borderRadius: 114, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: LIVI.border },
 
@@ -6791,7 +6810,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  rightWrap: { width: 80, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' as const },
+  rightWrap: { width: 128, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' as const, gap: 6 },
   inviteBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
   inviteBtnDisabled: { 
     backgroundColor: LIVI.glass,

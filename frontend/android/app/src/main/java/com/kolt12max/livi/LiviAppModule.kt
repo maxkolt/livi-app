@@ -10,6 +10,7 @@ import android.content.Intent
 import android.app.KeyguardManager
 import android.graphics.Rect
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -31,6 +32,7 @@ import org.json.JSONObject
 import com.google.firebase.analytics.FirebaseAnalytics
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import expo.modules.notifications.badge.BadgeHelper
+import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -135,14 +137,15 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
   /** Показать нативный экран исходящего сразу (без callId). callId придёт позже через notifyOutgoingCallId. Сохраняем toUserId/toNick, чтобы запустить звук из notifyOutgoingCallId даже если broadcast не успел дойти до Activity. Перед запуском шлём broadcast закрытия предыдущего экрана, чтобы при повторном звонке (пока друг на неактивном экране) не поднимался старый singleInstance. */
   @ReactMethod
-  fun launchOutgoingCallActivityWithoutCallId(toUserId: String, toNick: String?) {
-    Log.d(NAME, "launchOutgoingCallActivityWithoutCallId: toUserId=$toUserId toNick=${toNick?.take(20)} hasCurrentActivity=${currentActivity != null}")
+  fun launchOutgoingCallActivityWithoutCallId(toUserId: String, toNick: String?, hasVideo: Boolean) {
+    Log.d(NAME, "launchOutgoingCallActivityWithoutCallId: toUserId=$toUserId toNick=${toNick?.take(20)} hasVideo=$hasVideo hasCurrentActivity=${currentActivity != null}")
     val ctx = reactApplicationContext
     LiviOngoingCallHelper.setOutgoingCall(ctx, "", toUserId, toNick ?: "")
     val intent = Intent(ctx, OutgoingCallActivity::class.java).apply {
       putExtra(OutgoingCallActivity.EXTRA_CALL_ID, "")
       putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, toUserId)
       putExtra(OutgoingCallActivity.EXTRA_TO_NICK, toNick ?: "")
+      putExtra(OutgoingCallActivity.EXTRA_HAS_VIDEO, hasVideo)
     }
     closeAnyOutgoingScreenThenLaunch(ctx, intent, retryIfNoActivity = true)
   }
@@ -335,7 +338,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
   /** Единый UI входящего: открыть нативный IncomingCallActivity (foreground и из deep link livi://incoming-call). */
   @ReactMethod
-  fun launchIncomingCallActivity(callId: String, from: String, fromNick: String?) {
+  fun launchIncomingCallActivity(callId: String, from: String, fromNick: String?, hasVideo: Boolean) {
     val ctx = reactApplicationContext
     if (callId.isNotBlank() && EndedCallIds.isEnded(ctx, callId)) {
       Log.d(NAME, "launchIncomingCallActivity skipped (call already ended) callId=$callId")
@@ -348,7 +351,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
     // Те же флаги, что и в FCM (buildIncomingCallActivityIntent): иначе при активном процессе + заблокированном экране
     // startActivity без SHOW_WHEN_LOCKED / TURN_SCREEN_ON часто не показывает входящий поверх блокировки.
-    val intent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: "")
+    val intent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: "", hasVideo)
     ctx.startActivity(intent)
   }
 
@@ -357,7 +360,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
    * Используется для socket-path, когда приложение не в фокусе (AppState != active).
    */
   @ReactMethod
-  fun showIncomingCallSystemUI(callId: String, from: String, fromNick: String?) {
+  fun showIncomingCallSystemUI(callId: String, from: String, fromNick: String?, hasVideo: Boolean) {
     if (callId.isBlank() || from.isBlank()) return
     val ctx = reactApplicationContext
     if (EndedCallIds.isEnded(ctx, callId)) {
@@ -371,7 +374,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     // Как в LiviFirebaseMessagingService: сначала пробуем Activity сразу (сокет в фоне / экран выключен — иначе только FGS с «тихим»
     // уведомлением без fullScreenIntent часто не пробивает BAL на блокировке).
     try {
-      val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: "")
+      val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: "", hasVideo)
       ctx.startActivity(launchIntent)
       Log.d(NAME, "showIncomingCallSystemUI: immediate startActivity OK")
     } catch (e: Exception) {
@@ -398,7 +401,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } catch (e: Exception) {
       Log.w(NAME, "showIncomingCallSystemUI: failed to start IncomingCallForegroundService", e)
       try {
-        ctx.startActivity(LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: ""))
+        ctx.startActivity(LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: "", hasVideo))
       } catch (_: Exception) {}
     }
   }
@@ -586,6 +589,51 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /**
+   * Маршрут голосового звонка: earpiece vs speaker.
+   * На Android 12+ setSpeakerphoneOn часто игнорируется — используем setCommunicationDevice.
+   */
+  @ReactMethod
+  fun setVoiceCallSpeakerOn(speakerOn: Boolean, promise: Promise) {
+    UiThreadUtil.runOnUiThread {
+      try {
+        val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        if (am == null) {
+          promise.resolve(false)
+          return@runOnUiThread
+        }
+        am.mode = AudioManager.MODE_IN_COMMUNICATION
+        var applied = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          try {
+            val devices = am.availableCommunicationDevices
+            val targetType = if (speakerOn) {
+              AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+            } else {
+              AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+            }
+            val device = devices.firstOrNull { it.type == targetType }
+            if (device != null) {
+              applied = am.setCommunicationDevice(device)
+            }
+          } catch (e: Exception) {
+            Log.w(NAME, "setCommunicationDevice failed: ${e.message}")
+          }
+        }
+        if (!applied) {
+          @Suppress("DEPRECATION")
+          am.isSpeakerphoneOn = speakerOn
+          applied = true
+        }
+        Log.i(NAME, "setVoiceCallSpeakerOn speakerOn=$speakerOn applied=$applied api=${Build.VERSION.SDK_INT}")
+        promise.resolve(applied)
+      } catch (e: Exception) {
+        Log.e(NAME, "setVoiceCallSpeakerOn failed", e)
+        promise.reject("ERR_AUDIO_ROUTE", e.message, e)
+      }
+    }
+  }
+
   /** При обработке livi://answer-call — закрыть IncomingCallActivity по callId (если открыта из уведомления). */
   @ReactMethod
   fun sendCallAnsweredBroadcast(callId: String) {
@@ -665,6 +713,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     LiviAppModule.setInAppPiPVisibleForSystemPiPStatic(visible)
   }
 
+  @ReactMethod
+  fun setSystemPiPCaptureFrameReady(ready: Boolean) {
+    LiviAppModule.setSystemPiPCaptureFrameReadyStatic(ready)
+  }
+
   /** Координаты маленького in-app PiP в пикселях окна; используются как sourceRect при Home -> system PiP. */
   @ReactMethod
   fun setInAppPiPSourceRectForSystemPiP(left: Double, top: Double, width: Double, height: Double) {
@@ -719,16 +772,15 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
             Log.w("LiviAppModule", "requestEnterPictureInPicture attempt failed", e2)
           }
         }
-        // ВАЖНО: небольшая стартовая пауза всё ещё нужна, чтобы JS успел отрисовать overlay 9:16,
-        // но прежние 450ms ощущались как "залипание" на первом Back. Делаем раннюю попытку
-        // и оставляем более поздние ретраи как страховку для медленных устройств.
-        handler.postDelayed(tryEnterPiP, 120)
-        handler.postDelayed(tryEnterPiP, 260)
-        handler.postDelayed(tryEnterPiP, 450)
-        handler.postDelayed(tryEnterPiP, 700)
-        handler.postDelayed(tryEnterPiP, 1000)
-        handler.postDelayed(tryEnterPiP, 1500)
-        handler.postDelayed(tryEnterPiP, 2200)
+        // Вызывается только после отрисовки SystemPiPCaptureHost; первая попытка с небольшой паузой
+        // для TextureView, далее ретраи для медленных устройств / Samsung.
+        handler.postDelayed(tryEnterPiP, 80)
+        handler.postDelayed(tryEnterPiP, 280)
+        handler.postDelayed(tryEnterPiP, 520)
+        handler.postDelayed(tryEnterPiP, 900)
+        handler.postDelayed(tryEnterPiP, 1400)
+        handler.postDelayed(tryEnterPiP, 2100)
+        handler.postDelayed(tryEnterPiP, 3000)
       } catch (e: Exception) {
         Log.w("LiviAppModule", "requestEnterPictureInPicture failed", e)
       }
@@ -1550,6 +1602,17 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       shouldEnterPiPOnLeaveHint = value
     }
 
+    /** JS выставляет true, когда SystemPiPCaptureHost отрисовал remote video — можно enterPictureInPictureMode. */
+    @Volatile
+    @JvmField
+    var systemPiPCaptureFrameReady = false
+    @JvmStatic
+    fun getSystemPiPCaptureFrameReady(): Boolean = systemPiPCaptureFrameReady
+    @JvmStatic
+    internal fun setSystemPiPCaptureFrameReadyStatic(value: Boolean) {
+      systemPiPCaptureFrameReady = value
+    }
+
     /** true только для маленького in-app PiP; помогает MainActivity выбрать задержанный вход в system PiP без zoomed capture. */
     @Volatile
     @JvmField
@@ -1629,14 +1692,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
      * decorWidth/decorHeight — размер decorView на момент вызова (до входа в PiP), чтобы JS не вызывал getDecorViewSize() после перехода (там уже размер окна PiP 334x594 и ломается отображение при повторном входе). */
     @JvmStatic
     fun emitAboutToEnterSystemPiP(decorWidth: Int = 0, decorHeight: Int = 0) {
+      setSystemPiPCaptureFrameReadyStatic(false)
       reactContextRef?.runOnUiQueueThread {
+        val ctx = reactContextRef ?: return@runOnUiQueueThread
         if (decorWidth > 0 && decorHeight > 0) {
           val params = Arguments.createMap()
           params.putInt("width", decorWidth)
           params.putInt("height", decorHeight)
-          reactContextRef?.emitDeviceEvent("AboutToEnterSystemPiP", params)
+          ctx.emitDeviceEvent("AboutToEnterSystemPiP", params)
         } else {
-          reactContextRef?.emitDeviceEvent("AboutToEnterSystemPiP", null)
+          ctx.emitDeviceEvent("AboutToEnterSystemPiP", null)
         }
       }
     }

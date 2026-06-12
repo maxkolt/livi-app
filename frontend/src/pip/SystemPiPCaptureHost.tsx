@@ -32,12 +32,14 @@ export default function SystemPiPCaptureHost() {
       return;
     }
     firedRequestIdRef.current = requestId;
-    // ВАЖНО: для TextureView/RTC-поверхности нужно немного времени, иначе system PiP может
-    // захватить "старый" frame UI (кнопки/оверлеи) вместо выделенного fullscreen video.
-    // Ретраи native остаются как страховка для медленных устройств.
-    const ENTER_DELAY_MS = 260;
-    const t = setTimeout(() => {
+    const ENTER_DELAY_MS = 60;
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb: () => void) => setTimeout(cb, 16);
+    const requestSystemPiP = () => {
+      if (cancelled) return;
       try {
+        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
         NativeModules.LiviAppModule?.requestEnterPictureInPicture?.();
       } catch (error) {
         console.warn('[SystemPiPCaptureHost] native requestEnterPictureInPicture threw', {
@@ -45,9 +47,22 @@ export default function SystemPiPCaptureHost() {
           error: String(error),
         });
       }
-    }, ENTER_DELAY_MS);
+    };
+    raf(() => {
+      if (cancelled) return;
+      raf(() => {
+        if (cancelled) return;
+        timeoutId = setTimeout(requestSystemPiP, ENTER_DELAY_MS);
+      });
+    });
 
-    return () => clearTimeout(t);
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      try {
+        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
+      } catch (_) {}
+    };
   }, [active, layoutReady, requestId, remoteStream, shouldShowAway]);
 
   return (

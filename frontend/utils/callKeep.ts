@@ -13,8 +13,57 @@ export const OUTGOING_CALL_TIMEOUT_MS = 27_000;
 let isSetup = false;
 /** Android: CallKeep успешно инициализирован и готов к показу системного UI звонка. */
 let isAndroidCallKeepReady = false;
-/** raw callId -> { from, fromNick, callKitId } для навигации при answer из нативного UI */
-const pendingCallById: Record<string, { from: string; fromNick?: string; callKitId?: string }> = {};
+/** raw callId -> { from, fromNick, callKitId, hasVideo? } для навигации при answer из нативного UI */
+const pendingCallById: Record<string, { from: string; fromNick?: string; callKitId?: string; hasVideo?: boolean }> = {};
+/** callId -> media hint (audio | video) для навигации и CallKit */
+const callMediaByCallId: Record<string, 'audio' | 'video'> = {};
+
+export type DirectCallMediaHint = 'audio' | 'video';
+
+export function setCallMediaHint(callId: string, media: DirectCallMediaHint): void {
+  const id = String(callId || '').trim();
+  if (!id) return;
+  callMediaByCallId[id] = media;
+}
+
+export function getCallMediaHint(callId?: string | null): DirectCallMediaHint {
+  const id = String(callId || '').trim();
+  if (id && callMediaByCallId[id] === 'video') return 'video';
+  return 'audio';
+}
+
+/** Аудио-first UI и startWithCamOff для прямого звонка (мессенджер: по умолчанию аудио). */
+export function resolveDirectCallAudioFirst(params?: {
+  directCall?: boolean;
+  directInitiator?: boolean;
+  callMedia?: DirectCallMediaHint;
+  startWithCamOff?: boolean;
+  callId?: string | null;
+} | null, pendingCallId?: string | null): boolean {
+  const p = params ?? {};
+  if (!p.directCall) return false;
+  if (p.callMedia === 'video') return false;
+  if (p.startWithCamOff || p.callMedia === 'audio') return true;
+  const cid = String(p.callId ?? pendingCallId ?? '').trim();
+  if (cid && getCallMediaHint(cid) === 'audio') return true;
+  if (!p.directInitiator) return true;
+  return cid ? getCallMediaHint(cid) !== 'video' : true;
+}
+
+export function resolveCallHasVideo(callId?: string | null): boolean {
+  return getCallMediaHint(callId) !== 'audio';
+}
+
+export function videoCallNavExtras(
+  callId?: string | null,
+  explicitMedia?: DirectCallMediaHint,
+): { callMedia?: DirectCallMediaHint; startWithCamOff?: boolean } {
+  const id = String(callId || '').trim();
+  const media =
+    explicitMedia ?? (id ? callMediaByCallId[id] : undefined) ?? 'audio';
+  if (media === 'video') return {};
+  return { callMedia: 'audio', startWithCamOff: true };
+}
 const callKitUuidByCallId: Record<string, string> = {};
 const callIdByCallKitUuid: Record<string, string> = {};
 const activeCallKeepCallIds = new Set<string>();
@@ -31,12 +80,14 @@ function resolveCallKeepUuid(callIdOrUuid: string): string {
   return callKitUuidByCallId[id] || id;
 }
 
-function rememberPendingCall(input: { callId: string; from: string; fromNick?: string; callKitId?: string }): void {
+function rememberPendingCall(input: { callId: string; from: string; fromNick?: string; callKitId?: string; hasVideo?: boolean }): void {
   const callId = String(input.callId || '').trim();
   const from = String(input.from || '').trim();
   const callKitId = String(input.callKitId || '').trim();
   if (!callId || !from) return;
-  pendingCallById[callId] = { from, fromNick: input.fromNick, callKitId: callKitId || undefined };
+  const hasVideo = input.hasVideo === true;
+  pendingCallById[callId] = { from, fromNick: input.fromNick, callKitId: callKitId || undefined, hasVideo };
+  callMediaByCallId[callId] = hasVideo ? 'video' : 'audio';
   activeCallKeepCallIds.add(callId);
   if (callKitId) {
     callKitUuidByCallId[callId] = callKitId;
@@ -247,7 +298,8 @@ export async function launchIncomingCallActivityScreen(
   callId: string,
   from: string,
   fromNick?: string,
-  checkEnded?: boolean
+  checkEnded?: boolean,
+  hasVideo = false,
 ): Promise<void> {
   if (Platform.OS !== 'android') return;
   try {
@@ -264,7 +316,8 @@ export async function launchIncomingCallActivityScreen(
     lastDisplayedCallId.at = now;
     const LiviAppModule = NativeModules.LiviAppModule;
     if (LiviAppModule?.launchIncomingCallActivity) {
-      LiviAppModule.launchIncomingCallActivity(callId, from, fromNick ?? '');
+      rememberPendingCall({ callId, from, fromNick, hasVideo });
+      LiviAppModule.launchIncomingCallActivity(callId, from, fromNick ?? '', hasVideo);
       setIncomingCallScreenVisible(true, from);
       logger.info('[callKeep] launchIncomingCallActivityScreen', { callId, from });
     }
@@ -279,10 +332,11 @@ export async function launchIncomingCallActivityScreen(
  * - unlocked → heads-up уведомление (как на скрине)
  * - locked/sleep → full-screen → IncomingCallActivity
  */
-export function showIncomingCallSystemUI(callId: string, from: string, fromNick?: string): void {
+export function showIncomingCallSystemUI(callId: string, from: string, fromNick?: string, hasVideo = false): void {
   if (Platform.OS !== 'android') return;
   try {
-    NativeModules.LiviAppModule?.showIncomingCallSystemUI?.(callId, from, fromNick ?? '');
+    rememberPendingCall({ callId, from, fromNick, hasVideo });
+    NativeModules.LiviAppModule?.showIncomingCallSystemUI?.(callId, from, fromNick ?? '', hasVideo);
     // Как у launchIncomingCallActivityScreen: держим сокет/presence в согласовании с нативным входящим в фоне.
     setIncomingCallScreenVisible(true, from);
   } catch {}
@@ -461,7 +515,7 @@ export function setOutgoingCallTimeoutMs(ms: number): void {
  * Показать нативный экран исходящего вызова сразу (без задержки на ответ сервера).
  * Вызывать в момент нажатия кнопки видеозвонка. После получения callId вызвать notifyOutgoingCallId(callId).
  */
-export function displayOutgoingCallImmediate(toUserId: string, toNick?: string): void {
+export function displayOutgoingCallImmediate(toUserId: string, toNick?: string, hasVideo = true): void {
   logger.info('[outgoing] displayOutgoingCallImmediate called', {
     toUserId,
     toNick: toNick ?? '',
@@ -484,8 +538,8 @@ export function displayOutgoingCallImmediate(toUserId: string, toNick?: string):
   try {
     const LiviAppModule = NativeModules.LiviAppModule;
     if (LiviAppModule?.launchOutgoingCallActivityWithoutCallId) {
-      logger.info('[outgoing] calling native launchOutgoingCallActivityWithoutCallId', { to: toUserId });
-      LiviAppModule.launchOutgoingCallActivityWithoutCallId(toUserId, toNick ?? toUserId);
+      logger.info('[outgoing] calling native launchOutgoingCallActivityWithoutCallId', { to: toUserId, hasVideo });
+      LiviAppModule.launchOutgoingCallActivityWithoutCallId(toUserId, toNick ?? toUserId, hasVideo);
       logger.info('[callKeep] displayOutgoingCallImmediate', { to: toUserId });
     } else if (LiviAppModule?.launchOutgoingCallActivity) {
       logger.info('[outgoing] calling native launchOutgoingCallActivity (fallback, no callId)', { to: toUserId });
@@ -537,7 +591,7 @@ export function displayOutgoingCall(callId: string, toUserId: string, toNick?: s
  * Показать входящий звонок в нативном UI (полный экран / уведомление).
  * Вызывать при получении входящего (сокет или пуш). Повторные вызовы для того же callId игнорируются.
  */
-export function displayIncomingCall(callId: string, fromUserId: string, fromNick?: string, hasVideo = true, callKitId?: string): void {
+export function displayIncomingCall(callId: string, fromUserId: string, fromNick?: string, hasVideo = false, callKitId?: string): void {
   if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
   if (!isSetup || (Platform.OS === 'android' && !isAndroidCallKeepReady)) {
     logger.warn('[callKeep] displayIncomingCall skipped (CallKeep not ready)', {
@@ -555,7 +609,7 @@ export function displayIncomingCall(callId: string, fromUserId: string, fromNick
   lastDisplayedCallId.id = callId;
   lastDisplayedCallId.at = now;
   try {
-    rememberPendingCall({ callId, from: fromUserId, fromNick, callKitId });
+    rememberPendingCall({ callId, from: fromUserId, fromNick, callKitId, hasVideo });
     const RNCallKeep = require('react-native-callkeep');
     const nativeCallId = Platform.OS === 'ios' ? resolveCallKeepUuid(callKitId || callId) : callId;
     if (Platform.OS === 'ios') {
@@ -573,7 +627,7 @@ export function displayIncomingCall(callId: string, fromUserId: string, fromNick
 }
 
 /** Данные входящего по callId (для навигации при answer из нативного UI). */
-export function getPendingCallInfo(callId: string): { from: string; fromNick?: string; callKitId?: string } | undefined {
+export function getPendingCallInfo(callId: string): { from: string; fromNick?: string; callKitId?: string; hasVideo?: boolean } | undefined {
   return pendingCallById[resolveRawCallId(callId)];
 }
 

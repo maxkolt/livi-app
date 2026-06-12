@@ -29,6 +29,13 @@ export const FRIEND_ROW_HIT_VIDEO = {
   left: TOUCH_HIT_OUTER,
   right: TOUCH_HIT_INNER,
 } as const;
+/** Между аудио и видео — узкий зазор hitSlop. */
+export const FRIEND_ROW_HIT_AUDIO = {
+  top: TOUCH_HIT_OUTER,
+  bottom: TOUCH_HIT_OUTER,
+  left: TOUCH_HIT_INNER,
+  right: TOUCH_HIT_INNER,
+} as const;
 export const FRIEND_ROW_HIT_CHAT = {
   top: TOUCH_HIT_OUTER,
   bottom: TOUCH_HIT_OUTER,

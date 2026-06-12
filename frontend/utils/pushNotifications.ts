@@ -18,7 +18,7 @@ import { getInstallId } from './installId';
 import { logger } from './logger';
 import { trackReleaseError, trackReleaseEvent } from './telemetry';
 import { stopIncomingCallAlert } from './incomingCallAlert';
-import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration } from './callKeep';
+import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration, setCallMediaHint, getCallMediaHint, videoCallNavExtras, type DirectCallMediaHint } from './callKeep';
 import { emitCloseOutgoingCall, emitCloseHomeModals, emitMissedClear, emitMissedIncrement } from './globalEvents';
 import { recordAppliedFromPending } from '../sockets/socket';
 import { loadLang, t } from './i18n';
@@ -972,7 +972,9 @@ async function runWhenNavReady(
   return false;
 }
 
-async function navigateToVideoCallIncoming(peerUserId: string, callId: string) {
+async function navigateToVideoCallIncoming(peerUserId: string, callId: string, media?: DirectCallMediaHint) {
+  const incomingMedia = media ?? getCallMediaHint(callId);
+  try { setCallMediaHint(callId, incomingMedia); } catch {}
   await runWhenNavReady(`call:${callId || peerUserId}`, (nav) => {
     setActiveVideoCall(true);
     try { emitCloseHomeModals(); } catch {}
@@ -983,6 +985,7 @@ async function navigateToVideoCallIncoming(peerUserId: string, callId: string) {
       directInitiator: false,
       callId,
       isIncoming: true,
+      ...videoCallNavExtras(callId, incomingMedia),
     });
   });
 }
@@ -997,7 +1000,11 @@ export async function openIncomingCallScreen(peerUserId: string, callId: string)
 
 /** Открыть приложение и принять звонок (для livi://answer-call из нативного IncomingCallActivity).
  * Сразу VideoCall + session.acceptCall() (сокет греется параллельно). */
-export async function openAnswerCallScreen(peerUserId: string, callId: string): Promise<void> {
+export async function openAnswerCallScreen(
+  peerUserId: string,
+  callId: string,
+  media?: DirectCallMediaHint,
+): Promise<void> {
   try { setIncomingCallScreenVisible(false); } catch {}
   try {
     stopIncomingCallAlert();
@@ -1006,7 +1013,7 @@ export async function openAnswerCallScreen(peerUserId: string, callId: string): 
   if (Platform.OS === 'android') {
     sendCallAnsweredBroadcast(callId);
   }
-  await navigateToVideoCallIncoming(peerUserId, callId);
+  await navigateToVideoCallIncoming(peerUserId, callId, media ?? getCallMediaHint(callId));
   try {
     await clearCallRelatedNotificationsAndSyncBadge();
   } catch {}
@@ -1609,7 +1616,8 @@ export function addNotificationListeners() {
           appState: AppState.currentState,
         });
         if (isCallKeepAvailable() && AppState.currentState !== 'active') {
-          displayIncomingCall(data.callId, data.from, data.fromNick ?? '', true, data.callKitId);
+          const hasVideo = String(data?.media || '').toLowerCase() === 'video';
+          displayIncomingCall(data.callId, data.from, data.fromNick ?? '', hasVideo, data.callKitId);
         }
         const setFromPush = (global as any).__setIncomingCallFromPush;
         if (typeof setFromPush === 'function') {

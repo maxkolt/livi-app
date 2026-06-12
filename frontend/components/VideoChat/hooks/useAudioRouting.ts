@@ -1,15 +1,30 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type MutableRefObject } from 'react';
 import { DeviceEventEmitter, InteractionManager, PermissionsAndroid, Platform } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
 import { beginBackgroundMediaSuppression, pauseBackgroundMediaAfterCall } from '../../../utils/callKeep';
 import { logger } from '../../../utils/logger';
+import { applyNativeVoiceCallSpeaker } from '../../../utils/voiceCallAudioRoute';
 
 /**
  * Хук для управления аудио-рутированием
  * ВАЖНО: без агрессивных таймеров/пинков — они часто ухудшают стабильность (особенно на Android/ColorOS).
  * Делаем один предсказуемый старт/стоп аудио-сессии, остальное оставляем LiveKit/WebRTC.
  */
-export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
+export type AudioRoutingOptions = {
+  /** Старт с разговорного динамика (earpiece); громкий — только по кнопке. */
+  defaultToEarpiece?: boolean;
+  speakerOnRef?: MutableRefObject<boolean>;
+};
+
+export const useAudioRouting = (
+  enabled: boolean,
+  remoteStream: any,
+  preferAudioMode = false,
+  routingOptions?: AudioRoutingOptions,
+) => {
+  const routingOptionsRef = useRef(routingOptions);
+  routingOptionsRef.current = routingOptions;
+
   const didStartRef = useRef(false);
   const lastAvailableRef = useRef<string[]>([]);
   const lastSelectedRef = useRef<string>('');
@@ -51,6 +66,49 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
     try { InCallManager.setSpeakerphoneOn(false); } catch {}
   };
 
+  const wantsSpeakerOutput = () => {
+    const opts = routingOptionsRef.current;
+    if (opts?.defaultToEarpiece) {
+      return !!opts.speakerOnRef?.current;
+    }
+    return true;
+  };
+
+  const logRouteInfo = (msg: string, data?: Record<string, unknown>) => {
+    try {
+      logger.info(`[useAudioRouting] ${msg}`, {
+        speakerOn: wantsSpeakerOutput(),
+        defaultToEarpiece: !!routingOptionsRef.current?.defaultToEarpiece,
+        ...data,
+      });
+    } catch {}
+  };
+
+  /** Android: жёстко выставить earpiece или speaker (InCallManager user selection). */
+  const applyHardOutputRoute = (reason: string, force = false) => {
+    if (Platform.OS === 'android') {
+      const wantSpeaker = wantsSpeakerOutput();
+      try {
+        if (wantSpeaker) {
+          (InCallManager as any).setForceSpeakerphoneOn?.(true);
+          InCallManager.setSpeakerphoneOn(true);
+          void (InCallManager as any).chooseAudioRoute?.('SPEAKER_PHONE');
+        } else {
+          (InCallManager as any).setForceSpeakerphoneOn?.(false);
+          InCallManager.setSpeakerphoneOn(false);
+          void (InCallManager as any).chooseAudioRoute?.('EARPIECE');
+        }
+      } catch {}
+      void applyNativeVoiceCallSpeaker(wantSpeaker);
+      logRouteInfo(wantSpeaker ? 'speaker route' : 'earpiece route', { reason, force });
+      return;
+    }
+    configureIOSAudioSession();
+    try {
+      InCallManager.setSpeakerphoneOn(wantsSpeakerOutput());
+    } catch {}
+  };
+
   const configureIOSAudioSession = () => {
     if (Platform.OS !== 'ios') return;
     try {
@@ -59,14 +117,13 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
       if (!RTCAudioSession || typeof RTCAudioSession.sharedInstance !== 'function') return;
       const s = RTCAudioSession.sharedInstance();
       s.setCategory('PlayAndRecord', {
-        defaultToSpeaker: true,
+        defaultToSpeaker: wantsSpeakerOutput(),
         allowBluetooth: true,
         allowBluetoothA2DP: true,
         mixWithOthers: false,
       });
-      s.setMode('VideoChat');
+      s.setMode(wantsSpeakerOutput() ? 'VideoChat' : 'VoiceChat');
       s.setActive(true);
-      // IMPORTANT: do NOT force speaker output. Let iOS route to wired/Bluetooth devices.
     } catch (e) {
       logger.warn('[useAudioRouting] Error configuring iOS audio session:', e);
     }
@@ -76,39 +133,44 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
     if (Platform.OS === 'android') {
       beginBackgroundMediaSuppression();
     }
-    try { InCallManager.start({ media: 'video', ringback: '' }); } catch {}
-    // Ensure Android audio focus is requested (some devices won't switch routes reliably without it).
-    try { (InCallManager as any).requestAudioFocus?.(); } catch {}
-    // Android: по умолчанию звук в видеозвонке идёт в громкий динамик, не в верхний (earpiece).
-    if (Platform.OS === 'android') {
-      try { InCallManager.setSpeakerphoneOn(true); } catch {}
-    } else {
-      setSpeakerAuto(); // iOS: keep "auto" so wired/Bluetooth can take over.
+    const earpieceProductMode = !!routingOptionsRef.current?.defaultToEarpiece;
+    const media = earpieceProductMode || preferAudioMode ? 'audio' : 'video';
+    // Native start() применяет defaultSpeaker только при первой активации; после video-start earpiece не включится без stop().
+    if (Platform.OS === 'android' && earpieceProductMode) {
+      try { InCallManager.stop(); } catch {}
     }
-    configureIOSAudioSession();
+    try { InCallManager.start({ media, ringback: '' }); } catch {}
+    try { (InCallManager as any).requestAudioFocus?.(); } catch {}
+    applyHardOutputRoute('applyRouting', true);
     log('[useAudioRouting] applyRouting()', {
       platform: Platform.OS,
       enabled,
+      media,
       hasRemoteStream: !!remoteStream,
       streamId: remoteStream?.id,
     });
   };
 
   const pickDesiredRoute = (available: string[]) => {
-    // Deterministic rule:
     // 1) Wired headset always wins
     // 2) Bluetooth headset next
-    // 3) Otherwise default to speakerphone for video calls
+    // 3) Speaker vs earpiece — по режиму звонка / кнопке динамика
     if (available.includes('WIRED_HEADSET')) return 'WIRED_HEADSET';
     if (available.includes('BLUETOOTH')) return 'BLUETOOTH';
-    return 'SPEAKER_PHONE';
+    return wantsSpeakerOutput() ? 'SPEAKER_PHONE' : 'EARPIECE';
   };
 
-  const applyDesiredRoute = async (available: string[], reason: string) => {
+  const applyDesiredRoute = async (available: string[], reason: string, force = false) => {
     if (!enabled) return;
-    if (Platform.OS !== 'android') return; // iOS routes automatically (wired/BT has priority)
+    if (Platform.OS !== 'android') return;
+    if (routingOptionsRef.current?.defaultToEarpiece) {
+      applyHardOutputRoute(reason, force);
+      const desired = pickDesiredRoute(available);
+      if (desired) lastSelectedRef.current = desired;
+      return;
+    }
     const desired = pickDesiredRoute(available);
-    if (desired && lastSelectedRef.current === desired) return;
+    if (!force && desired && lastSelectedRef.current === desired) return;
     lastSelectedRef.current = desired;
     try {
       await (InCallManager as any).chooseAudioRoute?.(desired);
@@ -261,7 +323,8 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
         refreshInFlightRef.current = true;
         lastRefreshAtRef.current = now;
         try {
-          const chosen = lastSelectedRef.current || 'SPEAKER_PHONE';
+          const av = lastAvailableRef.current;
+          const chosen = pickDesiredRoute(av.length ? av : ['EARPIECE', 'SPEAKER_PHONE']);
           const status = await icm.chooseAudioRoute?.(chosen);
           const { available, selected } = parseStatus(status);
           log('[useAudioRouting] refreshStatus', { reason, available, selected });
@@ -301,9 +364,26 @@ export const useAudioRouting = (enabled: boolean, remoteStream: any) => {
     };
   }, [enabled]);
 
+  // LiveKit/WebRTC на Android иногда снова включает speaker после появления remote audio.
+  useEffect(() => {
+    if (!enabled || !routingOptionsRef.current?.defaultToEarpiece) return;
+    if (!remoteStream?.getAudioTracks?.()?.length) return;
+    applyHardOutputRoute('remote_stream', true);
+    const delays = [400, 1200, 2500, 5000, 8000];
+    const timers = delays.map((ms) =>
+      setTimeout(() => applyHardOutputRoute(`remote_stream+${ms}ms`, true), ms),
+    );
+    return () => {
+      timers.forEach(clearTimeout);
+    };
+  }, [enabled, remoteStream?.id, preferAudioMode]);
+
   return {
-    // Re-apply routing rules (used after PiP/foreground transitions)
-    syncRouteNow: () => applyDesiredRoute(lastAvailableRef.current, 'manualSync'),
+    syncRouteNow: () => {
+      applyHardOutputRoute('manualSync', true);
+      void applyDesiredRoute(lastAvailableRef.current, 'manualSync', true);
+    },
     stopSpeaker,
+    applyHardOutputRoute,
   };
 };

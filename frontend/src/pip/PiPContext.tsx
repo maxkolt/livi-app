@@ -325,6 +325,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setPendingSystemPiP(false);
           setSystemPiPCaptureActive(false);
           setSystemPiPCaptureRequestId(0);
+          try {
+            g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+            g.__pendingSystemPiPSyncRef.current = false;
+          } catch (_) {}
           const session = g.__webrtcSessionRef?.current;
           if (session && typeof (session as any).enterPiP === 'function') (session as any).enterPiP();
           // КРИТИЧНО: В PiP система часто переключает звук с громкого динамика на разговорный (earpiece) — становится тихо.
@@ -633,12 +637,62 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         roomId: stableIds.roomId,
       });
 
-      // Включаем отдельный fullscreen-host для system PiP capture. Native войдёт в PiP
-      // только после подтверждения готовности этого host, чтобы не захватить маленький in-app PiP.
-      const requestId = g.__pipVisibleRef?.current === true ? Date.now() : 0;
+      try {
+        g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+        g.__pendingSystemPiPSyncRef.current = true;
+        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
+        NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
+      } catch (_) {}
+
+      let params = g.__currentCallPiPParamsRef?.current;
+      if (!params && session) {
+        const cid = typeof (session as any).getCallId === 'function' ? (session as any).getCallId() : null;
+        const rid = typeof (session as any).getRoomId === 'function' ? (session as any).getRoomId() : null;
+        if (cid || rid) {
+          params = {
+            callId: cid || '',
+            roomId: rid || '',
+            partnerName: '',
+            partnerAvatarUrl: undefined,
+            localStream: null,
+            remoteStream: null,
+            localCamOn: true,
+            navParams: undefined,
+          };
+        }
+      }
+      if (params?.callId && params?.roomId) {
+        if (NativeModules.LiviAppModule?.setPiPEndCallParams) {
+          try { NativeModules.LiviAppModule.setPiPEndCallParams(params.callId, params.roomId); } catch (_) {}
+        }
+        const remoteFromSession =
+          session && typeof (session as any).getRemoteStream === 'function'
+            ? (session as any).getRemoteStream()
+            : null;
+        const localFromSession =
+          session && typeof (session as any).getLocalStream === 'function'
+            ? (session as any).getLocalStream()
+            : null;
+        const updateFnEarly = g.__pipUpdateStateRef?.current;
+        if (typeof updateFnEarly === 'function') {
+          updateFnEarly({
+            callId: params.callId,
+            roomId: params.roomId,
+            lastNavParams: params.navParams,
+            remoteStream: params.remoteStream ?? remoteFromSession ?? null,
+            localStream: params.localStream ?? localFromSession ?? null,
+            remoteCamOn: params.remoteCamOn,
+            allowVideoRender: true,
+          });
+        }
+      }
+
+      // Включаем отдельный fullscreen-host для system PiP capture (только Home).
+      const requestId = Date.now();
       setPendingSystemPiP(true);
       setSystemPiPCaptureActive(true);
       setSystemPiPCaptureRequestId(requestId);
+      setAllowVideoRender(true);
       const apply = (decorSize: { width: number; height: number } | null) => {
         // Не применять размер окна PiP (типично ~334x594) — иначе при повторном входе layout/зум ломается.
         if (decorSize && decorSize.width > 400 && decorSize.height > 400) setDecorSizeForPiP(decorSize);
@@ -666,26 +720,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setSystemPiPCaptureActive(false);
           setSystemPiPCaptureRequestId(0);
           setDecorSizeForPiP(null);
+          try {
+            g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
+            g.__pendingSystemPiPSyncRef.current = false;
+          } catch (_) {}
           if (typeof until === 'number') {
             g.__systemPiPEntryInProgressUntilRef.current = 0;
           }
         } catch (_) {}
       }, 4500);
 
-      let params = g.__currentCallPiPParamsRef?.current;
-      if (!params && session) {
-        const cid = typeof (session as any).getCallId === 'function' ? (session as any).getCallId() : null;
-        const rid = typeof (session as any).getRoomId === 'function' ? (session as any).getRoomId() : null;
-        if (cid || rid) params = { callId: cid || '', roomId: rid || '', partnerName: '', partnerAvatarUrl: undefined, localStream: null, remoteStream: null, localCamOn: true, navParams: undefined };
-      }
-      if (params?.callId && params?.roomId) {
-        if (NativeModules.LiviAppModule?.setPiPEndCallParams) {
-          try { NativeModules.LiviAppModule.setPiPEndCallParams(params.callId, params.roomId); } catch (_) {}
-        }
-        // Чтобы returnToCall не получал null: синхронно кладём callId/roomId в контекст при входе в системный PiP.
-        const updateFn = g.__pipUpdateStateRef?.current;
-        if (typeof updateFn === 'function') updateFn({ callId: params.callId, roomId: params.roomId, lastNavParams: params.navParams });
-      }
     });
     return () => sub.remove();
   }, [resolveStablePiPIds]);

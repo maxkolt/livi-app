@@ -64,6 +64,9 @@ import {
   openOverlayPermissionSettings,
   notifyCallCanceled,
   addEndedCallId,
+  setCallMediaHint,
+  getCallMediaHint,
+  videoCallNavExtras,
 } from './utils/callKeep';
 import { isIncomingCallExpired } from './utils/callExpiry';
 import { addVoipTokenListener } from './utils/voipPush';
@@ -556,7 +559,7 @@ function AppContent() {
       try { stopIncomingCallForegroundService(); } catch {}
       try { sendCallAnsweredBroadcast(callId); } catch {}
     }
-    await openAnswerCallScreen(from, callId);
+    await openAnswerCallScreen(from, callId, getCallMediaHint(callId));
   }, [rememberExpectedCallAccepted, setIncomingAnswerTransitionGuard]);
 
   const completeAndroidIncomingAnswerRef = React.useRef(completeAndroidIncomingAnswer);
@@ -861,6 +864,7 @@ function AppContent() {
             directInitiator: false,
             callId,
             isIncoming: true,
+            ...videoCallNavExtras(callId, info.hasVideo === false ? 'audio' : undefined),
           });
         },
         onEnd: (callId) => {
@@ -1003,7 +1007,7 @@ function AppContent() {
   const timedOutCallsRef = React.useRef<Map<string, number>>(new Map());
   // Время последнего инкремента пропущенного по userId (из сокета) — чтобы не дублировать при применении pending с FCM
   // Ref для хранения обработчика входящего звонка, чтобы он всегда был доступен
-  const incomingCallHandlerRef = React.useRef<((d: { callId: string; callKitId?: string; from: string; fromNick?: string; ts?: number | string; expiresAt?: number | string }) => void) | null>(null);
+  const incomingCallHandlerRef = React.useRef<((d: { callId: string; callKitId?: string; from: string; fromNick?: string; media?: string; ts?: number | string; expiresAt?: number | string }) => void) | null>(null);
 
 
   const startAnim = React.useCallback(() => {
@@ -1952,7 +1956,7 @@ function AppContent() {
   const INCOMING_CALL_DEBOUNCE_MS = 3000;
   const lastProcessedIncomingRef = React.useRef<{ callId: string; at: number } | null>(null);
 
-  const handleIncomingCall = React.useCallback((d: { callId: string; callKitId?: string; from: string; fromNick?: string; ts?: number | string; expiresAt?: number | string }) => {
+  const handleIncomingCall = React.useCallback((d: { callId: string; callKitId?: string; from: string; fromNick?: string; media?: string; ts?: number | string; expiresAt?: number | string }) => {
     const callId = String(d?.callId ?? '');
     const now = Date.now();
     const last = lastProcessedIncomingRef.current;
@@ -2018,6 +2022,11 @@ function AppContent() {
       setOverlayPermissionModalVisible(false);
     }
 
+    const incomingMedia =
+      String((d as any).media || '').toLowerCase() === 'video' ? 'video' : 'audio';
+    const hasVideo = incomingMedia === 'video';
+    try { setCallMediaHint(d.callId, incomingMedia); } catch {}
+
     // Android: мы отказались от кастомных модалок — входящий всегда открываем нативным экраном
     // поверх любого экрана/вкладки/модалки в приложении (в т.ч. "неактивный" VideoCall после завершения).
     logger.debug('Incoming call — showing native incoming UI', {
@@ -2039,13 +2048,13 @@ function AppContent() {
     if (Platform.OS === 'android') {
       const appState = AppState.currentState;
       if (appState && appState !== 'active') {
-        showIncomingCallSystemUI(d.callId, d.from, d.fromNick ?? '');
+        showIncomingCallSystemUI(d.callId, d.from, d.fromNick ?? '', hasVideo);
       } else {
-        launchIncomingCallActivityScreen(d.callId, d.from, d.fromNick ?? '');
+        launchIncomingCallActivityScreen(d.callId, d.from, d.fromNick ?? '', undefined, hasVideo);
       }
     } else if (isCallKeepAvailable()) {
       // iOS: системный UI через CallKeep (нативный, без RN-модалки)
-      displayIncomingCall(d.callId, d.from, d.fromNick ?? '', true, d.callKitId);
+      displayIncomingCall(d.callId, d.from, d.fromNick ?? '', hasVideo, d.callKitId);
     }
     try { AsyncStorage.setItem('last_incoming_from', String(d.from || '')); } catch {}
   }, [routeName]);
@@ -2059,6 +2068,7 @@ function AppContent() {
         callKitId: data?.callKitId ? String(data.callKitId) : undefined,
         from: String(data.from),
         fromNick: data?.fromNick ?? '',
+        media: data?.media,
         ts: data?.ts,
         expiresAt: data?.expiresAt,
       });
@@ -2757,8 +2767,25 @@ function AppContent() {
           // Caller: we initiated, the other accepted → directInitiator: true, peerUserId = callee (who accepted).
           // Callee: we accepted → we're already on VideoCall (navigated on Accept tap); skip or rare edge case.
           const params = isCaller
-            ? { directCall: true, directInitiator: true, callId: (data as any)?.callId, peerUserId: fromUserId, roomId: (data as any)?.livekitRoomName ?? (data as any)?.roomId }
-            : { directCall: true, directInitiator: false, callId: (data as any)?.callId, isIncoming: true, peerUserId: fromUserId ?? undefined };
+            ? {
+                directCall: true,
+                directInitiator: true,
+                callId: (data as any)?.callId,
+                peerUserId: fromUserId,
+                roomId: (data as any)?.livekitRoomName ?? (data as any)?.roomId,
+                ...videoCallNavExtras(
+                  (data as any)?.callId,
+                  (global as any).__outgoingCallMediaRef?.current === 'video' ? 'video' : undefined,
+                ),
+              }
+            : {
+                directCall: true,
+                directInitiator: false,
+                callId: (data as any)?.callId,
+                isIncoming: true,
+                peerUserId: fromUserId ?? undefined,
+                ...videoCallNavExtras((data as any)?.callId),
+              };
           logger.info('[App] 🚀 Navigating to VideoCall screen', {
             callId: data?.callId,
             peerUserId: fromUserId,
@@ -3246,8 +3273,7 @@ export default function App() {
     };
   }, []);
 
-  // Android: системный PiP только по кнопке «Домой» (MainActivity.onUserLeaveHint + homekey).
-  // VideoCall + активный звонок — Back в usePiP (in-app PiP). На корне с активным звонком Back не закрывает приложение.
+  // Android: системный PiP только «Домой». VideoCall Back → in-app PiP в usePiP.
   React.useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -3256,20 +3282,15 @@ export default function App() {
       const hasActiveCall = session && typeof session.getRoomId === 'function' && session.getRoomId();
       if (!pipVisible && !hasActiveCall) return false;
       if (!navRef.isReady()) return false;
-      // Завершение звонка по кнопке «Завершить»: не переходить в PiP по Back (как и по Home).
       if ((global as any).__endingCallInProgressRef?.current === true) return false;
       const currentRoute = navRef.getCurrentRoute?.()?.name;
-      // На экране VideoCall кнопку Back обрабатывает сам экран: возвращаемся на предыдущую
-      // страницу приложения и показываем in-app PiP, не уводя задачу в фон.
       if (currentRoute === 'VideoCall' && hasActiveCall) {
         return false;
       }
-
-      if (navRef.canGoBack()) return false; // не на корне — пусть экран/навигация обработает Back
+      if (navRef.canGoBack()) return false;
 
       if (!hasActiveCall) return false;
 
-      // Корень + активный звонок: не выходим из приложения и не входим в системный PiP по Back.
       if (!pipVisible) {
         try {
           const params = (global as any).__currentCallPiPParamsRef?.current;

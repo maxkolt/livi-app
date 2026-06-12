@@ -204,10 +204,14 @@ export class VideoCallSession extends SimpleEventEmitter {
   constructor(config: WebRTCSessionConfig) {
     super();
     this.config = config;
-    
+    if (config.startWithCamOff) {
+      this.isCamOn = false;
+    }
+
     logger.info('[VideoCallSession] 🆕 Constructor called', {
       myUserId: config.myUserId,
       hasCallbacks: !!config.callbacks,
+      startWithCamOff: !!config.startWithCamOff,
     });
     
     // КРИТИЧНО: Принудительно очищаем предыдущую комнату при создании новой сессии.
@@ -2574,6 +2578,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     const run = async () => {
+    if (this.localAudioTrack && !force) {
+      if (!this.isCamOn || this.localVideoTrack) {
+        this.emit('localStream', this.localStream);
+        this.notifyLocalStreamChange(this.localStream);
+        return;
+      }
+    }
     if (this.localVideoTrack && this.localAudioTrack && !force) {
       this.emit('localStream', this.localStream);
       this.notifyLocalStreamChange(this.localStream);
@@ -2604,10 +2615,21 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     logger.info('[VideoCallSession] Video capture preset', preferred.meta);
 
+    const wantVideo = this.isCamOn;
     let tracks: LocalTrack[] = [];
     try {
-      tracks = await createLocalTracks({ audio: true, video: preferred.primary });
+      tracks = await createLocalTracks(
+        wantVideo
+          ? { audio: true, video: preferred.primary }
+          : { audio: true, video: false },
+      );
     } catch (e1) {
+      if (!wantVideo) {
+        logger.error('[VideoCallSession] Failed to create audio-only local tracks', {
+          error: (e1 as any)?.message || String(e1),
+        });
+        throw e1;
+      }
       logger.warn('[VideoCallSession] Failed to create local tracks with preferred preset; retrying with fallback', {
         error: (e1 as any)?.message || String(e1),
         preferred: preferred.meta,

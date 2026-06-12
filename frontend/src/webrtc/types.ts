@@ -78,6 +78,9 @@ export interface WebRTCSessionConfig {
 
   /** Вызывается в самом начале handleCallEnded (до disconnectRoom), чтобы UI успел выставить refs и не реагировал на колбэки при отключении — без ререндеров при закрытии экрана. */
   onCallEnding?: () => void;
+
+  /** Аудиозвонок: не создавать видеотрек до включения камеры (toggleCam). */
+  startWithCamOff?: boolean;
   
   // Callbacks shortcuts (для удобства доступа)
   onLocalStreamChange?: (stream: MediaStream | null) => void;

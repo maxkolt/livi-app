@@ -11,6 +11,7 @@ import {
   StyleSheet,
   Dimensions,
   TouchableOpacity,
+  Pressable,
   Platform,
   Animated,
   BackHandler,
@@ -57,6 +58,7 @@ import {
   bringMainActivityToFront,
   requestExitSystemPiPSoft,
   pauseBackgroundMediaAfterCall,
+  resolveDirectCallAudioFirst,
 } from '../../utils/callKeep';
 import { clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount } from '../../utils/pushNotifications';
 import { emitMissedClear, emitCallEndedOnHome } from '../../utils/globalEvents';
@@ -78,6 +80,9 @@ type Props = {
       partnerNick?: string;
       /** call:ended в системном PiP у собеседника — тот же «неактивный» экран, что у завершившего из PiP. */
       endedFromRemoteSystemPiP?: boolean;
+      /** Аудиозвонок: камера выключена до upgrade. */
+      startWithCamOff?: boolean;
+      callMedia?: 'audio' | 'video';
     } 
   } 
 };
@@ -97,6 +102,17 @@ const boostMicLevel = (level: number) => {
   if (!level || level <= 0) return 0;
   const shaped = Math.pow(level, 0.55) * 2.4;
   return Math.min(1, shaped);
+};
+
+const formatCallDuration = (totalSeconds: number): string => {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  }
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 };
 
 const stopStreamTracks = (stream: MediaStream | null | undefined, context: string) => {
@@ -224,8 +240,29 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       isMountedRef.current = false;
     };
   }, []);
-  
-  const [camOn, setCamOn] = useState(true);
+
+  const initialCamOff = resolveDirectCallAudioFirst(route?.params ?? {}, null);
+  const [camOn, setCamOn] = useState(!initialCamOff);
+  const [inAudioOnlyUi, setInAudioOnlyUi] = useState(initialCamOff);
+  const inAudioOnlyUiRef = useRef(inAudioOnlyUi);
+  inAudioOnlyUiRef.current = inAudioOnlyUi;
+  useEffect(() => {
+    const pending = (global as any).__pendingCallAcceptedRef?.current;
+    const pendingCallId = pending ? String(pending?.callId ?? '') : null;
+    const audioFirst = resolveDirectCallAudioFirst(route?.params ?? {}, pendingCallId);
+    if (route?.params?.callMedia === 'video') {
+      setInAudioOnlyUi(false);
+      return;
+    }
+    if (audioFirst && !camOn) setInAudioOnlyUi(true);
+  }, [
+    route?.params?.directCall,
+    route?.params?.directInitiator,
+    route?.params?.callMedia,
+    route?.params?.startWithCamOff,
+    route?.params?.callId,
+    camOn,
+  ]);
   const [micOn, setMicOn] = useState(true);
   /** Зеркало `micOn` после рендера; в колбэках сессии лог может быть до следующего рендера — см. micMatchesUiYet. */
   const micOnRef = useRef(micOn);
@@ -233,7 +270,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const logMicTraceRef = useRef<(where: string, details?: Record<string, unknown>) => void>(() => {});
   logMicTraceRef.current = () => {};
 
-  const [remoteCamOn, setRemoteCamOn] = useState(true);
+  const [remoteCamOn, setRemoteCamOn] = useState(!initialCamOff);
   const remoteCamStateKnownRef = useRef(false);
   const [remoteMuted, setRemoteMuted] = useState(false);
   const remoteMutedRef = useRef(remoteMuted);
@@ -290,6 +327,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Не очищаем refs в cleanup при размонтировании (PiP) — только при завершении звонка (effect перезапишет при wasFriendCallEnded или handleCallEnded явно очистит).
   }, [hasActiveCallWithPartnerRef, partnerUserId]);
   const [friendCallAccepted, setFriendCallAccepted] = useState(false);
+  const callConnectedAtRef = useRef<number | null>(null);
+  const [callElapsedSec, setCallElapsedSec] = useState(0);
   const [buttonsOpacity] = useState(new Animated.Value(1));
   const incomingCallBounce = useRef(new Animated.Value(0)).current;
   const incomingWaveA = useRef(new Animated.Value(0)).current;
@@ -398,8 +437,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setIsInactiveState(false);
       setWasFriendCallEnded(false);
       setStarted(true);
-      const camOnAccept = sessionRef.current?.getIsCamOn?.() ?? true;
-      setCamOn(camOnAccept);
+      const audioFirst = resolveDirectCallAudioFirst(route?.params ?? {}, callId ?? null);
+      const camFromSession = sessionRef.current?.getIsCamOn?.();
+      setCamOn(
+        audioFirst ? false : typeof camFromSession === 'boolean' ? camFromSession : !audioFirst,
+      );
       logMicTraceRef.current('incoming useIncomingCall onAccept → setMicOn(true)', {
         callId,
         fromUserId,
@@ -534,8 +576,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     routeParams: route?.params,
     session: sessionRef.current,
     acceptCallTimeRef,
-    // Android Back обрабатываем внутри usePiP: уходим на предыдущий экран приложения
-    // и показываем поверх него in-app PiP без сворачивания задачи.
+    // Android Back: goBack + in-app PiP; системный PiP — только кнопка «Домой».
     enableAndroidBackHandler: true,
   });
   
@@ -572,7 +613,47 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     Number((global as any).__systemPiPReturnStateRef?.current?.token || 0) === currentSystemPiPReturnToken
       ? (global as any).__systemPiPReturnStateRef?.current
       : null;
-  const { syncRouteNow } = useAudioRouting(hasActiveCallForAudio && !isInactiveState, currentRemoteStream);
+  const directCallRoute = !!route?.params?.directCall;
+  const speakerOnRef = useRef(false);
+  const { syncRouteNow } = useAudioRouting(
+    hasActiveCallForAudio && !isInactiveState,
+    currentRemoteStream,
+    inAudioOnlyUi || initialCamOff,
+    directCallRoute ? { defaultToEarpiece: true, speakerOnRef } : undefined,
+  );
+  const syncRouteNowRef = useRef(syncRouteNow);
+  syncRouteNowRef.current = syncRouteNow;
+  const scheduleDirectCallAudioRepinRef = useRef<() => void>(() => {});
+  const scheduleDirectCallAudioRepin = useCallback(() => {
+    if (!directCallRoute) return;
+    const run = () => {
+      try { syncRouteNowRef.current?.(); } catch {}
+    };
+    run();
+    setTimeout(run, 400);
+    setTimeout(run, 1500);
+  }, [directCallRoute]);
+  scheduleDirectCallAudioRepinRef.current = scheduleDirectCallAudioRepin;
+  const [speakerOn, setSpeakerOn] = useState(false);
+  speakerOnRef.current = speakerOn;
+  const toggleSpeaker = useCallback(() => {
+    setSpeakerOn((prev) => {
+      const next = !prev;
+      speakerOnRef.current = next;
+      setTimeout(() => {
+        try { syncRouteNowRef.current?.(); } catch {}
+      }, 0);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!directCallRoute || isInactiveState) return;
+    const t = setTimeout(() => {
+      try { syncRouteNowRef.current?.(); } catch {}
+    }, 0);
+    return () => clearTimeout(t);
+  }, [speakerOn, directCallRoute, isInactiveState]);
   
   // Refs
   const focusEffectGuardRef = useRef(false);
@@ -759,6 +840,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setAndroidSystemPiPLeaveHintEnabled(!!shouldKeepLeaveHintOn);
     }
     syncPiPParamsRef();
+    const paramsForPip = g.__currentCallPiPParamsRef?.current;
+    const pipUpd = g.__pipUpdateStateRef?.current;
+    if (
+      typeof pipUpd === 'function' &&
+      paramsForPip?.remoteStream &&
+      g.__pipVisibleRef?.current !== true
+    ) {
+      pipUpd({
+        remoteStream: paramsForPip.remoteStream,
+        localStream: paramsForPip.localStream ?? null,
+        remoteCamOn: paramsForPip.remoteCamOn,
+      });
+    }
     return () => {
       // При уходе по «Назад» (in-app PiP) или по «Домой» (системный PiP) не сбрасываем params и hint.
       const leavingByBack = g.__leavingVideoCallByBackRef?.current === true;
@@ -1655,9 +1749,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const isDirectInitiator = !!route?.params?.directInitiator;
 
     const resolvedMyUserId = route?.params?.myUserId || getCurrentUserId();
+    const startWithCamOff = resolveDirectCallAudioFirst(
+      {
+        directCall: isDirectCall,
+        directInitiator: isDirectInitiator,
+        callMedia: route?.params?.callMedia,
+        startWithCamOff: route?.params?.startWithCamOff,
+        callId: route?.params?.callId ?? pendingCallId,
+      },
+      pendingCallId,
+    );
     const config: WebRTCSessionConfig = {
       myUserId: resolvedMyUserId,
       initialCallId: route?.params?.callId ?? pendingCallId ?? null,
+      startWithCamOff,
       callbacks: {
         onLocalStreamChange: (stream) => {
           const prevStream = localStreamRef.current;
@@ -1729,6 +1834,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               hasVideoTrack: !!(stream.getVideoTracks?.()?.[0]),
               hasAudioTrack: !!(stream.getAudioTracks?.()?.[0])
             });
+            if (route?.params?.directCall && stream.getAudioTracks?.()?.[0]) {
+              scheduleDirectCallAudioRepinRef.current();
+            }
             setIsInactiveState(false);
             setWasFriendCallEnded(false);
             setStarted(true);
@@ -1804,6 +1912,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             }
           }
           
+          if (inAudioOnlyUiRef.current && enabled) {
+            return;
+          }
           setCamOn(enabled);
         },
         onRemoteCamStateChange: (enabled) => {
@@ -2169,6 +2280,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         onCamStateChange: (enabled: boolean) => {
           if (enabled) setLocalRenderKey((k: number) => k + 1);
           if (pip.visible) pip.updatePiPState({ localCamOn: enabled });
+          if (inAudioOnlyUiRef.current && enabled) {
+            return;
+          }
           setCamOn(enabled);
         },
       });
@@ -2319,8 +2433,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setStarted(true);
       setLoading(true);
       incomingCallHook.setIncomingOverlay(false);
-      const camFromSession = sessionRef.current?.getIsCamOn?.() ?? true;
-      setCamOn(camFromSession);
+      const audioFirst = resolveDirectCallAudioFirst(route?.params ?? {}, callId ?? null);
+      const camFromSession = sessionRef.current?.getIsCamOn?.();
+      const resolvedCamOn = audioFirst
+        ? false
+        : typeof camFromSession === 'boolean'
+          ? camFromSession
+          : true;
+      setCamOn(resolvedCamOn);
       const micFromSession = sessionRef.current?.getIsMicOn?.() ?? true;
       logMicTraceRef.current('handleCallAnswered (socket) → setMicOn/setCamOn from session', {
         roomId,
@@ -2328,6 +2448,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         partnerId,
         micFromSession,
         camFromSession,
+        resolvedCamOn,
+        audioFirst,
       });
       setMicOn(micFromSession);
       
@@ -2335,9 +2457,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (currentLocalStream) {
         const videoTrack = (currentLocalStream as any)?.getVideoTracks?.()?.[0];
         if (videoTrack && videoTrack.readyState === 'live') {
-          videoTrack.enabled = camFromSession;
+          videoTrack.enabled = resolvedCamOn;
           try {
-            sessionRef.current?.sendCameraState?.(undefined, camFromSession);
+            sessionRef.current?.sendCameraState?.(undefined, resolvedCamOn);
           } catch (e) {
             logger.warn('[VideoCall] Error sending camera state:', e);
           }
@@ -2550,8 +2672,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         });
       }
       
-      // Форсим спикер (через useAudioRouting)
-      // forceSpeakerOnHard уже вызывается в useAudioRouting при изменении remoteStream
+      // Аудио-маршрут: useAudioRouting (earpiece по умолчанию для direct call)
     }
     
     return () => {
@@ -2985,7 +3106,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     if (session && typeof session.toggleCam === 'function') {
       setCamOn((prev) => {
         const next = !prev;
-        if (next) setLocalRenderKey((k: number) => k + 1);
+        if (next) {
+          setLocalRenderKey((k: number) => k + 1);
+          setInAudioOnlyUi(false);
+        }
         if (pip.visible) pip.updatePiPState({ localCamOn: next });
         return next;
       });
@@ -3040,6 +3164,44 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   // Проверка, является ли партнер другом (по списку friends или по типу звонка)
   const isDirectCall = !!route?.params?.directCall;
+  const showAudioPresentation =
+    isDirectCall &&
+    !isInactiveState &&
+    !wasFriendCallEnded &&
+    inAudioOnlyUi;
+
+  const partnerDisplayName = useMemo(() => {
+    if (route?.params?.partnerNick) return String(route.params.partnerNick);
+    if (partnerUserId) {
+      const f = friends.find((fr) => String(fr._id ?? fr.id) === String(partnerUserId));
+      const name = (f?.name || f?.nick || '').trim();
+      if (name) return name;
+    }
+    return '—';
+  }, [route?.params?.partnerNick, partnerUserId, friends]);
+
+  const callConnectedForTimer =
+    !!friendCallAccepted && !!remoteStream && !isInactiveState && !wasFriendCallEnded;
+
+  useEffect(() => {
+    if (!callConnectedForTimer) {
+      callConnectedAtRef.current = null;
+      setCallElapsedSec(0);
+      return;
+    }
+    if (callConnectedAtRef.current == null) {
+      callConnectedAtRef.current = Date.now();
+    }
+    const tick = () => {
+      const startedAt = callConnectedAtRef.current;
+      if (startedAt == null) return;
+      setCallElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [callConnectedForTimer]);
+
   const isPartnerFriend = useMemo(() => {
     if (!partnerUserId) return false;
     if (isDirectCall) return true; // Прямой звонок = партнёр всегда друг (вызов из списка друзей / входящий от друга)
@@ -3516,11 +3678,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   // Как в WhatsApp/Telegram: в системном PiP рисуем только видео собеседника; фон прозрачный, чтобы в окне PiP не было чёрных областей.
   // При возврате из PiP (fromPiP) показываем полноэкранный вид; при повторном входе в PiP (pendingSystemPiP) — компакт, иначе захватится layout с бейджем/кнопкой.
+  const homeSystemPiPPending =
+    pip.pendingSystemPiP ||
+    pip.systemPiPCaptureActive ||
+    (global as any).__pendingSystemPiPSyncRef?.current === true;
   const systemPiPCompact =
     Platform.OS === 'android' &&
+    !pip.visible &&
     !pip.systemPiPCaptureActive &&
-    (pip.pendingSystemPiP || pip.inSystemPiPMode) &&
-    (pip.pendingSystemPiP || !route?.params?.fromPiP);
+    !route?.params?.fromPiP &&
+    (homeSystemPiPPending || pip.inSystemPiPMode);
   if (systemPiPCompact) {
     return (
       <SafeAreaView style={styles.systemPiPContainer} edges={[]}>
@@ -3543,6 +3710,47 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             forceTextureView={true}
             objectFit="contain"
           />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (showAudioPresentation) {
+    return (
+      <SafeAreaView style={[styles.container, styles.audioCallContainer]} edges={Platform.OS === 'android' ? [] : undefined}>
+        <View style={[styles.audioCallContent, androidContentInsets]}>
+          <View style={styles.audioCallHeader}>
+            <Text style={styles.audioCallName} numberOfLines={2}>
+              {partnerDisplayName}
+            </Text>
+            <Text style={styles.audioCallSubtitle}>{t('audioCallStatus', lang)}</Text>
+            {callConnectedForTimer ? (
+              <Text style={styles.audioCallTimer}>{formatCallDuration(callElapsedSec)}</Text>
+            ) : null}
+          </View>
+          <View style={styles.audioCallHeaderSpacer} />
+          <View style={styles.audioCallControls}>
+            <TouchableOpacity
+              style={styles.audioRoundBtn}
+              onPress={toggleSpeaker}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons
+                name={speakerOn ? 'volume-up' : 'hearing'}
+                size={28}
+                color="#FFFFFF"
+              />
+            </TouchableOpacity>
+            <AudioCallEndButton onPress={() => onAbortCall('end_button')} />
+            <TouchableOpacity
+              style={styles.audioRoundBtn}
+              onPress={() => toggleCam()}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons name="videocam" size={28} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.audioCallHint}>{t('enableVideo', lang)}</Text>
         </View>
       </SafeAreaView>
     );
@@ -3738,6 +3946,74 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#000',
   },
+  audioCallContainer: {
+    backgroundColor: '#1B1C22',
+  },
+  audioCallContent: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingBottom: 48,
+  },
+  audioCallHeader: {
+    width: '100%',
+    alignItems: 'center',
+    paddingTop: 12,
+  },
+  audioCallHeaderSpacer: {
+    flex: 1,
+    width: '100%',
+  },
+  audioCallName: {
+    fontSize: 34,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
+  audioCallSubtitle: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#B0B0B0',
+    textAlign: 'center',
+  },
+  audioCallTimer: {
+    marginTop: 10,
+    fontSize: 16,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
+  audioCallControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 28,
+    marginBottom: 16,
+  },
+  audioRoundBtn: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  /** Как `btn_decline_round` / OutgoingCallActivity `btn_cancel` (colors.xml). */
+  audioRoundBtnDanger: {
+    backgroundColor: '#CC5C2F2F',
+    borderWidth: 1,
+    borderColor: '#E57373',
+  },
+  audioRoundBtnDangerPressed: {
+    backgroundColor: '#F06E3636',
+    borderColor: '#FF9F9F',
+  },
+  audioCallHint: {
+    fontSize: 13,
+    color: '#B0B0B0',
+    marginBottom: 8,
+  },
   content: {
     flex: 1,
     width: '100%',
@@ -3926,5 +4202,59 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
+/** Как `installPressFeedback` + `btn_decline_round` на Incoming/OutgoingCallActivity. */
+const AUDIO_CALL_DECLINE_ICON = '#E57373';
+const AUDIO_CALL_DECLINE_ICON_PRESSED = '#FF9F9F';
+
+function AudioCallEndButton({ onPress }: { onPress: () => void }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const alpha = useRef(new Animated.Value(1)).current;
+  const [surfacePressed, setSurfacePressed] = useState(false);
+
+  const runPressAnim = useCallback(
+    (pressed: boolean) => {
+      setSurfacePressed(pressed);
+      Animated.parallel([
+        Animated.timing(scale, {
+          toValue: pressed ? 0.86 : 1,
+          duration: pressed ? 90 : 140,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(alpha, {
+          toValue: pressed ? 0.78 : 1,
+          duration: pressed ? 90 : 140,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]).start();
+    },
+    [alpha, scale],
+  );
+
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={() => runPressAnim(true)}
+      onPressOut={() => runPressAnim(false)}
+    >
+      <Animated.View
+        style={[
+          styles.audioRoundBtn,
+          styles.audioRoundBtnDanger,
+          surfacePressed && styles.audioRoundBtnDangerPressed,
+          { transform: [{ scale }], opacity: alpha },
+        ]}
+      >
+        <MaterialIcons
+          name="call-end"
+          size={28}
+          color={surfacePressed ? AUDIO_CALL_DECLINE_ICON_PRESSED : AUDIO_CALL_DECLINE_ICON}
+        />
+      </Animated.View>
+    </Pressable>
+  );
+}
 
 export default VideoCall;

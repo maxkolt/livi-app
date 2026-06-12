@@ -234,10 +234,7 @@ export const usePiP = ({
     }
   }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, camOn, micOn, remoteMuted, remoteCamOn, localStream, remoteStream, routeParams, session]);
 
-  // Обработка BackHandler для Android:
-  // при уходе со страницы внутри приложения показываем in-app PiP.
-  // Системный PiP только по системной кнопке «Домой» (MainActivity onUserLeaveHint + homekey).
-  // Back на корне с активным звонком перехватывается в App.tsx без системного PiP.
+  // Android Back: goBack + in-app PiP поверх предыдущего экрана. Системный PiP — только «Домой».
   useEffect(() => {
     if (Platform.OS !== 'android') {
       return;
@@ -245,7 +242,7 @@ export const usePiP = ({
     if (!enableAndroidBackHandler) {
       return;
     }
-    
+
     const navigateBackFromCallScreen = () => {
       const returnTo = (routeParams as any)?.returnTo;
       if (navigation.canGoBack && navigation.canGoBack()) {
@@ -279,7 +276,6 @@ export const usePiP = ({
           g.__leavingVideoCallByBackRef.current = false;
           return;
         }
-        // __pipVisibleRef может быть true до showPiP (prefetch в BackHandler) — не пропускаем showPiP.
         showPiP({
           callId: resolvedCallId,
           roomId: resolvedRoomId,
@@ -316,9 +312,6 @@ export const usePiP = ({
     };
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      // КРИТИЧНО: Проверяем актуальное состояние звонка через ref
-      // Если звонок завершён — сами делаем шаг назад (goBack/navigate Home) и потребляем событие.
-      // Иначе при return false на части устройств Back доходит до Activity и вызывает finish() → при следующем открытии приложения показывается заглушка (холодный старт).
       if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
         navigateBackFromCallScreen();
         return true;
@@ -335,18 +328,22 @@ export const usePiP = ({
         g.__disableSystemPiPUntilRef.current = now + 2000;
         g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
         g.__pipVisibleRef.current = true;
-        // Явный Back с экрана звонка: не блокируем уход in-app PiP из-за недавней попытки системного PiP.
         g.__suppressInAppPiPUntilRef = g.__suppressInAppPiPUntilRef || { current: 0 };
         g.__suppressInAppPiPUntilRef.current = 0;
         g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
         g.__systemPiPEntryInProgressUntilRef.current = 0;
         const upd = g.__pipUpdateStateRef?.current;
         if (typeof upd === 'function') {
-          upd({ pendingSystemPiP: false, systemPiPCaptureActive: false, decorSizeForPiP: null });
+          upd({
+            pendingSystemPiP: false,
+            systemPiPCaptureActive: false,
+            systemPiPCaptureRequestId: 0,
+            decorSizeForPiP: null,
+          });
         }
+        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
       } catch {}
 
-      // Сначала навигация — пользователь сразу видит уход со звонка; PiP на следующем кадре (VideoCall уже размонтируется).
       navigateBackFromCallScreen();
       if (typeof requestAnimationFrame === 'function') {
         requestAnimationFrame(revealInAppPiPAfterBack);
@@ -357,7 +354,23 @@ export const usePiP = ({
     });
 
     return () => backHandler.remove();
-  }, [enableAndroidBackHandler, enterPiPMode, roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, session, navigation, routeParams]);
+  }, [
+    enableAndroidBackHandler,
+    enterPiPMode,
+    roomId,
+    callId,
+    partnerId,
+    isInactiveState,
+    wasFriendCallEnded,
+    pip.visible,
+    session,
+    navigation,
+    routeParams,
+    localStream,
+    remoteStream,
+    camOn,
+    remoteCamOn,
+  ]);
 
   // Обработка Swipe Left to Right для входа в PiP и возврата на предыдущую страницу
   // Порог: 25% ширины экрана для iOS (уменьшено для более чувствительного свайпа)

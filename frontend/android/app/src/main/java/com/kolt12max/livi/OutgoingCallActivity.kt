@@ -75,7 +75,8 @@ class OutgoingCallActivity : AppCompatActivity() {
 
         findViewById<TextView>(R.id.callee_name).text = if (toNick.isNotEmpty()) toNick else getString(R.string.outgoing_call_title)
         val subtitleView = findViewById<TextView>(R.id.call_subtitle)
-        startDotsAnimation(subtitleView)
+        val hasVideo = intent.getBooleanExtra(EXTRA_HAS_VIDEO, true)
+        startDotsAnimation(subtitleView, hasVideo)
 
         if (callId.isNotEmpty()) {
             LiviOutgoingCallService.start(this, callId, toUserId, toNick)
@@ -234,8 +235,8 @@ class OutgoingCallActivity : AppCompatActivity() {
     }
 
     private var dotsCount = 0
-    private fun startDotsAnimation(subtitleView: TextView) {
-        val base = getString(R.string.outgoing_call_subtitle_base)
+    private fun startDotsAnimation(subtitleView: TextView, hasVideo: Boolean = true) {
+        val base = getString(if (hasVideo) R.string.outgoing_call_subtitle_base else R.string.outgoing_call_subtitle_base_audio)
         dotsRunnable = object : Runnable {
             override fun run() {
                 dotsCount = (dotsCount % 3) + 1
@@ -289,6 +290,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_TO_USER_ID = "toUserId"
         const val EXTRA_TO_NICK = "toNick"
+        const val EXTRA_HAS_VIDEO = "hasVideo"
         /** FCM call_declined запускает активность с этим флагом, чтобы закрыть экран, если broadcast не дошёл (приложение в фоне/убито). */
         const val EXTRA_CLOSE_IMMEDIATELY = "close_immediately"
         const val ACTION_CLOSE_OUTGOING_CALL = "com.kolt12max.livi.CLOSE_OUTGOING_CALL"

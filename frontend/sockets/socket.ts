@@ -3748,15 +3748,20 @@ export async function getChatMessages(peerId: string, userId?: string): Promise<
 export default socket;
 
 /* ========= Calls (direct video) ========= */
-export function startCall(toUserId: string) {
+export type DirectCallMedia = 'audio' | 'video';
+
+export function startCall(toUserId: string, options?: { media?: DirectCallMedia }) {
   const raw = String(toUserId || '').trim();
   if (!isOid(raw)) return Promise.reject(new Error('invalid ObjectId'));
   const to = /^[a-f\d]{24}$/i.test(raw) ? raw.toLowerCase() : raw;
+  const media = options?.media === 'audio' ? 'audio' : undefined;
+  const payload: { to: string; media?: DirectCallMedia } = { to };
+  if (media) payload.media = media;
 
   const viaSocket = () =>
     emitAck<{ ok: boolean; callId?: string; error?: string }>(
       'call:initiate',
-      { to },
+      payload,
       20000,
     );
 
@@ -3772,7 +3777,7 @@ export function startCall(toUserId: string) {
       const res = await fetch(`${API_BASE}/api/calls/initiate`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ to }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
       if (!res.ok) {
@@ -3817,6 +3822,24 @@ export function startCall(toUserId: string) {
 
 export function cancelCall(callId: string) {
   socket.emit('call:cancel', { callId });
+}
+
+/** Снять залипший direct-call на сервере (initiator_busy / busy при новом звонке тому же другу). */
+export function forceEndDirectCallWithPeer(peerUserId: string, callId?: string | null): void {
+  const peer = String(peerUserId || '').trim().toLowerCase();
+  const me = String(currentUserId || '').trim().toLowerCase();
+  if (!peer || !me || !/^[a-f\d]{24}$/i.test(peer) || !/^[a-f\d]{24}$/i.test(me)) return;
+  const sorted = [me, peer].sort();
+  const roomId = `room_${sorted[0]}_${sorted[1]}`;
+  const cid = callId != null ? String(callId).trim() : '';
+  const payload: { callId?: string; roomId?: string } = { roomId };
+  if (cid) payload.callId = cid;
+  try {
+    socket.emit('call:end', payload);
+    logger.info('[socket] forceEndDirectCallWithPeer', { roomId, callId: cid || undefined });
+  } catch (e) {
+    logger.warn('[socket] forceEndDirectCallWithPeer failed', e as Error);
+  }
 }
 
 export function acceptCall(callId: string) {

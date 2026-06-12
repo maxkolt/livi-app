@@ -78,6 +78,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
 
         if (typeNorm == "call" && callId != null && from != null) {
             LiviAppModule.saveIncomingCallMeta(this, callId, from, fromNick)
+            val hasVideoCall = data["media"]?.trim()?.lowercase() == "video"
             // Пуш «call» пришёл с задержкой (устройство было офлайн): показываем только «Пропущенный вызов», не полноэкранный входящий.
             val CALL_RING_TIMEOUT_MS = 27_000L
             val MIN_REMAINING_WINDOW_TO_OPEN_UI_MS = 2_000L
@@ -183,7 +184,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     LiviAppModule.beginBackgroundMediaSuppressionStatic(this@LiviFirebaseMessagingService)
                 } catch (_: Exception) {}
                 try {
-                    val launchIntent = buildIncomingCallActivityIntent(this@LiviFirebaseMessagingService, callId, from, fromNick).apply {
+                    val launchIntent = buildIncomingCallActivityIntent(this@LiviFirebaseMessagingService, callId, from, fromNick, hasVideoCall).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     startActivity(launchIntent)
@@ -936,7 +937,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
 
         /** Intent для IncomingCallActivity (поверх блокировки и домашнего экрана). */
         @JvmStatic
-        fun buildIncomingCallActivityIntent(context: Context, callId: String, from: String, fromNick: String): Intent {
+        fun buildIncomingCallActivityIntent(context: Context, callId: String, from: String, fromNick: String, hasVideo: Boolean = true): Intent {
             return Intent(context, IncomingCallActivity::class.java).apply {
                 addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -952,6 +953,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(IncomingCallActivity.EXTRA_CALL_ID, callId)
                 putExtra(IncomingCallActivity.EXTRA_FROM, from)
                 putExtra(IncomingCallActivity.EXTRA_FROM_NICK, fromNick)
+                putExtra(IncomingCallActivity.EXTRA_HAS_VIDEO, hasVideo)
             }
         }
 

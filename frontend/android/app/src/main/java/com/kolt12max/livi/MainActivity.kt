@@ -321,21 +321,19 @@ class MainActivity : ReactActivity() {
             android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode failed", e2)
           }
         }
-        // Для direct VideoCall -> Home нужен самый ранний вход, иначе активность может успеть уйти в фон.
-        // Для Back -> in-app PiP -> Home fullscreen capture-host теперь prewarm-ится ещё во время in-app PiP,
-        // поэтому на leaveHint можно снова пробовать ранний native enter — это критично для более медленных устройств.
-        if (!inAppPiPVisible) {
-          android.util.Log.i("MainActivity", "onUserLeaveHint: direct path, running tryEnterPiP immediately")
-          tryEnterPiP.run()
-        } else {
-          android.util.Log.i("MainActivity", "onUserLeaveHint: in-app PiP path, running prewarmed tryEnterPiP immediately")
-          tryEnterPiP.run()
-        }
+        // enterPictureInPictureMode нужно вызвать в окне onUserLeaveHint. Ждать frameReady из JS нельзя —
+        // к моменту готовности TextureView activity уже в фоне и PiP не включается.
         if (!isInPictureInPictureMode) {
-          if (!inAppPiPVisible) android.util.Log.i("MainActivity", "onUserLeaveHint: scheduling direct-path retries")
-          else android.util.Log.i("MainActivity", "onUserLeaveHint: scheduling prewarmed in-app PiP retries")
-          // Ретраи до ~2.5s: на release/медленных Samsung enterPictureInPictureMode часто false на первых кадрах.
-          val delays = longArrayOf(0L, 120L, 280L, 520L, 900L, 1300L, 1800L, 2400L)
+          android.util.Log.i(
+            "MainActivity",
+            "onUserLeaveHint: immediate + scheduled PiP enter (inAppPiPVisible=$inAppPiPVisible)"
+          )
+          tryEnterPiP.run()
+          val delays = if (inAppPiPVisible) {
+            longArrayOf(0L, 60L, 140L, 280L, 480L, 800L, 1300L, 2000L)
+          } else {
+            longArrayOf(0L, 40L, 100L, 180L, 300L, 480L, 750L, 1200L, 1800L)
+          }
           for (d in delays) {
             val r = Runnable { tryEnterPiP.run() }
             pendingPiPEnterRunnables.add(r)

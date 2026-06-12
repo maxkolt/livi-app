@@ -164,7 +164,9 @@ class IncomingCallActivity : AppCompatActivity() {
         scheduleIncomingTimeout(callId)
 
         findViewById<TextView>(R.id.caller_name).text = if (fromNick.isNotEmpty()) fromNick else getString(R.string.incoming_call_unknown)
-        findViewById<TextView>(R.id.call_subtitle).text = getString(R.string.incoming_call_title)
+        val hasVideo = intent.getBooleanExtra(EXTRA_HAS_VIDEO, true)
+        findViewById<TextView>(R.id.call_subtitle).text =
+            getString(if (hasVideo) R.string.incoming_call_title else R.string.incoming_call_title_audio)
 
         val acceptButton = findViewById<ImageButton>(R.id.btn_accept)
         val declineButton = findViewById<ImageButton>(R.id.btn_decline)
@@ -857,6 +859,7 @@ class IncomingCallActivity : AppCompatActivity() {
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_FROM = "from"
         const val EXTRA_FROM_NICK = "fromNick"
+        const val EXTRA_HAS_VIDEO = "hasVideo"
         /** FCM call_canceled запускает активность с этим флагом, чтобы закрыть экран без показа UI (приложение в фоне/убито). */
         const val EXTRA_JUST_CLOSE = "just_close"
         const val ACTION_CALL_ANSWERED = "com.kolt12max.livi.CALL_ANSWERED"
