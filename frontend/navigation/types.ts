@@ -18,6 +18,7 @@ export type RootStackParamList = {
         mode?: 'friend';
         resume?: boolean;
         fromPiP?: boolean;
+        preferVideoCallUi?: boolean;
         systemPiPReturnToken?: number;
       }
     | undefined;

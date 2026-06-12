@@ -84,6 +84,8 @@ type Props = {
       /** Аудиозвонок: камера выключена до upgrade. */
       startWithCamOff?: boolean;
       callMedia?: 'audio' | 'video';
+      /** Одноразово: развернуть PiP в полноэкранный видео UI (не держать в params после применения). */
+      preferVideoCallUi?: boolean;
     } 
   } 
 };
@@ -3153,6 +3155,124 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       logger.warn('[VideoCall] Session не найдена для toggleCam');
     }
   }, [pip, camOn]);
+
+  const applyAudioOnlyUiState = useCallback((session: VideoCallSession | null) => {
+    inAudioOnlyUiRef.current = true;
+    setInAudioOnlyUi(true);
+    setCamOn(false);
+    const peerVideo = session?.getRemoteCamEnabled?.() ?? false;
+    setPeerInvitedVideo(!!peerVideo);
+    try {
+      pip.updatePiPState({ localCamOn: false, remoteCamOn: peerVideo });
+    } catch {}
+    try {
+      syncRouteNowRef.current?.();
+    } catch {}
+  }, [pip]);
+
+  const applyVideoCallUiFromPiPExpand = useCallback((session: VideoCallSession | null) => {
+    inAudioOnlyUiRef.current = false;
+    setInAudioOnlyUi(false);
+    setPeerInvitedVideo(false);
+    if (session) {
+      try {
+        session.enableRemoteVideoConsumption();
+      } catch {}
+      try {
+        setRemoteCamOn(!!session.getRemoteCamEnabled?.());
+      } catch {}
+    }
+    try {
+      syncRouteNowRef.current?.();
+    } catch {}
+  }, []);
+
+  const returnToAudioCallUi = useCallback(
+    async (opts?: { fromPiP?: boolean; skipNavigation?: boolean }) => {
+      if (!route?.params?.directCall) return;
+      if (inAudioOnlyUiRef.current) return;
+      const session =
+        (sessionRef.current || (global as any).__webrtcSessionRef?.current) as VideoCallSession | null;
+      if (!session || session.isEnded?.()) return;
+
+      const g = global as any;
+      try {
+        g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+        g.__expandToVideoCallUiFromPiPRef.current = false;
+      } catch {}
+      try {
+        navigation.setParams({ preferVideoCallUi: undefined } as any);
+      } catch {}
+
+      try {
+        if (session.getIsCamOn?.()) {
+          await session.toggleCam();
+        }
+      } catch (e) {
+        logger.warn('[VideoCall] returnToAudioCallUi toggleCam off failed', e);
+      }
+      try {
+        session.deferRemoteVideoConsumption();
+      } catch (e) {
+        logger.warn('[VideoCall] returnToAudioCallUi deferRemoteVideoConsumption failed', e);
+      }
+      applyAudioOnlyUiState(session);
+
+      if (opts?.fromPiP && !opts?.skipNavigation) {
+        try {
+          const returnFn = (global as any).__pipReturnToCallRef?.current;
+          if (typeof returnFn === 'function') returnFn();
+        } catch {}
+      }
+    },
+    [route?.params?.directCall, applyAudioOnlyUiState, navigation],
+  );
+
+  useEffect(() => {
+    const g = global as any;
+    g.__returnToAudioCallRef = g.__returnToAudioCallRef || { current: null };
+    g.__returnToAudioCallRef.current = returnToAudioCallUi;
+    g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+    const session = (sessionRef.current || g.__webrtcSessionRef?.current) as VideoCallSession | null;
+    if (g.__expandToVideoCallUiFromPiPRef?.current === true && route?.params?.directCall) {
+      g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+      g.__expandToVideoCallUiFromPiPRef.current = false;
+      g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+      applyVideoCallUiFromPiPExpand(session);
+    } else if (g.__preferAudioOnlyUiOnNextVideoCallRef.current && route?.params?.directCall) {
+      g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+      try {
+        session?.deferRemoteVideoConsumption?.();
+      } catch {}
+      applyAudioOnlyUiState(session);
+    }
+    return () => {
+      if (g.__returnToAudioCallRef?.current === returnToAudioCallUi) {
+        g.__returnToAudioCallRef.current = null;
+      }
+    };
+  }, [returnToAudioCallUi, route?.params?.directCall, applyAudioOnlyUiState, applyVideoCallUiFromPiPExpand, sessionTick]);
+
+  useEffect(() => {
+    if (!route?.params?.directCall || !route?.params?.preferVideoCallUi) return;
+    const g = global as any;
+    const session = (sessionRef.current || g.__webrtcSessionRef?.current) as VideoCallSession | null;
+    g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+    g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+    try {
+      g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+      g.__expandToVideoCallUiFromPiPRef.current = false;
+    } catch {}
+    applyVideoCallUiFromPiPExpand(session);
+    try {
+      navigation.setParams({ preferVideoCallUi: undefined } as any);
+    } catch {}
+  }, [
+    route?.params?.directCall,
+    route?.params?.preferVideoCallUi,
+    applyVideoCallUiFromPiPExpand,
+    navigation,
+  ]);
   
   const toggleRemoteAudio = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
@@ -3565,6 +3685,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           } catch (e) {
             logger.warn('[VideoCall] Error enabling video tracks:', e);
           }
+
+          if ((global as any).__expandToVideoCallUiFromPiPRef?.current) {
+            applyVideoCallUiFromPiPExpand(session as VideoCallSession);
+            try {
+              (global as any).__expandToVideoCallUiFromPiPRef.current = false;
+            } catch (_) {}
+          }
           
           // Обновляем remoteViewKey через session с защитой от повторного обновления
           requestAnimationFrame(() => {
@@ -3733,6 +3860,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }, [
       route?.params?.resume,
       route?.params?.fromPiP,
+      route?.params?.preferVideoCallUi,
       started,
       partnerId,
       roomId,
@@ -3752,7 +3880,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       getSystemPiPReturnState,
       claimSystemPiPReturnOwner,
       markSystemPiPReturnRestored,
-      syncRouteNow
+      syncRouteNow,
+      applyVideoCallUiFromPiPExpand,
     ])
   );
   
@@ -3994,6 +4123,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             localStream={localStream}
             visible={showControls}
             opacity={buttonsOpacity}
+            showReturnToAudio={isDirectCall && !inAudioOnlyUi && !isInactiveState}
+            onReturnToAudio={() => {
+              void returnToAudioCallUi();
+            }}
           />
         </View>
         </View>

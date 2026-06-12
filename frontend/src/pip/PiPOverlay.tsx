@@ -1,6 +1,6 @@
 // src/pip/PiPOverlay.tsx
 // Два режима: in-app PiP (маленькое перетаскиваемое окно) и полноэкранный слой для входа в системный PiP.
-import React, { useContext, useRef, useEffect, useCallback } from 'react';
+import React, { useContext, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Dimensions,
   StyleSheet,
@@ -21,6 +21,9 @@ import AwayPlaceholder from '../../components/AwayPlaceholder';
 
 const PIP_W = 150;
 const PIP_H = 260;
+/** Одинаковый отступ кнопок от краёв окна PiP */
+const PIP_CORNER_INSET = 8;
+const PIP_CORNER_BTN = 34;
 
 const isRandomChatActive = () => {
   try {
@@ -109,6 +112,8 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const partnerName = ctx?.partnerName ?? '';
   const localCamOn = ctx?.localCamOn ?? true;
   const remoteCamOn = ctx?.remoteCamOn ?? true;
+  const remoteStreamVersion = ctx?.remoteStreamVersion ?? 0;
+  const pipRemoteViewKey = ctx?.pipRemoteViewKey ?? 0;
   const isMuted = ctx?.isMuted ?? false;
   const suppressInAppPiPOnCurrentRoute = shouldSuppressInAppPiPOnRoute(currentRouteName);
 
@@ -146,6 +151,25 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       }
     } catch (_) {}
   }, [currentRouteName, isMuted]);
+
+  const returnToAudioCall = useCallback(() => {
+    try {
+      const g = global as any;
+      g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+      g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+      const fn = g.__returnToAudioCallRef?.current;
+      if (typeof fn === 'function') {
+        void fn({ fromPiP: true });
+        return;
+      }
+      const session = g.__webrtcSessionRef?.current;
+      if (session?.getIsCamOn?.()) {
+        void session.toggleCam();
+      }
+      session?.deferRemoteVideoConsumption?.();
+      returnToCall();
+    } catch (_) {}
+  }, [returnToCall]);
 
   const dims = Dimensions.get('window');
   const W = typeof dims?.width === 'number' && dims.width > 0 ? dims.width : 400;
@@ -219,15 +243,27 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     returnToCallRef.current = returnToCall;
   }, [returnToCall]);
 
+  const streamURL = remoteStream?.toURL?.();
+  const pipHasLiveRemoteVideo = useMemo(() => {
+    try {
+      const t = (remoteStream as any)?.getVideoTracks?.()?.[0];
+      return !!t && t.readyState === 'live' && t.enabled !== false;
+    } catch {
+      return false;
+    }
+  }, [remoteStream, remoteStreamVersion, pipRemoteViewKey]);
+  const showPartnerAway = remoteCamOn === false && !pipHasLiveRemoteVideo;
+  const canRenderVideo =
+    shouldShowOverlay &&
+    allowVideoRender &&
+    remoteStream &&
+    pipHasLiveRemoteVideo &&
+    (Platform.OS !== 'ios' || (streamURL && streamURL.length > 0));
+  const pipRtcViewKey = `pip-inapp-${remoteStream?.id ?? 'none'}-${remoteStreamVersion}-${pipRemoteViewKey}`;
+
   if (!shouldShowOverlay) {
     return null;
   }
-
-  const streamURL = remoteStream?.toURL?.();
-  const canRenderVideo =
-    allowVideoRender &&
-    remoteStream &&
-    (Platform.OS !== 'ios' || (streamURL && streamURL.length > 0));
 
   // In-app PiP: маленькое перетаскиваемое окно
   return (
@@ -250,50 +286,39 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
           {...panResponder.panHandlers}
         >
           <View style={[styles.pipWindowInner, { width: PIP_W, height: PIP_H }]}>
-            <View style={styles.pipTopBar}>
-              <Pressable
-                onPress={toggleCamera}
-                style={styles.pipTopBarBtn}
-                hitSlop={8}
-                android_ripple={{ color: 'rgba(255,255,255,0.2)', borderless: true }}
-              >
-                <View style={styles.pipTopBarIconCircle}>
-                  <View style={styles.pipTopBarIconCenter}>
-                    <MaterialIcons
-                      name={localCamOn ? 'videocam' : 'videocam-off'}
-                      size={24}
-                      color={localCamOn ? '#fff' : '#E53935'}
-                    />
-                  </View>
-                </View>
-              </Pressable>
-              <Pressable
-                onPress={toggleMic}
-                style={styles.pipTopBarBtn}
-                hitSlop={8}
-                android_ripple={{ color: 'rgba(255,255,255,0.2)', borderless: true }}
-              >
-                <View style={styles.pipTopBarIconCircle}>
-                  <View style={styles.pipTopBarIconCenter}>
-                    <MaterialIcons
-                      name={isMuted ? 'mic-off' : 'mic'}
-                      size={24}
-                      color={isMuted ? '#E53935' : '#fff'}
-                    />
-                  </View>
-                </View>
-              </Pressable>
+            <View style={[styles.pipCornerSlot, styles.pipCornerTL]} pointerEvents="box-none">
+              <PiPCornerButton onPress={toggleCamera}>
+                <MaterialIcons
+                  name={localCamOn ? 'videocam' : 'videocam-off'}
+                  size={20}
+                  color={localCamOn ? '#fff' : '#E53935'}
+                />
+              </PiPCornerButton>
+            </View>
+            <View style={[styles.pipCornerSlot, styles.pipCornerTR]} pointerEvents="box-none">
+              <PiPCornerButton onPress={toggleMic}>
+                <MaterialIcons
+                  name={isMuted ? 'mic-off' : 'mic'}
+                  size={20}
+                  color={isMuted ? '#E53935' : '#fff'}
+                />
+              </PiPCornerButton>
+            </View>
+            <View style={[styles.pipCornerSlot, styles.pipCornerBL]} pointerEvents="box-none">
+              <PiPCornerButton onPress={returnToAudioCall}>
+                <MaterialIcons name="phone-in-talk" size={19} color="#fff" />
+              </PiPCornerButton>
+            </View>
+            <View style={[styles.pipCornerSlot, styles.pipCornerBR]} pointerEvents="box-none">
               <Pressable
                 onPress={endCall}
-                style={styles.pipTopBarBtn}
-                hitSlop={8}
+                style={styles.pipCornerPressable}
+                hitSlop={6}
                 android_ripple={{ color: 'rgba(229,57,53,0.4)', borderless: true }}
               >
                 {({ pressed }) => (
-                  <View style={styles.pipTopBarIconCircle}>
-                    <View style={styles.pipTopBarIconCenter}>
-                      <Text style={[styles.pipCloseText, pressed && styles.pipCloseTextPressed]}>✕</Text>
-                    </View>
+                  <View style={styles.pipCornerIconCircle}>
+                    <Text style={[styles.pipCloseText, pressed && styles.pipCloseTextPressed]}>✕</Text>
                   </View>
                 )}
               </Pressable>
@@ -303,7 +328,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               onPress={returnToCall}
               android_ripple={{ color: 'rgba(255,255,255,0.08)', borderless: true }}
             >
-              {!remoteCamOn ? (
+              {showPartnerAway ? (
                 <View style={StyleSheet.absoluteFill}>
                   <AwayPlaceholder />
                 </View>
@@ -311,7 +336,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                 <View style={StyleSheet.absoluteFill}>
                   {Platform.OS === 'android' ? (
                     <RTCView
-                      key={`pip-inapp-${remoteStream.id}`}
+                      key={pipRtcViewKey}
                       stream={remoteStream}
                       streamURL={streamURL}
                       style={styles.rtcView}
@@ -325,7 +350,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                     />
                   ) : (
                     <RTCView
-                      key={`pip-inapp-${remoteStream.id}`}
+                      key={pipRtcViewKey}
                       streamURL={streamURL!}
                       style={styles.rtcView}
                       objectFit="cover"
@@ -341,6 +366,27 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
         </Animated.View>
       </View>
     </PiPErrorBoundary>
+  );
+}
+
+function PiPCornerButton({
+  onPress,
+  children,
+  rippleColor = 'rgba(255,255,255,0.2)',
+}: {
+  onPress: () => void;
+  children: React.ReactNode;
+  rippleColor?: string;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={styles.pipCornerPressable}
+      hitSlop={6}
+      android_ripple={{ color: rippleColor, borderless: true }}
+    >
+      <View style={styles.pipCornerIconCircle}>{children}</View>
+    </Pressable>
   );
 }
 
@@ -408,41 +454,50 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 8,
   },
-  pipTopBar: {
+  pipCornerSlot: {
     position: 'absolute',
-    top: 10,
-    left: 10,
-    right: 10,
-    height: 44,
-    backgroundColor: 'transparent',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    zIndex: 1,
-  },
-  pipTopBarBtn: {
-    width: 38,
-    height: 44,
+    zIndex: 2,
+    width: PIP_CORNER_BTN,
+    height: PIP_CORNER_BTN,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  pipTopBarIconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.45)',
+  pipCornerTL: {
+    top: PIP_CORNER_INSET,
+    left: PIP_CORNER_INSET,
+  },
+  pipCornerTR: {
+    top: PIP_CORNER_INSET,
+    right: PIP_CORNER_INSET,
+  },
+  pipCornerBL: {
+    bottom: PIP_CORNER_INSET,
+    left: PIP_CORNER_INSET,
+  },
+  pipCornerBR: {
+    bottom: PIP_CORNER_INSET,
+    right: PIP_CORNER_INSET,
+  },
+  pipCornerPressable: {
+    width: PIP_CORNER_BTN,
+    height: PIP_CORNER_BTN,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pipCornerIconCircle: {
+    width: PIP_CORNER_BTN,
+    height: PIP_CORNER_BTN,
+    borderRadius: PIP_CORNER_BTN / 2,
+    backgroundColor: 'rgba(0,0,0,0.42)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  pipTopBarIconCenter: {
+    borderColor: 'rgba(255,255,255,0.35)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   pipCloseText: {
     color: '#fff',
-    fontSize: 20,
+    fontSize: 18,
+    lineHeight: 20,
   },
   pipCloseTextPressed: {
     color: '#E53935',

@@ -666,7 +666,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           val ratio = Rational(9, 16)
           val builder = PictureInPictureParams.Builder()
             .setAspectRatio(ratio)
-            .setActions(emptyList<RemoteAction>())
+            .setActions((activity as? MainActivity)?.buildSystemPiPActions() ?: emptyList())
           val sourceRect = buildSystemPiPSourceRect(activity)
           if (sourceRect != null) builder.setSourceRectHint(sourceRect)
           val params = builder.build()
@@ -746,7 +746,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         val ratio = Rational(9, 16)
         val builder = PictureInPictureParams.Builder()
           .setAspectRatio(ratio)
-          .setActions(emptyList<RemoteAction>())
+          .setActions((activity as? MainActivity)?.buildSystemPiPActions() ?: emptyList())
         val sourceRect = buildSystemPiPSourceRect(activity)
         if (sourceRect != null) {
           builder.setSourceRectHint(sourceRect)
@@ -1669,6 +1669,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @Volatile var pipRoomId: String? = null
       private set
     const val ACTION_END_CALL_FROM_PIP = "com.kolt12max.livi.END_CALL_FROM_PIP"
+    const val ACTION_AUDIO_ONLY_FROM_PIP = "com.kolt12max.livi.AUDIO_ONLY_FROM_PIP"
     @JvmStatic
     fun setPiPEndCallParamsStatic(callId: String?, roomId: String?) {
       pipCallId = callId
@@ -1685,6 +1686,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     fun emitEndCallFromPiP() {
       reactContextRef?.runOnUiQueueThread {
         reactContextRef?.emitDeviceEvent("EndCallFromPiP", null)
+      }
+    }
+
+    @JvmStatic
+    fun emitReturnToAudioCallFromPiP() {
+      reactContextRef?.runOnUiQueueThread {
+        reactContextRef?.emitDeviceEvent("ReturnToAudioCallFromPiP", null)
       }
     }
 

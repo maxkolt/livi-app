@@ -1,6 +1,7 @@
 package com.kolt12max.livi
 
 import android.app.PictureInPictureParams
+import android.app.PendingIntent
 import android.app.RemoteAction
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -8,6 +9,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
 import android.graphics.Rect
+import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -81,6 +83,25 @@ class MainActivity : ReactActivity() {
     lastFinishRequestAtMs = now
     android.util.Log.i("MainActivity", "requestFinish accepted ($reason)")
     finish()
+  }
+
+  internal fun buildSystemPiPActions(): List<RemoteAction> {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return emptyList()
+    return try {
+      val intent = Intent(LiviAppModule.ACTION_AUDIO_ONLY_FROM_PIP).setPackage(packageName)
+      val pending = PendingIntent.getBroadcast(
+        this,
+        4102,
+        intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+      val icon = Icon.createWithResource(this, R.drawable.ic_phone_in_talk)
+      val label = getString(R.string.pip_action_audio_call)
+      listOf(RemoteAction(icon, label, label, pending))
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "buildSystemPiPActions failed", e)
+      emptyList()
+    }
   }
 
   private fun cancelPendingPiPEnterAttempts() {
@@ -306,7 +327,7 @@ class MainActivity : ReactActivity() {
             val ratio = Rational(9, 16)
             val builder = PictureInPictureParams.Builder()
               .setAspectRatio(ratio)
-              .setActions(emptyList<RemoteAction>())
+              .setActions(buildSystemPiPActions())
             if (sourceRect != null) {
               builder.setSourceRectHint(sourceRect)
             }

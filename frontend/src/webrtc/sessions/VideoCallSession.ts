@@ -103,6 +103,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private remoteCamEnabled = false;
   /** Audio-first UI: не подписываемся на remote video до явного перехода пользователя на видео-экран. */
   private deferRemoteVideoSubscription = false;
+  /** После входа в PiP с audio-only UI снова отложить remote video при exitPiP. */
+  private restoreDeferRemoteVideoAfterPiP = false;
   private remoteCamSide: CamSide = 'front';
   /** Партнёр прислал cam-toggle: камера выкл — не поднимать remoteCam по первому «живому» видеотреку (гонка с публикацией). */
   private remotePartnerDeclaredCamOff = false;
@@ -1366,9 +1368,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   /** Пользователь перешёл с audio-only UI на видеозвонок — подписаться на remote video и подтянуть треки. */
-  enableRemoteVideoConsumption(): void {
-    if (!this.deferRemoteVideoSubscription) return;
+  enableRemoteVideoConsumption(opts?: { keepRestoreDeferAfterPiP?: boolean }): void {
+    if (!this.deferRemoteVideoSubscription) {
+      if (!opts?.keepRestoreDeferAfterPiP) this.restoreDeferRemoteVideoAfterPiP = false;
+      return;
+    }
     this.deferRemoteVideoSubscription = false;
+    if (!opts?.keepRestoreDeferAfterPiP) this.restoreDeferRemoteVideoAfterPiP = false;
     logger.info('[VideoCallSession] Remote video consumption enabled (left audio-only UI)');
 
     const room = this.room;
@@ -1385,6 +1391,103 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
     }
     this.notifyRemoteCamStateChange(this.remoteCamEnabled);
+  }
+
+  /** In-app PiP: подписаться на remote video и синхронизировать стрим с оверлеем PiP. */
+  ensureRemoteVideoForPiP(): void {
+    if (this.deferRemoteVideoSubscription) {
+      this.restoreDeferRemoteVideoAfterPiP = true;
+      this.enableRemoteVideoConsumption({ keepRestoreDeferAfterPiP: true });
+    } else {
+      this.resubscribeRemoteVideoIfNeeded('pip_enter');
+    }
+    this.flushPiPRemoteVideoState();
+  }
+
+  private remoteStreamHasLiveVideoTrack(): boolean {
+    try {
+      const t = (this.remoteStream as any)?.getVideoTracks?.()?.[0];
+      return !!t && t.readyState === 'live' && t.enabled !== false;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Повторно подтянуть remote video в MediaStream (audio-only → PiP, или после defer/unsub). */
+  private resubscribeRemoteVideoIfNeeded(context: string): void {
+    if (this.remoteStreamHasLiveVideoTrack()) return;
+    const room = this.room;
+    if (!room || room.state !== 'connected') return;
+    room.remoteParticipants.forEach((participant) => {
+      participant.videoTrackPublications.forEach((publication) => {
+        if (this.deferRemoteVideoPublication(publication, context)) return;
+        try {
+          if (!publication.isSubscribed) publication.setSubscribed(true);
+        } catch {}
+        if (publication.track) {
+          this.handleTrackSubscribed(publication.track, publication, participant);
+        }
+      });
+    });
+  }
+
+  private flushPiPRemoteVideoState(): void {
+    try {
+      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      if (typeof pipUpdate !== 'function') return;
+      this.remoteViewKey = Date.now();
+      pipUpdate({
+        remoteStream: this.remoteStream ?? null,
+        remoteCamOn: this.getRemoteCamEnabled(),
+        pipRemoteViewKey: this.remoteViewKey,
+      });
+    } catch (_) {}
+  }
+
+  private restoreAudioOnlyDeferAfterPiPIfNeeded(): void {
+    try {
+      if ((global as any).__expandToVideoCallUiFromPiPRef?.current === true) {
+        this.restoreDeferRemoteVideoAfterPiP = false;
+        return;
+      }
+    } catch (_) {}
+    if (!this.restoreDeferRemoteVideoAfterPiP) return;
+    this.restoreDeferRemoteVideoAfterPiP = false;
+    this.deferRemoteVideoConsumption();
+  }
+
+  /** Вернуться на audio-only UI: отписаться от remote video, не трогая remoteCamEnabled (cam-toggle). */
+  deferRemoteVideoConsumption(): void {
+    if (this.deferRemoteVideoSubscription) return;
+    this.deferRemoteVideoSubscription = true;
+    logger.info('[VideoCallSession] Remote video consumption deferred (audio-only UI)');
+
+    const room = this.room;
+    if (room && room.state === 'connected') {
+      room.remoteParticipants.forEach((participant) => {
+        participant.videoTrackPublications.forEach((publication) => {
+          try {
+            if (publication.isSubscribed) publication.setSubscribed(false);
+          } catch {}
+        });
+      });
+    }
+
+    if (this.remoteVideoTrack) {
+      const mediaTrack = this.remoteVideoTrack.mediaStreamTrack;
+      if (mediaTrack && this.remoteStream) {
+        try {
+          this.remoteStream.removeTrack(mediaTrack as any);
+        } catch {}
+      }
+      this.remoteVideoTrack = null;
+      this.clearRemoteCamOffTimeout();
+      if (this.remoteStream) {
+        this.notifyRemoteStreamChange(this.remoteStream);
+      }
+    }
+    this.remoteViewKey = Date.now();
+    this.emit('remoteViewKeyChanged', this.remoteViewKey);
   }
 
   private deferRemoteVideoPublication(publication: RemoteTrackPublication, context: string): boolean {
@@ -1440,6 +1543,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       return;
     }
+    this.ensureRemoteVideoForPiP();
     if (this.lastSentPiPState === true && this.lastSentPiPRoomId === currentRoomId) {
       this.setInPiP(true);
       return;
@@ -1459,6 +1563,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   exitPiP?(): void {
     const currentRoomId = this.getRoomId();
     this.setInPiP(false);
+    this.restoreAudioOnlyDeferAfterPiPIfNeeded();
     if (this.ended || this.endCallInProgress || this.cleaned || !currentRoomId) {
       logger.debug('[VideoCallSession] pip:state не отправляем при exitPiP — звонок завершён или нет roomId', {
         ended: this.ended,
@@ -1719,6 +1824,19 @@ export class VideoCallSession extends SimpleEventEmitter {
       try {
         const pipUpdate = (global as any).__pipUpdateStateRef?.current;
         if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: data.enabled });
+      } catch (_) {}
+      try {
+        const pipVisible = (global as any).__pipVisibleRef?.current === true;
+        if (pipVisible && data.enabled) {
+          if (this.deferRemoteVideoSubscription) {
+            this.ensureRemoteVideoForPiP();
+          } else if (!this.remoteStreamHasLiveVideoTrack()) {
+            this.resubscribeRemoteVideoIfNeeded('cam_toggle_pip');
+            this.flushPiPRemoteVideoState();
+          } else {
+            this.flushPiPRemoteVideoState();
+          }
+        }
       } catch (_) {}
       logger.info('[VideoCallSession] ✅ onRemoteCamStateChange via cam-toggle', { enabled: data.enabled });
     };
@@ -5728,7 +5846,13 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Обновляем PiP (в т.ч. системный) при смене удалённого стрима — иначе при включении камеры партнёром из app PiP видео не восстановится у пользователя в системном PiP
     try {
       const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-      if (typeof pipUpdate === 'function') pipUpdate({ remoteStream: this.remoteStream, remoteCamOn: this.remoteCamEnabled });
+      if (typeof pipUpdate === 'function') {
+        pipUpdate({
+          remoteStream: this.remoteStream,
+          remoteCamOn: this.remoteCamEnabled,
+          pipRemoteViewKey: this.remoteViewKey,
+        });
+      }
     } catch (_) {}
 
     // КРИТИЧНО: Устанавливаем loading=false только когда приходит remoteStream с треками

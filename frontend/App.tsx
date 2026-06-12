@@ -825,6 +825,26 @@ function AppContent() {
     const subReturnActive = emitter.addListener('ReturnToActiveCallFromNotification', () => {
       invokeReturnToVideoCallFromNotification();
     });
+    const subReturnAudio = emitter.addListener('ReturnToAudioCallFromPiP', () => {
+      try {
+        const g = global as any;
+        g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+        g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+        const fn = g.__returnToAudioCallRef?.current;
+        if (typeof fn === 'function') {
+          void fn({ fromPiP: true });
+          return;
+        }
+        const session = g.__webrtcSessionRef?.current;
+        if (session?.getIsCamOn?.()) {
+          void session.toggleCam();
+        }
+        session?.deferRemoteVideoConsumption?.();
+        invokeReturnToVideoCallFromNotification();
+      } catch (e) {
+        logger.warn('[App] ReturnToAudioCallFromPiP handler failed', e);
+      }
+    });
     // AboutToEnterSystemPiP обрабатывается в PiPContext (как в WhatsApp/Telegram: компактный вид + requestEnterPictureInPicture, без смены экрана).
     return () => {
       sub1.remove();
@@ -835,6 +855,7 @@ function AppContent() {
       sub5.remove();
       sub7.remove();
       subReturnActive.remove();
+      subReturnAudio.remove();
     };
   }, [completeAndroidIncomingAnswer, rememberExpectedCallAccepted, shouldRequestPendingCallAccepted, invokeReturnToVideoCallFromNotification]);
 

@@ -52,10 +52,11 @@ class MainApplication : Application(), ReactApplication {
   override val reactHost: ReactHost
     get() = ReactNativeHostWrapper.createReactHost(applicationContext, reactNativeHost)
 
-  private val endCallFromPiPReceiver = object : BroadcastReceiver() {
+  private val pipActionReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
-      if (intent?.action == LiviAppModule.ACTION_END_CALL_FROM_PIP) {
-        LiviAppModule.emitEndCallFromPiP()
+      when (intent?.action) {
+        LiviAppModule.ACTION_END_CALL_FROM_PIP -> LiviAppModule.emitEndCallFromPiP()
+        LiviAppModule.ACTION_AUDIO_ONLY_FROM_PIP -> LiviAppModule.emitReturnToAudioCallFromPiP()
       }
     }
   }
@@ -70,11 +71,14 @@ class MainApplication : Application(), ReactApplication {
     // Регистрируем каналы уведомлений при старте приложения — пакет попадает в системный кэш истории уведомлений (уменьшает NotifHistoryProto "package name not found in string cache").
     LiviFirebaseMessagingService.ensureCallChannel(this)
     LiviFirebaseMessagingService.ensureMissedCallChannel(this)
-    val pipFilter = IntentFilter(LiviAppModule.ACTION_END_CALL_FROM_PIP)
+    val pipFilter = IntentFilter().apply {
+      addAction(LiviAppModule.ACTION_END_CALL_FROM_PIP)
+      addAction(LiviAppModule.ACTION_AUDIO_ONLY_FROM_PIP)
+    }
     if (Build.VERSION.SDK_INT >= 33) {
-      registerReceiver(endCallFromPiPReceiver, pipFilter, Context.RECEIVER_NOT_EXPORTED)
+      registerReceiver(pipActionReceiver, pipFilter, Context.RECEIVER_NOT_EXPORTED)
     } else {
-      registerReceiver(endCallFromPiPReceiver, pipFilter)
+      registerReceiver(pipActionReceiver, pipFilter)
     }
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
   }

@@ -11,6 +11,8 @@ interface MediaControlsProps {
   localStream: any;
   visible: boolean;
   opacity: Animated.AnimatedValue;
+  showReturnToAudio?: boolean;
+  onReturnToAudio?: () => void;
 }
 
 /**
@@ -25,6 +27,8 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
   localStream,
   visible,
   opacity,
+  showReturnToAudio,
+  onReturnToAudio,
 }) => {
   if (!visible) return null;
 
@@ -41,6 +45,20 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
           <MaterialIcons name="flip-camera-ios" size={26} color="#fff" />
         </TouchableOpacity>
       </Animated.View>
+
+      {showReturnToAudio && onReturnToAudio ? (
+        <Animated.View style={[styles.topRight, { opacity }]}>
+          <TouchableOpacity
+            onPress={onReturnToAudio}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            activeOpacity={0.7}
+            style={styles.iconBtn}
+            accessibilityLabel="return-to-audio"
+          >
+            <MaterialIcons name="phone-in-talk" size={26} color="#fff" />
+          </TouchableOpacity>
+        </Animated.View>
+      ) : null}
 
       {/* Кнопки микрофона и камеры (снизу) */}
       <Animated.View style={[styles.bottomOverlay, { opacity }]}>
@@ -89,6 +107,13 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 10,
     left: 10,
+    zIndex: 50,
+    ...(Platform.OS === 'android' ? { elevation: 50 } : {}),
+  },
+  topRight: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
     zIndex: 50,
     ...(Platform.OS === 'android' ? { elevation: 50 } : {}),
   },

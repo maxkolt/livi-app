@@ -94,8 +94,12 @@ type PiPState = {
   /** Размеры decorView с натива для совпадения overlay 9:16 с sourceRect (без чёрных полос в системном PiP). */
   decorSizeForPiP: { width: number; height: number } | null;
 
+  /** Инкремент при смене remoteStream / появлении видеотрека — remount RTCView в PiP. */
+  remoteStreamVersion: number;
+  pipRemoteViewKey: number;
+
   // служебное
-  updatePiPState: (patch: Partial<PiPState>) => void;
+  updatePiPState: (patch: Partial<PiPState> & { pipRemoteViewKey?: number }) => void;
 };
 
 export const PiPContext = createContext<PiPState | null>(null);
@@ -146,6 +150,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   const [suppressOverlayForReturn, setSuppressOverlayForReturn] = useState(false);
   /** Инкремент при установке стрима в showPiP — чтобы value контекста обновился и PiPOverlay получил remoteStream. */
   const [remoteStreamVersion, setRemoteStreamVersion] = useState(0);
+  const [pipRemoteViewKey, setPipRemoteViewKey] = useState(0);
   /** Размеры decorView для системного PiP layout (синхрон с buildSystemPiPSourceRect на нативе). */
   const [decorSizeForPiP, setDecorSizeForPiP] = useState<{ width: number; height: number } | null>(null);
 
@@ -385,6 +390,21 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(true);
       }
     } catch {}
+
+    let remoteStreamForPiP = p.remoteStream;
+    try {
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (session && typeof (session as any).ensureRemoteVideoForPiP === 'function') {
+        (session as any).ensureRemoteVideoForPiP();
+      }
+      const streamFromSession =
+        session && typeof (session as any).getRemoteStream === 'function'
+          ? (session as any).getRemoteStream()
+          : null;
+      if (streamFromSession) {
+        remoteStreamForPiP = streamFromSession;
+      }
+    } catch (_) {}
     
     callIdRef.current = p.callId || null;
     roomIdRef.current = p.roomId || null;
@@ -408,8 +428,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       setPartnerAvatarUrl(undefined);
     }
     if (p.localStream !== undefined) localStreamRef.current = p.localStream ?? null;
-    if (p.remoteStream !== undefined) {
-      remoteStreamRef.current = p.remoteStream ?? null;
+    if (p.remoteStream !== undefined || remoteStreamForPiP) {
+      remoteStreamRef.current = remoteStreamForPiP ?? null;
       setRemoteStreamVersion((v) => v + 1);
     }
     // При deferVisible (обычно Android Back → навигация назад) можно включать видео сразу:
@@ -422,7 +442,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           allowVideoRenderTimeoutRef.current = null;
         }
       } catch {}
-      if (p.remoteStream) setAllowVideoRender(true);
+      if (remoteStreamForPiP) setAllowVideoRender(true);
       // Prewarm dedicated system-PiP capture host while in-app PiP is visible.
       // On slower devices this avoids mounting the fullscreen RTC surface only after Home,
       // which can be too late for Android to accept enterPictureInPictureMode().
@@ -780,11 +800,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       g.__lastReturnToCallAtRef.current = now;
     } catch (_) {}
     try {
-      const g = global as any;
+      const gGuard = (global as any);
       const endingCall =
-        g.__endingCallInProgressRef?.current === true ||
-        g.__callEndedFromPiPNoOpenRef?.current === true ||
-        g.__endingFromPiPButtonRef?.current === true;
+        gGuard.__endingCallInProgressRef?.current === true ||
+        gGuard.__callEndedFromPiPNoOpenRef?.current === true ||
+        gGuard.__endingFromPiPButtonRef?.current === true;
       if (endingCall) {
         logger.info('[PiPContext] returnToCall ignored: call teardown in progress');
         hidePiP();
@@ -900,6 +920,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const effectiveCallId = callId || paramsRef?.callId || lastCtx?.callId || sessionCallId || null;
     const effectiveRoomId = roomId || paramsRef?.roomId || lastCtx?.roomId || sessionRoomId || null;
     const effectiveNavParams = lastNavParams ?? paramsRef?.navParams ?? lastCtx?.navParams;
+    try {
+      g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+      g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+      g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+      g.__expandToVideoCallUiFromPiPRef.current = true;
+    } catch (_) {}
     syncSessionPiPState(false, 'returnToCall');
     
     // Guard от двойной навигации
@@ -913,6 +939,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         ...(navParams ?? {}),
         resume: true,
         fromPiP: true,
+        preferVideoCallUi: true,
         systemPiPReturnToken: Number(g.__systemPiPReturnTokenRef?.current || Date.now()),
         directCall: true,
         directInitiator: undefined,
@@ -1138,7 +1165,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.isMuted !== undefined) setIsMuted(patch.isMuted);
     if (patch.isRemoteMuted !== undefined) setIsRemoteMuted(patch.isRemoteMuted);
     if (patch.localCamOn !== undefined) setLocalCamOn(patch.localCamOn);
-    if (patch.remoteCamOn !== undefined) setRemoteCamOn(patch.remoteCamOn);
+    if (patch.remoteCamOn !== undefined) {
+      setRemoteCamOn(patch.remoteCamOn);
+      if (patch.remoteCamOn === true) {
+        setRemoteStreamVersion((v) => v + 1);
+      }
+    }
     if (patch.pipPos) setPipPos(patch.pipPos);
     if (patch.allowVideoRender !== undefined) setAllowVideoRender(!!patch.allowVideoRender);
     if (patch.inSystemPiPMode !== undefined) setInSystemPiPMode(!!patch.inSystemPiPMode);
@@ -1151,6 +1183,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.localStream !== undefined) localStreamRef.current = patch.localStream;
     if (patch.remoteStream !== undefined) {
       remoteStreamRef.current = patch.remoteStream;
+      setRemoteStreamVersion((v) => v + 1);
+    }
+    if (patch.pipRemoteViewKey !== undefined) {
+      const k = Number(patch.pipRemoteViewKey) || 0;
+      setPipRemoteViewKey(k);
       setRemoteStreamVersion((v) => v + 1);
     }
   }, []);
@@ -1238,10 +1275,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     systemPiPCaptureRequestId,
     suppressOverlayForReturn,
     decorSizeForPiP,
+    remoteStreamVersion,
+    pipRemoteViewKey,
     updatePiPState,
   }), [
     visible, callId, roomId, partnerName, partnerAvatarUrl,
-    isMuted, isRemoteMuted, localCamOn, remoteCamOn, pipPos, allowVideoRender, inSystemPiPMode, pendingSystemPiP, systemPiPCaptureActive, systemPiPCaptureRequestId, suppressOverlayForReturn, decorSizeForPiP, remoteStreamVersion,
+    isMuted, isRemoteMuted, localCamOn, remoteCamOn, pipPos, allowVideoRender, inSystemPiPMode, pendingSystemPiP, systemPiPCaptureActive, systemPiPCaptureRequestId, suppressOverlayForReturn, decorSizeForPiP, remoteStreamVersion, pipRemoteViewKey,
     showPiP, hidePiP, updatePiPPosition, returnToCall, endCall, updatePiPState
   ]);
 
