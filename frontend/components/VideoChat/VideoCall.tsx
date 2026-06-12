@@ -447,13 +447,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setStarted(true);
       const audioFirst = resolveDirectCallAudioFirst(route?.params ?? {}, callId ?? null);
       const camFromSession = sessionRef.current?.getIsCamOn?.();
-      setCamOn(
-        audioFirst ? false : typeof camFromSession === 'boolean' ? camFromSession : !audioFirst,
-      );
+      const nextCamOn = audioFirst
+        ? false
+        : typeof camFromSession === 'boolean'
+          ? camFromSession
+          : !audioFirst;
+      setCamOn(nextCamOn);
       logMicTraceRef.current('incoming useIncomingCall onAccept → setMicOn(true)', {
         callId,
         fromUserId,
-        camOnAccept,
+        camOnAccept: nextCamOn,
       });
       setMicOn(true);
     },
@@ -3935,10 +3938,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       <SafeAreaView style={[styles.container, styles.audioCallContainer]} edges={Platform.OS === 'android' ? [] : undefined}>
         <View style={[styles.audioCallContent, androidContentInsets]}>
           <View style={styles.audioCallHeader}>
-            <Text style={styles.audioCallName} numberOfLines={2}>
+            <Text
+              style={styles.audioCallName}
+              numberOfLines={2}
+              {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+            >
               {partnerDisplayName}
             </Text>
-            <Text style={styles.audioCallSubtitle}>{t('audioCallStatus', lang)}</Text>
+            <Text
+              style={styles.audioCallSubtitle}
+              {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+            >
+              {t('audioCallStatus', lang)}
+            </Text>
             {callConnectedForTimer ? (
               <Text style={styles.audioCallTimer}>{formatCallDuration(callElapsedSec)}</Text>
             ) : null}
@@ -3981,14 +3993,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               </TouchableOpacity>
             </View>
           </View>
-          <Text
-            style={[
-              styles.audioCallHint,
-              pulsePeerVideoButton && { color: accent.softText },
-            ]}
-          >
-            {pulsePeerVideoButton ? t('peerEnabledVideo', lang) : t('enableVideo', lang)}
-          </Text>
         </View>
       </SafeAreaView>
     );
@@ -4200,7 +4204,7 @@ const styles = StyleSheet.create({
   audioCallHeader: {
     width: '100%',
     alignItems: 'center',
-    paddingTop: 12,
+    paddingTop: 56,
   },
   audioCallHeaderSpacer: {
     flex: 1,
@@ -4209,17 +4213,19 @@ const styles = StyleSheet.create({
   audioCallName: {
     fontSize: 34,
     fontWeight: '700',
+    lineHeight: 38,
     color: '#FFFFFF',
     textAlign: 'center',
   },
   audioCallSubtitle: {
-    marginTop: 8,
+    marginTop: -4,
     fontSize: 14,
+    lineHeight: 18,
     color: '#B0B0B0',
     textAlign: 'center',
   },
   audioCallTimer: {
-    marginTop: 10,
+    marginTop: 6,
     fontSize: 16,
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
@@ -4256,11 +4262,6 @@ const styles = StyleSheet.create({
   audioRoundBtnDangerPressed: {
     backgroundColor: '#F06E3636',
     borderColor: '#FF9F9F',
-  },
-  audioCallHint: {
-    fontSize: 13,
-    color: '#B0B0B0',
-    marginBottom: 8,
   },
   content: {
     flex: 1,
