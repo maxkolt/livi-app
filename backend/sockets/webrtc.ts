@@ -267,6 +267,48 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     }
   });
 
+  /** Direct call: партнёр на экране видеозвонка или вернулся на аудио (не зависит от mute камеры). */
+  socket.on(
+    "direct-call:video-ui",
+    (data: { inVideoCallUi: boolean; from: string; roomId?: string }) => {
+      const { inVideoCallUi, roomId } = data;
+      let forwardedViaRoom = false;
+      if (roomId && roomId.startsWith("room_")) {
+        const room = (io.sockets.adapter.rooms as any)?.get?.(roomId) as Set<string> | undefined;
+        if (room && room.size > 0) {
+          socket.to(roomId).emit("direct-call:video-ui", {
+            inVideoCallUi,
+            from: socket.id,
+            roomId,
+          });
+          forwardedViaRoom = true;
+        }
+      } else {
+        socket.rooms.forEach((currentRoomId) => {
+          if (currentRoomId.startsWith("room_")) {
+            socket.to(currentRoomId).emit("direct-call:video-ui", {
+              inVideoCallUi,
+              from: socket.id,
+              roomId: currentRoomId,
+            });
+            forwardedViaRoom = true;
+          }
+        });
+      }
+      const socketData = (socket as any).data;
+      if (!forwardedViaRoom && socketData?.partnerSid) {
+        const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
+        if (partnerSocket) {
+          partnerSocket.emit("direct-call:video-ui", {
+            inVideoCallUi,
+            from: socket.id,
+            ...(roomId ? { roomId } : {}),
+          });
+        }
+      }
+    },
+  );
+
   /** =========================
    *  Room leave
    *  ========================= */
