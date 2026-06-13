@@ -1,11 +1,50 @@
 import { NativeModules, Platform } from 'react-native';
+import { shouldUsePipPlaceholderOnly } from '../src/pip/pipPlaceholderOnly';
 
-/** Android: ongoing-уведомление в шторке во время активного видеозвонка (в т.ч. PiP). */
-export function startActiveCallNotification(partnerNick?: string | null): void {
+function resolveActiveCallPlaceholderOnly(): boolean {
+  try {
+    const g = global as any;
+    const params = g.__currentCallPiPParamsRef?.current;
+    const session = g.__webrtcSessionRef?.current;
+    const remoteStream =
+      params?.remoteStream ??
+      (typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null);
+    return shouldUsePipPlaceholderOnly({
+      localCamOn: params?.localCamOn,
+      remoteCamOn: params?.remoteCamOn,
+      remoteStream,
+    });
+  } catch {
+    return false;
+  }
+}
+
+/** Android: ongoing-уведомление в шторке во время активного звонка (аудио — без system PiP, видео — в т.ч. PiP). */
+export function startActiveCallNotification(
+  partnerNick?: string | null,
+  opts?: { audioOnly?: boolean },
+): void {
   if (Platform.OS !== 'android') return;
   try {
     const nick = typeof partnerNick === 'string' ? partnerNick.trim() : '';
-    NativeModules.LiviAppModule?.startActiveCallForegroundService?.(nick || null);
+    const audioOnly = opts?.audioOnly ?? resolveActiveCallPlaceholderOnly();
+    NativeModules.LiviAppModule?.startActiveCallForegroundService?.(nick || null, audioOnly);
+  } catch (_) {}
+}
+
+/** Обновить текст ongoing-уведомления при переключении audio ↔ video UI. */
+export function refreshAndroidActiveCallNotification(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    const g = global as any;
+    if (g.__videoCallActiveRef?.current === false) return;
+    const session = g.__webrtcSessionRef?.current;
+    if (session && typeof session.isEnded === 'function' && session.isEnded()) return;
+    const params = g.__currentCallPiPParamsRef?.current;
+    const nick =
+      (typeof params?.partnerName === 'string' ? params.partnerName : '') ||
+      '';
+    startActiveCallNotification(nick, { audioOnly: resolveActiveCallPlaceholderOnly() });
   } catch (_) {}
 }
 
@@ -16,7 +55,7 @@ export function stopActiveCallNotification(): void {
   } catch (_) {}
 }
 
-/** Активный звонок: системный PiP по Home должен оставаться разрешённым. */
+/** Активный звонок: нативный leaveHint может быть включён (дальше проверяем audio/video). */
 export function isAndroidActiveCallEligibleForLeaveHint(): boolean {
   if (Platform.OS !== 'android') return false;
   try {
@@ -33,12 +72,12 @@ export function isAndroidActiveCallEligibleForLeaveHint(): boolean {
     const roomId = String(
       params?.roomId ||
         (typeof session?.getRoomId === 'function' ? session.getRoomId() : '') ||
-        ''
+        '',
     ).trim();
     const callId = String(
       params?.callId ||
         (typeof session?.getCallId === 'function' ? session.getCallId() : '') ||
-        ''
+        '',
     ).trim();
     if (!roomId && !callId) return false;
 
@@ -54,12 +93,14 @@ export function isAndroidActiveCallEligibleForLeaveHint(): boolean {
   }
 }
 
+/** System PiP по Home — только для видеозвонка; аудио уходит в ongoing notification. */
+export function shouldAllowAndroidSystemPiPOnLeaveHint(): boolean {
+  if (!isAndroidActiveCallEligibleForLeaveHint()) return false;
+  return !resolveActiveCallPlaceholderOnly();
+}
+
 let leaveHintDisableTimer: ReturnType<typeof setTimeout> | null = null;
 
-/**
- * Включение — сразу; выключение — с короткой задержкой и повторной проверкой активного звонка,
- * чтобы несколько эффектов не «мигали» false→true и не блокировали system PiP после циклов in-app/Home.
- */
 export function setAndroidSystemPiPLeaveHintEnabled(enabled: boolean): void {
   if (Platform.OS !== 'android') return;
   try {
@@ -68,7 +109,9 @@ export function setAndroidSystemPiPLeaveHintEnabled(enabled: boolean): void {
         clearTimeout(leaveHintDisableTimer);
         leaveHintDisableTimer = null;
       }
-      NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(true);
+      const allowPiP = shouldAllowAndroidSystemPiPOnLeaveHint();
+      NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(!allowPiP);
+      NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(allowPiP);
       return;
     }
     if (leaveHintDisableTimer) clearTimeout(leaveHintDisableTimer);
@@ -76,6 +119,7 @@ export function setAndroidSystemPiPLeaveHintEnabled(enabled: boolean): void {
       leaveHintDisableTimer = null;
       if (isAndroidActiveCallEligibleForLeaveHint()) return;
       NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+      NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(false);
     }, 320);
   } catch (_) {}
 }

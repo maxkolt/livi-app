@@ -12,12 +12,17 @@ export default function SystemPiPCaptureHost() {
   const [layoutReady, setLayoutReady] = useState(false);
   const firedRequestIdRef = useRef(0);
 
+  useEffect(() => {
+    if (!active) {
+      setLayoutReady(false);
+      firedRequestIdRef.current = 0;
+    }
+  }, [active]);
+
   const active = pip.systemPiPCaptureActive;
-  const pipVisible = pip.visible;
   const requestId = pip.systemPiPCaptureRequestId;
-  const prepared = active && requestId <= 0;
   const live = active && requestId > 0;
-  const preparedVisible = prepared && !pipVisible;
+  // Полноэкранный capture-host только при переходе Home → PiP (requestId > 0). Иначе перекрывает UI аудиозвонка.
   const remoteStream = pip.remoteStream;
   const remoteCamOn = pip.remoteCamOn ?? true;
   const placeholderOnly = shouldUsePipPlaceholderOnly({
@@ -45,9 +50,8 @@ export default function SystemPiPCaptureHost() {
       remoteCamOn,
       localCamOn: pip.localCamOn,
       hasLiveRemoteVideo,
-      prepared,
+      prepared: false,
       live,
-      preparedVisible,
     });
   }, [
     active,
@@ -58,18 +62,8 @@ export default function SystemPiPCaptureHost() {
     remoteCamOn,
     pip.localCamOn,
     hasLiveRemoteVideo,
-    prepared,
     live,
-    preparedVisible,
   ]);
-
-  useEffect(() => {
-    if (!active || !layoutReady) return;
-    if (!placeholderOnly && !shouldShowAway) return;
-    try {
-      NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
-    } catch (_) {}
-  }, [active, layoutReady, placeholderOnly, shouldShowAway]);
 
   useEffect(() => {
     if (!active || !layoutReady || requestId <= 0) {
@@ -79,7 +73,7 @@ export default function SystemPiPCaptureHost() {
       return;
     }
     firedRequestIdRef.current = requestId;
-    const ENTER_DELAY_MS = 60;
+    const ENTER_DELAY_MS = placeholderOnly ? 16 : 60;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb: () => void) => setTimeout(cb, 16);
@@ -87,7 +81,10 @@ export default function SystemPiPCaptureHost() {
       if (cancelled) return;
       try {
         NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
-        NativeModules.LiviAppModule?.requestEnterPictureInPicture?.();
+        // Аудио: enter только из MainActivity после frameReady (не дублировать и не захватить VideoCall).
+        if (!placeholderOnly) {
+          NativeModules.LiviAppModule?.requestEnterPictureInPicture?.();
+        }
       } catch (error) {
         console.warn('[SystemPiPCaptureHost] native requestEnterPictureInPicture threw', {
           requestId,
@@ -110,22 +107,17 @@ export default function SystemPiPCaptureHost() {
         NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
       } catch (_) {}
     };
-  }, [active, layoutReady, requestId, remoteStream, shouldShowAway]);
+  }, [active, layoutReady, requestId, remoteStream, shouldShowAway, placeholderOnly]);
+
+  if (!live) {
+    return null;
+  }
 
   return (
     <View
       collapsable={false}
       pointerEvents="none"
-      style={[
-        styles.hostBase,
-        live
-          ? styles.hostActive
-          : preparedVisible
-            ? styles.hostPrepared
-            : prepared
-              ? styles.hostPreparedHidden
-              : styles.hostInactive,
-      ]}
+      style={styles.hostActive}
       onLayout={() => {
         if (!layoutReady) {
           setLayoutReady(true);
@@ -160,38 +152,16 @@ export default function SystemPiPCaptureHost() {
 }
 
 const styles = StyleSheet.create({
-  hostBase: {
-    ...StyleSheet.absoluteFillObject,
-  },
   hostActive: {
+    ...StyleSheet.absoluteFillObject,
     zIndex: 10000,
     elevation: 10000,
     backgroundColor: '#000',
   },
-  hostPrepared: {
-    zIndex: 9998,
-    elevation: 9998,
-    // Для сценария VideoCall -> Home native может заходить в PiP быстрее JS-рендеров.
-    // Если host "подготовлен, но невидим" (opacity: 0), Android захватывает underlying UI
-    // (кнопки/оверлеи VideoCall) — что и даёт неверный "захват". Поэтому в prepared-режиме
-    // делаем host фактически присутствующим в кадре.
-    opacity: 1,
-    backgroundColor: '#000',
-  },
-  hostPreparedHidden: {
-    zIndex: -1,
-    elevation: 0,
-    opacity: 0,
-    backgroundColor: 'transparent',
-  },
-  hostInactive: {
-    zIndex: -1,
-    elevation: 0,
-    opacity: 0,
-    backgroundColor: 'transparent',
-  },
   fill: {
     flex: 1,
     backgroundColor: '#000',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

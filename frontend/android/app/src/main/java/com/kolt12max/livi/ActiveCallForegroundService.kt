@@ -24,6 +24,7 @@ class ActiveCallForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         partnerNick = intent?.getStringExtra(EXTRA_PARTNER_NICK)?.trim()?.takeIf { it.isNotEmpty() }
+        audioOnly = intent?.getBooleanExtra(EXTRA_AUDIO_ONLY, false) == true
         // Явно указываем тип FGS, чтобы Android 13+ корректно трекал policy для phoneCall-сервиса.
         val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
@@ -44,22 +45,40 @@ class ActiveCallForegroundService : Service() {
     }
 
     private var partnerNick: String? = null
+    private var audioOnly: Boolean = false
 
     private fun buildNotification(): Notification {
-        val channelId = CHANNEL_ID
+        val channelId = if (audioOnly) CHANNEL_ID_AUDIO else CHANNEL_ID
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channelName = if (audioOnly) {
+                getString(R.string.active_audio_call_notification_channel)
+            } else {
+                getString(R.string.active_call_notification_channel)
+            }
             val channel = NotificationChannel(
                 channelId,
-                getString(R.string.active_call_notification_channel),
+                channelName,
                 NotificationManager.IMPORTANCE_LOW
             ).apply { setShowBadge(false) }
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
         }
 
-        val title = if (!partnerNick.isNullOrEmpty()) {
+        val title = if (audioOnly) {
+            if (!partnerNick.isNullOrEmpty()) {
+                getString(R.string.active_audio_call_notification_title_from, partnerNick)
+            } else {
+                getString(R.string.active_audio_call_notification_title_someone)
+            }
+        } else if (!partnerNick.isNullOrEmpty()) {
             getString(R.string.active_call_notification_title_from, partnerNick)
         } else {
             getString(R.string.active_call_notification_title_someone)
+        }
+
+        val contentText = if (audioOnly) {
+            getString(R.string.active_audio_call_notification_text)
+        } else {
+            getString(R.string.active_call_notification_text)
         }
 
         val pendingIntent = PendingIntent.getActivity(
@@ -74,7 +93,7 @@ class ActiveCallForegroundService : Service() {
 
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle(title)
-            .setContentText(getString(R.string.active_call_notification_text))
+            .setContentText(contentText)
             .setSmallIcon(applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.ic_menu_call)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -87,12 +106,15 @@ class ActiveCallForegroundService : Service() {
     companion object {
         private const val TAG = "ActiveCallFg"
         private const val CHANNEL_ID = "livi_active_call_channel"
+        private const val CHANNEL_ID_AUDIO = "livi_active_audio_call_channel"
         private const val NOTIFICATION_ID = 1004
         private const val EXTRA_PARTNER_NICK = "partnerNick"
+        private const val EXTRA_AUDIO_ONLY = "audioOnly"
 
-        fun start(context: Context, partnerNick: String?) {
+        fun start(context: Context, partnerNick: String?, audioOnly: Boolean = false) {
             val intent = Intent(context, ActiveCallForegroundService::class.java).apply {
                 putExtra(EXTRA_PARTNER_NICK, partnerNick?.takeIf { it.isNotBlank() } ?: "")
+                putExtra(EXTRA_AUDIO_ONLY, audioOnly)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

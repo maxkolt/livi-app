@@ -63,6 +63,8 @@ class MainActivity : ReactActivity() {
   private val pendingPiPEnterRunnables = mutableListOf<Runnable>()
   private var lastPiPEnterRequestAtMs = 0L
   private var isPiPEnterAttemptRunning = false
+  /** Runnable из onUserLeaveHint — повторный enter после setSystemPiPCaptureFrameReady(true) из JS. */
+  private var leaveHintPiPEnterRunnable: Runnable? = null
   /** Анти-реэнтри: сразу после выхода из system PiP игнорируем ложный onUserLeaveHint этого же transition. */
   private var suppressPiPReenterUntilMs = 0L
   /** Системный PiP по onUserLeaveHint (Home / уход в фон), но не сразу после Recents. */
@@ -114,6 +116,7 @@ class MainActivity : ReactActivity() {
     }
     pendingPiPEnterRunnables.clear()
     isPiPEnterAttemptRunning = false
+    leaveHintPiPEnterRunnable = null
   }
 
   /** После явного возврата на VideoCall (тап PiP / уведомление) — снова разрешить Home → system PiP. */
@@ -124,6 +127,13 @@ class MainActivity : ReactActivity() {
   /** LiviAppModule при setEndingCallInProgress(true) — отменить отложенный вход в PiP после goBack. */
   internal fun cancelPendingPiPEnterAttemptsForCallTeardown() {
     cancelPendingPiPEnterAttempts()
+  }
+
+  /** JS отрисовал SystemPiPCaptureHost — повторить enter, пока окно leaveHint ещё активно. */
+  internal fun retryEnterSystemPiPIfLeaveHintPending() {
+    if (!isPiPEnterAttemptRunning || isInPictureInPictureMode) return
+    val r = leaveHintPiPEnterRunnable ?: return
+    pipEnterHandler.post(r)
   }
 
   private fun tryStashPendingAnswerFromIntent(i: Intent?): Boolean {
@@ -305,6 +315,10 @@ class MainActivity : ReactActivity() {
       android.util.Log.i("MainActivity", "onUserLeaveHint: skip system PiP because endingCallInProgress=true")
       return
     }
+    if (LiviAppModule.getSystemPiPCapturePlaceholderOnly()) {
+      android.util.Log.i("MainActivity", "onUserLeaveHint: skip system PiP — audio-only call (ongoing notification)")
+      return
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && shouldEnterPiP) {
       try {
         val now = System.currentTimeMillis()
@@ -331,16 +345,25 @@ class MainActivity : ReactActivity() {
               return@Runnable
             }
             val waitedMs = System.currentTimeMillis() - lastPiPEnterRequestAtMs
-            if (
-              !inAppPiPVisible &&
-              !LiviAppModule.getSystemPiPCaptureFrameReady() &&
-              waitedMs < 520L
-            ) {
-              android.util.Log.d(
-                "MainActivity",
-                "onUserLeaveHint: defer PiP enter — capture frame not ready yet (waitedMs=$waitedMs)"
-              )
-              return@Runnable
+            val placeholderOnly = LiviAppModule.getSystemPiPCapturePlaceholderOnly()
+            val frameReady = LiviAppModule.getSystemPiPCaptureFrameReady()
+            if (!inAppPiPVisible && !frameReady) {
+              // Аудио: не входить в PiP до AwayPlaceholder — иначе Samsung захватывает UI звонка.
+              if (placeholderOnly && waitedMs < 480L) {
+                android.util.Log.d(
+                  "MainActivity",
+                  "onUserLeaveHint: defer PiP enter — placeholder capture not ready (waitedMs=$waitedMs)"
+                )
+                return@Runnable
+              }
+              // Видео: короткие ретраи ждут TextureView; поздние — без frameReady (иначе launcher).
+              if (!placeholderOnly && waitedMs in 50L..450L) {
+                android.util.Log.d(
+                  "MainActivity",
+                  "onUserLeaveHint: defer PiP enter — capture frame not ready yet (waitedMs=$waitedMs)"
+                )
+                return@Runnable
+              }
             }
             val ratio = Rational(9, 16)
             val builder = PictureInPictureParams.Builder()
@@ -360,18 +383,19 @@ class MainActivity : ReactActivity() {
             android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode failed", e2)
           }
         }
-        // enterPictureInPictureMode нужно вызвать в окне onUserLeaveHint. Ждать frameReady из JS нельзя
-        // бесконечно — к моменту готовности activity уже в фоне и PiP не включается.
-        // Не вызываем enter сразу: иначе Samsung захватывает экран VideoCall до AwayPlaceholder (см. логи ~6ms).
+        // enterPictureInPictureMode нужно вызвать в окне onUserLeaveHint; без немедленной попытки часто остаётся launcher.
+        leaveHintPiPEnterRunnable = tryEnterPiP
         if (!isInPictureInPictureMode) {
           android.util.Log.i(
             "MainActivity",
-            "onUserLeaveHint: scheduled PiP enter (no immediate; inAppPiPVisible=$inAppPiPVisible)"
+            "onUserLeaveHint: scheduled PiP enter (immediate + retries; inAppPiPVisible=$inAppPiPVisible)"
           )
+          pendingPiPEnterRunnables.add(tryEnterPiP)
+          pipEnterHandler.post(tryEnterPiP)
           val delays = if (inAppPiPVisible) {
             longArrayOf(80L, 160L, 280L, 480L, 800L, 1300L, 2000L)
           } else {
-            longArrayOf(120L, 220L, 360L, 520L, 750L, 1100L, 1600L, 2200L)
+            longArrayOf(40L, 80L, 120L, 200L, 320L, 480L, 750L, 1100L)
           }
           for (d in delays) {
             val r = Runnable { tryEnterPiP.run() }

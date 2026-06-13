@@ -51,6 +51,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/ke
 import {
   reenableAndroidSystemPiPLeaveHintAfterReturn,
   setAndroidSystemPiPLeaveHintEnabled,
+  refreshAndroidActiveCallNotification,
 } from '../../utils/activeCallNotification';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
@@ -266,6 +267,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     setPipAudioOnlyPlaceholderSticky(inAudioOnlyUi);
   }, [inAudioOnlyUi]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    refreshAndroidActiveCallNotification();
+  }, [inAudioOnlyUi, camOn, remoteCamOn, remoteStream?.id]);
 
   /** Собеседник включил видео (cam-toggle), мы ещё на audio UI — пульс кнопки «видео». */
   const [peerInvitedVideo, setPeerInvitedVideo] = useState(false);
@@ -863,6 +869,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
       if (transitionalLeaveHint && (effectiveSystemPiPRoomId || effectiveSystemPiPCallId)) {
         syncPiPParamsRef();
+        refreshAndroidActiveCallNotification();
       }
       return;
     }
@@ -885,6 +892,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setAndroidSystemPiPLeaveHintEnabled(!!shouldKeepLeaveHintOn);
     }
     syncPiPParamsRef();
+    if (Platform.OS === 'android' && shouldKeepLeaveHintOn) {
+      refreshAndroidActiveCallNotification();
+    }
     const paramsForPip = g.__currentCallPiPParamsRef?.current;
     const pipUpd = g.__pipUpdateStateRef?.current;
     if (
@@ -920,32 +930,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
     };
   }, [roomId, callId, isInactiveState, partnerUserId, partnerId, localStream, remoteStream, camOn, micOn, remoteMuted, remoteCamOn, route?.params, isFocused, appState, getTrackEnabled, getDesiredRemoteMutedForPiPReturn]);
-
-  // Android audio-only: держим SystemPiPCaptureHost в prepared до Home, чтобы PiP не схватил UI VideoCall.
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    if (!inAudioOnlyUi || isInactiveState || !(roomId || callId)) return;
-    const g = global as any;
-    const pipUpd = g.__pipUpdateStateRef?.current;
-    if (typeof pipUpd !== 'function') return;
-    try {
-      NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
-    } catch (_) {}
-    pipUpd({
-      systemPiPCaptureActive: true,
-      systemPiPCaptureRequestId: 0,
-      allowVideoRender: false,
-      localCamOn: false,
-    });
-    return () => {
-      if (g.__systemPiPEntryInProgressUntilRef?.current > Date.now()) return;
-      if (g.__pipInSystemModeRef?.current === true) return;
-      const upd = g.__pipUpdateStateRef?.current;
-      if (typeof upd === 'function' && !inAudioOnlyUiRef.current) {
-        upd({ systemPiPCaptureActive: false, systemPiPCaptureRequestId: 0 });
-      }
-    };
-  }, [inAudioOnlyUi, isInactiveState, roomId, callId]);
 
   // КРИТИЧНО: Выставляем «активный видеозвонок» при показе экрана VideoCall (а не только после connectToLiveKit),
   // чтобы сокет не отключался при уходе в фон до создания комнаты (например, ответ на звонок с блокировки).
@@ -3740,7 +3724,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
         if (session && typeof session.enterPiP === 'function') session.enterPiP();
         if (NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint) {
-          NativeModules.LiviAppModule.setShouldEnterPiPOnLeaveHint(true);
+          setAndroidSystemPiPLeaveHintEnabled(true);
         }
         // Показываем PiP с remote, затем оверлей 9:16 с видео собеседника — в кадр системного PiP попадёт он
         if (typeof showPiP === 'function' && callId && roomId) {

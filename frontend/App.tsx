@@ -78,6 +78,7 @@ import {
   reenableAndroidSystemPiPLeaveHintAfterReturn,
   setAndroidSystemPiPLeaveHintEnabled,
 } from './utils/activeCallNotification';
+import { shouldUsePipPlaceholderOnly } from './src/pip/pipPlaceholderOnly';
 
 // Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
 const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
@@ -576,6 +577,24 @@ function AppContent() {
       g.__callEndedFromPiPNoOpenRef?.current === true ||
       g.__endingFromPiPButtonRef?.current === true;
     if (endingCall) return;
+
+    try {
+      const params = g.__currentCallPiPParamsRef?.current;
+      const remoteStream =
+        params?.remoteStream ??
+        (typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null);
+      const audioOnlyReturn = shouldUsePipPlaceholderOnly({
+        localCamOn: params?.localCamOn,
+        remoteCamOn: params?.remoteCamOn,
+        remoteStream,
+      });
+      if (audioOnlyReturn) {
+        g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+        g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+        g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+        g.__expandToVideoCallUiFromPiPRef.current = false;
+      }
+    } catch (_) {}
 
     // Не копируем логику SystemPiPExpanded (leaveHint=false + disable 6s): иначе после возврата
     // на VideoCall повторный Home сворачивает приложение без system PiP.

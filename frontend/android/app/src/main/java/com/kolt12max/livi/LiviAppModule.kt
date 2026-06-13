@@ -482,9 +482,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
   /** Запустить foreground-сервис во время активного видеозвонка — сокет не засыпает в фоне/PiP. partnerNick — никнейм для уведомления «Видеозвонок от {nick}» или пусто для «от кого-то». */
   @ReactMethod
-  fun startActiveCallForegroundService(partnerNick: String?) {
+  fun startActiveCallForegroundService(partnerNick: String?, audioOnly: Boolean) {
     try {
-      ActiveCallForegroundService.start(reactApplicationContext, partnerNick?.takeIf { it.isNotBlank() })
+      ActiveCallForegroundService.start(reactApplicationContext, partnerNick?.takeIf { it.isNotBlank() }, audioOnly)
     } catch (e: Exception) {
       android.util.Log.w(NAME, "startActiveCallForegroundService failed", e)
     }
@@ -716,6 +716,15 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun setSystemPiPCaptureFrameReady(ready: Boolean) {
     LiviAppModule.setSystemPiPCaptureFrameReadyStatic(ready)
+    if (ready) {
+      (currentActivity as? MainActivity)?.retryEnterSystemPiPIfLeaveHintPending()
+    }
+  }
+
+  /** Аудиозвонок / без видео: в system PiP только AwayPlaceholder, не захват экрана VideoCall. */
+  @ReactMethod
+  fun setSystemPiPCapturePlaceholderOnly(placeholderOnly: Boolean) {
+    LiviAppModule.setSystemPiPCapturePlaceholderOnlyStatic(placeholderOnly)
   }
 
   /** Координаты маленького in-app PiP в пикселях окна; используются как sourceRect при Home -> system PiP. */
@@ -1611,6 +1620,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     internal fun setSystemPiPCaptureFrameReadyStatic(value: Boolean) {
       systemPiPCaptureFrameReady = value
+    }
+
+    @Volatile
+    @JvmField
+    var systemPiPCapturePlaceholderOnly = false
+    @JvmStatic
+    fun getSystemPiPCapturePlaceholderOnly(): Boolean = systemPiPCapturePlaceholderOnly
+    @JvmStatic
+    internal fun setSystemPiPCapturePlaceholderOnlyStatic(value: Boolean) {
+      systemPiPCapturePlaceholderOnly = value
     }
 
     /** true только для маленького in-app PiP; помогает MainActivity выбрать задержанный вход в system PiP без zoomed capture. */

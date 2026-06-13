@@ -10,7 +10,7 @@ import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../utils/callKeep';
-import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn } from '../../utils/activeCallNotification';
+import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification } from '../../utils/activeCallNotification';
 import { shouldUsePipPlaceholderOnly } from './pipPlaceholderOnly';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
@@ -661,6 +661,44 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       if (session && typeof (session as any).isEnded === 'function' && (session as any).isEnded()) {
         return;
       }
+
+      let paramsEarly = g.__currentCallPiPParamsRef?.current;
+      if (!paramsEarly && session) {
+        const cid = typeof (session as any).getCallId === 'function' ? (session as any).getCallId() : null;
+        const rid = typeof (session as any).getRoomId === 'function' ? (session as any).getRoomId() : null;
+        if (cid || rid) {
+          paramsEarly = {
+            localCamOn:
+              typeof (session as any).getIsCamOn === 'function' ? (session as any).getIsCamOn() : false,
+            remoteCamOn:
+              typeof (session as any).getRemoteCamEnabled === 'function'
+                ? (session as any).getRemoteCamEnabled()
+                : false,
+            remoteStream:
+              typeof (session as any).getRemoteStream === 'function'
+                ? (session as any).getRemoteStream()
+                : null,
+          };
+        }
+      }
+      const remoteEarly =
+        session && typeof (session as any).getRemoteStream === 'function'
+          ? (session as any).getRemoteStream()
+          : null;
+      if (
+        shouldUsePipPlaceholderOnly({
+          localCamOn: paramsEarly?.localCamOn,
+          remoteCamOn: paramsEarly?.remoteCamOn,
+          remoteStream: paramsEarly?.remoteStream ?? remoteEarly ?? null,
+        })
+      ) {
+        logger.info('[PiPContext] AboutToEnterSystemPiP skipped — audio call uses status notification');
+        try {
+          refreshAndroidActiveCallNotification();
+        } catch (_) {}
+        return;
+      }
+
       try {
         g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
         g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 4500;
@@ -675,7 +713,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       try {
         g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
         g.__pendingSystemPiPSyncRef.current = true;
-        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
         NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
       } catch (_) {}
 
@@ -719,6 +756,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         hasRemoteStream: !!(params?.remoteStream ?? remoteFromSessionForPlaceholder),
         decorPayload: { w: payload?.width ?? 0, h: payload?.height ?? 0 },
       });
+      try {
+        NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholderOnlyHome);
+        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
+      } catch (_) {}
       if (params?.callId && params?.roomId) {
         if (NativeModules.LiviAppModule?.setPiPEndCallParams) {
           try { NativeModules.LiviAppModule.setPiPEndCallParams(params.callId, params.roomId); } catch (_) {}
