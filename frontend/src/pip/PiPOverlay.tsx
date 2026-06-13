@@ -162,12 +162,15 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       g.__expandToVideoCallUiFromPiPRef.current = false;
       const onVideoCallScreen = shouldSuppressInAppPiPOnRoute(currentRouteName);
       const fn = g.__returnToAudioCallRef?.current;
+      const session = g.__webrtcSessionRef?.current;
       if (onVideoCallScreen && typeof fn === 'function') {
         void fn({ skipNavigation: true });
         return;
       }
       if (typeof fn === 'function') {
         void fn({ fromPiP: true, skipNavigation: true });
+      } else if (session && typeof session.enterDirectCallAudioOnlyMode === 'function') {
+        void session.enterDirectCallAudioOnlyMode().catch(() => {});
       }
       const navFn = g.__pipReturnToAudioCallRef?.current;
       if (typeof navFn === 'function') {

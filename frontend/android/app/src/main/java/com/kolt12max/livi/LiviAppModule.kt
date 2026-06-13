@@ -652,37 +652,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** Уход в фон по Back + вход в системный PiP с натива (таймер не зависит от JS, PiP показывается сразу). */
+  /** @deprecated Системный PiP только по Home (onUserLeaveHint), не из JS Back/moveTaskToBack. */
   @ReactMethod
   fun moveTaskToBackAndEnterPiP(nonRoot: Boolean) {
-    val activity = currentActivity ?: return
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    activity.runOnUiThread {
-      activity.moveTaskToBack(nonRoot)
-      val handler = Handler(Looper.getMainLooper())
-      val tryEnterPiP = Runnable {
-        try {
-          if (activity.isInPictureInPictureMode) return@Runnable
-          val ratio = Rational(9, 16)
-          val builder = PictureInPictureParams.Builder()
-            .setAspectRatio(ratio)
-            .setActions((activity as? MainActivity)?.buildSystemPiPActions() ?: emptyList())
-          val sourceRect = buildSystemPiPSourceRect(activity)
-          if (sourceRect != null) builder.setSourceRectHint(sourceRect)
-          val params = builder.build()
-          if (activity.enterPictureInPictureMode(params)) {
-            Log.d(NAME, "moveTaskToBackAndEnterPiP: entered PiP")
-          }
-        } catch (e2: Exception) {
-          Log.w(NAME, "moveTaskToBackAndEnterPiP attempt failed", e2)
-        }
-      }
-      handler.postDelayed(tryEnterPiP, 150)
-      handler.postDelayed(tryEnterPiP, 350)
-      handler.postDelayed(tryEnterPiP, 550)
-      handler.postDelayed(tryEnterPiP, 850)
-      handler.postDelayed(tryEnterPiP, 1200)
-    }
+    Log.i(NAME, "moveTaskToBackAndEnterPiP ignored — use Home for system PiP")
+    moveTaskToBack(nonRoot)
   }
 
   /** Включить/выключить системный PiP при нажатии Home: true = при уходе в фон перейти в Picture-in-Picture (окно поверх лаунчера). Вызывать из JS при активном видеозвонке или при показе in-app PiP. На Android 12+ дополнительно включается авто-вход в PiP для совместимости со всеми устройствами. */
@@ -694,17 +668,22 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } catch (_: Exception) {}
   }
 
+  /** Отменить отложенный enter PiP из onUserLeaveHint (например, JS решил что это audio-only). */
+  @ReactMethod
+  fun cancelPendingSystemPiPEnter() {
+    try {
+      (currentActivity as? MainActivity)?.cancelPendingPiPEnterAttemptsForCallTeardown()
+    } catch (_: Exception) {}
+  }
+
   @ReactMethod
   fun setShouldEnterPiPOnLeaveHint(enabled: Boolean) {
+    val effective = false
     val prev = LiviAppModule.getShouldEnterPiPOnLeaveHint()
-    LiviAppModule.setPiPOnLeaveHintEnabled(enabled)
-    if (prev != enabled) {
-      Log.i(NAME, "setShouldEnterPiPOnLeaveHint: $prev -> $enabled")
+    LiviAppModule.setPiPOnLeaveHintEnabled(effective)
+    if (prev != effective) {
+      Log.i(NAME, "setShouldEnterPiPOnLeaveHint: $prev -> $effective (requested=$enabled, leaveHint PiP disabled)")
     }
-    // ВАЖНО: сознательно НЕ включаем Activity#setAutoEnterPictureInPictureEnabled на Android 12+.
-    // Причина: авто-вход в PiP может срабатывать в неожиданные моменты (особенно на Samsung/OneUI)
-    // во время переходов/закрытия нативных экранов, что выглядит как "само выбросило из приложения".
-    // Мы хотим вход в системный PiP только по системной кнопке «Домой» (homekey + onUserLeaveHint в MainActivity).
   }
 
   /** JS выставляет true, когда виден маленький in-app PiP. Home из этого состояния требует задержки перед system PiP, чтобы не захватить zoomed cover-кадр. */
@@ -739,61 +718,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     LiviAppModule.setEndingCallInProgressStatic(inProgress)
   }
 
-  /** Запросить переход в системный PiP из JS (при уходе по кнопке «Назад» с экрана звонка — показываем in-app PiP и затем системное PiP-окно). */
+  /** @deprecated Retry enter PiP while leaveHint window is active (frame ready from SystemPiPCaptureHost). */
   @ReactMethod
   fun requestEnterPictureInPicture() {
-    val activity = currentActivity ?: return
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    activity.runOnUiThread {
-      try {
-        Log.i(
-          NAME,
-          "requestEnterPictureInPicture invoked activity=${activity.javaClass.simpleName} isInPiP=${activity.isInPictureInPictureMode} hasFocus=${activity.window?.decorView?.hasWindowFocus() == true}"
-        )
-        // JS вызывает этот метод только после того, как dedicated SystemPiPCaptureHost уже
-        // отрисован и готов стать единственным источником кадра для system PiP.
-        val ratio = Rational(9, 16)
-        val builder = PictureInPictureParams.Builder()
-          .setAspectRatio(ratio)
-          .setActions((activity as? MainActivity)?.buildSystemPiPActions() ?: emptyList())
-        val sourceRect = buildSystemPiPSourceRect(activity)
-        if (sourceRect != null) {
-          builder.setSourceRectHint(sourceRect)
-          Log.d(NAME, "requestEnterPictureInPicture sourceRect left=${sourceRect.left} top=${sourceRect.top} right=${sourceRect.right} bottom=${sourceRect.bottom} w=${sourceRect.width()} h=${sourceRect.height()}")
-        } else {
-          Log.w(NAME, "requestEnterPictureInPicture buildSystemPiPSourceRect returned null")
-        }
-        val params = builder.build()
-        val handler = Handler(Looper.getMainLooper())
-        val tryEnterPiP = Runnable {
-          try {
-            if (activity.isInPictureInPictureMode) return@Runnable
-            Log.i(
-              NAME,
-              "requestEnterPictureInPicture attempt isInPiP=${activity.isInPictureInPictureMode} hasFocus=${activity.window?.decorView?.hasWindowFocus() == true}"
-            )
-            if (activity.enterPictureInPictureMode(params)) {
-              Log.d("LiviAppModule", "Entered Picture-in-Picture mode (requested from JS)")
-            } else {
-              Log.w("LiviAppModule", "requestEnterPictureInPicture: enterPictureInPictureMode returned false")
-            }
-          } catch (e2: Exception) {
-            Log.w("LiviAppModule", "requestEnterPictureInPicture attempt failed", e2)
-          }
-        }
-        // Вызывается только после отрисовки SystemPiPCaptureHost; первая попытка с небольшой паузой
-        // для TextureView, далее ретраи для медленных устройств / Samsung.
-        handler.postDelayed(tryEnterPiP, 80)
-        handler.postDelayed(tryEnterPiP, 280)
-        handler.postDelayed(tryEnterPiP, 520)
-        handler.postDelayed(tryEnterPiP, 900)
-        handler.postDelayed(tryEnterPiP, 1400)
-        handler.postDelayed(tryEnterPiP, 2100)
-        handler.postDelayed(tryEnterPiP, 3000)
-      } catch (e: Exception) {
-        Log.w("LiviAppModule", "requestEnterPictureInPicture failed", e)
-      }
-    }
+    try {
+      (currentActivity as? MainActivity)?.retryEnterSystemPiPIfLeaveHintPending()
+    } catch (_: Exception) {}
   }
 
   /**
@@ -1718,18 +1648,46 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     /** Уведомить JS, что скоро включится системный PiP — чтобы переключить UI на «только PiP» (видео собеседника + верхние кнопки) до входа в PiP.
      * decorWidth/decorHeight — размер decorView на момент вызова (до входа в PiP), чтобы JS не вызывал getDecorViewSize() после перехода (там уже размер окна PiP 334x594 и ломается отображение при повторном входе). */
     @JvmStatic
-    fun emitAboutToEnterSystemPiP(decorWidth: Int = 0, decorHeight: Int = 0) {
+    fun emitAboutToEnterSystemPiP(decorWidth: Int = 0, decorHeight: Int = 0, traceId: String? = null) {
       setSystemPiPCaptureFrameReadyStatic(false)
       reactContextRef?.runOnUiQueueThread {
         val ctx = reactContextRef ?: return@runOnUiQueueThread
+        val params = Arguments.createMap()
         if (decorWidth > 0 && decorHeight > 0) {
-          val params = Arguments.createMap()
           params.putInt("width", decorWidth)
           params.putInt("height", decorHeight)
-          ctx.emitDeviceEvent("AboutToEnterSystemPiP", params)
-        } else {
-          ctx.emitDeviceEvent("AboutToEnterSystemPiP", null)
         }
+        if (!traceId.isNullOrBlank()) {
+          params.putString("traceId", traceId)
+        }
+        ctx.emitDeviceEvent("AboutToEnterSystemPiP", params)
+      }
+    }
+
+    /** Сквозная трассировка Home → system PiP (Metro: [LIVI][SYSPIP][home], logcat: SysPiPHome). */
+    @JvmStatic
+    fun emitSystemPiPHomeTrace(traceId: String, phase: String, extras: Bundle?) {
+      Log.i(
+        "SysPiPHome",
+        "phase=$phase traceId=$traceId ${extras?.keySet()?.joinToString { k -> "$k=${extras.get(k)}" } ?: ""}"
+      )
+      reactContextRef?.runOnUiQueueThread {
+        val params = Arguments.createMap()
+        params.putString("traceId", traceId)
+        params.putString("phase", phase)
+        if (extras != null) {
+          for (key in extras.keySet()) {
+            when (val v = extras.get(key)) {
+              is Boolean -> params.putBoolean(key, v)
+              is Int -> params.putInt(key, v)
+              is Long -> params.putDouble(key, v.toDouble())
+              is Double -> params.putDouble(key, v)
+              is String -> params.putString(key, v)
+              else -> if (v != null) params.putString(key, v.toString())
+            }
+          }
+        }
+        reactContextRef?.emitDeviceEvent("SystemPiPHomeTrace", params)
       }
     }
 

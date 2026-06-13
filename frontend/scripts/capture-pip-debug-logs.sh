@@ -14,7 +14,7 @@ cd "$SCRIPT_DIR/.."
 LOG_DIR="$(pwd)/logs_devices"
 mkdir -p "$LOG_DIR"
 TS=$(date +%Y%m%d-%H%M%S)
-GREP_PIP='getDecorViewSize|requestEnterPictureInPicture|sourceRect|LiviAppModule|PiPOverlay|PiPContext|SystemPiPCaptureHost|pip_enter_exit|placeholder|AboutToEnterSystemPiP|updatePiPState|applyPending|scheduleSystemPiP|decorSize|VideoCall|MainActivity.*PiP|ReactNativeJS'
+GREP_PIP='SysPiPHome|SYSPIP|\[LIVI\]\[SYSPIP\]|getDecorViewSize|requestEnterPictureInPicture|sourceRect|LiviAppModule|PiPOverlay|PiPContext|SystemPiPCaptureHost|pip_enter_exit|placeholder|AboutToEnterSystemPiP|updatePiPState|applyPending|scheduleSystemPiP|decorSize|VideoCall|MainActivity.*PiP|ReactNativeJS.*SYSPIP|ReactNativeJS.*sys_pip_home'
 
 if [ "${2:-}" = "live" ] || [ "$SERIAL" = "live" ]; then
   if [ "$SERIAL" = "live" ]; then SERIAL="${1:-}"; fi

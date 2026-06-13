@@ -37,26 +37,70 @@ export function mediaStreamHasLiveVideo(stream: unknown): boolean {
   }
 }
 
+export function getPipPlaceholderOnlyDebug(opts?: {
+  localCamOn?: boolean;
+  remoteCamOn?: boolean;
+  remoteStream?: unknown;
+  localStream?: unknown;
+}): { placeholderOnly: boolean; reason: string; flags: Record<string, boolean> } {
+  const g = global as any;
+  const flags = {
+    inAudioOnlyUiRef: g.__inAudioOnlyUiRef?.current === true,
+    pipAudioOnlySticky: g.__pipAudioOnlyPlaceholderRef?.current === true,
+    liveRemoteVideo: mediaStreamHasLiveVideo(opts?.remoteStream),
+    liveLocalVideo: mediaStreamHasLiveVideo(opts?.localStream),
+    localCamOn: opts?.localCamOn === true,
+    remoteCamOn: opts?.remoteCamOn === true,
+  };
+  if (opts?.localCamOn === true || opts?.remoteCamOn === true) {
+    return { placeholderOnly: false, reason: 'cam_on', flags };
+  }
+  if (flags.liveRemoteVideo) {
+    return { placeholderOnly: false, reason: 'live_remote_video', flags };
+  }
+  if (flags.liveLocalVideo) {
+    return { placeholderOnly: false, reason: 'live_local_video', flags };
+  }
+  try {
+    const session = g.__webrtcSessionRef?.current;
+    if (session?.getIsCamOn?.()) {
+      return { placeholderOnly: false, reason: 'session_local_cam', flags };
+    }
+    if (session?.getRemoteCamEnabled?.()) {
+      return { placeholderOnly: false, reason: 'session_remote_cam', flags };
+    }
+  } catch (_) {}
+  if (flags.inAudioOnlyUiRef) {
+    return { placeholderOnly: true, reason: 'inAudioOnlyUiRef', flags };
+  }
+  if (flags.pipAudioOnlySticky) {
+    const session = g.__webrtcSessionRef?.current;
+    const callLive =
+      session && typeof session.isEnded === 'function' ? !session.isEnded() : !!session;
+    if (callLive) {
+      return { placeholderOnly: true, reason: 'pipAudioOnlySticky', flags };
+    }
+  }
+  try {
+    const session = g.__webrtcSessionRef?.current;
+    if (session && typeof session.shouldUsePlaceholderPiP === 'function') {
+      const sessionPlaceholder = session.shouldUsePlaceholderPiP();
+      return {
+        placeholderOnly: !!sessionPlaceholder,
+        reason: sessionPlaceholder ? 'session_shouldUsePlaceholderPiP' : 'session_no_placeholder',
+        flags,
+      };
+    }
+  } catch {}
+  return { placeholderOnly: false, reason: 'default_false', flags };
+}
+
 /** System / in-app PiP: не монтировать RTCView, показывать заглушку LiVi. */
 export function shouldUsePipPlaceholderOnly(opts?: {
   localCamOn?: boolean;
   remoteCamOn?: boolean;
   remoteStream?: unknown;
+  localStream?: unknown;
 }): boolean {
-  if (isInAudioOnlyCallUi()) {
-    return true;
-  }
-  if (opts?.localCamOn === true || opts?.remoteCamOn === true) {
-    return false;
-  }
-  if (mediaStreamHasLiveVideo(opts?.remoteStream)) {
-    return false;
-  }
-  try {
-    const session = (global as any).__webrtcSessionRef?.current;
-    if (session && typeof session.shouldUsePlaceholderPiP === 'function') {
-      return session.shouldUsePlaceholderPiP();
-    }
-  } catch {}
-  return false;
+  return getPipPlaceholderOnlyDebug(opts).placeholderOnly;
 }

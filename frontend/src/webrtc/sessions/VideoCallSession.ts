@@ -123,7 +123,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     disconnected?: () => void;
     pipState?: (data: { inPiP: boolean; roomId: string; from: string }) => void;
     camToggle?: (data: { enabled: boolean; from: string; roomId?: string }) => void;
+    directCallVideoUi?: (data: { inVideoCallUi: boolean; from: string; roomId?: string }) => void;
   } = {};
+  private lastEmittedPeerVideoCallUi: boolean | null = null;
   private connectRequestId = 0;
   private disconnectReason: 'user' | 'server' | 'unknown' = 'unknown';
   private isDisconnecting = false;
@@ -735,6 +737,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (callbacks.onLocalStreamChange) this.config.onLocalStreamChange = callbacks.onLocalStreamChange;
     if (callbacks.onRemoteStreamChange) this.config.onRemoteStreamChange = callbacks.onRemoteStreamChange;
     if (callbacks.onRemoteCamStateChange) this.config.onRemoteCamStateChange = callbacks.onRemoteCamStateChange;
+    if (callbacks.onPeerDirectCallVideoUiChange) {
+      this.config.callbacks.onPeerDirectCallVideoUiChange = callbacks.onPeerDirectCallVideoUiChange;
+    }
     if (callbacks.onRemoteCamSideChange) this.config.onRemoteCamSideChange = callbacks.onRemoteCamSideChange;
     if (callbacks.onLoadingChange) this.config.onLoadingChange = callbacks.onLoadingChange;
     if (callbacks.onPartnerIdChange) this.config.onPartnerIdChange = callbacks.onPartnerIdChange;
@@ -1536,6 +1541,51 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.isCamOn;
   }
 
+  /** Сообщить партнёру, что мы на экране видеозвонка или вернулись на аудио (direct call). */
+  notifyPeerDirectCallVideoUi(inVideoCallUi: boolean): void {
+    if (!this.config.getIsDirectCall?.()) return;
+    if (this.lastEmittedPeerVideoCallUi === inVideoCallUi) return;
+    const currentRoomId = this.getRoomId();
+    if (this.ended || this.endCallInProgress || !currentRoomId) return;
+    this.lastEmittedPeerVideoCallUi = inVideoCallUi;
+    try {
+      socket.emit('direct-call:video-ui', {
+        inVideoCallUi,
+        from: socket.id,
+        roomId: currentRoomId,
+      });
+      logger.info('[VideoCallSession] direct-call:video-ui sent', {
+        inVideoCallUi,
+        roomId: currentRoomId,
+      });
+    } catch (e) {
+      logger.warn('[VideoCallSession] direct-call:video-ui emit failed', e);
+    }
+  }
+
+  /** Direct call: экран аудио — выкл. камеру, cam-toggle партнёру, не подписываться на remote video. */
+  async enterDirectCallAudioOnlyMode(): Promise<void> {
+    if (!this.config.getIsDirectCall?.()) return;
+    if (this.ended || this.endCallInProgress) return;
+    this.notifyPeerDirectCallVideoUi(false);
+    try {
+      if (this.getIsCamOn()) {
+        await this.toggleCam();
+      }
+    } catch (e) {
+      logger.warn('[VideoCallSession] enterDirectCallAudioOnlyMode toggleCam failed', e);
+    }
+    try {
+      this.deferRemoteVideoConsumption();
+    } catch (e) {
+      logger.warn('[VideoCallSession] enterDirectCallAudioOnlyMode deferRemoteVideo failed', e);
+    }
+    try {
+      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: false });
+    } catch (_) {}
+  }
+
   /** Звонок уже завершён (endCall вызван или получен call:ended). Используется в App, чтобы не показывать PiP с пустыми данными. */
   isEnded(): boolean {
     return this.ended || this.endCallInProgress;
@@ -1652,6 +1702,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (handlers.disconnected) socket.off('disconnected', handlers.disconnected);
     if (handlers.pipState) socket.off('pip:state', handlers.pipState);
     if (handlers.camToggle) socket.off('cam-toggle', handlers.camToggle);
+    if (handlers.directCallVideoUi) socket.off('direct-call:video-ui', handlers.directCallVideoUi);
 
     this.socketHandlers = {};
   }
@@ -1859,6 +1910,23 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.info('[VideoCallSession] ✅ onRemoteCamStateChange via cam-toggle', { enabled: data.enabled });
     };
 
+    const directCallVideoUiHandler = (data: {
+      inVideoCallUi: boolean;
+      from: string;
+      roomId?: string;
+    }) => {
+      const currentRoomId = this.getRoomId();
+      const incoming = data.roomId;
+      if (!currentRoomId || !incoming || incoming !== currentRoomId) {
+        return;
+      }
+      logger.info('[VideoCallSession] direct-call:video-ui received', {
+        inVideoCallUi: data.inVideoCallUi,
+        roomId: incoming,
+      });
+      this.config.callbacks.onPeerDirectCallVideoUiChange?.(data.inVideoCallUi);
+    };
+
     // Сохраняем ссылки на обработчики для возможности их удаления
     this.socketHandlers.callAccepted = callAcceptedHandler;
     this.socketHandlers.callIncoming = callIncomingHandler;
@@ -1870,6 +1938,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.socketHandlers.disconnected = disconnectedHandler;
     this.socketHandlers.pipState = pipStateHandler;
     this.socketHandlers.camToggle = camToggleHandler;
+    this.socketHandlers.directCallVideoUi = directCallVideoUiHandler;
     
     socket.on('call:accepted', callAcceptedHandler);
     socket.on('call:incoming', callIncomingHandler);
@@ -1880,6 +1949,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     socket.on('call:cancel', onCallCancel);
     socket.on('pip:state', pipStateHandler);
     socket.on('cam-toggle', camToggleHandler);
+    socket.on('direct-call:video-ui', directCallVideoUiHandler);
     
     logger.info('[VideoCallSession] ✅ Socket handlers registered', {
       myUserId: this.config.myUserId,
@@ -1895,6 +1965,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       () => socket.off('call:cancel', onCallCancel),
       () => socket.off('pip:state', pipStateHandler),
       () => socket.off('cam-toggle', camToggleHandler),
+      () => socket.off('direct-call:video-ui', directCallVideoUiHandler),
     ];
   }
 
@@ -2485,6 +2556,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Сразу помечаем завершение, чтобы повторный вызов (socket call:ended + ParticipantDisconnected
     // почти одновременно) не выполнял очистку и emit('callEnded') дважды.
     this.ended = true;
+    this.lastEmittedPeerVideoCallUi = null;
     this.unregisterSocketHandlers('callEnded');
     // КРИТИЧНО: Сразу уведомляем UI (выставить refs), чтобы колбэки при disconnectRoom (onRemoteCamStateChange и т.д.) не вызывали setState — без ререндеров при закрытии экрана.
     try { this.config.onCallEnding?.(); } catch (_) {}

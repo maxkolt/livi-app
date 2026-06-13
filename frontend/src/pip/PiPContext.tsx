@@ -10,8 +10,15 @@ import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../utils/callKeep';
-import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification } from '../../utils/activeCallNotification';
+import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification, syncAndroidSystemPiPNativeFlags, isAndroidActiveCallEligibleForLeaveHint } from '../../utils/activeCallNotification';
 import { shouldUsePipPlaceholderOnly } from './pipPlaceholderOnly';
+import {
+  beginHomePiPOutcomeWatch,
+  installSystemPiPHomeTraceListener,
+  logHomePiPTrace,
+  noteHomePiPModeChanged,
+  setActiveHomePiPTraceId,
+} from '../../utils/systemPiPHomeTrace';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
 
@@ -269,6 +276,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   }, [visible, remoteStreamVersion, delayMs, allowVideoRender, pendingSystemPiP]);
 
   // Системный PiP (Android): только видео + системная кнопка X. In-app PiP: верхняя панель + видео.
+  useEffect(() => {
+    installSystemPiPHomeTraceListener();
+    return () => {};
+  }, []);
+
   // КРИТИЧНО: Обновление state в том же тике, что и нативный переход в PiP, приводит к "forEach of null"
   // (Animated/React при смене transform или перестроении дерева). Откладываем на следующий тик.
   useEffect(() => {
@@ -276,6 +288,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
     const sub = emitter.addListener('SystemPiPModeChanged', (payload: { isInPiP?: boolean }) => {
       const inPiP = !!payload?.isInPiP;
+      const traceId = (global as any).__activeHomePiPTraceIdRef?.current as string | null;
+      logHomePiPTrace('js_mode_changed', { traceId, inPiP });
+      noteHomePiPModeChanged(traceId, inPiP);
       const stableIds = resolveStablePiPIds();
       trackReleaseEvent('pip_enter_exit', {
         phase: inPiP ? 'enter' : 'exit',
@@ -331,6 +346,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setPendingSystemPiP(false);
           setSystemPiPCaptureActive(false);
           setSystemPiPCaptureRequestId(0);
+          try {
+            g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
+            if (g.__pipVisibleRef.current === true) {
+              g.__pipHidePiPRef?.current?.();
+              g.__pipVisibleRef.current = false;
+              NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
+              logHomePiPTrace('js_hide_in_app_for_system', { traceId: g.__activeHomePiPTraceIdRef?.current });
+            }
+          } catch (_) {}
           try {
             g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
             g.__pendingSystemPiPSyncRef.current = false;
@@ -460,9 +484,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       });
       if (!placeholderOnly && remoteStreamForPiP) setAllowVideoRender(true);
       else setAllowVideoRender(false);
-      // Prewarm dedicated system-PiP capture host while in-app PiP is visible.
-      setSystemPiPCaptureActive(true);
-      setSystemPiPCaptureRequestId(0);
     }
     // localCamOn — источник истины для восстановления после PiP.
     // Если явно не передали, пытаемся вычислить из localStream (best-effort).
@@ -644,12 +665,21 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
     const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
-    const sub = emitter.addListener('AboutToEnterSystemPiP', (payload: { width?: number; height?: number } | null) => {
+    const sub = emitter.addListener('AboutToEnterSystemPiP', (payload: { width?: number; height?: number; traceId?: string } | null) => {
       const g = (global as any);
-      try {
-        g.__enterSystemPiPAfterVideoCallRef = g.__enterSystemPiPAfterVideoCallRef || { current: null };
-        g.__enterSystemPiPAfterVideoCallRef.current = null;
-      } catch (_) {}
+      const traceId = payload?.traceId ? String(payload.traceId) : `hp_js_${Date.now()}`;
+      setActiveHomePiPTraceId(traceId);
+      beginHomePiPOutcomeWatch(traceId);
+      logHomePiPTrace('js_about_to_enter', {
+        traceId,
+        decorW: payload?.width ?? 0,
+        decorH: payload?.height ?? 0,
+      });
+      logHomePiPTrace('js_about_to_enter_skip', {
+        traceId,
+        reason: 'policy_no_system_pip_on_leave_hint',
+      });
+      return;
       // Не входить в PiP без нажатия пользователя: при завершении звонка (переход на Home) onUserLeaveHint может сработать раньше нативного флага.
       if (g.__endingCallInProgressRef?.current === true) {
         return;
@@ -657,10 +687,23 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       if (g.__videoCallActiveRef?.current === false) {
         return;
       }
+      if (!isAndroidActiveCallEligibleForLeaveHint()) {
+        logger.info('[PiPContext] AboutToEnterSystemPiP skipped — not on active VideoCall');
+        logHomePiPTrace('js_about_to_enter_skip', { traceId, reason: 'not_on_video_call' });
+        return;
+      }
       const session = g.__webrtcSessionRef?.current;
       if (session && typeof (session as any).isEnded === 'function' && (session as any).isEnded()) {
         return;
       }
+
+      try {
+        g.__leavingVideoCallByHomeRef = g.__leavingVideoCallByHomeRef || { current: false };
+        g.__leavingVideoCallByHomeRef.current = true;
+        g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+        g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 6000;
+        NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
+      } catch (_) {}
 
       let paramsEarly = g.__currentCallPiPParamsRef?.current;
       if (!paramsEarly && session) {
@@ -685,19 +728,53 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         session && typeof (session as any).getRemoteStream === 'function'
           ? (session as any).getRemoteStream()
           : null;
+      const localCamEarly =
+        paramsEarly?.localCamOn ??
+        (session && typeof (session as any).getIsCamOn === 'function'
+          ? (session as any).getIsCamOn()
+          : false);
+      const remoteCamEarly =
+        paramsEarly?.remoteCamOn ??
+        (session && typeof (session as any).getRemoteCamEnabled === 'function'
+          ? (session as any).getRemoteCamEnabled()
+          : false);
+      const localEarly =
+        paramsEarly?.localStream ??
+        (session && typeof (session as any).getLocalStream === 'function'
+          ? (session as any).getLocalStream()
+          : null);
       if (
         shouldUsePipPlaceholderOnly({
-          localCamOn: paramsEarly?.localCamOn,
-          remoteCamOn: paramsEarly?.remoteCamOn,
+          localCamOn: localCamEarly,
+          remoteCamOn: remoteCamEarly,
           remoteStream: paramsEarly?.remoteStream ?? remoteEarly ?? null,
+          localStream: localEarly,
         })
       ) {
         logger.info('[PiPContext] AboutToEnterSystemPiP skipped — audio call uses status notification');
+        logHomePiPTrace('js_about_to_enter_skip', { traceId, reason: 'audio_placeholder' });
         try {
+          NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
+          NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(true);
+          NativeModules.LiviAppModule?.cancelPendingSystemPiPEnter?.();
+          g.__leavingVideoCallByHomeRef.current = false;
           refreshAndroidActiveCallNotification();
         } catch (_) {}
         return;
       }
+
+      try {
+        syncAndroidSystemPiPNativeFlags();
+      } catch (_) {}
+
+      try {
+        if (g.__pipVisibleRef?.current === true) {
+          g.__pipHidePiPRef?.current?.();
+          g.__pipVisibleRef.current = false;
+          NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
+          logHomePiPTrace('js_hide_in_app_for_system', { traceId, reason: 'before_system_capture' });
+        }
+      } catch (_) {}
 
       try {
         g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
@@ -744,10 +821,25 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         session && typeof (session as any).getRemoteStream === 'function'
           ? (session as any).getRemoteStream()
           : null;
+      const localFromSessionForPlaceholder =
+        session && typeof (session as any).getLocalStream === 'function'
+          ? (session as any).getLocalStream()
+          : null;
+      const localCamForPlaceholder =
+        params?.localCamOn ??
+        (session && typeof (session as any).getIsCamOn === 'function'
+          ? (session as any).getIsCamOn()
+          : false);
+      const remoteCamForPlaceholder =
+        params?.remoteCamOn ??
+        (session && typeof (session as any).getRemoteCamEnabled === 'function'
+          ? (session as any).getRemoteCamEnabled()
+          : false);
       const placeholderOnlyHome = shouldUsePipPlaceholderOnly({
-        localCamOn: params?.localCamOn,
-        remoteCamOn: params?.remoteCamOn,
+        localCamOn: localCamForPlaceholder,
+        remoteCamOn: remoteCamForPlaceholder,
         remoteStream: params?.remoteStream ?? remoteFromSessionForPlaceholder ?? null,
+        localStream: params?.localStream ?? localFromSessionForPlaceholder ?? null,
       });
       logger.info('[PiPContext] AboutToEnterSystemPiP placeholder decision', {
         placeholderOnlyHome,
@@ -773,6 +865,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             ? (session as any).getLocalStream()
             : null;
         const updateFnEarly = g.__pipUpdateStateRef?.current;
+        const localCamFromSession =
+          session && typeof (session as any).getIsCamOn === 'function'
+            ? (session as any).getIsCamOn()
+            : undefined;
+        const remoteCamFromSession =
+          session && typeof (session as any).getRemoteCamEnabled === 'function'
+            ? (session as any).getRemoteCamEnabled()
+            : undefined;
         if (typeof updateFnEarly === 'function') {
           updateFnEarly({
             callId: params.callId,
@@ -780,7 +880,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             lastNavParams: params.navParams,
             remoteStream: params.remoteStream ?? remoteFromSession ?? null,
             localStream: params.localStream ?? localFromSession ?? null,
-            remoteCamOn: params.remoteCamOn,
+            localCamOn:
+              typeof params?.localCamOn === 'boolean' ? params.localCamOn : localCamFromSession,
+            remoteCamOn:
+              typeof params?.remoteCamOn === 'boolean' ? params.remoteCamOn : remoteCamFromSession,
+            preferVideoCallUi: params?.preferVideoCallUi,
+            inAudioOnlyUi: params?.inAudioOnlyUi,
             allowVideoRender: !placeholderOnlyHome,
           });
         }
@@ -1129,7 +1234,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // Чтобы по кнопке «развернуть» в системном PiP возвращать на экран видеозвонка (App слушает SystemPiPExpanded и дергает этот ref).
   useEffect(() => {
     const g = global as any;
-    g.__pipReturnToCallRef = { current: () => returnToCall() };
+    g.__pipReturnToCallRef = { current: () => returnToCall({ preferAudioOnlyUi: false }) };
     g.__pipReturnToAudioCallRef = { current: () => returnToCall({ preferAudioOnlyUi: true }) };
     return () => {
       delete g.__pipReturnToCallRef;

@@ -1,7 +1,6 @@
 package com.kolt12max.livi
 
 import android.app.PictureInPictureParams
-import android.app.PendingIntent
 import android.app.RemoteAction
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -9,7 +8,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
 import android.graphics.Rect
-import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -71,6 +69,18 @@ class MainActivity : ReactActivity() {
   private var suppressSystemPiPOnLeaveHintUntilMs = 0L
   private var homeKeyForPiPReceiver: BroadcastReceiver? = null
   private var clearRecentsSuppressRunnable: Runnable? = null
+  /** Корреляция одного нажатия Home → system PiP (logcat SysPiPHome). */
+  private var currentHomePiPTraceId: String = ""
+  private var homePiPEnterAttemptSeq: Int = 0
+
+  private fun homePiPTrace(phase: String, extras: Bundle.() -> Unit = {}) {
+    if (currentHomePiPTraceId.isBlank()) {
+      currentHomePiPTraceId = "hp_${System.currentTimeMillis()}"
+    }
+    val b = Bundle()
+    extras.invoke(b)
+    LiviAppModule.emitSystemPiPHomeTrace(currentHomePiPTraceId, phase, b)
+  }
 
   private fun requestFinish(reason: String) {
     val now = System.currentTimeMillis()
@@ -87,28 +97,7 @@ class MainActivity : ReactActivity() {
     finish()
   }
 
-  internal fun buildSystemPiPActions(): List<RemoteAction> {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return emptyList()
-    return try {
-      val intent = Intent(this, MainActivity::class.java).apply {
-        action = LiviAppModule.ACTION_AUDIO_ONLY_FROM_PIP
-        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-      }
-      val pending = PendingIntent.getActivity(
-        this,
-        4102,
-        intent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-      )
-      val icon = Icon.createWithResource(this, R.drawable.ic_phone_in_talk)
-      val title = getString(R.string.pip_action_audio_call)
-      val description = getString(R.string.pip_action_audio_call_desc)
-      listOf(RemoteAction(icon, title, description, pending))
-    } catch (e: Exception) {
-      android.util.Log.w("MainActivity", "buildSystemPiPActions failed", e)
-      emptyList()
-    }
-  }
+  internal fun buildSystemPiPActions(): List<RemoteAction> = emptyList()
 
   private fun cancelPendingPiPEnterAttempts() {
     for (r in pendingPiPEnterRunnables) {
@@ -174,6 +163,22 @@ class MainActivity : ReactActivity() {
     }
   }
 
+  private fun handleLauncherTapDuringActiveCall(intent: Intent?) {
+    if (!isLaunchedFromLauncher(intent)) return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode) {
+      emitSystemPiPExpandedOnce("launcher-tap-in-pip")
+      return
+    }
+    if (LiviAppModule.getShouldEnterPiPOnLeaveHint() && !LiviAppModule.getEndingCallInProgress()) {
+      android.util.Log.i("MainActivity", "launcher tap during active call -> pending return to VideoCall")
+      LiviAppModule.setPendingReturnToActiveCall(this)
+      return
+    }
+    if (LiviOngoingCallHelper.launchOngoingCallActivityIfNeeded(this)) {
+      requestFinish("launcher-redirect-to-ongoing-call")
+    }
+  }
+
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
@@ -202,6 +207,7 @@ class MainActivity : ReactActivity() {
     if (tryStashPendingAnswerFromIntent(intent)) {
       pendingAnswerFromIntent = true
     }
+    handleLauncherTapDuringActiveCall(intent)
   }
 
   private fun emitSystemPiPExpandedOnce(reason: String) {
@@ -238,6 +244,7 @@ class MainActivity : ReactActivity() {
     }
     handleReturnToActiveCallIntent(intent)
     handleAudioOnlyFromPiPIntent(intent)
+    handleLauncherTapDuringActiveCall(intent)
     // FCM call_accepted запустил MainActivity — закрыть нативный экран исходящего (если ещё открыт) и уведомить JS
     val pendingCallId = intent?.getStringExtra(EXTRA_PENDING_CALL_ACCEPTED_CALL_ID)
     if (!pendingCallId.isNullOrBlank()) {
@@ -283,137 +290,32 @@ class MainActivity : ReactActivity() {
   }
 
   /**
-   * Системный PiP при Home (onUserLeaveHint). Recents помечаем через ACTION_CLOSE_SYSTEM_DIALOGS
-   * и кратко подавляем PiP — на Samsung homekey часто приходит после leaveHint, поэтому не требуем его заранее.
+   * Home / system navigation: no system PiP (policy). Trace only; pending enter attempts cancelled.
    */
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
+    currentHomePiPTraceId = "hp_${System.currentTimeMillis()}"
+    homePiPEnterAttemptSeq = 0
     val now = System.currentTimeMillis()
-    if (now < suppressSystemPiPOnLeaveHintUntilMs) {
-      android.util.Log.i(
-        "MainActivity",
-        "onUserLeaveHint: skip system PiP — recent Recents (remainingMs=${suppressSystemPiPOnLeaveHintUntilMs - now})"
-      )
-      return
+    val endingCallInProgressEarly = LiviAppModule.getEndingCallInProgress()
+    val shouldEnterPiPEarly = LiviAppModule.getShouldEnterPiPOnLeaveHint()
+    val placeholderOnlyEarly = LiviAppModule.getSystemPiPCapturePlaceholderOnly()
+    val inAppPiPVisibleEarly = LiviAppModule.getInAppPiPVisibleForSystemPiP()
+    homePiPTrace("native_on_user_leave_hint") {
+      putBoolean("shouldEnterPiP", shouldEnterPiPEarly)
+      putBoolean("placeholderOnly", placeholderOnlyEarly)
+      putBoolean("endingCallInProgress", endingCallInProgressEarly)
+      putBoolean("inAppPiPVisible", inAppPiPVisibleEarly)
+      putBoolean("isInPiP", isInPictureInPictureMode)
+      putBoolean("hasFocus", window?.decorView?.hasWindowFocus() == true)
+      putInt("sdk", Build.VERSION.SDK_INT)
     }
-    if (now < suppressPiPReenterUntilMs) {
-      android.util.Log.i(
-        "MainActivity",
-        "onUserLeaveHint: skip system PiP due to recent PiP-exit cooldown (remainingMs=${suppressPiPReenterUntilMs - now})"
-      )
-      cancelPendingPiPEnterAttempts()
-      return
-    }
-    val endingCallInProgress = LiviAppModule.getEndingCallInProgress()
-    val shouldEnterPiP = LiviAppModule.getShouldEnterPiPOnLeaveHint()
-    val inAppPiPVisible = LiviAppModule.getInAppPiPVisibleForSystemPiP()
+    cancelPendingPiPEnterAttempts()
     android.util.Log.i(
       "MainActivity",
-      "onUserLeaveHint: sdk=${Build.VERSION.SDK_INT} endingCallInProgress=$endingCallInProgress shouldEnterPiP=$shouldEnterPiP inAppPiPVisible=$inAppPiPVisible isInPiP=$isInPictureInPictureMode hasFocus=${window?.decorView?.hasWindowFocus() == true}"
+      "onUserLeaveHint: system PiP on Home/navigation disabled (no enterPictureInPictureMode, no AboutToEnterSystemPiP)"
     )
-    if (endingCallInProgress) {
-      android.util.Log.i("MainActivity", "onUserLeaveHint: skip system PiP because endingCallInProgress=true")
-      return
-    }
-    if (LiviAppModule.getSystemPiPCapturePlaceholderOnly()) {
-      android.util.Log.i("MainActivity", "onUserLeaveHint: skip system PiP — audio-only call (ongoing notification)")
-      return
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && shouldEnterPiP) {
-      try {
-        val now = System.currentTimeMillis()
-        if (isPiPEnterAttemptRunning && now - lastPiPEnterRequestAtMs < 1200L) {
-          android.util.Log.i("MainActivity", "onUserLeaveHint: skip duplicate PiP enter sequence (already running)")
-          return
-        }
-        lastPiPEnterRequestAtMs = now
-        cancelPendingPiPEnterAttempts()
-        isPiPEnterAttemptRunning = true
-        android.util.Log.i("MainActivity", "onUserLeaveHint: requesting JS system PiP capture preparation")
-        val root = window?.decorView
-        val decorW = root?.width ?: 0
-        val decorH = root?.height ?: 0
-        LiviAppModule.emitAboutToEnterSystemPiP(decorW, decorH)
-        val sourceRect = buildSystemPiPSourceRect()
-        val tryEnterPiP = Runnable {
-          try {
-            if (isInPictureInPictureMode) return@Runnable
-            if (LiviAppModule.getEndingCallInProgress()) return@Runnable
-            if (!LiviAppModule.getShouldEnterPiPOnLeaveHint()) {
-              android.util.Log.i("MainActivity", "onUserLeaveHint: skip retry because shouldEnterPiPOnLeaveHint=false")
-              cancelPendingPiPEnterAttempts()
-              return@Runnable
-            }
-            val waitedMs = System.currentTimeMillis() - lastPiPEnterRequestAtMs
-            val placeholderOnly = LiviAppModule.getSystemPiPCapturePlaceholderOnly()
-            val frameReady = LiviAppModule.getSystemPiPCaptureFrameReady()
-            if (!inAppPiPVisible && !frameReady) {
-              // Аудио: не входить в PiP до AwayPlaceholder — иначе Samsung захватывает UI звонка.
-              if (placeholderOnly && waitedMs < 480L) {
-                android.util.Log.d(
-                  "MainActivity",
-                  "onUserLeaveHint: defer PiP enter — placeholder capture not ready (waitedMs=$waitedMs)"
-                )
-                return@Runnable
-              }
-              // Видео: короткие ретраи ждут TextureView; поздние — без frameReady (иначе launcher).
-              if (!placeholderOnly && waitedMs in 50L..450L) {
-                android.util.Log.d(
-                  "MainActivity",
-                  "onUserLeaveHint: defer PiP enter — capture frame not ready yet (waitedMs=$waitedMs)"
-                )
-                return@Runnable
-              }
-            }
-            val ratio = Rational(9, 16)
-            val builder = PictureInPictureParams.Builder()
-              .setAspectRatio(ratio)
-              .setActions(buildSystemPiPActions())
-            if (sourceRect != null) {
-              builder.setSourceRectHint(sourceRect)
-            }
-            val params = builder.build()
-            if (enterPictureInPictureMode(params)) {
-              android.util.Log.d("MainActivity", "Entered Picture-in-Picture mode (leaveHint)")
-              cancelPendingPiPEnterAttempts()
-            } else {
-              android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode returned false")
-            }
-          } catch (e2: Exception) {
-            android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode failed", e2)
-          }
-        }
-        // enterPictureInPictureMode нужно вызвать в окне onUserLeaveHint; без немедленной попытки часто остаётся launcher.
-        leaveHintPiPEnterRunnable = tryEnterPiP
-        if (!isInPictureInPictureMode) {
-          android.util.Log.i(
-            "MainActivity",
-            "onUserLeaveHint: scheduled PiP enter (immediate + retries; inAppPiPVisible=$inAppPiPVisible)"
-          )
-          pendingPiPEnterRunnables.add(tryEnterPiP)
-          pipEnterHandler.post(tryEnterPiP)
-          val delays = if (inAppPiPVisible) {
-            longArrayOf(80L, 160L, 280L, 480L, 800L, 1300L, 2000L)
-          } else {
-            longArrayOf(40L, 80L, 120L, 200L, 320L, 480L, 750L, 1100L)
-          }
-          for (d in delays) {
-            val r = Runnable { tryEnterPiP.run() }
-            pendingPiPEnterRunnables.add(r)
-            pipEnterHandler.postDelayed(r, d)
-          }
-        }
-      } catch (e: Exception) {
-        android.util.Log.w("MainActivity", "emitAboutToEnterSystemPiP failed", e)
-        cancelPendingPiPEnterAttempts()
-      }
-    } else {
-      android.util.Log.i(
-        "MainActivity",
-        "onUserLeaveHint: skip system PiP because shouldEnterPiPOnLeaveHint=false or sdk<26"
-      )
-      cancelPendingPiPEnterAttempts()
-    }
+    homePiPTrace("native_skip") { putString("reason", "policy_no_system_pip_on_leave_hint") }
   }
 
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
@@ -462,7 +364,7 @@ class MainActivity : ReactActivity() {
         }
         pipHandler.postDelayed(exitPipTimeoutRunnable!!, pipExitDecideMs)
         val hasFocus = window?.decorView?.hasWindowFocus() == true
-        if (isInForeground && hasFocus) {
+        if (isInForeground && hasFocus && !isPiPEnterAttemptRunning) {
           emitSystemPiPExpandedOnce("modeChanged(false)+foreground")
         }
       }
@@ -514,10 +416,7 @@ class MainActivity : ReactActivity() {
     if (tryStashPendingAnswerFromIntent(intent)) {
       pendingAnswerFromIntent = true
     }
-    // Кнопка Домой свернула приложение во время звонка
-    if (isLaunchedFromLauncher(intent) && LiviOngoingCallHelper.launchOngoingCallActivityIfNeeded(this)) {
-      requestFinish("launcher-redirect-to-ongoing-call")
-    }
+    handleLauncherTapDuringActiveCall(intent)
     // Пуш call_ended (endedFromActive): закрыть PiP сразу у собеседника, т.к. сокет в фоне часто отключён.
     closePipCallEndedReceiver = object : BroadcastReceiver() {
       override fun onReceive(context: Context?, intent: Intent?) {

@@ -77,6 +77,8 @@ import {
   isAndroidActiveCallEligibleForLeaveHint,
   reenableAndroidSystemPiPLeaveHintAfterReturn,
   setAndroidSystemPiPLeaveHintEnabled,
+  shouldBlockAndroidLeaveHintDisarm,
+  shouldAllowAndroidSystemPiPOnLeaveHint,
 } from './utils/activeCallNotification';
 import { shouldUsePipPlaceholderOnly } from './src/pip/pipPlaceholderOnly';
 
@@ -583,16 +585,26 @@ function AppContent() {
       const remoteStream =
         params?.remoteStream ??
         (typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null);
-      const audioOnlyReturn = shouldUsePipPlaceholderOnly({
-        localCamOn: params?.localCamOn,
-        remoteCamOn: params?.remoteCamOn,
-        remoteStream,
-      });
-      if (audioOnlyReturn) {
+      if (params?.preferVideoCallUi === true) {
         g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
-        g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+        g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
         g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-        g.__expandToVideoCallUiFromPiPRef.current = false;
+        g.__expandToVideoCallUiFromPiPRef.current = true;
+      } else {
+        const audioOnlyReturn = shouldUsePipPlaceholderOnly({
+          localCamOn: params?.localCamOn,
+          remoteCamOn: params?.remoteCamOn,
+          remoteStream,
+          localStream:
+            params?.localStream ??
+            (typeof session?.getLocalStream === 'function' ? session.getLocalStream() : null),
+        });
+        if (audioOnlyReturn || params?.inAudioOnlyUi === true) {
+          g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+          g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+          g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+          g.__expandToVideoCallUiFromPiPRef.current = false;
+        }
       }
     } catch (_) {}
 
@@ -626,6 +638,7 @@ function AppContent() {
                 callId: params.callId,
                 roomId: params.roomId,
                 directCall: true,
+                ...(params.preferVideoCallUi ? { preferVideoCallUi: true } : {}),
               },
             },
           ],
@@ -788,6 +801,11 @@ function AppContent() {
           restoredAt: 0,
           settledUntil: 0,
         };
+        // Разворот системного PiP (стрелки) — всегда полноэкранный видеозвонок, не audio-only UI.
+        g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+        g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+        g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+        g.__expandToVideoCallUiFromPiPRef.current = true;
         g.__suppressAbortDuringSystemPiPReturnUntilRef =
           g.__suppressAbortDuringSystemPiPReturnUntilRef || { current: 0 };
         g.__suppressAbortDuringSystemPiPReturnUntilRef.current = Math.max(
@@ -832,6 +850,7 @@ function AppContent() {
                   callId: params.callId,
                   roomId: params.roomId,
                   directCall: true,
+                  preferVideoCallUi: true,
                 },
               },
             ],
@@ -903,7 +922,7 @@ function AppContent() {
         logger.warn('[App] ReturnToAudioCallFromPiP handler failed', e);
       }
     });
-    // AboutToEnterSystemPiP обрабатывается в PiPContext (как в WhatsApp/Telegram: компактный вид + requestEnterPictureInPicture, без смены экрана).
+    // AboutToEnterSystemPiP обрабатывается в PiPContext (подготовка capture; enter — только MainActivity.onUserLeaveHint).
     return () => {
       sub1.remove();
       sub2.remove();
@@ -1736,9 +1755,10 @@ function AppContent() {
         // При активном звонке (экран VideoCall или in-app PiP) guard не должен гасить leaveHint —
         // иначе по нажатию Home системный PiP не покажется.
         const allowWhileGuardActive =
-          activeCallOnAnyScreen ||
-          (!!pipVisible && !isVideoSessionRoute(currentRoute)) ||
-          (isVideoSessionRoute(currentRoute) && sessionNotEndedForGuard && videoCallStillActiveByRef);
+          isVideoSessionRoute(currentRoute) &&
+          sessionNotEndedForGuard &&
+          videoCallStillActiveByRef &&
+          hasCallIdsForGuard;
         // Глобальный guard: после завершения звонка запрещаем системный PiP на короткое время,
         // чтобы исключить гонку (cleanup/reset → onUserLeaveHint → PiP + лаунчер).
         const disableUntil = g.__disableSystemPiPUntilRef?.current;
@@ -1776,16 +1796,12 @@ function AppContent() {
         const onVideoCallWithActiveSession =
           !videoCallInactiveByRef && isVideoSessionRoute(currentRoute) && sessionNotEnded;
         const allowSystemPiP =
-          (systemPiPEntryInProgress && hasActiveCallForPiP) ||
-          pipVisible ||
-          !!incoming ||
-          (hasActiveCallForPiP || onVideoCallWithActiveSession);
+          isVideoSessionRoute(currentRoute) &&
+          onVideoCallWithActiveSession &&
+          shouldAllowAndroidSystemPiPOnLeaveHint();
         const logKey = JSON.stringify({
           currentRoute,
           allowSystemPiP: !!allowSystemPiP,
-          pipVisible: !!pipVisible,
-          hasIncoming: !!incoming,
-          hasActiveCallForPiP: !!hasActiveCallForPiP,
           onVideoCallWithActiveSession: !!onVideoCallWithActiveSession,
           hasParamsCallId: !!params?.callId,
           hasParamsRoomId: !!params?.roomId,
@@ -1796,7 +1812,11 @@ function AppContent() {
         if (systemPiPDecisionLogRef.current !== logKey) {
           systemPiPDecisionLogRef.current = logKey;
         }
-        setAndroidSystemPiPLeaveHintEnabled(!!allowSystemPiP);
+        if (shouldBlockAndroidLeaveHintDisarm()) {
+          setAndroidSystemPiPLeaveHintEnabled(true);
+        } else {
+          setAndroidSystemPiPLeaveHintEnabled(!!allowSystemPiP);
+        }
         }
       } catch (_) {}
     }

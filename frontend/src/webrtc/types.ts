@@ -13,6 +13,8 @@ export interface WebRTCSessionCallbacks {
   onMicStateChange?: (enabled: boolean) => void;
   onCamStateChange?: (enabled: boolean) => void;
   onRemoteCamStateChange?: (enabled: boolean) => void;
+  /** Direct call: собеседник на экране видеозвонка (не путать с cam on/off). */
+  onPeerDirectCallVideoUiChange?: (inVideoCallUi: boolean) => void;
   onRemoteCamSideChange?: (side: CamSide) => void;
   onPcConnectedChange?: (connected: boolean) => void;
   onLoadingChange?: (loading: boolean) => void;
