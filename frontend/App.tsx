@@ -1862,6 +1862,14 @@ function AppContent() {
           clearInterval(pipKeepScreenOnInterval);
           pipKeepScreenOnInterval = null;
         }
+        if (nextAppState === 'active') {
+          try {
+            const session = (global as any).__webrtcSessionRef?.current;
+            if (session && typeof session.restoreCameraAfterAppBackground === 'function') {
+              void session.restoreCameraAfterAppBackground();
+            }
+          } catch (_) {}
+        }
         // КРИТИЧНО: Приложение активно или неактивно (но видно) - ВСЕГДА активируем keep-awake
         // 'inactive' на iOS означает, что приложение видно, но не полностью активно
         // (например, показывается Control Center или уведомление)
@@ -1883,6 +1891,16 @@ function AppContent() {
           }
         }
       } else if (nextAppState === 'background') {
+        try {
+          const bgSession = (global as any).__webrtcSessionRef?.current;
+          if (
+            bgSession &&
+            typeof bgSession.pauseCameraForAppBackground === 'function' &&
+            (typeof bgSession.isEnded !== 'function' || !bgSession.isEnded())
+          ) {
+            void bgSession.pauseCameraForAppBackground();
+          }
+        } catch (_) {}
         // Проверяем: в системном PiP с активным звонком — экран не гасим до завершения звонка
         const g = (global as any);
         const inPiP = g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;

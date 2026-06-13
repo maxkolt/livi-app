@@ -151,6 +151,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastCallEndSentKey: string | null = null;
   private lastSentPiPState: boolean | null = null;
   private lastSentPiPRoomId: string | null = null;
+  /** Камера сознательно выключена при уходе приложения в фон (cam-toggle → заглушка у партнёра). */
+  private cameraSuspendedForAppBackground = false;
   /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и endCall повторно */
   private cleaned = false;
   /** ctor запланировал handleCallAccepted из __pendingCallAcceptedRef — UI не должен дублировать connectAsInitiatorAfterAccepted */
@@ -610,6 +612,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Сразу помечаем звонок завершённым, чтобы асинхронный код (handleCallAccepted, connectToLiveKit)
     // видел ended и не выполнял пост-подключение / setLocalDescription после disconnect
     this.ended = true;
+    this.cameraSuspendedForAppBackground = false;
     // КРИТИЧНО: При завершении звонка выключаем системный PiP hint максимально рано,
     // чтобы на некоторых устройствах не происходил автовход в PiP (onUserLeaveHint) во время очистки.
     if (Platform.OS === 'android') {
@@ -843,8 +846,49 @@ export class VideoCallSession extends SimpleEventEmitter {
     (this.config.callbacks.onCallIdChange ?? this.config.onCallIdChange)?.(callId);
   }
 
+  isCameraSuspendedForAppBackground(): boolean {
+    return this.cameraSuspendedForAppBackground;
+  }
+
+  /** Уход в фон: выключить камеру и cam-toggle(false), чтобы у партнёра была заглушка, а не чёрный кадр. */
+  async pauseCameraForAppBackground(): Promise<void> {
+    if (this.ended || this.endCallInProgress) return;
+    if (this.cameraSuspendedForAppBackground) return;
+    if (!this.isCamOn) return;
+    this.cameraSuspendedForAppBackground = true;
+    logger.info('[VideoCallSession] Pausing camera for app background');
+    await this.applyLocalCameraEnabled(false);
+    try {
+      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: false });
+    } catch (_) {}
+  }
+
+  /** Возврат из фона: снова включить камеру, если она была приостановлена при background. */
+  async restoreCameraAfterAppBackground(): Promise<void> {
+    if (this.ended || this.endCallInProgress) {
+      this.cameraSuspendedForAppBackground = false;
+      return;
+    }
+    if (!this.cameraSuspendedForAppBackground) {
+      await this.reconnectCameraOnResume();
+      return;
+    }
+    this.cameraSuspendedForAppBackground = false;
+    logger.info('[VideoCallSession] Restoring camera after app foreground');
+    await this.applyLocalCameraEnabled(true);
+    try {
+      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+      if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: true });
+    } catch (_) {}
+  }
+
   async toggleCam(): Promise<void> {
-    this.isCamOn = !this.isCamOn;
+    await this.applyLocalCameraEnabled(!this.isCamOn);
+  }
+
+  private async applyLocalCameraEnabled(enabled: boolean): Promise<void> {
+    this.isCamOn = enabled;
 
     logger.info('[VideoCallSession] toggleCam called', {
       newCamState: this.isCamOn,

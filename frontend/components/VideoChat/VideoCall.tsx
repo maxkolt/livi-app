@@ -1604,18 +1604,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // без sessionTick эффект восстановления запускается до этого и видит session = null, поэтому setMicOn не вызывается.
   }, [route?.params?.resume, route?.params?.fromPiP, pip.localStream, pip.remoteStream, pip.localCamOn, pip.isMuted, pip.isRemoteMuted, sessionTick, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn, extendPiPReturnAbortGuard, getSystemPiPReturnToken, getSystemPiPReturnState, claimSystemPiPReturnOwner]);
 
-  // При возврате из фона во время видеозвонка — переподключить камеру, если система её закрыла
+  // При возврате из фона — восстановить камеру (явная пауза в background или OS ended track)
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState !== 'active') return;
       const session = sessionRef.current;
       const hasActiveCall = !!(roomId || callId || partnerId) && !wasFriendCallEnded && !isInactiveState;
-      if (session && hasActiveCall && camOn && typeof (session as any).reconnectCameraOnResume === 'function') {
-        (session as any).reconnectCameraOnResume().catch(() => {});
+      if (!session || !hasActiveCall) return;
+      if (typeof (session as any).restoreCameraAfterAppBackground === 'function') {
+        (session as any).restoreCameraAfterAppBackground().catch(() => {});
       }
     });
     return () => sub.remove();
-  }, [roomId, callId, partnerId, wasFriendCallEnded, isInactiveState, camOn]);
+  }, [roomId, callId, partnerId, wasFriendCallEnded, isInactiveState]);
 
   // Инициализация session и восстановление состояния звонка
   useEffect(() => {
@@ -1849,8 +1850,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           // Если пользователь выключает камеру вручную (не из PiP или background), отмечаем это
           if (!enabled) {
             const session = sessionRef.current;
+            const suspendedForBackground =
+              session &&
+              typeof (session as any).isCameraSuspendedForAppBackground === 'function' &&
+              (session as any).isCameraSuspendedForAppBackground();
             const pipManager = (session as any)?.pipManager;
-            if (pipManager && typeof pipManager.markCameraManuallyDisabled === 'function') {
+            if (
+              !suspendedForBackground &&
+              pipManager &&
+              typeof pipManager.markCameraManuallyDisabled === 'function'
+            ) {
               // КРИТИЧНО: Отмечаем, что пользователь сам выключил камеру
               // Это предотвратит автоматическое восстановление камеры при выходе из PiP
               pipManager.markCameraManuallyDisabled();
