@@ -11,6 +11,7 @@ import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../utils/callKeep';
 import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn } from '../../utils/activeCallNotification';
+import { shouldUsePipPlaceholderOnly } from './pipPlaceholderOnly';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
 
@@ -392,9 +393,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     } catch {}
 
     let remoteStreamForPiP = p.remoteStream;
+    const sessionEarly = (global as any).__webrtcSessionRef?.current;
+    const placeholderOnlyEarly = shouldUsePipPlaceholderOnly({
+      localCamOn: p.localCamOn,
+      remoteCamOn: p.remoteCamOn,
+      remoteStream: p.remoteStream,
+    });
     try {
-      const session = (global as any).__webrtcSessionRef?.current;
-      if (session && typeof (session as any).ensureRemoteVideoForPiP === 'function') {
+      const session = sessionEarly;
+      if (
+        !placeholderOnlyEarly &&
+        session &&
+        typeof (session as any).ensureRemoteVideoForPiP === 'function'
+      ) {
         (session as any).ensureRemoteVideoForPiP();
       }
       const streamFromSession =
@@ -442,10 +453,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           allowVideoRenderTimeoutRef.current = null;
         }
       } catch {}
-      if (remoteStreamForPiP) setAllowVideoRender(true);
+      const placeholderOnly = shouldUsePipPlaceholderOnly({
+        localCamOn: p.localCamOn,
+        remoteCamOn: p.remoteCamOn,
+        remoteStream: remoteStreamForPiP,
+      });
+      if (!placeholderOnly && remoteStreamForPiP) setAllowVideoRender(true);
+      else setAllowVideoRender(false);
       // Prewarm dedicated system-PiP capture host while in-app PiP is visible.
-      // On slower devices this avoids mounting the fullscreen RTC surface only after Home,
-      // which can be too late for Android to accept enterPictureInPictureMode().
       setSystemPiPCaptureActive(true);
       setSystemPiPCaptureRequestId(0);
     }
@@ -669,6 +684,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         const cid = typeof (session as any).getCallId === 'function' ? (session as any).getCallId() : null;
         const rid = typeof (session as any).getRoomId === 'function' ? (session as any).getRoomId() : null;
         if (cid || rid) {
+          const localCam =
+            typeof (session as any).getIsCamOn === 'function' ? (session as any).getIsCamOn() : false;
+          const remoteCam =
+            typeof (session as any).getRemoteCamEnabled === 'function'
+              ? (session as any).getRemoteCamEnabled()
+              : false;
           params = {
             callId: cid || '',
             roomId: rid || '',
@@ -676,11 +697,28 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             partnerAvatarUrl: undefined,
             localStream: null,
             remoteStream: null,
-            localCamOn: true,
+            localCamOn: localCam,
+            remoteCamOn: remoteCam,
             navParams: undefined,
           };
         }
       }
+      const remoteFromSessionForPlaceholder =
+        session && typeof (session as any).getRemoteStream === 'function'
+          ? (session as any).getRemoteStream()
+          : null;
+      const placeholderOnlyHome = shouldUsePipPlaceholderOnly({
+        localCamOn: params?.localCamOn,
+        remoteCamOn: params?.remoteCamOn,
+        remoteStream: params?.remoteStream ?? remoteFromSessionForPlaceholder ?? null,
+      });
+      logger.info('[PiPContext] AboutToEnterSystemPiP placeholder decision', {
+        placeholderOnlyHome,
+        localCamOn: params?.localCamOn,
+        remoteCamOn: params?.remoteCamOn,
+        hasRemoteStream: !!(params?.remoteStream ?? remoteFromSessionForPlaceholder),
+        decorPayload: { w: payload?.width ?? 0, h: payload?.height ?? 0 },
+      });
       if (params?.callId && params?.roomId) {
         if (NativeModules.LiviAppModule?.setPiPEndCallParams) {
           try { NativeModules.LiviAppModule.setPiPEndCallParams(params.callId, params.roomId); } catch (_) {}
@@ -702,7 +740,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             remoteStream: params.remoteStream ?? remoteFromSession ?? null,
             localStream: params.localStream ?? localFromSession ?? null,
             remoteCamOn: params.remoteCamOn,
-            allowVideoRender: true,
+            allowVideoRender: !placeholderOnlyHome,
           });
         }
       }
@@ -712,7 +750,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       setPendingSystemPiP(true);
       setSystemPiPCaptureActive(true);
       setSystemPiPCaptureRequestId(requestId);
-      setAllowVideoRender(true);
+      setAllowVideoRender(!placeholderOnlyHome);
       const apply = (decorSize: { width: number; height: number } | null) => {
         // Не применять размер окна PiP (типично ~334x594) — иначе при повторном входе layout/зум ломается.
         if (decorSize && decorSize.width > 400 && decorSize.height > 400) setDecorSizeForPiP(decorSize);

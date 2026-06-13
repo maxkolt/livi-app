@@ -4,6 +4,8 @@ import AwayPlaceholder from '../../components/AwayPlaceholder';
 import { RemoteVideo } from '../../components/VideoChat/shared/RemoteVideo';
 import { defaultLang } from '../../utils/i18n';
 import { usePiP } from './PiPContext';
+import { mediaStreamHasLiveVideo, shouldUsePipPlaceholderOnly } from './pipPlaceholderOnly';
+import { logger } from '../../utils/logger';
 
 export default function SystemPiPCaptureHost() {
   const pip = usePiP();
@@ -18,11 +20,56 @@ export default function SystemPiPCaptureHost() {
   const preparedVisible = prepared && !pipVisible;
   const remoteStream = pip.remoteStream;
   const remoteCamOn = pip.remoteCamOn ?? true;
-  // В prewarm/prepared режиме remoteCamOn может быть "запаздывающим" (state еще не успел обновиться),
-  // а нам нужен именно источник текущего кадра для system PiP. Поэтому в prepared форсим remoteCamOn=true.
-  const remoteCamOnForCapture = prepared ? true : remoteCamOn;
-  const shouldShowAway = !remoteCamOnForCapture;
-  const shouldRenderVideoForCapture = active && !!remoteStream && (live ? !shouldShowAway : true);
+  const placeholderOnly = shouldUsePipPlaceholderOnly({
+    localCamOn: pip.localCamOn,
+    remoteCamOn,
+    remoteStream,
+  });
+  const hasLiveRemoteVideo = mediaStreamHasLiveVideo(remoteStream);
+  const remoteCamOnForCapture = placeholderOnly ? false : remoteCamOn;
+  const shouldShowAway = placeholderOnly || !remoteCamOnForCapture || !hasLiveRemoteVideo;
+  const shouldRenderVideoForCapture =
+    active && !placeholderOnly && hasLiveRemoteVideo && remoteCamOn && (live ? true : remoteCamOn);
+
+  const lastCaptureDiagRef = useRef('');
+  useEffect(() => {
+    if (!active) return;
+    const key = `${requestId}|ph=${placeholderOnly ? 1 : 0}|vid=${shouldRenderVideoForCapture ? 1 : 0}|away=${shouldShowAway ? 1 : 0}|rcam=${remoteCamOn ? 1 : 0}|lcam=${pip.localCamOn ? 1 : 0}|liveRv=${hasLiveRemoteVideo ? 1 : 0}`;
+    if (lastCaptureDiagRef.current === key) return;
+    lastCaptureDiagRef.current = key;
+    logger.info('[SystemPiPCaptureHost] capture frame decision', {
+      requestId,
+      placeholderOnly,
+      shouldRenderVideoForCapture,
+      shouldShowAway,
+      remoteCamOn,
+      localCamOn: pip.localCamOn,
+      hasLiveRemoteVideo,
+      prepared,
+      live,
+      preparedVisible,
+    });
+  }, [
+    active,
+    requestId,
+    placeholderOnly,
+    shouldRenderVideoForCapture,
+    shouldShowAway,
+    remoteCamOn,
+    pip.localCamOn,
+    hasLiveRemoteVideo,
+    prepared,
+    live,
+    preparedVisible,
+  ]);
+
+  useEffect(() => {
+    if (!active || !layoutReady) return;
+    if (!placeholderOnly && !shouldShowAway) return;
+    try {
+      NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+    } catch (_) {}
+  }, [active, layoutReady, placeholderOnly, shouldShowAway]);
 
   useEffect(() => {
     if (!active || !layoutReady || requestId <= 0) {

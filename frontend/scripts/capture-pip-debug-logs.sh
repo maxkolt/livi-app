@@ -14,7 +14,25 @@ cd "$SCRIPT_DIR/.."
 LOG_DIR="$(pwd)/logs_devices"
 mkdir -p "$LOG_DIR"
 TS=$(date +%Y%m%d-%H%M%S)
-GREP_PIP='getDecorViewSize|requestEnterPictureInPicture|sourceRect|LiviAppModule|PiPOverlay|PiPContext|updatePiPState|AboutToEnterSystemPiP|applyPending|scheduleSystemPiP|applyDecorAndPending|prepSystemPiPUI|System PiP layout|decorSize|usePreventRemove|PreventRemove Back|VideoCall root|ReactNativeJS'
+GREP_PIP='getDecorViewSize|requestEnterPictureInPicture|sourceRect|LiviAppModule|PiPOverlay|PiPContext|SystemPiPCaptureHost|pip_enter_exit|placeholder|AboutToEnterSystemPiP|updatePiPState|applyPending|scheduleSystemPiP|decorSize|VideoCall|MainActivity.*PiP|ReactNativeJS'
+
+if [ "${2:-}" = "live" ] || [ "$SERIAL" = "live" ]; then
+  if [ "$SERIAL" = "live" ]; then SERIAL="${1:-}"; fi
+  DEVICES=($(adb devices -l | awk '$2=="device" {print $1}'))
+  if [ -z "$SERIAL" ]; then
+    SERIAL="${DEVICES[0]:-}"
+  fi
+  if [ -z "$SERIAL" ]; then
+    echo "Нет подключённых устройств."
+    exit 1
+  fi
+  OUT="$LOG_DIR/pip-live-$SERIAL-$TS.log"
+  echo "Live-захват с $SERIAL -> $OUT"
+  echo "Остановка: Ctrl+C или kill процесса adb logcat"
+  adb -s "$SERIAL" logcat -c 2>/dev/null || true
+  adb -s "$SERIAL" logcat -v threadtime 2>&1 | grep -E --line-buffered "$GREP_PIP" | tee "$OUT"
+  exit 0
+fi
 
 if [ -n "$SERIAL" ]; then
   OUT="$LOG_DIR/pip-debug-$TS.log"

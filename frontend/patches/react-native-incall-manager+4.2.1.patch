@@ -1,0 +1,35 @@
+diff --git a/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java b/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
+index 0000000..1111111 100644
+--- a/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
++++ b/android/src/main/java/com/zxcpoiu/incallmanager/InCallManagerModule.java
+@@ -1748,12 +1748,13 @@ public class InCallManagerModule extends ReactContextBaseJavaModule implements
+      */
+     public void updateAudioDeviceState() {
+         UiThreadUtil.runOnUiThread(() -> {
++            synchronized (this) {
+             Log.d(TAG, "--- updateAudioDeviceState: "
+                             + "wired headset=" + hasWiredHeadset + ", "
+                             + "BT state=" + bluetoothManager.getState());
+             Log.d(TAG, "Device status: "
+-                            + "available=" + audioDevices + ", "
++                            + "available=" + new HashSet<>(audioDevices) + ", "
+                             + "selected=" + selectedAudioDevice + ", "
+                             + "user selected=" + userSelectedAudioDevice);
+ 
+@@ -1835,7 +1836,7 @@ public class InCallManagerModule extends ReactContextBaseJavaModule implements
+                 // Do the required device switch.
+                 setAudioDeviceInternal(newAudioDevice);
+                 Log.d(TAG, "New device status: "
+-                                + "available=" + audioDevices + ", "
++                                + "available=" + new HashSet<>(audioDevices) + ", "
+                                 + "selected=" + newAudioDevice);
+                 /*
+                 if (audioManagerEvents != null) {
+@@ -1847,6 +1848,7 @@ public class InCallManagerModule extends ReactContextBaseJavaModule implements
+                 sendEvent("onAudioDeviceChanged", getAudioDeviceStatusMap());
+             }
+             Log.d(TAG, "--- updateAudioDeviceState done");
++            }
+         });
+     }
+ 

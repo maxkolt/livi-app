@@ -814,6 +814,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private notifyRemoteCamStateChange(enabled: boolean): void {
+    if (this.ended || this.endCallInProgress) return;
     (this.config.callbacks.onRemoteCamStateChange ?? this.config.onRemoteCamStateChange)?.(enabled);
   }
 
@@ -1367,6 +1368,18 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.remoteCamEnabled;
   }
 
+  /** PiP с audio UI: без remote video subscription / RTC capture. */
+  shouldUsePlaceholderPiP(): boolean {
+    if (this.remoteCamEnabled) return false;
+    if (this.getIsCamOn?.()) return false;
+    if (this.remoteStreamHasLiveVideoTrack()) return false;
+    try {
+      const t = (this.localStream as any)?.getVideoTracks?.()?.[0];
+      if (t && t.readyState === 'live' && t.enabled !== false) return false;
+    } catch {}
+    return this.deferRemoteVideoSubscription;
+  }
+
   /** Пользователь перешёл с audio-only UI на видеозвонок — подписаться на remote video и подтянуть треки. */
   enableRemoteVideoConsumption(opts?: { keepRestoreDeferAfterPiP?: boolean }): void {
     if (!this.deferRemoteVideoSubscription) {
@@ -1543,7 +1556,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       return;
     }
-    this.ensureRemoteVideoForPiP();
+    if (!this.shouldUsePlaceholderPiP()) {
+      this.ensureRemoteVideoForPiP();
+    }
     if (this.lastSentPiPState === true && this.lastSentPiPRoomId === currentRoomId) {
       this.setInPiP(true);
       return;

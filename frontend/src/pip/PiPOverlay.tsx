@@ -18,6 +18,7 @@ import { PiPContext } from './PiPContext';
 import { logger } from '../../utils/logger';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import AwayPlaceholder from '../../components/AwayPlaceholder';
+import { shouldUsePipPlaceholderOnly } from './pipPlaceholderOnly';
 
 const PIP_W = 150;
 const PIP_H = 260;
@@ -259,6 +260,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     }
   }, [remoteStream, remoteStreamVersion, pipRemoteViewKey]);
   const showPartnerAway = remoteCamOn === false;
+  const pipPlaceholderOnly = shouldUsePipPlaceholderOnly({
+    localCamOn,
+    remoteCamOn,
+    remoteStream,
+  });
   const canRenderVideo =
     shouldShowOverlay &&
     allowVideoRender &&
@@ -335,7 +341,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               onPress={returnToCall}
               android_ripple={{ color: 'rgba(255,255,255,0.08)', borderless: true }}
             >
-              {showPartnerAway ? (
+              {pipPlaceholderOnly ? (
+                <View style={StyleSheet.absoluteFill}>
+                  <AwayPlaceholder />
+                </View>
+              ) : showPartnerAway ? (
                 <View style={StyleSheet.absoluteFill}>
                   <AwayPlaceholder />
                 </View>

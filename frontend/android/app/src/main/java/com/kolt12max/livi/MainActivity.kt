@@ -330,6 +330,18 @@ class MainActivity : ReactActivity() {
               cancelPendingPiPEnterAttempts()
               return@Runnable
             }
+            val waitedMs = System.currentTimeMillis() - lastPiPEnterRequestAtMs
+            if (
+              !inAppPiPVisible &&
+              !LiviAppModule.getSystemPiPCaptureFrameReady() &&
+              waitedMs < 520L
+            ) {
+              android.util.Log.d(
+                "MainActivity",
+                "onUserLeaveHint: defer PiP enter — capture frame not ready yet (waitedMs=$waitedMs)"
+              )
+              return@Runnable
+            }
             val ratio = Rational(9, 16)
             val builder = PictureInPictureParams.Builder()
               .setAspectRatio(ratio)
@@ -348,18 +360,18 @@ class MainActivity : ReactActivity() {
             android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode failed", e2)
           }
         }
-        // enterPictureInPictureMode нужно вызвать в окне onUserLeaveHint. Ждать frameReady из JS нельзя —
-        // к моменту готовности TextureView activity уже в фоне и PiP не включается.
+        // enterPictureInPictureMode нужно вызвать в окне onUserLeaveHint. Ждать frameReady из JS нельзя
+        // бесконечно — к моменту готовности activity уже в фоне и PiP не включается.
+        // Не вызываем enter сразу: иначе Samsung захватывает экран VideoCall до AwayPlaceholder (см. логи ~6ms).
         if (!isInPictureInPictureMode) {
           android.util.Log.i(
             "MainActivity",
-            "onUserLeaveHint: immediate + scheduled PiP enter (inAppPiPVisible=$inAppPiPVisible)"
+            "onUserLeaveHint: scheduled PiP enter (no immediate; inAppPiPVisible=$inAppPiPVisible)"
           )
-          tryEnterPiP.run()
           val delays = if (inAppPiPVisible) {
-            longArrayOf(0L, 60L, 140L, 280L, 480L, 800L, 1300L, 2000L)
+            longArrayOf(80L, 160L, 280L, 480L, 800L, 1300L, 2000L)
           } else {
-            longArrayOf(0L, 40L, 100L, 180L, 300L, 480L, 750L, 1200L, 1800L)
+            longArrayOf(120L, 220L, 360L, 520L, 750L, 1100L, 1600L, 2200L)
           }
           for (d in delays) {
             val r = Runnable { tryEnterPiP.run() }

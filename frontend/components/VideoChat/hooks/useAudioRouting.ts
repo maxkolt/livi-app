@@ -16,6 +16,9 @@ export type AudioRoutingOptions = {
   speakerOnRef?: MutableRefObject<boolean>;
 };
 
+const MIN_HARD_ROUTE_MS = 500;
+const MIN_NATIVE_ROUTE_MS = 600;
+
 export const useAudioRouting = (
   enabled: boolean,
   remoteStream: any,
@@ -32,20 +35,28 @@ export const useAudioRouting = (
   const btPermissionRequestedRef = useRef(false);
   const refreshInFlightRef = useRef(false);
   const lastRefreshAtRef = useRef(0);
+  const lastHardRouteAtRef = useRef(0);
+  const lastHardRouteSpeakerRef = useRef<boolean | null>(null);
+  const lastNativeRouteAtRef = useRef(0);
+  const lastNativeSpeakerRef = useRef<boolean | null>(null);
+  const lastRemoteStreamRoutedIdRef = useRef<string | null>(null);
+  const incallOpChainRef = useRef(Promise.resolve());
+
+  const enqueueInCallOp = (op: () => void | Promise<void>) => {
+    incallOpChainRef.current = incallOpChainRef.current
+      .then(() => op())
+      .catch(() => {});
+  };
+
   const log = (msg: string, data?: any) => {
-    // Keep logs useful but not too spammy.
     const now = Date.now();
     const allow = __DEV__ || now - lastLogAtRef.current > 1200;
     if (!allow) return;
     lastLogAtRef.current = now;
-    // Noisy audio routing logs should be DEBUG-level (hidden by default LOG_LEVEL=info).
     try { logger.debug(msg, data); } catch {}
   };
 
   const setSpeakerAuto = () => {
-    // Best-effort across incall-manager versions:
-    // - prefer "auto" if supported
-    // - fallback to boolean false (do not force speakerphone)
     try {
       const fn = (InCallManager as any).setForceSpeakerphoneOn;
       if (typeof fn === 'function') {
@@ -76,7 +87,7 @@ export const useAudioRouting = (
 
   const logRouteInfo = (msg: string, data?: Record<string, unknown>) => {
     try {
-      logger.info(`[useAudioRouting] ${msg}`, {
+      logger.debug(`[useAudioRouting] ${msg}`, {
         speakerOn: wantsSpeakerOutput(),
         defaultToEarpiece: !!routingOptionsRef.current?.defaultToEarpiece,
         ...data,
@@ -84,22 +95,65 @@ export const useAudioRouting = (
     } catch {}
   };
 
+  const applyNativeSpeakerThrottled = (wantSpeaker: boolean, force: boolean) => {
+    const now = Date.now();
+    if (
+      !force &&
+      lastNativeSpeakerRef.current === wantSpeaker &&
+      now - lastNativeRouteAtRef.current < MIN_NATIVE_ROUTE_MS
+    ) {
+      return;
+    }
+    lastNativeSpeakerRef.current = wantSpeaker;
+    lastNativeRouteAtRef.current = now;
+    void applyNativeVoiceCallSpeaker(wantSpeaker);
+  };
+
   /** Android: жёстко выставить earpiece или speaker (InCallManager user selection). */
   const applyHardOutputRoute = (reason: string, force = false) => {
+    const wantSpeaker = wantsSpeakerOutput();
+    const earpieceMode = !!routingOptionsRef.current?.defaultToEarpiece;
+    const now = Date.now();
+    const userIntent = reason === 'manualSync' || reason.startsWith('toggle');
+
+    if (!userIntent) {
+      if (earpieceMode && (reason.startsWith('poll_') || reason === 'onAudioDeviceChanged')) {
+        return;
+      }
+      if (
+        !force &&
+        lastHardRouteSpeakerRef.current === wantSpeaker &&
+        now - lastHardRouteAtRef.current < MIN_HARD_ROUTE_MS
+      ) {
+        return;
+      }
+      if (
+        force &&
+        lastHardRouteSpeakerRef.current === wantSpeaker &&
+        now - lastHardRouteAtRef.current < 220
+      ) {
+        return;
+      }
+    }
+
+    lastHardRouteSpeakerRef.current = wantSpeaker;
+    lastHardRouteAtRef.current = now;
+
     if (Platform.OS === 'android') {
-      const wantSpeaker = wantsSpeakerOutput();
-      try {
-        if (wantSpeaker) {
-          (InCallManager as any).setForceSpeakerphoneOn?.(true);
-          InCallManager.setSpeakerphoneOn(true);
-          void (InCallManager as any).chooseAudioRoute?.('SPEAKER_PHONE');
-        } else {
-          (InCallManager as any).setForceSpeakerphoneOn?.(false);
-          InCallManager.setSpeakerphoneOn(false);
-          void (InCallManager as any).chooseAudioRoute?.('EARPIECE');
-        }
-      } catch {}
-      void applyNativeVoiceCallSpeaker(wantSpeaker);
+      enqueueInCallOp(() => {
+        try {
+          if (wantSpeaker) {
+            (InCallManager as any).setForceSpeakerphoneOn?.(true);
+            InCallManager.setSpeakerphoneOn(true);
+            void (InCallManager as any).chooseAudioRoute?.('SPEAKER_PHONE');
+          } else {
+            (InCallManager as any).setForceSpeakerphoneOn?.(false);
+            InCallManager.setSpeakerphoneOn(false);
+            void (InCallManager as any).chooseAudioRoute?.('EARPIECE');
+          }
+        } catch {}
+      });
+      applyNativeSpeakerThrottled(wantSpeaker, userIntent || force);
       logRouteInfo(wantSpeaker ? 'speaker route' : 'earpiece route', { reason, force });
       return;
     }
@@ -136,19 +190,20 @@ export const useAudioRouting = (
     const earpieceProductMode = !!routingOptionsRef.current?.defaultToEarpiece;
     const media = earpieceProductMode || preferAudioMode ? 'audio' : 'video';
     const alreadyActive = didStartRef.current;
-    // Native start() применяет defaultSpeaker только при первой активации; после video-start earpiece не включится без stop().
     if (Platform.OS === 'android' && earpieceProductMode && !alreadyActive) {
       try { InCallManager.stop(); } catch {}
     }
     if (!alreadyActive) {
-      try { InCallManager.start({ media, ringback: '' }); } catch {}
-    } else if (earpieceProductMode) {
-      applyHardOutputRoute('applyRouting_repin', true);
-    } else {
-      try { InCallManager.start({ media, ringback: '' }); } catch {}
+      enqueueInCallOp(() => {
+        try { InCallManager.start({ media, ringback: '' }); } catch {}
+      });
+    } else if (!earpieceProductMode) {
+      enqueueInCallOp(() => {
+        try { InCallManager.start({ media, ringback: '' }); } catch {}
+      });
     }
     try { (InCallManager as any).requestAudioFocus?.(); } catch {}
-    applyHardOutputRoute('applyRouting', true);
+    applyHardOutputRoute(alreadyActive && earpieceProductMode ? 'applyRouting_repin' : 'applyRouting', true);
     log('[useAudioRouting] applyRouting()', {
       platform: Platform.OS,
       enabled,
@@ -159,9 +214,6 @@ export const useAudioRouting = (
   };
 
   const pickDesiredRoute = (available: string[]) => {
-    // 1) Wired headset always wins
-    // 2) Bluetooth headset next
-    // 3) Speaker vs earpiece — по режиму звонка / кнопке динамика
     if (available.includes('WIRED_HEADSET')) return 'WIRED_HEADSET';
     if (available.includes('BLUETOOTH')) return 'BLUETOOTH';
     return wantsSpeakerOutput() ? 'SPEAKER_PHONE' : 'EARPIECE';
@@ -180,7 +232,9 @@ export const useAudioRouting = (
     if (!force && desired && lastSelectedRef.current === desired) return;
     lastSelectedRef.current = desired;
     try {
-      await (InCallManager as any).chooseAudioRoute?.(desired);
+      enqueueInCallOp(() => {
+        void (InCallManager as any).chooseAudioRoute?.(desired);
+      });
       log('[useAudioRouting] ✅ chooseAudioRoute()', { desired, available, reason });
       logger.debug('[useAudioRouting] chooseAudioRoute', { desired, available, reason });
       return;
@@ -189,7 +243,6 @@ export const useAudioRouting = (
       logger.warn('[useAudioRouting] chooseAudioRoute failed, fallback to speaker toggle', { desired, reason, e });
     }
 
-    // Fallback: speaker toggle only (wired/BT should still work on most devices, but less deterministic).
     try {
       if (desired === 'SPEAKER_PHONE') {
         InCallManager.setSpeakerphoneOn(true);
@@ -200,9 +253,6 @@ export const useAudioRouting = (
   };
 
   const stopSpeaker = () => {
-    // КРИТИЧНО: Если мы в PiP (in-app или системный), НЕ останавливаем аудио-сессию.
-    // При уходе в PiP экран звонка размонтируется, и cleanup этого хука иначе вызовет InCallManager.stop(),
-    // что приводит к "тишине" в PiP. Учитываем оба режима — иначе при системном PiP без in-app один не слышит другого.
     try {
       const pipVisible = !!(global as any).__pipVisibleRef?.current;
       const inSystemPiP = (global as any).__pipInSystemModeRef?.current === true;
@@ -211,6 +261,9 @@ export const useAudioRouting = (
       }
     } catch {}
 
+    lastRemoteStreamRoutedIdRef.current = null;
+    lastHardRouteAtRef.current = 0;
+    lastNativeRouteAtRef.current = 0;
     try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
     try { InCallManager.setSpeakerphoneOn(false); } catch {}
     try { InCallManager.stop(); } catch {}
@@ -219,9 +272,6 @@ export const useAudioRouting = (
     didStartRef.current = false;
   };
 
-  // КРИТИЧНО: Форсим аудио-сессию/спикер при активном звонке.
-  // Нельзя ждать remoteStream, т.к. на iOS иногда аудио не начинает играть, если аудио-сессия не поднята заранее.
-  // Single effect: attach listeners BEFORE InCallManager.start() to avoid missing the first onAudioDeviceChanged event.
   useEffect(() => {
     if (!enabled) {
       stopSpeaker();
@@ -254,14 +304,13 @@ export const useAudioRouting = (
     };
 
     const onWired = (data: any) => {
-      // Android native emits {isPlugged:boolean}
       const plugged = data?.isPlugged === true;
       const available = plugged
         ? Array.from(new Set([...lastAvailableRef.current, 'WIRED_HEADSET']))
         : lastAvailableRef.current.filter((d) => d !== 'WIRED_HEADSET');
       lastAvailableRef.current = available;
       log('[useAudioRouting] WiredHeadset', { plugged, available });
-      void applyDesiredRoute(available, 'WiredHeadset');
+      void applyDesiredRoute(available, 'WiredHeadset', true);
     };
 
     const subs: Array<{ remove: () => void }> = [];
@@ -273,9 +322,8 @@ export const useAudioRouting = (
     const ensureBluetoothConnectPermission = async (): Promise<boolean> => {
       if (Platform.OS !== 'android') return true;
       const ver = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
-      if (!Number.isFinite(ver) || ver < 31) return true; // BLUETOOTH_CONNECT introduced in Android 12 (API 31)
+      if (!Number.isFinite(ver) || ver < 31) return true;
 
-      // react-native-incall-manager will refuse to start BT manager without this permission.
       const perm = (PermissionsAndroid as any)?.PERMISSIONS?.BLUETOOTH_CONNECT;
       if (!perm) return true;
 
@@ -284,14 +332,12 @@ export const useAudioRouting = (
         if (already) return true;
       } catch {}
 
-      // Request only once per hook lifetime to avoid spamming prompts.
       if (btPermissionRequestedRef.current) return false;
       btPermissionRequestedRef.current = true;
 
       try {
         const res = await PermissionsAndroid.request(perm);
-        const ok = res === PermissionsAndroid.RESULTS.GRANTED;
-        return ok;
+        return res === PermissionsAndroid.RESULTS.GRANTED;
       } catch (e) {
         logger.warn('[useAudioRouting] BLUETOOTH_CONNECT permission request failed', { e });
         return false;
@@ -300,8 +346,6 @@ export const useAudioRouting = (
 
     let cancelled = false;
 
-    // Start routing after permission check; defer InCallManager.start until after navigation/animations
-    // to avoid main-thread contention (Choreographer "Skipped N frames" / AudioDeviceBroker lock).
     (async () => {
       if (didStartRef.current) {
         InteractionManager.runAfterInteractions(() => {
@@ -321,18 +365,21 @@ export const useAudioRouting = (
       });
     })();
 
-    // Bootstrap + short polling window:
-    // Bluetooth SCO may take 1-3s to become available; we actively query status via chooseAudioRoute()
-    // (it returns availableAudioDeviceList/selectedAudioDevice) and then apply deterministic rule.
     const bootstrap = async () => {
       if (Platform.OS !== 'android') return;
+      const earpieceMode = !!routingOptionsRef.current?.defaultToEarpiece;
+      if (earpieceMode) {
+        applyHardOutputRoute('bootstrap', true);
+        return;
+      }
+
       const icm: any = InCallManager as any;
 
       const refresh = async (reason: string) => {
         if (cancelled) return;
         if (refreshInFlightRef.current) return;
         const now = Date.now();
-        if (now - lastRefreshAtRef.current < 120) return;
+        if (now - lastRefreshAtRef.current < 350) return;
         refreshInFlightRef.current = true;
         lastRefreshAtRef.current = now;
         try {
@@ -349,15 +396,12 @@ export const useAudioRouting = (
         }
       };
 
-      // 1) immediate refresh
       await refresh('bootstrap');
-      // 2) poll a few times for BT/SCO to appear
-      const delays = [300, 700, 1200, 2000, 3200];
+      const delays = [700, 2000];
       for (const ms of delays) {
         if (cancelled) break;
         await new Promise((r) => setTimeout(r, ms));
         await refresh(`poll_${ms}`);
-        // stop early if we already see external devices
         const av = lastAvailableRef.current;
         const desired = pickDesiredRoute(av);
         if (desired === lastSelectedRef.current && (av.includes('WIRED_HEADSET') || av.includes('BLUETOOTH'))) {
@@ -379,17 +423,17 @@ export const useAudioRouting = (
 
   const syncRouteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // LiveKit/WebRTC на Android иногда снова включает speaker после появления remote audio.
   useEffect(() => {
     if (!enabled || !routingOptionsRef.current?.defaultToEarpiece) return;
-    if (!remoteStream?.getAudioTracks?.()?.length) return;
+    const streamId = remoteStream?.id ? String(remoteStream.id) : '';
+    if (!streamId || !remoteStream?.getAudioTracks?.()?.length) return;
+    if (lastRemoteStreamRoutedIdRef.current === streamId) return;
+    lastRemoteStreamRoutedIdRef.current = streamId;
+
     applyHardOutputRoute('remote_stream', true);
-    const delays = [1200, 3500];
-    const timers = delays.map((ms) =>
-      setTimeout(() => applyHardOutputRoute(`remote_stream+${ms}ms`, true), ms),
-    );
+    const timer = setTimeout(() => applyHardOutputRoute('remote_stream+1200ms', false), 1200);
     return () => {
-      timers.forEach(clearTimeout);
+      clearTimeout(timer);
     };
   }, [enabled, remoteStream?.id, preferAudioMode]);
 
