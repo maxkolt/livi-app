@@ -272,38 +272,48 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
     "direct-call:video-ui",
     (data: { inVideoCallUi: boolean; from: string; roomId?: string }) => {
       const { inVideoCallUi, roomId } = data;
-      let forwardedViaRoom = false;
-      if (roomId && roomId.startsWith("room_")) {
-        const room = (io.sockets.adapter.rooms as any)?.get?.(roomId) as Set<string> | undefined;
-        if (room && room.size > 0) {
-          socket.to(roomId).emit("direct-call:video-ui", {
-            inVideoCallUi,
-            from: socket.id,
-            roomId,
+      const payload = (resolvedRoomId: string) => ({
+        inVideoCallUi,
+        from: socket.id,
+        roomId: resolvedRoomId,
+      });
+
+      let resolvedRoomId: string | undefined =
+        roomId && roomId.startsWith("room_") ? roomId : undefined;
+
+      if (resolvedRoomId) {
+        const room = (io.sockets.adapter.rooms as any)?.get?.(resolvedRoomId) as
+          | Set<string>
+          | undefined;
+        if (room && room.size > 1) {
+          socket.to(resolvedRoomId).emit("direct-call:video-ui", payload(resolvedRoomId));
+        } else {
+          logger.debug("direct-call:video-ui: room missing or only sender; will use partnerSid", {
+            roomId: resolvedRoomId,
+            roomSize: room?.size ?? 0,
           });
-          forwardedViaRoom = true;
         }
       } else {
         socket.rooms.forEach((currentRoomId) => {
-          if (currentRoomId.startsWith("room_")) {
-            socket.to(currentRoomId).emit("direct-call:video-ui", {
-              inVideoCallUi,
-              from: socket.id,
-              roomId: currentRoomId,
-            });
-            forwardedViaRoom = true;
-          }
+          if (!currentRoomId.startsWith("room_")) return;
+          resolvedRoomId = resolvedRoomId || currentRoomId;
+          socket.to(currentRoomId).emit("direct-call:video-ui", payload(currentRoomId));
         });
       }
+
       const socketData = (socket as any).data;
-      if (!forwardedViaRoom && socketData?.partnerSid) {
-        const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
+      const partnerSid = socketData?.partnerSid as string | undefined;
+      if (partnerSid) {
+        const partnerSocket = io.sockets.sockets.get(partnerSid);
         if (partnerSocket) {
-          partnerSocket.emit("direct-call:video-ui", {
-            inVideoCallUi,
-            from: socket.id,
-            ...(roomId ? { roomId } : {}),
-          });
+          const sidRoomId =
+            resolvedRoomId ||
+            (roomId && roomId.startsWith("room_") ? roomId : undefined) ||
+            (socketData?.roomId as string | undefined);
+          partnerSocket.emit(
+            "direct-call:video-ui",
+            sidRoomId ? payload(sidRoomId) : { inVideoCallUi, from: socket.id },
+          );
         }
       }
     },
