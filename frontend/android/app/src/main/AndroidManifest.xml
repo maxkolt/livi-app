@@ -136,6 +136,10 @@
     </service>
     <!-- Активный видеозвонок: держим процесс в foreground, чтобы сокет не засыпал в фоне/PiP -->
     <service android:name=".ActiveCallForegroundService" android:exported="false" android:foregroundServiceType="phoneCall"/>
+    <!-- WebRTC screen-share FGS (mediaProjection): не используем в LiVi; убираем из merge — иначе Play ругается на BOOT_COMPLETED + Android 15. -->
+    <service
+      android:name="com.oney.WebRTCModule.MediaProjectionService"
+      tools:node="remove" />
     <!-- «Отклонить» в уведомлении: HTTP decline без открытия приложения (нет Deep link received) -->
     <receiver android:name=".DeclineCallReceiver" android:exported="false">
       <intent-filter>

@@ -63,21 +63,7 @@ import { uiAccent } from '../theme/uiAccent';
 import { t, defaultLang } from '../utils/i18n';
 import type { Lang } from '../utils/i18n';
 import { useLang } from '../store/lang';
-
-// expo-linear-gradient -> react-native-linear-gradient -> fallback
-const LinearGradient: any = (() => {
-  try {
-    return require("expo-linear-gradient").LinearGradient;
-  } catch {
-    try {
-      return require("react-native-linear-gradient").default;
-    } catch {
-      return ({ style, children }: any) => (
-        <View style={[{ backgroundColor: "#2EE6FF" }, style]}>{children}</View>
-      );
-    }
-  }
-})();
+import { LinearGradient } from 'expo-linear-gradient';
 
 import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';

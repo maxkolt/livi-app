@@ -8,6 +8,8 @@ import android.content.IntentFilter
 import android.content.res.Configuration
 import android.os.Build
 
+import com.oney.WebRTCModule.WebRTCModuleOptions
+
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactNativeHost
@@ -62,6 +64,8 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // Screen capture / getDisplayMedia не используем; без этого @livekit/react-native-webrtc может поднять mediaProjection FGS.
+    WebRTCModuleOptions.getInstance().enableMediaProjectionService = false
     SoLoader.init(this, OpenSourceMergedSoMapping)
     if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
       // If you opted-in for the New Architecture, we load the native entry point for this app.

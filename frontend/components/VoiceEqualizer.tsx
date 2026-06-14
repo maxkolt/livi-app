@@ -1,20 +1,6 @@
 import React, { useEffect, useMemo } from "react";
 import { View, Animated, Easing, StyleSheet } from "react-native";
-
-// expo-linear-gradient -> react-native-linear-gradient -> fallback
-const LinearGradient: any = (() => {
-  try {
-    return require("expo-linear-gradient").LinearGradient;
-  } catch {
-    try {
-      return require("react-native-linear-gradient").default;
-    } catch {
-      return ({ style }: any) => (
-        <View style={[{ backgroundColor: "#2EE6FF" }, style]} />
-      );
-    }
-  }
-})();
+import { LinearGradient } from "expo-linear-gradient";
 
 type Props = {
   level: number; // micLevel (0..1)

@@ -31,7 +31,7 @@ import PiPOverlay from "./src/pip/PiPOverlay";
 import SystemPiPCaptureHost from "./src/pip/SystemPiPCaptureHost";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
-import { registerGlobals as registerLiveKitGlobals } from '@livekit/react-native';
+import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
@@ -131,7 +131,7 @@ if (__DEV__) {
 
 // Регистрация глобальных LiveKit штук один раз при старте приложения
 try {
-  registerLiveKitGlobals();
+  safeRegisterLiveKitGlobals();
 } catch (e) {
   logger.warn('[App] Failed to register LiveKit globals', e);
 }
@@ -2259,6 +2259,12 @@ function AppContent() {
   React.useEffect(() => {
     const onCallEnded = (data?: { callId?: string; roomId?: string }) => {
       const g = global as any;
+      // Снимок до hidePiP в PiPContext: in-app PiP → бейдж «Звонок завершён» на Home.
+      try {
+        g.__pipCallEndedWasInAppAtStartRef = g.__pipCallEndedWasInAppAtStartRef || { current: false };
+        g.__pipCallEndedWasInAppAtStartRef.current =
+          g.__pipVisibleRef?.current === true && g.__pipInSystemModeRef?.current !== true;
+      } catch (_) {}
       const eventCallId = String(data?.callId || g.__currentCallPiPParamsRef?.current?.callId || '').trim();
       const eventRoomId = String(
         data?.roomId || g.__currentCallPiPParamsRef?.current?.roomId || g.__pipLastContextRef?.current?.roomId || ''
@@ -2443,6 +2449,24 @@ function AppContent() {
       if (noOpenFlag) {
         console.log('[App] [call:ended] __callEndedFromPiPNoOpenRef=true → return (НЕ вызываем goHome, приложение не открываем)');
         return;
+      }
+
+      const wasInAppPiP =
+        g.__pipCallEndedWasInAppRef?.current === true ||
+        g.__pipCallEndedWasInAppAtStartRef?.current === true;
+      try {
+        if (g.__pipCallEndedWasInAppRef) g.__pipCallEndedWasInAppRef.current = false;
+        if (g.__pipCallEndedWasInAppAtStartRef) g.__pipCallEndedWasInAppAtStartRef.current = false;
+      } catch (_) {}
+      if (wasInAppPiP) {
+        queueMicrotask(() => {
+          try {
+            if (!navRef.isReady()) return;
+            const routeName = String(navRef.getCurrentRoute()?.name ?? '');
+            if (routeName === 'VideoCall') return;
+            emitCallEndedOnHome();
+          } catch (_) {}
+        });
       }
 
       // Закрываем экран видеозвонка (goBack — пользователь остаётся на том же экране, что и до звонка). Не вызываем, если VideoCall уже закрыл экран.

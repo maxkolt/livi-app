@@ -1,3 +1,4 @@
+import './polyfills/ensureCoreJsPolyfills';
 import './shims/nativeEventEmitterShim';
 import 'react-native-gesture-handler';
 import 'react-native-reanimated';

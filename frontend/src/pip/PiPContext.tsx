@@ -1317,6 +1317,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         g2.__pipCallEndedWasInSystemRef = g2.__pipCallEndedWasInSystemRef || { current: false };
         g2.__pipCallEndedWasInSystemRef.current =
           inSystemPiPMode === true || inSystemByRef === true;
+        g2.__pipCallEndedWasInAppRef = g2.__pipCallEndedWasInAppRef || { current: false };
+        g2.__pipCallEndedWasInAppRef.current =
+          !inSystemPiPMode && !inSystemByRef;
       } catch (_) {}
       if (Platform.OS === 'android') {
         try { NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false); } catch (_) {}

@@ -104,3 +104,45 @@ export function shouldUsePipPlaceholderOnly(opts?: {
 }): boolean {
   return getPipPlaceholderOnlyDebug(opts).placeholderOnly;
 }
+
+/**
+ * Куда развернуть звонок из PiP по центральному тапу: audio UI, если пользователь ушёл с аудио-экрана.
+ * Логика согласована с invokeReturnToVideoCallFromNotification в App.tsx.
+ */
+export function resolvePreferAudioOnlyUiOnPiPReturn(opts?: {
+  localCamOn?: boolean;
+  remoteCamOn?: boolean;
+  remoteStream?: unknown;
+  localStream?: unknown;
+}): boolean {
+  try {
+    if (isInAudioOnlyCallUi()) {
+      return true;
+    }
+    const g = global as any;
+    const params = g.__currentCallPiPParamsRef?.current;
+    if (params?.preferVideoCallUi === true) {
+      return false;
+    }
+    if (params?.inAudioOnlyUi === true) {
+      return true;
+    }
+    const session = g.__webrtcSessionRef?.current;
+    const remoteStream =
+      opts?.remoteStream ??
+      params?.remoteStream ??
+      (typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null);
+    const localStream =
+      opts?.localStream ??
+      params?.localStream ??
+      (typeof session?.getLocalStream === 'function' ? session.getLocalStream() : null);
+    return shouldUsePipPlaceholderOnly({
+      localCamOn: opts?.localCamOn ?? params?.localCamOn,
+      remoteCamOn: opts?.remoteCamOn ?? params?.remoteCamOn,
+      remoteStream,
+      localStream,
+    });
+  } catch {
+    return false;
+  }
+}

@@ -18,10 +18,14 @@ import { PiPContext } from './PiPContext';
 import { logger } from '../../utils/logger';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import AwayPlaceholder from '../../components/AwayPlaceholder';
-import { shouldUsePipPlaceholderOnly } from './pipPlaceholderOnly';
+import {
+  isInAudioOnlyCallUi,
+  resolvePreferAudioOnlyUiOnPiPReturn,
+  shouldUsePipPlaceholderOnly,
+} from './pipPlaceholderOnly';
 
-const PIP_W = 150;
-const PIP_H = 260;
+const PIP_W = 130;
+const PIP_H = 210;
 /** Одинаковый отступ кнопок от краёв окна PiP */
 const PIP_CORNER_INSET = 8;
 const PIP_CORNER_BTN = 34;
@@ -181,6 +185,20 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     } catch (_) {}
   }, [returnToCall, currentRouteName]);
 
+  /** Центр PiP: вернуть на тот UI звонка, с которого ушли (audio / video). Угол «телефон» — по-прежнему всегда audio. */
+  const returnToCallFromCenter = useCallback(() => {
+    try {
+      const preferAudioOnlyUi = resolvePreferAudioOnlyUiOnPiPReturn({
+        localCamOn,
+        remoteCamOn,
+        remoteStream,
+      });
+      returnToCall({ preferAudioOnlyUi });
+    } catch (_) {
+      returnToCall();
+    }
+  }, [returnToCall, localCamOn, remoteCamOn, remoteStream]);
+
   const dims = Dimensions.get('window');
   const W = typeof dims?.width === 'number' && dims.width > 0 ? dims.width : 400;
   const H = typeof dims?.height === 'number' && dims.height > 0 ? dims.height : 700;
@@ -250,8 +268,8 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
 
   const returnToCallRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    returnToCallRef.current = returnToCall;
-  }, [returnToCall]);
+    returnToCallRef.current = returnToCallFromCenter;
+  }, [returnToCallFromCenter]);
 
   const streamURL = remoteStream?.toURL?.();
   const pipHasLiveRemoteVideo = useMemo(() => {
@@ -268,6 +286,8 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     remoteCamOn,
     remoteStream,
   });
+  const pipVideoToggleDisabled = isInAudioOnlyCallUi();
+  const pipShowCamOffIcon = pipVideoToggleDisabled || !localCamOn;
   const canRenderVideo =
     shouldShowOverlay &&
     allowVideoRender &&
@@ -303,11 +323,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
         >
           <View style={[styles.pipWindowInner, { width: PIP_W, height: PIP_H }]}>
             <View style={[styles.pipCornerSlot, styles.pipCornerTL]} pointerEvents="box-none">
-              <PiPCornerButton onPress={toggleCamera}>
+              <PiPCornerButton onPress={toggleCamera} disabled={pipVideoToggleDisabled}>
                 <MaterialIcons
-                  name={localCamOn ? 'videocam' : 'videocam-off'}
+                  name={pipShowCamOffIcon ? 'videocam-off' : 'videocam'}
                   size={20}
-                  color={localCamOn ? '#fff' : '#E53935'}
+                  color={pipShowCamOffIcon ? '#E53935' : '#fff'}
                 />
               </PiPCornerButton>
             </View>
@@ -326,22 +346,13 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
               </PiPCornerButton>
             </View>
             <View style={[styles.pipCornerSlot, styles.pipCornerBR]} pointerEvents="box-none">
-              <Pressable
-                onPress={endCall}
-                style={styles.pipCornerPressable}
-                hitSlop={6}
-                android_ripple={{ color: 'rgba(229,57,53,0.4)', borderless: true }}
-              >
-                {({ pressed }) => (
-                  <View style={styles.pipCornerIconCircle}>
-                    <Text style={[styles.pipCloseText, pressed && styles.pipCloseTextPressed]}>✕</Text>
-                  </View>
-                )}
-              </Pressable>
+              <PiPCornerButton onPress={endCall} rippleColor="rgba(229,57,53,0.4)">
+                <MaterialIcons name="close" size={22} color="#fff" />
+              </PiPCornerButton>
             </View>
             <Pressable
               style={styles.pipVideoArea}
-              onPress={returnToCall}
+              onPress={returnToCallFromCenter}
               android_ripple={{ color: 'rgba(255,255,255,0.08)', borderless: true }}
             >
               {pipPlaceholderOnly ? (
@@ -393,17 +404,20 @@ function PiPCornerButton({
   onPress,
   children,
   rippleColor = 'rgba(255,255,255,0.2)',
+  disabled = false,
 }: {
   onPress: () => void;
   children: React.ReactNode;
   rippleColor?: string;
+  disabled?: boolean;
 }) {
   return (
     <Pressable
-      onPress={onPress}
-      style={styles.pipCornerPressable}
+      onPress={disabled ? undefined : onPress}
+      disabled={disabled}
+      style={[styles.pipCornerPressable, disabled && styles.pipCornerPressableDisabled]}
       hitSlop={6}
-      android_ripple={{ color: rippleColor, borderless: true }}
+      android_ripple={disabled ? undefined : { color: rippleColor, borderless: true }}
     >
       <View style={styles.pipCornerIconCircle}>{children}</View>
     </Pressable>
@@ -504,6 +518,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  pipCornerPressableDisabled: {
+    opacity: 0.55,
+  },
   pipCornerIconCircle: {
     width: PIP_CORNER_BTN,
     height: PIP_CORNER_BTN,
@@ -513,14 +530,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.35)',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  pipCloseText: {
-    color: '#fff',
-    fontSize: 18,
-    lineHeight: 20,
-  },
-  pipCloseTextPressed: {
-    color: '#E53935',
   },
   pipVideoArea: {
     ...StyleSheet.absoluteFillObject,
