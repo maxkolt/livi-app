@@ -39,7 +39,7 @@ import { uiAccent } from '../../theme/uiAccent';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { usePiP, isPipOverlayVisibleSync } from '../../src/pip/PiPContext';
-import { setPipAudioOnlyPlaceholderSticky, shouldUsePipPlaceholderOnly } from '../../src/pip/pipPlaceholderOnly';
+import { setPipAudioOnlyPlaceholderSticky, shouldUsePipPlaceholderOnly, isInAudioOnlyCallUi } from '../../src/pip/pipPlaceholderOnly';
 import socket, {
   fetchFriends,
   getCurrentUserId,
@@ -269,6 +269,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     const g = global as any;
     g.__inAudioOnlyUiRef = inAudioOnlyUiRef;
+    g.__stayOnVideoCallUiRef = stayOnVideoCallUiRef;
     return () => {
       if (g.__inAudioOnlyUiRef === inAudioOnlyUiRef) {
         const session = g.__webrtcSessionRef?.current;
@@ -277,7 +278,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           session?.getRemoteCamEnabled?.() ||
           inAudioOnlyUiRef.current === false;
         setPipAudioOnlyPlaceholderSticky(inAudioOnlyUiRef.current === true && !videoCallActive);
-        g.__inAudioOnlyUiRef = { current: false };
+        const keepAudioOnlySticky = g.__pipAudioOnlyPlaceholderRef?.current === true;
+        if (!inAudioOnlyUiRef.current && !keepAudioOnlySticky) {
+          g.__inAudioOnlyUiRef = { current: false };
+        }
+      }
+      if (g.__stayOnVideoCallUiRef === stayOnVideoCallUiRef) {
+        g.__stayOnVideoCallUiRef = { current: false };
       }
     };
   }, []);
@@ -309,11 +316,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       return;
     }
     const partnerDeclaredVideoUi = session.getPartnerPeerDirectCallVideoUi?.() === true;
+    const partnerDeclaredAudioUi = session.isPartnerPeerOnDirectCallAudioUi?.() === true;
     const partnerInPiPForHint =
-      partnerInPiPRef.current || session.getPartnerInPiP?.() === true;
+      !partnerDeclaredAudioUi &&
+      (partnerInPiPRef.current || session.getPartnerInPiP?.() === true);
     const partnerOnVideoUiFlag = partnerDeclaredVideoUi || partnerInPiPForHint;
     const partnerCamOnWhileWeAreOnAudio =
-      session.getRemoteCamEnabled?.() === true;
+      !partnerDeclaredAudioUi && session.getRemoteCamEnabled?.() === true;
     const partnerVideoUi = partnerOnVideoUiFlag || partnerCamOnWhileWeAreOnAudio;
     setPeerInvitedVideo(!!partnerVideoUi);
   }, []);
@@ -497,6 +506,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }
   }, []);
   const getDesiredLocalMediaStateForPiPReturn = useCallback((stream?: MediaStream | null) => {
+    if (isInAudioOnlyCallUi()) {
+      const effectiveStream =
+        stream ||
+        sessionRef.current?.getLocalStream?.() ||
+        pip.localStream ||
+        localStreamRef.current ||
+        null;
+      const trackMicOn = getTrackEnabled(effectiveStream, 'audio');
+      return {
+        micOn: typeof trackMicOn === 'boolean' ? trackMicOn : !pip.isMuted,
+        camOn: false,
+      };
+    }
     const effectiveStream =
       stream ||
       sessionRef.current?.getLocalStream?.() ||
@@ -2614,10 +2636,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
 
         const camEnabled = !!session?.getRemoteCamEnabled?.();
-        setRemoteCamOn(camEnabled);
-        try {
-          pip.updatePiPState({ remoteCamOn: camEnabled });
-        } catch (_) {}
+        if (!inAudioOnlyUiRef.current) {
+          setRemoteCamOn(camEnabled);
+          try {
+            pip.updatePiPState({ remoteCamOn: camEnabled });
+          } catch (_) {}
+        }
       }
     };
 
@@ -3193,13 +3217,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (leavingAudioOnlyUi) {
         stayOnVideoCallUiRef.current = true;
         inAudioOnlyUiRef.current = false;
+        try {
+          (global as any).__inAudioOnlyUiRef.current = false;
+        } catch {}
         setPeerInvitedVideo(false);
         setInAudioOnlyUi(false);
         try {
           (session as VideoCallSession).enableRemoteVideoConsumption();
-        } catch {}
-        try {
-          (session as VideoCallSession).notifyPeerDirectCallVideoUi(true);
         } catch {}
       }
       setCamOn((prev) => {
@@ -3221,6 +3245,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const applyAudioOnlyUiState = useCallback((session: VideoCallSession | null) => {
     stayOnVideoCallUiRef.current = false;
     inAudioOnlyUiRef.current = true;
+    try {
+      (global as any).__inAudioOnlyUiRef.current = true;
+    } catch {}
+    setPipAudioOnlyPlaceholderSticky(true);
     setInAudioOnlyUi(true);
     setCamOn(false);
     syncPeerVideoInviteHint();
@@ -3250,10 +3278,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   }, [pip, syncPeerVideoInviteHint]);
 
   const applyVideoCallUiFromPiPExpand = useCallback((session: VideoCallSession | null) => {
+    if (
+      inAudioOnlyUiRef.current ||
+      (global as any).__inAudioOnlyUiRef?.current === true ||
+      (global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current === true
+    ) {
+      return;
+    }
     stayOnVideoCallUiRef.current = true;
     setPipAudioOnlyPlaceholderSticky(false);
     inAudioOnlyUiRef.current = false;
     setInAudioOnlyUi(false);
+    try {
+      (global as any).__inAudioOnlyUiRef.current = false;
+    } catch {}
     setPeerInvitedVideo(false);
     if (session) {
       try {
@@ -3293,10 +3331,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (!session || session.isEnded?.()) return;
 
       const g = global as any;
+      stayOnVideoCallUiRef.current = false;
       try {
+        g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+        g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
         g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
         g.__expandToVideoCallUiFromPiPRef.current = false;
+        if (g.__inAudioOnlyUiRef) g.__inAudioOnlyUiRef.current = true;
       } catch {}
+      inAudioOnlyUiRef.current = true;
+      setPipAudioOnlyPlaceholderSticky(true);
       try {
         navigation.setParams({ preferVideoCallUi: undefined } as any);
       } catch {}
@@ -3338,8 +3382,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
         applyVideoCallUiFromPiPExpand(session);
       } else {
-      g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
-      void (async () => {
+        g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+        stayOnVideoCallUiRef.current = false;
+        inAudioOnlyUiRef.current = true;
+        try {
+          if (g.__inAudioOnlyUiRef) g.__inAudioOnlyUiRef.current = true;
+        } catch {}
+        setPipAudioOnlyPlaceholderSticky(true);
+        void (async () => {
         try {
           await session?.enterDirectCallAudioOnlyMode?.();
         } catch (e) {
@@ -3431,6 +3481,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
   useEffect(() => {
     if (!isDirectCall || inAudioOnlyUiRef.current) return;
+    if ((global as any).__inAudioOnlyUiRef?.current === true) return;
+    if ((global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return;
+    if (isInAudioOnlyCallUi()) return;
     if (!stayOnVideoCallUiRef.current || !friendCallAccepted) return;
     notifyPeerDirectCallVideoUi(true);
   }, [isDirectCall, inAudioOnlyUi, friendCallAccepted, sessionTick, notifyPeerDirectCallVideoUi]);
@@ -3761,7 +3814,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
           if (
             (global as any).__expandToVideoCallUiFromPiPRef?.current &&
-            !(global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current
+            !(global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current &&
+            !inAudioOnlyUiRef.current &&
+            (global as any).__inAudioOnlyUiRef?.current !== true
           ) {
             applyVideoCallUiFromPiPExpand(session as VideoCallSession);
             try {

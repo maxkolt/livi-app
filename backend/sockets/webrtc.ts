@@ -287,6 +287,11 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
           | undefined;
         if (room && room.size > 1) {
           socket.to(resolvedRoomId).emit("direct-call:video-ui", payload(resolvedRoomId));
+          logger.info("direct-call:video-ui forwarded to room", {
+            roomId: resolvedRoomId,
+            roomSize: room.size,
+            inVideoCallUi,
+          });
         } else {
           logger.debug("direct-call:video-ui: room missing or only sender; will use partnerSid", {
             roomId: resolvedRoomId,
@@ -301,6 +306,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
         });
       }
 
+      let forwardedToPartnerSid = false;
       const socketData = (socket as any).data;
       const partnerSid = socketData?.partnerSid as string | undefined;
       if (partnerSid) {
@@ -314,7 +320,19 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
             "direct-call:video-ui",
             sidRoomId ? payload(sidRoomId) : { inVideoCallUi, from: socket.id },
           );
+          forwardedToPartnerSid = true;
+          logger.info("direct-call:video-ui forwarded to partnerSid", {
+            partnerSid,
+            inVideoCallUi,
+            roomId: sidRoomId ?? roomId,
+          });
         }
+      }
+      if (!forwardedToPartnerSid && resolvedRoomId) {
+        logger.debug("direct-call:video-ui: no partnerSid fallback target", {
+          roomId: resolvedRoomId,
+          inVideoCallUi,
+        });
       }
     },
   );

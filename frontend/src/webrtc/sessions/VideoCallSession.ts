@@ -914,6 +914,10 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.cameraSuspendedForAppBackground = false;
         return;
       }
+      if (this.isLocalDirectCallAudioOnlyUi()) {
+        this.cameraSuspendedForAppBackground = false;
+        return;
+      }
       const isRoomReconnecting =
         this.liveKitReconnecting || this.room?.state === 'reconnecting';
       if (isRoomReconnecting) {
@@ -1504,6 +1508,10 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /** Пользователь перешёл с audio-only UI на видеозвонок — подписаться на remote video и подтянуть треки. */
   enableRemoteVideoConsumption(opts?: { keepRestoreDeferAfterPiP?: boolean }): void {
+    if (this.isLocalDirectCallAudioOnlyUi()) {
+      logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — local audio-only UI');
+      return;
+    }
     const wasDeferred = this.deferRemoteVideoSubscription;
     if (!wasDeferred) {
       if (!opts?.keepRestoreDeferAfterPiP) this.restoreDeferRemoteVideoAfterPiP = false;
@@ -1534,6 +1542,10 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /** In-app PiP: подписаться на remote video и синхронизировать стрим с оверлеем PiP. */
   ensureRemoteVideoForPiP(): void {
+    if (this.isLocalDirectCallAudioOnlyUi()) {
+      logger.debug('[VideoCallSession] Skip ensureRemoteVideoForPiP — local audio-only UI');
+      return;
+    }
     if (this.deferRemoteVideoSubscription) {
       this.restoreDeferRemoteVideoAfterPiP = true;
       this.enableRemoteVideoConsumption({ keepRestoreDeferAfterPiP: true });
@@ -1662,9 +1674,31 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.isCamOn;
   }
 
+  /** Локальный UI direct-call: экран «Аудиозвонок» (не video UI / не Home-as-video). */
+  private isLocalDirectCallAudioOnlyUi(): boolean {
+    try {
+      const g = global as any;
+      if (g.__inAudioOnlyUiRef?.current === true) return true;
+      if (g.__pipAudioOnlyPlaceholderRef?.current === true) {
+        const live =
+          !this.ended &&
+          !this.endCallInProgress &&
+          (this.room?.state === 'connected' || !!this.roomId);
+        if (live) return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   /** Сообщить партнёру, что мы на экране видеозвонка или вернулись на аудио (direct call). */
   notifyPeerDirectCallVideoUi(inVideoCallUi: boolean, opts?: { force?: boolean }): void {
     if (!this.config.getIsDirectCall?.()) return;
+    if (inVideoCallUi && this.isLocalDirectCallAudioOnlyUi()) {
+      logger.debug('[VideoCallSession] Skip direct-call:video-ui true — local audio-only UI');
+      return;
+    }
     if (!opts?.force && this.lastEmittedPeerVideoCallUi === inVideoCallUi) return;
     const currentRoomId = this.getRoomId();
     if (this.ended || this.endCallInProgress || !currentRoomId) return;
@@ -1688,6 +1722,13 @@ export class VideoCallSession extends SimpleEventEmitter {
   async enterDirectCallAudioOnlyMode(): Promise<void> {
     if (!this.config.getIsDirectCall?.()) return;
     if (this.ended || this.endCallInProgress) return;
+    this.restoreDeferRemoteVideoAfterPiP = false;
+    this.lastEmittedPeerVideoCallUi = false;
+    try {
+      const g = global as any;
+      if (g.__inAudioOnlyUiRef) g.__inAudioOnlyUiRef.current = true;
+    } catch (_) {}
+    this.setInPiP(false);
     this.notifyPeerDirectCallVideoUi(false, { force: true });
     try {
       this.exitPiP?.();
@@ -1732,6 +1773,10 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       return;
     }
+    if (this.isLocalDirectCallAudioOnlyUi()) {
+      logger.debug('[VideoCallSession] Skip enterPiP — local audio-only UI');
+      return;
+    }
     if (!this.shouldUsePlaceholderPiP()) {
       this.ensureRemoteVideoForPiP();
     }
@@ -1761,7 +1806,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     const currentRoomId = this.getRoomId();
     const wasInLocalPiP = this.inPiP;
     this.setInPiP(false);
-    this.restoreAudioOnlyDeferAfterPiPIfNeeded();
+    if (!this.isLocalDirectCallAudioOnlyUi()) {
+      this.restoreAudioOnlyDeferAfterPiPIfNeeded();
+    }
     if (this.ended || this.endCallInProgress || this.cleaned || !currentRoomId) {
       logger.debug('[VideoCallSession] pip:state не отправляем при exitPiP — звонок завершён или нет roomId', {
         ended: this.ended,
@@ -2072,11 +2119,16 @@ export class VideoCallSession extends SimpleEventEmitter {
         return;
       }
       if (this.ended || this.endCallInProgress) return;
+      if (data.from && data.from === socket.id) return;
       logger.info('[VideoCallSession] direct-call:video-ui received', {
         inVideoCallUi: data.inVideoCallUi,
         roomId: incoming,
       });
       this.partnerPeerDirectCallVideoUi = !!data.inVideoCallUi;
+      if (!data.inVideoCallUi && this.config.getIsDirectCall?.() && this.partnerInPiP) {
+        this.partnerInPiP = false;
+        this.emit('partnerPiPStateChanged', { inPiP: false });
+      }
       this.emit('partnerDirectCallVideoUiChanged', { inVideoCallUi: !!data.inVideoCallUi });
       this.config.callbacks.onPeerDirectCallVideoUiChange?.(data.inVideoCallUi);
     };
