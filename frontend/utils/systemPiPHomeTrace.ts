@@ -4,6 +4,15 @@ import { trackReleaseEvent } from './telemetry';
 
 const LOG_TAG = '[LIVI][SYSPIP][home]';
 
+/** Включить: `(global as any).__LIVI_SYS_PIP_HOME_TRACE__ = true` (см. scripts/capture-pip-debug-logs.sh). */
+function isSysPiPHomeTraceEnabled(): boolean {
+  try {
+    return (global as any).__LIVI_SYS_PIP_HOME_TRACE__ === true;
+  } catch {
+    return false;
+  }
+}
+
 export type HomePiPTracePhase =
   | 'native_on_user_leave_hint'
   | 'native_skip'
@@ -55,6 +64,7 @@ function resolveIds(): { callId: string | null; roomId: string | null } {
 }
 
 export function logHomePiPTrace(phase: HomePiPTracePhase | string, payload: TracePayload = {}): void {
+  if (!isSysPiPHomeTraceEnabled()) return;
   const ids = resolveIds();
   const body = {
     phase,
@@ -76,7 +86,7 @@ export function setActiveHomePiPTraceId(traceId: string | null): void {
 }
 
 export function beginHomePiPOutcomeWatch(traceId: string): void {
-  if (!traceId) return;
+  if (!isSysPiPHomeTraceEnabled() || !traceId) return;
   const prev = outcomes.get(traceId);
   if (prev?.timeoutId) clearTimeout(prev.timeoutId);
   const state: OutcomeState = {
@@ -183,6 +193,7 @@ export function installSystemPiPHomeTraceListener(): void {
         frameReady?: boolean;
         isInPiP?: boolean;
       }) => {
+        if (!isSysPiPHomeTraceEnabled()) return;
         const traceId = payload?.traceId ? String(payload.traceId) : null;
         if (traceId) setActiveHomePiPTraceId(traceId);
         if (traceId && payload?.phase === 'native_on_user_leave_hint') {

@@ -1893,12 +1893,11 @@ function AppContent() {
       } else if (nextAppState === 'background') {
         try {
           const bgSession = (global as any).__webrtcSessionRef?.current;
-          if (
+          const callStillLive =
             bgSession &&
-            typeof bgSession.pauseCameraForAppBackground === 'function' &&
-            (typeof bgSession.isEnded !== 'function' || !bgSession.isEnded())
-          ) {
-            void bgSession.pauseCameraForAppBackground();
+            (typeof bgSession.isEnded !== 'function' || !bgSession.isEnded());
+          if (callStillLive && typeof bgSession.onAppBackgroundDuringActiveCall === 'function') {
+            bgSession.onAppBackgroundDuringActiveCall();
           }
         } catch (_) {}
         // Проверяем: в системном PiP с активным звонком — экран не гасим до завершения звонка

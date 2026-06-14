@@ -1,7 +1,7 @@
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { Buffer } from 'buffer';
 import AudioRecord from 'react-native-audio-record';
-import { Platform, NativeModules } from 'react-native';
+import { Platform, NativeModules, AppState } from 'react-native';
 import * as Device from 'expo-device';
 import {
   Room,
@@ -126,6 +126,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     directCallVideoUi?: (data: { inVideoCallUi: boolean; from: string; roomId?: string }) => void;
   } = {};
   private lastEmittedPeerVideoCallUi: boolean | null = null;
+  /** Партнёр на полноэкранном video UI direct-call; null — ещё не присылал direct-call:video-ui. */
+  private partnerPeerDirectCallVideoUi: boolean | null = null;
   private connectRequestId = 0;
   private disconnectReason: 'user' | 'server' | 'unknown' = 'unknown';
   private isDisconnecting = false;
@@ -153,6 +155,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastSentPiPRoomId: string | null = null;
   /** Камера сознательно выключена при уходе приложения в фон (cam-toggle → заглушка у партнёра). */
   private cameraSuspendedForAppBackground = false;
+  /** Сериализация pause/restore и recreate, чтобы App + VideoCall не гоняли два reconnect подряд. */
+  private cameraAppLifecyclePromise: Promise<void> | null = null;
+  private localVideoRecreatePromise: Promise<void> | null = null;
   /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и endCall повторно */
   private cleaned = false;
   /** ctor запланировал handleCallAccepted из __pendingCallAcceptedRef — UI не должен дублировать connectAsInitiatorAfterAccepted */
@@ -688,6 +693,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.lastSentPiPState = null;
     this.lastSentPiPRoomId = null;
     this.partnerInPiP = false;
+    this.partnerPeerDirectCallVideoUi = null;
     this.partnerId = null;
     this.partnerUserId = null;
     this.notifyPartnerIdChange(null);
@@ -850,37 +856,90 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.cameraSuspendedForAppBackground;
   }
 
+  private enqueueCameraAppLifecycle(task: () => Promise<void>): Promise<void> {
+    const chained = (this.cameraAppLifecyclePromise ?? Promise.resolve())
+      .catch(() => {})
+      .then(task);
+    this.cameraAppLifecyclePromise = chained;
+    void chained.finally(() => {
+      if (this.cameraAppLifecyclePromise === chained) {
+        this.cameraAppLifecyclePromise = null;
+      }
+    });
+    return chained;
+  }
+
   /** Уход в фон: выключить камеру и cam-toggle(false), чтобы у партнёра была заглушка, а не чёрный кадр. */
   async pauseCameraForAppBackground(): Promise<void> {
+    return this.enqueueCameraAppLifecycle(async () => {
+      if (this.ended || this.endCallInProgress) return;
+      if (this.cameraSuspendedForAppBackground) return;
+      if (!this.isCamOn) return;
+      this.cameraSuspendedForAppBackground = true;
+      logger.info('[VideoCallSession] Pausing camera for app background');
+      await this.applyLocalCameraEnabled(false);
+      try {
+        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+        if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: false });
+      } catch (_) {}
+    });
+  }
+
+  /**
+   * Уход на Home / в фон с экрана видеозвонка: сначала pip/video-ui (партнёр на audio не теряет подсказку),
+   * затем пауза камеры как «выкл. камеру»; при возврате — restoreCameraAfterAppBackground.
+   */
+  onAppBackgroundDuringActiveCall(): void {
     if (this.ended || this.endCallInProgress) return;
-    if (this.cameraSuspendedForAppBackground) return;
-    if (!this.isCamOn) return;
-    this.cameraSuspendedForAppBackground = true;
-    logger.info('[VideoCallSession] Pausing camera for app background');
-    await this.applyLocalCameraEnabled(false);
     try {
-      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-      if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: false });
+      const g = global as any;
+      if (g.__inAudioOnlyUiRef?.current === true) return;
     } catch (_) {}
+    logger.info('[VideoCallSession] App background on video UI — notify video UI, then pause camera');
+    try {
+      this.enterPiP?.();
+    } catch (_) {}
+    if (this.config.getIsDirectCall?.()) {
+      this.notifyPeerDirectCallVideoUi(true, { force: true });
+    }
+    void this.pauseCameraForAppBackground().catch((e) => {
+      logger.warn('[VideoCallSession] pauseCameraForAppBackground failed on app background', e);
+    });
   }
 
   /** Возврат из фона: снова включить камеру, если она была приостановлена при background. */
   async restoreCameraAfterAppBackground(): Promise<void> {
-    if (this.ended || this.endCallInProgress) {
-      this.cameraSuspendedForAppBackground = false;
-      return;
-    }
-    if (!this.cameraSuspendedForAppBackground) {
+    return this.enqueueCameraAppLifecycle(async () => {
+      if (this.ended || this.endCallInProgress) {
+        this.cameraSuspendedForAppBackground = false;
+        return;
+      }
+      const isRoomReconnecting =
+        this.liveKitReconnecting || this.room?.state === 'reconnecting';
+      if (isRoomReconnecting) {
+        logger.info('[VideoCallSession] Defer camera restore until LiveKit reconnect completes');
+        return;
+      }
+      const wasSuspendedForBackground = this.cameraSuspendedForAppBackground;
+      if (wasSuspendedForBackground) {
+        this.cameraSuspendedForAppBackground = false;
+        logger.info('[VideoCallSession] Restoring camera after app foreground');
+        await this.applyLocalCameraEnabled(true);
+        try {
+          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+          if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: true });
+        } catch (_) {}
+        return;
+      }
       await this.reconnectCameraOnResume();
-      return;
-    }
-    this.cameraSuspendedForAppBackground = false;
-    logger.info('[VideoCallSession] Restoring camera after app foreground');
-    await this.applyLocalCameraEnabled(true);
-    try {
-      const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-      if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: true });
-    } catch (_) {}
+    });
+  }
+
+  /** После Reconnected: догнать restore, если foreground пришёл во время reconnecting. */
+  private tryRestoreCameraAfterReconnect(): void {
+    if (this.ended || this.endCallInProgress || !this.cameraSuspendedForAppBackground) return;
+    if (AppState.currentState !== 'active') return;
+    void this.restoreCameraAfterAppBackground();
   }
 
   async toggleCam(): Promise<void> {
@@ -1408,6 +1467,20 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.room?.name || this.roomId;
   }
 
+  /** roomId в pip/cam-toggle/direct-call:video-ui может совпадать с socket roomId или именем LiveKit-комнаты. */
+  private matchesSignalingRoom(incoming?: string | null): boolean {
+    if (!incoming) return false;
+    const normalized = String(incoming).trim();
+    if (!normalized) return false;
+    const ids = new Set<string>();
+    for (const raw of [this.getRoomId(), this.roomId, this.room?.name, this.currentRoomName]) {
+      if (raw == null) continue;
+      const s = String(raw).trim();
+      if (s) ids.add(s);
+    }
+    return ids.has(normalized);
+  }
+
   getCallId(): string | null {
     return this.callId;
   }
@@ -1431,13 +1504,17 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /** Пользователь перешёл с audio-only UI на видеозвонок — подписаться на remote video и подтянуть треки. */
   enableRemoteVideoConsumption(opts?: { keepRestoreDeferAfterPiP?: boolean }): void {
-    if (!this.deferRemoteVideoSubscription) {
+    const wasDeferred = this.deferRemoteVideoSubscription;
+    if (!wasDeferred) {
       if (!opts?.keepRestoreDeferAfterPiP) this.restoreDeferRemoteVideoAfterPiP = false;
       return;
     }
     this.deferRemoteVideoSubscription = false;
     if (!opts?.keepRestoreDeferAfterPiP) this.restoreDeferRemoteVideoAfterPiP = false;
     logger.info('[VideoCallSession] Remote video consumption enabled (left audio-only UI)');
+    if (this.config.getIsDirectCall?.()) {
+      this.notifyPeerDirectCallVideoUi(true);
+    }
 
     const room = this.room;
     if (room && room.state === 'connected') {
@@ -1586,9 +1663,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   /** Сообщить партнёру, что мы на экране видеозвонка или вернулись на аудио (direct call). */
-  notifyPeerDirectCallVideoUi(inVideoCallUi: boolean): void {
+  notifyPeerDirectCallVideoUi(inVideoCallUi: boolean, opts?: { force?: boolean }): void {
     if (!this.config.getIsDirectCall?.()) return;
-    if (this.lastEmittedPeerVideoCallUi === inVideoCallUi) return;
+    if (!opts?.force && this.lastEmittedPeerVideoCallUi === inVideoCallUi) return;
     const currentRoomId = this.getRoomId();
     if (this.ended || this.endCallInProgress || !currentRoomId) return;
     this.lastEmittedPeerVideoCallUi = inVideoCallUi;
@@ -1611,7 +1688,12 @@ export class VideoCallSession extends SimpleEventEmitter {
   async enterDirectCallAudioOnlyMode(): Promise<void> {
     if (!this.config.getIsDirectCall?.()) return;
     if (this.ended || this.endCallInProgress) return;
-    this.notifyPeerDirectCallVideoUi(false);
+    this.notifyPeerDirectCallVideoUi(false, { force: true });
+    try {
+      this.exitPiP?.();
+    } catch (e) {
+      logger.warn('[VideoCallSession] enterDirectCallAudioOnlyMode exitPiP failed', e);
+    }
     try {
       if (this.getIsCamOn()) {
         await this.toggleCam();
@@ -1655,6 +1737,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     if (this.lastSentPiPState === true && this.lastSentPiPRoomId === currentRoomId) {
       this.setInPiP(true);
+      if (this.config.getIsDirectCall?.()) {
+        this.notifyPeerDirectCallVideoUi(true, { force: true });
+      }
       return;
     }
     this.setInPiP(true);
@@ -1664,6 +1749,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.lastSentPiPState = true;
       this.lastSentPiPRoomId = currentRoomId;
       logger.info('[VideoCallSession] ✅ Отправлено pip:state=true партнеру', { roomId: currentRoomId });
+      if (this.config.getIsDirectCall?.()) {
+        this.notifyPeerDirectCallVideoUi(true);
+      }
     } catch (e) {
       logger.warn('[VideoCallSession] Ошибка отправки pip:state:', e);
     }
@@ -1671,6 +1759,7 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   exitPiP?(): void {
     const currentRoomId = this.getRoomId();
+    const wasInLocalPiP = this.inPiP;
     this.setInPiP(false);
     this.restoreAudioOnlyDeferAfterPiPIfNeeded();
     if (this.ended || this.endCallInProgress || this.cleaned || !currentRoomId) {
@@ -1681,7 +1770,11 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       return;
     }
-    if (this.lastSentPiPState === false && this.lastSentPiPRoomId === currentRoomId) {
+    if (
+      !wasInLocalPiP &&
+      this.lastSentPiPState === false &&
+      this.lastSentPiPRoomId === currentRoomId
+    ) {
       return;
     }
     try {
@@ -1696,6 +1789,15 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   getPartnerInPiP(): boolean {
     return this.partnerInPiP;
+  }
+
+  getPartnerPeerDirectCallVideoUi(): boolean {
+    return this.partnerPeerDirectCallVideoUi === true;
+  }
+
+  /** Партнёр явно сообщил, что на audio-only UI direct-call. */
+  isPartnerPeerOnDirectCallAudioUi(): boolean {
+    return this.partnerPeerDirectCallVideoUi === false;
   }
 
   destroy(): void {
@@ -1959,15 +2061,23 @@ export class VideoCallSession extends SimpleEventEmitter {
       from: string;
       roomId?: string;
     }) => {
-      const currentRoomId = this.getRoomId();
       const incoming = data.roomId;
-      if (!currentRoomId || !incoming || incoming !== currentRoomId) {
+      if (incoming && !this.matchesSignalingRoom(incoming)) {
+        logger.debug('[VideoCallSession] direct-call:video-ui ignored (room mismatch)', {
+          receivedRoomId: incoming,
+          currentRoomId: this.getRoomId(),
+          socketRoomId: this.roomId,
+          livekitRoomName: this.room?.name,
+        });
         return;
       }
+      if (this.ended || this.endCallInProgress) return;
       logger.info('[VideoCallSession] direct-call:video-ui received', {
         inVideoCallUi: data.inVideoCallUi,
         roomId: incoming,
       });
+      this.partnerPeerDirectCallVideoUi = !!data.inVideoCallUi;
+      this.emit('partnerDirectCallVideoUiChanged', { inVideoCallUi: !!data.inVideoCallUi });
       this.config.callbacks.onPeerDirectCallVideoUiChange?.(data.inVideoCallUi);
     };
 
@@ -2601,6 +2711,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // почти одновременно) не выполнял очистку и emit('callEnded') дважды.
     this.ended = true;
     this.lastEmittedPeerVideoCallUi = null;
+    this.partnerPeerDirectCallVideoUi = null;
     this.unregisterSocketHandlers('callEnded');
     // КРИТИЧНО: Сразу уведомляем UI (выставить refs), чтобы колбэки при disconnectRoom (onRemoteCamStateChange и т.д.) не вызывали setState — без ререндеров при закрытии экрана.
     try { this.config.onCallEnding?.(); } catch (_) {}
@@ -3226,6 +3337,28 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async recreateLocalVideoTrack(context: string): Promise<void> {
+    if (this.localVideoRecreatePromise) {
+      await this.localVideoRecreatePromise.catch(() => {});
+      const mt = this.localVideoTrack?.mediaStreamTrack;
+      if (mt && mt.readyState === 'live') {
+        logger.debug('[VideoCallSession] recreateLocalVideoTrack skipped — prior recreate left live track', {
+          context,
+        });
+        return;
+      }
+    }
+    const work = this.recreateLocalVideoTrackInner(context);
+    this.localVideoRecreatePromise = work;
+    try {
+      await work;
+    } finally {
+      if (this.localVideoRecreatePromise === work) {
+        this.localVideoRecreatePromise = null;
+      }
+    }
+  }
+
+  private async recreateLocalVideoTrackInner(context: string): Promise<void> {
     // IMPORTANT: Do not touch localAudioTrack here. Recreating audio during camera recovery
     // is a common root cause of one-way / unstable audio on Android.
     const camStateBeforeAwait = this.isCamOn;
@@ -5349,6 +5482,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           }, this.remoteMediaRecoveryInProgress || this.remoteMediaRelayRecoveryAttempted);
         }
         void this.recoverLocalTracksAfterReconnect(room, 'RoomEvent.Reconnected');
+        this.tryRestoreCameraAfterReconnect();
       })
       .on(RoomEvent.ParticipantConnected, (participant) => {
         // КРИТИЧНО: При подключении участника подписываемся на все его существующие треки

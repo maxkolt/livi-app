@@ -5,7 +5,9 @@
 #   ./scripts/capture-pip-debug-logs.sh           # снять с обоих устройств (pip-debug-SERIAL1.log, pip-debug-SERIAL2.log)
 #   ./scripts/capture-pip-debug-logs.sh SERIAL    # снять с одного устройства в pip-debug-YYYYMMDD-HHMMSS.log
 #
-# Проверка логов: после теста вызови "проверь логи" — ассистент запустит скрипт и прочитает файлы.
+# Для JS-трасс Home→system PiP в Metro: в DevTools выполнить
+#   global.__LIVI_SYS_PIP_HOME_TRACE__ = true
+# (по умолчанию выключено — нет [LIVI][SYSPIP][home] и sys_pip_home в [LIVI][REL]).
 
 set -e
 SERIAL="${1:-}"
