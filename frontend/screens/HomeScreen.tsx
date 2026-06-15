@@ -57,6 +57,7 @@ import {
   FRIEND_ROW_HIT_CHAT,
   FRIEND_ROW_HIT_VIDEO,
   FRIEND_ROW_HIT_AUDIO,
+  FRIEND_ACTION_PRESS_RETENTION,
 } from '../constants/uiTokens';
 import { useAppTheme, ThemePreference } from '../theme/ThemeProvider';
 import { uiAccent } from '../theme/uiAccent';
@@ -239,6 +240,7 @@ function FriendRowIconActionButton({
       disabled={disabled}
       accessibilityState={accessibilityState}
       hitSlop={hitSlop}
+      pressRetentionOffset={FRIEND_ACTION_PRESS_RETENTION}
       delayLongPress={delayLongPress}
       android_disableSound
       android_ripple={null}
@@ -1231,7 +1233,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const ensureIdentityRef = useRef<Promise<any> | null>(null);
   const attachIdentityRef = useRef<Promise<any> | null>(null);
   const lastChatOpenRef = useRef<{ peerId: string; at: number } | null>(null);
-  const CHAT_OPEN_DEBOUNCE_MS = 450;
+  const CHAT_OPEN_DEBOUNCE_MS = 220;
 
   /* ===== Сброс всего React state ===== */
   const resetAllState = useCallback(async () => {
@@ -1634,7 +1636,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const activeOutgoingAttemptRef = useRef(0);
   const lastOutgoingExternalCloseResetAtRef = useRef(0);
 
-  /** UI без исходящего, но ref попытки остался после async — иначе video onPress/handleStartVideoCall молча игнорируют тап. */
+  /** UI без исходящего, но ref попытки остался после async — иначе onPress молча игнорируют тап. */
   const clearStaleOutgoingAttemptIfIdle = useCallback(() => {
     if (activeOutgoingAttemptRef.current <= 0) return;
     if (callingVisibleRef.current) return;
@@ -1671,6 +1673,24 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       g.__onVideoCallEndedRef?.current?.();
     } catch {}
   }, []);
+
+  /** Перед тапом по чату/звонку: снять залипшие refs и не мешать Swipeable. */
+  const prepareFriendRowActionTap = useCallback(() => {
+    try {
+      openSwipeableRef.current?.close?.();
+    } catch {}
+    try {
+      const g = global as any;
+      if (g.__videoCallActiveRef?.current === true && !isDirectCallSessionLive(g)) {
+        forceResetCallBusyRefs();
+      }
+    } catch {}
+    clearStaleOutgoingAttemptIfIdle();
+    if (activeOutgoingAttemptRef.current > 0 && !callingVisibleRef.current) {
+      activeOutgoingAttemptRef.current = 0;
+      outgoingAttemptSeqRef.current += 1;
+    }
+  }, [clearStaleOutgoingAttemptIfIdle, forceResetCallBusyRefs]);
 
   // ВАЖНО: не закрываем исходящий UI на socket 'connect'.
   // Иначе при старте звонка из вкладки «Друзья» (HomeScreen смонтирован) нативный исходящий экран
@@ -1869,7 +1889,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     }
     if (activeOutgoingAttemptRef.current > 0) {
       clearStaleOutgoingAttemptIfIdle();
-      if (activeOutgoingAttemptRef.current > 0) return;
+      if (activeOutgoingAttemptRef.current > 0 && callingVisibleRef.current) {
+        return;
+      }
+      if (activeOutgoingAttemptRef.current > 0) {
+        activeOutgoingAttemptRef.current = 0;
+        outgoingAttemptSeqRef.current += 1;
+      }
     }
     if (callingVisibleRef.current) {
       try { setOutgoingCallScreenVisible(false); } catch {}
@@ -1908,6 +1934,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         try { closeOutgoingCallActivity(); } catch {}
         return;
       }
+
+      displayOutgoingCallImmediate(friend.id, friendName, media !== 'audio');
 
       // Подписки ДО await startCall: иначе call:declined может прийти раньше регистрации → calling остаётся true → кнопки звонка глобально disabled.
       const socketUnsubs: Array<() => void> = [];
@@ -2065,8 +2093,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
 
       setCalling((c) => ({ ...c, callId: r.callId || null }));
-
-      displayOutgoingCallImmediate(friend.id, friendName, media !== 'audio');
 
       if (r.callId) {
         notifyOutgoingCallId(r.callId);
@@ -4703,6 +4729,7 @@ const handleClearNick = useCallback(async () => {
     const count = unreadByUser[friendIdStr] || 0;
 
     const handlePress = React.useCallback(() => {
+      prepareFriendRowActionTap();
       const peerIdStr = friendIdStr;
       const now = Date.now();
       const last = lastChatOpenRef.current;
@@ -4763,7 +4790,7 @@ const handleClearNick = useCallback(async () => {
         peerAvatarThumbB64: friend.avatarThumbB64 || '',
         peerOnline: friend.online,
       });
-    }, [navigation, friend.id, friend.name, friend.avatarVer, friend.avatarThumbB64, friend.online, friendIdStr, calling.visible, markReadMenu, menuOpen, donateVisible, shareVisible, inviteRequestVisible, roomFull.visible]);
+    }, [navigation, friend.id, friend.name, friend.avatarVer, friend.avatarThumbB64, friend.online, friendIdStr, calling.visible, markReadMenu, menuOpen, donateVisible, shareVisible, inviteRequestVisible, roomFull.visible, prepareFriendRowActionTap]);
 
     return (
       <View style={styles.chatBtnOuter}>
@@ -4950,10 +4977,8 @@ const handleClearNick = useCallback(async () => {
                 : undefined
             }
             onPress={() => {
+              prepareFriendRowActionTap();
               if (hardVideoDisabled) return;
-              if (activeOutgoingAttemptRef.current > 0 && !callingVisibleRef.current) {
-                clearStaleOutgoingAttemptIfIdle();
-              }
               if (outgoingInProgress && activeOutgoingAttemptRef.current > 0) {
                 const shouldResetStaleOutgoing =
                   Platform.OS === 'android' &&
@@ -4961,7 +4986,7 @@ const handleClearNick = useCallback(async () => {
                   isCallKeepAvailable();
                 if (shouldResetStaleOutgoing) {
                   resetOutgoingAfterExternalClose('call-press-stale-outgoing');
-                } else {
+                } else if (callingVisibleRef.current) {
                   return;
                 }
               }

@@ -132,6 +132,39 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
 
   const pipFromAudioOnly = pipInAppBarEnteredFromAudioOnly();
 
+  const showAudioReturnFromVideoPiP = useMemo(() => {
+    if (pipFromAudioOnly) return false;
+    try {
+      const g = global as any;
+      const session = g.__webrtcSessionRef?.current;
+      const live = session && typeof session.isEnded === 'function' && !session.isEnded();
+      const params = g.__currentCallPiPParamsRef?.current;
+      const direct =
+        params?.navParams?.directCall === true ||
+        params?.navParams?.directCall === undefined;
+      return !!(live && direct && (params?.callId || session?.getCallId?.()));
+    } catch {
+      return false;
+    }
+  }, [pipFromAudioOnly, visible]);
+
+  const returnToAudioFromVideoPiP = useCallback(() => {
+    try {
+      const g = global as any;
+      const onVideoCallScreen = shouldSuppressInAppPiPOnRoute(currentRouteName);
+      hidePiP();
+      if (onVideoCallScreen) {
+        const fn = g.__returnToAudioCallRef?.current;
+        if (typeof fn === 'function') {
+          void fn({ skipNavigation: true, fromPiP: true });
+        }
+        return;
+      }
+      prepareDirectCallAudioReturnFromPiP();
+      returnToCall({ preferAudioOnlyUi: true });
+    } catch (_) {}
+  }, [returnToCall, currentRouteName, hidePiP]);
+
   const returnToCallFromPiP = useCallback(() => {
     try {
       const g = global as any;
@@ -164,10 +197,12 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const H = typeof dims?.height === 'number' && dims.height > 0 ? dims.height : 700;
 
   const pipBarW = useMemo(() => {
-    const actionSlots = 3 * PIP_ACTION_OUTER + 2 * PIP_ACTION_GAP;
+    const actionCount = showAudioReturnFromVideoPiP ? 4 : 3;
+    const actionSlots =
+      actionCount * PIP_ACTION_OUTER + Math.max(0, actionCount - 1) * PIP_ACTION_GAP;
     const minW = PIP_PREVIEW_SIZE + PIP_BAR_H_PAD * 2 + PIP_AVATAR_ACTION_GAP + actionSlots;
     return Math.min(W - 16, minW);
-  }, [W]);
+  }, [W, showAudioReturnFromVideoPiP]);
 
   const isSystemPiPLayout = pendingSystemPiP || inSystemPiPMode;
   const showingInAppPiPDuringBackTransition =
@@ -265,6 +300,15 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
             </View>
 
             <View style={[styles.pipActionsRow, { gap: PIP_ACTION_GAP }]} pointerEvents="box-none">
+              {showAudioReturnFromVideoPiP ? (
+                <PiPActionButton
+                  onPress={returnToAudioFromVideoPiP}
+                  accessibilityLabel="Вернуться в аудиозвонок"
+                  chrome={chrome}
+                >
+                  <MaterialIcons name="phone-in-talk" size={PIP_ICON_SIZE} color={chrome.icon} />
+                </PiPActionButton>
+              ) : null}
               <PiPActionButton
                 onPress={returnToCallFromPiP}
                 accessibilityLabel={pipFromAudioOnly ? 'Вернуться в аудиозвонок' : 'Вернуться в видеозвонок'}

@@ -19,8 +19,16 @@ export const CHAT_BACK_BUTTON_SURFACE = {
 } as const;
 
 /** У соседних кнопок: большой hitSlop снаружи, маленький к соседу — меньше перехвата тапов. */
-export const TOUCH_HIT_OUTER = 19;
-export const TOUCH_HIT_INNER = 4;
+export const TOUCH_HIT_OUTER = 26;
+export const TOUCH_HIT_INNER = 6;
+
+/** Лёгкое касание: не срывать onPress при микродвижении пальца. */
+export const FRIEND_ACTION_PRESS_RETENTION = {
+  top: 22,
+  bottom: 22,
+  left: 22,
+  right: 22,
+} as const;
 
 /** Список друзей: видео слева, чат справа (между ними ~14px). */
 export const FRIEND_ROW_HIT_VIDEO = {

@@ -80,7 +80,7 @@ import {
   shouldBlockAndroidLeaveHintDisarm,
   shouldAllowAndroidSystemPiPOnLeaveHint,
 } from './utils/activeCallNotification';
-import { resolvePreferAudioOnlyUiOnPiPReturn } from './src/pip/pipPlaceholderOnly';
+import { resolvePreferAudioOnlyUiOnActiveCallReturn, prepareDirectCallAudioReturnFromPiP } from './src/pip/pipPlaceholderOnly';
 
 // Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
 const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
@@ -581,10 +581,9 @@ function AppContent() {
       g.__endingFromPiPButtonRef?.current === true;
     if (endingCall) return;
 
-    const preferAudioOnlyUi =
-      typeof opts?.preferAudioOnlyFromNative === 'boolean'
-        ? opts.preferAudioOnlyFromNative
-        : resolvePreferAudioOnlyUiOnPiPReturn();
+    const preferAudioOnlyUi = resolvePreferAudioOnlyUiOnActiveCallReturn({
+      preferAudioOnlyFromNative: opts?.preferAudioOnlyFromNative,
+    });
 
     // Не копируем логику SystemPiPExpanded (leaveHint=false + disable 6s): иначе после возврата
     // на VideoCall повторный Home сворачивает приложение без system PiP.
@@ -849,37 +848,20 @@ function AppContent() {
     });
     const subReturnAudio = emitter.addListener('ReturnToAudioCallFromPiP', () => {
       try {
-        const g = global as any;
-        g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
-        g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
-        g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-        g.__expandToVideoCallUiFromPiPRef.current = false;
-
         try {
           NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
         } catch (_) {}
-
-        const onCall = g.__returnToAudioCallRef?.current;
-        if (typeof onCall === 'function') {
-          void onCall({ skipNavigation: true });
-        } else {
-          const session = g.__webrtcSessionRef?.current;
-          if (session?.getIsCamOn?.()) {
-            void session.toggleCam();
-          }
-          session?.deferRemoteVideoConsumption?.();
-        }
-
-        const navFn = g.__pipReturnToAudioCallRef?.current;
+        const navFn = (global as any).__pipReturnToAudioCallRef?.current;
         if (typeof navFn === 'function') {
           navFn();
           reenableAndroidSystemPiPLeaveHintAfterReturn();
           return;
         }
-
+        const g = global as any;
         const params = g.__currentCallPiPParamsRef?.current;
         const nav = g.__navRef;
         if (params?.callId && params?.roomId && nav?.isReady?.()) {
+          prepareDirectCallAudioReturnFromPiP();
           const returnToken = Number(g.__systemPiPReturnTokenRef?.current || Date.now());
           nav.dispatch(
             CommonActions.reset({
@@ -891,6 +873,7 @@ function AppContent() {
                   params: {
                     resume: true,
                     fromPiP: true,
+                    audioOnlyPiPReturn: true,
                     systemPiPReturnToken: returnToken,
                     callId: params.callId,
                     roomId: params.roomId,

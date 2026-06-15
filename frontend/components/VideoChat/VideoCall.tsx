@@ -39,7 +39,7 @@ import { uiAccent } from '../../theme/uiAccent';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { usePiP, isPipOverlayVisibleSync } from '../../src/pip/PiPContext';
-import { setPipAudioOnlyPlaceholderSticky, shouldUsePipPlaceholderOnly, isInAudioOnlyCallUi } from '../../src/pip/pipPlaceholderOnly';
+import { setPipAudioOnlyPlaceholderSticky, shouldUsePipPlaceholderOnly, isInAudioOnlyCallUi, pipInAppBarEnteredFromAudioOnly } from '../../src/pip/pipPlaceholderOnly';
 import socket, {
   fetchFriends,
   getCurrentUserId,
@@ -340,6 +340,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     return () => {
       if (g.__inAudioOnlyUiRef === inAudioOnlyUiRef) {
         const session = g.__webrtcSessionRef?.current;
+        const onVideoUi = stayOnVideoCallUiRef.current === true;
+        if (onVideoUi) {
+          setPipAudioOnlyPlaceholderSticky(false);
+        }
         const videoCallActive =
           session?.getIsCamOn?.() ||
           session?.getRemoteCamEnabled?.() ||
@@ -351,7 +355,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
       }
       if (g.__stayOnVideoCallUiRef === stayOnVideoCallUiRef) {
-        g.__stayOnVideoCallUiRef = { current: false };
+        const session = g.__webrtcSessionRef?.current;
+        const callLive =
+          session && typeof session.isEnded === 'function' ? !session.isEnded() : false;
+        const preserveVideoUi = callLive && stayOnVideoCallUiRef.current === true;
+        g.__stayOnVideoCallUiRef = { current: preserveVideoUi };
       }
     };
   }, []);
@@ -581,7 +589,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }
   }, []);
   const getDesiredLocalMediaStateForPiPReturn = useCallback((stream?: MediaStream | null) => {
-    if (isInAudioOnlyCallUi()) {
+    if (isInAudioOnlyCallUi() || pipInAppBarEnteredFromAudioOnly()) {
       const effectiveStream =
         stream ||
         sessionRef.current?.getLocalStream?.() ||
@@ -3530,13 +3538,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           logger.warn('[VideoCall] returnToAudioCallUi enterDirectCallAudioOnlyMode failed', e);
         }
       }
-
-      if (opts?.fromPiP && !opts?.skipNavigation) {
-        try {
-          const returnFn = (global as any).__pipReturnToAudioCallRef?.current;
-          if (typeof returnFn === 'function') returnFn();
-        } catch {}
-      }
     },
     [route?.params?.directCall, applyAudioOnlyUiState, navigation],
   );
@@ -3560,7 +3561,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       route?.params?.directCall &&
       (g.__preferAudioOnlyUiOnNextVideoCallRef?.current || route?.params?.audioOnlyPiPReturn === true)
     ) {
-      if (route?.params?.preferVideoCallUi === true) {
+      if (
+        route?.params?.preferVideoCallUi === true &&
+        route?.params?.audioOnlyPiPReturn !== true
+      ) {
         g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
         applyVideoCallUiFromPiPExpand(session);
       } else {
@@ -3892,11 +3896,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
 
         const audioOnlyPiPReturn =
-          route?.params?.audioOnlyPiPReturn === true ||
+          route?.params?.preferVideoCallUi !== true &&
+          (route?.params?.audioOnlyPiPReturn === true ||
           (global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current === true ||
           inAudioOnlyUiRef.current ||
           (global as any).__inAudioOnlyUiRef?.current === true ||
-          isInAudioOnlyCallUi();
+          pipInAppBarEnteredFromAudioOnly() ||
+          isInAudioOnlyCallUi());
 
         if (audioOnlyPiPReturn) {
           try {
@@ -3919,7 +3925,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           reenableAndroidSystemPiPLeaveHintAfterReturn();
           setTimeout(() => {
             focusEffectGuardRef.current = false;
-          }, 120);
+          }, 50);
           return;
         }
         

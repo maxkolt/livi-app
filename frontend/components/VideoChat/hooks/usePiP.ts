@@ -106,7 +106,7 @@ export const usePiP = ({
         return;
       }
     }
-    pipTransitionUntilRef.current = now + (fromVideoCallBack ? 250 : 800);
+    pipTransitionUntilRef.current = now + (fromVideoCallBack ? 200 : 450);
 
     // КРИТИЧНО: Проверяем по refs (актуальное состояние), чтобы при отложенном вызове после Back
     // не показывать PiP, если звонок успел завершиться. Пропы могут быть устаревшими в замыкании.
@@ -264,57 +264,14 @@ export const usePiP = ({
       enterPiPMode({ deferVisible: true, fromVideoCallBack: true });
       try {
         const g = global as any;
-        const showPiP = g.__pipShowPiPRef?.current;
-        const params = g.__currentCallPiPParamsRef?.current;
-        const sessionForPiP = session || g.__webrtcSessionRef?.current;
-        const resolvedCallId =
-          params?.callId ||
-          (typeof sessionForPiP?.getCallId === 'function' ? sessionForPiP.getCallId() : null) ||
-          callId ||
-          '';
-        const resolvedRoomId =
-          params?.roomId ||
-          (typeof sessionForPiP?.getRoomId === 'function' ? sessionForPiP.getRoomId() : null) ||
-          roomId ||
-          '';
-        if (typeof showPiP !== 'function' || !resolvedCallId || !resolvedRoomId) {
-          g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
-          g.__leavingVideoCallByBackRef.current = false;
-          return;
-        }
-        showPiP({
-          callId: resolvedCallId,
-          roomId: resolvedRoomId,
-          partnerName: params?.partnerName,
-          partnerAvatarUrl: params?.partnerAvatarUrl,
-          localStream:
-            params?.localStream ??
-            localStream ??
-            (typeof sessionForPiP?.getLocalStream === 'function' ? sessionForPiP.getLocalStream() : null),
-          remoteStream:
-            params?.remoteStream ??
-            remoteStream ??
-            (typeof sessionForPiP?.getRemoteStream === 'function' ? sessionForPiP.getRemoteStream() : null),
-          muteLocal: params?.muteLocal,
-          muteRemote: params?.muteRemote,
-          localCamOn: params?.localCamOn ?? camOn,
-          remoteCamOn: params?.remoteCamOn ?? remoteCamOn,
-          navParams: params?.navParams ?? routeParams,
-          fromAudioOnlyUi: isInAudioOnlyCallUi(),
-          audioOutputRoute: getAudioOutputRoute?.() ?? params?.audioOutputRoute,
-          deferVisible: true,
-        });
-      } catch {}
-      try {
-        const g = global as any;
         const clearLeaving = () => {
           g.__leavingVideoCallByBackRef = g.__leavingVideoCallByBackRef || { current: false };
           g.__leavingVideoCallByBackRef.current = false;
         };
         if (typeof requestAnimationFrame === 'function') {
-          requestAnimationFrame(() => requestAnimationFrame(clearLeaving));
+          requestAnimationFrame(clearLeaving);
         } else {
-          setTimeout(clearLeaving, 32);
+          setTimeout(clearLeaving, 16);
         }
       } catch {}
     };

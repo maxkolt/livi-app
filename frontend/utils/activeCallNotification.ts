@@ -1,6 +1,19 @@
 import { AppState, NativeModules, Platform } from 'react-native';
-import { shouldUsePipPlaceholderOnly } from '../src/pip/pipPlaceholderOnly';
+import { isInAudioOnlyCallUi, shouldUsePipPlaceholderOnly } from '../src/pip/pipPlaceholderOnly';
 import { logHomePiPTrace } from './systemPiPHomeTrace';
+
+/** Ongoing FGS: audio channel + return intent when пользователь на экране аудиозвонка. */
+function resolveActiveCallNotificationAudioOnly(): boolean {
+  try {
+    const g = global as any;
+    if (g.__stayOnVideoCallUiRef?.current === true) return false;
+    const params = g.__currentCallPiPParamsRef?.current;
+    if (params?.preferVideoCallUi === true) return false;
+    if (params?.inAudioOnlyUi === true) return true;
+  } catch (_) {}
+  if (isInAudioOnlyCallUi()) return true;
+  return resolveActiveCallPlaceholderOnly();
+}
 
 function resolveActiveCallPlaceholderOnly(): boolean {
   try {
@@ -103,7 +116,7 @@ export function startActiveCallNotification(
   if (Platform.OS !== 'android') return;
   try {
     const nick = typeof partnerNick === 'string' ? partnerNick.trim() : '';
-    const audioOnly = opts?.audioOnly ?? resolveActiveCallPlaceholderOnly();
+    const audioOnly = opts?.audioOnly ?? resolveActiveCallNotificationAudioOnly();
     NativeModules.LiviAppModule?.startActiveCallForegroundService?.(nick || null, audioOnly);
   } catch (_) {}
 }
@@ -152,7 +165,7 @@ export function refreshAndroidActiveCallNotification(): void {
     const nick =
       (typeof params?.partnerName === 'string' ? params.partnerName : '') ||
       '';
-    startActiveCallNotification(nick, { audioOnly: resolveActiveCallPlaceholderOnly() });
+    startActiveCallNotification(nick, { audioOnly: resolveActiveCallNotificationAudioOnly() });
     syncAndroidSystemPiPNativeFlags();
   } catch (_) {}
 }

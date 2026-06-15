@@ -31,7 +31,7 @@
     },
     "android": {
       "package": "com.kolt12max.livi",
-      "versionCode": 148,
+      "versionCode": 149,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"

@@ -2,6 +2,13 @@
 export function isInAudioOnlyCallUi(): boolean {
   try {
     const g = global as any;
+    if (g.__stayOnVideoCallUiRef?.current === true) {
+      return false;
+    }
+    const params = g.__currentCallPiPParamsRef?.current;
+    if (params?.preferVideoCallUi === true) {
+      return false;
+    }
     if (g.__inAudioOnlyUiRef?.current === true) {
       return true;
     }
@@ -56,6 +63,11 @@ export function prepareDirectCallAudioReturnFromPiP(): void {
     if (session && typeof session.enterDirectCallAudioOnlyMode === 'function' && !session.isEnded?.()) {
       void session.enterDirectCallAudioOnlyMode();
     }
+    const paramsRef = g.__currentCallPiPParamsRef?.current;
+    if (paramsRef && typeof paramsRef === 'object') {
+      paramsRef.inAudioOnlyUi = true;
+      paramsRef.preferVideoCallUi = false;
+    }
   } catch {}
 }
 
@@ -83,6 +95,26 @@ export function getPipPlaceholderOnlyDebug(opts?: {
     localCamOn: opts?.localCamOn === true,
     remoteCamOn: opts?.remoteCamOn === true,
   };
+  if (g.__stayOnVideoCallUiRef?.current === true) {
+    return { placeholderOnly: false, reason: 'stay_on_video_ui', flags };
+  }
+  const paramsPref = g.__currentCallPiPParamsRef?.current;
+  if (paramsPref?.preferVideoCallUi === true) {
+    return { placeholderOnly: false, reason: 'params_prefer_video_ui', flags };
+  }
+  if (flags.inAudioOnlyUiRef) {
+    return { placeholderOnly: true, reason: 'inAudioOnlyUiRef', flags };
+  }
+  if (flags.pipAudioOnlySticky) {
+    const sessionSticky = g.__webrtcSessionRef?.current;
+    const callLiveSticky =
+      sessionSticky && typeof sessionSticky.isEnded === 'function'
+        ? !sessionSticky.isEnded()
+        : !!sessionSticky;
+    if (callLiveSticky) {
+      return { placeholderOnly: true, reason: 'pipAudioOnlySticky', flags };
+    }
+  }
   if (opts?.localCamOn === true || opts?.remoteCamOn === true) {
     return { placeholderOnly: false, reason: 'cam_on', flags };
   }
@@ -101,17 +133,6 @@ export function getPipPlaceholderOnlyDebug(opts?: {
       return { placeholderOnly: false, reason: 'session_remote_cam', flags };
     }
   } catch (_) {}
-  if (flags.inAudioOnlyUiRef) {
-    return { placeholderOnly: true, reason: 'inAudioOnlyUiRef', flags };
-  }
-  if (flags.pipAudioOnlySticky) {
-    const session = g.__webrtcSessionRef?.current;
-    const callLive =
-      session && typeof session.isEnded === 'function' ? !session.isEnded() : !!session;
-    if (callLive) {
-      return { placeholderOnly: true, reason: 'pipAudioOnlySticky', flags };
-    }
-  }
   try {
     const session = g.__webrtcSessionRef?.current;
     if (session && typeof session.shouldUsePlaceholderPiP === 'function') {
@@ -180,6 +201,29 @@ export function shouldUsePipPlaceholderOnly(opts?: {
 }
 
 /**
+ * Куда развернуть звонок по тапу ongoing-уведомления / return from Home.
+ * Video UI (params + stayOnVideo) важнее устаревшего audio-sticky; нативный audioOnly — подсказка при равных.
+ */
+export function resolvePreferAudioOnlyUiOnActiveCallReturn(opts?: {
+  preferAudioOnlyFromNative?: boolean;
+}): boolean {
+  try {
+    const g = global as any;
+    const params = g.__currentCallPiPParamsRef?.current;
+    if (g.__stayOnVideoCallUiRef?.current === true) return false;
+    if (params?.preferVideoCallUi === true) return false;
+    if (params?.inAudioOnlyUi === true) return true;
+    const native = opts?.preferAudioOnlyFromNative;
+    if (native === false) return false;
+    if (native === true) return true;
+    if (isInAudioOnlyCallUi()) return true;
+    return resolvePreferAudioOnlyUiOnPiPReturn();
+  } catch {
+    return opts?.preferAudioOnlyFromNative === true;
+  }
+}
+
+/**
  * Куда развернуть звонок из PiP по центральному тапу: audio UI, если пользователь ушёл с аудио-экрана.
  * Логика согласована с invokeReturnToVideoCallFromNotification в App.tsx.
  */
@@ -194,6 +238,9 @@ export function resolvePreferAudioOnlyUiOnPiPReturn(opts?: {
       return true;
     }
     const g = global as any;
+    if (g.__stayOnVideoCallUiRef?.current === true) {
+      return false;
+    }
     const params = g.__currentCallPiPParamsRef?.current;
     if (params?.preferVideoCallUi === true) {
       return false;
