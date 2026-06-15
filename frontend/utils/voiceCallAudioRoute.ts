@@ -8,7 +8,7 @@ export async function applyNativeVoiceCallSpeaker(speakerOn: boolean): Promise<v
     const mod = NativeModules.LiviAppModule as { setVoiceCallSpeakerOn?: (on: boolean) => Promise<boolean> };
     if (typeof mod?.setVoiceCallSpeakerOn !== 'function') return;
     const ok = await mod.setVoiceCallSpeakerOn(speakerOn);
-    logger.debug('[voiceCallAudioRoute] native', { speakerOn, ok });
+    logger.info('[voiceCallAudioRoute] native', { speakerOn, ok });
   } catch (e) {
     logger.warn('[voiceCallAudioRoute] native failed', { speakerOn, error: String(e) });
   }

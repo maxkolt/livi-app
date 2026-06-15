@@ -57,6 +57,7 @@ import {
   syncAndroidSystemPiPLeaveHintForActiveVideoCall,
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
+import { iconNameForRoute, type InCallAudioRoute } from './hooks/audioRouteTypes';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
 import { useIncomingCall } from './hooks/useIncomingCall';
@@ -744,12 +745,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       ? (global as any).__systemPiPReturnStateRef?.current
       : null;
   const directCallRoute = !!route?.params?.directCall;
+  const audioFirstDirectCall =
+    directCallRoute &&
+    route?.params?.callMedia !== 'video' &&
+    route?.params?.preferVideoCallUi !== true;
+  const userRouteRef = useRef<InCallAudioRoute>('EARPIECE');
   const speakerOnRef = useRef(false);
-  const { syncRouteNow } = useAudioRouting(
+  const { syncRouteNow, cycleUserRoute, selectedRoute } = useAudioRouting(
     hasActiveCallForAudio && !isInactiveState,
     currentRemoteStream,
     inAudioOnlyUi,
-    directCallRoute ? { defaultToEarpiece: inAudioOnlyUi, speakerOnRef } : undefined,
+    audioFirstDirectCall && inAudioOnlyUi
+      ? { defaultToEarpiece: true, userRouteRef, speakerOnRef }
+      : undefined,
   );
   const syncRouteNowRef = useRef(syncRouteNow);
   syncRouteNowRef.current = syncRouteNow;
@@ -766,18 +774,30 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }, 280);
   }, [directCallRoute]);
   scheduleDirectCallAudioRepinRef.current = scheduleDirectCallAudioRepin;
-  const [speakerOn, setSpeakerOn] = useState(false);
-  speakerOnRef.current = speakerOn;
-  const toggleSpeaker = useCallback(() => {
-    setSpeakerOn((prev) => {
-      const next = !prev;
-      speakerOnRef.current = next;
-      setTimeout(() => {
-        try { syncRouteNowRef.current?.(); } catch {}
-      }, 0);
-      return next;
-    });
-  }, []);
+  const pinInitialAudioCallEarpieceRef = useRef(() => {});
+  pinInitialAudioCallEarpieceRef.current = () => {
+    if (!directCallRoute || route?.params?.callMedia === 'video') return;
+    const audioFirst = resolveDirectCallAudioFirst(route?.params ?? {}, callId ?? null);
+    if (!inAudioOnlyUiRef.current && !audioFirst) return;
+    void (async () => {
+      try {
+        const res = await InCallManager.getIsWiredHeadsetPluggedIn();
+        const plugged = !!((res as { isWiredHeadsetPluggedIn?: boolean })?.isWiredHeadsetPluggedIn ?? res);
+        if (plugged) return;
+      } catch {}
+      userRouteRef.current = 'EARPIECE';
+      speakerOnRef.current = false;
+      try {
+        syncRouteNowRef.current?.();
+      } catch {}
+    })();
+  };
+  const cycleAudioRoute = useCallback(() => {
+    try {
+      cycleUserRoute();
+    } catch {}
+  }, [cycleUserRoute]);
+  const audioRouteIcon = iconNameForRoute(selectedRoute);
 
   
   // Refs
@@ -2510,6 +2530,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         audioFirst,
       });
       setMicOn(micFromSession);
+      if (audioFirst) {
+        inAudioOnlyUiRef.current = true;
+        setInAudioOnlyUi(true);
+        try {
+          pinInitialAudioCallEarpieceRef.current();
+          setTimeout(() => pinInitialAudioCallEarpieceRef.current(), 450);
+          scheduleDirectCallAudioRepinRef.current?.();
+        } catch {}
+      }
       
       const currentLocalStream = sessionRef.current?.getLocalStream?.() || localStreamRef.current;
       if (currentLocalStream) {
@@ -3244,6 +3273,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
   const applyAudioOnlyUiState = useCallback((session: VideoCallSession | null) => {
     stayOnVideoCallUiRef.current = false;
+    userRouteRef.current = 'EARPIECE';
+    speakerOnRef.current = false;
     inAudioOnlyUiRef.current = true;
     try {
       (global as any).__inAudioOnlyUiRef.current = true;
@@ -3271,9 +3302,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     } catch {}
     try {
       syncRouteNowRef.current?.();
-    } catch {}
-    try {
       scheduleDirectCallAudioRepinRef.current?.();
+      pinInitialAudioCallEarpieceRef.current();
+      setTimeout(() => pinInitialAudioCallEarpieceRef.current(), 450);
     } catch {}
   }, [pip, syncPeerVideoInviteHint]);
 
@@ -4089,11 +4120,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           <View style={styles.audioCallControls}>
             <TouchableOpacity
               style={styles.audioRoundBtn}
-              onPress={toggleSpeaker}
+              onPress={cycleAudioRoute}
               activeOpacity={0.85}
             >
               <MaterialIcons
-                name={speakerOn ? 'volume-up' : 'hearing'}
+                name={audioRouteIcon}
                 size={28}
                 color="#FFFFFF"
               />
