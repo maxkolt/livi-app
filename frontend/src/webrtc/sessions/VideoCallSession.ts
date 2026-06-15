@@ -30,6 +30,7 @@ import { getInstallId } from '../../../utils/installId';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../../utils/callKeep';
 import { setAndroidSystemPiPLeaveHintEnabled } from '../../../utils/activeCallNotification';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
+import { isInAudioOnlyCallUi } from '../../pip/pipPlaceholderOnly';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
 
@@ -103,6 +104,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private remoteCamEnabled = false;
   /** Audio-first UI: не подписываемся на remote video до явного перехода пользователя на видео-экран. */
   private deferRemoteVideoSubscription = false;
+  /** Defer из экрана «Аудиозвонок» / startWithCamOff — не поднимать video consumption из recovery. */
+  private directCallAudioOnlyConsumerDefer = false;
   /** После входа в PiP с audio-only UI снова отложить remote video при exitPiP. */
   private restoreDeferRemoteVideoAfterPiP = false;
   private remoteCamSide: CamSide = 'front';
@@ -213,6 +216,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private lastLiveKitToken: string | null = null;
   private iceTransportLogTimers: Array<ReturnType<typeof setTimeout>> = [];
   private lastIceTransportLogSignature: string | null = null;
+  private directCallAudioOnlyModePromise: Promise<void> | null = null;
 
   constructor(config: WebRTCSessionConfig) {
     super();
@@ -220,6 +224,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (config.startWithCamOff) {
       this.isCamOn = false;
       this.deferRemoteVideoSubscription = true;
+      this.directCallAudioOnlyConsumerDefer = true;
     }
 
     logger.info('[VideoCallSession] 🆕 Constructor called', {
@@ -951,6 +956,17 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async applyLocalCameraEnabled(enabled: boolean): Promise<void> {
+    if (
+      enabled &&
+      this.config.getIsDirectCall?.() &&
+      (this.isLocalDirectCallAudioOnlyUi() ||
+        isInAudioOnlyCallUi() ||
+        this.directCallAudioOnlyConsumerDefer)
+    ) {
+      logger.debug('[VideoCallSession] Skip camera enable — direct-call audio-only UI');
+      return;
+    }
+
     this.isCamOn = enabled;
 
     logger.info('[VideoCallSession] toggleCam called', {
@@ -1506,16 +1522,57 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.deferRemoteVideoSubscription;
   }
 
+  getDeferRemoteVideoSubscription(): boolean {
+    return this.deferRemoteVideoSubscription;
+  }
+
+  getDirectCallAudioOnlyConsumerDefer(): boolean {
+    return this.directCallAudioOnlyConsumerDefer;
+  }
+
   /** Пользователь перешёл с audio-only UI на видеозвонок — подписаться на remote video и подтянуть треки. */
-  enableRemoteVideoConsumption(opts?: { keepRestoreDeferAfterPiP?: boolean }): void {
+  enableRemoteVideoConsumption(opts?: {
+    keepRestoreDeferAfterPiP?: boolean;
+    /** Явный выход с экрана аудиозвонка (кнопка «видео» / toggleCam). */
+    leaveAudioOnlyConsumer?: boolean;
+  }): void {
     if (this.isLocalDirectCallAudioOnlyUi()) {
       logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — local audio-only UI');
       return;
     }
+    if (this.directCallAudioOnlyConsumerDefer && !opts?.leaveAudioOnlyConsumer) {
+      logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — direct-call audio-only consumer defer');
+      return;
+    }
+    if (opts?.leaveAudioOnlyConsumer) {
+      if (isInAudioOnlyCallUi()) {
+        logger.debug(
+          '[VideoCallSession] Skip enableRemoteVideoConsumption — leaveAudioOnlyConsumer while audio UI active',
+        );
+        return;
+      }
+      this.directCallAudioOnlyConsumerDefer = false;
+    }
     const wasDeferred = this.deferRemoteVideoSubscription;
     if (!wasDeferred) {
       if (!opts?.keepRestoreDeferAfterPiP) this.restoreDeferRemoteVideoAfterPiP = false;
+      if (
+        this.config.getIsDirectCall?.() &&
+        !this.isLocalDirectCallAudioOnlyUi() &&
+        !this.directCallAudioOnlyConsumerDefer &&
+        !isInAudioOnlyCallUi()
+      ) {
+        this.resubscribeRemoteVideoIfNeeded('enable_consumption_idempotent');
+      }
       return;
+    }
+    if (isInAudioOnlyCallUi() || this.directCallAudioOnlyConsumerDefer) {
+      logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — audio-only consumer still active');
+      return;
+    }
+    if (this.liveKitRemoteVideoUnsubscribeTimer) {
+      clearTimeout(this.liveKitRemoteVideoUnsubscribeTimer);
+      this.liveKitRemoteVideoUnsubscribeTimer = null;
     }
     this.deferRemoteVideoSubscription = false;
     if (!opts?.keepRestoreDeferAfterPiP) this.restoreDeferRemoteVideoAfterPiP = false;
@@ -1544,6 +1601,10 @@ export class VideoCallSession extends SimpleEventEmitter {
   ensureRemoteVideoForPiP(): void {
     if (this.isLocalDirectCallAudioOnlyUi()) {
       logger.debug('[VideoCallSession] Skip ensureRemoteVideoForPiP — local audio-only UI');
+      return;
+    }
+    if (this.directCallAudioOnlyConsumerDefer || isInAudioOnlyCallUi()) {
+      logger.debug('[VideoCallSession] Skip ensureRemoteVideoForPiP — direct-call audio-only consumer');
       return;
     }
     if (this.deferRemoteVideoSubscription) {
@@ -1608,22 +1669,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   /** Вернуться на audio-only UI: отписаться от remote video, не трогая remoteCamEnabled (cam-toggle). */
-  deferRemoteVideoConsumption(): void {
-    if (this.deferRemoteVideoSubscription) return;
-    this.deferRemoteVideoSubscription = true;
-    logger.info('[VideoCallSession] Remote video consumption deferred (audio-only UI)');
-
-    const room = this.room;
-    if (room && room.state === 'connected') {
-      room.remoteParticipants.forEach((participant) => {
-        participant.videoTrackPublications.forEach((publication) => {
-          try {
-            if (publication.isSubscribed) publication.setSubscribed(false);
-          } catch {}
-        });
-      });
-    }
-
+  private detachRemoteVideoFromUiStream(): void {
     if (this.remoteVideoTrack) {
       const mediaTrack = this.remoteVideoTrack.mediaStreamTrack;
       if (mediaTrack && this.remoteStream) {
@@ -1639,6 +1685,77 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     this.remoteViewKey = Date.now();
     this.emit('remoteViewKeyChanged', this.remoteViewKey);
+  }
+
+  private liveKitRemoteVideoUnsubscribeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  deferRemoteVideoConsumption(opts?: { uiOnly?: boolean }): void {
+    if (this.deferRemoteVideoSubscription) {
+      if (opts?.uiOnly) {
+        this.detachRemoteVideoFromUiStream();
+      }
+      return;
+    }
+    this.deferRemoteVideoSubscription = true;
+
+    let hadSubscribedVideo = false;
+    const room = this.room;
+    if (room && room.state === 'connected') {
+      room.remoteParticipants.forEach((participant) => {
+        participant.videoTrackPublications.forEach((publication) => {
+          try {
+            if (publication.isSubscribed) hadSubscribedVideo = true;
+          } catch {}
+        });
+      });
+    }
+
+    const detachUi = () => {
+      if (this.remoteVideoTrack || this.remoteStreamHasLiveVideoTrack()) {
+        this.detachRemoteVideoFromUiStream();
+      }
+    };
+
+    if (opts?.uiOnly) {
+      detachUi();
+      if (this.config.getIsDirectCall?.()) {
+        this.directCallAudioOnlyConsumerDefer = true;
+        this.requestSyncDirectCallAudioOnlyUi();
+      }
+      logger.info('[VideoCallSession] Remote video consumption deferred (audio-only UI, keep LiveKit subscription)');
+      return;
+    }
+
+    if (!this.remoteVideoTrack && !hadSubscribedVideo) {
+      logger.info('[VideoCallSession] Remote video consumption deferred (audio-only UI, no subscribed video)');
+      return;
+    }
+
+    detachUi();
+
+    const runHeavyTeardown = () => {
+      if (!this.deferRemoteVideoSubscription) return;
+      const liveRoom = this.room;
+      if (liveRoom && liveRoom.state === 'connected') {
+        liveRoom.remoteParticipants.forEach((participant) => {
+          participant.videoTrackPublications.forEach((publication) => {
+            try {
+              if (publication.isSubscribed) publication.setSubscribed(false);
+            } catch {}
+          });
+        });
+      }
+      logger.info('[VideoCallSession] Remote video consumption deferred (audio-only UI)');
+    };
+
+    if (this.liveKitRemoteVideoUnsubscribeTimer) {
+      clearTimeout(this.liveKitRemoteVideoUnsubscribeTimer);
+      this.liveKitRemoteVideoUnsubscribeTimer = null;
+    }
+    this.liveKitRemoteVideoUnsubscribeTimer = setTimeout(() => {
+      this.liveKitRemoteVideoUnsubscribeTimer = null;
+      runHeavyTeardown();
+    }, 12000);
   }
 
   private deferRemoteVideoPublication(publication: RemoteTrackPublication, context: string): boolean {
@@ -1678,6 +1795,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private isLocalDirectCallAudioOnlyUi(): boolean {
     try {
       const g = global as any;
+      if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return true;
       if (g.__inAudioOnlyUiRef?.current === true) return true;
       if (g.__pipAudioOnlyPlaceholderRef?.current === true) {
         const live =
@@ -1690,6 +1808,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     } catch {
       return false;
     }
+  }
+
+  private requestSyncDirectCallAudioOnlyUi(): void {
+    try {
+      const fn = (global as any).__syncDirectCallAudioOnlyUiRef?.current;
+      if (typeof fn === 'function') {
+        fn(this);
+      }
+    } catch (_) {}
   }
 
   /** Сообщить партнёру, что мы на экране видеозвонка или вернулись на аудио (direct call). */
@@ -1720,8 +1847,36 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /** Direct call: экран аудио — выкл. камеру, cam-toggle партнёру, не подписываться на remote video. */
   async enterDirectCallAudioOnlyMode(): Promise<void> {
+    if (this.directCallAudioOnlyModePromise) {
+      return this.directCallAudioOnlyModePromise;
+    }
+    this.directCallAudioOnlyModePromise = this.runEnterDirectCallAudioOnlyMode().finally(() => {
+      this.directCallAudioOnlyModePromise = null;
+    });
+    return this.directCallAudioOnlyModePromise;
+  }
+
+  private async runEnterDirectCallAudioOnlyMode(): Promise<void> {
     if (!this.config.getIsDirectCall?.()) return;
     if (this.ended || this.endCallInProgress) return;
+
+    const camOnNow = this.getIsCamOn();
+    const hasRemoteVideoNow =
+      !!this.remoteVideoTrack || this.remoteStreamHasLiveVideoTrack();
+    if (
+      this.deferRemoteVideoSubscription &&
+      !camOnNow &&
+      !hasRemoteVideoNow &&
+      !this.inPiP
+    ) {
+      try {
+        const g = global as any;
+        if (g.__inAudioOnlyUiRef) g.__inAudioOnlyUiRef.current = true;
+      } catch (_) {}
+      this.notifyPeerDirectCallVideoUi(false);
+      return;
+    }
+
     this.restoreDeferRemoteVideoAfterPiP = false;
     this.lastEmittedPeerVideoCallUi = false;
     try {
@@ -1735,15 +1890,33 @@ export class VideoCallSession extends SimpleEventEmitter {
     } catch (e) {
       logger.warn('[VideoCallSession] enterDirectCallAudioOnlyMode exitPiP failed', e);
     }
+    const camOn = this.getIsCamOn();
+    const localVideoTrack = (this.localStream as any)?.getVideoTracks?.()?.[0];
+    const hasLiveLocalVideo =
+      !!localVideoTrack &&
+      localVideoTrack.readyState === 'live' &&
+      localVideoTrack.enabled !== false;
+    const needsCamOff = camOn && hasLiveLocalVideo;
+    const needsVideoTeardown =
+      !this.deferRemoteVideoSubscription ||
+      !!this.remoteVideoTrack ||
+      this.remoteStreamHasLiveVideoTrack();
     try {
-      if (this.getIsCamOn()) {
+      if (needsCamOff) {
         await this.toggleCam();
       }
     } catch (e) {
       logger.warn('[VideoCallSession] enterDirectCallAudioOnlyMode toggleCam failed', e);
     }
     try {
-      this.deferRemoteVideoConsumption();
+      if (needsVideoTeardown) {
+        this.deferRemoteVideoConsumption({ uiOnly: true });
+      } else {
+        this.deferRemoteVideoSubscription = true;
+        this.directCallAudioOnlyConsumerDefer = true;
+        this.requestSyncDirectCallAudioOnlyUi();
+        logger.debug('[VideoCallSession] enterDirectCallAudioOnlyMode — already audio-only consumer');
+      }
     } catch (e) {
       logger.warn('[VideoCallSession] enterDirectCallAudioOnlyMode deferRemoteVideo failed', e);
     }
@@ -1777,6 +1950,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.debug('[VideoCallSession] Skip enterPiP — local audio-only UI');
       return;
     }
+    try {
+      const g = global as any;
+      if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) {
+        logger.debug('[VideoCallSession] Skip enterPiP — audio-only return from PiP');
+        return;
+      }
+    } catch (_) {}
     if (!this.shouldUsePlaceholderPiP()) {
       this.ensureRemoteVideoForPiP();
     }
@@ -4181,6 +4361,24 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       return true;
     }
+
+    if (this.room && this.room.state === 'reconnecting' && targetRoomName) {
+      const activeName = this.currentRoomName || this.room.name || null;
+      if (activeName === targetRoomName) {
+        logger.info('[VideoCallSession] Room reconnecting to target room, waiting for Reconnected', {
+          roomName: targetRoomName,
+        });
+        let waitCount = 0;
+        while (this.room?.state === 'reconnecting' && waitCount < 150) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          waitCount++;
+        }
+        if (this.room?.state === 'connected') {
+          this.currentRoomName = this.currentRoomName || this.room.name || targetRoomName;
+          return true;
+        }
+      }
+    }
     
     // КРИТИЧНО: Если комната в состоянии "connecting", ждем завершения подключения
     // Не прерываем процесс подключения
@@ -4242,6 +4440,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: НЕ отключаем комнату если она в состоянии "connecting" - ждем завершения
     if (this.room && 
         this.room.state !== 'connecting' &&
+        this.room.state !== 'reconnecting' &&
         (this.room.state !== 'disconnected' || 
          !this.currentRoomName || 
          !targetRoomName || 
@@ -4957,6 +5156,40 @@ export class VideoCallSession extends SimpleEventEmitter {
                                errorMessage.includes('401') ||
                                errorMessage.includes('Unauthorized');
       const isClientDisconnect = errorMessage.includes('Client initiated disconnect') || errorMessage.includes('user initiated disconnect');
+
+      if (
+        !this.ended &&
+        !isClientDisconnect &&
+        this.room === room &&
+        (room.state === 'connected' || room.state === 'reconnecting')
+      ) {
+        if (room.state === 'connected') {
+          this.currentRoomName = this.currentRoomName || room.name || targetRoomName || null;
+          this.lastLiveKitUrl = url;
+          this.lastLiveKitToken = token;
+          logger.info(
+            '[VideoCallSession] Connect promise failed after SDK already connected; keeping room',
+            { roomState: room.state, targetRoomName, error: errorMessage },
+          );
+          return true;
+        }
+        let earlyWait = 0;
+        while (this.room === room && room.state === 'reconnecting' && earlyWait < 120) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          earlyWait++;
+        }
+        if (this.room === room && room.state === 'connected') {
+          this.currentRoomName = this.currentRoomName || room.name || targetRoomName || null;
+          this.lastLiveKitUrl = url;
+          this.lastLiveKitToken = token;
+          logger.info(
+            '[VideoCallSession] Room reconnected after connect promise error; keeping session',
+            { targetRoomName, error: errorMessage },
+          );
+          return true;
+        }
+      }
+
       if (this.ended || isClientDisconnect) {
         logger.info('[VideoCallSession] Connect aborted (call ended or user disconnect)', {
           ended: this.ended,
@@ -5007,9 +5240,51 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
       
       if (this.room === room) {
-        this.room = null;
-        this.currentRoomName = null;
-        setActiveVideoCall(false);
+        const sdkRecovered =
+          room.state === 'connected' || room.state === 'reconnecting';
+        if (sdkRecovered) {
+          if (room.state === 'connected') {
+            this.currentRoomName = this.currentRoomName || room.name || targetRoomName || null;
+            this.lastLiveKitUrl = url;
+            this.lastLiveKitToken = token;
+            logger.info(
+              '[VideoCallSession] Connect promise failed after SDK already connected; keeping room',
+              {
+                roomState: room.state,
+                targetRoomName,
+                error: errorMessage,
+              },
+            );
+            return true;
+          }
+          let waitCount = 0;
+          while (
+            this.room === room &&
+            room.state === 'reconnecting' &&
+            waitCount < 120
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            waitCount++;
+          }
+          if (this.room === room && room.state === 'connected') {
+            this.currentRoomName = this.currentRoomName || room.name || targetRoomName || null;
+            this.lastLiveKitUrl = url;
+            this.lastLiveKitToken = token;
+            logger.info(
+              '[VideoCallSession] Room reconnected after connect promise error; keeping session',
+              { targetRoomName, error: errorMessage },
+            );
+            return true;
+          }
+          logger.info(
+            '[VideoCallSession] Connect promise failed while room reconnecting; not tearing down',
+            { roomState: room.state, targetRoomName, error: errorMessage },
+          );
+        } else {
+          this.room = null;
+          this.currentRoomName = null;
+          setActiveVideoCall(false);
+        }
       }
       
       // КРИТИЧНО: Не считаем запрос "stale" если он для той же комнаты
@@ -5501,6 +5776,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       })
       .on(RoomEvent.Reconnected, () => {
         this.liveKitReconnecting = false;
+        // Старый room.connect() мог ещё висеть в очереди — не даём ему обнулить уже живую комнату.
+        this.connectRequestId++;
         void sendClientMetrics(API_BASE, { roomReconnected: true, reconnect: true }).catch(() => {});
         logger.info('[VideoCallSession] LiveKit room reconnected', {
           roomName: room.name,

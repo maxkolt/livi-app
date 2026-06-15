@@ -10,6 +10,11 @@ import { beginBackgroundMediaSuppression, pauseBackgroundMediaAfterCall } from '
 import { logger } from '../../../utils/logger';
 import { applyNativeVoiceCallSpeaker } from '../../../utils/voiceCallAudioRoute';
 import {
+  setPersistedCallAudioRoute,
+  scheduleReapplyPersistedCallAudioRoute,
+  shouldPreserveCallAudioRouteInInAppPiP,
+} from '../../../utils/callAudioRoutePersist';
+import {
   type InCallAudioRoute,
   isExternalHeadsetRoute,
   nextRouteInCycle,
@@ -112,6 +117,7 @@ export const useAudioRouting = (
     if (opts?.speakerOnRef) {
       opts.speakerOnRef.current = route === 'SPEAKER_PHONE';
     }
+    setPersistedCallAudioRoute(route);
   };
 
   const publishRouteState = (available: string[], selected: string) => {
@@ -482,6 +488,9 @@ export const useAudioRouting = (
       const pipVisible = !!(global as any).__pipVisibleRef?.current;
       const inSystemPiP = (global as any).__pipInSystemModeRef?.current === true;
       if (pipVisible || inSystemPiP) {
+        if (pipVisible && shouldPreserveCallAudioRouteInInAppPiP()) {
+          scheduleReapplyPersistedCallAudioRoute('stopSpeaker_skip_in_app_pip', { media: 'audio' });
+        }
         return;
       }
     } catch {}

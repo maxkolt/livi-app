@@ -80,7 +80,7 @@ import {
   shouldBlockAndroidLeaveHintDisarm,
   shouldAllowAndroidSystemPiPOnLeaveHint,
 } from './utils/activeCallNotification';
-import { shouldUsePipPlaceholderOnly } from './src/pip/pipPlaceholderOnly';
+import { resolvePreferAudioOnlyUiOnPiPReturn } from './src/pip/pipPlaceholderOnly';
 
 // Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
 const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
@@ -568,7 +568,8 @@ function AppContent() {
   const completeAndroidIncomingAnswerRef = React.useRef(completeAndroidIncomingAnswer);
   completeAndroidIncomingAnswerRef.current = completeAndroidIncomingAnswer;
 
-  const invokeReturnToVideoCallFromNotification = React.useCallback(() => {
+  const invokeReturnToVideoCallFromNotification = React.useCallback(
+    (opts?: { preferAudioOnlyFromNative?: boolean }) => {
     const g = global as any;
     const session = g.__webrtcSessionRef?.current;
     const sessionEnded =
@@ -580,33 +581,10 @@ function AppContent() {
       g.__endingFromPiPButtonRef?.current === true;
     if (endingCall) return;
 
-    try {
-      const params = g.__currentCallPiPParamsRef?.current;
-      const remoteStream =
-        params?.remoteStream ??
-        (typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null);
-      if (params?.preferVideoCallUi === true) {
-        g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
-        g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
-        g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-        g.__expandToVideoCallUiFromPiPRef.current = true;
-      } else {
-        const audioOnlyReturn = shouldUsePipPlaceholderOnly({
-          localCamOn: params?.localCamOn,
-          remoteCamOn: params?.remoteCamOn,
-          remoteStream,
-          localStream:
-            params?.localStream ??
-            (typeof session?.getLocalStream === 'function' ? session.getLocalStream() : null),
-        });
-        if (audioOnlyReturn || params?.inAudioOnlyUi === true) {
-          g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
-          g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
-          g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-          g.__expandToVideoCallUiFromPiPRef.current = false;
-        }
-      }
-    } catch (_) {}
+    const preferAudioOnlyUi =
+      typeof opts?.preferAudioOnlyFromNative === 'boolean'
+        ? opts.preferAudioOnlyFromNative
+        : resolvePreferAudioOnlyUiOnPiPReturn();
 
     // Не копируем логику SystemPiPExpanded (leaveHint=false + disable 6s): иначе после возврата
     // на VideoCall повторный Home сворачивает приложение без system PiP.
@@ -614,7 +592,9 @@ function AppContent() {
       NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
     } catch (_) {}
 
-    const fn = g.__pipReturnToCallRef?.current;
+    const fn = preferAudioOnlyUi
+      ? g.__pipReturnToAudioCallRef?.current
+      : g.__pipReturnToCallRef?.current;
     if (typeof fn === 'function') {
       fn();
       reenableAndroidSystemPiPLeaveHintAfterReturn();
@@ -638,7 +618,7 @@ function AppContent() {
                 callId: params.callId,
                 roomId: params.roomId,
                 directCall: true,
-                ...(params.preferVideoCallUi ? { preferVideoCallUi: true } : {}),
+                ...(preferAudioOnlyUi ? { audioOnlyPiPReturn: true } : { preferVideoCallUi: true }),
               },
             },
           ],
@@ -646,7 +626,9 @@ function AppContent() {
       );
       reenableAndroidSystemPiPLeaveHintAfterReturn();
     }
-  }, []);
+  },
+    [],
+  );
 
   React.useEffect(() => {
     return () => {
@@ -860,8 +842,10 @@ function AppContent() {
       }
       reenableAndroidSystemPiPLeaveHintAfterReturn();
     });
-    const subReturnActive = emitter.addListener('ReturnToActiveCallFromNotification', () => {
-      invokeReturnToVideoCallFromNotification();
+    const subReturnActive = emitter.addListener('ReturnToActiveCallFromNotification', (audioOnly?: boolean) => {
+      invokeReturnToVideoCallFromNotification({
+        preferAudioOnlyFromNative: audioOnly === true ? true : audioOnly === false ? false : undefined,
+      });
     });
     const subReturnAudio = emitter.addListener('ReturnToAudioCallFromPiP', () => {
       try {
@@ -1351,8 +1335,14 @@ function AppContent() {
     if (Platform.OS !== 'android') return;
     const LiviAppModule = NativeModules.LiviAppModule;
     const tryPending = () => {
-      LiviAppModule?.getAndClearPendingReturnToActiveCall?.()?.then?.((pending: boolean) => {
-        if (pending) invokeReturnToVideoCallFromNotification();
+      LiviAppModule?.getAndClearPendingReturnToActiveCall?.()?.then?.((result: boolean | { pending?: boolean; audioOnly?: boolean }) => {
+        const pending = result === true || result?.pending === true;
+        if (!pending) return;
+        const preferAudioOnlyFromNative =
+          typeof (result as { audioOnly?: boolean })?.audioOnly === 'boolean'
+            ? (result as { audioOnly: boolean }).audioOnly
+            : undefined;
+        invokeReturnToVideoCallFromNotification({ preferAudioOnlyFromNative });
       });
     };
     tryPending();

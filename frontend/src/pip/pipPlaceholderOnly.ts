@@ -28,6 +28,37 @@ export function setPipAudioOnlyPlaceholderSticky(active: boolean): void {
   } catch {}
 }
 
+/**
+ * In-app PiP → «Аудиозвонок» с Home: до navigate выставить audio UI и запустить WebRTC,
+ * чтобы первый кадр VideoCall уже был audio, а не видео + remount.
+ */
+export function prepareDirectCallAudioReturnFromPiP(): void {
+  try {
+    const g = global as any;
+    g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+    g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+    g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+    g.__expandToVideoCallUiFromPiPRef.current = false;
+    g.__inAudioOnlyUiRef = g.__inAudioOnlyUiRef || { current: false };
+    g.__inAudioOnlyUiRef.current = true;
+    setPipAudioOnlyPlaceholderSticky(true);
+    try {
+      g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
+      g.__stayOnVideoCallUiRef.current = false;
+    } catch {}
+    const session = g.__webrtcSessionRef?.current;
+    const callId =
+      session && typeof session.getCallId === 'function' ? session.getCallId() : null;
+    g.__directCallAudioOnlyMountKeyRef = g.__directCallAudioOnlyMountKeyRef || { current: null };
+    if (callId) g.__directCallAudioOnlyMountKeyRef.current = String(callId);
+    g.__directCallAudioOnlyPreparedAtRef = g.__directCallAudioOnlyPreparedAtRef || { current: 0 };
+    g.__directCallAudioOnlyPreparedAtRef.current = Date.now();
+    if (session && typeof session.enterDirectCallAudioOnlyMode === 'function' && !session.isEnded?.()) {
+      void session.enterDirectCallAudioOnlyMode();
+    }
+  } catch {}
+}
+
 export function mediaStreamHasLiveVideo(stream: unknown): boolean {
   try {
     const t = (stream as any)?.getVideoTracks?.()?.[0];
@@ -93,6 +124,49 @@ export function getPipPlaceholderOnlyDebug(opts?: {
     }
   } catch {}
   return { placeholderOnly: false, reason: 'default_false', flags };
+}
+
+/** С какого UI ушли в in-app PiP: аудио → иконка возврата «аудио», видео → «видео». */
+export function pipInAppBarEnteredFromAudioOnly(): boolean {
+  try {
+    const g = global as any;
+    const sticky = g.__pipInAppRtcFromAudioOnlyRef?.current;
+    if (sticky === true) return true;
+    if (sticky === false) return false;
+    return isInAudioOnlyCallUi();
+  } catch {
+    return false;
+  }
+}
+
+/** In-app PiP-плашка: без RTCView, только аватар (и для видео-, и для аудио-звонка). */
+export function shouldAllowRtcVideoInInAppPiPBar(_opts?: { fromAudioOnlyUi?: boolean }): boolean {
+  return false;
+}
+
+export function setPipInAppRtcFromAudioOnlySticky(fromAudioOnlyUi: boolean): void {
+  try {
+    const g = global as any;
+    g.__pipInAppRtcFromAudioOnlyRef = g.__pipInAppRtcFromAudioOnlyRef || { current: false };
+    g.__pipInAppRtcFromAudioOnlyRef.current = !!fromAudioOnlyUi;
+  } catch {}
+}
+
+/** Разрешить allowVideoRender / RTC в in-app PiP (с учётом audio-only и placeholder). */
+export function shouldAllowRtcVideoRenderInInAppPiP(opts?: {
+  fromAudioOnlyUi?: boolean;
+  localCamOn?: boolean;
+  remoteCamOn?: boolean;
+  remoteStream?: unknown;
+  localStream?: unknown;
+}): boolean {
+  if (!shouldAllowRtcVideoInInAppPiPBar({ fromAudioOnlyUi: opts?.fromAudioOnlyUi })) {
+    return false;
+  }
+  if (shouldUsePipPlaceholderOnly(opts)) {
+    return false;
+  }
+  return !!(opts?.remoteStream && mediaStreamHasLiveVideo(opts.remoteStream));
 }
 
 /** System / in-app PiP: не монтировать RTCView, показывать заглушку LiVi. */

@@ -160,6 +160,12 @@ export function applyCallEndedGlobalRefsOnce(
     g.__pipVisibleRef.current = false;
     g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
     g.__currentCallPiPParamsRef.current = null;
+    g.__acceptCallTimeRef = g.__acceptCallTimeRef || { current: 0 };
+    g.__acceptCallTimeRef.current = 0;
+    g.__callConnectedAtRef = g.__callConnectedAtRef || { current: null };
+    g.__callConnectedAtRef.current = null;
+    g.__directCallAudioOnlyMountKeyRef = g.__directCallAudioOnlyMountKeyRef || { current: null };
+    g.__directCallAudioOnlyMountKeyRef.current = null;
     g.__onVideoCallEndedRef?.current?.();
   } catch (_) {}
   return true;

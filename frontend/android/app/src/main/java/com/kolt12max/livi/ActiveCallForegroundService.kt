@@ -87,6 +87,7 @@ class ActiveCallForegroundService : Service() {
             Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 putExtra(MainActivity.EXTRA_RETURN_TO_ACTIVE_CALL, true)
+                putExtra(MainActivity.EXTRA_RETURN_TO_ACTIVE_CALL_AUDIO_ONLY, audioOnly)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

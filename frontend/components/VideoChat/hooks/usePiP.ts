@@ -2,6 +2,7 @@ import { useCallback, useRef, useEffect } from 'react';
 import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { usePiP as usePiPContext, isPipOverlayVisibleSync } from '../../../src/pip/PiPContext';
+import { isInAudioOnlyCallUi } from '../../../src/pip/pipPlaceholderOnly';
 import { logger } from '../../../utils/logger';
 import socket from '../../../sockets/socket';
 
@@ -25,6 +26,7 @@ interface UsePiPProps {
   session?: any; // VideoCallSession
   acceptCallTimeRef: React.MutableRefObject<number>;
   enableAndroidBackHandler?: boolean;
+  getAudioOutputRoute?: () => import('./audioRouteTypes').InCallAudioRoute;
 }
 
 /**
@@ -49,6 +51,7 @@ export const usePiP = ({
   session,
   acceptCallTimeRef,
   enableAndroidBackHandler = true,
+  getAudioOutputRoute,
 }: UsePiPProps) => {
   const navigation = useNavigation();
   const pip = usePiPContext();
@@ -174,6 +177,7 @@ export const usePiP = ({
       const finalCallId = actualCallId || callId || '';
       const finalRoomId = actualRoomId || roomId || '';
       
+      const audioRoute = getAudioOutputRoute?.();
       pip.showPiP({
         callId: finalCallId,
         roomId: finalRoomId,
@@ -185,6 +189,8 @@ export const usePiP = ({
         remoteStream: remoteStream || null,
         localCamOn: camOn,
         remoteCamOn,
+        fromAudioOnlyUi: isInAudioOnlyCallUi(),
+        audioOutputRoute: audioRoute,
         deferVisible: !!opts?.deferVisible,
         navParams: {
           ...routeParams,
@@ -232,7 +238,7 @@ export const usePiP = ({
         if (g.__pipVisibleRef?.current === true && !pip.visible) g.__pipVisibleRef.current = false;
       } catch {}
     }
-  }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, camOn, micOn, remoteMuted, remoteCamOn, localStream, remoteStream, routeParams, session]);
+  }, [roomId, callId, partnerId, isInactiveState, wasFriendCallEnded, pip.visible, friends, partnerUserId, camOn, micOn, remoteMuted, remoteCamOn, localStream, remoteStream, routeParams, session, getAudioOutputRoute]);
 
   // Android Back: goBack + in-app PiP поверх предыдущего экрана. Системный PiP — только «Домой».
   useEffect(() => {
@@ -294,6 +300,8 @@ export const usePiP = ({
           localCamOn: params?.localCamOn ?? camOn,
           remoteCamOn: params?.remoteCamOn ?? remoteCamOn,
           navParams: params?.navParams ?? routeParams,
+          fromAudioOnlyUi: isInAudioOnlyCallUi(),
+          audioOutputRoute: getAudioOutputRoute?.() ?? params?.audioOutputRoute,
           deferVisible: true,
         });
       } catch {}

@@ -1077,8 +1077,18 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun getAndClearPendingReturnToActiveCall(promise: Promise) {
     try {
-      val value = getAndClearPendingReturnToActiveCall(reactApplicationContext)
-      promise.resolve(value)
+      val ctx = reactApplicationContext
+      val prefs = ctx.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE)
+      val pending = prefs.getBoolean(KEY_PENDING_RETURN_TO_ACTIVE_CALL, false)
+      val audioOnly = prefs.getBoolean(KEY_PENDING_RETURN_AUDIO_ONLY, false)
+      prefs.edit()
+        .remove(KEY_PENDING_RETURN_TO_ACTIVE_CALL)
+        .remove(KEY_PENDING_RETURN_AUDIO_ONLY)
+        .apply()
+      val map = Arguments.createMap()
+      map.putBoolean("pending", pending)
+      map.putBoolean("audioOnly", audioOnly)
+      promise.resolve(map)
     } catch (e: Exception) {
       promise.resolve(false)
     }
@@ -1709,9 +1719,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
     /** Тап по ongoing-уведомлению «Видеозвонок от …» — вернуться на экран звонка. */
     @JvmStatic
-    fun emitReturnToActiveCallFromNotification() {
+    fun emitReturnToActiveCallFromNotification(audioOnly: Boolean = false) {
       reactContextRef?.runOnUiQueueThread {
-        reactContextRef?.emitDeviceEvent("ReturnToActiveCallFromNotification", null)
+        reactContextRef?.emitDeviceEvent("ReturnToActiveCallFromNotification", audioOnly)
       }
     }
 
@@ -1870,6 +1880,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private const val PREFS_OPEN_TAB = "LiviOpenTab"
     private const val KEY_PENDING_OPEN_TAB_FRIENDS = "pending_open_tab_friends"
     private const val KEY_PENDING_RETURN_TO_ACTIVE_CALL = "pending_return_to_active_call"
+    private const val KEY_PENDING_RETURN_AUDIO_ONLY = "pending_return_to_active_call_audio_only"
     private const val HEADLESS_TASK_CALL_KEEP = "RNCallKeepBackgroundMessage"
 
     private var reactContextRef: ReactApplicationContext? = null
@@ -1898,8 +1909,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
 
     @JvmStatic
-    fun setPendingReturnToActiveCall(context: Context) {
-      context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE).edit().putBoolean(KEY_PENDING_RETURN_TO_ACTIVE_CALL, true).apply()
+    fun setPendingReturnToActiveCall(context: Context, audioOnly: Boolean = false) {
+      context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE).edit()
+        .putBoolean(KEY_PENDING_RETURN_TO_ACTIVE_CALL, true)
+        .putBoolean(KEY_PENDING_RETURN_AUDIO_ONLY, audioOnly)
+        .apply()
     }
 
     /** Снять все уведомления «пропущенный вызов» из шторки. Вызывать из MainActivity при тапе по уведомлению (без ожидания JS). */
@@ -1944,7 +1958,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     fun getAndClearPendingReturnToActiveCall(context: Context): Boolean {
       val prefs = context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE)
       val value = prefs.getBoolean(KEY_PENDING_RETURN_TO_ACTIVE_CALL, false)
-      prefs.edit().remove(KEY_PENDING_RETURN_TO_ACTIVE_CALL).apply()
+      prefs.edit()
+        .remove(KEY_PENDING_RETURN_TO_ACTIVE_CALL)
+        .remove(KEY_PENDING_RETURN_AUDIO_ONLY)
+        .apply()
       return value
     }
 

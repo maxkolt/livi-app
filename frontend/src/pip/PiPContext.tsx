@@ -11,7 +11,19 @@ import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../utils/callKeep';
 import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification, syncAndroidSystemPiPNativeFlags, isAndroidActiveCallEligibleForLeaveHint } from '../../utils/activeCallNotification';
-import { shouldUsePipPlaceholderOnly } from './pipPlaceholderOnly';
+import {
+  shouldUsePipPlaceholderOnly,
+  prepareDirectCallAudioReturnFromPiP,
+  isInAudioOnlyCallUi,
+  setPipInAppRtcFromAudioOnlySticky,
+  shouldAllowRtcVideoRenderInInAppPiP,
+} from './pipPlaceholderOnly';
+import {
+  scheduleReapplyPersistedCallAudioRoute,
+  setPersistedCallAudioRoute,
+} from '../../utils/callAudioRoutePersist';
+import type { InCallAudioRoute } from '../../components/VideoChat/hooks/audioRouteTypes';
+import { normalizeInCallRoute } from '../../components/VideoChat/hooks/audioRouteTypes';
 import {
   beginHomePiPOutcomeWatch,
   installSystemPiPHomeTraceListener,
@@ -78,6 +90,8 @@ type PiPState = {
      * Used on Android BackHandler to avoid PiP flashing before navigation.
      */
     deferVisible?: boolean;
+    fromAudioOnlyUi?: boolean;
+    audioOutputRoute?: import('../../components/VideoChat/hooks/audioRouteTypes').InCallAudioRoute;
   }) => void;
 
   hidePiP: () => void;
@@ -112,6 +126,15 @@ type PiPState = {
 
 export const PiPContext = createContext<PiPState | null>(null);
 
+function pickNonEmptyPiPString(...values: (string | undefined | null)[]): string | undefined {
+  for (const v of values) {
+    if (typeof v === 'string' && v.trim() !== '') {
+      return v.trim();
+    }
+  }
+  return undefined;
+}
+
 export const usePiP = () => {
   const ctx = useContext(PiPContext);
   if (!ctx) throw new Error('usePiP must be used inside PiPProvider');
@@ -133,6 +156,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // хранит реальный ник партнёра (если есть); фоллбек-лейбл вычисляем в UI по текущему языку
   const [partnerName, setPartnerName] = useState<string>('');
   const [partnerAvatarUrl, setPartnerAvatarUrl] = useState<string | undefined>(undefined);
+  const partnerNameRef = useRef(partnerName);
+  const partnerAvatarUrlRef = useRef<string | undefined>(partnerAvatarUrl);
+
+  useEffect(() => {
+    partnerNameRef.current = partnerName;
+  }, [partnerName]);
+
+  useEffect(() => {
+    partnerAvatarUrlRef.current = partnerAvatarUrl;
+  }, [partnerAvatarUrl]);
 
   const [isMuted, setIsMuted] = useState(false);
   const [isRemoteMuted, setIsRemoteMuted] = useState(false);
@@ -144,6 +177,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
   const localStreamRef = useRef<MediaStreamLike | null>(null);
   const remoteStreamRef = useRef<MediaStreamLike | null>(null);
+  const localCamOnRef = useRef<boolean | undefined>(undefined);
+  const remoteCamOnRef = useRef<boolean>(true);
   const [localCamOn, setLocalCamOn] = useState<boolean | undefined>(undefined);
   const [remoteCamOn, setRemoteCamOn] = useState<boolean>(true);
   const [pipPos, setPipPos] = useState({ x: 12, y: 120 });
@@ -256,15 +291,38 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       allowVideoRenderTimeoutRef.current = null;
     }
     if (delayMs <= 0) {
-      if (typeof requestAnimationFrame !== 'undefined') {
-        requestAnimationFrame(() => setAllowVideoRender(true));
-      } else {
+      const enable = () => {
+        if (
+          !shouldAllowRtcVideoRenderInInAppPiP({
+            localCamOn: localCamOnRef.current,
+            remoteCamOn: remoteCamOnRef.current,
+            remoteStream: remoteStreamRef.current,
+            localStream: localStreamRef.current,
+          })
+        ) {
+          return;
+        }
         setAllowVideoRender(true);
+      };
+      if (typeof requestAnimationFrame !== 'undefined') {
+        requestAnimationFrame(enable);
+      } else {
+        enable();
       }
       return;
     }
     allowVideoRenderTimeoutRef.current = setTimeout(() => {
       allowVideoRenderTimeoutRef.current = null;
+      if (
+        !shouldAllowRtcVideoRenderInInAppPiP({
+          localCamOn: localCamOnRef.current,
+          remoteCamOn: remoteCamOnRef.current,
+          remoteStream: remoteStreamRef.current,
+          localStream: localStreamRef.current,
+        })
+      ) {
+        return;
+      }
       setAllowVideoRender(true);
     }, delayMs);
     return () => {
@@ -403,7 +461,21 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     muteRemote?: boolean;
     navParams?: any; // ← кто нас вызвал (для корректного возврата)
     deferVisible?: boolean;
+    fromAudioOnlyUi?: boolean;
+    audioOutputRoute?: InCallAudioRoute;
   }) => {
+    const fromAudioOnlyUi =
+      typeof p.fromAudioOnlyUi === 'boolean' ? p.fromAudioOnlyUi : isInAudioOnlyCallUi();
+    setPipInAppRtcFromAudioOnlySticky(fromAudioOnlyUi);
+
+    if (fromAudioOnlyUi) {
+      const routeNorm = normalizeInCallRoute(p.audioOutputRoute || '');
+      if (routeNorm) {
+        setPersistedCallAudioRoute(routeNorm);
+      }
+      scheduleReapplyPersistedCallAudioRoute('in_app_pip_from_audio', { media: 'audio' });
+    }
+
     // КРИТИЧНО: Ставим флаг PiP синхронно (до setState), чтобы teardown логика (например, stopSpeaker в хуках)
     // могла увидеть, что PiP уже включен, даже если React effect еще не успел пробежать.
     try {
@@ -426,6 +498,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     try {
       const session = sessionEarly;
       if (
+        fromAudioOnlyUi &&
         !placeholderOnlyEarly &&
         session &&
         typeof (session as any).ensureRemoteVideoForPiP === 'function'
@@ -454,13 +527,22 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         if (Livi?.setPiPEndCallParams) Livi.setPiPEndCallParams(p.callId, p.roomId);
       } catch (_) {}
     }
-    setPartnerName(p.partnerName || '');
-    // Убеждаемся, что partnerAvatarUrl сохраняется правильно
-    // Используем строгую проверку: сохраняем только если это непустая строка
-    if (p.partnerAvatarUrl && typeof p.partnerAvatarUrl === 'string' && p.partnerAvatarUrl.trim() !== '') {
-      setPartnerAvatarUrl(p.partnerAvatarUrl.trim());
-    } else {
-      setPartnerAvatarUrl(undefined);
+    const pipParamsRef = (global as any).__currentCallPiPParamsRef?.current;
+    const resolvedPartnerName = pickNonEmptyPiPString(
+      p.partnerName,
+      pipParamsRef?.partnerName,
+      partnerNameRef.current,
+    );
+    if (resolvedPartnerName) {
+      setPartnerName(resolvedPartnerName);
+    }
+    const resolvedPartnerAvatar = pickNonEmptyPiPString(
+      p.partnerAvatarUrl,
+      pipParamsRef?.partnerAvatarUrl,
+      partnerAvatarUrlRef.current,
+    );
+    if (resolvedPartnerAvatar) {
+      setPartnerAvatarUrl(resolvedPartnerAvatar);
     }
     if (p.localStream !== undefined) localStreamRef.current = p.localStream ?? null;
     if (p.remoteStream !== undefined || remoteStreamForPiP) {
@@ -477,24 +559,32 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           allowVideoRenderTimeoutRef.current = null;
         }
       } catch {}
-      const placeholderOnly = shouldUsePipPlaceholderOnly({
-        localCamOn: p.localCamOn,
-        remoteCamOn: p.remoteCamOn,
-        remoteStream: remoteStreamForPiP,
-      });
-      if (!placeholderOnly && remoteStreamForPiP) setAllowVideoRender(true);
-      else setAllowVideoRender(false);
+      if (
+        shouldAllowRtcVideoRenderInInAppPiP({
+          fromAudioOnlyUi,
+          localCamOn: p.localCamOn,
+          remoteCamOn: p.remoteCamOn,
+          remoteStream: remoteStreamForPiP,
+          localStream: p.localStream,
+        })
+      ) {
+        setAllowVideoRender(true);
+      } else {
+        setAllowVideoRender(false);
+      }
     }
     // localCamOn — источник истины для восстановления после PiP.
     // Если явно не передали, пытаемся вычислить из localStream (best-effort).
     if (typeof p.localCamOn === 'boolean') {
       setLocalCamOn(p.localCamOn);
+      localCamOnRef.current = p.localCamOn;
     } else {
       try {
         const t = (p.localStream as any)?.getVideoTracks?.()?.[0];
         const enabled = t?.enabled;
         if (typeof enabled === 'boolean') {
           setLocalCamOn(enabled);
+          localCamOnRef.current = enabled;
         }
       } catch {}
     }
@@ -503,12 +593,18 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     try {
       const session = (global as any).__webrtcSessionRef?.current;
       if (session && typeof (session as any).getRemoteCamEnabled === 'function') {
-        setRemoteCamOn((session as any).getRemoteCamEnabled());
+        const remoteCam = (session as any).getRemoteCamEnabled();
+        setRemoteCamOn(remoteCam);
+        remoteCamOnRef.current = remoteCam;
       } else if (typeof p.remoteCamOn === 'boolean') {
         setRemoteCamOn(p.remoteCamOn);
+        remoteCamOnRef.current = p.remoteCamOn;
       }
     } catch (_) {
-      if (typeof p.remoteCamOn === 'boolean') setRemoteCamOn(p.remoteCamOn);
+      if (typeof p.remoteCamOn === 'boolean') {
+        setRemoteCamOn(p.remoteCamOn);
+        remoteCamOnRef.current = p.remoteCamOn;
+      }
     }
     if (typeof p.muteLocal === 'boolean') setIsMuted(!!p.muteLocal);
     if (typeof p.muteRemote === 'boolean') setIsRemoteMuted(!!p.muteRemote);
@@ -526,7 +622,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
               allowVideoRenderTimeoutRef.current = null;
             }
           } catch {}
-          setAllowVideoRender(true);
+          if (
+            shouldAllowRtcVideoRenderInInAppPiP({
+              fromAudioOnlyUi,
+              localCamOn: localCamOnRef.current,
+              remoteCamOn: remoteCamOnRef.current,
+              remoteStream: remoteStreamRef.current,
+              localStream: localStreamRef.current,
+            })
+          ) {
+            setAllowVideoRender(true);
+          } else {
+            setAllowVideoRender(false);
+          }
         }
         setVisible(true);
       } else {
@@ -547,7 +655,19 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
                 allowVideoRenderTimeoutRef.current = null;
               }
             } catch {}
-            setAllowVideoRender(true);
+            if (
+              shouldAllowRtcVideoRenderInInAppPiP({
+                fromAudioOnlyUi,
+                localCamOn: localCamOnRef.current,
+                remoteCamOn: remoteCamOnRef.current,
+                remoteStream: remoteStreamRef.current,
+                localStream: localStreamRef.current,
+              })
+            ) {
+              setAllowVideoRender(true);
+            } else {
+              setAllowVideoRender(false);
+            }
           }
           setVisible(true);
         });
@@ -580,6 +700,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       if (Platform.OS === 'android') {
         NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
       }
+      setPipInAppRtcFromAudioOnlySticky(false);
     } catch {}
     setVisible(false);
     setPendingSystemPiP(false);
@@ -985,10 +1106,26 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     } catch (_) {}
     try {
       const gGuard = (global as any);
-      const endingCall =
+      const endingFromPiPButton = gGuard.__endingFromPiPButtonRef?.current === true;
+      let endingCall =
         gGuard.__endingCallInProgressRef?.current === true ||
         gGuard.__callEndedFromPiPNoOpenRef?.current === true ||
-        gGuard.__endingFromPiPButtonRef?.current === true;
+        endingFromPiPButton;
+      if (endingCall) {
+        const sessionCheck = gGuard.__webrtcSessionRef?.current;
+        const callLive =
+          sessionCheck &&
+          typeof sessionCheck.isEnded === 'function' &&
+          !sessionCheck.isEnded();
+        if (callLive && !endingFromPiPButton) {
+          logger.info('[PiPContext] returnToCall: active call — ignore stale teardown guards');
+          try {
+            gGuard.__endingCallInProgressRef.current = false;
+            gGuard.__callEndedFromPiPNoOpenRef.current = false;
+          } catch (_) {}
+          endingCall = false;
+        }
+      }
       if (endingCall) {
         logger.info('[PiPContext] returnToCall ignored: call teardown in progress');
         hidePiP();
@@ -1109,8 +1246,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
       g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
       if (preferAudioOnlyUi) {
-        g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
-        g.__expandToVideoCallUiFromPiPRef.current = false;
+        prepareDirectCallAudioReturnFromPiP();
       } else {
         g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
         g.__expandToVideoCallUiFromPiPRef.current = true;
@@ -1129,7 +1265,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         ...(navParams ?? {}),
         resume: true,
         fromPiP: true,
-        ...(preferAudioOnlyUi ? {} : { preferVideoCallUi: true }),
+        ...(preferAudioOnlyUi ? { audioOnlyPiPReturn: true } : { preferVideoCallUi: true }),
         systemPiPReturnToken: Number(g.__systemPiPReturnTokenRef?.current || Date.now()),
         directCall: true,
         directInitiator: undefined,
@@ -1173,12 +1309,35 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       navigatingRef.current = true;
       setSuppressOverlayForReturn(true);
       try {
-        nav.dispatch(
-          CommonActions.reset({
-            index: 1,
-            routes: [{ name: 'Home' as any }, { name: 'VideoCall' as any, params }],
-          })
-        );
+        const currentRouteName = nav?.getCurrentRoute?.()?.name as string | undefined;
+        const liveSession = (global as any).__webrtcSessionRef?.current;
+        const callStillLive =
+          liveSession &&
+          typeof liveSession.isEnded === 'function' &&
+          !liveSession.isEnded();
+        const useStackNavigate =
+          callStillLive &&
+          (currentRouteName === 'Home' || currentRouteName === 'VideoCall');
+
+        if (useStackNavigate) {
+          if (preferAudioOnlyUi) {
+            hidePiP();
+          }
+          nav.dispatch(
+            CommonActions.navigate({
+              name: 'VideoCall' as any,
+              params,
+              merge: true,
+            }),
+          );
+        } else {
+          nav.dispatch(
+            CommonActions.reset({
+              index: 1,
+              routes: [{ name: 'Home' as any }, { name: 'VideoCall' as any, params }],
+            }),
+          );
+        }
         hidePiP();
         finishReturnToCallAfterNav();
       } catch (e) {
@@ -1196,6 +1355,21 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         navigatingRef.current = false;
       }
     };
+
+    if (
+      preferAudioOnlyUi &&
+      currentRouteName === 'VideoCall' &&
+      typeof g.__returnToAudioCallRef?.current === 'function'
+    ) {
+      hidePiP();
+      try {
+        void g.__returnToAudioCallRef.current({ skipNavigation: true, fromPiP: true });
+      } catch (e) {
+        logger.warn('[PiPContext] returnToCall audio fast-path failed', e);
+      }
+      releaseReturnToCallInFlight();
+      return;
+    }
 
     if (nav && effectiveCallId && effectiveRoomId) {
       doNavigate(String(effectiveCallId), String(effectiveRoomId), effectiveNavParams);

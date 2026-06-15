@@ -552,9 +552,11 @@ class MainActivity : ReactActivity() {
 
   private fun handleReturnToActiveCallIntent(intent: Intent?) {
     if (intent?.getBooleanExtra(EXTRA_RETURN_TO_ACTIVE_CALL, false) != true) return
+    val audioOnly = intent.getBooleanExtra(EXTRA_RETURN_TO_ACTIVE_CALL_AUDIO_ONLY, false)
     intent.removeExtra(EXTRA_RETURN_TO_ACTIVE_CALL)
-    LiviAppModule.setPendingReturnToActiveCall(this)
-    LiviAppModule.emitReturnToActiveCallFromNotification()
+    intent.removeExtra(EXTRA_RETURN_TO_ACTIVE_CALL_AUDIO_ONLY)
+    LiviAppModule.setPendingReturnToActiveCall(this, audioOnly)
+    LiviAppModule.emitReturnToActiveCallFromNotification(audioOnly)
   }
 
   /** Кнопка «Аудио» в системном PiP — развернуть приложение и открыть экран аудиозвонка. */
@@ -574,6 +576,8 @@ class MainActivity : ReactActivity() {
     const val EXTRA_OPEN_TAB_FRIENDS = "open_tab_friends"
     /** Тап по ongoing-уведомлению активного видеозвонка — вернуться на экран звонка. */
     const val EXTRA_RETURN_TO_ACTIVE_CALL = "return_to_active_call"
+    /** С какого UI ушли в фон (аудио / видео) — для возврата по тапу на ongoing-уведомление. */
+    const val EXTRA_RETURN_TO_ACTIVE_CALL_AUDIO_ONLY = "return_to_active_call_audio_only"
 
     /** true когда приложение на переднем плане (в т.ч. во время видеозвонка) — тогда не показываем heads-up уведомление о звонке */
     @JvmField

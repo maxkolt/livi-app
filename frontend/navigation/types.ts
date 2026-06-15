@@ -19,6 +19,8 @@ export type RootStackParamList = {
         resume?: boolean;
         fromPiP?: boolean;
         preferVideoCallUi?: boolean;
+        /** In-app PiP → полноэкранный аудио UI (без тяжёлого video restore). */
+        audioOnlyPiPReturn?: boolean;
         systemPiPReturnToken?: number;
       }
     | undefined;
