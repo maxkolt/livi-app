@@ -15,7 +15,7 @@ import { View, Text, TextInput, Animated, TouchableOpacity, StyleSheet, Easing, 
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, warmCallSignaling, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, reportIncomingCallShown, emitPresenceUpdateIfChanged, beginEarlyIncomingCallAccept } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, warmCallSignaling, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, reportIncomingCallShown, emitPresenceUpdateIfChanged, beginEarlyIncomingCallAccept, getIncomingCallScreenState } from "./sockets/socket";
 import { emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce } from './utils/globalEvents';
 import { buildCallEndSocketPayload } from './utils/callEndPayload';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -438,6 +438,7 @@ function AppContent() {
     }
     if (!active) {
       g.__incomingAnswerTransitionRef.current = null;
+      if (g.__incomingAnswerPeerUserIdRef) g.__incomingAnswerPeerUserIdRef.current = null;
       return;
     }
     const normalizedCallId = String(callId || '').trim();
@@ -567,6 +568,10 @@ function AppContent() {
   const completeAndroidIncomingAnswer = React.useCallback(async (from: string, callId: string) => {
     logger.info('[App] Completing incoming answer', { callId, from });
     clearEndingCallInProgress();
+    incomingCallIdRef.current = callId;
+    const gAns = global as any;
+    gAns.__incomingAnswerPeerUserIdRef = gAns.__incomingAnswerPeerUserIdRef || { current: null as string | null };
+    gAns.__incomingAnswerPeerUserIdRef.current = String(from || '').trim() || null;
     rememberExpectedCallAccepted(callId, 'incoming-answer');
     beginEarlyIncomingCallAccept(callId);
     if (Platform.OS === 'android' && callId) {
@@ -995,7 +1000,10 @@ function AppContent() {
           try { stopIncomingCallForegroundService(); } catch {}
           const info = getPendingCallInfo(callId);
           if (!info || !navRef.isReady()) return;
-          incomingCallIdRef.current = null;
+          incomingCallIdRef.current = callId;
+          const gCk = global as any;
+          gCk.__incomingAnswerPeerUserIdRef = gCk.__incomingAnswerPeerUserIdRef || { current: null as string | null };
+          gCk.__incomingAnswerPeerUserIdRef.current = String(info.from || '').trim() || null;
           try { setIncomingCallScreenVisible(false); } catch {}
           stopIncomingCallAlert();
           setIncoming(null);
@@ -2907,14 +2915,41 @@ function AppContent() {
         return;
       }
 
-      const fromUserId = (data as any)?.fromUserId ?? (data as any)?.from;
-      const myUserId = getCurrentUserId();
-      const isCaller = myUserId && fromUserId && myUserId !== fromUserId;
+      const isCaller = hasMatchingOutgoing;
+      const myUserId = String(getCurrentUserId() || '').trim();
+      let peerUserId = String((data as any)?.fromUserId ?? '').trim() || undefined;
+      if (isCaller) {
+        if (!peerUserId || (myUserId && peerUserId === myUserId)) {
+          const outgoingPeer = String((global as any).__outgoingCallPeerUserIdRef?.current || '').trim();
+          if (outgoingPeer) peerUserId = outgoingPeer;
+        }
+      } else if (myUserId && peerUserId === myUserId) {
+        const incomingPeer =
+          String((global as any).__incomingAnswerPeerUserIdRef?.current || '').trim() ||
+          String(getIncomingCallScreenState().fromUserId || '').trim() ||
+          String(incoming?.from || '').trim() ||
+          undefined;
+        if (incomingPeer) peerUserId = incomingPeer;
+      }
+      const gAccept = global as any;
+      const incomingTransition = gAccept.__incomingAnswerTransitionRef?.current as
+        | { callId?: string; expiresAt?: number }
+        | null
+        | undefined;
+      const incomingAnswerInFlight =
+        !!callId &&
+        !!incomingTransition &&
+        String(incomingTransition.callId || '') === callId &&
+        Date.now() < Number(incomingTransition.expiresAt || 0);
+      const calleeOwnsNavigation =
+        !isCaller &&
+        (hasIncomingContext || hasExpectedAcceptedContext || incomingAnswerInFlight);
       const hasAcceptedContext =
         alreadyOnVideoCall ||
         hasMatchingOutgoing ||
         hasIncomingContext ||
-        hasExpectedAcceptedContext;
+        hasExpectedAcceptedContext ||
+        incomingAnswerInFlight;
       if (!hasAcceptedContext) {
         logger.info('[App] ⏭️ call:accepted ignored (no active call context)', {
           callId,
@@ -2951,7 +2986,7 @@ function AppContent() {
       }
       // Повторный call:accepted (reconnect сокета / дубль broadcast), пока инициатор уже в LiveKit —
       // не перезаписываем pending ref и не дёргаем UI (в логах второй дубль часто приходит в `connecting`, не только в `connected`).
-      if (alreadyOnVideoCall && isCaller && callId) {
+      if (alreadyOnVideoCall && callId) {
         try {
           const sess = (global as any).__webrtcSessionRef?.current;
           const sid =
@@ -2985,67 +3020,90 @@ function AppContent() {
       try {
         const currentRoute = navRef.getCurrentRoute();
         if (navRef.isReady() && currentRoute?.name !== 'VideoCall') {
-          // Caller: we initiated, the other accepted → directInitiator: true, peerUserId = callee (who accepted).
-          // Callee: we accepted → we're already on VideoCall (navigated on Accept tap); skip or rare edge case.
-          const params = isCaller
-            ? {
-                directCall: true,
-                directInitiator: true,
-                callId: (data as any)?.callId,
-                peerUserId: fromUserId,
-                roomId: (data as any)?.livekitRoomName ?? (data as any)?.roomId,
-                ...videoCallNavExtras(
-                  (data as any)?.callId,
-                  (global as any).__outgoingCallMediaRef?.current === 'video' ? 'video' : undefined,
-                ),
-              }
-            : {
-                directCall: true,
-                directInitiator: false,
-                callId: (data as any)?.callId,
-                isIncoming: true,
-                peerUserId: fromUserId ?? undefined,
-                ...videoCallNavExtras((data as any)?.callId),
+          const closeAcceptedCallUi = () => {
+            try { setOutgoingCallScreenVisible(false); } catch {}
+            try { emitCloseOutgoingCall({ reason: 'accepted' }); } catch {}
+            if (isCaller) {
+              const bringCallerMain = () => {
+                logger.info('[App] 📱 bringMainActivityToFront (socket-only path, caller)');
+                try { bringMainActivityToFront(); } catch {}
               };
-          logger.info('[App] 🚀 Navigating to VideoCall screen', {
-            callId: data?.callId,
-            peerUserId: fromUserId,
-            isCaller,
-          });
-          const doNavigate = () => {
-            try {
-              if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
-                setActiveVideoCall(true);
-                // Закрываем модалки «Поддержать LiVi» и «Пригласи друга», чтобы экран видеозвонка был поверх
-                try { emitCloseHomeModals(); } catch {}
-                // Push VideoCall поверх текущего экрана (не reset), чтобы после завершения звонка goBack() вернул на тот же экран (Chat, Friends и т.д.).
-                navRef.navigate('VideoCall' as any, params);
-              }
-            } catch (err) {
-              logger.error('[App] ❌ Error navigating to VideoCall', { error: err, callId: data?.callId });
+              InteractionManager.runAfterInteractions(() => {
+                if (typeof requestAnimationFrame === 'function') {
+                  requestAnimationFrame(bringCallerMain);
+                } else {
+                  setTimeout(bringCallerMain, 0);
+                }
+              });
+            } else {
+              try { closeOutgoingCallActivity(); } catch {}
             }
           };
-          // Сначала навигация на VideoCall, потом лёгкое закрытие исходящего (без cancelCall/сброса refs), затем MainActivity — без кадра «Друзья».
-          doNavigate();
-          try { setOutgoingCallScreenVisible(false); } catch {}
-          try { emitCloseOutgoingCall({ reason: 'accepted' }); } catch {}
-          if (isCaller) {
-            const bringCallerMain = () => {
-              logger.info('[App] 📱 bringMainActivityToFront (socket-only path, caller)');
-              try { bringMainActivityToFront(); } catch {}
-            };
-            InteractionManager.runAfterInteractions(() => {
-              if (typeof requestAnimationFrame === 'function') {
-                requestAnimationFrame(bringCallerMain);
-              } else {
-                setTimeout(bringCallerMain, 0);
-              }
+
+          if (calleeOwnsNavigation) {
+            logger.info('[App] ⏭️ call:accepted callee navigation skipped (answer flow owns VideoCall)', {
+              callId: data?.callId,
+              incomingAnswerInFlight,
+              hasIncomingContext,
+              hasExpectedAcceptedContext,
+              myUserId: myUserId || undefined,
             });
+            closeAcceptedCallUi();
+          } else if (peerUserId) {
+            const params = isCaller
+              ? {
+                  directCall: true,
+                  directInitiator: true,
+                  callId: (data as any)?.callId,
+                  peerUserId,
+                  roomId: (data as any)?.livekitRoomName ?? (data as any)?.roomId,
+                  ...videoCallNavExtras(
+                    (data as any)?.callId,
+                    (global as any).__outgoingCallMediaRef?.current === 'video' ? 'video' : undefined,
+                  ),
+                }
+              : {
+                  directCall: true,
+                  directInitiator: false,
+                  callId: (data as any)?.callId,
+                  isIncoming: true,
+                  peerUserId,
+                  ...videoCallNavExtras((data as any)?.callId),
+                };
+            logger.info('[App] 🚀 Navigating to VideoCall screen', {
+              callId: data?.callId,
+              peerUserId,
+              isCaller,
+              myUserId: myUserId || undefined,
+            });
+            const doNavigate = () => {
+              try {
+                if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
+                  setActiveVideoCall(true);
+                  try { emitCloseHomeModals(); } catch {}
+                  navRef.navigate('VideoCall' as any, params);
+                }
+              } catch (err) {
+                logger.error('[App] ❌ Error navigating to VideoCall', { error: err, callId: data?.callId });
+              }
+            };
+            doNavigate();
+            closeAcceptedCallUi();
           } else {
-            try { closeOutgoingCallActivity(); } catch {}
+            logger.warn('[App] call:accepted missing fromUserId — skip VideoCall navigation', {
+              callId: data?.callId,
+              isCaller,
+            });
+            closeAcceptedCallUi();
           }
         } else {
-          logger.info('[App] ⏭️ Already on VideoCall screen, skipping navigation', { callId: data?.callId });
+          logger.info('[App] ⏭️ Already on VideoCall screen, skipping navigation', {
+            callId: data?.callId,
+            isCaller,
+            incomingAnswerInFlight,
+            calleeOwnsNavigation,
+            myUserId: myUserId || undefined,
+          });
         }
       } catch (e) {
         logger.error('[App] ❌ Error navigating to VideoCall', { error: e, callId: data?.callId });

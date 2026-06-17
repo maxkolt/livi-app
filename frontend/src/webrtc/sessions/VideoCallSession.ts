@@ -974,12 +974,30 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     try {
       const g = global as any;
+      if (g.__leavingVideoCallByHomeRef?.current === true) {
+        logger.info('[VideoCallSession] Skip camera pause — Home/system PiP transition in progress');
+        return;
+      }
       const inAppPiPVisible = g.__pipVisibleRef?.current === true;
       const inSystemPiP = g.__pipInSystemModeRef?.current === true;
-      if ((inAppPiPVisible || inSystemPiP) && !this.isLocalDirectCallAudioOnlyUi()) {
+      const systemPiPEntryInProgress =
+        Date.now() < Number(g.__systemPiPEntryInProgressUntilRef?.current || 0);
+      const pendingSystemPiP = g.__pendingSystemPiPSyncRef?.current === true;
+      const suspendedInAppForSystem = g.__pipSuspendedForSystemPiPRef?.current === true;
+      if (
+        (inAppPiPVisible ||
+          inSystemPiP ||
+          systemPiPEntryInProgress ||
+          pendingSystemPiP ||
+          suspendedInAppForSystem) &&
+        !this.isLocalDirectCallAudioOnlyUi()
+      ) {
         logger.info('[VideoCallSession] Skip camera pause — PiP keeps capture warm for fast return', {
           inAppPiPVisible,
           inSystemPiP,
+          systemPiPEntryInProgress,
+          pendingSystemPiP,
+          suspendedInAppForSystem,
         });
         return;
       }
@@ -3826,20 +3844,17 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     const oldVideoTrack = this.localVideoTrack;
 
-    if (
-      useFastRecovery &&
-      oldVideoTrack &&
-      this.room?.state === 'connected' &&
-      this.room.localParticipant
-    ) {
+    if (useFastRecovery && this.room?.state === 'connected' && this.room.localParticipant) {
       const publication = this.getLocalVideoPublication();
       if (publication?.replaceTrack) {
         try {
           const newVideo = await this.createFreshLocalVideoTrack(context);
           await (publication as any).replaceTrack(newVideo, true);
-          try {
-            oldVideoTrack.stop();
-          } catch {}
+          if (oldVideoTrack) {
+            try {
+              oldVideoTrack.stop();
+            } catch {}
+          }
           this.localVideoTrack = newVideo;
           const stream = new MediaStream();
           try {

@@ -1707,7 +1707,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Ref текущего исходящего callId — fallback для App: при подключении сокета запросить call:accepted, если FCM не сработал (инициатор на нативном экране)
   useEffect(() => {
     (global as any).__outgoingCallIdRef = (global as any).__outgoingCallIdRef ?? { current: null };
+    (global as any).__outgoingCallPeerUserIdRef = (global as any).__outgoingCallPeerUserIdRef ?? { current: null };
     (global as any).__outgoingCallIdRef.current = calling.visible && calling.callId ? calling.callId : null;
+    (global as any).__outgoingCallPeerUserIdRef.current =
+      calling.visible && calling.friend?.id ? String(calling.friend.id) : null;
     if (Platform.OS === 'android' && calling.visible && calling.callId) {
       const media = (global as any).__outgoingCallMediaRef?.current;
       if (media === 'video') {
@@ -1722,7 +1725,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }
     }
     return () => {
-      if ((global as any).__outgoingCallIdRef?.current === calling.callId) (global as any).__outgoingCallIdRef.current = null;
+      if ((global as any).__outgoingCallIdRef?.current === calling.callId) {
+        (global as any).__outgoingCallIdRef.current = null;
+      }
+      if (
+        calling.friend?.id &&
+        (global as any).__outgoingCallPeerUserIdRef?.current === String(calling.friend.id)
+      ) {
+        (global as any).__outgoingCallPeerUserIdRef.current = null;
+      }
     };
   }, [calling.visible, calling.callId, calling.friend]);
 
