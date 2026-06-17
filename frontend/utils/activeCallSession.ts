@@ -1,4 +1,19 @@
+import { NativeModules, Platform } from 'react-native';
 import { normalizeInCallRoute } from '../components/VideoChat/hooks/audioRouteTypes';
+
+/** Сброс JS + native «завершение звонка» (блокирует system PiP в onUserLeaveHint). */
+export function clearEndingCallInProgress(): void {
+  try {
+    const g = global as any;
+    g.__endingCallInProgressRef = g.__endingCallInProgressRef || { current: false };
+    g.__endingCallInProgressRef.current = false;
+  } catch {}
+  if (Platform.OS === 'android') {
+    try {
+      NativeModules.LiviAppModule?.setEndingCallInProgress?.(false);
+    } catch {}
+  }
+}
 
 /** Активный direct / VideoCall (не teardown, сессия не ended). */
 export function isOngoingCallSession(): boolean {
@@ -23,6 +38,14 @@ export function resolveActiveCallInCallMedia(): 'audio' | 'video' {
     const params = g.__currentCallPiPParamsRef?.current;
     if (params?.inAudioOnlyUi === true) return 'audio';
     if (params?.preferVideoCallUi === false) return 'audio';
+    const session = g.__webrtcSessionRef?.current;
+    if (session && typeof session.isCameraSuspendedForAppBackground === 'function') {
+      if (session.isCameraSuspendedForAppBackground()) return 'audio';
+    }
+    if (g.__pipInSystemModeRef?.current === true) {
+      const localCamOn = params?.localCamOn;
+      if (localCamOn === false) return 'audio';
+    }
   } catch {}
   return 'video';
 }

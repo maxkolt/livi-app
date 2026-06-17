@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Keyboard, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { onCallIncoming, onCallCanceled, acceptCall, declineCall, warmCallSignaling } from '../../../sockets/socket';
+import { onCallIncoming, onCallCanceled, acceptCall, declineCall, warmCallSignaling, beginEarlyIncomingCallAccept } from '../../../sockets/socket';
 import socket, { emitPresenceUpdateIfChanged } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
 import { startIncomingCallAlert, stopIncomingCallAlert } from '../../../utils/incomingCallAlert';
@@ -259,6 +259,9 @@ export const useIncomingCall = ({
       logger.warn('[useIncomingCall] Cannot accept call - missing callId or fromUserId');
       return;
     }
+
+    warmCallSignaling();
+    beginEarlyIncomingCallAccept(finalCallId);
 
     // Принимаем вызов через session (используем ref для получения актуального session)
     // КРИТИЧНО: Вызываем ТОЛЬКО session.acceptCall(), который сам отправляет call:accept

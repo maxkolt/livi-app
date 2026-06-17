@@ -13,6 +13,7 @@ import {
   ensureSocketConnected,
   warmCallSignaling,
   getUnreadCount,
+  beginEarlyIncomingCallAccept,
 } from '../sockets/socket';
 import { getInstallId } from './installId';
 import { logger } from './logger';
@@ -1010,6 +1011,7 @@ export async function openAnswerCallScreen(
     stopIncomingCallAlert();
   } catch {}
   warmCallSignaling();
+  beginEarlyIncomingCallAccept(callId);
   if (Platform.OS === 'android') {
     sendCallAnsweredBroadcast(callId);
   }

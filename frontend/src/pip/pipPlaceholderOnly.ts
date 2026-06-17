@@ -289,7 +289,8 @@ export function refreshSystemPiPLeaveContextSnapshot(): void {
     const inAppPiP = g.__pipVisibleRef?.current === true;
     g.__systemPiPLeaveContextSnapshotRef = {
       preferAudioOnly,
-      restoreInAppPiP: inAppPiP && !preferAudioOnly,
+      // Любой in-app PiP (в т.ч. с аудио-экрана) — при развороте system PiP возвращаем на Home + overlay, не на полный VideoCall.
+      restoreInAppPiP: inAppPiP,
       routeName: (g.__navRef?.getCurrentRoute?.()?.name as string | undefined) ?? null,
       capturedAt: Date.now(),
     };

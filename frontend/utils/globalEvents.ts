@@ -89,16 +89,22 @@ export function emitRequestCloseIncoming() {
   }
 }
 
+export type CloseOutgoingCallPayload = {
+  /** accepted — звонок принят, только снять исходящий UI без cancelCall и сброса refs звонка */
+  reason?: 'external' | 'accepted';
+};
+
 /** Закрыть модалку исходящего вызова (когда абонент отклонил/отменил/таймаут вне приложения). */
-export function onCloseOutgoingCall(cb: () => void): () => void {
-  const h = () => cb();
+export function onCloseOutgoingCall(cb: (payload?: CloseOutgoingCallPayload) => void): () => void {
+  const h = (payload?: CloseOutgoingCallPayload) => cb(payload);
   closeOutgoingCallListeners.add(h as any);
   return () => { closeOutgoingCallListeners.delete(h as any); };
 }
 
-export function emitCloseOutgoingCall() {
+export function emitCloseOutgoingCall(opts?: CloseOutgoingCallPayload) {
+  const payload: CloseOutgoingCallPayload = { reason: opts?.reason ?? 'external' };
   for (const l of closeOutgoingCallListeners) {
-    try { (l as any)({}); } catch {}
+    try { (l as any)(payload); } catch {}
   }
 }
 

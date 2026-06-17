@@ -129,7 +129,9 @@ import socket, {
   onIncomingCallScreenChange,
   getIncomingCallScreenState,
   emitPresenceUpdateIfChanged,
+  setActiveVideoCall,
 } from '../sockets/socket';
+import { primeAndroidCallContextForLeaveHint } from '../utils/activeCallNotification';
 import {
   isUpdateAvailable,
   isUpdateReminderCooldownActive,
@@ -159,6 +161,7 @@ type Props = { navigation: any };
 type Friend = {
   id: string;
   name?: string;
+  nick?: string;
   avatar?: string; // маркер наличия аватара
   avatarVer?: number; // версия аватара для кеширования
   avatarThumbB64?: string; // data URI миниатюры для списков
@@ -1705,10 +1708,39 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   useEffect(() => {
     (global as any).__outgoingCallIdRef = (global as any).__outgoingCallIdRef ?? { current: null };
     (global as any).__outgoingCallIdRef.current = calling.visible && calling.callId ? calling.callId : null;
+    if (Platform.OS === 'android' && calling.visible && calling.callId) {
+      const media = (global as any).__outgoingCallMediaRef?.current;
+      if (media === 'video') {
+        const nick = trimNick(calling.friend?.nick || calling.friend?.name || '');
+        try {
+          primeAndroidCallContextForLeaveHint({
+            callId: calling.callId,
+            partnerNick: nick || null,
+          });
+          setActiveVideoCall(true, nick || null);
+        } catch (_) {}
+      }
+    }
     return () => {
       if ((global as any).__outgoingCallIdRef?.current === calling.callId) (global as any).__outgoingCallIdRef.current = null;
     };
-  }, [calling.visible, calling.callId]);
+  }, [calling.visible, calling.callId, calling.friend]);
+
+  /** call:accepted — только снять исходящий UI; не cancelCall, не forceResetCallBusyRefs (App уже на VideoCall). */
+  const resetOutgoingAfterCallAccepted = useCallback((source = 'accepted') => {
+    activeOutgoingAttemptRef.current = 0;
+    pendingCancelRef.current = false;
+    try { setOutgoingCallScreenVisible(false); } catch {}
+    callingVisibleRef.current = false;
+    setCalling((prev) =>
+      prev.visible || prev.friend || prev.callId
+        ? { visible: false, friend: null, callId: null }
+        : prev,
+    );
+    setSwipeActionsHiddenForCall(null);
+    stopWaves();
+    logger.info('[HomeScreen] reset outgoing after call accepted (light)', { source });
+  }, [stopWaves]);
 
   // Закрытие модалки исходящего по событию извне (абонент отклонил на нативном экране/отменил/таймаут — событие приходит в App, эмитится emitCloseOutgoingCall)
   const resetOutgoingAfterExternalClose = useCallback((source = 'external') => {
@@ -1807,12 +1839,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [clearFriendsCallBusy, forceResetCallBusyRefs, stopWaves]);
 
   useEffect(() => {
-    const unsub = onCloseOutgoingCall(() => {
+    const unsub = onCloseOutgoingCall((payload) => {
+      if (payload?.reason === 'accepted') {
+        resetOutgoingAfterCallAccepted('onCloseOutgoingCall-accepted');
+        return;
+      }
       // Даже если callingVisibleRef уже false, активная async-попытка могла ещё ждать startCall.
       resetOutgoingAfterExternalClose('onCloseOutgoingCall');
     });
     return unsub;
-  }, [resetOutgoingAfterExternalClose]);
+  }, [resetOutgoingAfterCallAccepted, resetOutgoingAfterExternalClose]);
 
   // Закрытие модалок «Поддержать LiVi» и «Пригласи друга» при переходе на видеозвонок (чтобы экран VideoCall был поверх)
   useEffect(() => {

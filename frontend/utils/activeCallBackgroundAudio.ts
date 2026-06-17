@@ -6,13 +6,15 @@ import {
 } from './callAudioRoutePersist';
 import { armAndroidLeaveHintForVideoCallHome, syncAndroidLeaveHintForOngoingCall } from './activeCallNotification';
 
-const BACKGROUND_REAPPLY_DELAYS_MS = [0, 300, 900, 1500, 2500, 4000, 6000, 9000];
-const BACKGROUND_INTERVAL_MS = 10_000;
+const BACKGROUND_REAPPLY_DELAYS_MS = [0, 400, 1200, 3000];
+const FOREGROUND_REAPPLY_DELAYS_MS = [0, 350];
+const BACKGROUND_INTERVAL_MS = 12_000;
 const NATIVE_VOICE_MAINTAIN_MIN_MS = 12_000;
 
 let installed = false;
 let bgInterval: ReturnType<typeof setInterval> | null = null;
 let lastNativeVoiceMaintainAt = 0;
+let lastAppState: AppStateStatus = AppState.currentState;
 
 function clearBackgroundInterval(): void {
   if (bgInterval) {
@@ -50,10 +52,12 @@ export function maintainCallAudioForActiveCall(reason = 'maintain_active_call'):
     media,
     delaysMs: BACKGROUND_REAPPLY_DELAYS_MS,
   });
-  restoreSessionMicrophoneIfNeeded();
 }
 
 function onAppStateChange(next: AppStateStatus): void {
+  const prev = lastAppState;
+  lastAppState = next;
+
   if (!isOngoingCallSession()) {
     clearBackgroundInterval();
     return;
@@ -61,7 +65,9 @@ function onAppStateChange(next: AppStateStatus): void {
 
   if (next === 'background') {
     armAndroidLeaveHintForVideoCallHome();
-    maintainCallAudioForActiveCall('app_state_background');
+    if (prev !== 'background') {
+      maintainCallAudioForActiveCall('app_state_background');
+    }
     if (Platform.OS !== 'android') return;
     clearBackgroundInterval();
     const media = resolveActiveCallInCallMedia();
@@ -73,7 +79,6 @@ function onAppStateChange(next: AppStateStatus): void {
       captureCallAudioRouteFromUi();
       void reapplyPersistedCallAudioRoute('app_state_background_interval', { media });
       nativeMaintainCallVoiceAudio(false);
-      restoreSessionMicrophoneIfNeeded();
     }, BACKGROUND_INTERVAL_MS);
     return;
   }
@@ -83,14 +88,26 @@ function onAppStateChange(next: AppStateStatus): void {
     lastNativeVoiceMaintainAt = 0;
     syncAndroidLeaveHintForOngoingCall();
     captureCallAudioRouteFromUi();
-    scheduleReapplyPersistedCallAudioRoute('app_state_foreground', {
-      media: resolveActiveCallInCallMedia(),
-      delaysMs: [0, 300, 900, 1500],
-    });
-    restoreSessionMicrophoneIfNeeded();
+    if (prev !== 'active') {
+      scheduleReapplyPersistedCallAudioRoute('app_state_foreground', {
+        media: resolveActiveCallInCallMedia(),
+        delaysMs: FOREGROUND_REAPPLY_DELAYS_MS,
+      });
+      restoreSessionMicrophoneIfNeeded();
+    }
     try {
-      const session = (global as any).__webrtcSessionRef?.current;
-      if (session && typeof session.restoreCameraAfterAppBackground === 'function') {
+      const g = global as any;
+      const returningFromPiP = Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
+      const session = g.__webrtcSessionRef?.current;
+      if (returningFromPiP && session && typeof session.restoreLocalCameraAfterPiPReturn === 'function') {
+        void session.restoreLocalCameraAfterPiPReturn();
+        return;
+      }
+      if (
+        session &&
+        typeof session.restoreCameraAfterAppBackground === 'function' &&
+        !returningFromPiP
+      ) {
         void session.restoreCameraAfterAppBackground();
       }
     } catch {}
@@ -100,5 +117,6 @@ function onAppStateChange(next: AppStateStatus): void {
 export function installActiveCallBackgroundAudioHandlers(): void {
   if (installed) return;
   installed = true;
+  lastAppState = AppState.currentState;
   AppState.addEventListener('change', onAppStateChange);
 }

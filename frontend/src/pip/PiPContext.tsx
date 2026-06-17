@@ -6,6 +6,7 @@ import InCallManager from 'react-native-incall-manager';
 import { CommonActions } from '@react-navigation/native';
 import socket, { onConnected, emitPresenceUpdateIfChanged } from '../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
+import { clearEndingCallInProgress } from '../../utils/activeCallSession';
 import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
@@ -18,6 +19,7 @@ import {
   setPipInAppRtcFromAudioOnlySticky,
   shouldAllowRtcVideoRenderInInAppPiP,
   peekSystemPiPLeaveContextForReturn,
+  refreshSystemPiPLeaveContextSnapshot,
 } from './pipPlaceholderOnly';
 import {
   scheduleReapplyPersistedCallAudioRoute,
@@ -34,6 +36,37 @@ import {
 } from '../../utils/systemPiPHomeTrace';
 
 type MediaStreamLike = any; // из @livekit/react-native-webrtc
+
+function shouldSkipSuppressOverlayWhenLeavingSystemPiP(): boolean {
+  try {
+    const g = global as any;
+    if (g.__restoringInAppPiPFromSystemRef?.current === true) return true;
+    if (g.__pipSuspendedForSystemPiPRef?.current === true) return true;
+    if (g.__pipReturnToCallInFlightRef?.current === true) return true;
+    return peekSystemPiPLeaveContextForReturn().restoreInAppPiP;
+  } catch {
+    return false;
+  }
+}
+
+/** Скрыть in-app оверлей на время system PiP без hidePiP — visible остаётся true для мгновенного возврата плашки. */
+function suspendInAppOverlayForSystemPiPEnter(): void {
+  try {
+    const g = global as any;
+    if (g.__pipVisibleRef?.current !== true) return;
+    g.__pipSuspendedForSystemPiPRef = g.__pipSuspendedForSystemPiPRef || { current: false };
+    g.__pipSuspendedForSystemPiPRef.current = true;
+    NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
+  } catch (_) {}
+}
+
+function clearInAppPiPSystemSuspendFlags(): void {
+  try {
+    const g = global as any;
+    if (g.__pipSuspendedForSystemPiPRef) g.__pipSuspendedForSystemPiPRef.current = false;
+    if (g.__restoringInAppPiPFromSystemRef) g.__restoringInAppPiPFromSystemRef.current = false;
+  } catch (_) {}
+}
 
 /**
  * In-app PiP: `visible` из React context обновляется после ре-рендера, а `showPiP`/`hidePiP`
@@ -399,8 +432,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           setDecorSizeForPiP(null);
           setSystemPiPCaptureActive(false);
           setSystemPiPCaptureRequestId(0);
-          // Выход из системного PiP: сразу подавляем оверлей, чтобы он не мелькнул маленьким окном поверх экрана видеозвонка.
-          setSuppressOverlayForReturn(true);
+          // Выход из системного PiP: подавляем оверлей только при возврате на полный VideoCall.
+          // При restoreInAppPiP плашка должна остаться видимой без мигания.
+          if (shouldSkipSuppressOverlayWhenLeavingSystemPiP()) {
+            setSuppressOverlayForReturn(false);
+          } else {
+            setSuppressOverlayForReturn(true);
+          }
         }
         try {
           g.__pipInSystemModeRef = g.__pipInSystemModeRef || { current: false };
@@ -413,10 +451,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           try {
             g.__pipVisibleRef = g.__pipVisibleRef || { current: false };
             if (g.__pipVisibleRef.current === true) {
-              g.__pipHidePiPRef?.current?.();
-              g.__pipVisibleRef.current = false;
-              NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
-              logHomePiPTrace('js_hide_in_app_for_system', { traceId: g.__activeHomePiPTraceIdRef?.current });
+              suspendInAppOverlayForSystemPiPEnter();
+              logHomePiPTrace('js_soft_hide_in_app_for_system', { traceId: g.__activeHomePiPTraceIdRef?.current });
             }
           } catch (_) {}
           try {
@@ -508,6 +544,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       if (Platform.OS === 'android') {
         NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(true);
       }
+      refreshSystemPiPLeaveContextSnapshot();
     } catch {}
 
     let remoteStreamForPiP = p.remoteStream;
@@ -709,6 +746,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       } catch {}
       deferVisibleRafRef.current = null;
     }
+    clearInAppPiPSystemSuspendFlags();
     try {
       const g = global as any;
       g.__pipForceHiddenRef = g.__pipForceHiddenRef || { current: false };
@@ -838,7 +876,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         g.__leavingVideoCallByHomeRef.current = true;
         g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
         g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 6000;
-        NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
       } catch (_) {}
 
       let paramsEarly = g.__currentCallPiPParamsRef?.current;
@@ -905,11 +942,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       } catch (_) {}
 
       try {
+        refreshSystemPiPLeaveContextSnapshot();
+      } catch (_) {}
+
+      try {
         if (g.__pipVisibleRef?.current === true) {
-          g.__pipHidePiPRef?.current?.();
-          g.__pipVisibleRef.current = false;
-          NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
-          logHomePiPTrace('js_hide_in_app_for_system', { traceId, reason: 'before_system_capture' });
+          suspendInAppOverlayForSystemPiPEnter();
+          logHomePiPTrace('js_soft_hide_in_app_for_system', { traceId, reason: 'before_system_capture' });
         }
       } catch (_) {}
 
@@ -1139,7 +1178,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         if (callLive && !endingFromPiPButton) {
           logger.info('[PiPContext] returnToCall: active call — ignore stale teardown guards');
           try {
-            gGuard.__endingCallInProgressRef.current = false;
+            clearEndingCallInProgress();
             gGuard.__callEndedFromPiPNoOpenRef.current = false;
           } catch (_) {}
           endingCall = false;
@@ -1156,9 +1195,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     } catch (_) {}
     if (returnToCallInFlightRef.current) {
       return;
-    }
-    if (Platform.OS === 'android') {
-      try { NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.(); } catch (_) {}
     }
     returnToCallInFlightRef.current = true;
     try {
@@ -1184,6 +1220,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const preferAudioOnlyUi = opts?.preferAudioOnlyUi === true;
     const restoreInAppPiP = opts?.restoreInAppPiP === true;
 
+    if (restoreInAppPiP) {
+      try {
+        g.__restoringInAppPiPFromSystemRef = g.__restoringInAppPiPFromSystemRef || { current: false };
+        g.__restoringInAppPiPFromSystemRef.current = true;
+      } catch (_) {}
+      setSuppressOverlayForReturn(false);
+    }
+
     const wasSystemPiP =
       inSystemPiPMode || g.__pipInSystemModeRef?.current === true;
 
@@ -1191,6 +1235,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const tailMs = preferAudioOnlyUi ? 80 : 160;
       setTimeout(() => {
         setSuppressOverlayForReturn(false);
+        clearInAppPiPSystemSuspendFlags();
         releaseReturnToCallInFlight();
         reenableAndroidSystemPiPLeaveHintAfterReturn();
       }, tailMs);
@@ -1270,19 +1315,22 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     try {
       g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
       g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-      if (preferAudioOnlyUi) {
-        prepareDirectCallAudioReturnFromPiP();
-      } else if (restoreInAppPiP) {
+      if (restoreInAppPiP) {
         g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
         g.__expandToVideoCallUiFromPiPRef.current = false;
         g.__pipForceHiddenRef = g.__pipForceHiddenRef || { current: false };
         g.__pipForceHiddenRef.current = false;
+      } else if (preferAudioOnlyUi) {
+        prepareDirectCallAudioReturnFromPiP();
       } else {
         g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
         g.__expandToVideoCallUiFromPiPRef.current = true;
       }
     } catch (_) {}
-    syncSessionPiPState(false, preferAudioOnlyUi ? 'returnToAudioCall' : 'returnToCall');
+    syncSessionPiPState(
+      false,
+      restoreInAppPiP ? 'returnToCall' : preferAudioOnlyUi ? 'returnToAudioCall' : 'returnToCall',
+    );
     
     // Guard от двойной навигации
     if (navigatingRef.current) {
@@ -1387,6 +1435,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
     if (
       preferAudioOnlyUi &&
+      !restoreInAppPiP &&
       currentRouteName === 'VideoCall' &&
       typeof g.__returnToAudioCallRef?.current === 'function'
     ) {
@@ -1400,7 +1449,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       return;
     }
 
-    if (restoreInAppPiP && !preferAudioOnlyUi) {
+    if (restoreInAppPiP) {
       const leaveSnap = peekSystemPiPLeaveContextForReturn();
       const targetRoute = leaveSnap.routeName || 'Home';
       const showInAppFromParams = (): boolean => {
@@ -1436,6 +1485,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           abortReturnToCallKeepPiP();
           return;
         }
+        clearInAppPiPSystemSuspendFlags();
         setSuppressOverlayForReturn(false);
         finishReturnToCallAfterNav();
       };
@@ -1649,6 +1699,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const k = Number(patch.pipRemoteViewKey) || 0;
       setPipRemoteViewKey(k);
       setRemoteStreamVersion((v) => v + 1);
+    }
+    if (patch.suppressOverlayForReturn !== undefined) {
+      setSuppressOverlayForReturn(!!patch.suppressOverlayForReturn);
     }
   }, []);
 

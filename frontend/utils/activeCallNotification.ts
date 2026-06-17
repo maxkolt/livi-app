@@ -70,6 +70,7 @@ function getActiveCallIds(): { roomId: string; callId: string } {
     const callId = String(
       params?.callId ||
         (typeof session?.getCallId === 'function' ? session.getCallId() : '') ||
+        g.__outgoingCallIdRef?.current ||
         '',
     ).trim();
     return { roomId, callId };
@@ -146,10 +147,43 @@ function applyAndroidLeaveHintNativeFlags(allowPiP: boolean): void {
   logHomePiPTrace('js_leave_hint_arm', { allowPiP: effectiveAllow, placeholderOnly });
 }
 
+/** До монтирования VideoCall: callId/roomId + active ref, чтобы Home не попал в should_enter_false. */
+export function primeAndroidCallContextForLeaveHint(opts: {
+  callId?: string | null;
+  roomId?: string | null;
+  partnerNick?: string | null;
+}): void {
+  if (Platform.OS !== 'android') return;
+  const callId = String(opts.callId ?? '').trim();
+  const roomId = String(opts.roomId ?? '').trim();
+  if (!callId && !roomId) return;
+  try {
+    const g = global as any;
+    g.__videoCallActiveRef = g.__videoCallActiveRef || { current: false };
+    g.__videoCallActiveRef.current = true;
+    g.__currentCallPiPParamsRef = g.__currentCallPiPParamsRef || { current: null };
+    const prev = g.__currentCallPiPParamsRef.current;
+    const nick = typeof opts.partnerNick === 'string' ? opts.partnerNick.trim() : '';
+    g.__currentCallPiPParamsRef.current = {
+      ...(prev && typeof prev === 'object' ? prev : {}),
+      callId: callId || prev?.callId || '',
+      roomId: roomId || prev?.roomId || '',
+      ...(nick ? { partnerName: nick } : {}),
+    };
+    applyAndroidLeaveHintNativeFlags(true);
+  } catch (_) {}
+}
+
 /** Держать leaveHint включённым на любом экране, пока звонок жив (Home/in-app PiP до onUserLeaveHint). */
 export function syncAndroidLeaveHintForOngoingCall(): void {
   if (Platform.OS !== 'android') return;
   try {
+    if (isCallTeardownInProgress()) return;
+    const { roomId, callId } = getActiveCallIds();
+    if (roomId || callId) {
+      applyAndroidLeaveHintNativeFlags(true);
+      return;
+    }
     if (!isOngoingCallSession()) return;
     if (!shouldAllowAndroidSystemPiPOnLeaveHint()) return;
     applyAndroidLeaveHintNativeFlags(true);
@@ -218,8 +252,20 @@ export function isAndroidActiveCallEligibleForLeaveHint(): boolean {
     const inBackgroundWithLiveCall =
       AppState.currentState === 'background' && g.__videoCallActiveRef?.current !== false;
     const ongoingSession = isOngoingCallSession();
+    const incomingTransition = g.__incomingAnswerTransitionRef?.current;
+    const incomingAnswerTransitionActive =
+      !!incomingTransition && Number(incomingTransition.expiresAt || 0) > Date.now();
+    const outgoingCallId = String(g.__outgoingCallIdRef?.current || '').trim();
+    const onCallConnectTransition = incomingAnswerTransitionActive || !!outgoingCallId;
 
-    return (onVideoCallRoute || homeHold || inBackgroundWithLiveCall || ongoingSession) && (!!roomId || !!callId);
+    return (
+      (onVideoCallRoute ||
+        homeHold ||
+        inBackgroundWithLiveCall ||
+        ongoingSession ||
+        onCallConnectTransition) &&
+      (!!roomId || !!callId)
+    );
   } catch {
     return false;
   }
@@ -306,13 +352,39 @@ export function armAndroidLeaveHintForVideoCallHome(): void {
   } catch (_) {}
 }
 
+const SYSTEM_PIP_RETURN_SETTLE_MS = 3600;
+
+let reenableAfterReturnGeneration = 0;
+let reenableAfterReturnTimers: ReturnType<typeof setTimeout>[] = [];
+
+function clearReenableAfterReturnTimers(): void {
+  for (const t of reenableAfterReturnTimers) {
+    clearTimeout(t);
+  }
+  reenableAfterReturnTimers = [];
+}
+
 /**
  * После возврата на VideoCall (уведомление, in-app PiP, разворот system PiP) натив может
  * остаться с shouldEnterPiPOnLeaveHint=false — повторный Home тогда сворачивает без system PiP.
+ * clearSystemPiPReenterSuppress откладываем до стабилизации навигации (~3.6s), иначе обходим
+ * нативный 3s anti-reenter и ловим повторный onUserLeaveHint → снова system PiP.
  */
-export function reenableAndroidSystemPiPLeaveHintAfterReturn(): void {
+export function reenableAndroidSystemPiPLeaveHintAfterReturn(opts?: {
+  settledMs?: number;
+  /** @internal после внешнего ожидания — сразу снять suppress и arm leaveHint */
+  afterExternalSettle?: boolean;
+}): void {
   if (Platform.OS !== 'android') return;
-  const attempt = () => {
+  clearReenableAfterReturnTimers();
+  reenableAfterReturnGeneration += 1;
+  const generation = reenableAfterReturnGeneration;
+  const settledMs = opts?.afterExternalSettle
+    ? 0
+    : Math.max(0, opts?.settledMs ?? SYSTEM_PIP_RETURN_SETTLE_MS);
+
+  const attempt = (clearSuppress: boolean) => {
+    if (generation !== reenableAfterReturnGeneration) return;
     try {
       if (!isAndroidActiveCallEligibleForLeaveHint()) return;
       const g = global as any;
@@ -320,17 +392,22 @@ export function reenableAndroidSystemPiPLeaveHintAfterReturn(): void {
       if (Number(g.__disableSystemPiPUntilRef.current || 0) > Date.now()) {
         g.__disableSystemPiPUntilRef.current = 0;
       }
-      NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
+      if (clearSuppress) {
+        NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
+      }
       setAndroidSystemPiPLeaveHintEnabled(true);
     } catch (_) {}
   };
-  attempt();
-  if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(() => requestAnimationFrame(attempt));
-  }
-  setTimeout(attempt, 320);
-  setTimeout(attempt, 900);
-  setTimeout(attempt, 1800);
+
+  const schedule = (delayMs: number, clearSuppress: boolean) => {
+    const t = setTimeout(() => attempt(clearSuppress), delayMs);
+    reenableAfterReturnTimers.push(t);
+  };
+
+  schedule(settledMs, true);
+  schedule(settledMs + 320, true);
+  schedule(settledMs + 900, true);
+  schedule(settledMs + 1800, true);
 }
 
 /** Пока экран VideoCall в фокусе и звонок жив — держим leaveHint включённым (Home → system PiP). */

@@ -2,7 +2,7 @@
 import { io, Socket } from "socket.io-client";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { logger } from '../utils/logger';
-import { startActiveCallNotification, stopActiveCallNotification } from '../utils/activeCallNotification';
+import { startActiveCallNotification, stopActiveCallNotification, syncAndroidLeaveHintForOngoingCall } from '../utils/activeCallNotification';
 
 // Глобальное хранение сообщений
 export const globalMessageStorage = {
@@ -1145,6 +1145,9 @@ export function setActiveVideoCall(active: boolean, partnerDisplayName?: string 
   if (Platform.OS === 'android') {
     if (active) {
       startActiveCallNotification(partnerDisplayName);
+      try {
+        syncAndroidLeaveHintForOngoingCall();
+      } catch (_) {}
     } else {
       stopActiveCallNotification();
     }
@@ -3842,27 +3845,86 @@ export function forceEndDirectCallWithPeer(peerUserId: string, callId?: string |
   }
 }
 
-export function acceptCall(callId: string) {
+const earlyIncomingCallAcceptById = new Map<string, Promise<{ ok: boolean; duplicate?: boolean }>>();
+
+function markIncomingAcceptSent(callId: string): boolean {
+  try {
+    const g = global as any;
+    g.__incomingAcceptSentRef = g.__incomingAcceptSentRef || { current: null as string | null };
+    if (g.__incomingAcceptSentRef.current === callId) return false;
+    g.__incomingAcceptSentRef.current = callId;
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+async function runCallAcceptAck(callId: string): Promise<{ ok: boolean; duplicate?: boolean }> {
+  warmCallSignaling();
+  await ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
+  const resp = await emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
+    'call:accept',
+    { callId },
+    7000,
+    2,
+  );
+  return { ok: !!resp?.ok, duplicate: resp?.duplicate };
+}
+
+/**
+ * Отправить call:accept до монтирования VideoCall (аудио / входящий) — инициатор раньше получает call:accepted.
+ */
+export function beginEarlyIncomingCallAccept(callId: string): void {
   const id = String(callId || '').trim();
   if (!id) return;
-  void (async () => {
+  if (earlyIncomingCallAcceptById.has(id)) return;
+  if (!markIncomingAcceptSent(id)) return;
+
+  const work = (async () => {
     try {
-      warmCallSignaling();
-      await ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
-      const resp = await emitAck<{ ok?: boolean; error?: string }>('call:accept', { callId: id }, 7000, 2);
-      if (!resp?.ok) {
-        logger.warn('[socket] call:accept ack returned not ok', { callId: id, error: resp?.error });
-      }
+      return await runCallAcceptAck(id);
     } catch (e: any) {
-      logger.warn('[socket] call:accept via ack failed, fallback emit', {
+      logger.warn('[socket] early call:accept failed, fallback emit', {
         callId: id,
         error: e?.message || String(e),
       });
       try {
         socket.emit('call:accept', { callId: id });
       } catch {}
+      return { ok: true };
     }
   })();
+  earlyIncomingCallAcceptById.set(id, work);
+  void work.finally(() => {
+    setTimeout(() => {
+      if (earlyIncomingCallAcceptById.get(id) === work) {
+        earlyIncomingCallAcceptById.delete(id);
+      }
+    }, 60_000);
+  });
+}
+
+export function hasEarlyIncomingCallAccept(callId: string): boolean {
+  return earlyIncomingCallAcceptById.has(String(callId || '').trim());
+}
+
+export async function awaitEarlyIncomingCallAccept(
+  callId: string,
+): Promise<{ ok: boolean; duplicate?: boolean } | null> {
+  const id = String(callId || '').trim();
+  const p = earlyIncomingCallAcceptById.get(id);
+  if (!p) return null;
+  try {
+    return await p;
+  } catch {
+    return { ok: false };
+  }
+}
+
+export function acceptCall(callId: string) {
+  const id = String(callId || '').trim();
+  if (!id) return;
+  beginEarlyIncomingCallAccept(id);
 }
 
 export function declineCall(callId: string) {

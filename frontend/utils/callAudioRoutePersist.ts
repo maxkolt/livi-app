@@ -31,6 +31,19 @@ export function clearPersistedCallAudioRoute(): void {
 }
 
 let reapplyChain = Promise.resolve();
+let scheduledReapplyTimers: ReturnType<typeof setTimeout>[] = [];
+let lastReapplySignature = '';
+let lastReapplyAt = 0;
+const REAPPLY_DEDUP_MS = 450;
+
+function clearScheduledReapplies(): void {
+  for (const t of scheduledReapplyTimers) {
+    try {
+      clearTimeout(t);
+    } catch {}
+  }
+  scheduledReapplyTimers = [];
+}
 
 export async function reapplyPersistedCallAudioRoute(
   reason: string,
@@ -43,6 +56,15 @@ export async function reapplyPersistedCallAudioRoute(
       if (!route) return;
 
       const media = opts?.media ?? 'audio';
+      const signature = `${route}|${media}`;
+      const now = Date.now();
+      if (signature === lastReapplySignature && now - lastReapplyAt < REAPPLY_DEDUP_MS) {
+        logger.debug('[callAudioRoutePersist] reapply skipped (duplicate)', { reason, route, media });
+        return;
+      }
+      lastReapplySignature = signature;
+      lastReapplyAt = now;
+
       try {
         if (Platform.OS === 'android') beginBackgroundMediaSuppression();
         InCallManager.start({ media, ringback: '' });
@@ -82,11 +104,14 @@ export function scheduleReapplyPersistedCallAudioRoute(
   reason: string,
   opts?: { media?: 'audio' | 'video'; delaysMs?: number[] },
 ): void {
+  clearScheduledReapplies();
   const delays = opts?.delaysMs ?? [0, 300, 900, 1500, 2500];
   for (const ms of delays) {
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      scheduledReapplyTimers = scheduledReapplyTimers.filter((t) => t !== timer);
       void reapplyPersistedCallAudioRoute(reason, { media: opts?.media });
     }, ms);
+    scheduledReapplyTimers.push(timer);
   }
 }
 

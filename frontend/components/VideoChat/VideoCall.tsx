@@ -51,13 +51,15 @@ import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/ke
 import {
   reenableAndroidSystemPiPLeaveHintAfterReturn,
   isAndroidLeaveHintHomeTransitionHold,
+  isAndroidActiveCallEligibleForLeaveHint,
   setAndroidSystemPiPLeaveHintEnabled,
   shouldBlockAndroidLeaveHintDisarm,
   refreshAndroidActiveCallNotification,
+  syncAndroidLeaveHintForOngoingCall,
   syncAndroidSystemPiPLeaveHintForActiveVideoCall,
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
-import { isOngoingCallSession } from '../../utils/activeCallSession';
+import { isOngoingCallSession, clearEndingCallInProgress } from '../../utils/activeCallSession';
 import { iconNameForRoute, type InCallAudioRoute } from './hooks/audioRouteTypes';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
@@ -611,12 +613,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       null;
     const trackMicOn = getTrackEnabled(effectiveStream, 'audio');
     const trackCamOn = getTrackEnabled(effectiveStream, 'video');
+    const sessionWantsCam =
+      sessionRef.current && typeof sessionRef.current.getIsCamOn === 'function'
+        ? sessionRef.current.getIsCamOn()
+        : undefined;
     return {
       micOn: typeof trackMicOn === 'boolean' ? trackMicOn : !pip.isMuted,
       camOn:
-        typeof trackCamOn === 'boolean'
-          ? trackCamOn
-          : (typeof pip.localCamOn === 'boolean' ? pip.localCamOn : camOn),
+        sessionWantsCam === true
+          ? true
+          : typeof trackCamOn === 'boolean'
+            ? trackCamOn
+            : typeof pip.localCamOn === 'boolean'
+              ? pip.localCamOn
+              : camOn,
     };
   }, [camOn, getTrackEnabled, pip.isMuted, pip.localCamOn, pip.localStream]);
   const getDesiredRemoteMutedForPiPReturn = useCallback(() => {
@@ -962,7 +972,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     setPartnerInPiP(false);
     callEndedTransitionDoneRef.current = true;
     try {
-      NativeModules.LiviAppModule?.setEndingCallInProgress?.(false);
+      clearEndingCallInProgress();
     } catch (_) {}
   }, [route?.params?.endedFromRemoteSystemPiP]);
 
@@ -1008,14 +1018,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const globalVideoCallActiveForPiP = g.__videoCallActiveRef?.current !== false;
     const hasStableSystemPiPContext =
       Platform.OS === 'android' &&
-      !!effectiveSystemPiPRoomId &&
+      !!(effectiveSystemPiPRoomId || effectiveSystemPiPCallId) &&
       !isInactiveState &&
       !!sessionForSystemPiP &&
       sessionAliveForSystemPiP;
     const canEnableSystemPiP =
       Platform.OS === 'android' &&
       isFocused &&
-      !!effectiveSystemPiPRoomId &&
+      !!(effectiveSystemPiPRoomId || effectiveSystemPiPCallId) &&
       !isInactiveState &&
       !!sessionForSystemPiP &&
       sessionAliveForSystemPiP &&
@@ -1060,7 +1070,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Очищаем только в cleanup эффекта, когда сессия реально завершена (stillActive === false).
     if (!hasStableSystemPiPContext) {
       if (Platform.OS === 'android' && !shouldBlockAndroidLeaveHintDisarm()) {
-        setAndroidSystemPiPLeaveHintEnabled(false);
+        if (isAndroidActiveCallEligibleForLeaveHint()) {
+          syncAndroidLeaveHintForOngoingCall();
+        } else {
+          setAndroidSystemPiPLeaveHintEnabled(false);
+        }
       }
       return;
     }
@@ -1126,7 +1140,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   useEffect(() => {
     const p = route?.params;
     const hasCallIntent = !!(p?.callId || p?.roomId || p?.peerUserId || p?.directCall);
-    if (hasCallIntent) setActiveVideoCall(true);
+    if (hasCallIntent) {
+      clearEndingCallInProgress();
+      setActiveVideoCall(true);
+    }
   }, [route?.params]);
 
   // Отслеживание изменений параметров роута
@@ -1394,7 +1411,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     return current;
   }, [getSystemPiPReturnToken]);
 
-  const markSystemPiPReturnRestored = useCallback((token = getSystemPiPReturnToken(), settleMs = 1800) => {
+  const markSystemPiPReturnRestored = useCallback((token = getSystemPiPReturnToken(), settleMs = 3600) => {
     if (!token) return;
     const g = global as any;
     g.__systemPiPReturnStateRef = g.__systemPiPReturnStateRef || { current: null };
@@ -1480,15 +1497,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
       callEndedTransitionDoneRef.current = true;
       markGlobalCleanupDone(source, finalCallId, finalRoomId);
+      clearEndingCallInProgress();
 
       if (shouldReportEndCall) {
         const doReportEndCall = () => {
           reportEndCallToCallKeep(finalCallId);
-          if (Platform.OS === 'android') {
-            setTimeout(() => {
-              try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(false); } catch (_) {}
-            }, 600);
-          }
         };
         if (Platform.OS === 'android') {
           setTimeout(doReportEndCall, 120);
@@ -1554,6 +1567,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       setTimeout(() => {
         isEndingCallRef.current = false;
         setIsEndingCall(false);
+        clearEndingCallInProgress();
         logger.debug('[VideoCall] isEndingCallRef reset after deferred teardown', { source });
       }, 1000);
     }, 0);
@@ -2363,13 +2377,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
       const g = global as any;
       g.__incomingAcceptSentRef = g.__incomingAcceptSentRef || { current: null as string | null };
-      if (g.__incomingAcceptSentRef.current === incomingCallId) {
-        logger.info('[VideoCall] Callee: acceptCall already in flight for callId, skipping duplicate', {
-          callId: incomingCallId,
-        });
-        return;
+      if (g.__incomingAcceptSentRef.current !== incomingCallId) {
+        g.__incomingAcceptSentRef.current = incomingCallId;
       }
-      g.__incomingAcceptSentRef.current = incomingCallId;
 
       session.acceptCall(incomingCallId, fromUserId).catch((e) => {
         logger.error('[VideoCall] Error accepting incoming call:', e);
@@ -3011,12 +3021,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         isEndingCallRef.current = false;
         setIsEndingCall(false);
         try {
-          const gr = (global as any).__endingCallInProgressRef;
-          if (gr && typeof gr.current !== 'undefined') gr.current = false;
+          clearEndingCallInProgress();
         } catch (_) {}
-        if (Platform.OS === 'android') {
-          try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(false); } catch (_) {}
-        }
         logger.debug('[VideoCall] isEndingCallRef reset (onAbortCall no-session)');
       }, 1000);
       return;
@@ -3155,12 +3161,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
     setTimeout(() => {
       try {
-        const gr = (global as any).__endingCallInProgressRef;
-        if (gr && typeof gr.current !== 'undefined') gr.current = false;
+        clearEndingCallInProgress();
       } catch (_) {}
-      if (Platform.OS === 'android') {
-        try { NativeModules.LiviAppModule?.setEndingCallInProgress?.(false); } catch (_) {}
-      }
 
       // КРИТИЧНО: Дополнительная проверка через небольшую задержку
       // Убеждаемся, что камера действительно остановлена
@@ -3252,9 +3254,25 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   // в стеке при переходе на Home, и тогда PiP оверлей никогда не появится.
   useFocusEffect(
     useCallback(() => {
-      pipRef.current?.updatePiPState({ suppressOverlayForReturn: true });
+      const shouldSkipPipSuppress = () => {
+        try {
+          const g = global as any;
+          return (
+            g.__restoringInAppPiPFromSystemRef?.current === true ||
+            g.__pipSuspendedForSystemPiPRef?.current === true ||
+            g.__pipReturnToCallInFlightRef?.current === true
+          );
+        } catch {
+          return false;
+        }
+      };
+      if (!shouldSkipPipSuppress()) {
+        pipRef.current?.updatePiPState({ suppressOverlayForReturn: true });
+      }
       return () => {
-        pipRef.current?.updatePiPState({ suppressOverlayForReturn: false });
+        if (!shouldSkipPipSuppress()) {
+          pipRef.current?.updatePiPState({ suppressOverlayForReturn: false });
+        }
       };
     }, [])
   );
@@ -4057,6 +4075,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                 hasPipLocalStream: !!pipLocalStream,
                 hasLocalStream: !!localStream,
                 hasLocalStreamRef: !!localStreamRef.current,
+              });
+            }
+
+            if (desiredCamOn && typeof (session as VideoCallSession).restoreLocalCameraAfterPiPReturn === 'function') {
+              void (session as VideoCallSession).restoreLocalCameraAfterPiPReturn().catch((e) => {
+                logger.warn('[VideoCall] restoreLocalCameraAfterPiPReturn failed', e);
               });
             }
             

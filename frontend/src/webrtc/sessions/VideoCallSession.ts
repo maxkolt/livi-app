@@ -19,7 +19,16 @@ import {
 } from 'livekit-client';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, WebRTCSessionCallbacks, CamSide } from '../types';
-import socket, { API_BASE, emitAck, ensureSocketConnected, warmCallSignaling, CALL_SIGNALING_CONNECT_MS, setActiveVideoCall } from '../../../sockets/socket';
+import socket, {
+  API_BASE,
+  emitAck,
+  ensureSocketConnected,
+  warmCallSignaling,
+  CALL_SIGNALING_CONNECT_MS,
+  setActiveVideoCall,
+  awaitEarlyIncomingCallAccept,
+  hasEarlyIncomingCallAccept,
+} from '../../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../../utils/globalEvents';
 import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
@@ -162,6 +171,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** Сериализация pause/restore и recreate, чтобы App + VideoCall не гоняли два reconnect подряд. */
   private cameraAppLifecyclePromise: Promise<void> | null = null;
   private localVideoRecreatePromise: Promise<void> | null = null;
+  /** После foreground/pip restore не дублировать recreate через reconnectCameraOnResume. */
+  private skipReconnectCameraOnResumeUntil = 0;
   /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и endCall повторно */
   private cleaned = false;
   /** ctor запланировал handleCallAccepted из __pendingCallAcceptedRef — UI не должен дублировать connectAsInitiatorAfterAccepted */
@@ -449,19 +460,37 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.notifyLoadingChange(true);
     setActiveVideoCall(true);
     warmCallSignaling();
-    this.incomingAcceptDeferCapture = true;
-    const socketReadyPromise = ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
+    // Видео-входящий: отложить камеру до connect (landscape→portrait). Аудио: сразу prewarm + без sleep в connectToLiveKit.
+    this.incomingAcceptDeferCapture = this.isCamOn;
+    if (!this.isCamOn) {
+      void this.ensureLocalTracks().catch((e) => {
+        logger.warn('[VideoCallSession] ensureLocalTracks during acceptCall (audio) failed', e);
+      });
+    }
+    const earlyAcceptStarted = hasEarlyIncomingCallAccept(id);
+    const socketReadyPromise = earlyAcceptStarted ? Promise.resolve() : ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
 
     const run = (async () => {
       try {
         await socketReadyPromise;
         this.acceptAckStartedAt = Date.now();
-        const resp = await emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
-          'call:accept',
-          { callId: id },
-          7000,
-          2,
-        );
+        let resp: { ok?: boolean; error?: string; duplicate?: boolean } | null = null;
+        const early = await awaitEarlyIncomingCallAccept(id);
+        if (early) {
+          resp = early;
+          logger.info('[VideoCallSession] call:accept reused early incoming accept', {
+            callId: id,
+            ok: early.ok,
+            duplicate: early.duplicate,
+          });
+        } else {
+          resp = await emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
+            'call:accept',
+            { callId: id },
+            7000,
+            2,
+          );
+        }
         this.acceptAckCompletedAt = Date.now();
         if (!resp?.ok) {
           const err = resp?.error || 'call_accept_failed';
@@ -875,7 +904,45 @@ export class VideoCallSession extends SimpleEventEmitter {
     return chained;
   }
 
-  /** Уход в фон: выключить камеру и cam-toggle(false), чтобы у партнёра была заглушка, а не чёрный кадр. */
+  /**
+   * Пауза камеры в фоне: mute + cam-toggle(false) для партнёра, но isCamOn остаётся true —
+   * при возврате из PiP не теряем намерение «камера была включена».
+   */
+  private async muteLocalCameraForAppBackground(): Promise<void> {
+    const currentRoomId = this.getRoomId();
+    if (!this.ended && !this.endCallInProgress && currentRoomId) {
+      try {
+        socket.emit('cam-toggle', {
+          enabled: false,
+          from: socket.id,
+          roomId: currentRoomId,
+          camSide: this.camSide,
+        });
+        logger.info('[VideoCallSession] ✅ cam-toggle false (background pause, cam intent kept)', {
+          roomId: currentRoomId,
+        });
+      } catch (e) {
+        logger.warn('[VideoCallSession] cam-toggle on background pause failed', e);
+      }
+    }
+    if (this.localVideoTrack) {
+      try {
+        await this.localVideoTrack.mute().catch(() => {});
+        if (this.localVideoTrack.mediaStreamTrack) {
+          this.localVideoTrack.mediaStreamTrack.enabled = false;
+        }
+      } catch (e) {
+        logger.warn('[VideoCallSession] muteLocalCameraForAppBackground failed', e);
+      }
+    }
+    this.notifyCamStateChange(this.isCamOn);
+    if (this.localStream) {
+      this.emit('localStream', this.localStream);
+      this.notifyLocalStreamChange(this.localStream);
+    }
+  }
+
+  /** Уход в фон: приостановить камеру (заглушка у партнёра), не сбрасывая isCamOn. */
   async pauseCameraForAppBackground(): Promise<void> {
     return this.enqueueCameraAppLifecycle(async () => {
       if (this.ended || this.endCallInProgress) return;
@@ -883,11 +950,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (!this.isCamOn) return;
       this.cameraSuspendedForAppBackground = true;
       logger.info('[VideoCallSession] Pausing camera for app background');
-      await this.applyLocalCameraEnabled(false);
-      try {
-        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
-        if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: false });
-      } catch (_) {}
+      await this.muteLocalCameraForAppBackground();
     });
   }
 
@@ -909,14 +972,92 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.config.getIsDirectCall?.()) {
       this.notifyPeerDirectCallVideoUi(true, { force: true });
     }
+    try {
+      const g = global as any;
+      const inAppPiPVisible = g.__pipVisibleRef?.current === true;
+      const inSystemPiP = g.__pipInSystemModeRef?.current === true;
+      if ((inAppPiPVisible || inSystemPiP) && !this.isLocalDirectCallAudioOnlyUi()) {
+        logger.info('[VideoCallSession] Skip camera pause — PiP keeps capture warm for fast return', {
+          inAppPiPVisible,
+          inSystemPiP,
+        });
+        return;
+      }
+    } catch (_) {}
     void this.pauseCameraForAppBackground().catch((e) => {
       logger.warn('[VideoCallSession] pauseCameraForAppBackground failed on app background', e);
+    });
+  }
+
+  /**
+   * Возврат на полный VideoCall из PiP: быстро включить локальную камеру (live — unmute; ended — fast-start recreate).
+   */
+  async restoreLocalCameraAfterPiPReturn(): Promise<void> {
+    if (this.ended || this.endCallInProgress || this.isLocalDirectCallAudioOnlyUi()) return;
+    if (!this.isCamOn && !this.cameraSuspendedForAppBackground) return;
+    return this.enqueueCameraAppLifecycle(async () => {
+      if (this.localVideoRecreatePromise) {
+        await this.localVideoRecreatePromise.catch(() => {});
+      }
+      const pausedForBackground = this.cameraSuspendedForAppBackground;
+      const mt = this.localVideoTrack?.mediaStreamTrack;
+      if (mt?.readyState === 'live') {
+        if (!mt.enabled) {
+          await this.applyLocalCameraEnabled(true);
+        } else if (
+          this.room?.state === 'connected' &&
+          this.localVideoTrack &&
+          !this.isVideoTrackPublished(this.localVideoTrack)
+        ) {
+          await this.applyLocalCameraEnabled(true);
+        } else if (pausedForBackground) {
+          const currentRoomId = this.getRoomId();
+          if (!this.ended && !this.endCallInProgress && currentRoomId) {
+            try {
+              socket.emit('cam-toggle', {
+                enabled: true,
+                from: socket.id,
+                roomId: currentRoomId,
+                camSide: this.camSide,
+              });
+            } catch (_) {}
+          }
+        }
+        this.cameraSuspendedForAppBackground = false;
+        this.skipReconnectCameraOnResumeUntil = Date.now() + 8000;
+        try {
+          const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+          if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: true });
+        } catch (_) {}
+        return;
+      }
+      this.cameraSuspendedForAppBackground = false;
+      logger.info('[VideoCallSession] Fast restore local camera after PiP return');
+      await this.applyLocalCameraEnabled(true);
+      this.skipReconnectCameraOnResumeUntil = Date.now() + 8000;
+      try {
+        this.maybeScheduleFastStartVideoUpgrade('pip-return');
+      } catch (_) {}
+      try {
+        const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+        if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: true });
+      } catch (_) {}
     });
   }
 
   /** Возврат из фона: снова включить камеру, если она была приостановлена при background. */
   async restoreCameraAfterAppBackground(): Promise<void> {
     return this.enqueueCameraAppLifecycle(async () => {
+      try {
+        const returningFromPiP =
+          Date.now() < Number((global as any).__returningFromSystemPiPUntilRef?.current || 0);
+        if (returningFromPiP) {
+          logger.info(
+            '[VideoCallSession] Skip AppState camera restore — system PiP return owns lifecycle',
+          );
+          return;
+        }
+      } catch (_) {}
       if (this.ended || this.endCallInProgress) {
         this.cameraSuspendedForAppBackground = false;
         return;
@@ -936,6 +1077,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.cameraSuspendedForAppBackground = false;
         logger.info('[VideoCallSession] Restoring camera after app foreground');
         await this.applyLocalCameraEnabled(true);
+        this.skipReconnectCameraOnResumeUntil = Date.now() + 8000;
         try {
           const pipUpdate = (global as any).__pipUpdateStateRef?.current;
           if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: true });
@@ -1069,6 +1211,9 @@ export class VideoCallSession extends SimpleEventEmitter {
         logger.info('[VideoCallSession] Recovering video track for camera enable');
         // Пересоздаём ТОЛЬКО видео трек (аудио не трогаем для стабильности)
         await this.recreateLocalVideoTrack('toggleCam:recovery');
+        try {
+          this.maybeScheduleFastStartVideoUpgrade('camera-enable-recovery');
+        } catch (_) {}
       }
 
       // После восстановления трека - включаем и публикуем
@@ -1171,6 +1316,13 @@ export class VideoCallSession extends SimpleEventEmitter {
    */
   async reconnectCameraOnResume(): Promise<void> {
     if (this.ended || !this.room || this.room.state !== 'connected' || !this.isCamOn) return;
+    if (this.localVideoRecreatePromise) return;
+    if (Date.now() < this.skipReconnectCameraOnResumeUntil) return;
+    try {
+      if (Date.now() < Number((global as any).__returningFromSystemPiPUntilRef?.current || 0)) {
+        return;
+      }
+    } catch (_) {}
     const track = this.localVideoTrack;
     if (!track?.mediaStreamTrack || track.mediaStreamTrack.readyState !== 'ended') return;
     try {
@@ -3659,10 +3811,63 @@ export class VideoCallSession extends SimpleEventEmitter {
     const camStateBeforeAwait = this.isCamOn;
 
     const facingMode = this.camSide === 'front' ? 'user' : 'environment';
-    const preferred = getPreferredVideoCaptureOptions(facingMode);
+    const useFastRecovery =
+      /recovery|pipReturn|pip-return|reconnectCameraOnResume/i.test(context);
+    const steadyPreferred = getPreferredVideoCaptureOptions(facingMode);
+    const preferred = useFastRecovery
+      ? getFastStartVideoCaptureOptions(facingMode)
+      : steadyPreferred;
+    if (useFastRecovery) {
+      this.fastStartVideoProfileActive =
+        steadyPreferred.meta.preset !== preferred.meta.preset && preferred.meta.preset === 'low';
+      this.clearFastStartVideoUpgradeTimer();
+    }
     logger.info('[VideoCallSession] Recreating local video track', { context, preferred: preferred.meta, camSide: this.camSide });
 
     const oldVideoTrack = this.localVideoTrack;
+
+    if (
+      useFastRecovery &&
+      oldVideoTrack &&
+      this.room?.state === 'connected' &&
+      this.room.localParticipant
+    ) {
+      const publication = this.getLocalVideoPublication();
+      if (publication?.replaceTrack) {
+        try {
+          const newVideo = await this.createFreshLocalVideoTrack(context);
+          await (publication as any).replaceTrack(newVideo, true);
+          try {
+            oldVideoTrack.stop();
+          } catch {}
+          this.localVideoTrack = newVideo;
+          const stream = new MediaStream();
+          try {
+            const mt = newVideo.mediaStreamTrack;
+            if (mt) stream.addTrack(mt as any);
+          } catch {}
+          try {
+            const at = this.localAudioTrack?.mediaStreamTrack;
+            if (at) stream.addTrack(at as any);
+          } catch {}
+          this.localStream = stream;
+          this.emit('localStream', stream);
+          this.notifyLocalStreamChange(stream);
+          logger.info('[VideoCallSession] Recovered video via replaceTrack (fast path)', { context });
+          try {
+            this.maybeScheduleFastStartVideoUpgrade('camera-enable-recovery');
+          } catch (_) {}
+          return;
+        } catch (e) {
+          logger.warn('[VideoCallSession] replaceTrack fast recovery failed; falling back to full recreate', {
+            context,
+            error: (e as any)?.message || String(e),
+          });
+          this.localVideoTrack = oldVideoTrack;
+        }
+      }
+    }
+
     const oldVideoMedia = oldVideoTrack?.mediaStreamTrack;
 
     // Best-effort: unpublish the old camera track before stopping it.
@@ -3677,9 +3882,10 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     this.stopLocalVideoTrackWithoutStateReset();
 
-    // Android Camera2: allow device to fully release camera before reopening.
+    // Android Camera2: allow device to release camera before reopening (shorter after PiP/recovery).
     if (Platform.OS === 'android') {
-      await new Promise((r) => setTimeout(r, 220));
+      const releaseMs = useFastRecovery ? 72 : 220;
+      await new Promise((r) => setTimeout(r, releaseMs));
     }
 
     const tryCreate = async (opts: any) => createLocalTracks(opts);
@@ -5103,8 +5309,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       }, 1000);
 
       // Даём движку LiveKit время поднять транспорт перед публикацией (снижает "publication timed out" и "connection state mismatch").
-      if (!this.ended && this.room === room) {
-        await new Promise<void>(r => setTimeout(r, 350));
+      const postConnectPublishDelayMs = this.isCamOn ? 350 : 0;
+      if (postConnectPublishDelayMs > 0 && !this.ended && this.room === room) {
+        await new Promise<void>((r) => setTimeout(r, postConnectPublishDelayMs));
       }
 
       // КРИТИЧНО: Проверяем состояние комнаты перед публикацией треков
