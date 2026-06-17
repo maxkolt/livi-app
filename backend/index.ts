@@ -3395,16 +3395,15 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       }
 
-      // Важно для UX инициатора: presence-update не должен блокировать call:accepted.
-      // Сначала переводим участников на экран видеозвонка, затем обновляем busy у друзей.
-      try {
-        await emitPresenceUpdateCallToFriends(io, link.a, link.b, true);
-      } catch (e: any) {
+      ack?.({ ok: true });
+
+      // Важно для UX инициатора: presence-update не должен блокировать call:accept ack.
+      void emitPresenceUpdateCallToFriends(io, link.a, link.b, true).catch((e: any) => {
         logger.warn('[call:accept] emitPresenceUpdateCallToFriends failed (post-accepted)', {
           callId: id,
           error: e?.message,
         });
-      }
+      });
 
       // Сохраняем pending room для обоих участников, чтобы reconnect/reauth могли
       // восстановить call:accepted и подключение к LiveKit без повторного входящего.
@@ -3441,7 +3440,6 @@ io.on('connection', async (sock: AuthedSocket) => {
         bConnected: !!bSock,
         acceptFlowLatencyMs: Date.now() - acceptFlowStartedAt,
       });
-      ack?.({ ok: true });
     }
   });
 
