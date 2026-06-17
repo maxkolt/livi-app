@@ -1,0 +1,104 @@
+import { AppState, Platform, type AppStateStatus, NativeModules } from 'react-native';
+import { captureCallAudioRouteFromUi, isOngoingCallSession, resolveActiveCallInCallMedia } from './activeCallSession';
+import {
+  reapplyPersistedCallAudioRoute,
+  scheduleReapplyPersistedCallAudioRoute,
+} from './callAudioRoutePersist';
+import { armAndroidLeaveHintForVideoCallHome, syncAndroidLeaveHintForOngoingCall } from './activeCallNotification';
+
+const BACKGROUND_REAPPLY_DELAYS_MS = [0, 300, 900, 1500, 2500, 4000, 6000, 9000];
+const BACKGROUND_INTERVAL_MS = 10_000;
+const NATIVE_VOICE_MAINTAIN_MIN_MS = 12_000;
+
+let installed = false;
+let bgInterval: ReturnType<typeof setInterval> | null = null;
+let lastNativeVoiceMaintainAt = 0;
+
+function clearBackgroundInterval(): void {
+  if (bgInterval) {
+    clearInterval(bgInterval);
+    bgInterval = null;
+  }
+}
+
+function restoreSessionMicrophoneIfNeeded(): void {
+  try {
+    const session = (global as any).__webrtcSessionRef?.current;
+    if (session && typeof session.restoreMicrophoneAfterAppBackground === 'function') {
+      void session.restoreMicrophoneAfterAppBackground();
+    }
+  } catch {}
+}
+
+function nativeMaintainCallVoiceAudio(force = false): void {
+  if (Platform.OS !== 'android') return;
+  const now = Date.now();
+  if (!force && now - lastNativeVoiceMaintainAt < NATIVE_VOICE_MAINTAIN_MIN_MS) return;
+  lastNativeVoiceMaintainAt = now;
+  try {
+    NativeModules.LiviAppModule?.maintainActiveCallVoiceAudio?.();
+  } catch {}
+}
+
+/** Переприменить incall-маршрут и focus (Home, навигатор, другое приложение поверх). */
+export function maintainCallAudioForActiveCall(reason = 'maintain_active_call'): void {
+  if (!isOngoingCallSession()) return;
+  captureCallAudioRouteFromUi();
+  const media = resolveActiveCallInCallMedia();
+  nativeMaintainCallVoiceAudio(reason === 'app_state_background');
+  scheduleReapplyPersistedCallAudioRoute(reason, {
+    media,
+    delaysMs: BACKGROUND_REAPPLY_DELAYS_MS,
+  });
+  restoreSessionMicrophoneIfNeeded();
+}
+
+function onAppStateChange(next: AppStateStatus): void {
+  if (!isOngoingCallSession()) {
+    clearBackgroundInterval();
+    return;
+  }
+
+  if (next === 'background') {
+    armAndroidLeaveHintForVideoCallHome();
+    maintainCallAudioForActiveCall('app_state_background');
+    if (Platform.OS !== 'android') return;
+    clearBackgroundInterval();
+    const media = resolveActiveCallInCallMedia();
+    bgInterval = setInterval(() => {
+      if (AppState.currentState !== 'background' || !isOngoingCallSession()) {
+        clearBackgroundInterval();
+        return;
+      }
+      captureCallAudioRouteFromUi();
+      void reapplyPersistedCallAudioRoute('app_state_background_interval', { media });
+      nativeMaintainCallVoiceAudio(false);
+      restoreSessionMicrophoneIfNeeded();
+    }, BACKGROUND_INTERVAL_MS);
+    return;
+  }
+
+  if (next === 'active') {
+    clearBackgroundInterval();
+    lastNativeVoiceMaintainAt = 0;
+    syncAndroidLeaveHintForOngoingCall();
+    captureCallAudioRouteFromUi();
+    scheduleReapplyPersistedCallAudioRoute('app_state_foreground', {
+      media: resolveActiveCallInCallMedia(),
+      delaysMs: [0, 300, 900, 1500],
+    });
+    restoreSessionMicrophoneIfNeeded();
+    try {
+      const session = (global as any).__webrtcSessionRef?.current;
+      if (session && typeof session.restoreCameraAfterAppBackground === 'function') {
+        void session.restoreCameraAfterAppBackground();
+      }
+    } catch {}
+  }
+}
+
+export function installActiveCallBackgroundAudioHandlers(): void {
+  if (installed) return;
+  installed = true;
+  AppState.addEventListener('change', onAppStateChange);
+}

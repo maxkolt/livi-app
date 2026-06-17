@@ -10,13 +10,14 @@ import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../utils/callKeep';
-import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification, syncAndroidSystemPiPNativeFlags, isAndroidActiveCallEligibleForLeaveHint } from '../../utils/activeCallNotification';
+import { startActiveCallNotification, reenableAndroidSystemPiPLeaveHintAfterReturn, refreshAndroidActiveCallNotification, syncAndroidSystemPiPNativeFlags, isAndroidActiveCallEligibleForLeaveHint, shouldUseSystemPiPControlsCaptureOnly } from '../../utils/activeCallNotification';
 import {
   shouldUsePipPlaceholderOnly,
   prepareDirectCallAudioReturnFromPiP,
   isInAudioOnlyCallUi,
   setPipInAppRtcFromAudioOnlySticky,
   shouldAllowRtcVideoRenderInInAppPiP,
+  peekSystemPiPLeaveContextForReturn,
 } from './pipPlaceholderOnly';
 import {
   scheduleReapplyPersistedCallAudioRoute,
@@ -347,7 +348,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     const sub = emitter.addListener('SystemPiPModeChanged', (payload: { isInPiP?: boolean }) => {
       const inPiP = !!payload?.isInPiP;
       const traceId = (global as any).__activeHomePiPTraceIdRef?.current as string | null;
-      logHomePiPTrace('js_mode_changed', { traceId, inPiP });
+      logHomePiPTrace('js_mode_changed', { traceId: traceId ?? undefined, inPiP });
       noteHomePiPModeChanged(traceId, inPiP);
       const stableIds = resolveStablePiPIds();
       trackReleaseEvent('pip_enter_exit', {
@@ -390,6 +391,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         }
         setInSystemPiPMode(inPiP);
         if (!inPiP) {
+          try {
+            g.__systemPiPLiViBackdropActiveRef = g.__systemPiPLiViBackdropActiveRef || { current: false };
+            g.__systemPiPLiViBackdropActiveRef.current = false;
+          } catch (_) {}
+          setPendingSystemPiP(false);
           setDecorSizeForPiP(null);
           setSystemPiPCaptureActive(false);
           setSystemPiPCaptureRequestId(0);
@@ -796,9 +802,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     } catch {}
   }, [callId, roomId, lastNavParams]);
 
-  // AboutToEnterSystemPiP: единый сценарий системного PiP.
-  // При Home не показываем in-app PiP и не делаем reset на Home — входим напрямую в системный PiP,
-  // чтобы окно PiP содержало видео собеседника с текущего экрана VideoCall.
+  // AboutToEnterSystemPiP: системный PiP с заглушкой LiVi (без RTC/capture), с любого экрана активного звонка.
   useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
     const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
@@ -812,11 +816,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         decorW: payload?.width ?? 0,
         decorH: payload?.height ?? 0,
       });
-      logHomePiPTrace('js_about_to_enter_skip', {
-        traceId,
-        reason: 'policy_no_system_pip_on_leave_hint',
-      });
-      return;
       // Не входить в PiP без нажатия пользователя: при завершении звонка (переход на Home) onUserLeaveHint может сработать раньше нативного флага.
       if (g.__endingCallInProgressRef?.current === true) {
         return;
@@ -881,6 +880,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           ? (session as any).getLocalStream()
           : null);
       if (
+        !shouldUseSystemPiPControlsCaptureOnly() &&
         shouldUsePipPlaceholderOnly({
           localCamOn: localCamEarly,
           remoteCamOn: remoteCamEarly,
@@ -926,7 +926,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
       try {
         g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
-        g.__pendingSystemPiPSyncRef.current = true;
+        g.__pendingSystemPiPSyncRef.current = false;
         NativeModules.LiviAppModule?.setInAppPiPVisibleForSystemPiP?.(false);
       } catch (_) {}
 
@@ -972,7 +972,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         (session && typeof (session as any).getRemoteCamEnabled === 'function'
           ? (session as any).getRemoteCamEnabled()
           : false);
-      const placeholderOnlyHome = shouldUsePipPlaceholderOnly({
+      const placeholderOnlyHome = shouldUseSystemPiPControlsCaptureOnly()
+        ? true
+        : shouldUsePipPlaceholderOnly({
         localCamOn: localCamForPlaceholder,
         remoteCamOn: remoteCamForPlaceholder,
         remoteStream: params?.remoteStream ?? remoteFromSessionForPlaceholder ?? null,
@@ -987,7 +989,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       });
       try {
         NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholderOnlyHome);
-        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
+        if (!placeholderOnlyHome) {
+          NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(false);
+        }
       } catch (_) {}
       if (params?.callId && params?.roomId) {
         if (NativeModules.LiviAppModule?.setPiPEndCallParams) {
@@ -1028,12 +1032,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         }
       }
 
-      // Включаем отдельный fullscreen-host для system PiP capture (только Home).
-      const requestId = Date.now();
-      setPendingSystemPiP(true);
-      setSystemPiPCaptureActive(true);
-      setSystemPiPCaptureRequestId(requestId);
-      setAllowVideoRender(!placeholderOnlyHome);
+      // Black-only system PiP: нативный backdrop в MainActivity, без JS-оверлея (иначе мелькает сплэш/логотип).
+      setPendingSystemPiP(false);
+      setSystemPiPCaptureActive(false);
+      setSystemPiPCaptureRequestId(0);
+      try {
+        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+      } catch (_) {}
+      setAllowVideoRender(false);
       const apply = (decorSize: { width: number; height: number } | null) => {
         // Не применять размер окна PiP (типично ~334x594) — иначе при повторном входе layout/зум ломается.
         if (decorSize && decorSize.width > 400 && decorSize.height > 400) setDecorSizeForPiP(decorSize);
@@ -1103,7 +1109,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // returnToCall вызывается из App.tsx по событию SystemPiPExpanded (кнопка «развернуть» в системном PiP).
   // Параметры для навигации берутся из state (callId, roomId, lastNavParams), при null — из __currentCallPiPParamsRef
   // и __pipLastContextRef (см. комментарий выше), чтобы возврат работал даже при гонках.
-  const returnToCall = useCallback((opts?: { preferAudioOnlyUi?: boolean }) => {
+  const returnToCall = useCallback((opts?: { preferAudioOnlyUi?: boolean; restoreInAppPiP?: boolean }) => {
     const g = (global as any);
     const nav = g.__navRef;
     const currentRouteName = nav?.getCurrentRoute?.()?.name as string | undefined;
@@ -1176,6 +1182,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     };
 
     const preferAudioOnlyUi = opts?.preferAudioOnlyUi === true;
+    const restoreInAppPiP = opts?.restoreInAppPiP === true;
 
     const wasSystemPiP =
       inSystemPiPMode || g.__pipInSystemModeRef?.current === true;
@@ -1265,6 +1272,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
       if (preferAudioOnlyUi) {
         prepareDirectCallAudioReturnFromPiP();
+      } else if (restoreInAppPiP) {
+        g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+        g.__expandToVideoCallUiFromPiPRef.current = false;
+        g.__pipForceHiddenRef = g.__pipForceHiddenRef || { current: false };
+        g.__pipForceHiddenRef.current = false;
       } else {
         g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
         g.__expandToVideoCallUiFromPiPRef.current = true;
@@ -1388,6 +1400,64 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       return;
     }
 
+    if (restoreInAppPiP && !preferAudioOnlyUi) {
+      const leaveSnap = peekSystemPiPLeaveContextForReturn();
+      const targetRoute = leaveSnap.routeName || 'Home';
+      const showInAppFromParams = (): boolean => {
+        const params = g.__currentCallPiPParamsRef?.current;
+        const showFn = g.__pipShowPiPRef?.current;
+        const cid = params?.callId || effectiveCallId;
+        const rid = params?.roomId || effectiveRoomId;
+        if (!cid || !rid || typeof showFn !== 'function') return false;
+        showFn({
+          callId: String(cid),
+          roomId: String(rid),
+          partnerName: params?.partnerName,
+          partnerAvatarUrl: params?.partnerAvatarUrl,
+          localStream: params?.localStream ?? null,
+          remoteStream: params?.remoteStream ?? null,
+          muteLocal: params?.muteLocal,
+          muteRemote: params?.muteRemote,
+          localCamOn: params?.localCamOn,
+          remoteCamOn: params?.remoteCamOn,
+          navParams: params?.navParams ?? effectiveNavParams,
+          deferVisible: false,
+        });
+        try {
+          const sess = g.__webrtcSessionRef?.current;
+          if (sess?.enterPiP && typeof sess.enterPiP === 'function') {
+            sess.enterPiP();
+          }
+        } catch (_) {}
+        return true;
+      };
+      const completeRestore = () => {
+        if (!showInAppFromParams()) {
+          abortReturnToCallKeepPiP();
+          return;
+        }
+        setSuppressOverlayForReturn(false);
+        finishReturnToCallAfterNav();
+      };
+      if (!nav?.isReady?.()) {
+        abortReturnToCallKeepPiP();
+        return;
+      }
+      try {
+        const curRoute = nav.getCurrentRoute?.()?.name;
+        if (curRoute === targetRoute) {
+          completeRestore();
+        } else {
+          nav.dispatch(CommonActions.navigate({ name: targetRoute as any }));
+          setTimeout(completeRestore, 100);
+        }
+      } catch (e) {
+        logger.warn('[PiPContext] restoreInAppPiP navigation failed', e);
+        abortReturnToCallKeepPiP();
+      }
+      return;
+    }
+
     if (nav && effectiveCallId && effectiveRoomId) {
       doNavigate(String(effectiveCallId), String(effectiveRoomId), effectiveNavParams);
       return;
@@ -1425,7 +1495,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
   // Чтобы по кнопке «развернуть» в системном PiP возвращать на экран видеозвонка (App слушает SystemPiPExpanded и дергает этот ref).
   useEffect(() => {
     const g = global as any;
-    g.__pipReturnToCallRef = { current: () => returnToCall({ preferAudioOnlyUi: false }) };
+    g.__pipReturnToCallRef = {
+      current: (inner?: { restoreInAppPiP?: boolean }) =>
+        returnToCall({ preferAudioOnlyUi: false, restoreInAppPiP: inner?.restoreInAppPiP }),
+    };
     g.__pipReturnToAudioCallRef = { current: () => returnToCall({ preferAudioOnlyUi: true }) };
     return () => {
       delete g.__pipReturnToCallRef;

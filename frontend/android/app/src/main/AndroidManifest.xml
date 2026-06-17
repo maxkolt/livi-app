@@ -135,7 +135,7 @@
       <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Display incoming video call screen over other apps"/>
     </service>
     <!-- Активный видеозвонок: держим процесс в foreground, чтобы сокет не засыпал в фоне/PiP -->
-    <service android:name=".ActiveCallForegroundService" android:exported="false" android:foregroundServiceType="phoneCall"/>
+    <service android:name=".ActiveCallForegroundService" android:exported="false" android:foregroundServiceType="phoneCall|microphone"/>
     <!-- WebRTC screen-share FGS (mediaProjection): не используем в LiVi; убираем из merge — иначе Play ругается на BOOT_COMPLETED + Android 15. -->
     <service
       android:name="com.oney.WebRTCModule.MediaProjectionService"

@@ -6,6 +6,8 @@ import { RemoteVideo } from '../../components/VideoChat/shared/RemoteVideo';
 import { defaultLang } from '../../utils/i18n';
 import { usePiP } from './PiPContext';
 import { getPipPlaceholderOnlyDebug, mediaStreamHasLiveVideo } from './pipPlaceholderOnly';
+import { shouldUseSystemPiPControlsCaptureOnly } from '../../utils/activeCallNotification';
+import SystemPiPControlsPlaque from './SystemPiPControlsPlaque';
 import { logger } from '../../utils/logger';
 import { logHomePiPTrace } from '../../utils/systemPiPHomeTrace';
 
@@ -75,7 +77,7 @@ export default function SystemPiPCaptureHost() {
     remoteStream,
     localStream,
   });
-  const placeholderOnly = placeholderDebug.placeholderOnly;
+  const placeholderOnly = shouldUseSystemPiPControlsCaptureOnly() ? true : placeholderDebug.placeholderOnly;
   const hasLiveRemoteVideo = mediaStreamHasLiveVideo(remoteStream);
   const hasLiveLocalVideo = mediaStreamHasLiveVideo(localStream);
   const remoteCamOnForCapture = placeholderOnly ? false : remoteCamOn;
@@ -155,9 +157,13 @@ export default function SystemPiPCaptureHost() {
 
   useEffect(() => {
     if (!active || requestId <= 0) return;
+    if (placeholderOnly) {
+      setLayoutReady(true);
+      return;
+    }
     const t = setTimeout(() => setLayoutReady((prev) => prev || true), 180);
     return () => clearTimeout(t);
-  }, [active, requestId]);
+  }, [active, requestId, placeholderOnly]);
 
   useEffect(() => {
     if (!active || !layoutReady || requestId <= 0) {
@@ -177,8 +183,13 @@ export default function SystemPiPCaptureHost() {
     const requestSystemPiP = () => {
       if (cancelled) return;
       try {
-        logHomePiPTrace('js_frame_ready', { requestId, placeholderOnly: displayPlaceholderOnly, skipped: true });
-        // System PiP on Home/navigation is disabled; do not signal frame ready or retry enterPictureInPictureMode.
+        logHomePiPTrace('js_frame_ready', {
+          requestId,
+          placeholderOnly: displayPlaceholderOnly,
+          skipped: false,
+        });
+        NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+        NativeModules.LiviAppModule?.requestEnterPictureInPicture?.();
       } catch (error) {
         console.warn('[SystemPiPCaptureHost] setSystemPiPCaptureFrameReady threw', {
           requestId,
@@ -225,7 +236,7 @@ export default function SystemPiPCaptureHost() {
   return (
     <View
       collapsable={false}
-      pointerEvents="none"
+      pointerEvents={displayPlaceholderOnly ? 'box-none' : 'none'}
       style={styles.hostActive}
       onLayout={() => {
         if (!layoutReady) {
@@ -265,11 +276,13 @@ export default function SystemPiPCaptureHost() {
             useTextureView: true,
           } as any)}
         />
-      ) : active ? (
+      ) : displayPlaceholderOnly ? (
+        <SystemPiPControlsPlaque />
+      ) : (
         <View style={styles.fill}>
           <AwayPlaceholder />
         </View>
-      ) : null}
+      )}
     </View>
   );
 }

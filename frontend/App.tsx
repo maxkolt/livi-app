@@ -22,13 +22,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './utils/logger';
 import InCallManager from 'react-native-incall-manager';
 import { startIncomingCallAlert, stopIncomingCallAlert } from './utils/incomingCallAlert';
-import HomeScreen from "./screens/HomeScreen";
+import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen";
 import VideoCallScreen from "./screens/VideoCallScreen";
 import RandomChatScreen from "./screens/RandomChatScreen";
 import ChatScreen from "./screens/ChatScreen";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
-import SystemPiPCaptureHost from "./src/pip/SystemPiPCaptureHost";
+import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
@@ -79,8 +79,16 @@ import {
   setAndroidSystemPiPLeaveHintEnabled,
   shouldBlockAndroidLeaveHintDisarm,
   shouldAllowAndroidSystemPiPOnLeaveHint,
+  armAndroidLeaveHintForVideoCallHome,
+  syncAndroidLeaveHintForOngoingCall,
 } from './utils/activeCallNotification';
-import { resolvePreferAudioOnlyUiOnActiveCallReturn, prepareDirectCallAudioReturnFromPiP } from './src/pip/pipPlaceholderOnly';
+import {
+  resolvePreferAudioOnlyUiOnActiveCallReturn,
+  prepareDirectCallAudioReturnFromPiP,
+  peekSystemPiPLeaveContextForReturn,
+} from './src/pip/pipPlaceholderOnly';
+import { installActiveCallBackgroundAudioHandlers, maintainCallAudioForActiveCall } from './utils/activeCallBackgroundAudio';
+import { isOngoingCallSession } from './utils/activeCallSession';
 
 // Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
 const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
@@ -344,6 +352,9 @@ function AppContent() {
   const lang = useLang((s) => s.lang);
   const hydrateLang = useLang((s) => s.hydrate);
   const insets = useSafeAreaInsets();
+  React.useEffect(() => {
+    installActiveCallBackgroundAudioHandlers();
+  }, []);
   /** Пока true — не скрываем оверлей. После обработки initial URL (в т.ч. answer-call) ставим true, чтобы не мелькала Home у принимающего. */
   const [initialUrlProcessed, setInitialUrlProcessed] = React.useState(false);
   /** Android: модалка «Разрешить отображение поверх других окон», пока разрешение не выдано. */
@@ -773,6 +784,7 @@ function AppContent() {
           return;
         }
         g.__lastSystemPiPExpandedAtRef.current = now;
+        markHomeScreenBootedForSession();
         g.__systemPiPReturnTokenRef = g.__systemPiPReturnTokenRef || { current: 0 };
         g.__systemPiPReturnTokenRef.current = now;
         g.__systemPiPReturnStateRef = g.__systemPiPReturnStateRef || { current: null };
@@ -782,11 +794,19 @@ function AppContent() {
           restoredAt: 0,
           settledUntil: 0,
         };
-        // Разворот системного PiP (стрелки) — всегда полноэкранный видеозвонок, не audio-only UI.
+        const leaveCtx = peekSystemPiPLeaveContextForReturn();
         g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
-        g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
         g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-        g.__expandToVideoCallUiFromPiPRef.current = true;
+        if (leaveCtx.preferAudioOnly) {
+          g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+          g.__expandToVideoCallUiFromPiPRef.current = false;
+        } else if (leaveCtx.restoreInAppPiP) {
+          g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+          g.__expandToVideoCallUiFromPiPRef.current = false;
+        } else {
+          g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+          g.__expandToVideoCallUiFromPiPRef.current = true;
+        }
         g.__suppressAbortDuringSystemPiPReturnUntilRef =
           g.__suppressAbortDuringSystemPiPReturnUntilRef || { current: 0 };
         g.__suppressAbortDuringSystemPiPReturnUntilRef.current = Math.max(
@@ -804,9 +824,17 @@ function AppContent() {
         NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
         requestExitSystemPiPSoft();
       } catch (_) {}
-      const fn = (global as any).__pipReturnToCallRef?.current;
+      const leaveCtx = peekSystemPiPLeaveContextForReturn();
+      const preferAudioOnly = leaveCtx.preferAudioOnly;
+      const fn = preferAudioOnly
+        ? (global as any).__pipReturnToAudioCallRef?.current
+        : (global as any).__pipReturnToCallRef?.current;
       if (typeof fn === 'function') {
-        fn();
+        if (preferAudioOnly) {
+          fn();
+        } else {
+          fn({ restoreInAppPiP: leaveCtx.restoreInAppPiP });
+        }
         reenableAndroidSystemPiPLeaveHintAfterReturn();
         return;
       }
@@ -817,27 +845,54 @@ function AppContent() {
       if (params?.callId && params?.roomId && nav?.isReady?.()) {
         const g = global as any;
         const returnToken = Number(g.__systemPiPReturnTokenRef?.current || Date.now());
-        nav.dispatch(
-          CommonActions.reset({
-            index: 1,
-            routes: [
-              { name: 'Home' as const },
-              {
-                name: 'VideoCall' as const,
-                params: {
-                  resume: true,
-                  fromPiP: true,
-                  systemPiPReturnToken: returnToken,
-                  callId: params.callId,
-                  roomId: params.roomId,
-                  directCall: true,
-                  preferVideoCallUi: true,
+        if (preferAudioOnly) {
+          prepareDirectCallAudioReturnFromPiP();
+        }
+        if (leaveCtx.restoreInAppPiP && !preferAudioOnly) {
+          const target = (leaveCtx.routeName as keyof RootStackParamList) || 'Home';
+          nav.dispatch(CommonActions.navigate({ name: target as any }));
+          const showPiP = g.__pipShowPiPRef?.current;
+          if (typeof showPiP === 'function') {
+            showPiP({
+              callId: params.callId,
+              roomId: params.roomId,
+              partnerName: params.partnerName,
+              partnerAvatarUrl: params.partnerAvatarUrl,
+              localStream: params.localStream ?? null,
+              remoteStream: params.remoteStream ?? null,
+              muteLocal: params.muteLocal,
+              muteRemote: params.muteRemote,
+              localCamOn: params.localCamOn,
+              remoteCamOn: params.remoteCamOn,
+              navParams: params.navParams,
+              deferVisible: false,
+            });
+          }
+        } else {
+          nav.dispatch(
+            CommonActions.reset({
+              index: 1,
+              routes: [
+                { name: 'Home' as const },
+                {
+                  name: 'VideoCall' as const,
+                  params: {
+                    resume: true,
+                    fromPiP: true,
+                    systemPiPReturnToken: returnToken,
+                    callId: params.callId,
+                    roomId: params.roomId,
+                    directCall: true,
+                    ...(preferAudioOnly
+                      ? { audioOnlyPiPReturn: true }
+                      : { preferVideoCallUi: true }),
+                  },
                 },
-              },
-            ],
-          })
-        );
-        console.log('[App] SystemPiPExpanded fallback: dispatched reset to VideoCall');
+              ],
+            })
+          );
+        }
+        console.log('[App] SystemPiPExpanded fallback: navigation dispatched');
       }
       reenableAndroidSystemPiPLeaveHintAfterReturn();
     });
@@ -1000,6 +1055,11 @@ function AppContent() {
       g.__bumpAndroidPipGuardRef.current = null;
     };
   }, []);
+
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    syncAndroidLeaveHintForOngoingCall();
+  }, [routeName, androidPipGuardTick]);
 
   // ==== incoming call (global, когда не на экране видеозвонка) ====
   const [incoming, setIncoming] = React.useState<{ callId: string; from: string; fromNick?: string } | null>(null);
@@ -1319,7 +1379,9 @@ function AppContent() {
     const LiviAppModule = NativeModules.LiviAppModule;
     const tryPending = () => {
       LiviAppModule?.getAndClearPendingReturnToActiveCall?.()?.then?.((result: boolean | { pending?: boolean; audioOnly?: boolean }) => {
-        const pending = result === true || result?.pending === true;
+        const pending =
+          result === true ||
+          (typeof result === 'object' && result !== null && result.pending === true);
         if (!pending) return;
         const preferAudioOnlyFromNative =
           typeof (result as { audioOnly?: boolean })?.audioOnly === 'boolean'
@@ -1728,7 +1790,6 @@ function AppContent() {
         // При активном звонке (экран VideoCall или in-app PiP) guard не должен гасить leaveHint —
         // иначе по нажатию Home системный PiP не покажется.
         const allowWhileGuardActive =
-          isVideoSessionRoute(currentRoute) &&
           sessionNotEndedForGuard &&
           videoCallStillActiveByRef &&
           hasCallIdsForGuard;
@@ -1769,9 +1830,7 @@ function AppContent() {
         const onVideoCallWithActiveSession =
           !videoCallInactiveByRef && isVideoSessionRoute(currentRoute) && sessionNotEnded;
         const allowSystemPiP =
-          isVideoSessionRoute(currentRoute) &&
-          onVideoCallWithActiveSession &&
-          shouldAllowAndroidSystemPiPOnLeaveHint();
+          hasActiveCallForPiP && isAndroidActiveCallEligibleForLeaveHint();
         const logKey = JSON.stringify({
           currentRoute,
           allowSystemPiP: !!allowSystemPiP,
@@ -1871,6 +1930,10 @@ function AppContent() {
             (typeof bgSession.isEnded !== 'function' || !bgSession.isEnded());
           if (callStillLive && typeof bgSession.onAppBackgroundDuringActiveCall === 'function') {
             bgSession.onAppBackgroundDuringActiveCall();
+          }
+          if (callStillLive) {
+            armAndroidLeaveHintForVideoCallHome();
+            maintainCallAudioForActiveCall('app_content_background');
           }
         } catch (_) {}
         // Проверяем: в системном PiP с активным звонком — экран не гасим до завершения звонка
@@ -2023,8 +2086,10 @@ function AppContent() {
       if (Platform.OS === 'android') {
         try {
           (InCallManager as any).setKeepScreenOn?.(false);
-          InCallManager.stop();
-          logger.debug('[App] setKeepScreenOn(false) deactivated for Android (unmount)');
+          if (!isOngoingCallSession()) {
+            InCallManager.stop();
+            logger.debug('[App] setKeepScreenOn(false) deactivated for Android (unmount)');
+          }
         } catch (e) {
           logger.warn('[App] Failed to setKeepScreenOn(false) on Android (unmount):', e);
         }
@@ -3142,7 +3207,7 @@ function AppContent() {
 
           {/* In-app PiP не показывается на экране видеозвонка (VideoCall/RandomChat) — только на Home и др. */}
           <PiPOverlay currentRouteName={routeName} />
-          <SystemPiPCaptureHost />
+          <SystemPiPLogoLayer />
 
           {/* Android: запрос разрешения «Отображение поверх других окон» при первом заходе (без Alert) */}
           {Platform.OS === 'android' && (

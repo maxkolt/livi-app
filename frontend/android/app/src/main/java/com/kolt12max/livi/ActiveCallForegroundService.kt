@@ -9,7 +9,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 
@@ -20,18 +22,28 @@ import androidx.core.app.ServiceCompat
  */
 class ActiveCallForegroundService : Service() {
 
+    private val audioMaintainHandler = Handler(Looper.getMainLooper())
+    private var audioMaintainRunnable: Runnable? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         partnerNick = intent?.getStringExtra(EXTRA_PARTNER_NICK)?.trim()?.takeIf { it.isNotEmpty() }
         audioOnly = intent?.getBooleanExtra(EXTRA_AUDIO_ONLY, false) == true
-        // Явно указываем тип FGS, чтобы Android 13+ корректно трекал policy для phoneCall-сервиса.
+        // phoneCall + microphone: микрофон и приём голоса в фоне (навигатор / другое приложение поверх).
         val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+            if (Build.VERSION.SDK_INT >= 34) {
+                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            type
         } else {
             0
         }
         ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), fgsType)
+        LiviAppModule.setActiveCallForegroundRunningStatic(true)
+        LiviAppModule.beginActiveCallVoiceAudioHoldStatic(applicationContext)
+        scheduleAudioMaintainLoop()
         try {
             val p = org.json.JSONObject()
                 .put("source", "active_call_service")
@@ -42,6 +54,32 @@ class ActiveCallForegroundService : Service() {
             }
         } catch (_: Exception) {}
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        cancelAudioMaintainLoop()
+        LiviAppModule.setActiveCallForegroundRunningStatic(false)
+        LiviAppModule.endActiveCallVoiceAudioHoldStatic(applicationContext)
+        super.onDestroy()
+    }
+
+    private fun scheduleAudioMaintainLoop() {
+        cancelAudioMaintainLoop()
+        val r = object : Runnable {
+            override fun run() {
+                try {
+                    LiviAppModule.maintainActiveCallVoiceAudioStatic(applicationContext)
+                } catch (_: Exception) {}
+                audioMaintainHandler.postDelayed(this, AUDIO_MAINTAIN_INTERVAL_MS)
+            }
+        }
+        audioMaintainRunnable = r
+        audioMaintainHandler.postDelayed(r, AUDIO_MAINTAIN_INTERVAL_MS)
+    }
+
+    private fun cancelAudioMaintainLoop() {
+        audioMaintainRunnable?.let { audioMaintainHandler.removeCallbacks(it) }
+        audioMaintainRunnable = null
     }
 
     private var partnerNick: String? = null
@@ -106,6 +144,7 @@ class ActiveCallForegroundService : Service() {
 
     companion object {
         private const val TAG = "ActiveCallFg"
+        private const val AUDIO_MAINTAIN_INTERVAL_MS = 12_000L
         private const val CHANNEL_ID = "livi_active_call_channel"
         private const val CHANNEL_ID_AUDIO = "livi_active_audio_call_channel"
         private const val NOTIFICATION_ID = 1004

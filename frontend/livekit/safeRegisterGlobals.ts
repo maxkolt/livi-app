@@ -5,7 +5,7 @@
  */
 import 'well-known-symbols/Symbol.asyncIterator/auto';
 import 'well-known-symbols/Symbol.iterator/auto';
-import '@livekit/react-native/src/polyfills/MediaRecorderShim';
+import './MediaRecorderShim';
 import { registerGlobals as webrtcRegisterGlobals } from '@livekit/react-native-webrtc';
 import { setupURLPolyfill } from 'react-native-url-polyfill';
 import '@livekit/react-native/src/polyfills/EncoderDecoderTogether.min.js';
@@ -22,10 +22,9 @@ export interface SafeRegisterGlobalsOptions {
 
 function iosCategoryEnforce(): void {
   if (Platform.OS === 'ios') {
-    // @ts-expect-error RN web globals
-    const getUserMediaFunc = global.navigator.mediaDevices.getUserMedia;
-    // @ts-expect-error RN web globals
-    global.navigator.mediaDevices.getUserMedia = async (constraints: { audio?: unknown }) => {
+    const mediaDevices = global.navigator.mediaDevices as MediaDevices;
+    const getUserMediaFunc = mediaDevices.getUserMedia.bind(mediaDevices);
+    mediaDevices.getUserMedia = async (constraints: MediaStreamConstraints) => {
       if (constraints.audio) {
         await AudioSession.setAppleAudioConfiguration({
           audioCategory: 'playAndRecord',
@@ -41,17 +40,20 @@ function livekitRegisterGlobals(): void {
     platform: Platform.OS,
     devicePixelRatio: PixelRatio.get(),
   };
-  // @ts-expect-error LiveKit global
-  global.LiveKitReactNativeGlobal = lkGlobal;
+  (global as typeof globalThis & { LiveKitReactNativeGlobal?: LiveKitReactNativeInfo }).LiveKitReactNativeGlobal =
+    lkGlobal;
 }
 
 function fixWebrtcAdapter(): void {
-  // @ts-expect-error RN web globals
-  if (window?.navigator !== undefined) {
-    // @ts-expect-error RN web globals
-    const { navigator } = window;
-    if (navigator.userAgent === undefined) {
-      navigator.userAgent = navigator.product ?? 'Unknown';
+  const nav = global.navigator as Navigator & { userAgent?: string; product?: string };
+  if (nav && nav.userAgent === undefined) {
+    try {
+      Object.defineProperty(nav, 'userAgent', {
+        value: nav.product ?? 'Unknown',
+        configurable: true,
+      });
+    } catch {
+      (nav as { userAgent: string }).userAgent = nav.product ?? 'Unknown';
     }
   }
 }
@@ -75,15 +77,15 @@ function shimCryptoUuid(): void {
 }
 
 function shimWebstreams(): void {
-  // @ts-expect-error polyfill attach
-  if (typeof global.WritableStream === 'undefined') {
-    // @ts-expect-error polyfill attach
-    global.WritableStream = WritableStream;
+  const g = global as typeof globalThis & {
+    WritableStream?: typeof WritableStream;
+    ReadableStream?: typeof ReadableStream;
+  };
+  if (typeof g.WritableStream === 'undefined') {
+    g.WritableStream = WritableStream;
   }
-  // @ts-expect-error polyfill attach
-  if (typeof global.ReadableStream === 'undefined') {
-    // @ts-expect-error polyfill attach
-    global.ReadableStream = ReadableStream;
+  if (typeof g.ReadableStream === 'undefined') {
+    g.ReadableStream = ReadableStream as any;
   }
 }
 

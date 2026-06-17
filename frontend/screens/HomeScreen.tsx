@@ -712,7 +712,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
             }}
           >
             <LinearGradient
-              colors={colors}
+              colors={colors as unknown as readonly [string, string, ...string[]]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={{
@@ -884,6 +884,10 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
 
 /** При возврате на Home (например из VideoCall по Back → PiP) экран монтируется заново и state сбрасывается — без этого флага снова показывался бы SplashLoader. Запоминаем, что контент уже показывали в этой сессии. */
 let homeScreenAlreadyBooted = false;
+
+export function markHomeScreenBootedForSession() {
+  homeScreenAlreadyBooted = true;
+}
 
 export default function HomeScreen({ navigation, route }: Props & { route?: { params?: HomeRouteParams } }) {
   const { width: layoutWidth } = useWindowDimensions();
@@ -3187,6 +3191,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       loadProfileSync();
     }
   }, [loadProfileSync, profileKey, resolvedUserId, profileLoaded]); // Перезагружаем при изменении profileKey или currentUserId
+
+  useEffect(() => {
+    if (homeScreenAlreadyBooted && !splashDismissed) {
+      setSplashDismissed(true);
+    }
+  }, [splashDismissed]);
 
   // Запоминаем, что сплеш уже был скрыт в этой сессии — при возврате из VideoCall/PiP не показывать его снова.
   useEffect(() => {

@@ -111,8 +111,9 @@ export function noteHomePiPModeChanged(traceId: string | null, inPiP: boolean): 
   let state = outcomes.get(id);
   if (!state) {
     beginHomePiPOutcomeWatch(id);
-    state = outcomes.get(id)!;
+    state = outcomes.get(id);
   }
+  if (!state) return;
   if (inPiP) {
     state.sawEnter = true;
     state.enterAt = Date.now();

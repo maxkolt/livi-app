@@ -15,6 +15,7 @@ import {
   LocalVideoTrack,
   createLocalTracks,
   VideoPresets,
+  ConnectionState,
 } from 'livekit-client';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, WebRTCSessionCallbacks, CamSide } from '../types';
@@ -896,6 +897,7 @@ export class VideoCallSession extends SimpleEventEmitter {
    */
   onAppBackgroundDuringActiveCall(): void {
     if (this.ended || this.endCallInProgress) return;
+    void this.restoreMicrophoneAfterAppBackground().catch(() => {});
     try {
       const g = global as any;
       if (g.__inAudioOnlyUiRef?.current === true) return;
@@ -949,6 +951,67 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (this.ended || this.endCallInProgress || !this.cameraSuspendedForAppBackground) return;
     if (AppState.currentState !== 'active') return;
     void this.restoreCameraAfterAppBackground();
+  }
+
+  /**
+   * Фон / другое приложение поверх: восстановить mic uplink и публикацию в LiveKit.
+   */
+  async restoreMicrophoneAfterAppBackground(): Promise<void> {
+    if (this.ended || this.endCallInProgress || !this.isMicOn) return;
+    const room = this.room;
+    if (!room || room.state !== 'connected' || !room.localParticipant) return;
+
+    try {
+      await room.localParticipant.setMicrophoneEnabled(true);
+    } catch (e) {
+      logger.debug('[VideoCallSession] restoreMicrophone setMicrophoneEnabled', e);
+    }
+
+    const audioMt = this.localAudioTrack?.mediaStreamTrack;
+    if (audioMt?.readyState === 'ended') {
+      try {
+        logger.info('[VideoCallSession] Recreating local audio track after background');
+        const tracks = await createLocalTracks({ audio: true, video: false });
+        const newAudio = tracks.find((t) => t.kind === Track.Kind.Audio) as LocalAudioTrack | undefined;
+        if (newAudio) {
+          try {
+            this.localAudioTrack?.stop();
+          } catch {}
+          this.localAudioTrack = newAudio;
+          await this.unpublishOtherLocalTracks('audio', newAudio);
+          await room.localParticipant.publishTrack(newAudio).catch((e) => {
+            logger.warn('[VideoCallSession] Publish recreated audio after background failed', e);
+          });
+          const stream = this.localStream ?? new MediaStream();
+          try {
+            const stale = stream.getAudioTracks();
+            stale.forEach((t) => {
+              try {
+                stream.removeTrack(t);
+              } catch {}
+            });
+            const mt = newAudio.mediaStreamTrack;
+            if (mt) stream.addTrack(mt as any);
+          } catch {}
+          this.localStream = stream;
+          this.emit('localStream', stream);
+          this.notifyLocalStreamChange(stream);
+        }
+      } catch (e) {
+        logger.warn('[VideoCallSession] restoreMicrophone recreate failed', e);
+      }
+      return;
+    }
+
+    if (this.localAudioTrack && !this.isAudioTrackPublished(this.localAudioTrack)) {
+      try {
+        await this.unpublishOtherLocalTracks('audio', this.localAudioTrack);
+        await room.localParticipant.publishTrack(this.localAudioTrack).catch(() => {});
+      } catch {}
+    }
+    try {
+      if (this.isMicOn) await this.localAudioTrack?.unmute().catch(() => {});
+    } catch {}
   }
 
   async toggleCam(): Promise<void> {
@@ -4373,7 +4436,8 @@ export class VideoCallSession extends SimpleEventEmitter {
           await new Promise((resolve) => setTimeout(resolve, 100));
           waitCount++;
         }
-        if (this.room?.state === 'connected') {
+        const stateAfterReconnectWait = this.room?.state as ConnectionState;
+        if (stateAfterReconnectWait === ConnectionState.Connected && this.room) {
           this.currentRoomName = this.currentRoomName || this.room.name || targetRoomName;
           return true;
         }
@@ -5178,7 +5242,8 @@ export class VideoCallSession extends SimpleEventEmitter {
           await new Promise((resolve) => setTimeout(resolve, 100));
           earlyWait++;
         }
-        if (this.room === room && room.state === 'connected') {
+        const stateAfterEarlyReconnect = room.state as ConnectionState;
+        if (this.room === room && stateAfterEarlyReconnect === ConnectionState.Connected) {
           this.currentRoomName = this.currentRoomName || room.name || targetRoomName || null;
           this.lastLiveKitUrl = url;
           this.lastLiveKitToken = token;
@@ -5266,7 +5331,8 @@ export class VideoCallSession extends SimpleEventEmitter {
             await new Promise((resolve) => setTimeout(resolve, 100));
             waitCount++;
           }
-          if (this.room === room && room.state === 'connected') {
+          const stateAfterReconnect = room.state as ConnectionState;
+          if (this.room === room && stateAfterReconnect === ConnectionState.Connected) {
             this.currentRoomName = this.currentRoomName || room.name || targetRoomName || null;
             this.lastLiveKitUrl = url;
             this.lastLiveKitToken = token;

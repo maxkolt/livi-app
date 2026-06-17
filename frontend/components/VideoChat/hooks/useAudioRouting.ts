@@ -14,6 +14,7 @@ import {
   scheduleReapplyPersistedCallAudioRoute,
   shouldPreserveCallAudioRouteInInAppPiP,
 } from '../../../utils/callAudioRoutePersist';
+import { isOngoingCallSession, resolveActiveCallInCallMedia } from '../../../utils/activeCallSession';
 import {
   type InCallAudioRoute,
   isExternalHeadsetRoute,
@@ -487,9 +488,15 @@ export const useAudioRouting = (
     try {
       const pipVisible = !!(global as any).__pipVisibleRef?.current;
       const inSystemPiP = (global as any).__pipInSystemModeRef?.current === true;
-      if (pipVisible || inSystemPiP) {
-        if (pipVisible && shouldPreserveCallAudioRouteInInAppPiP()) {
-          scheduleReapplyPersistedCallAudioRoute('stopSpeaker_skip_in_app_pip', { media: 'audio' });
+      const keepCallAudio = isOngoingCallSession();
+      if (pipVisible || inSystemPiP || keepCallAudio) {
+        if (
+          keepCallAudio ||
+          (pipVisible && shouldPreserveCallAudioRouteInInAppPiP())
+        ) {
+          scheduleReapplyPersistedCallAudioRoute('stopSpeaker_skip_active_call', {
+            media: resolveActiveCallInCallMedia(),
+          });
         }
         return;
       }

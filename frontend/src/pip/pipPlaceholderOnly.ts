@@ -267,3 +267,46 @@ export function resolvePreferAudioOnlyUiOnPiPReturn(opts?: {
     return false;
   }
 }
+
+export type SystemPiPLeaveContext = {
+  preferAudioOnly: boolean;
+  restoreInAppPiP: boolean;
+  routeName: string | null;
+  capturedAt: number;
+};
+
+/** Держим актуальный снимок UI до Home → system PiP (onUserLeaveHint раньше AppState background). */
+export function refreshSystemPiPLeaveContextSnapshot(): void {
+  try {
+    const g = global as any;
+    const params = g.__currentCallPiPParamsRef?.current;
+    const preferAudioOnly = resolvePreferAudioOnlyUiOnPiPReturn({
+      localCamOn: params?.localCamOn,
+      remoteCamOn: params?.remoteCamOn,
+      remoteStream: params?.remoteStream,
+      localStream: params?.localStream,
+    });
+    const inAppPiP = g.__pipVisibleRef?.current === true;
+    g.__systemPiPLeaveContextSnapshotRef = {
+      preferAudioOnly,
+      restoreInAppPiP: inAppPiP && !preferAudioOnly,
+      routeName: (g.__navRef?.getCurrentRoute?.()?.name as string | undefined) ?? null,
+      capturedAt: Date.now(),
+    };
+  } catch {}
+}
+
+export function peekSystemPiPLeaveContextForReturn(): SystemPiPLeaveContext {
+  try {
+    const snap = (global as any).__systemPiPLeaveContextSnapshotRef as SystemPiPLeaveContext | undefined;
+    if (snap && Date.now() - snap.capturedAt < 120_000) {
+      return snap;
+    }
+  } catch {}
+  return {
+    preferAudioOnly: resolvePreferAudioOnlyUiOnPiPReturn(),
+    restoreInAppPiP: false,
+    routeName: null,
+    capturedAt: Date.now(),
+  };
+}

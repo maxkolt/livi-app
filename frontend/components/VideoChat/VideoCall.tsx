@@ -39,7 +39,7 @@ import { uiAccent } from '../../theme/uiAccent';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { usePiP, isPipOverlayVisibleSync } from '../../src/pip/PiPContext';
-import { setPipAudioOnlyPlaceholderSticky, shouldUsePipPlaceholderOnly, isInAudioOnlyCallUi, pipInAppBarEnteredFromAudioOnly } from '../../src/pip/pipPlaceholderOnly';
+import { setPipAudioOnlyPlaceholderSticky, shouldUsePipPlaceholderOnly, isInAudioOnlyCallUi, pipInAppBarEnteredFromAudioOnly, refreshSystemPiPLeaveContextSnapshot } from '../../src/pip/pipPlaceholderOnly';
 import socket, {
   fetchFriends,
   getCurrentUserId,
@@ -57,6 +57,7 @@ import {
   syncAndroidSystemPiPLeaveHintForActiveVideoCall,
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
+import { isOngoingCallSession } from '../../utils/activeCallSession';
 import { iconNameForRoute, type InCallAudioRoute } from './hooks/audioRouteTypes';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
@@ -1052,6 +1053,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         audioOutputRoute: userRouteRef.current,
         navParams: { ...route?.params, peerUserId: partnerUserId, partnerId } as any,
       };
+      refreshSystemPiPLeaveContextSnapshot();
     };
 
     // Не очищаем ref при !canEnableSystemPiP — иначе при возврате из системного PiP returnToCall получит null.
@@ -1065,15 +1067,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     syncPiPParamsRef();
     const holdLeaveHintForHome =
       isAndroidLeaveHintHomeTransitionHold() || appState === 'background';
-    const shouldSyncActiveCallNativeState =
-      sessionAliveForSystemPiP &&
+    const shouldArmLeaveHintNative =
+      hasStableSystemPiPContext &&
       globalVideoCallActiveForPiP &&
-      !isInactiveState &&
-      (canEnableSystemPiP || holdLeaveHintForHome);
+      !isInactiveState;
+    const shouldSyncActiveCallNativeState =
+      shouldArmLeaveHintNative && (canEnableSystemPiP || holdLeaveHintForHome || isOngoingCallSession());
     if (Platform.OS === 'android') {
-      if (shouldSyncActiveCallNativeState || shouldBlockAndroidLeaveHintDisarm()) {
+      if (shouldArmLeaveHintNative || shouldBlockAndroidLeaveHintDisarm() || isOngoingCallSession()) {
         setAndroidSystemPiPLeaveHintEnabled(true);
-      } else {
+      } else if (!holdLeaveHintForHome) {
         setAndroidSystemPiPLeaveHintEnabled(false);
       }
     }

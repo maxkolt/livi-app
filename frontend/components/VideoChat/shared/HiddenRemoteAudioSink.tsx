@@ -29,11 +29,13 @@ export const HiddenRemoteAudioSink: React.FC<Props> = ({ stream, remoteMuted = f
   return (
     <View pointerEvents="none" style={styles.host} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       <RTCView
-        stream={stream}
         streamURL={streamURL}
-        objectFit="cover"
-        zOrder={0}
-        {...(Platform.OS === 'android' ? { zOrderMediaOverlay: false } : {})}
+        {...({
+          stream,
+          objectFit: 'cover',
+          zOrder: 0,
+          ...(Platform.OS === 'android' ? { zOrderMediaOverlay: false } : {}),
+        } as any)}
       />
     </View>
   );

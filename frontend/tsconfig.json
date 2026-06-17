@@ -24,6 +24,7 @@
     "src",
     "components",
     "utils",
+    "livekit",
     "App.tsx",
     "global.d.ts"
   ]

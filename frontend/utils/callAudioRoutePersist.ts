@@ -5,6 +5,7 @@ import { isExternalHeadsetRoute, normalizeInCallRoute } from '../components/Vide
 import { beginBackgroundMediaSuppression } from './callKeep';
 import { applyNativeVoiceCallSpeaker } from './voiceCallAudioRoute';
 import { logger } from './logger';
+import { captureCallAudioRouteFromUi } from './activeCallSession';
 
 export function setPersistedCallAudioRoute(route: InCallAudioRoute): void {
   try {
@@ -37,6 +38,7 @@ export async function reapplyPersistedCallAudioRoute(
 ): Promise<void> {
   reapplyChain = reapplyChain
     .then(async () => {
+      captureCallAudioRouteFromUi();
       const route = getPersistedCallAudioRoute();
       if (!route) return;
 

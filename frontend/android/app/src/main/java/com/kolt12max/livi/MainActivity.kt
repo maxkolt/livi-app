@@ -14,6 +14,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Rational
+import android.view.View
+import android.view.ViewGroup
 import androidx.activity.OnBackPressedCallback
 
 import com.facebook.react.ReactActivity
@@ -72,6 +74,52 @@ class MainActivity : ReactActivity() {
   /** Корреляция одного нажатия Home → system PiP (logcat SysPiPHome). */
   private var currentHomePiPTraceId: String = ""
   private var homePiPEnterAttemptSeq: Int = 0
+  /** Нативная заглушка LiVi поверх RN — единый кадр system PiP на всех устройствах. */
+  private var systemPiPBackdrop: View? = null
+
+  private fun showSystemPiPBackdropForCapture() {
+    try {
+      val decor = window?.decorView as? ViewGroup ?: return
+      val backdrop = systemPiPBackdrop ?: run {
+        val inflated = layoutInflater.inflate(R.layout.system_pip_backdrop, decor, false)
+        decor.addView(
+          inflated,
+          ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+          ),
+        )
+        inflated.elevation = 10000f
+        inflated.translationZ = 10000f
+        systemPiPBackdrop = inflated
+        inflated
+      }
+      backdrop.visibility = View.VISIBLE
+      backdrop.bringToFront()
+      decor.requestLayout()
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "showSystemPiPBackdropForCapture failed", e)
+    }
+  }
+
+  private fun restoreMainWindowBackgroundAfterPiP() {
+    try {
+      window.setBackgroundDrawable(null)
+    } catch (_: Exception) {
+      try {
+        window.decorView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+      } catch (_: Exception) {}
+    }
+  }
+
+  private fun hideSystemPiPBackdropForCapture() {
+    try {
+      systemPiPBackdrop?.visibility = View.GONE
+      if (!isInPictureInPictureMode) {
+        restoreMainWindowBackgroundAfterPiP()
+      }
+    } catch (_: Exception) {}
+  }
 
   private fun homePiPTrace(phase: String, extras: Bundle.() -> Unit = {}) {
     if (currentHomePiPTraceId.isBlank()) {
@@ -106,6 +154,9 @@ class MainActivity : ReactActivity() {
     pendingPiPEnterRunnables.clear()
     isPiPEnterAttemptRunning = false
     leaveHintPiPEnterRunnable = null
+    if (!isInPictureInPictureMode) {
+      hideSystemPiPBackdropForCapture()
+    }
   }
 
   /** После явного возврата на VideoCall (тап PiP / уведомление) — снова разрешить Home → system PiP. */
@@ -138,12 +189,15 @@ class MainActivity : ReactActivity() {
     return true
   }
 
-  private fun buildSystemPiPSourceRect(): Rect? {
+  private fun buildSystemPiPSourceRect(placeholderOnly: Boolean = true): Rect? {
     return try {
       val root = window?.decorView ?: return null
       val w = root.width
       val h = root.height
       if (w <= 0 || h <= 0) return null
+      if (placeholderOnly) {
+        return Rect(0, 0, w, h)
+      }
       val ratioW = 9f
       val ratioH = 16f
       val targetW: Int
@@ -217,6 +271,7 @@ class MainActivity : ReactActivity() {
     wasInPip = false
     expandedEmittedForPipExit = true
     LiviAppModule.setPiPOnLeaveHintEnabled(false)
+    hideSystemPiPBackdropForCapture()
     android.util.Log.i("MainActivity", "PiP exit: $reason -> emitting SystemPiPExpanded")
     LiviAppModule.emitSystemPiPExpanded()
   }
@@ -225,6 +280,9 @@ class MainActivity : ReactActivity() {
     super.onResume()
     lastResumedInstance = this
     isInForeground = true
+    if (!isInPictureInPictureMode) {
+      hideSystemPiPBackdropForCapture()
+    }
     // Выход из системного PiP по кнопке «развернуть»: надёжно обрабатываем только тот resume,
     // который пришёл после onPictureInPictureModeChanged(false). Старый fallback по wasInPip
     // давал ложный SystemPiPExpanded во время Home -> system PiP на части устройств.
@@ -290,15 +348,35 @@ class MainActivity : ReactActivity() {
   }
 
   /**
-   * Home / system navigation: no system PiP (policy). Trace only; pending enter attempts cancelled.
+   * Системный PiP при Home (onUserLeaveHint). Recents помечаем через ACTION_CLOSE_SYSTEM_DIALOGS
+   * и кратко подавляем PiP — на Samsung homekey часто приходит после leaveHint.
    */
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
     currentHomePiPTraceId = "hp_${System.currentTimeMillis()}"
     homePiPEnterAttemptSeq = 0
     val now = System.currentTimeMillis()
+    if (now < suppressSystemPiPOnLeaveHintUntilMs) {
+      android.util.Log.i(
+        "MainActivity",
+        "onUserLeaveHint: skip system PiP — recent Recents (remainingMs=${suppressSystemPiPOnLeaveHintUntilMs - now})"
+      )
+      homePiPTrace("native_skip") { putString("reason", "recent_recents") }
+      return
+    }
+    if (now < suppressPiPReenterUntilMs) {
+      android.util.Log.i(
+        "MainActivity",
+        "onUserLeaveHint: skip system PiP due to recent PiP-exit cooldown (remainingMs=${suppressPiPReenterUntilMs - now})"
+      )
+      cancelPendingPiPEnterAttempts()
+      homePiPTrace("native_skip") { putString("reason", "pip_exit_cooldown") }
+      return
+    }
     val endingCallInProgressEarly = LiviAppModule.getEndingCallInProgress()
-    val shouldEnterPiPEarly = LiviAppModule.getShouldEnterPiPOnLeaveHint()
+    val shouldEnterPiPEarly =
+      LiviAppModule.getShouldEnterPiPOnLeaveHint() ||
+      (LiviAppModule.isActiveCallForegroundRunning() && !endingCallInProgressEarly)
     val placeholderOnlyEarly = LiviAppModule.getSystemPiPCapturePlaceholderOnly()
     val inAppPiPVisibleEarly = LiviAppModule.getInAppPiPVisibleForSystemPiP()
     homePiPTrace("native_on_user_leave_hint") {
@@ -310,12 +388,128 @@ class MainActivity : ReactActivity() {
       putBoolean("hasFocus", window?.decorView?.hasWindowFocus() == true)
       putInt("sdk", Build.VERSION.SDK_INT)
     }
-    cancelPendingPiPEnterAttempts()
+    if (endingCallInProgressEarly) {
+      android.util.Log.i("MainActivity", "onUserLeaveHint: skip system PiP because endingCallInProgress=true")
+      homePiPTrace("native_skip") { putString("reason", "ending_call") }
+      return
+    }
+    val shouldEnterPiP = shouldEnterPiPEarly
+    val inAppPiPVisible = inAppPiPVisibleEarly
     android.util.Log.i(
       "MainActivity",
-      "onUserLeaveHint: system PiP on Home/navigation disabled (no enterPictureInPictureMode, no AboutToEnterSystemPiP)"
+      "onUserLeaveHint: sdk=${Build.VERSION.SDK_INT} endingCallInProgress=$endingCallInProgressEarly shouldEnterPiP=$shouldEnterPiP inAppPiPVisible=$inAppPiPVisible isInPiP=$isInPictureInPictureMode hasFocus=${window?.decorView?.hasWindowFocus() == true}"
     )
-    homePiPTrace("native_skip") { putString("reason", "policy_no_system_pip_on_leave_hint") }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && shouldEnterPiP) {
+      try {
+        val nowEnter = System.currentTimeMillis()
+        if (isPiPEnterAttemptRunning && nowEnter - lastPiPEnterRequestAtMs < 1200L) {
+          android.util.Log.i("MainActivity", "onUserLeaveHint: skip duplicate PiP enter sequence (already running)")
+          homePiPTrace("native_skip") { putString("reason", "duplicate_enter_sequence") }
+          return
+        }
+        lastPiPEnterRequestAtMs = nowEnter
+        cancelPendingPiPEnterAttempts()
+        isPiPEnterAttemptRunning = true
+        // Всегда logo-only system PiP (LiVi на тёмном фоне), без RTC/capture.
+        LiviAppModule.setSystemPiPCapturePlaceholderOnlyStatic(true)
+        LiviAppModule.setSystemPiPCaptureFrameReadyStatic(true)
+        val placeholderOnlyEnter = true
+        android.util.Log.i(
+          "MainActivity",
+          "onUserLeaveHint: placeholderOnly=$placeholderOnlyEnter — prepare PiP enter (black backdrop)"
+        )
+        val root = window?.decorView
+        val decorW = root?.width ?: 0
+        val decorH = root?.height ?: 0
+        val sourceRect = buildSystemPiPSourceRect(placeholderOnlyEnter)
+        val tryEnterPiP = Runnable {
+          try {
+            if (isInPictureInPictureMode) return@Runnable
+            if (LiviAppModule.getEndingCallInProgress()) return@Runnable
+            if (!LiviAppModule.getShouldEnterPiPOnLeaveHint()) {
+              val fgsCall = LiviAppModule.isActiveCallForegroundRunning()
+              if (!fgsCall || LiviAppModule.getEndingCallInProgress()) {
+                android.util.Log.i("MainActivity", "onUserLeaveHint: skip retry because shouldEnterPiPOnLeaveHint=false")
+                cancelPendingPiPEnterAttempts()
+                return@Runnable
+              }
+            }
+            val waitedMs = System.currentTimeMillis() - lastPiPEnterRequestAtMs
+            val placeholderOnly = true
+            val frameReady = LiviAppModule.getSystemPiPCaptureFrameReady()
+            if (!placeholderOnly && !inAppPiPVisible && !frameReady && waitedMs in 50L..450L) {
+              android.util.Log.d(
+                "MainActivity",
+                "onUserLeaveHint: defer PiP enter — capture frame not ready yet (waitedMs=$waitedMs)"
+              )
+              return@Runnable
+            }
+            showSystemPiPBackdropForCapture()
+            val ratio =
+              if (placeholderOnly) Rational(16, 9) else Rational(9, 16)
+            val builder = PictureInPictureParams.Builder()
+              .setAspectRatio(ratio)
+              .setActions(buildSystemPiPActions())
+            if (sourceRect != null) {
+              builder.setSourceRectHint(sourceRect)
+            }
+            val params = builder.build()
+            if (enterPictureInPictureMode(params)) {
+              android.util.Log.d("MainActivity", "Entered Picture-in-Picture mode (leaveHint)")
+              homePiPTrace("native_enter_pip_ok") { putBoolean("placeholderOnly", placeholderOnly) }
+              cancelPendingPiPEnterAttempts()
+            } else {
+              android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode returned false")
+              homePiPTrace("native_enter_pip_false") { putBoolean("placeholderOnly", placeholderOnly) }
+              if (!isInPictureInPictureMode) {
+                hideSystemPiPBackdropForCapture()
+              }
+            }
+          } catch (e2: Exception) {
+            android.util.Log.w("MainActivity", "leaveHint enterPictureInPictureMode failed", e2)
+            homePiPTrace("native_enter_pip_error") { putString("error", e2.message ?: "unknown") }
+          }
+        }
+        leaveHintPiPEnterRunnable = tryEnterPiP
+        if (!isInPictureInPictureMode) {
+          val hasFocusNow = window?.decorView?.hasWindowFocus() == true
+          if (hasFocusNow) {
+            tryEnterPiP.run()
+          }
+          LiviAppModule.emitAboutToEnterSystemPiP(decorW, decorH, currentHomePiPTraceId)
+          if (!isInPictureInPictureMode) {
+            if (!hasFocusNow) {
+              root?.post { tryEnterPiP.run() } ?: tryEnterPiP.run()
+            }
+            pendingPiPEnterRunnables.add(tryEnterPiP)
+            pipEnterHandler.post(tryEnterPiP)
+          }
+          android.util.Log.i(
+            "MainActivity",
+            "onUserLeaveHint: scheduled PiP enter (logo backdrop + retries; inAppPiPVisible=$inAppPiPVisible hasFocus=$hasFocusNow)"
+          )
+          if (!isInPictureInPictureMode) {
+            val delays = longArrayOf(16L, 48L, 120L, 280L, 480L, 800L, 1200L)
+            for (d in delays) {
+              val r = Runnable { tryEnterPiP.run() }
+              pendingPiPEnterRunnables.add(r)
+              pipEnterHandler.postDelayed(r, d)
+            }
+          }
+        }
+      } catch (e: Exception) {
+        android.util.Log.w("MainActivity", "emitAboutToEnterSystemPiP failed", e)
+        cancelPendingPiPEnterAttempts()
+        homePiPTrace("native_skip") { putString("reason", "emit_about_to_enter_failed") }
+      }
+    } else {
+      android.util.Log.i(
+        "MainActivity",
+        "onUserLeaveHint: skip system PiP because shouldEnterPiPOnLeaveHint=false or sdk<26"
+      )
+      cancelPendingPiPEnterAttempts()
+      homePiPTrace("native_skip") { putString("reason", "should_enter_false_or_sdk") }
+    }
   }
 
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
@@ -323,7 +517,12 @@ class MainActivity : ReactActivity() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       if (isInPictureInPictureMode) {
         cancelPendingPiPEnterAttempts()
-        window.setBackgroundDrawableResource(android.R.color.transparent)
+        showSystemPiPBackdropForCapture()
+        try {
+          window.setBackgroundDrawableResource(R.color.system_pip_backdrop)
+        } catch (_: Exception) {
+          window.setBackgroundDrawableResource(android.R.color.black)
+        }
         // Вход в PiP: отменяем таймер «выход из PiP», иначе на части устройств через таймаут срабатывает EndCallFromPiP.
         exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
         exitPipTimeoutRunnable = null
@@ -333,12 +532,23 @@ class MainActivity : ReactActivity() {
       }
       LiviAppModule.emitSystemPiPModeChanged(isInPictureInPictureMode)
       if (!isInPictureInPictureMode) {
+        hideSystemPiPBackdropForCapture()
         // На части устройств сразу после разворота из PiP прилетает ложный onUserLeaveHint и
         // может повторно увести экран в PiP. Держим короткое окно anti re-enter.
         suppressPiPReenterUntilMs = System.currentTimeMillis() + 3000L
         // Сразу отключаем вход в PiP по onUserLeaveHint — на части устройств onUserLeaveHint
         // приходит во время перехода PiP→fullscreen до onResume; иначе приложение снова уходит в PiP.
         LiviAppModule.setPiPOnLeaveHintEnabled(false)
+        pipHandler.postDelayed({
+          try {
+            if (isInPictureInPictureMode || LiviAppModule.getEndingCallInProgress()) return@postDelayed
+            if (LiviAppModule.isActiveCallForegroundRunning()) {
+              LiviAppModule.setPiPOnLeaveHintEnabled(true)
+              LiviAppModule.setSystemPiPCapturePlaceholderOnlyStatic(true)
+              LiviAppModule.setSystemPiPCaptureFrameReadyStatic(true)
+            }
+          } catch (_: Exception) {}
+        }, 3200L)
         // Различие «развернуть» (стрелки) и «закрыть» (X): при развороте приходит onResume, при закрытии — нет.
         // Ставим флаг и таймаут: если до таймаута придёт onResume — шлём SystemPiPExpanded, иначе EndCallFromPiP.
         // expandedEmittedForPipExit предотвращает EndCallFromPiP, если мы уже отправили expand (на части устройств onResume приходит после onPictureInPictureModeChanged).

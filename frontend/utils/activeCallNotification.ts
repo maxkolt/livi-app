@@ -1,6 +1,7 @@
 import { AppState, NativeModules, Platform } from 'react-native';
-import { isInAudioOnlyCallUi, shouldUsePipPlaceholderOnly } from '../src/pip/pipPlaceholderOnly';
+import { isInAudioOnlyCallUi, shouldUsePipPlaceholderOnly, refreshSystemPiPLeaveContextSnapshot } from '../src/pip/pipPlaceholderOnly';
 import { logHomePiPTrace } from './systemPiPHomeTrace';
+import { isOngoingCallSession } from './activeCallSession';
 
 /** Ongoing FGS: audio channel + return intent when пользователь на экране аудиозвонка. */
 function resolveActiveCallNotificationAudioOnly(): boolean {
@@ -124,17 +125,35 @@ export function startActiveCallNotification(
 let lastNativeLeaveHintAllow: boolean | null = null;
 let lastNativePlaceholderOnly: boolean | null = null;
 
-function applyAndroidLeaveHintNativeFlags(_allowPiP: boolean): void {
-  const allowPiP = false;
-  const placeholderOnly = resolveActiveCallPlaceholderOnly();
-  if (lastNativeLeaveHintAllow === allowPiP && lastNativePlaceholderOnly === placeholderOnly) {
+/** System PiP: всегда заглушка LiVi (без RTC/capture), независимо от экрана звонка. */
+export function shouldUseSystemPiPControlsCaptureOnly(): boolean {
+  return true;
+}
+
+function applyAndroidLeaveHintNativeFlags(allowPiP: boolean): void {
+  const effectiveAllow = allowPiP && shouldAllowAndroidSystemPiPOnLeaveHint();
+  const placeholderOnly = effectiveAllow ? true : false;
+  if (lastNativeLeaveHintAllow === effectiveAllow && lastNativePlaceholderOnly === placeholderOnly) {
     return;
   }
-  lastNativeLeaveHintAllow = allowPiP;
+  lastNativeLeaveHintAllow = effectiveAllow;
   lastNativePlaceholderOnly = placeholderOnly;
   NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(placeholderOnly);
-  NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
-  logHomePiPTrace('js_leave_hint_arm', { allowPiP, placeholderOnly });
+  if (placeholderOnly) {
+    NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
+  }
+  NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(effectiveAllow);
+  logHomePiPTrace('js_leave_hint_arm', { allowPiP: effectiveAllow, placeholderOnly });
+}
+
+/** Держать leaveHint включённым на любом экране, пока звонок жив (Home/in-app PiP до onUserLeaveHint). */
+export function syncAndroidLeaveHintForOngoingCall(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    if (!isOngoingCallSession()) return;
+    if (!shouldAllowAndroidSystemPiPOnLeaveHint()) return;
+    applyAndroidLeaveHintNativeFlags(true);
+  } catch (_) {}
 }
 
 /** Синхронизировать shouldEnterPiPOnLeaveHint + placeholderOnly с текущим audio/video UI. */
@@ -196,16 +215,19 @@ export function isAndroidActiveCallEligibleForLeaveHint(): boolean {
     const homeHold = isAndroidLeaveHintHomeTransitionHold();
     const onVideoCallRoute =
       g.__navRef?.getCurrentRoute?.()?.name === 'VideoCall' && g.__videoCallActiveRef?.current !== false;
+    const inBackgroundWithLiveCall =
+      AppState.currentState === 'background' && g.__videoCallActiveRef?.current !== false;
+    const ongoingSession = isOngoingCallSession();
 
-    return (onVideoCallRoute || homeHold) && (!!roomId || !!callId);
+    return (onVideoCallRoute || homeHold || inBackgroundWithLiveCall || ongoingSession) && (!!roomId || !!callId);
   } catch {
     return false;
   }
 }
 
-/** System PiP on Home / system navigation buttons is disabled app-wide. */
+/** System PiP on Home while an active call is in progress (controls bar capture, not full video UI). */
 export function shouldAllowAndroidSystemPiPOnLeaveHint(): boolean {
-  return false;
+  return isAndroidActiveCallEligibleForLeaveHint();
 }
 
 let leaveHintDisableTimer: ReturnType<typeof setTimeout> | null = null;
@@ -267,8 +289,22 @@ export function setAndroidSystemPiPLeaveHintEnabled(enabled: boolean): void {
 /**
  * Сразу при Home (AppState background): закрепить refs и нативные флаги до onUserLeaveHint.
  */
-/** @deprecated System PiP on Home is disabled; ongoing notification handles background audio. */
-export function armAndroidLeaveHintForVideoCallHome(): void {}
+export function armAndroidLeaveHintForVideoCallHome(): void {
+  if (Platform.OS !== 'android') return;
+  try {
+    refreshSystemPiPLeaveContextSnapshot();
+    const g = global as any;
+    g.__leavingVideoCallByHomeRef = g.__leavingVideoCallByHomeRef || { current: false };
+    g.__leavingVideoCallByHomeRef.current = true;
+    g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+    g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 6000;
+    if (!isAndroidActiveCallEligibleForLeaveHint() && !isOngoingCallSession()) {
+      g.__leavingVideoCallByHomeRef.current = false;
+      return;
+    }
+    applyAndroidLeaveHintNativeFlags(true);
+  } catch (_) {}
+}
 
 /**
  * После возврата на VideoCall (уведомление, in-app PiP, разворот system PiP) натив может
@@ -276,10 +312,25 @@ export function armAndroidLeaveHintForVideoCallHome(): void {}
  */
 export function reenableAndroidSystemPiPLeaveHintAfterReturn(): void {
   if (Platform.OS !== 'android') return;
-  try {
-    NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
-    setAndroidSystemPiPLeaveHintEnabled(false);
-  } catch (_) {}
+  const attempt = () => {
+    try {
+      if (!isAndroidActiveCallEligibleForLeaveHint()) return;
+      const g = global as any;
+      g.__disableSystemPiPUntilRef = g.__disableSystemPiPUntilRef || { current: 0 };
+      if (Number(g.__disableSystemPiPUntilRef.current || 0) > Date.now()) {
+        g.__disableSystemPiPUntilRef.current = 0;
+      }
+      NativeModules.LiviAppModule?.clearSystemPiPReenterSuppress?.();
+      setAndroidSystemPiPLeaveHintEnabled(true);
+    } catch (_) {}
+  };
+  attempt();
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => requestAnimationFrame(attempt));
+  }
+  setTimeout(attempt, 320);
+  setTimeout(attempt, 900);
+  setTimeout(attempt, 1800);
 }
 
 /** Пока экран VideoCall в фокусе и звонок жив — держим leaveHint включённым (Home → system PiP). */
