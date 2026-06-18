@@ -40,7 +40,6 @@ import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { usePiP, isPipOverlayVisibleSync } from '../../src/pip/PiPContext';
 import {
-  finishDirectCallVideoExpandInFlight,
   isDirectCallVideoExpandGuardActive,
   setPipAudioOnlyPlaceholderSticky,
   shouldUsePipPlaceholderOnly,
@@ -48,8 +47,8 @@ import {
   pipInAppBarEnteredFromAudioOnly,
   refreshSystemPiPLeaveContextSnapshot,
   setPipInAppRtcFromAudioOnlySticky,
-  tryBeginDirectCallVideoExpand,
   mediaStreamHasLiveVideo,
+  runDirectCallVideoExpandOnce,
 } from '../../src/pip/pipPlaceholderOnly';
 import socket, {
   fetchFriends,
@@ -3731,22 +3730,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const expandDirectCallToVideoUi = useCallback(async () => {
     const g = global as any;
     if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return;
-    if (!tryBeginDirectCallVideoExpand()) return;
-    try {
+    return runDirectCallVideoExpandOnce(async () => {
       const session = (sessionRef.current || g.__webrtcSessionRef?.current) as VideoCallSession | null;
       if (!session || session.isEnded?.()) return;
       applyVideoCallUiFromPiPExpand(session);
       await enableLocalCameraForVideoUi(session);
       try {
-        g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-        g.__expandToVideoCallUiFromPiPRef.current = false;
-      } catch {}
-      try {
         navigation.setParams({ preferVideoCallUi: undefined, audioOnlyPiPReturn: undefined } as any);
       } catch {}
-    } finally {
-      finishDirectCallVideoExpandInFlight();
-    }
+    });
   }, [applyVideoCallUiFromPiPExpand, enableLocalCameraForVideoUi, navigation]);
 
   const returnToAudioCallUi = useCallback(
@@ -4412,12 +4404,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
           if (
             (global as any).__expandToVideoCallUiFromPiPRef?.current &&
-            !(global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current
+            !(global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current &&
+            !isDirectCallVideoExpandGuardActive()
           ) {
-            const gExpand = global as any;
-            if (!gExpand.__directCallVideoExpandInFlightRef?.current) {
-              void expandDirectCallToVideoUi();
-            }
+            void expandDirectCallToVideoUi();
           }
           
           // Обновляем remoteViewKey через session с защитой от повторного обновления

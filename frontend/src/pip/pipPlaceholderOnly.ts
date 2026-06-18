@@ -86,6 +86,41 @@ export function finishDirectCallVideoExpandInFlight(): void {
   } catch {}
 }
 
+/** Один expand + enable camera на всех входах (PiP overlay, mount, focus). */
+export function runDirectCallVideoExpandOnce(run: () => Promise<void>): Promise<void> {
+  try {
+    const g = global as any;
+    g.__directCallVideoExpandPromiseRef =
+      g.__directCallVideoExpandPromiseRef || { current: null as Promise<void> | null };
+    const inFlight = g.__directCallVideoExpandPromiseRef.current;
+    if (inFlight) {
+      return inFlight;
+    }
+    if (!tryBeginDirectCallVideoExpand()) {
+      return Promise.resolve();
+    }
+    const task = (async () => {
+      try {
+        await run();
+      } finally {
+        finishDirectCallVideoExpandInFlight();
+        try {
+          g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+          g.__expandToVideoCallUiFromPiPRef.current = false;
+        } catch {}
+      }
+    })();
+    g.__directCallVideoExpandPromiseRef.current = task;
+    return task.finally(() => {
+      if (g.__directCallVideoExpandPromiseRef?.current === task) {
+        g.__directCallVideoExpandPromiseRef.current = null;
+      }
+    });
+  } catch {
+    return Promise.resolve();
+  }
+}
+
 /**
  * In-app PiP → «Аудиозвонок» с Home: до navigate выставить audio UI и запустить WebRTC,
  * чтобы первый кадр VideoCall уже был audio, а не видео + remount.

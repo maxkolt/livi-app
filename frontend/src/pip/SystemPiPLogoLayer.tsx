@@ -4,7 +4,7 @@ import { usePiP } from './PiPContext';
 
 /**
  * Fallback для iOS / если нативный backdrop не поднялся.
- * На Android system PiP рисуется нативным overlay в MainActivity (system_pip_backdrop.xml).
+ * На Android system PiP — нативный overlay в MainActivity (system_pip_backdrop.xml + livi_pip_placeholder).
  */
 export default function SystemPiPLogoLayer() {
   const { inSystemPiPMode, pendingSystemPiP } = usePiP();

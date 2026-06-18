@@ -1199,6 +1199,25 @@ export class VideoCallSession extends SimpleEventEmitter {
     await this.applyLocalCameraEnabled(!this.isCamOn);
   }
 
+  private isLiveKitRoomConnected(): boolean {
+    return !!this.room && this.room.state === ConnectionState.Connected;
+  }
+
+  /** Ждём connected перед recreate/publish (expand из PiP на connecting). */
+  private async waitForLiveKitRoomConnected(timeoutMs = 12000): Promise<boolean> {
+    if (!this.room) return false;
+    if (this.isLiveKitRoomConnected()) return true;
+    if (this.ended || this.endCallInProgress) return false;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.ended || this.endCallInProgress) return false;
+      if (this.isLiveKitRoomConnected()) return true;
+      if (this.room?.state === ConnectionState.Disconnected) return false;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return this.isLiveKitRoomConnected();
+  }
+
   private async applyLocalCameraEnabled(enabled: boolean): Promise<void> {
     if (
       enabled &&
@@ -1239,6 +1258,16 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
 
     if (this.isCamOn) {
+      if (this.room && !this.isLiveKitRoomConnected()) {
+        await this.waitForLiveKitRoomConnected();
+      }
+      if (this.ended || !this.isCamOn) return;
+      if (this.room && !this.isLiveKitRoomConnected()) {
+        logger.debug('[VideoCallSession] Skip camera recovery — room not connected after wait', {
+          roomState: this.room?.state,
+        });
+        return;
+      }
       // ВКЛЮЧАЕМ камеру
       // Проверяем нужно ли восстановить трек
       const needsRecovery =

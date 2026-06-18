@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Статичный чёрный кадр для system PiP (без логотипа и без захвата React). -->
+<!-- Статичный кадр LiVi для system PiP (без RTC/capture). -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/system_pip_backdrop_root"
     android:layout_width="match_parent"
@@ -7,4 +7,16 @@
     android:background="@color/system_pip_backdrop"
     android:clickable="false"
     android:focusable="false"
-    android:importantForAccessibility="noHideDescendants" />
+    android:importantForAccessibility="noHideDescendants">
+
+    <ImageView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:alpha="0.92"
+        android:contentDescription="@null"
+        android:importantForAccessibility="no"
+        android:padding="28dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/livi_pip_placeholder" />
+</FrameLayout>
