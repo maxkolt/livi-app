@@ -858,8 +858,8 @@ export async function sendCallPushToRecipient(userId: string, data: CallPushData
       iosVoipSent,
     });
     pushLog('call_push_sending_via_Expo', { userId, tokenCount: expoTokens.length });
-    const callTitle = (data.fromNick || '').trim() || 'Входящий видеозвонок';
-    const callBody = 'Входящий видеозвонок';
+    const callTitle = (data.fromNick || '').trim() || 'Входящий вызов';
+    const callBody = 'Входящий вызов';
     const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
       to,
       sound: 'default',
@@ -1122,8 +1122,8 @@ export async function sendCallCanceledToRecipient(
   const iosTokens = list.filter((r) => r.platform === 'ios').map((r) => r.token).filter((t) => Expo.isExpoPushToken(t));
   if (iosTokens.length > 0) {
     try {
-      const title = 'Пропущенный видеозвонок';
-      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий видеозвонок';
+      const title = 'Пропущенный вызов';
+      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий вызов';
       const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
         to,
         sound: 'default',
@@ -1147,8 +1147,8 @@ export async function sendCallCanceledToRecipient(
   }
   if (!androidSent && list.some((r) => r.platform === 'android')) {
     try {
-      const title = 'Пропущенный видеозвонок';
-      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий видеозвонок';
+      const title = 'Пропущенный вызов';
+      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий вызов';
       await sendPushToUser(calleeUserId, {
         kind: 'message',
         title,
@@ -1219,7 +1219,7 @@ export async function sendCallMissedToRecipient(
   if (iosTokens.length > 0) {
     try {
       const title = 'Пропущенный вызов';
-      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий видеозвонок';
+      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий вызов';
       const messages: ExpoPushMessage[] = iosTokens.map((to) => ({
         to,
         sound: 'default',
@@ -1245,7 +1245,7 @@ export async function sendCallMissedToRecipient(
   if (!androidSent && list.some((r) => r.platform === 'android')) {
     try {
       const title = 'Пропущенный вызов';
-      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий видеозвонок';
+      const body = fromNick?.trim() ? `От ${fromNick.trim()}` : 'Входящий вызов';
       await sendPushToUser(calleeUserId, {
         kind: 'call',
         title,
