@@ -2472,10 +2472,16 @@ io.on('connection', async (sock: AuthedSocket) => {
       const busy = status === 'busy';
       const idleOnline = !busy && payload?.idle === true;
 
+      const socketDataLooksRandomOrQueueBusy = (sdata: Record<string, unknown>, uid: string) => {
+        if (sdata.inCall === true || sdata.partnerSid) return true;
+        if (sdata.busy === true && !callOfUser.has(uid)) return true;
+        return false;
+      };
+
       const hasAnotherBusySocket = getSocketsForUser(io, userId).some((s) => {
         if (s.id === sock.id) return false;
         const sdata = (s as any)?.data || {};
-        return !!(sdata.inCall || sdata.busy || sdata.roomId);
+        return !!(sdata.inCall || sdata.busy || sdata.roomId || sdata.partnerSid);
       });
 
       if (idleOnline) {
@@ -2528,9 +2534,11 @@ io.on('connection', async (sock: AuthedSocket) => {
         }
       }
       // Другие сокеты того же userId: пока хоть один в звонке/рандоме — не даём сбросить «занят» для друзей.
-      // Текущий сокет сюда не включаем: иначе его же устаревшие busy/roomId (гонка со stop после рандома)
-      // не дают перейти в online и оставляют initiator_busy на call:initiate.
-      const busyRequested = busy || hasAnotherBusySocket;
+      // Текущий сокет: при erroneous presence:online во время рандома/очереди учитываем partnerSid/inCall/markBusy.
+      const currentSockData = ((sock as any)?.data || {}) as Record<string, unknown>;
+      const currentStillInRandomOrQueue =
+        !busy && socketDataLooksRandomOrQueueBusy(currentSockData, userId);
+      const busyRequested = busy || hasAnotherBusySocket || currentStillInRandomOrQueue;
 
       // КРИТИЧНО: Получатель (callee) не должен показывать бейдж «Занято» до принятия вызова.
       let ignoreBusyForCallee = false;
