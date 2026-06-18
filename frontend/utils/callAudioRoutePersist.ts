@@ -2,10 +2,19 @@ import { Platform } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
 import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { isExternalHeadsetRoute, normalizeInCallRoute } from '../components/VideoChat/hooks/audioRouteTypes';
-import { beginBackgroundMediaSuppression } from './callKeep';
+import { beginBackgroundMediaSuppression } from './backgroundMediaSuppression';
 import { applyNativeVoiceCallSpeaker } from './voiceCallAudioRoute';
 import { logger } from './logger';
-import { captureCallAudioRouteFromUi } from './activeCallSession';
+import {
+  applySystemPiPReturnMediaSnapshot,
+  captureCallAudioRouteFromUi,
+  isAppInCallBackgroundState,
+  isAudioOnlyOngoingCallContext,
+  resolveActiveCallInCallMedia,
+  resolvePersistedCallAudioRouteForReapply,
+  readInAppPiPAudioOutputRoute,
+} from './activeCallSession';
+import { isInAudioOnlyCallUi } from '../src/pip/pipPlaceholderOnly';
 
 export function setPersistedCallAudioRoute(route: InCallAudioRoute): void {
   try {
@@ -27,6 +36,57 @@ export function clearPersistedCallAudioRoute(): void {
   try {
     const g = global as any;
     if (g.__persistedCallAudioRouteRef) g.__persistedCallAudioRouteRef.current = null;
+  } catch {}
+}
+
+/** Home / фон с экрана «Аудиозвонок»: громкая связь (кроме Bluetooth). */
+export function pinLoudSpeakerForAudioCallLeavingToBackground(): void {
+  if (!isAudioOnlyOngoingCallContext()) return;
+  const fromParams = normalizeInCallRoute(
+    (global as any).__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
+  );
+  const stored = getPersistedCallAudioRoute();
+  const route = fromParams || stored || 'EARPIECE';
+  if (route === 'BLUETOOTH') return;
+  setPersistedCallAudioRoute('SPEAKER_PHONE');
+  try {
+    const g = global as any;
+    g.__audioCallHomeSpeakerPinRef = g.__audioCallHomeSpeakerPinRef || { current: false };
+    g.__audioCallHomeSpeakerPinRef.current = true;
+    const params = g.__currentCallPiPParamsRef?.current;
+    if (params && typeof params === 'object') {
+      params.audioOutputRoute = 'SPEAKER_PHONE';
+    }
+  } catch {}
+}
+
+/** После возврата с Home: снова разговорный на экране «Аудиозвонок». */
+export function restoreAudioCallEarpieceAfterHomeReturn(): void {
+  try {
+    const g = global as any;
+    if (g.__audioCallHomeSpeakerPinRef?.current !== true) return;
+    g.__audioCallHomeSpeakerPinRef.current = false;
+    if (!isAudioOnlyOngoingCallContext()) return;
+    if (getPersistedCallAudioRoute() === 'BLUETOOTH') return;
+    setPersistedCallAudioRoute('EARPIECE');
+    const params = g.__currentCallPiPParamsRef?.current;
+    if (params && typeof params === 'object') {
+      params.audioOutputRoute = 'EARPIECE';
+    }
+  } catch {}
+}
+
+/** Video UI / PiP с видео: громкая связь в persist и PiP params (не audio-only). */
+export function pinVideoCallLoudSpeakerRoute(): void {
+  if (isInAudioOnlyCallUi()) return;
+  setPersistedCallAudioRoute('SPEAKER_PHONE');
+  try {
+    const params = (global as any).__currentCallPiPParamsRef?.current;
+    if (params && typeof params === 'object') {
+      params.audioOutputRoute = 'SPEAKER_PHONE';
+      params.preferVideoCallUi = true;
+      params.inAudioOnlyUi = false;
+    }
   } catch {}
 }
 
@@ -52,10 +112,23 @@ export async function reapplyPersistedCallAudioRoute(
   reapplyChain = reapplyChain
     .then(async () => {
       captureCallAudioRouteFromUi();
-      const route = getPersistedCallAudioRoute();
+      let stored = getPersistedCallAudioRoute();
+      const preserveInAppPiP =
+        shouldPreserveCallAudioRouteInInAppPiP() && !isAppInCallBackgroundState();
+      if (preserveInAppPiP) {
+        const preserved = readInAppPiPAudioOutputRoute();
+        stored = preserved;
+        setPersistedCallAudioRoute(preserved);
+      }
+      const route = preserveInAppPiP
+        ? stored
+        : resolvePersistedCallAudioRouteForReapply(stored);
       if (!route) return;
+      if (route !== stored) {
+        setPersistedCallAudioRoute(route);
+      }
 
-      const media = opts?.media ?? 'audio';
+      const media = opts?.media ?? (isInAudioOnlyCallUi() ? 'audio' : resolveActiveCallInCallMedia());
       const signature = `${route}|${media}`;
       const now = Date.now();
       if (signature === lastReapplySignature && now - lastReapplyAt < REAPPLY_DEDUP_MS) {
@@ -115,13 +188,23 @@ export function scheduleReapplyPersistedCallAudioRoute(
   }
 }
 
-/** In-app PiP с экрана «Аудиозвонок»: сохранить earpiece / speaker / BT. */
+/** In-app PiP: сохранить earpiece / speaker / BT (audio- и video-экран). */
 export function shouldPreserveCallAudioRouteInInAppPiP(): boolean {
   try {
     const g = global as any;
-    if (g.__pipInAppRtcFromAudioOnlyRef?.current === true) return true;
-    return false;
+    if (g.__pipVisibleRef?.current !== true) return false;
+    if (g.__pipInSystemModeRef?.current === true) return false;
+    return true;
   } catch {
     return false;
   }
+}
+
+/** После разворота system PiP: mic + динамик как до ухода на Home. */
+export function restoreCallMediaAfterSystemPiPReturn(): void {
+  if (!applySystemPiPReturnMediaSnapshot()) return;
+  scheduleReapplyPersistedCallAudioRoute('system_pip_return_media', {
+    media: resolveActiveCallInCallMedia(),
+    delaysMs: [0, 250, 800, 1500],
+  });
 }

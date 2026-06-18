@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, TouchableOpacity, StyleSheet, Animated, Platform } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
+import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 
 interface MediaControlsProps {
   micOn: boolean;
@@ -55,7 +55,7 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
             style={styles.iconBtn}
             accessibilityLabel="return-to-audio"
           >
-            <MaterialIcons name="phone-in-talk" size={26} color="#fff" />
+            <MaterialCommunityIcons name="phone-in-talk" size={28} color="#fff" />
           </TouchableOpacity>
         </Animated.View>
       ) : null}

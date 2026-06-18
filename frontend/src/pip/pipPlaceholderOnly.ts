@@ -71,6 +71,30 @@ export function prepareDirectCallAudioReturnFromPiP(): void {
   } catch {}
 }
 
+/** In-app PiP → экран видеозвонка с Home / другого экрана (не audio UI). */
+export function prepareDirectCallVideoReturnFromPiP(): void {
+  try {
+    const g = global as any;
+    g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+    g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+    g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+    g.__expandToVideoCallUiFromPiPRef.current = true;
+    g.__inAudioOnlyUiRef = g.__inAudioOnlyUiRef || { current: false };
+    g.__inAudioOnlyUiRef.current = false;
+    setPipAudioOnlyPlaceholderSticky(false);
+    setPipInAppRtcFromAudioOnlySticky(false);
+    try {
+      g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
+      g.__stayOnVideoCallUiRef.current = true;
+    } catch {}
+    const paramsRef = g.__currentCallPiPParamsRef?.current;
+    if (paramsRef && typeof paramsRef === 'object') {
+      paramsRef.inAudioOnlyUi = false;
+      paramsRef.preferVideoCallUi = true;
+    }
+  } catch {}
+}
+
 export function mediaStreamHasLiveVideo(stream: unknown): boolean {
   try {
     const t = (stream as any)?.getVideoTracks?.()?.[0];

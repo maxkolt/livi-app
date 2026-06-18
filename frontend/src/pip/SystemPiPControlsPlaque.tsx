@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
+import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { usePiP } from './PiPContext';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { pipInAppBarEnteredFromAudioOnly } from './pipPlaceholderOnly';
@@ -62,9 +62,10 @@ export default function SystemPiPControlsPlaque() {
       }
       const session = (global as any).__webrtcSessionRef?.current;
       if (session && typeof session.toggleMic === 'function') {
-        const nextMuted = !isMuted;
-        (global as any).__pipUpdateStateRef?.current?.({ isMuted: nextMuted });
         session.toggleMic();
+        const enabled =
+          typeof session.getIsMicOn === 'function' ? session.getIsMicOn() : !isMuted;
+        (global as any).__pipUpdateStateRef?.current?.({ isMuted: !enabled });
       }
     } catch (_) {}
   }, [isMuted]);
@@ -97,11 +98,11 @@ export default function SystemPiPControlsPlaque() {
         </View>
         <View style={[styles.actionsRow, { gap: ACTION_GAP }]}>
           <ActionButton onPress={returnToCallFromPiP} accessibilityLabel="Вернуться в звонок" chrome={chrome}>
-            <MaterialIcons
-              name={pipFromAudioOnly ? 'phone-in-talk' : 'videocam'}
-              size={ICON_SIZE}
-              color={chrome.icon}
-            />
+            {pipFromAudioOnly ? (
+              <MaterialCommunityIcons name="ear-hearing" size={ICON_SIZE} color={chrome.icon} />
+            ) : (
+              <MaterialIcons name="videocam" size={ICON_SIZE} color={chrome.icon} />
+            )}
           </ActionButton>
           <ActionButton onPress={toggleMic} accessibilityLabel="Микрофон" chrome={chrome}>
             <MaterialIcons name={isMuted ? 'mic-off' : 'mic'} size={ICON_SIZE} color={isMuted ? chrome.iconOff : chrome.icon} />

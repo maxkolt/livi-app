@@ -2,6 +2,10 @@ import { AppState, NativeModules, Platform } from 'react-native';
 import { isInAudioOnlyCallUi, shouldUsePipPlaceholderOnly, refreshSystemPiPLeaveContextSnapshot } from '../src/pip/pipPlaceholderOnly';
 import { logHomePiPTrace } from './systemPiPHomeTrace';
 import { isOngoingCallSession } from './activeCallSession';
+import {
+  pinLoudSpeakerForAudioCallLeavingToBackground,
+  scheduleReapplyPersistedCallAudioRoute,
+} from './callAudioRoutePersist';
 
 /** Ongoing FGS: audio channel + return intent when пользователь на экране аудиозвонка. */
 function resolveActiveCallNotificationAudioOnly(): boolean {
@@ -339,6 +343,11 @@ export function armAndroidLeaveHintForVideoCallHome(): void {
   if (Platform.OS !== 'android') return;
   try {
     refreshSystemPiPLeaveContextSnapshot();
+    pinLoudSpeakerForAudioCallLeavingToBackground();
+    scheduleReapplyPersistedCallAudioRoute('audio_home_loud_speaker', {
+      media: 'audio',
+      delaysMs: [0, 300, 900, 1500],
+    });
     const g = global as any;
     g.__leavingVideoCallByHomeRef = g.__leavingVideoCallByHomeRef || { current: false };
     g.__leavingVideoCallByHomeRef.current = true;

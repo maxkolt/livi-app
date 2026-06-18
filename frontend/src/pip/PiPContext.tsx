@@ -6,7 +6,7 @@ import InCallManager from 'react-native-incall-manager';
 import { CommonActions } from '@react-navigation/native';
 import socket, { onConnected, emitPresenceUpdateIfChanged } from '../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
-import { clearEndingCallInProgress } from '../../utils/activeCallSession';
+import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState } from '../../utils/activeCallSession';
 import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
@@ -22,6 +22,9 @@ import {
   refreshSystemPiPLeaveContextSnapshot,
 } from './pipPlaceholderOnly';
 import {
+  pinLoudSpeakerForAudioCallLeavingToBackground,
+  pinVideoCallLoudSpeakerRoute,
+  restoreCallMediaAfterSystemPiPReturn,
   scheduleReapplyPersistedCallAudioRoute,
   setPersistedCallAudioRoute,
 } from '../../utils/callAudioRoutePersist';
@@ -511,10 +514,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     setPipInAppRtcFromAudioOnlySticky(fromAudioOnlyUi);
 
     if (fromAudioOnlyUi) {
-      const routeNorm = normalizeInCallRoute(p.audioOutputRoute || '');
-      if (routeNorm) {
-        setPersistedCallAudioRoute(routeNorm);
-      }
+      const routeNorm = normalizeInCallRoute(p.audioOutputRoute || '') || 'EARPIECE';
+      setPersistedCallAudioRoute(routeNorm);
+      try {
+        const gParams = global as any;
+        gParams.__currentCallPiPParamsRef = gParams.__currentCallPiPParamsRef || { current: null };
+        const existing = gParams.__currentCallPiPParamsRef.current;
+        if (existing && typeof existing === 'object') {
+          existing.audioOutputRoute = routeNorm;
+        }
+      } catch {}
       try {
         const gAudio = global as any;
         gAudio.__lastInAppPipAudioReapplyAtRef = gAudio.__lastInAppPipAudioReapplyAtRef || { current: 0 };
@@ -532,10 +541,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           delaysMs: [0, 250],
         });
       }
+    } else {
+      pinVideoCallLoudSpeakerRoute();
     }
 
-    // КРИТИЧНО: Ставим флаг PiP синхронно (до setState), чтобы teardown логика (например, stopSpeaker в хуках)
-    // могла увидеть, что PiP уже включен, даже если React effect еще не успел пробежать.
+    // КРИТИЧНО: Ставим флаг PiP синхронно
     try {
       (global as any).__pipForceHiddenRef = (global as any).__pipForceHiddenRef || { current: false };
       (global as any).__pipForceHiddenRef.current = false;
@@ -665,7 +675,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         remoteCamOnRef.current = p.remoteCamOn;
       }
     }
-    if (typeof p.muteLocal === 'boolean') setIsMuted(!!p.muteLocal);
+    setIsMuted(
+      typeof p.muteLocal === 'boolean' ? p.muteLocal : resolvePiPLocalMutedState(),
+    );
     if (typeof p.muteRemote === 'boolean') setIsRemoteMuted(!!p.muteRemote);
     // Не затираем navParams undefined-ом: это ломает returnToCall (нечем восстановить экран звонка).
     setLastNavParams((prev: any) => (p.navParams !== undefined ? p.navParams : prev));
@@ -840,6 +852,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     } catch {}
   }, [callId, roomId, lastNavParams]);
 
+  useEffect(() => {
+    if (!visible) return;
+    setIsMuted(resolvePiPLocalMutedState());
+  }, [visible, callId, roomId]);
+
   // AboutToEnterSystemPiP: системный PiP с заглушкой LiVi (без RTC/capture), с любого экрана активного звонка.
   useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
@@ -870,6 +887,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       if (session && typeof (session as any).isEnded === 'function' && (session as any).isEnded()) {
         return;
       }
+
+      try {
+        captureSystemPiPReturnMediaSnapshot();
+      } catch (_) {}
 
       try {
         g.__leavingVideoCallByHomeRef = g.__leavingVideoCallByHomeRef || { current: false };
@@ -928,6 +949,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         logger.info('[PiPContext] AboutToEnterSystemPiP skipped — audio call uses status notification');
         logHomePiPTrace('js_about_to_enter_skip', { traceId, reason: 'audio_placeholder' });
         try {
+          pinLoudSpeakerForAudioCallLeavingToBackground();
+          scheduleReapplyPersistedCallAudioRoute('audio_home_loud_speaker', {
+            media: 'audio',
+            delaysMs: [0, 250, 800, 1500],
+          });
           NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
           NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(true);
           NativeModules.LiviAppModule?.cancelPendingSystemPiPEnter?.();
@@ -1230,6 +1256,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
     const wasSystemPiP =
       inSystemPiPMode || g.__pipInSystemModeRef?.current === true;
+
+    if (wasSystemPiP) {
+      try {
+        restoreCallMediaAfterSystemPiPReturn();
+      } catch (_) {}
+    }
 
     const finishReturnToCallAfterNav = () => {
       const tailMs = preferAudioOnlyUi ? 80 : 160;
@@ -1672,7 +1704,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (patch.partnerName !== undefined) setPartnerName(patch.partnerName);
     if (patch.partnerAvatarUrl !== undefined) setPartnerAvatarUrl(patch.partnerAvatarUrl);
     if (patch.visible !== undefined) setVisible(patch.visible);
-    if (patch.isMuted !== undefined) setIsMuted(patch.isMuted);
+    if (patch.isMuted !== undefined) {
+      setIsMuted(patch.isMuted);
+      try {
+        const params = (global as any).__currentCallPiPParamsRef?.current;
+        if (params && typeof params === 'object') {
+          params.muteLocal = patch.isMuted;
+        }
+      } catch {}
+    }
     if (patch.isRemoteMuted !== undefined) setIsRemoteMuted(patch.isRemoteMuted);
     if (patch.localCamOn !== undefined) setLocalCamOn(patch.localCamOn);
     if (patch.remoteCamOn !== undefined) {

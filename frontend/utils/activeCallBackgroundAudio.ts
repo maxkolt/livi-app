@@ -1,7 +1,10 @@
 import { AppState, Platform, type AppStateStatus, NativeModules } from 'react-native';
 import { captureCallAudioRouteFromUi, isOngoingCallSession, resolveActiveCallInCallMedia } from './activeCallSession';
 import {
+  pinLoudSpeakerForAudioCallLeavingToBackground,
   reapplyPersistedCallAudioRoute,
+  restoreAudioCallEarpieceAfterHomeReturn,
+  restoreCallMediaAfterSystemPiPReturn,
   scheduleReapplyPersistedCallAudioRoute,
 } from './callAudioRoutePersist';
 import { armAndroidLeaveHintForVideoCallHome, syncAndroidLeaveHintForOngoingCall } from './activeCallNotification';
@@ -45,6 +48,7 @@ function nativeMaintainCallVoiceAudio(force = false): void {
 /** Переприменить incall-маршрут и focus (Home, навигатор, другое приложение поверх). */
 export function maintainCallAudioForActiveCall(reason = 'maintain_active_call'): void {
   if (!isOngoingCallSession()) return;
+  pinLoudSpeakerForAudioCallLeavingToBackground();
   captureCallAudioRouteFromUi();
   const media = resolveActiveCallInCallMedia();
   nativeMaintainCallVoiceAudio(reason === 'app_state_background');
@@ -87,6 +91,17 @@ function onAppStateChange(next: AppStateStatus): void {
     clearBackgroundInterval();
     lastNativeVoiceMaintainAt = 0;
     syncAndroidLeaveHintForOngoingCall();
+    try {
+      const g = global as any;
+      const returningFromPiP = Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
+      if (returningFromPiP) {
+        restoreCallMediaAfterSystemPiPReturn();
+      } else {
+        restoreAudioCallEarpieceAfterHomeReturn();
+      }
+    } catch {
+      restoreAudioCallEarpieceAfterHomeReturn();
+    }
     captureCallAudioRouteFromUi();
     if (prev !== 'active') {
       scheduleReapplyPersistedCallAudioRoute('app_state_foreground', {

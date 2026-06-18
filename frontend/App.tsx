@@ -90,6 +90,7 @@ import {
 } from './src/pip/pipPlaceholderOnly';
 import { installActiveCallBackgroundAudioHandlers } from './utils/activeCallBackgroundAudio';
 import { isOngoingCallSession, clearEndingCallInProgress } from './utils/activeCallSession';
+import { restoreCallMediaAfterSystemPiPReturn } from './utils/callAudioRoutePersist';
 
 // Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
 const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
@@ -197,6 +198,8 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 
 // КРИТИЧНО: Глобальная ссылка на функцию переключения камеры из VideoCall (для PiP).
 (global as any).__toggleCamRef = { current: null as (() => void) | null };
+
+(global as any).__cycleAudioRouteRef = { current: null as (() => void) | null };
 
 const getOverlayPermissionModalStyles = (theme: any, isDark: boolean) => {
   const a = uiAccent(isDark);
@@ -839,6 +842,9 @@ function AppContent() {
       const leaveCtx = peekSystemPiPLeaveContextForReturn();
       const preferAudioOnly = leaveCtx.preferAudioOnly;
       const restoreInAppPiP = leaveCtx.restoreInAppPiP;
+      try {
+        restoreCallMediaAfterSystemPiPReturn();
+      } catch (_) {}
       try {
         const session = (global as any).__webrtcSessionRef?.current;
         if (

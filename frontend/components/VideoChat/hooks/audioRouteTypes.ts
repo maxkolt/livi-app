@@ -26,7 +26,7 @@ export function nextRouteInCycle(current: InCallAudioRoute, available: string[])
 
 export function iconNameForRoute(
   route: InCallAudioRoute,
-): 'phone-in-talk' | 'volume-up' | 'headset' | 'bluetooth' {
+): 'ear-hearing' | 'volume-up' | 'headset' | 'bluetooth' {
   switch (route) {
     case 'SPEAKER_PHONE':
       return 'volume-up';
@@ -36,7 +36,7 @@ export function iconNameForRoute(
       return 'bluetooth';
     case 'EARPIECE':
     default:
-      return 'phone-in-talk';
+      return 'ear-hearing';
   }
 }
 

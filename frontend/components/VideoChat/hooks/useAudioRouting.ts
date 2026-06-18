@@ -489,11 +489,15 @@ export const useAudioRouting = (
       const pipVisible = !!(global as any).__pipVisibleRef?.current;
       const inSystemPiP = (global as any).__pipInSystemModeRef?.current === true;
       const keepCallAudio = isOngoingCallSession();
+      const preserveInAppAudioPiP = shouldPreserveCallAudioRouteInInAppPiP();
       if (pipVisible || inSystemPiP || keepCallAudio) {
-        if (
-          keepCallAudio ||
-          (pipVisible && shouldPreserveCallAudioRouteInInAppPiP())
-        ) {
+        if (preserveInAppAudioPiP) {
+          scheduleReapplyPersistedCallAudioRoute('stopSpeaker_preserve_in_app_audio_pip', {
+            media: 'audio',
+          });
+          return;
+        }
+        if (keepCallAudio || pipVisible || inSystemPiP) {
           scheduleReapplyPersistedCallAudioRoute('stopSpeaker_skip_active_call', {
             media: resolveActiveCallInCallMedia(),
           });
@@ -788,7 +792,10 @@ export const useAudioRouting = (
     syncRouteDebounceRef.current = setTimeout(() => {
       syncRouteDebounceRef.current = null;
       const av = lastAvailableRef.current;
-      const route = getUserRoute();
+      const earpieceMode = !!routingOptionsRef.current?.defaultToEarpiece;
+      const route = earpieceMode
+        ? getUserRoute()
+        : pickDesiredRoute(av.length ? av : ['EARPIECE', 'SPEAKER_PHONE'], 'manualSync');
       applySpecificRoute(route, 'manualSync', true);
       void applyDesiredRoute(av, 'manualSync', true);
     }, 140);

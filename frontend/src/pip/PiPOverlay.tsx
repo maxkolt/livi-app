@@ -11,15 +11,26 @@ import {
   PanResponder,
   Image,
 } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
+import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { PiPContext } from './PiPContext';
 import { logger } from '../../utils/logger';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { useAppTheme } from '../../theme/ThemeProvider';
+import { uiAccent } from '../../theme/uiAccent';
 import {
   prepareDirectCallAudioReturnFromPiP,
+  prepareDirectCallVideoReturnFromPiP,
   pipInAppBarEnteredFromAudioOnly,
 } from './pipPlaceholderOnly';
+import { resolvePiPLocalMutedState } from '../../utils/activeCallSession';
+import {
+  readInAppPiPAudioOutputRoute,
+  toggleInAppPiPAudioOutputRoute,
+} from '../../utils/inAppPiPAudioRoute';
+import {
+  iconNameForRoute,
+  type InCallAudioRoute,
+} from '../../components/VideoChat/hooks/audioRouteTypes';
 
 const PIP_BAR_H = 58;
 const PIP_BAR_RADIUS = PIP_BAR_H / 2;
@@ -82,6 +93,7 @@ type PiPOverlayProps = { currentRouteName?: string | null };
 
 export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const { isDark } = useAppTheme();
+  const accent = useMemo(() => uiAccent(isDark), [isDark]);
   const ctx = usePiPContextSafe();
   const visible = ctx?.visible ?? false;
   const returnToCall = ctx?.returnToCall ?? (() => {});
@@ -97,6 +109,16 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const partnerAvatarUrl = ctx?.partnerAvatarUrl;
   const partnerName = ctx?.partnerName ?? '';
   const isMuted = ctx?.isMuted ?? false;
+  const [localMicMuted, setLocalMicMuted] = useState(isMuted);
+  const [pipAudioRoute, setPipAudioRoute] = useState<InCallAudioRoute>('EARPIECE');
+
+  useEffect(() => {
+    if (!visible) return;
+    setLocalMicMuted(resolvePiPLocalMutedState());
+    setPipAudioRoute(readInAppPiPAudioOutputRoute());
+  }, [visible, isMuted]);
+
+  const micIconMuted = visible ? localMicMuted : isMuted;
   const suppressInAppPiPOnCurrentRoute = shouldSuppressInAppPiPOnRoute(currentRouteName);
 
   const chrome = useMemo(
@@ -123,14 +145,33 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       }
       const session = (global as any).__webrtcSessionRef?.current;
       if (session && typeof session.toggleMic === 'function') {
-        const nextMuted = !isMuted;
-        (global as any).__pipUpdateStateRef?.current?.({ isMuted: nextMuted });
         session.toggleMic();
+        const enabled =
+          typeof session.getIsMicOn === 'function' ? session.getIsMicOn() : !micIconMuted;
+        (global as any).__pipUpdateStateRef?.current?.({ isMuted: !enabled });
+        setLocalMicMuted(!enabled);
       }
     } catch (_) {}
-  }, [currentRouteName, isMuted]);
+  }, [currentRouteName, micIconMuted]);
+
+  useEffect(() => {
+    if (!visible) {
+      setLocalMicMuted(false);
+    }
+  }, [visible]);
 
   const pipFromAudioOnly = pipInAppBarEnteredFromAudioOnly();
+  const loudSpeakerActive = pipAudioRoute === 'SPEAKER_PHONE';
+  const pipAudioRouteIcon = iconNameForRoute(pipAudioRoute);
+
+  const toggleAudioOutputRoute = useCallback(() => {
+    const next = toggleInAppPiPAudioOutputRoute();
+    if (next) {
+      setPipAudioRoute(next);
+    } else {
+      setPipAudioRoute(readInAppPiPAudioOutputRoute());
+    }
+  }, []);
 
   const showAudioReturnFromVideoPiP = useMemo(() => {
     if (pipFromAudioOnly) return false;
@@ -192,17 +233,36 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     } catch (_) {}
   }, [returnToCall, currentRouteName, hidePiP, pipFromAudioOnly]);
 
+  const openVideoCallFromAudioPiP = useCallback(() => {
+    try {
+      const g = global as any;
+      const onVideoCallScreen = shouldSuppressInAppPiPOnRoute(currentRouteName);
+      hidePiP();
+      if (onVideoCallScreen) {
+        prepareDirectCallVideoReturnFromPiP();
+        g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+        g.__expandToVideoCallUiFromPiPRef.current = true;
+        return;
+      }
+      prepareDirectCallVideoReturnFromPiP();
+      returnToCall({ preferAudioOnlyUi: false });
+    } catch (_) {}
+  }, [returnToCall, currentRouteName, hidePiP]);
+
   const dims = Dimensions.get('window');
   const W = typeof dims?.width === 'number' && dims.width > 0 ? dims.width : 400;
   const H = typeof dims?.height === 'number' && dims.height > 0 ? dims.height : 700;
 
   const pipBarW = useMemo(() => {
-    const actionCount = showAudioReturnFromVideoPiP ? 4 : 3;
+    let actionCount = 3;
+    if (showAudioReturnFromVideoPiP) actionCount += 1;
+    if (pipFromAudioOnly) actionCount += 1;
+    actionCount += 1;
     const actionSlots =
       actionCount * PIP_ACTION_OUTER + Math.max(0, actionCount - 1) * PIP_ACTION_GAP;
     const minW = PIP_PREVIEW_SIZE + PIP_BAR_H_PAD * 2 + PIP_AVATAR_ACTION_GAP + actionSlots;
     return Math.min(W - 16, minW);
-  }, [W, showAudioReturnFromVideoPiP]);
+  }, [W, showAudioReturnFromVideoPiP, pipFromAudioOnly]);
 
   const isSystemPiPLayout = pendingSystemPiP || inSystemPiPMode;
   const showingInAppPiPDuringBackTransition =
@@ -306,7 +366,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                   accessibilityLabel="Вернуться в аудиозвонок"
                   chrome={chrome}
                 >
-                  <MaterialIcons name="phone-in-talk" size={PIP_ICON_SIZE} color={chrome.icon} />
+                  <MaterialCommunityIcons name="phone-in-talk" size={PIP_ICON_SIZE} color={chrome.icon} />
                 </PiPActionButton>
               ) : null}
               <PiPActionButton
@@ -314,17 +374,47 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                 accessibilityLabel={pipFromAudioOnly ? 'Вернуться в аудиозвонок' : 'Вернуться в видеозвонок'}
                 chrome={chrome}
               >
-                <MaterialIcons
-                  name={pipFromAudioOnly ? 'phone-in-talk' : 'videocam'}
-                  size={PIP_ICON_SIZE}
-                  color={chrome.icon}
-                />
+                {pipFromAudioOnly ? (
+                  <MaterialCommunityIcons name="phone-in-talk" size={PIP_ICON_SIZE} color={chrome.icon} />
+                ) : (
+                  <MaterialIcons name="videocam" size={PIP_ICON_SIZE} color={chrome.icon} />
+                )}
+              </PiPActionButton>
+              {pipFromAudioOnly ? (
+                <PiPActionButton
+                  onPress={openVideoCallFromAudioPiP}
+                  accessibilityLabel="Вернуться в видеозвонок"
+                  chrome={chrome}
+                >
+                  <MaterialIcons name="videocam" size={PIP_ICON_SIZE} color={chrome.icon} />
+                </PiPActionButton>
+              ) : null}
+              <PiPActionButton
+                onPress={toggleAudioOutputRoute}
+                accessibilityLabel="Переключить динамик"
+                chrome={chrome}
+                active={loudSpeakerActive}
+                activeAccent={accent}
+              >
+                {pipAudioRouteIcon === 'ear-hearing' ? (
+                  <MaterialCommunityIcons
+                    name="ear-hearing"
+                    size={PIP_ICON_SIZE}
+                    color={loudSpeakerActive ? accent.softText : chrome.icon}
+                  />
+                ) : (
+                  <MaterialIcons
+                    name={pipAudioRouteIcon}
+                    size={PIP_ICON_SIZE}
+                    color={loudSpeakerActive ? accent.softText : chrome.icon}
+                  />
+                )}
               </PiPActionButton>
               <PiPActionButton onPress={toggleMic} accessibilityLabel="Микрофон" chrome={chrome}>
                 <MaterialIcons
-                  name={isMuted ? 'mic-off' : 'mic'}
+                  name={micIconMuted ? 'mic-off' : 'mic'}
                   size={PIP_ICON_SIZE}
-                  color={isMuted ? chrome.iconOff : chrome.icon}
+                  color={micIconMuted ? chrome.iconOff : chrome.icon}
                 />
               </PiPActionButton>
               <PiPActionButton onPress={endCall} accessibilityLabel="Завершить" chrome={chrome} endCall>
@@ -345,6 +435,11 @@ type PipChrome = {
   endCallBorder: string;
 };
 
+type PipActiveAccent = {
+  solid: string;
+  solid15: string;
+};
+
 function PiPActionButton({
   onPress,
   children,
@@ -352,6 +447,8 @@ function PiPActionButton({
   accessibilityLabel,
   chrome,
   endCall = false,
+  active = false,
+  activeAccent,
 }: {
   onPress: () => void;
   children: React.ReactNode;
@@ -359,6 +456,8 @@ function PiPActionButton({
   accessibilityLabel?: string;
   chrome: PipChrome;
   endCall?: boolean;
+  active?: boolean;
+  activeAccent?: PipActiveAccent;
 }) {
   return (
     <Pressable
@@ -385,9 +484,21 @@ function PiPActionButton({
         style={[
           styles.pipActionCircle,
           endCall && styles.pipActionCircleEndCall,
+          active && activeAccent
+            ? {
+                borderWidth: 2,
+                borderColor: activeAccent.solid,
+                backgroundColor: activeAccent.solid15,
+              }
+            : null,
           {
-            backgroundColor: chrome.btnBg,
-            borderColor: endCall ? chrome.endCallBorder : chrome.btnBorder,
+            backgroundColor:
+              active && activeAccent ? activeAccent.solid15 : chrome.btnBg,
+            borderColor: endCall
+              ? chrome.endCallBorder
+              : active && activeAccent
+                ? activeAccent.solid
+                : chrome.btnBorder,
           },
         ]}
       >

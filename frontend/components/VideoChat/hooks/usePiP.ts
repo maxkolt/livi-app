@@ -2,7 +2,10 @@ import { useCallback, useRef, useEffect } from 'react';
 import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { usePiP as usePiPContext, isPipOverlayVisibleSync } from '../../../src/pip/PiPContext';
-import { isInAudioOnlyCallUi } from '../../../src/pip/pipPlaceholderOnly';
+import { isInAudioOnlyCallUi, setPipInAppRtcFromAudioOnlySticky } from '../../../src/pip/pipPlaceholderOnly';
+import { resolvePiPLocalMutedState } from '../../../utils/activeCallSession';
+import { setPersistedCallAudioRoute } from '../../../utils/callAudioRoutePersist';
+import { readInAppPiPAudioOutputRoute } from '../../../utils/inAppPiPAudioRoute';
 import { logger } from '../../../utils/logger';
 import socket from '../../../sockets/socket';
 
@@ -108,7 +111,21 @@ export const usePiP = ({
     }
     pipTransitionUntilRef.current = now + (fromVideoCallBack ? 200 : 450);
 
-    // КРИТИЧНО: Проверяем по refs (актуальное состояние), чтобы при отложенном вызове после Back
+    if (isInAudioOnlyCallUi()) {
+      setPipInAppRtcFromAudioOnlySticky(true);
+      const routeEarly = getAudioOutputRoute?.() || readInAppPiPAudioOutputRoute();
+      if (routeEarly) {
+        setPersistedCallAudioRoute(routeEarly);
+        try {
+          const params = g.__currentCallPiPParamsRef?.current;
+          if (params && typeof params === 'object') {
+            params.audioOutputRoute = routeEarly;
+          }
+        } catch {}
+      }
+    }
+
+    // КРИТИЧНО: Проверяем по refs
     // не показывать PiP, если звонок успел завершиться. Пропы могут быть устаревшими в замыкании.
     const inactive = isInactiveStateRef.current || wasFriendCallEndedRef.current;
     if (inactive || isInactiveState || wasFriendCallEnded) {
@@ -177,20 +194,28 @@ export const usePiP = ({
       const finalCallId = actualCallId || callId || '';
       const finalRoomId = actualRoomId || roomId || '';
       
-      const audioRoute = getAudioOutputRoute?.();
+      const audioRoute = getAudioOutputRoute?.() || readInAppPiPAudioOutputRoute();
+      const fromAudioOnlyUi = isInAudioOnlyCallUi();
+      const pipAudioRoute =
+        fromAudioOnlyUi
+          ? audioRoute || 'EARPIECE'
+          : audioRoute === 'EARPIECE'
+            ? 'SPEAKER_PHONE'
+            : audioRoute;
+      const muteLocal = resolvePiPLocalMutedState(micOn);
       pip.showPiP({
         callId: finalCallId,
         roomId: finalRoomId,
         partnerName: (partner?.nick && partner.nick.trim()) ? partner.nick.trim() : (partnerNameFromParams && String(partnerNameFromParams).trim()) ? String(partnerNameFromParams).trim() : '',
         partnerAvatarUrl: avatarUrl,
-        muteLocal: !micOn,
+        muteLocal,
         muteRemote: remoteMuted,
         localStream: localStream || null,
         remoteStream: remoteStream || null,
         localCamOn: camOn,
         remoteCamOn,
-        fromAudioOnlyUi: isInAudioOnlyCallUi(),
-        audioOutputRoute: audioRoute,
+        fromAudioOnlyUi,
+        audioOutputRoute: pipAudioRoute,
         deferVisible: !!opts?.deferVisible,
         navParams: {
           ...routeParams,
