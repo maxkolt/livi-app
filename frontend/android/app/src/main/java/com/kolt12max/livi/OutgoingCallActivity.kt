@@ -49,6 +49,8 @@ class OutgoingCallActivity : AppCompatActivity() {
     private var callId: String = ""
     private var toUserId: String = ""
     private var toNick: String = ""
+    /** Отмена с кнопки X: Main уже запланирован без debounce — не дублировать в finish(). */
+    private var mainReturnScheduledForUserCancel = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -130,6 +132,8 @@ class OutgoingCallActivity : AppCompatActivity() {
                 LiviOutgoingCallService.cancelCallOnServer(this, effectiveCallId)
             }
             LiviOutgoingCallService.stop(this)
+            mainReturnScheduledForUserCancel = true
+            LiviAppModule.scheduleMainActivityAfterOutgoingUserCancel(applicationContext)
             finish()
         }
 
@@ -223,7 +227,9 @@ class OutgoingCallActivity : AppCompatActivity() {
         // Убираем системную анимацию закрытия, чтобы не было "мерцания/уезда" Home
         // при возврате с нативного экрана исходящего вызова.
         overridePendingTransition(0, 0)
-        LiviAppModule.scheduleMainActivityAfterOutgoingClose(applicationContext)
+        if (!mainReturnScheduledForUserCancel) {
+            LiviAppModule.scheduleMainActivityAfterOutgoingClose(applicationContext)
+        }
     }
 
     /**

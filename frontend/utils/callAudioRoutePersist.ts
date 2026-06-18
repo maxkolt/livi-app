@@ -97,7 +97,7 @@ let reapplyChain = Promise.resolve();
 let scheduledReapplyTimers: ReturnType<typeof setTimeout>[] = [];
 let lastReapplySignature = '';
 let lastReapplyAt = 0;
-const REAPPLY_DEDUP_MS = 450;
+const REAPPLY_DEDUP_MS = 900;
 
 function clearScheduledReapplies(): void {
   for (const t of scheduledReapplyTimers) {

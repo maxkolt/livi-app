@@ -32,7 +32,7 @@ import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
 import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
-import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative } from './utils/pushNotifications';
+import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
 import {
@@ -91,8 +91,22 @@ import {
   peekSystemPiPLeaveContextForReturn,
 } from './src/pip/pipPlaceholderOnly';
 import { installActiveCallBackgroundAudioHandlers } from './utils/activeCallBackgroundAudio';
-import { isOngoingCallSession, clearEndingCallInProgress } from './utils/activeCallSession';
+import {
+  isOngoingCallSession,
+  clearEndingCallInProgress,
+  shouldKeepInCallAudioOnAppBackground,
+} from './utils/activeCallSession';
 import { restoreCallMediaAfterSystemPiPReturn } from './utils/callAudioRoutePersist';
+import {
+  installAppNavigationGuard,
+  applyCallCancelledHomeNotice,
+  dismissStaleVideoCallRouteIfNeeded,
+  endCallImplNavCleanup,
+  isAppBackgroundOrInactive,
+  leaveVideoCallScreenPreservingStack,
+  stashPendingVideoCallNavigation,
+  flushPendingVideoCallNavigation,
+} from './utils/appNavigationGuard';
 
 // Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
 const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
@@ -359,6 +373,7 @@ function AppContent() {
   const hydrateLang = useLang((s) => s.hydrate);
   const insets = useSafeAreaInsets();
   React.useEffect(() => {
+    installAppNavigationGuard();
     installActiveCallBackgroundAudioHandlers();
   }, []);
   /** Пока true — не скрываем оверлей. После обработки initial URL (в т.ч. answer-call) ставим true, чтобы не мелькала Home у принимающего. */
@@ -709,14 +724,7 @@ function AppContent() {
       try { stopIncomingCallAlert(); } catch {}
       try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       // Бейдж «Вызов отменен» на главном экране (тот, кому звонили, отклонил в приложении)
-      if (navRef.isReady()) {
-        const rn = String(navRef.getCurrentRoute()?.name ?? '');
-        if (rn !== 'Home') {
-          navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
-        } else {
-          navRef.dispatch(CommonActions.setParams({ callCancelled: true }));
-        }
-      }
+      applyCallCancelledHomeNotice(navRef);
     });
     const sub3 = emitter.addListener('LiviPendingCallAccepted', () => {
       const LiviAppModule = NativeModules.LiviAppModule;
@@ -1065,14 +1073,7 @@ function AppContent() {
               setIncoming(null);
               try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
               // Бейдж «Вызов отменен» на главном экране (тот, кому звонили, отклонил)
-              if (navRef.isReady()) {
-                const rn = String(navRef.getCurrentRoute()?.name ?? '');
-                if (rn !== 'Home') {
-                  navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
-                } else {
-                  navRef.dispatch(CommonActions.setParams({ callCancelled: true }));
-                }
-              }
+              applyCallCancelledHomeNotice(navRef);
             } else {
               // Звонящий отменил с нативного экрана — отменяем исходящий и сразу закрываем модалку
               try { cancelCall(callId); } catch {}
@@ -1412,14 +1413,17 @@ function AppContent() {
           }
 
           if (cancelled) return;
-          // Синхронизировать счётчик в шторке с источником истины (AsyncStorage) при каждом старте.
+          // Синхронизировать счётчик в шторке только если JS расходится с native (FCM уже обновил shade — не refresh).
           if (Platform.OS === 'android') {
             try {
               const raw2 = await AsyncStorage.getItem(key);
               const map2 = raw2 ? JSON.parse(raw2) as Record<string, number> : {};
+              const nativeMissed = await getMissedCountByUserFromNative();
               for (const uid of Object.keys(map2 || {})) {
                 const c = map2[uid];
-                if (uid && typeof c === 'number' && c > 0) {
+                if (!uid || typeof c !== 'number' || c <= 0) continue;
+                const nativeC = typeof nativeMissed[uid] === 'number' ? nativeMissed[uid] : 0;
+                if (nativeC !== c) {
                   LiviAppModule?.syncMissedCountForUser?.(uid, c);
                 }
               }
@@ -1993,6 +1997,8 @@ function AppContent() {
         const inPiP = g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
         const session = g.__webrtcSessionRef?.current;
         const activeVideoCallNotEnded = !!session && (typeof session.isEnded !== 'function' ? true : !session.isEnded());
+        const keepCallAudioContext =
+          inPiP || activeVideoCallNotEnded || shouldKeepInCallAudioOnAppBackground();
         const keepScreenOnInPiP = inPiP && activeVideoCallNotEnded;
 
         if (!keepScreenOnInPiP) {
@@ -2032,7 +2038,7 @@ function AppContent() {
         // Страховка: не вызывать stop(), если есть активная сессия (ref'ы PiP могли не успеть проставиться в release).
         if (Platform.OS === 'android') {
           try {
-            if (!inPiP && !activeVideoCallNotEnded) {
+            if (!keepCallAudioContext) {
               (InCallManager as any).setKeepScreenOn?.(false);
               InCallManager.stop();
               logger.info('[App] AppState background: InCallManager.stop() called (no PiP, no active call)');
@@ -2040,6 +2046,7 @@ function AppContent() {
               logger.info('[App] AppState background: Skip InCallManager.stop() — keep call audio', {
                 inPiP,
                 activeVideoCallNotEnded,
+                keepCallAudioContext,
                 pipVisibleRef: g.__pipVisibleRef?.current,
                 pipInSystemModeRef: g.__pipInSystemModeRef?.current,
               });
@@ -2583,24 +2590,15 @@ function AppContent() {
         const route = navRef.getCurrentRoute();
         const routeName = String((route as any)?.name ?? '');
         if (routeName === 'Home') return;
-        // Только если сейчас на VideoCall — закрываем экран (goBack или reset). Иначе пользователь уже на другом экране — не трогаем.
         if (routeName === 'VideoCall') {
-          const returnTo = (route as any)?.params?.returnTo;
-          const state = navRef.getState();
-          const routes = state?.routes ?? [];
-          const canGoBack = typeof navRef.canGoBack === 'function' ? navRef.canGoBack() : routes.length > 1;
-          if (canGoBack) {
-            navRef.dispatch(CommonActions.goBack());
-            try { emitCallEndedOnHome(); } catch (_) {}
-          } else if (returnTo?.name) {
-            navRef.dispatch(CommonActions.reset({
-              index: 0,
-              routes: [{ name: returnTo.name as any, params: { ...(returnTo.params || {}), callEnded: true } }],
-            }));
-          } else {
-            navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
-          }
-          return;
+          leaveVideoCallScreenPreservingStack(navRef, {
+            callEndedParams: true,
+            emitCallEndedOnHome: () => {
+              try {
+                emitCallEndedOnHome();
+              } catch (_) {}
+            },
+          });
         }
       };
       closeVideoCallScreen();
@@ -2658,26 +2656,12 @@ function AppContent() {
           if (route?.name === 'Home') {
             // уже на Home
           } else if (route?.name === 'VideoCall') {
-            // Открытие по пушу «звонок завершён»: сбрасываем на Home только если это не тот, кто завершил из PiP (иначе он оказывается на странице приветствия).
             const endedFromPiP = (global as any).__lastEndCallSourceRef?.current === 'pip_close';
             if (!endedFromPiP) {
-              navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
-            }
-          } else {
-            const state = navRef.getState();
-            const routes = state?.routes ?? [];
-            const idx = state?.index ?? 0;
-            if (idx > 0 && routes[idx - 1]?.name === 'Home') {
-              navRef.dispatch(CommonActions.goBack());
-            } else {
-              navRef.dispatch(
-                CommonActions.reset({
-                  index: 0,
-                  routes: [{ name: 'Home' as any }],
-                })
-              );
+              leaveVideoCallScreenPreservingStack(navRef);
             }
           }
+          // Chat / RandomChat / … — стек не меняем: пользователь возвращается туда, где был.
         }
       }
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
@@ -2752,13 +2736,8 @@ function AppContent() {
         // Если приложение открыли (или вернулись в него), а текущий экран — неактивный видеозвонок — сбрасываем на Home только если это не тот, кто завершил звонок из PiP (иначе он оказывается на странице приветствия при открытии по пушу, когда у собеседника закрывается PiP).
         try {
           if (navRef.isReady()) {
-            const route = navRef.getCurrentRoute();
-            const isInactiveCall = (global as any).__isInactiveStateRef?.current === true;
-            const sessionEnded = (global as any).__webrtcSessionRef?.current?.ended === true;
-            const endedFromPiP = (global as any).__lastEndCallSourceRef?.current === 'pip_close';
-            if ((route?.name === 'VideoCall') && (isInactiveCall || sessionEnded) && !endedFromPiP) {
-              navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any }] }));
-            }
+            dismissStaleVideoCallRouteIfNeeded(navRef);
+            flushPendingVideoCallNavigation(navRef);
           }
         } catch (_) {}
 
@@ -2891,11 +2870,7 @@ function AppContent() {
         if (homeResetByVideoCall) {
           try { g.__homeResetByVideoCallRef.current = false; } catch (_) {}
         } else if (!alreadyDidNav && navRef.isReady()) {
-          if (routeName !== 'Home') {
-            navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
-          } else {
-            navRef.dispatch(CommonActions.setParams({ callCancelled: true }));
-          }
+          applyCallCancelledHomeNotice(navRef);
         }
       }
       // Инкремент пропущенного только у получателя (callee); для callee на Home делаем в setTimeout выше
@@ -3102,11 +3077,17 @@ function AppContent() {
             });
             const doNavigate = () => {
               try {
-                if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
-                  setActiveVideoCall(true);
-                  try { emitCloseHomeModals(); } catch {}
-                  navRef.navigate('VideoCall' as any, params);
+                if (!navRef.isReady() || navRef.getCurrentRoute()?.name === 'VideoCall') return;
+                if (isAppBackgroundOrInactive()) {
+                  stashPendingVideoCallNavigation(params as Record<string, unknown>);
+                  logger.info('[App] call:accepted navigation deferred until foreground', {
+                    callId: data?.callId,
+                  });
+                  return;
                 }
+                setActiveVideoCall(true);
+                try { emitCloseHomeModals(); } catch {}
+                navRef.navigate('VideoCall' as any, params);
               } catch (err) {
                 logger.error('[App] ❌ Error navigating to VideoCall', { error: err, callId: data?.callId });
               }
@@ -3162,12 +3143,7 @@ function AppContent() {
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
       // Переход на Home с бейджем «Вызов отменен» (не дублируем, если уже обработали call:cancel)
       if (!wasCanceled && navRef.isReady()) {
-        const routeName = String(navRef.getCurrentRoute()?.name ?? '');
-        if (routeName !== 'Home') {
-          navRef.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callCancelled: true } }] }));
-        } else {
-          navRef.dispatch(CommonActions.setParams({ callCancelled: true }));
-        }
+        applyCallCancelledHomeNotice(navRef);
       }
       try {
         if (callId && !wasCanceled) {
@@ -3558,17 +3534,7 @@ export default function App() {
     if (typeof hidePiP === 'function') hidePiP();
     // Если пользователь на странице видеозвонка — не переходим на Home, остаёмся на ней.
     if (navRef.isReady()) {
-      const route = navRef.getCurrentRoute();
-      const routeName = route?.name ?? '';
-      if (routeName !== 'VideoCall') {
-        console.log('[App] [PiP] endCallImpl: навигация на Home (не в PiP: inSystem=false, pipVisible=false, текущий экран=', routeName, ')');
-        navRef.dispatch(
-          CommonActions.reset({
-            index: 0,
-            routes: [{ name: 'Home' as any }],
-          })
-        );
-      }
+      endCallImplNavCleanup(navRef);
     }
   };
 

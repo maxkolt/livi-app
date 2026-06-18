@@ -4,6 +4,9 @@ import 'react-native-gesture-handler';
 import 'react-native-reanimated';
 // Ранняя загрузка модуля пуша, чтобы захватить getLastNotificationResponseAsync до монтирования App (важно для входящего звонка из фона/убитого приложения)
 import './utils/pushNotifications';
+import { installAppNavigationGuard } from './utils/appNavigationGuard';
+
+installAppNavigationGuard();
 
 import { Alert, AppRegistry, Platform, Text, TextInput } from 'react-native';
 

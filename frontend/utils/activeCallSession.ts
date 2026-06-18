@@ -76,6 +76,60 @@ export function isOngoingCallSession(): boolean {
   }
 }
 
+function isIncomingAnswerTransitionActive(): boolean {
+  try {
+    const incomingTransition = (global as any).__incomingAnswerTransitionRef?.current;
+    return !!incomingTransition && Number(incomingTransition.expiresAt || 0) > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Не сбрасывать InCallManager / не резать random-chat при уходе в фон:
+ * звонок, переход на accept, нативные incoming/outgoing экраны.
+ */
+export function shouldKeepInCallAudioOnAppBackground(): boolean {
+  try {
+    const g = global as any;
+    if (g.__endingCallInProgressRef?.current === true) return false;
+    if (g.__callEndedFromPiPNoOpenRef?.current === true) return false;
+    if (g.__endingFromPiPButtonRef?.current === true) return false;
+
+    const session = g.__webrtcSessionRef?.current;
+    const sessionLive =
+      !!session &&
+      (typeof session.isEnded !== 'function' || !session.isEnded());
+    if (sessionLive) return true;
+
+    if (isOngoingCallSession()) return true;
+    if (isIncomingAnswerTransitionActive()) return true;
+
+    const outgoingCallId = String(g.__outgoingCallIdRef?.current || '').trim();
+    if (outgoingCallId) return true;
+
+    if (g.__incomingCallScreenVisibleRef?.current === true) return true;
+    if (g.__outgoingCallScreenVisibleRef?.current === true) return true;
+    if (g.__socketActiveVideoCallRef?.current === true) return true;
+
+    if (g.__videoCallActiveRef?.current === true) {
+      const params = g.__currentCallPiPParamsRef?.current;
+      if (params?.callId || params?.roomId) return true;
+    }
+
+    const route = g.__navRef?.getCurrentRoute?.()?.name;
+    if (route === 'VideoCall' && g.__videoCallActiveRef?.current !== false) {
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+/** Random chat: не стопать поиск/комнату, пока идёт или подключается direct-call. */
+export function shouldDeferRandomChatStopOnAppBackground(): boolean {
+  return shouldKeepInCallAudioOnAppBackground();
+}
+
 export function resolveActiveCallInCallMedia(): 'audio' | 'video' {
   try {
     if (ongoingCallPrefersVideoMedia()) return 'video';

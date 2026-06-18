@@ -40,7 +40,7 @@ import { getInstallId } from '../../../utils/installId';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../../utils/callKeep';
 import { setAndroidSystemPiPLeaveHintEnabled } from '../../../utils/activeCallNotification';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
-import { isInAudioOnlyCallUi } from '../../pip/pipPlaceholderOnly';
+import { isDirectCallVideoExpandGuardActive, isInAudioOnlyCallUi } from '../../pip/pipPlaceholderOnly';
 import { markDirectCallVideoMediaActive } from '../../../utils/activeCallSession';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
@@ -54,6 +54,7 @@ const REMOTE_CAM_OFF_GRACE_MS = 1400;
 const RECENT_RECONNECT_DISCONNECT_GUARD_MS = 2000;
 const REMOTE_PARTICIPANT_DISCONNECT_CONFIRM_MS = 250;
 const REMOTE_MEDIA_WATCHDOG_MS = 12_000;
+const REMOTE_MEDIA_SUBSCRIBE_RETRY_MS = 5_000;
 
 function parsePublicFlag(value: string | undefined, fallback: boolean): boolean {
   const v = String(value ?? '').trim().toLowerCase();
@@ -172,6 +173,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** Сериализация pause/restore и recreate, чтобы App + VideoCall не гоняли два reconnect подряд. */
   private cameraAppLifecyclePromise: Promise<void> | null = null;
   private localVideoRecreatePromise: Promise<void> | null = null;
+  private localCameraRestoreAfterPiPPromise: Promise<void> | null = null;
   /** После foreground/pip restore не дублировать recreate через reconnectCameraOnResume. */
   private skipReconnectCameraOnResumeUntil = 0;
   /** Идемпотентность cleanup(): повторный вызов не выполняет отписки и endCall повторно */
@@ -225,6 +227,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private remoteMediaRecoveryInProgress = false;
   private remoteMediaRelayRecoveryAttempted = false;
   private remoteMediaNoParticipantWatchdogCount = 0;
+  /** Сколько раз watchdog видел remote participant, но без медиа (до relay fallback). */
+  private remoteMediaParticipantWatchdogCount = 0;
   private lastLiveKitUrl: string | null = null;
   private lastLiveKitToken: string | null = null;
   private iceTransportLogTimers: Array<ReturnType<typeof setTimeout>> = [];
@@ -1012,8 +1016,27 @@ export class VideoCallSession extends SimpleEventEmitter {
    * Возврат на полный VideoCall из PiP: быстро включить локальную камеру (live — unmute; ended — fast-start recreate).
    */
   async restoreLocalCameraAfterPiPReturn(): Promise<void> {
-    if (this.ended || this.endCallInProgress || this.isLocalDirectCallAudioOnlyUi()) return;
-    if (!this.isCamOn && !this.cameraSuspendedForAppBackground) return;
+    if (this.localCameraRestoreAfterPiPPromise) {
+      return this.localCameraRestoreAfterPiPPromise;
+    }
+    const work = this.restoreLocalCameraAfterPiPReturnInner();
+    this.localCameraRestoreAfterPiPPromise = work;
+    try {
+      await work;
+    } finally {
+      if (this.localCameraRestoreAfterPiPPromise === work) {
+        this.localCameraRestoreAfterPiPPromise = null;
+      }
+    }
+  }
+
+  private async restoreLocalCameraAfterPiPReturnInner(): Promise<void> {
+    if (this.ended || this.endCallInProgress) return;
+    const expandingToVideoUi =
+      isDirectCallVideoExpandGuardActive() ||
+      (global as any).__stayOnVideoCallUiRef?.current === true;
+    if (this.isLocalDirectCallAudioOnlyUi() && !expandingToVideoUi) return;
+    if (!this.isCamOn && !this.cameraSuspendedForAppBackground && !expandingToVideoUi) return;
     return this.enqueueCameraAppLifecycle(async () => {
       if (this.localVideoRecreatePromise) {
         await this.localVideoRecreatePromise.catch(() => {});
@@ -1054,9 +1077,6 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.info('[VideoCallSession] Fast restore local camera after PiP return');
       await this.applyLocalCameraEnabled(true);
       this.skipReconnectCameraOnResumeUntil = Date.now() + 8000;
-      try {
-        this.maybeScheduleFastStartVideoUpgrade('pip-return');
-      } catch (_) {}
       try {
         const pipUpdate = (global as any).__pipUpdateStateRef?.current;
         if (typeof pipUpdate === 'function') pipUpdate({ localCamOn: true });
@@ -1789,13 +1809,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     if (opts?.leaveAudioOnlyConsumer) {
+      this.directCallAudioOnlyConsumerDefer = false;
       if (isInAudioOnlyCallUi()) {
         logger.debug(
-          '[VideoCallSession] Skip enableRemoteVideoConsumption — leaveAudioOnlyConsumer while audio UI active',
+          '[VideoCallSession] enableRemoteVideoConsumption — leaveAudioOnlyConsumer (UI ref may lag)',
         );
-        return;
       }
-      this.directCallAudioOnlyConsumerDefer = false;
     }
     const wasDeferred = this.deferRemoteVideoSubscription;
     if (!wasDeferred) {
@@ -2108,6 +2127,17 @@ export class VideoCallSession extends SimpleEventEmitter {
   private async runEnterDirectCallAudioOnlyMode(): Promise<void> {
     if (!this.config.getIsDirectCall?.()) return;
     if (this.ended || this.endCallInProgress) return;
+
+    try {
+      const g = global as any;
+      if (g.__expandToVideoCallUiFromPiPRef?.current === true) return;
+      if (
+        isDirectCallVideoExpandGuardActive() &&
+        g.__stayOnVideoCallUiRef?.current === true
+      ) {
+        return;
+      }
+    } catch (_) {}
 
     const camOnNow = this.getIsCamOn();
     const hasRemoteVideoNow =
@@ -3347,14 +3377,18 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   private scheduleRemoteMediaWatchdog(
     context: { url: string; token: string; targetRoomName?: string | null },
-    preserveRecovery = false
+    preserveRecovery = false,
+    delayMs = REMOTE_MEDIA_WATCHDOG_MS,
   ): void {
     this.clearRemoteMediaWatchdog(!preserveRecovery);
     this.remoteMediaFirstSeenAt = 0;
-    if (!preserveRecovery) this.remoteMediaNoParticipantWatchdogCount = 0;
+    if (!preserveRecovery) {
+      this.remoteMediaNoParticipantWatchdogCount = 0;
+      this.remoteMediaParticipantWatchdogCount = 0;
+    }
     this.remoteMediaWatchdogTimer = setTimeout(() => {
       void this.handleRemoteMediaWatchdog(context);
-    }, REMOTE_MEDIA_WATCHDOG_MS);
+    }, delayMs);
   }
 
   private markRemoteMediaSeen(reason: string, publication: RemoteTrackPublication, participant: RemoteParticipant): void {
@@ -3465,6 +3499,18 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
 
+    this.remoteMediaParticipantWatchdogCount += 1;
+    if (this.remoteMediaParticipantWatchdogCount < 2) {
+      logger.info('[VideoCallSession] Remote media watchdog: rescheduling before relay fallback', {
+        roomName: room.name,
+        attempt: this.remoteMediaParticipantWatchdogCount,
+        delayMs: REMOTE_MEDIA_SUBSCRIBE_RETRY_MS,
+      });
+      this.remoteMediaRecoveryInProgress = false;
+      this.scheduleRemoteMediaWatchdog(context, true, REMOTE_MEDIA_SUBSCRIBE_RETRY_MS);
+      return;
+    }
+
     this.remoteMediaRelayRecoveryAttempted = true;
     void sendClientMetrics(API_BASE, { relayFallback: true }).catch(() => {});
     logger.warn('[VideoCallSession] Remote media still missing; reconnecting with relay-only ICE fallback', {
@@ -3500,6 +3546,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private maybeScheduleFastStartVideoUpgrade(reason: string): void {
+    if (this.config.getIsDirectCall?.()) return;
     if (!this.fastStartVideoProfileActive) return;
     if (this.fastStartVideoUpgradeTimer) return;
     if (this.ended || !this.isCamOn || this.cameraSwitchInProgress) return;
@@ -3553,14 +3600,34 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     } catch {}
 
-    const stream = new MediaStream();
+    this.emitLocalMediaStream({ forceNewStream: false });
+  }
+
+  /** Собрать local MediaStream; по умолчанию сохраняем stream.id (меньше remount локального RTCView). */
+  private emitLocalMediaStream(opts?: { forceNewStream?: boolean }): void {
+    const forceNew = opts?.forceNewStream === true;
+    let stream = !forceNew && this.localStream ? this.localStream : new MediaStream();
     try {
-      const mt = this.localVideoTrack.mediaStreamTrack;
-      if (mt) stream.addTrack(mt as any);
+      for (const t of [...stream.getVideoTracks()]) {
+        try {
+          stream.removeTrack(t);
+        } catch {}
+      }
+    } catch {}
+    try {
+      const vt = this.localVideoTrack?.mediaStreamTrack;
+      if (vt) stream.addTrack(vt as any);
     } catch {}
     try {
       const at = this.localAudioTrack?.mediaStreamTrack;
-      if (at) stream.addTrack(at as any);
+      if (at && !stream.getAudioTracks().some((t) => t.id === at.id)) {
+        for (const t of [...stream.getAudioTracks()]) {
+          try {
+            stream.removeTrack(t);
+          } catch {}
+        }
+        stream.addTrack(at as any);
+      }
     } catch {}
     this.localStream = stream;
     this.emit('localStream', stream);
@@ -3866,7 +3933,12 @@ export class VideoCallSession extends SimpleEventEmitter {
     const camStateBeforeAwait = this.isCamOn;
 
     const facingMode = this.camSide === 'front' ? 'user' : 'environment';
+    const preferSteadyCaptureForDirectCall =
+      this.config.getIsDirectCall?.() &&
+      (isDirectCallVideoExpandGuardActive() ||
+        /toggleCam:recovery|pip-return|reconnectCameraOnResume|camera-enable-recovery/i.test(context));
     const useFastRecovery =
+      !preferSteadyCaptureForDirectCall &&
       /recovery|pipReturn|pip-return|reconnectCameraOnResume/i.test(context);
     const steadyPreferred = getPreferredVideoCaptureOptions(facingMode);
     const preferred = useFastRecovery
@@ -3874,7 +3946,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       : steadyPreferred;
     if (useFastRecovery) {
       this.fastStartVideoProfileActive =
-        steadyPreferred.meta.preset !== preferred.meta.preset && preferred.meta.preset === 'low';
+        !this.config.getIsDirectCall?.() &&
+        steadyPreferred.meta.preset !== preferred.meta.preset &&
+        preferred.meta.preset === 'low';
+      this.clearFastStartVideoUpgradeTimer();
+    } else {
+      this.fastStartVideoProfileActive = false;
       this.clearFastStartVideoUpgradeTimer();
     }
     logger.info('[VideoCallSession] Recreating local video track', { context, preferred: preferred.meta, camSide: this.camSide });
@@ -3893,18 +3970,9 @@ export class VideoCallSession extends SimpleEventEmitter {
             } catch {}
           }
           this.localVideoTrack = newVideo;
-          const stream = new MediaStream();
-          try {
-            const mt = newVideo.mediaStreamTrack;
-            if (mt) stream.addTrack(mt as any);
-          } catch {}
-          try {
-            const at = this.localAudioTrack?.mediaStreamTrack;
-            if (at) stream.addTrack(at as any);
-          } catch {}
-          this.localStream = stream;
-          this.emit('localStream', stream);
-          this.notifyLocalStreamChange(stream);
+          this.emitLocalMediaStream({
+            forceNewStream: context.includes('restartLocalCamera') || context.includes('flip'),
+          });
           logger.info('[VideoCallSession] Recovered video via replaceTrack (fast path)', { context });
           try {
             this.maybeScheduleFastStartVideoUpgrade('camera-enable-recovery');
@@ -4003,21 +4071,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
     }
 
-    // Создаём новый MediaStream с новым видео-треком и тем же аудио-треком.
-    // Важно: новая ссылка и новый stream.id, чтобы UI (VideoCall) увидел изменение
-    // (prevStream.id !== stream.id) и обновил localRenderKey — иначе превью не перерисуется при перевороте камеры.
-    const stream = new MediaStream();
-    try {
-      const mt = this.localVideoTrack.mediaStreamTrack;
-      if (mt) stream.addTrack(mt as any);
-    } catch {}
-    try {
-      const at = this.localAudioTrack?.mediaStreamTrack;
-      if (at) stream.addTrack(at as any);
-    } catch {}
-    this.localStream = stream;
-    this.emit('localStream', stream);
-    this.notifyLocalStreamChange(stream);
+    // Новый stream.id только для flip/restart — иначе сохраняем id (меньше мерцания превью).
+    const forceNewStream = context.includes('restartLocalCamera') || context.includes('flip');
+    this.emitLocalMediaStream({ forceNewStream });
   }
 
   private stopLocalTracksWithoutStateReset(): void {

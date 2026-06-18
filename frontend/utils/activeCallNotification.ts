@@ -115,6 +115,10 @@ export function shouldBlockAndroidLeaveHintDisarm(): boolean {
 }
 
 /** Android: ongoing-уведомление в шторке во время активного звонка (аудио — без system PiP, видео — в т.ч. PiP). */
+let lastFgsStartSignature = '';
+let lastFgsStartAtMs = 0;
+const FGS_START_DEDUP_MS = 900;
+
 export function startActiveCallNotification(
   partnerNick?: string | null,
   opts?: { audioOnly?: boolean },
@@ -123,6 +127,13 @@ export function startActiveCallNotification(
   try {
     const nick = typeof partnerNick === 'string' ? partnerNick.trim() : '';
     const audioOnly = opts?.audioOnly ?? resolveActiveCallNotificationAudioOnly();
+    const signature = `${audioOnly ? 'a' : 'v'}|${nick}`;
+    const now = Date.now();
+    if (signature === lastFgsStartSignature && now - lastFgsStartAtMs < FGS_START_DEDUP_MS) {
+      return;
+    }
+    lastFgsStartSignature = signature;
+    lastFgsStartAtMs = now;
     NativeModules.LiviAppModule?.startActiveCallForegroundService?.(nick || null, audioOnly);
   } catch (_) {}
 }
@@ -229,6 +240,8 @@ export function refreshAndroidActiveCallNotification(): void {
 
 export function stopActiveCallNotification(): void {
   if (Platform.OS !== 'android') return;
+  lastFgsStartSignature = '';
+  lastFgsStartAtMs = 0;
   try {
     NativeModules.LiviAppModule?.stopActiveCallForegroundService?.();
   } catch (_) {}

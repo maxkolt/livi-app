@@ -1209,9 +1209,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     } catch (_: Exception) {}
   }
 
-  /** Обновить сводные уведомления в шторке: общие пропущенные звонки и общие непрочитанные сообщения (отдельно). Вызывается из JS при syncAppBadgeFromMissedCount когда бейдж не «увиден». */
+  /** Только пропущенные в шторке (без непрочитанных). JS вызывает, когда изменился только missed-бейдж. */
   @ReactMethod
-  fun updateSummaryNotifications(missedTotal: Int, unreadTotal: Int) {
+  fun updateMissedSummaryInShade(missedTotal: Int) {
     Handler(Looper.getMainLooper()).post {
       try {
         val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -1220,6 +1220,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         } else {
           cancelNotificationIfPresent(nm, LiviFirebaseMessagingService.NOTIFICATION_ID_SUMMARY_MISSED_CALLS)
         }
+      } catch (_: Exception) {}
+    }
+  }
+
+  /** Только непрочитанные сообщения в шторке (без пропущенных). */
+  @ReactMethod
+  fun updateUnreadSummaryInShade(unreadTotal: Int) {
+    Handler(Looper.getMainLooper()).post {
+      try {
+        val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (unreadTotal > 0) {
           LiviFirebaseMessagingService.updateSummaryUnreadNotification(reactApplicationContext, unreadTotal)
         } else {
@@ -1227,6 +1237,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         }
       } catch (_: Exception) {}
     }
+  }
+
+  /** Обновить сводные уведомления в шторке: общие пропущенные звонки и общие непрочитанные сообщения (отдельно). Вызывается из JS при syncAppBadgeFromMissedCount когда бейдж не «увиден». */
+  @ReactMethod
+  fun updateSummaryNotifications(missedTotal: Int, unreadTotal: Int) {
+    updateMissedSummaryInShade(missedTotal)
+    updateUnreadSummaryInShade(unreadTotal)
   }
 
   /** Обновить summary-уведомление «Непрочитанные сообщения» с последним отправителем. */
@@ -1605,6 +1622,20 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         lastBringMainToFrontAtMs = now
       }
       postMainActivityReorderToFront(ctx, delayMs)
+    }
+
+    /**
+     * Пользователь нажал «Отмена» на OutgoingCallActivity — обязательно вернуть MainActivity.
+     * Общий debounce [scheduleMainActivityAfterOutgoingClose] здесь не применяем: иначе после недавнего
+     * bringMain/закрытия старого исходящего возврат пропускается и пользователь видит лаунчер.
+     */
+    @JvmStatic
+    fun scheduleMainActivityAfterOutgoingUserCancel(ctx: Context) {
+      synchronized(LiviAppModule::class.java) {
+        lastBringMainToFrontAtMs = System.currentTimeMillis()
+      }
+      Log.d(NAME, "scheduleMainActivityAfterOutgoingUserCancel: forcing Main reorder")
+      postMainActivityReorderToFront(ctx.applicationContext, 80L)
     }
 
     @JvmStatic
@@ -2043,6 +2074,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private const val PREFS_MISSED_SHOWN_IDS = "LiviMissedShownIds"
     private const val KEY_MISSED_SHOWN_IDS = "ids"
     private const val MISSED_SHOWN_EXPIRY_MS = 120_000L
+    private const val PREFS_MESSAGE_NOTIFIED_IDS = "LiviMessageNotifiedIds"
+    private const val KEY_MESSAGE_NOTIFIED_IDS = "ids"
+    private const val MESSAGE_NOTIFIED_EXPIRY_MS = 7L * 24 * 60 * 60 * 1000
     private const val KEY_MISSED_NICK_PREFIX = "missed_nick_"
     const val MISSED_NOTIFICATION_ID_BASE = 1002
     const val ACTION_MISSED_CALL_DISMISSED = "com.kolt12max.livi.MISSED_CALL_DISMISSED"
@@ -2256,6 +2290,44 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         if (now - ts > MISSED_SHOWN_EXPIRY_MS) null else id to ts
       }
       return entries.any { it.first == callId.trim() }
+    }
+
+    /** Уже показывали heads-up для этого messageId? (дедуп FCM + Expo fallback) */
+    @JvmStatic
+    fun wasMessageNotifiedForId(context: Context, messageId: String): Boolean {
+      if (messageId.isBlank()) return false
+      val prefs = context.getSharedPreferences(PREFS_MESSAGE_NOTIFIED_IDS, Context.MODE_PRIVATE)
+      val raw = prefs.getString(KEY_MESSAGE_NOTIFIED_IDS, "") ?: ""
+      val now = System.currentTimeMillis()
+      val entries = raw.split(',').mapNotNull { entry ->
+        val part = entry.trim()
+        if (part.isEmpty()) return@mapNotNull null
+        val idx = part.lastIndexOf(':')
+        if (idx <= 0) return@mapNotNull null
+        val id = part.substring(0, idx)
+        val ts = part.substring(idx + 1).toLongOrNull() ?: 0L
+        if (now - ts > MESSAGE_NOTIFIED_EXPIRY_MS) null else id to ts
+      }
+      return entries.any { it.first == messageId.trim() }
+    }
+
+    @JvmStatic
+    fun markMessageNotifiedForId(context: Context, messageId: String) {
+      if (messageId.isBlank()) return
+      val prefs = context.getSharedPreferences(PREFS_MESSAGE_NOTIFIED_IDS, Context.MODE_PRIVATE)
+      val raw = prefs.getString(KEY_MESSAGE_NOTIFIED_IDS, "") ?: ""
+      val now = System.currentTimeMillis()
+      val entries = raw.split(',').mapNotNull { entry ->
+        val part = entry.trim()
+        if (part.isEmpty()) return@mapNotNull null
+        val idx = part.lastIndexOf(':')
+        if (idx <= 0) return@mapNotNull null
+        val id = part.substring(0, idx)
+        val ts = part.substring(idx + 1).toLongOrNull() ?: 0L
+        if (now - ts > MESSAGE_NOTIFIED_EXPIRY_MS) null else "$id:$ts"
+      }.toMutableList()
+      entries.add("${messageId.trim()}:$now")
+      prefs.edit().putString(KEY_MESSAGE_NOTIFIED_IDS, entries.takeLast(100).joinToString(",")).apply()
     }
 
     /** Отметить, что для callId уже показали «пропущенный вызов». */

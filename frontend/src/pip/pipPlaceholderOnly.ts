@@ -35,13 +35,66 @@ export function setPipAudioOnlyPlaceholderSticky(active: boolean): void {
   } catch {}
 }
 
+const DIRECT_CALL_VIDEO_EXPAND_GUARD_MS = 3500;
+const DIRECT_CALL_VIDEO_EXPAND_DEDUP_MS = 900;
+
+/** Продлевает окно, в котором audio-only / PiP-return не должны откатывать переход на video UI. */
+export function touchDirectCallVideoExpandGuard(): void {
+  try {
+    const g = global as any;
+    g.__directCallVideoExpandUntilRef = g.__directCallVideoExpandUntilRef || { current: 0 };
+    g.__directCallVideoExpandUntilRef.current = Date.now() + DIRECT_CALL_VIDEO_EXPAND_GUARD_MS;
+  } catch {}
+}
+
+export function isDirectCallVideoExpandGuardActive(): boolean {
+  try {
+    const g = global as any;
+    if (g.__directCallVideoExpandInFlightRef?.current === true) return true;
+    return Date.now() < Number(g.__directCallVideoExpandUntilRef?.current || 0);
+  } catch {
+    return false;
+  }
+}
+
+/** Один активный expand на коротком интервале (PiP overlay + mount effects). */
+export function tryBeginDirectCallVideoExpand(): boolean {
+  try {
+    const g = global as any;
+    const now = Date.now();
+    g.__directCallVideoExpandInFlightRef = g.__directCallVideoExpandInFlightRef || { current: false };
+    g.__directCallVideoExpandLastBeginRef = g.__directCallVideoExpandLastBeginRef || { current: 0 };
+    g.__directCallVideoExpandUntilRef = g.__directCallVideoExpandUntilRef || { current: 0 };
+    if (g.__directCallVideoExpandInFlightRef.current) return false;
+    const lastBegin = Number(g.__directCallVideoExpandLastBeginRef.current || 0);
+    if (now - lastBegin < DIRECT_CALL_VIDEO_EXPAND_DEDUP_MS) return false;
+    g.__directCallVideoExpandInFlightRef.current = true;
+    g.__directCallVideoExpandLastBeginRef.current = now;
+    g.__directCallVideoExpandUntilRef.current = now + DIRECT_CALL_VIDEO_EXPAND_GUARD_MS;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function finishDirectCallVideoExpandInFlight(): void {
+  try {
+    const g = global as any;
+    if (g.__directCallVideoExpandInFlightRef) {
+      g.__directCallVideoExpandInFlightRef.current = false;
+    }
+  } catch {}
+}
+
 /**
  * In-app PiP → «Аудиозвонок» с Home: до navigate выставить audio UI и запустить WebRTC,
  * чтобы первый кадр VideoCall уже был audio, а не видео + remount.
  */
 export function prepareDirectCallAudioReturnFromPiP(): void {
   try {
+    if (isDirectCallVideoExpandGuardActive()) return;
     const g = global as any;
+    if (g.__expandToVideoCallUiFromPiPRef?.current === true) return;
     g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
     g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
     g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
@@ -98,7 +151,11 @@ export function prepareDirectCallVideoReturnFromPiP(): void {
     if (paramsRef && typeof paramsRef === 'object') {
       paramsRef.inAudioOnlyUi = false;
       paramsRef.preferVideoCallUi = true;
+      paramsRef.localCamOn = true;
     }
+    g.__directCallAudioOnlyPreparedAtRef = g.__directCallAudioOnlyPreparedAtRef || { current: 0 };
+    g.__directCallAudioOnlyPreparedAtRef.current = 0;
+    touchDirectCallVideoExpandGuard();
   } catch {}
 }
 

@@ -150,10 +150,24 @@ class ActiveCallForegroundService : Service() {
         private const val NOTIFICATION_ID = 1004
         private const val EXTRA_PARTNER_NICK = "partnerNick"
         private const val EXTRA_AUDIO_ONLY = "audioOnly"
+        private const val START_DEDUP_MS = 900L
+
+        @Volatile private var lastStartSignature: String? = null
+        @Volatile private var lastStartAtMs: Long = 0L
 
         fun start(context: Context, partnerNick: String?, audioOnly: Boolean = false) {
+            val nick = partnerNick?.takeIf { it.isNotBlank() } ?: ""
+            val signature = "${if (audioOnly) "a" else "v"}|$nick"
+            val now = System.currentTimeMillis()
+            synchronized(ActiveCallForegroundService::class.java) {
+                if (signature == lastStartSignature && now - lastStartAtMs < START_DEDUP_MS) {
+                    return
+                }
+                lastStartSignature = signature
+                lastStartAtMs = now
+            }
             val intent = Intent(context, ActiveCallForegroundService::class.java).apply {
-                putExtra(EXTRA_PARTNER_NICK, partnerNick?.takeIf { it.isNotBlank() } ?: "")
+                putExtra(EXTRA_PARTNER_NICK, nick)
                 putExtra(EXTRA_AUDIO_ONLY, audioOnly)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -165,6 +179,10 @@ class ActiveCallForegroundService : Service() {
         }
 
         fun stop(context: Context) {
+            synchronized(ActiveCallForegroundService::class.java) {
+                lastStartSignature = null
+                lastStartAtMs = 0L
+            }
             context.stopService(Intent(context, ActiveCallForegroundService::class.java))
             android.util.Log.d(TAG, "ActiveCallForegroundService stop requested")
         }

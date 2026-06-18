@@ -39,7 +39,18 @@ import { uiAccent } from '../../theme/uiAccent';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
 import { usePiP, isPipOverlayVisibleSync } from '../../src/pip/PiPContext';
-import { setPipAudioOnlyPlaceholderSticky, shouldUsePipPlaceholderOnly, isInAudioOnlyCallUi, pipInAppBarEnteredFromAudioOnly, refreshSystemPiPLeaveContextSnapshot } from '../../src/pip/pipPlaceholderOnly';
+import {
+  finishDirectCallVideoExpandInFlight,
+  isDirectCallVideoExpandGuardActive,
+  setPipAudioOnlyPlaceholderSticky,
+  shouldUsePipPlaceholderOnly,
+  isInAudioOnlyCallUi,
+  pipInAppBarEnteredFromAudioOnly,
+  refreshSystemPiPLeaveContextSnapshot,
+  setPipInAppRtcFromAudioOnlySticky,
+  tryBeginDirectCallVideoExpand,
+  mediaStreamHasLiveVideo,
+} from '../../src/pip/pipPlaceholderOnly';
 import socket, {
   fetchFriends,
   getCurrentUserId,
@@ -614,6 +625,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           ? !pip.isMuted
           : !resolvePiPLocalMutedState();
 
+    const g = global as any;
+    const expandingToVideoUi =
+      route?.params?.preferVideoCallUi === true ||
+      g.__expandToVideoCallUiFromPiPRef?.current === true ||
+      g.__stayOnVideoCallUiRef?.current === true ||
+      isDirectCallVideoExpandGuardActive();
+    if (expandingToVideoUi) {
+      const sessionCam =
+        session && typeof session.getIsCamOn === 'function' ? session.getIsCamOn() : undefined;
+      return {
+        micOn: micOnFromIntent,
+        camOn: sessionCam === false ? false : true,
+      };
+    }
+
     if (isInAudioOnlyCallUi() || pipInAppBarEnteredFromAudioOnly()) {
       return {
         micOn: micOnFromIntent,
@@ -648,7 +674,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       micOn: micOnFromIntent,
       camOn: camOnResolved,
     };
-  }, [camOn, getTrackEnabled, pip.isMuted, pip.localCamOn, pip.localStream]);
+  }, [camOn, getTrackEnabled, pip.isMuted, pip.localCamOn, pip.localStream, route?.params?.preferVideoCallUi]);
   const getDesiredRemoteMutedForPiPReturn = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
     const fromSession =
@@ -1811,16 +1837,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     if (resume && fromPiP && session && resumeFromPiPEffectRanRef.current !== resumeRunKey) {
       resumeFromPiPEffectRanRef.current = resumeRunKey;
       const { camOn: desiredCamOn, micOn: desiredMicOn } = getDesiredLocalMediaStateForPiPReturn(pip.localStream);
+      const skipStaleCamSnapshot =
+        isDirectCallVideoExpandGuardActive() ||
+        (global as any).__expandToVideoCallUiFromPiPRef?.current === true;
       if (pip.localStream) {
         setLocalStream(pip.localStream);
         setLocalRenderKey((k: number) => k + 1);
-        try {
-          const videoTrack = (pip.localStream as any)?.getVideoTracks?.()?.[0];
-          if (videoTrack) {
-            videoTrack.enabled = !!desiredCamOn;
-          }
-        } catch {}
-        setCamOn(!!desiredCamOn);
+        if (!skipStaleCamSnapshot) {
+          try {
+            const videoTrack = (pip.localStream as any)?.getVideoTracks?.()?.[0];
+            if (videoTrack) {
+              videoTrack.enabled = !!desiredCamOn;
+            }
+          } catch {}
+          setCamOn(!!desiredCamOn);
+        }
       }
       if (pip.remoteStream) {
         setRemoteStream(pip.remoteStream);
@@ -3435,15 +3466,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
   const syncDirectCallVideoUiSession = useCallback((session: VideoCallSession | null) => {
     if (!session) return;
-    if (isInAudioOnlyCallUi()) return;
     if (inAudioOnlyUiRef.current) return;
     if (!stayOnVideoCallUiRef.current) return;
     markDirectCallVideoMediaActive();
     try {
       const g = global as any;
       if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return;
-      const preparedAt = Number(g.__directCallAudioOnlyPreparedAtRef?.current || 0);
-      if (preparedAt && Date.now() - preparedAt < 12000) return;
     } catch {}
     try {
       session.enableRemoteVideoConsumption({ leaveAudioOnlyConsumer: true });
@@ -3602,18 +3630,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     if ((global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current === true) {
       return;
     }
-    if (isInAudioOnlyCallUi()) {
-      return;
-    }
-    if (session?.getDirectCallAudioOnlyConsumerDefer?.()) {
-      return;
-    }
     stayOnVideoCallUiRef.current = true;
     setPipAudioOnlyPlaceholderSticky(false);
+    setPipInAppRtcFromAudioOnlySticky(false);
     inAudioOnlyUiRef.current = false;
     setInAudioOnlyUi(false);
     try {
-      (global as any).__inAudioOnlyUiRef.current = false;
+      const g = global as any;
+      g.__inAudioOnlyUiRef.current = false;
+      g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+      g.__directCallAudioOnlyPreparedAtRef = g.__directCallAudioOnlyPreparedAtRef || { current: 0 };
+      g.__directCallAudioOnlyPreparedAtRef.current = 0;
     } catch {}
     setPeerInvitedVideo(false);
     syncDirectCallVideoUiSession(session);
@@ -3624,6 +3651,103 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     restoreOngoingCallMicrophoneIfEnabled();
     pinVideoUiSpeakerAndSyncAudio();
   }, [syncDirectCallVideoUiSession, pinVideoUiSpeakerAndSyncAudio]);
+
+  const enableLocalCameraForVideoUi = useCallback(
+    async (session: VideoCallSession | null) => {
+      if (!session || session.isEnded?.()) return;
+      try {
+        const params = (global as any).__currentCallPiPParamsRef?.current;
+        if (params && typeof params === 'object') {
+          params.localCamOn = true;
+          params.preferVideoCallUi = true;
+          params.inAudioOnlyUi = false;
+        }
+      } catch {}
+      setCamOn(true);
+      try {
+        pip.updatePiPState({ localCamOn: true });
+      } catch {}
+      const ls = session.getLocalStream?.();
+      const vt = ls?.getVideoTracks?.()?.[0];
+      const trackLive =
+        !!vt && vt.readyState === 'live' && vt.enabled !== false;
+      const sessionCamOn =
+        typeof session.getIsCamOn === 'function' ? session.getIsCamOn() : false;
+
+      if (sessionCamOn && trackLive) {
+        if (ls) {
+          localStreamRef.current = ls as any;
+          setLocalStream(ls as any);
+        }
+        return;
+      }
+
+      const trackEnded = !vt || vt.readyState === 'ended';
+      const canRestore = typeof session.restoreLocalCameraAfterPiPReturn === 'function';
+      if (trackEnded && canRestore && sessionCamOn) {
+        try {
+          await session.restoreLocalCameraAfterPiPReturn();
+        } catch (e) {
+          logger.warn('[VideoCall] enableLocalCameraForVideoUi restoreLocalCamera failed', e);
+        }
+      }
+
+      const lsAfter = session.getLocalStream?.();
+      const vtAfter = lsAfter?.getVideoTracks?.()?.[0];
+      const trackLiveAfter =
+        !!vtAfter && vtAfter.readyState === 'live' && vtAfter.enabled !== false;
+      const sessionCamOnAfter =
+        typeof session.getIsCamOn === 'function' ? session.getIsCamOn() : false;
+
+      if (sessionCamOnAfter && trackLiveAfter) {
+        if (lsAfter) {
+          localStreamRef.current = lsAfter as any;
+          setLocalStream(lsAfter as any);
+        }
+        return;
+      }
+
+      if (!sessionCamOnAfter || !trackLiveAfter) {
+        try {
+          await session.toggleCam();
+        } catch (e) {
+          logger.warn('[VideoCall] enableLocalCameraForVideoUi toggleCam failed', e);
+        }
+      }
+
+      const lsFinal = session.getLocalStream?.();
+      const vtFinal = lsFinal?.getVideoTracks?.()?.[0];
+      if (vtFinal && !vtFinal.enabled) {
+        vtFinal.enabled = true;
+      }
+      if (lsFinal) {
+        localStreamRef.current = lsFinal as any;
+        setLocalStream(lsFinal as any);
+      }
+    },
+    [pip],
+  );
+
+  const expandDirectCallToVideoUi = useCallback(async () => {
+    const g = global as any;
+    if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return;
+    if (!tryBeginDirectCallVideoExpand()) return;
+    try {
+      const session = (sessionRef.current || g.__webrtcSessionRef?.current) as VideoCallSession | null;
+      if (!session || session.isEnded?.()) return;
+      applyVideoCallUiFromPiPExpand(session);
+      await enableLocalCameraForVideoUi(session);
+      try {
+        g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+        g.__expandToVideoCallUiFromPiPRef.current = false;
+      } catch {}
+      try {
+        navigation.setParams({ preferVideoCallUi: undefined, audioOnlyPiPReturn: undefined } as any);
+      } catch {}
+    } finally {
+      finishDirectCallVideoExpandInFlight();
+    }
+  }, [applyVideoCallUiFromPiPExpand, enableLocalCameraForVideoUi, navigation]);
 
   const returnToAudioCallUi = useCallback(
     async (opts?: { fromPiP?: boolean; skipNavigation?: boolean }) => {
@@ -3696,10 +3820,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       route?.params?.directCall &&
       !g.__preferAudioOnlyUiOnNextVideoCallRef?.current
     ) {
-      g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-      g.__expandToVideoCallUiFromPiPRef.current = false;
-      g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
-      applyVideoCallUiFromPiPExpand(session);
+      void expandDirectCallToVideoUi();
     } else if (
       route?.params?.directCall &&
       (g.__preferAudioOnlyUiOnNextVideoCallRef?.current || route?.params?.audioOnlyPiPReturn === true)
@@ -3726,7 +3847,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         applyAudioOnlyUiState(session);
         const preparedRecently =
           Date.now() - Number(g.__directCallAudioOnlyPreparedAtRef?.current || 0) < 6000;
-        if (!alreadyHandled && !preparedRecently && mountKey) {
+        const blockAudioOnlySessionTeardown =
+          isDirectCallVideoExpandGuardActive() ||
+          g.__expandToVideoCallUiFromPiPRef?.current === true;
+        if (
+          !alreadyHandled &&
+          !preparedRecently &&
+          mountKey &&
+          !blockAudioOnlySessionTeardown
+        ) {
           g.__directCallAudioOnlyMountKeyRef.current = mountKey;
           void (async () => {
             try {
@@ -3743,27 +3872,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         g.__returnToAudioCallRef.current = null;
       }
     };
-  }, [returnToAudioCallUi, route?.params?.directCall, applyAudioOnlyUiState, applyVideoCallUiFromPiPExpand]);
+  }, [returnToAudioCallUi, route?.params?.directCall, applyAudioOnlyUiState, expandDirectCallToVideoUi]);
 
   useEffect(() => {
     if (!route?.params?.directCall || !route?.params?.preferVideoCallUi) return;
-    const g = global as any;
-    const session = (sessionRef.current || g.__webrtcSessionRef?.current) as VideoCallSession | null;
-    g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
-    g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
-    try {
-      g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-      g.__expandToVideoCallUiFromPiPRef.current = false;
-    } catch {}
-    applyVideoCallUiFromPiPExpand(session);
-    try {
-      navigation.setParams({ preferVideoCallUi: undefined } as any);
-    } catch {}
+    void expandDirectCallToVideoUi();
   }, [
     route?.params?.directCall,
     route?.params?.preferVideoCallUi,
-    applyVideoCallUiFromPiPExpand,
-    navigation,
+    expandDirectCallToVideoUi,
   ]);
   
   const toggleRemoteAudio = useCallback(() => {
@@ -3793,12 +3910,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         ((sessionRef.current || g.__webrtcSessionRef?.current) as VideoCallSession | null);
       applyAudioOnlyUiState(live);
     };
+    g.__expandDirectCallToVideoUiRef = g.__expandDirectCallToVideoUiRef || { current: null };
+    g.__expandDirectCallToVideoUiRef.current = () => expandDirectCallToVideoUi();
     return () => {
       if (g.__syncDirectCallAudioOnlyUiRef?.current) {
         g.__syncDirectCallAudioOnlyUiRef.current = null;
       }
+      if (g.__expandDirectCallToVideoUiRef?.current) {
+        g.__expandDirectCallToVideoUiRef.current = null;
+      }
     };
-  }, [applyAudioOnlyUiState]);
+  }, [applyAudioOnlyUiState, expandDirectCallToVideoUi]);
 
   useEffect(() => {
     (global as any).__toggleMicRef = (global as any).__toggleMicRef || { current: null };
@@ -4043,6 +4165,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
         const audioOnlyPiPReturn =
           route?.params?.preferVideoCallUi !== true &&
+          (global as any).__expandToVideoCallUiFromPiPRef?.current !== true &&
+          !isDirectCallVideoExpandGuardActive() &&
           (route?.params?.audioOnlyPiPReturn === true ||
           (global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current === true ||
           inAudioOnlyUiRef.current ||
@@ -4111,20 +4235,29 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           }
           const { camOn: desiredCamOn, micOn: desiredMicOn } =
             getDesiredLocalMediaStateForPiPReturn(effectiveLocalStream);
+          const skipStaleCamSnapshot =
+            isDirectCallVideoExpandGuardActive() ||
+            (global as any).__expandToVideoCallUiFromPiPRef?.current === true;
+          const expandOrchestratesLocalCamera = skipStaleCamSnapshot && desiredCamOn;
           if (sessionLocalStream) {
-            setLocalStream(sessionLocalStream);
-            localStreamRef.current = sessionLocalStream as any;
-            // Обновляем localRenderKey чтобы видео обновилось в UI
-            setLocalRenderKey((k: number) => k + 1);
+            const bindSessionLocalToUi =
+              !expandOrchestratesLocalCamera || mediaStreamHasLiveVideo(sessionLocalStream);
+            if (bindSessionLocalToUi) {
+              setLocalStream(sessionLocalStream);
+              localStreamRef.current = sessionLocalStream as any;
+              setLocalRenderKey((k: number) => k + 1);
+            }
             
             // Применяем сохранённое состояние камеры (best-effort)
-            try {
-              const videoTrack = (sessionLocalStream as any)?.getVideoTracks?.()?.[0];
-              if (videoTrack) {
-                videoTrack.enabled = !!desiredCamOn;
-              }
-            } catch {}
-            setCamOn(!!desiredCamOn);
+            if (!skipStaleCamSnapshot) {
+              try {
+                const videoTrack = (sessionLocalStream as any)?.getVideoTracks?.()?.[0];
+                if (videoTrack) {
+                  videoTrack.enabled = !!desiredCamOn;
+                }
+              } catch {}
+              setCamOn(!!desiredCamOn);
+            }
             setRemoteMuted(getDesiredRemoteMutedForPiPReturn());
             logMicTraceRef.current('focus return from PiP → setMicOn from local media snapshot', {
               pipIsMuted: pip.isMuted,
@@ -4136,6 +4269,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             logger.info('[VideoCall] ✅ Локальный стрим восстановлен из сессии при возврате из PiP', {
               streamId: sessionLocalStream.id,
               desiredCamOn,
+              bindSessionLocalToUi,
             });
           } else if (pipLocalStream) {
             setLocalStream(pipLocalStream);
@@ -4144,13 +4278,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             setLocalRenderKey((k: number) => k + 1);
             
             // Применяем сохранённое состояние камеры (best-effort)
-            try {
-              const videoTrack = (pipLocalStream as any)?.getVideoTracks?.()?.[0];
-              if (videoTrack) {
-                videoTrack.enabled = !!desiredCamOn;
-              }
-            } catch {}
-            setCamOn(!!desiredCamOn);
+            if (!skipStaleCamSnapshot) {
+              try {
+                const videoTrack = (pipLocalStream as any)?.getVideoTracks?.()?.[0];
+                if (videoTrack) {
+                  videoTrack.enabled = !!desiredCamOn;
+                }
+              } catch {}
+              setCamOn(!!desiredCamOn);
+            }
             setRemoteMuted(getDesiredRemoteMutedForPiPReturn());
             logMicTraceRef.current('focus return from PiP → setMicOn from local media snapshot', {
               pipIsMuted: pip.isMuted,
@@ -4207,6 +4343,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           // ВАЖНО: НЕ включаем локальные/удалённые видеотреки насильно.
           // Локальный трек приводим к сохранённому состоянию (desiredCamOn),
           // а удалённый трек/remoteCamOn должен управляться состоянием партнёра (cam-toggle/LiveKit).
+          if (!expandOrchestratesLocalCamera) {
           try {
             const currentLocalStream =
               sessionLocalStream ||
@@ -4271,21 +4408,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           } catch (e) {
             logger.warn('[VideoCall] Error enabling video tracks:', e);
           }
+          }
 
           if (
             (global as any).__expandToVideoCallUiFromPiPRef?.current &&
-            !(global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current &&
-            !inAudioOnlyUiRef.current &&
-            (global as any).__inAudioOnlyUiRef?.current !== true
+            !(global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current
           ) {
-            applyVideoCallUiFromPiPExpand(session as VideoCallSession);
-            try {
-              (global as any).__expandToVideoCallUiFromPiPRef.current = false;
-            } catch (_) {}
-          } else if ((global as any).__expandToVideoCallUiFromPiPRef?.current) {
-            try {
-              (global as any).__expandToVideoCallUiFromPiPRef.current = false;
-            } catch (_) {}
+            const gExpand = global as any;
+            if (!gExpand.__directCallVideoExpandInFlightRef?.current) {
+              void expandDirectCallToVideoUi();
+            }
           }
           
           // Обновляем remoteViewKey через session с защитой от повторного обновления

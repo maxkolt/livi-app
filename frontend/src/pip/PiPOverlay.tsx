@@ -244,6 +244,10 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
         prepareDirectCallVideoReturnFromPiP();
         g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
         g.__expandToVideoCallUiFromPiPRef.current = true;
+        const expandFn = g.__expandDirectCallToVideoUiRef?.current;
+        if (typeof expandFn === 'function') {
+          void expandFn();
+        }
         return;
       }
       prepareDirectCallVideoReturnFromPiP();

@@ -37,15 +37,24 @@ class LiviOutgoingCallService : Service() {
     private var toUserId: String = ""
     private var toNick: String = ""
     private var closeReceiver: BroadcastReceiver? = null
+    @Volatile
+    private var foregroundStarted: Boolean = false
+    @Volatile
+    private var pendingStopAfterForeground: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
+        // Receiver регистрируем после первого startForeground в onStartCommand.
+    }
+
+    private fun registerCloseReceiverIfNeeded() {
+        if (closeReceiver != null) return
         closeReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val broadcastCallId = intent?.getStringExtra(OutgoingCallActivity.EXTRA_CALL_ID) ?: ""
                 if (broadcastCallId.isEmpty() || broadcastCallId == this@LiviOutgoingCallService.callId) {
                     android.util.Log.d(TAG, "close broadcast received, stopping service callId=$callId")
-                    stopSelf()
+                    requestStop()
                 }
             }
         }
@@ -57,23 +66,56 @@ class LiviOutgoingCallService : Service() {
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        callId = intent?.getStringExtra(OutgoingCallActivity.EXTRA_CALL_ID) ?: ""
-        toUserId = intent?.getStringExtra(OutgoingCallActivity.EXTRA_TO_USER_ID) ?: ""
-        toNick = intent?.getStringExtra(OutgoingCallActivity.EXTRA_TO_NICK) ?: ""
-
-        if (callId.isEmpty()) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
-        // Явно указываем mediaPlayback тип, чтобы FGS logger/state на Android 13+ не ловил рассинхрон.
+    /** Android: после startForegroundService() обязан быть startForeground до stopSelf. */
+    private fun ensureForegroundStarted() {
+        if (foregroundStarted) return
         val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
         } else {
             0
         }
         ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), fgsType)
+        foregroundStarted = true
+    }
+
+    private fun requestStop() {
+        if (!foregroundStarted) {
+            pendingStopAfterForeground = true
+            return
+        }
+        stopForegroundAndSelf()
+    }
+
+    private fun stopForegroundAndSelf() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (_: Exception) {}
+        stopSelf()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        ensureForegroundStarted()
+        registerCloseReceiverIfNeeded()
+
+        callId = intent?.getStringExtra(OutgoingCallActivity.EXTRA_CALL_ID) ?: ""
+        toUserId = intent?.getStringExtra(OutgoingCallActivity.EXTRA_TO_USER_ID) ?: ""
+        toNick = intent?.getStringExtra(OutgoingCallActivity.EXTRA_TO_NICK) ?: ""
+
+        if (pendingStopAfterForeground || callId.isEmpty()) {
+            android.util.Log.d(
+                TAG,
+                "onStartCommand: stop after foreground pendingStop=$pendingStopAfterForeground emptyCallId=${callId.isEmpty()}",
+            )
+            pendingStopAfterForeground = false
+            stopForegroundAndSelf()
+            return START_NOT_STICKY
+        }
+
         startSound()
         scheduleTimeout()
 
@@ -182,7 +224,7 @@ class LiviOutgoingCallService : Service() {
                 }
             }
             sendBroadcast(closeIntent)
-            stopSelf()
+            requestStop()
         }
         mainHandler.postDelayed(timeoutRunnable!!, timeoutMs)
     }
@@ -242,6 +284,10 @@ class LiviOutgoingCallService : Service() {
         private const val DEFAULT_TIMEOUT_MS = 27_000L
 
         fun start(context: Context, callId: String, toUserId: String, toNick: String) {
+            if (callId.isBlank()) {
+                android.util.Log.w(TAG, "start skipped: empty callId")
+                return
+            }
             val intent = Intent(context, LiviOutgoingCallService::class.java).apply {
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
                 putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, toUserId)
@@ -254,8 +300,16 @@ class LiviOutgoingCallService : Service() {
             }
         }
 
+        /** Закрытие через broadcast — сервис сам stopSelf после startForeground (без гонки stopService). */
         fun stop(context: Context) {
-            context.stopService(Intent(context, LiviOutgoingCallService::class.java))
+            val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
+                setPackage(context.packageName)
+            }
+            try {
+                context.sendBroadcast(closeIntent)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "stop broadcast failed", e)
+            }
         }
 
         /** Уведомить сервер об отмене вызова (при нажатии «Отмена» на экране). */

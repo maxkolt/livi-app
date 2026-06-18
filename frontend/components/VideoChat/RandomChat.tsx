@@ -64,6 +64,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/ke
 import * as Device from 'expo-device';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { useModeration } from './hooks/useModeration';
+import { shouldDeferRandomChatStopOnAppBackground } from '../../utils/activeCallSession';
 
 type Props = { 
   route?: { 
@@ -1530,7 +1531,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     const sub = AppState.addEventListener('change', async (nextAppState) => {
       try {
         if (nextAppState === 'background') {
-          if (startedRef.current || loadingRef.current) {
+          if (shouldDeferRandomChatStopOnAppBackground()) {
+            logger.debug('[RandomChat] App background: skip stop — direct call / incoming transition active');
+          } else if (startedRef.current || loadingRef.current) {
             logger.info('[RandomChat] App moved to background, stopping chat immediately');
             forceStopRandomChat();
           }

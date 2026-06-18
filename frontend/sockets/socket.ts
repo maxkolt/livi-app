@@ -1074,6 +1074,28 @@ const __incomingCallScreenChangeListeners = new Set<(visible: boolean, fromUserI
 /** Пока активен видеозвонок (подключение к LiveKit или комната connected) — не отключать сокет при «background», чтобы избежать negotiation disconnected / m-line errors. */
 let __activeVideoCall = false;
 
+function mirrorCallPresenceFlagsToGlobal(patch: {
+  incomingScreen?: boolean;
+  outgoingScreen?: boolean;
+  activeVideoCall?: boolean;
+}): void {
+  try {
+    const g = global as any;
+    if (typeof patch.incomingScreen === 'boolean') {
+      g.__incomingCallScreenVisibleRef = g.__incomingCallScreenVisibleRef || { current: false };
+      g.__incomingCallScreenVisibleRef.current = patch.incomingScreen;
+    }
+    if (typeof patch.outgoingScreen === 'boolean') {
+      g.__outgoingCallScreenVisibleRef = g.__outgoingCallScreenVisibleRef || { current: false };
+      g.__outgoingCallScreenVisibleRef.current = patch.outgoingScreen;
+    }
+    if (typeof patch.activeVideoCall === 'boolean') {
+      g.__socketActiveVideoCallRef = g.__socketActiveVideoCallRef || { current: false };
+      g.__socketActiveVideoCallRef.current = patch.activeVideoCall;
+    }
+  } catch {}
+}
+
 function emitAppVisibilityToServer(foreground: boolean) {
   try {
     if (socket?.connected) socket.emit('app:visibility', { foreground });
@@ -1101,6 +1123,7 @@ function isExpectedSocketConnectError(error: unknown): boolean {
 
 export function setOutgoingCallScreenVisible(visible: boolean): void {
   __outgoingCallScreenVisible = visible;
+  mirrorCallPresenceFlagsToGlobal({ outgoingScreen: visible });
   if (
     !SOCKET_KEEP_ALIVE_IN_BACKGROUND &&
     !visible &&
@@ -1116,6 +1139,7 @@ export function setOutgoingCallScreenVisible(visible: boolean): void {
 export function setIncomingCallScreenVisible(visible: boolean, fromUserId?: string | null): void {
   __incomingCallScreenVisible = visible;
   __incomingCallFromUserId = visible && fromUserId != null ? String(fromUserId) : null;
+  mirrorCallPresenceFlagsToGlobal({ incomingScreen: visible });
   __incomingCallScreenChangeListeners.forEach((cb) => {
     try { cb(__incomingCallScreenVisible, __incomingCallFromUserId); } catch {}
   });
@@ -1142,6 +1166,7 @@ export function onIncomingCallScreenChange(cb: (visible: boolean, fromUserId: st
 
 export function setActiveVideoCall(active: boolean, partnerDisplayName?: string | null): void {
   __activeVideoCall = active;
+  mirrorCallPresenceFlagsToGlobal({ activeVideoCall: active });
   if (Platform.OS === 'android') {
     if (active) {
       startActiveCallNotification(partnerDisplayName);
