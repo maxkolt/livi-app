@@ -161,8 +161,15 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
   /** =========================
    *  Camera toggle forwarding
    *  ========================= */
-  socket.on("cam-toggle", (data: { enabled: boolean; from: string; to?: string; roomId?: string; camSide?: 'front' | 'back' }) => {
-    const { enabled, from, to, roomId, camSide } = data;
+  socket.on("cam-toggle", (data: { enabled: boolean; from: string; to?: string; roomId?: string; camSide?: 'front' | 'back'; sideOnly?: boolean }) => {
+    const { enabled, from, to, roomId, camSide, sideOnly } = data;
+    const relayPayload = {
+      enabled,
+      from,
+      roomId,
+      camSide,
+      ...(sideOnly === true ? { sideOnly: true as const } : {}),
+    };
     
     // Пересылаем событие всем в комнатах, где находится этот сокет
     let forwardedViaRoom = false;
@@ -173,7 +180,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       // In RandomChat we may NOT join sockets to that roomId, so room-broadcast would be a no-op.
       const room = (io.sockets.adapter.rooms as any)?.get?.(roomId) as Set<string> | undefined;
       if (room && room.size > 0) {
-        socket.to(roomId).emit("cam-toggle", { enabled, from, roomId, camSide });
+        socket.to(roomId).emit("cam-toggle", { ...relayPayload, roomId });
         if (!enabled) logger.debug('Camera toggle forwarded to room (explicit)', { roomId, roomSize: room.size });
         forwardedViaRoom = true;
       } else {
@@ -183,7 +190,7 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       socket.rooms.forEach((currentRoomId) => {
         if (currentRoomId.startsWith("room_")) {
           // КРИТИЧНО: Передаем roomId при пересылке для правильной обработки на клиенте
-          socket.to(currentRoomId).emit("cam-toggle", { enabled, from, roomId: currentRoomId, camSide });
+          socket.to(currentRoomId).emit("cam-toggle", { ...relayPayload, roomId: currentRoomId });
           if (!enabled) logger.debug('Camera toggle forwarded to room', { roomId: currentRoomId });
           forwardedViaRoom = true;
         }
@@ -198,7 +205,14 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
       const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
       if (partnerSocket) {
         // Include roomId if provided to let the client filter stale events.
-        partnerSocket.emit("cam-toggle", { enabled, from, to: partnerSocket.id, ...(roomId ? { roomId } : {}), camSide });
+        partnerSocket.emit("cam-toggle", {
+          enabled,
+          from,
+          to: partnerSocket.id,
+          camSide,
+          ...(roomId ? { roomId } : {}),
+          ...(sideOnly === true ? { sideOnly: true as const } : {}),
+        });
         if (!enabled) logger.debug('Camera toggle forwarded to partner', { partnerId: socketData.partnerSid });
       }
     }
