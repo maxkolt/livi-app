@@ -160,6 +160,7 @@ export type SystemPiPReturnMediaSnapshot = {
   micOn: boolean;
   camOn: boolean;
   audioRoute: InCallAudioRoute;
+  preferAudioOnlyUi: boolean;
   capturedAt: number;
 };
 
@@ -173,18 +174,39 @@ export function captureSystemPiPReturnMediaSnapshot(): void {
       typeof session.getIsMicOn === 'function' ? session.getIsMicOn() : true;
     const camOn =
       typeof session.getIsCamOn === 'function' ? session.getIsCamOn() : false;
+    const preferAudioOnlyUi = isInAudioOnlyCallUi();
     const fromParams = normalizeInCallRoute(
       g.__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
     );
     const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
+    const routeFromPiP = readInAppPiPAudioOutputRoute();
+    const audioRoute = preferAudioOnlyUi
+      ? routeFromPiP
+      : fromParams || stored || routeFromPiP || 'EARPIECE';
     const snap: SystemPiPReturnMediaSnapshot = {
       micOn: !!micOn,
       camOn: !!camOn,
-      audioRoute: fromParams || stored || 'EARPIECE',
+      audioRoute,
+      preferAudioOnlyUi,
       capturedAt: Date.now(),
     };
     g.__systemPiPReturnMediaSnapshotRef = snap;
+    g.__systemPiPReturnMediaRestoreTokenRef =
+      g.__systemPiPReturnMediaRestoreTokenRef || { current: 0 };
+    g.__systemPiPReturnMediaRestoreTokenRef.current = 0;
   } catch {}
+}
+
+export function peekSystemPiPReturnMediaSnapshot(): SystemPiPReturnMediaSnapshot | null {
+  try {
+    const snap = (global as any).__systemPiPReturnMediaSnapshotRef as
+      | SystemPiPReturnMediaSnapshot
+      | undefined;
+    if (!snap || Date.now() - snap.capturedAt > 120_000) return null;
+    return snap;
+  } catch {
+    return null;
+  }
 }
 
 /** Восстановить mic / маршрут из снимка (камера — через session.restoreLocalCameraAfterPiPReturn). */
@@ -215,11 +237,40 @@ export function applySystemPiPReturnMediaSnapshot(): boolean {
       if (params && typeof params === 'object') {
         params.audioOutputRoute = route;
         params.muteLocal = !targetMic;
+        params.localCamOn = !!snap.camOn;
+        if (snap.preferAudioOnlyUi) {
+          params.inAudioOnlyUi = true;
+          params.preferVideoCallUi = false;
+        }
       }
       if (g.__audioCallHomeSpeakerPinRef) {
         g.__audioCallHomeSpeakerPinRef.current = false;
       }
     }
+    if (snap.preferAudioOnlyUi) {
+      g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || {
+        current: false,
+      };
+      g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+      g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+      g.__expandToVideoCallUiFromPiPRef.current = false;
+      g.__inAudioOnlyUiRef = g.__inAudioOnlyUiRef || { current: false };
+      g.__inAudioOnlyUiRef.current = true;
+      g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
+      g.__stayOnVideoCallUiRef.current = false;
+      g.__pipAudioOnlyPlaceholderRef = g.__pipAudioOnlyPlaceholderRef || { current: false };
+      g.__pipAudioOnlyPlaceholderRef.current = true;
+    } else {
+      g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || {
+        current: false,
+      };
+      g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+      g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+      g.__expandToVideoCallUiFromPiPRef.current = true;
+      g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
+      g.__stayOnVideoCallUiRef.current = true;
+    }
+    g.__lastAppliedSystemPiPSnapRef = { ...snap };
     const pipUpdate = g.__pipUpdateStateRef?.current;
     if (typeof pipUpdate === 'function') {
       pipUpdate({ isMuted: !targetMic });

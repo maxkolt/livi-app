@@ -724,6 +724,7 @@ class IncomingCallActivity : AppCompatActivity() {
             try {
                 LiviAppModule.releaseBackgroundMediaSuppressionStatic(applicationContext)
             } catch (_: Exception) {}
+            LiviOngoingCallHelper.clearOngoingCall(applicationContext)
             android.util.Log.e(TAG, "IncomingCallActivity timeout 20s: isInForeground=false calling finish() callId=$callId")
             finish()
         }
@@ -820,6 +821,7 @@ class IncomingCallActivity : AppCompatActivity() {
         closeHandled = true
         closingForCompletion = true
         isInForeground = false
+        LiviOngoingCallHelper.clearOngoingCall(applicationContext)
         if (!acceptInProgress) {
             try {
                 LiviAppModule.releaseBackgroundMediaSuppressionStatic(applicationContext)

@@ -492,8 +492,8 @@ export const useAudioRouting = (
       const preserveInAppAudioPiP = shouldPreserveCallAudioRouteInInAppPiP();
       if (pipVisible || inSystemPiP || keepCallAudio) {
         if (preserveInAppAudioPiP) {
-          scheduleReapplyPersistedCallAudioRoute('stopSpeaker_preserve_in_app_audio_pip', {
-            media: 'audio',
+          scheduleReapplyPersistedCallAudioRoute('stopSpeaker_preserve_in_app_pip', {
+            media: resolveActiveCallInCallMedia(),
           });
           return;
         }

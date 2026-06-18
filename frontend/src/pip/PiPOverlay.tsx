@@ -161,6 +161,8 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   }, [visible]);
 
   const pipFromAudioOnly = pipInAppBarEnteredFromAudioOnly();
+  /** Ушли с видео-экрана в in-app PiP — подсветить «вернуться в видео», как активный динамик. */
+  const pipVideoReturnHighlight = !pipFromAudioOnly;
   const loudSpeakerActive = pipAudioRoute === 'SPEAKER_PHONE';
   const pipAudioRouteIcon = iconNameForRoute(pipAudioRoute);
 
@@ -373,11 +375,17 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                 onPress={returnToCallFromPiP}
                 accessibilityLabel={pipFromAudioOnly ? 'Вернуться в аудиозвонок' : 'Вернуться в видеозвонок'}
                 chrome={chrome}
+                active={pipVideoReturnHighlight}
+                activeAccent={accent}
               >
                 {pipFromAudioOnly ? (
                   <MaterialCommunityIcons name="phone-in-talk" size={PIP_ICON_SIZE} color={chrome.icon} />
                 ) : (
-                  <MaterialIcons name="videocam" size={PIP_ICON_SIZE} color={chrome.icon} />
+                  <MaterialIcons
+                    name="videocam"
+                    size={PIP_ICON_SIZE}
+                    color={pipVideoReturnHighlight ? accent.softText : chrome.icon}
+                  />
                 )}
               </PiPActionButton>
               {pipFromAudioOnly ? (

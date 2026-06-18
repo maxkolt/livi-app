@@ -81,6 +81,10 @@ object LiviOngoingCallHelper {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val type = prefs.getString(KEY_TYPE, null) ?: return false
         val callId = prefs.getString(KEY_CALL_ID, null) ?: return false
+        if (EndedCallIds.isEnded(context, callId)) {
+            clearOngoingCall(context)
+            return false
+        }
         val intent = when (type) {
             "outgoing" -> {
                 val toUserId = prefs.getString(KEY_TO_USER_ID, "") ?: ""
@@ -116,6 +120,10 @@ object LiviOngoingCallHelper {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val type = prefs.getString(KEY_TYPE, null) ?: return null
         val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
+        if (EndedCallIds.isEnded(context, callId)) {
+            clearOngoingCall(context)
+            return null
+        }
 
         val intent = when (type) {
             "outgoing" -> {

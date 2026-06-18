@@ -169,9 +169,17 @@ class LiviOutgoingCallService : Service() {
         timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
         timeoutRunnable = Runnable {
             timeoutRunnable = null
-            cancelCallByHttp(callId)
+            val id = callId
+            if (id.isNotEmpty()) {
+                EndedCallIds.add(applicationContext, id)
+            }
+            LiviOngoingCallHelper.clearOngoingCall(applicationContext)
+            cancelCallByHttp(id)
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(applicationContext.packageName)
+                if (id.isNotEmpty()) {
+                    putExtra(OutgoingCallActivity.EXTRA_CALL_ID, id)
+                }
             }
             sendBroadcast(closeIntent)
             stopSelf()

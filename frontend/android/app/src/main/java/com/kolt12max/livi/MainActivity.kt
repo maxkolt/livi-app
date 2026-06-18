@@ -229,8 +229,21 @@ class MainActivity : ReactActivity() {
       return
     }
     if (LiviOngoingCallHelper.launchOngoingCallActivityIfNeeded(this)) {
-      requestFinish("launcher-redirect-to-ongoing-call")
+      hideMainActivityForOngoingNativeCall()
     }
+  }
+
+  /**
+   * Показать нативный экран звонка поверх задачи, но **не** finish() — иначе умирает React
+   * и после таймаута/закрытия звонка процесс часто завершается (холодный старт с лаунчера).
+   */
+  private fun hideMainActivityForOngoingNativeCall() {
+    if (isFinishing || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed)) {
+      android.util.Log.i("MainActivity", "launcher-redirect-to-ongoing-call: skip (finishing)")
+      return
+    }
+    android.util.Log.i("MainActivity", "launcher-redirect-to-ongoing-call: moveTaskToBack (keep MainActivity)")
+    moveTaskToBack(true)
   }
 
   override fun onNewIntent(intent: Intent) {

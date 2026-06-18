@@ -847,7 +847,13 @@ function AppContent() {
       } catch (_) {}
       try {
         const session = (global as any).__webrtcSessionRef?.current;
+        const appliedSnap = (global as any).__lastAppliedSystemPiPSnapRef as
+          | { camOn?: boolean; preferAudioOnlyUi?: boolean }
+          | undefined;
+        const shouldRestoreCam =
+          appliedSnap?.camOn === true && appliedSnap?.preferAudioOnlyUi !== true;
         if (
+          shouldRestoreCam &&
           session &&
           typeof session.getIsCamOn === 'function' &&
           session.getIsCamOn() &&

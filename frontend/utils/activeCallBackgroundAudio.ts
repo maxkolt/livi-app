@@ -1,5 +1,5 @@
 import { AppState, Platform, type AppStateStatus, NativeModules } from 'react-native';
-import { captureCallAudioRouteFromUi, isOngoingCallSession, resolveActiveCallInCallMedia } from './activeCallSession';
+import { captureCallAudioRouteFromUi, isOngoingCallSession, peekSystemPiPReturnMediaSnapshot, resolveActiveCallInCallMedia } from './activeCallSession';
 import {
   pinLoudSpeakerForAudioCallLeavingToBackground,
   reapplyPersistedCallAudioRoute,
@@ -94,7 +94,8 @@ function onAppStateChange(next: AppStateStatus): void {
     try {
       const g = global as any;
       const returningFromPiP = Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
-      if (returningFromPiP) {
+      const hasPendingSnap = !!peekSystemPiPReturnMediaSnapshot();
+      if (returningFromPiP || hasPendingSnap) {
         restoreCallMediaAfterSystemPiPReturn();
       } else {
         restoreAudioCallEarpieceAfterHomeReturn();

@@ -3475,6 +3475,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     userRouteRef.current = 'EARPIECE';
     speakerOnRef.current = false;
     setPersistedCallAudioRoute('EARPIECE');
+    try {
+      const g = global as any;
+      const paramsRef = g.__currentCallPiPParamsRef?.current;
+      if (paramsRef && typeof paramsRef === 'object') {
+        paramsRef.audioOutputRoute = 'EARPIECE';
+        paramsRef.localCamOn = false;
+        paramsRef.inAudioOnlyUi = true;
+        paramsRef.preferVideoCallUi = false;
+      }
+      if (g.__audioCallHomeSpeakerPinRef) {
+        g.__audioCallHomeSpeakerPinRef.current = false;
+      }
+    } catch {}
     inAudioOnlyUiRef.current = true;
     try {
       (global as any).__inAudioOnlyUiRef.current = true;

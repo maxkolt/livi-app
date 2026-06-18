@@ -191,6 +191,7 @@ export function scheduleReapplyPersistedCallAudioRoute(
 /** In-app PiP: сохранить earpiece / speaker / BT (audio- и video-экран). */
 export function shouldPreserveCallAudioRouteInInAppPiP(): boolean {
   try {
+    if (isInAudioOnlyCallUi()) return false;
     const g = global as any;
     if (g.__pipVisibleRef?.current !== true) return false;
     if (g.__pipInSystemModeRef?.current === true) return false;
@@ -201,10 +202,21 @@ export function shouldPreserveCallAudioRouteInInAppPiP(): boolean {
 }
 
 /** После разворота system PiP: mic + динамик как до ухода на Home. */
-export function restoreCallMediaAfterSystemPiPReturn(): void {
-  if (!applySystemPiPReturnMediaSnapshot()) return;
+export function restoreCallMediaAfterSystemPiPReturn(): boolean {
+  const g = global as any;
+  const token = Number(g.__systemPiPReturnTokenRef?.current || 0);
+  g.__systemPiPReturnMediaRestoreTokenRef =
+    g.__systemPiPReturnMediaRestoreTokenRef || { current: 0 };
+  if (token && g.__systemPiPReturnMediaRestoreTokenRef.current === token) {
+    return false;
+  }
+  if (!applySystemPiPReturnMediaSnapshot()) return false;
+  if (token) {
+    g.__systemPiPReturnMediaRestoreTokenRef.current = token;
+  }
   scheduleReapplyPersistedCallAudioRoute('system_pip_return_media', {
     media: resolveActiveCallInCallMedia(),
     delaysMs: [0, 250, 800, 1500],
   });
+  return true;
 }

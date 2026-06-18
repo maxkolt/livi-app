@@ -67,6 +67,13 @@ export function prepareDirectCallAudioReturnFromPiP(): void {
     if (paramsRef && typeof paramsRef === 'object') {
       paramsRef.inAudioOnlyUi = true;
       paramsRef.preferVideoCallUi = false;
+      paramsRef.localCamOn = false;
+      paramsRef.audioOutputRoute = 'EARPIECE';
+    }
+    g.__persistedCallAudioRouteRef = g.__persistedCallAudioRouteRef || { current: null };
+    g.__persistedCallAudioRouteRef.current = 'EARPIECE';
+    if (g.__audioCallHomeSpeakerPinRef) {
+      g.__audioCallHomeSpeakerPinRef.current = false;
     }
   } catch {}
 }
