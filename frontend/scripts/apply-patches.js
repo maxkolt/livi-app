@@ -21,6 +21,7 @@ const patches = [
   { dir: 'node_modules/expo-av', file: 'expo-av+15.1.7.patch' },
   { dir: 'node_modules/react-native-safe-area-context', file: 'react-native-safe-area-context+5.4.0.patch' },
   { dir: 'node_modules/react-native-safe-area-context', file: 'react-native-safe-area-context+5.4.0-insets-null.patch' },
+  { dir: 'node_modules/@livekit/react-native', file: 'livekit-react-native+2.9.3.patch' },
 ];
 
 process.chdir(root);

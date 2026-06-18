@@ -6,7 +6,7 @@ import InCallManager from 'react-native-incall-manager';
 import { CommonActions } from '@react-navigation/native';
 import socket, { onConnected, emitPresenceUpdateIfChanged } from '../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
-import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState } from '../../utils/activeCallSession';
+import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState, markDirectCallVideoMediaActive, ongoingCallPrefersVideoMedia, resolveActiveCallInCallMedia } from '../../utils/activeCallSession';
 import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
@@ -932,6 +932,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         (session && typeof (session as any).getRemoteCamEnabled === 'function'
           ? (session as any).getRemoteCamEnabled()
           : false);
+      if (localCamEarly || remoteCamEarly || ongoingCallPrefersVideoMedia()) {
+        markDirectCallVideoMediaActive();
+      }
       const localEarly =
         paramsEarly?.localStream ??
         (session && typeof (session as any).getLocalStream === 'function'
@@ -949,11 +952,13 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         logger.info('[PiPContext] AboutToEnterSystemPiP skipped — audio call uses status notification');
         logHomePiPTrace('js_about_to_enter_skip', { traceId, reason: 'audio_placeholder' });
         try {
-          pinLoudSpeakerForAudioCallLeavingToBackground();
-          scheduleReapplyPersistedCallAudioRoute('audio_home_loud_speaker', {
-            media: 'audio',
-            delaysMs: [0, 250, 800, 1500],
-          });
+          if (resolveActiveCallInCallMedia() === 'audio') {
+            pinLoudSpeakerForAudioCallLeavingToBackground();
+            scheduleReapplyPersistedCallAudioRoute('audio_home_loud_speaker', {
+              media: 'audio',
+              delaysMs: [0, 250, 800, 1500],
+            });
+          }
           NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
           NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(true);
           NativeModules.LiviAppModule?.cancelPendingSystemPiPEnter?.();

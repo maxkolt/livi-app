@@ -54,6 +54,7 @@ import socket, {
   declineCall,
   getCurrentUserId,
   emitPresenceUpdateIfChanged,
+  onConnected,
 } from '../../sockets/socket';
 import { syncMyStreamProfile } from '../../chat/cometchat';
 import { loadProfileFromStorage } from '../../utils/profileStorage';
@@ -1293,36 +1294,101 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   const { stopSpeaker } = useAudioRouting(hasActiveCallForAudio, remoteStream);
   
   // Отправка статуса "busy" при активном общении или поиске в рандомном чате
+  const emitRandomPresenceBusy = useCallback((opts?: { force?: boolean }) => {
+    const rid = roomId ? String(roomId).trim() : '';
+    emitPresenceUpdateIfChanged(
+      { status: 'busy', ...(rid ? { roomId: rid } : {}) },
+      opts?.force ? { force: true } : undefined,
+    );
+  }, [roomId]);
+
+  const computeRandomPresenceShouldBeBusy = useCallback(() => {
+    const hasActiveCall = !!partnerId || !!roomId;
+    const inSearchFlow =
+      (startedRef.current || started || loadingRef.current || loading) &&
+      !partnerId &&
+      !roomId;
+    return hasActiveCall || inSearchFlow;
+  }, [partnerId, roomId, started, loading]);
+
   useEffect(() => {
     const g = global as any;
     if (!g.__randomChatPresenceBusyRef) g.__randomChatPresenceBusyRef = { current: false };
+    if (!g.__randomChatHadPresenceBusyRef) g.__randomChatHadPresenceBusyRef = { current: false };
 
-    const hasActiveCall = !!partnerId || !!roomId;
-    const isSearching = started && !partnerId && !roomId;
-    const shouldBeBusy = hasActiveCall || isSearching;
+    const shouldBeBusy = computeRandomPresenceShouldBeBusy();
     g.__randomChatPresenceBusyRef.current = shouldBeBusy;
 
     if (shouldBeBusy) {
-      // Отправляем статус "busy" когда есть активное общение или идет поиск
       try {
-        const rid = roomId ? String(roomId).trim() : '';
-        emitPresenceUpdateIfChanged({ status: 'busy', ...(rid ? { roomId: rid } : {}) });
+        emitRandomPresenceBusy();
+        g.__randomChatHadPresenceBusyRef.current = true;
       } catch (e) {
         logger.warn('[RandomChat] Error sending presence:update busy:', e);
       }
-    } else {
-      // Сбрасываем статус "busy" когда нет активного общения и не ищем
+    } else if (g.__randomChatHadPresenceBusyRef.current) {
       try {
-        emitPresenceUpdateIfChanged({ status: 'online' });
+        emitPresenceUpdateIfChanged({ status: 'online' }, { force: true });
+        g.__randomChatHadPresenceBusyRef.current = false;
       } catch (e) {
         logger.warn('[RandomChat] Error sending presence:update online:', e);
       }
     }
+  }, [partnerId, roomId, started, loading, computeRandomPresenceShouldBeBusy, emitRandomPresenceBusy]);
 
+  useEffect(() => {
+    const off = onConnected(() => {
+      const g = global as any;
+      if (!computeRandomPresenceShouldBeBusy()) return;
+      try {
+        emitRandomPresenceBusy({ force: true });
+        g.__randomChatHadPresenceBusyRef = g.__randomChatHadPresenceBusyRef || { current: false };
+        g.__randomChatHadPresenceBusyRef.current = true;
+        g.__randomChatPresenceBusyRef = g.__randomChatPresenceBusyRef || { current: false };
+        g.__randomChatPresenceBusyRef.current = true;
+      } catch (e) {
+        logger.warn('[RandomChat] Error re-sending presence busy on reconnect:', e);
+      }
+    });
     return () => {
+      try {
+        off?.();
+      } catch {}
+    };
+  }, [computeRandomPresenceShouldBeBusy, emitRandomPresenceBusy]);
+
+  // Периодически переотправляем busy (reconnect/гонки idle presence на HomeScreen).
+  useEffect(() => {
+    const tick = () => {
+      if (!computeRandomPresenceShouldBeBusy()) return;
+      try {
+        emitRandomPresenceBusy({ force: true });
+        const g = global as any;
+        g.__randomChatHadPresenceBusyRef = g.__randomChatHadPresenceBusyRef || { current: false };
+        g.__randomChatHadPresenceBusyRef.current = true;
+        g.__randomChatPresenceBusyRef = g.__randomChatPresenceBusyRef || { current: false };
+        g.__randomChatPresenceBusyRef.current = true;
+      } catch {}
+    };
+    tick();
+    const id = setInterval(tick, 10_000);
+    return () => clearInterval(id);
+  }, [
+    partnerId,
+    roomId,
+    started,
+    loading,
+    computeRandomPresenceShouldBeBusy,
+    emitRandomPresenceBusy,
+  ]);
+
+  useEffect(() => {
+    const g = global as any;
+    return () => {
+      g.__randomChatPresenceBusyRef = g.__randomChatPresenceBusyRef || { current: false };
       g.__randomChatPresenceBusyRef.current = false;
     };
-  }, [partnerId, roomId, started]);
+  }, []);
   
   const forceStopRandomChat = useCallback(() => {
     try {

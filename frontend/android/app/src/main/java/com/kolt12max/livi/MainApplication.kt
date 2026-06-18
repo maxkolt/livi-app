@@ -9,6 +9,7 @@ import android.content.res.Configuration
 import android.os.Build
 
 import com.oney.WebRTCModule.WebRTCModuleOptions
+import com.livekit.reactnative.LiveKitReactNative
 
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
@@ -64,6 +65,7 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    LiveKitReactNative.setup(this)
     // Screen capture / getDisplayMedia не используем; без этого @livekit/react-native-webrtc может поднять mediaProjection FGS.
     WebRTCModuleOptions.getInstance().enableMediaProjectionService = false
     SoLoader.init(this, OpenSourceMergedSoMapping)

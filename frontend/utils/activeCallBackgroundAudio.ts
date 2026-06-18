@@ -48,9 +48,11 @@ function nativeMaintainCallVoiceAudio(force = false): void {
 /** Переприменить incall-маршрут и focus (Home, навигатор, другое приложение поверх). */
 export function maintainCallAudioForActiveCall(reason = 'maintain_active_call'): void {
   if (!isOngoingCallSession()) return;
-  pinLoudSpeakerForAudioCallLeavingToBackground();
-  captureCallAudioRouteFromUi();
   const media = resolveActiveCallInCallMedia();
+  if (media === 'audio') {
+    pinLoudSpeakerForAudioCallLeavingToBackground();
+  }
+  captureCallAudioRouteFromUi();
   nativeMaintainCallVoiceAudio(reason === 'app_state_background');
   scheduleReapplyPersistedCallAudioRoute(reason, {
     media,

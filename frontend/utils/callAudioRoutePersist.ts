@@ -13,6 +13,7 @@ import {
   resolveActiveCallInCallMedia,
   resolvePersistedCallAudioRouteForReapply,
   readInAppPiPAudioOutputRoute,
+  markDirectCallVideoMediaActive,
 } from './activeCallSession';
 import { isInAudioOnlyCallUi } from '../src/pip/pipPlaceholderOnly';
 
@@ -42,6 +43,7 @@ export function clearPersistedCallAudioRoute(): void {
 /** Home / фон с экрана «Аудиозвонок»: громкая связь (кроме Bluetooth). */
 export function pinLoudSpeakerForAudioCallLeavingToBackground(): void {
   if (!isAudioOnlyOngoingCallContext()) return;
+  if (resolveActiveCallInCallMedia() === 'video') return;
   const fromParams = normalizeInCallRoute(
     (global as any).__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
   );
@@ -79,6 +81,7 @@ export function restoreAudioCallEarpieceAfterHomeReturn(): void {
 /** Video UI / PiP с видео: громкая связь в persist и PiP params (не audio-only). */
 export function pinVideoCallLoudSpeakerRoute(): void {
   if (isInAudioOnlyCallUi()) return;
+  markDirectCallVideoMediaActive();
   setPersistedCallAudioRoute('SPEAKER_PHONE');
   try {
     const params = (global as any).__currentCallPiPParamsRef?.current;

@@ -17,6 +17,10 @@ object LiviOngoingCallHelper {
     private const val KEY_TO_NICK = "toNick"
     private const val KEY_FROM = "from"
     private const val KEY_FROM_NICK = "fromNick"
+    private const val KEY_INCOMING_STARTED_AT_MS = "incomingStartedAtMs"
+
+    /** Совпадает с JS OUTGOING_CALL_TIMEOUT_MS / FCM ring window. */
+    private const val INCOMING_RING_WINDOW_MS = 27_000L
 
     fun setOutgoingCall(context: Context, callId: String, toUserId: String, toNick: String) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
@@ -24,6 +28,7 @@ object LiviOngoingCallHelper {
             .putString(KEY_CALL_ID, callId)
             .putString(KEY_TO_USER_ID, toUserId)
             .putString(KEY_TO_NICK, toNick ?: "")
+            .remove(KEY_INCOMING_STARTED_AT_MS)
             .apply()
     }
 
@@ -33,6 +38,7 @@ object LiviOngoingCallHelper {
             .putString(KEY_CALL_ID, callId)
             .putString(KEY_FROM, from)
             .putString(KEY_FROM_NICK, fromNick ?: "")
+            .putLong(KEY_INCOMING_STARTED_AT_MS, System.currentTimeMillis())
             .apply()
     }
 
@@ -49,6 +55,37 @@ object LiviOngoingCallHelper {
     fun clearOngoingCall(context: Context) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
     }
+
+    @JvmStatic
+    fun clearOngoingCallIfMatches(context: Context, callId: String) {
+        if (callId.isBlank()) return
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getString(KEY_CALL_ID, null) == callId.trim()) {
+            clearOngoingCall(context)
+        }
+    }
+
+    /** Не показывать/не восстанавливать входящий (лаунчер, CallKeep PI, JS peek). */
+    @JvmStatic
+    fun shouldSuppressStaleIncoming(context: Context, callId: String): Boolean {
+        if (callId.isBlank()) return true
+        if (EndedCallIds.isEnded(context, callId)) return true
+        return isIncomingRingWindowExpired(context, callId)
+    }
+
+    private fun isIncomingRingWindowExpired(context: Context, callId: String): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        var startedAt = 0L
+        if (prefs.getString(KEY_CALL_ID, null) == callId.trim()) {
+            startedAt = prefs.getLong(KEY_INCOMING_STARTED_AT_MS, 0L)
+        }
+        if (startedAt <= 0L) {
+            startedAt = LiviAppModule.incomingCallMetaStartedAtMs(context, callId)
+        }
+        if (startedAt <= 0L) return false
+        return System.currentTimeMillis() >= startedAt + INCOMING_RING_WINDOW_MS
+    }
+
 
     /** Не очищает prefs: перед clearOngoingCall — передать callId/toUserId/toNick в intent «close immediately». */
     @JvmStatic
@@ -67,6 +104,10 @@ object LiviOngoingCallHelper {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (prefs.getString(KEY_TYPE, null) != "incoming") return null
         val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
+        if (shouldSuppressStaleIncoming(context, callId)) {
+            clearOngoingCallIfMatches(context, callId)
+            return null
+        }
         val from = prefs.getString(KEY_FROM, null) ?: return null
         val fromNick = prefs.getString(KEY_FROM_NICK, "") ?: ""
         return Triple(callId, from, fromNick)
@@ -81,7 +122,11 @@ object LiviOngoingCallHelper {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val type = prefs.getString(KEY_TYPE, null) ?: return false
         val callId = prefs.getString(KEY_CALL_ID, null) ?: return false
-        if (EndedCallIds.isEnded(context, callId)) {
+        if (type == "incoming" && shouldSuppressStaleIncoming(context, callId)) {
+            clearOngoingCallIfMatches(context, callId)
+            return false
+        }
+        if (type == "outgoing" && EndedCallIds.isEnded(context, callId)) {
             clearOngoingCall(context)
             return false
         }
@@ -120,6 +165,10 @@ object LiviOngoingCallHelper {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val type = prefs.getString(KEY_TYPE, null) ?: return null
         val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
+        if (type == "incoming" && shouldSuppressStaleIncoming(context, callId)) {
+            clearOngoingCallIfMatches(context, callId)
+            return null
+        }
         if (EndedCallIds.isEnded(context, callId)) {
             clearOngoingCall(context)
             return null

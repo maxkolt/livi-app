@@ -630,6 +630,37 @@ export function clearPendingCall(callId: string): void {
 }
 
 /**
+ * Входящий через IncomingCallActivity (без displayIncomingCall): зарегистрировать звонок в CallKeep,
+ * чтобы endCall/setCurrentCallActive и Telecom не теряли связь.
+ */
+export function registerIncomingCallKeepSession(
+  callId: string,
+  fromUserId: string,
+  opts?: { fromNick?: string; hasVideo?: boolean },
+): void {
+  if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !isSetup) return;
+  const raw = String(callId || '').trim();
+  const from = String(fromUserId || '').trim();
+  if (!raw || !from) return;
+  rememberPendingCall({
+    callId: raw,
+    from,
+    fromNick: opts?.fromNick,
+    hasVideo: opts?.hasVideo === true,
+  });
+  try {
+    const RNCallKeep = require('react-native-callkeep');
+    const nativeCallId = resolveCallKeepUuid(raw);
+    if (Platform.OS === 'android') {
+      RNCallKeep.default.setCurrentCallActive?.(nativeCallId);
+    }
+    logger.info('[callKeep] registerIncomingCallKeepSession', { callId: raw, from });
+  } catch (e) {
+    logger.warn('[callKeep] registerIncomingCallKeepSession failed', e as Error);
+  }
+}
+
+/**
  * Сообщить CallKeep, что пользователь принял звонок (вызывать после перехода на VideoCall и acceptCall).
  */
 export function reportAnswerIncomingCall(callId: string): void {

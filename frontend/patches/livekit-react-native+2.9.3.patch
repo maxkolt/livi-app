@@ -1,0 +1,15 @@
+diff --git a/android/src/main/java/com/livekit/reactnative/LiveKitReactNative.kt b/android/src/main/java/com/livekit/reactnative/LiveKitReactNative.kt
+index 0000000..1111111 100644
+--- a/android/src/main/java/com/livekit/reactnative/LiveKitReactNative.kt
++++ b/android/src/main/java/com/livekit/reactnative/LiveKitReactNative.kt
+@@ -98,6 +98,10 @@ object LiveKitReactNative {
+ 
+         _audioProcessingController = null
+ 
++        // RN reload may destroy the module after teardown — avoid crashing the process.
++        if (_audioRecordSamplesDispatcher == null) {
++            return
++        }
+         // adm needs to be re-setup with a new one each time.
+         setupAdm(context)
+         options.audioDeviceModule = adm

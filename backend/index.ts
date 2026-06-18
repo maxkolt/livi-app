@@ -1758,6 +1758,24 @@ async function runCallPushRetryCycle(callId: string): Promise<void> {
   scheduleCallPushRetry(callId, CALL_DELIVERY_RETRY_EVERY_MS);
 }
 
+function socketDataLooksRandomOrQueueBusy(sdata: Record<string, unknown>, uid: string): boolean {
+  if (sdata.inCall === true || sdata.partnerSid) return true;
+  if (sdata.busy === true && !callOfUser.has(uid)) return true;
+  return false;
+}
+
+async function userHasActiveRandomChat(io: Server, userId: string): Promise<boolean> {
+  for (const s of getSocketsForUser(io, userId)) {
+    const sdata = ((s as any).data || {}) as Record<string, unknown>;
+    if (socketDataLooksRandomOrQueueBusy(sdata, userId)) return true;
+    try {
+      if (await queueStore.isInQueue(s.id)) return true;
+      if (await queueStore.isLocked(s.id)) return true;
+    } catch {}
+  }
+  return false;
+}
+
 /** Callee в ожидающем звонке (без inCall) не считается занятым при отображении в списке друзей. */
 function isSocketBusyForFriendsExport(data: Record<string, unknown> | undefined, userId: string): boolean {
   const d = data || {};
@@ -2472,17 +2490,13 @@ io.on('connection', async (sock: AuthedSocket) => {
       const busy = status === 'busy';
       const idleOnline = !busy && payload?.idle === true;
 
-      const socketDataLooksRandomOrQueueBusy = (sdata: Record<string, unknown>, uid: string) => {
-        if (sdata.inCall === true || sdata.partnerSid) return true;
-        if (sdata.busy === true && !callOfUser.has(uid)) return true;
-        return false;
-      };
-
       const hasAnotherBusySocket = getSocketsForUser(io, userId).some((s) => {
         if (s.id === sock.id) return false;
         const sdata = (s as any)?.data || {};
         return !!(sdata.inCall || sdata.busy || sdata.roomId || sdata.partnerSid);
       });
+
+      const inRandomChat = await userHasActiveRandomChat(io, userId);
 
       if (idleOnline) {
         const hasLiveSameUserCallSocket = getSocketsForUser(io, userId).some((s) => {
@@ -2498,7 +2512,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         const sockStillBusy =
           !!(sockData.busy || sockData.inCall || sockData.roomId || sockData.partnerSid);
 
-        if (!hasLiveSameUserCallSocket && !sockStillBusy && !hasAnotherBusySocket) {
+        if (!hasLiveSameUserCallSocket && !sockStillBusy && !hasAnotherBusySocket && !inRandomChat) {
           const pendingActive = activeRoomByUserId.get(userId);
           if (pendingActive?.callId) {
             const timeline = getCallTimeline(pendingActive.callId);
@@ -2538,13 +2552,14 @@ io.on('connection', async (sock: AuthedSocket) => {
       const currentSockData = ((sock as any)?.data || {}) as Record<string, unknown>;
       const currentStillInRandomOrQueue =
         !busy && socketDataLooksRandomOrQueueBusy(currentSockData, userId);
-      const busyRequested = busy || hasAnotherBusySocket || currentStillInRandomOrQueue;
+      const busyRequested =
+        busy || hasAnotherBusySocket || currentStillInRandomOrQueue || (!busy && inRandomChat);
 
       // КРИТИЧНО: Получатель (callee) не должен показывать бейдж «Занято» до принятия вызова.
       let ignoreBusyForCallee = false;
       // КРИТИЧНО: Инициатор (caller) не должен показывать бейдж «Занято» у того, кому звонят, пока вызов не принят (нативный экран входящего, дозвон).
       let ignoreBusyForCaller = false;
-      if (busyRequested && callOfUser.has(userId)) {
+      if (busyRequested && callOfUser.has(userId) && !inRandomChat) {
         const entry = callOfUser.get(userId);
         if (entry) {
           const link = callsById.get(entry.callId);

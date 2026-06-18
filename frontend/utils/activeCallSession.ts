@@ -4,7 +4,47 @@ import {
   isExternalHeadsetRoute,
   normalizeInCallRoute,
 } from '../components/VideoChat/hooks/audioRouteTypes';
-import { isInAudioOnlyCallUi } from '../src/pip/pipPlaceholderOnly';
+import { isInAudioOnlyCallUi, setPipAudioOnlyPlaceholderSticky } from '../src/pip/pipPlaceholderOnly';
+
+/** Direct-call / video UI: сброс sticky audio-only refs (Home/PiP не должны включать audio_home speaker). */
+export function markDirectCallVideoMediaActive(): void {
+  try {
+    const g = global as any;
+    g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
+    g.__stayOnVideoCallUiRef.current = true;
+    setPipAudioOnlyPlaceholderSticky(false);
+    if (g.__inAudioOnlyUiRef) g.__inAudioOnlyUiRef.current = false;
+    g.__preferAudioOnlyUiOnNextVideoCallRef =
+      g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
+    g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+    const params = g.__currentCallPiPParamsRef?.current;
+    if (params && typeof params === 'object') {
+      params.inAudioOnlyUi = false;
+      params.preferVideoCallUi = true;
+    }
+  } catch {}
+}
+
+/** Активный звонок уже на video UI / с камерой — не трактовать как audio-only для маршрута. */
+export function ongoingCallPrefersVideoMedia(): boolean {
+  try {
+    const g = global as any;
+    if (g.__stayOnVideoCallUiRef?.current === true) return true;
+    const params = g.__currentCallPiPParamsRef?.current;
+    if (params?.preferVideoCallUi === true) return true;
+    if (params?.localCamOn === true) return true;
+    const session = g.__webrtcSessionRef?.current;
+    if (!session) return false;
+    if (typeof session.isEnded === 'function' && session.isEnded()) return false;
+    if (typeof session.getIsCamOn === 'function' && session.getIsCamOn()) return true;
+    const defer = session.getDeferRemoteVideoSubscription?.();
+    const audioDefer = session.getDirectCallAudioOnlyConsumerDefer?.();
+    if (defer === false && audioDefer === false) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 /** Сброс JS + native «завершение звонка» (блокирует system PiP в onUserLeaveHint). */
 export function clearEndingCallInProgress(): void {
@@ -38,6 +78,7 @@ export function isOngoingCallSession(): boolean {
 
 export function resolveActiveCallInCallMedia(): 'audio' | 'video' {
   try {
+    if (ongoingCallPrefersVideoMedia()) return 'video';
     if (isInAudioOnlyCallUi()) return 'audio';
     const g = global as any;
     if (g.__inAudioOnlyUiRef?.current === true) return 'audio';
@@ -69,6 +110,7 @@ export function resolvePersistedCallAudioRouteForActiveUi(
 
 /** Активный аудиозвонок (экран или sticky после Home), не video UI. */
 export function isAudioOnlyOngoingCallContext(): boolean {
+  if (ongoingCallPrefersVideoMedia()) return false;
   if (isInAudioOnlyCallUi()) return true;
   try {
     if (!isOngoingCallSession()) return false;

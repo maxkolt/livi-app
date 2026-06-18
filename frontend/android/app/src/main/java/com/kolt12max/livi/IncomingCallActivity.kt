@@ -85,15 +85,16 @@ class IncomingCallActivity : AppCompatActivity() {
             closeIncomingScreen(callIdFromIntent)
             return
         }
-        // КРИТИЧНО: Если звонок уже отменён/завершён (пущ пришёл с опозданием или пользователь открыл уведомление позже) — не показывать экран
-        if (callIdFromIntent.isNotEmpty() && EndedCallIds.isEnded(this, callIdFromIntent)) {
+        // Звонок уже отменён или ring window истёк (лаунчер/FGS с устаревшим callId).
+        if (callIdFromIntent.isNotEmpty() && LiviOngoingCallHelper.shouldSuppressStaleIncoming(this, callIdFromIntent)) {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
             val shown = Intent(IncomingCallForegroundService.ACTION_INCOMING_CALL_ACTIVITY_SHOWN).apply {
                 setPackage(packageName)
                 putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callIdFromIntent)
             }
             sendBroadcast(shown)
-            closeIncomingScreen()
+            LiviOngoingCallHelper.clearOngoingCallIfMatches(this, callIdFromIntent)
+            closeIncomingScreen(callIdFromIntent)
             return
         }
         currentCallId = callIdFromIntent
@@ -233,7 +234,7 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (currentCallId.isNotEmpty() && EndedCallIds.isEnded(this, currentCallId)) {
+        if (currentCallId.isNotEmpty() && LiviOngoingCallHelper.shouldSuppressStaleIncoming(this, currentCallId)) {
             closeIncomingScreen(currentCallId)
             return
         }
@@ -262,7 +263,7 @@ class IncomingCallActivity : AppCompatActivity() {
 
     /** true если экран закрыт как уже отменённый/завершённый. */
     private fun closeIfCallAlreadyEnded(callId: String): Boolean {
-        if (callId.isEmpty() || !EndedCallIds.isEnded(this, callId)) return false
+        if (callId.isEmpty() || !LiviOngoingCallHelper.shouldSuppressStaleIncoming(this, callId)) return false
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         closeIncomingScreen(callId)
         return true
@@ -742,6 +743,8 @@ class IncomingCallActivity : AppCompatActivity() {
         if (callId.isEmpty()) return
         val remainingMs = remainingIncomingMs()
         if (remainingMs <= 0L) return
+        if (EndedCallIds.isEnded(applicationContext, callId)) return
+        if (LiviOngoingCallHelper.shouldSuppressStaleIncoming(applicationContext, callId)) return
         minimizedToShade = true
         val from = intent.getStringExtra(EXTRA_FROM) ?: ""
         val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""

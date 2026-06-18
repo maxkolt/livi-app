@@ -72,7 +72,7 @@ import { trimNick } from '../utils/userDisplayName';
 import { usePiP } from '../src/pip/PiPContext';
 import { onMessageReceived, onMessageReadReceipt, onMessageDeleted, onMessagesDeleted, getUnreadCount, getUnreadCounts, markMessagesAsRead, onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
 import { onMissedIncrement, onMissedClear, onMissedFetchedFromServer, onRequestCloseIncoming, emitCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onCometChatStatus } from '../utils/globalEvents';
-import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, setCallMediaHint } from '../utils/callKeep';
+import { displayOutgoingCallImmediate, notifyOutgoingCallId, isCallKeepAvailable, reportEndCallToCallKeep, closeOutgoingCallActivity, bringMainActivityToFront, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, setCallMediaHint } from '../utils/callKeep';
 import { clearMissedBadgeCleared, syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, dismissMessageNotificationForUser, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import SettingsTab from '../components/SettingsTab';
 import ChatStyleBackButton from '../components/ChatStyleBackButton';
@@ -314,10 +314,13 @@ const mapToFriend = (u: any): Friend => {
 /** Не залипаем «Занято» локально, если сервер уже вернул busy: false (напр. после отмены исходящего). */
 function mergeFriendBusyFromFetch(
   serverBusy: boolean,
-  _prevBusy?: boolean,
-  _friendLooksOnline?: boolean,
+  prevBusy?: boolean,
+  friendLooksOnline?: boolean,
 ): boolean {
-  return !!serverBusy;
+  if (serverBusy) return true;
+  // REST может отставать от presence:update (busy:true) во время рандом-чата.
+  if (prevBusy && friendLooksOnline) return true;
+  return false;
 }
 
 /** Есть ли реально активный direct-call (не залипшие global refs после завершения). */
@@ -2234,6 +2237,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     callingVisibleRef.current = false;
     try { setOutgoingCallScreenVisible(false); } catch {}
     try { closeOutgoingCallActivity(); } catch {}
+    try { bringMainActivityToFront(); } catch {}
     if (calling.callId) {
       try {
         reportEndCallToCallKeep(calling.callId);
@@ -3485,6 +3489,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const hasActiveLocalCall =
         g.__videoCallActiveRef?.current === true ||
         g.__randomChatPresenceBusyRef?.current === true ||
+        g.__randomChatHadPresenceBusyRef?.current === true ||
         g.__pipVisibleRef?.current === true ||
         g.__pipInSystemModeRef?.current === true ||
         incomingAnswerTransitionActive ||

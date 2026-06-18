@@ -41,6 +41,7 @@ import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../
 import { setAndroidSystemPiPLeaveHintEnabled } from '../../../utils/activeCallNotification';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
 import { isInAudioOnlyCallUi } from '../../pip/pipPlaceholderOnly';
+import { markDirectCallVideoMediaActive } from '../../../utils/activeCallSession';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
 
@@ -1306,6 +1307,13 @@ export class VideoCallSession extends SimpleEventEmitter {
           logger.warn('[VideoCallSession] Failed to disable camera', e);
         }
       }
+      // Сбрасываем ссылку на ended-трек, чтобы повторное включение всегда шло через recovery, а не через «живой» mute.
+      const ended =
+        this.localVideoTrack?.mediaStreamTrack?.readyState === 'ended' ||
+        !this.localVideoTrack?.mediaStreamTrack;
+      if (ended) {
+        this.localVideoTrack = null;
+      }
     }
     
     // Обновляем localStream
@@ -1429,6 +1437,7 @@ export class VideoCallSession extends SimpleEventEmitter {
             from: socket.id,
             roomId: currentRoomId,
             camSide: this.camSide,
+            sideOnly: true,
           });
         } catch {}
       }
@@ -1740,12 +1749,14 @@ export class VideoCallSession extends SimpleEventEmitter {
 
   /** Текущее состояние камеры собеседника (синхронно обновляется при cam-toggle/LiveKit). Используется в showPiP, чтобы заглушка «Отошел» показывалась сразу при входе в PiP без гонки с React state. */
   getRemoteCamEnabled(): boolean {
+    if (this.partnerPeerDirectCallVideoUi === false) return false;
+    if (this.remotePartnerDeclaredCamOff) return false;
     return this.remoteCamEnabled;
   }
 
   /** PiP с audio UI: без remote video subscription / RTC capture. */
   shouldUsePlaceholderPiP(): boolean {
-    if (this.remoteCamEnabled) return false;
+    if (this.getRemoteCamEnabled()) return false;
     if (this.getIsCamOn?.()) return false;
     if (this.remoteStreamHasLiveVideoTrack()) return false;
     try {
@@ -1795,6 +1806,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         !this.directCallAudioOnlyConsumerDefer &&
         !isInAudioOnlyCallUi()
       ) {
+        markDirectCallVideoMediaActive();
         this.resubscribeRemoteVideoIfNeeded('enable_consumption_idempotent');
       }
       return;
@@ -1809,6 +1821,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     }
     this.deferRemoteVideoSubscription = false;
     if (!opts?.keepRestoreDeferAfterPiP) this.restoreDeferRemoteVideoAfterPiP = false;
+    markDirectCallVideoMediaActive();
     logger.info('[VideoCallSession] Remote video consumption enabled (left audio-only UI)');
     if (this.config.getIsDirectCall?.()) {
       this.notifyPeerDirectCallVideoUi(true);
@@ -1827,7 +1840,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         });
       });
     }
-    this.notifyRemoteCamStateChange(this.remoteCamEnabled);
+    this.notifyRemoteCamStateChange(this.getRemoteCamEnabled());
   }
 
   /** In-app PiP: подписаться на remote video и синхронизировать стрим с оверлеем PiP. */
@@ -2055,6 +2068,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   /** Сообщить партнёру, что мы на экране видеозвонка или вернулись на аудио (direct call). */
   notifyPeerDirectCallVideoUi(inVideoCallUi: boolean, opts?: { force?: boolean }): void {
     if (!this.config.getIsDirectCall?.()) return;
+    if (inVideoCallUi) {
+      markDirectCallVideoMediaActive();
+    }
     if (inVideoCallUi && this.isLocalDirectCallAudioOnlyUi()) {
       logger.debug('[VideoCallSession] Skip direct-call:video-ui true — local audio-only UI');
       return;
@@ -2457,7 +2473,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     };
 
-    const camToggleHandler = (data: { enabled: boolean; from: string; roomId?: string; camSide?: CamSide }) => {
+    const camToggleHandler = (data: {
+      enabled: boolean;
+      from: string;
+      roomId?: string;
+      camSide?: CamSide;
+      sideOnly?: boolean;
+    }) => {
       const currentRoomId = this.getRoomId();
       const incoming = data.roomId;
 
@@ -2481,12 +2503,16 @@ export class VideoCallSession extends SimpleEventEmitter {
         from: data.from,
         roomId: incoming,
         camSide: data.camSide,
+        sideOnly: !!data.sideOnly,
       });
 
       const nextCamSide: CamSide = data.camSide === 'back' ? 'back' : 'front';
       if (this.remoteCamSide !== nextCamSide) {
         this.remoteCamSide = nextCamSide;
         this.notifyRemoteCamSideChange(nextCamSide);
+      }
+      if (data.sideOnly) {
+        return;
       }
       this.remotePartnerDeclaredCamOff = !data.enabled;
       this.remoteCamEnabled = data.enabled;
@@ -2538,6 +2564,17 @@ export class VideoCallSession extends SimpleEventEmitter {
         roomId: incoming,
       });
       this.partnerPeerDirectCallVideoUi = !!data.inVideoCallUi;
+      if (!data.inVideoCallUi) {
+        this.remotePartnerDeclaredCamOff = true;
+        if (this.remoteCamEnabled) {
+          this.remoteCamEnabled = false;
+          this.notifyRemoteCamStateChange(false);
+          try {
+            const pipUpdate = (global as any).__pipUpdateStateRef?.current;
+            if (typeof pipUpdate === 'function') pipUpdate({ remoteCamOn: false });
+          } catch (_) {}
+        }
+      }
       if (!data.inVideoCallUi && this.config.getIsDirectCall?.() && this.partnerInPiP) {
         this.partnerInPiP = false;
         this.emit('partnerPiPStateChanged', { inPiP: false });
@@ -6328,7 +6365,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       })
       .on(RoomEvent.TrackUnmuted, (pub, participant) => {
         if (!participant.isLocal && pub.kind === Track.Kind.Video) {
-          this.remotePartnerDeclaredCamOff = false;
+          if (this.partnerPeerDirectCallVideoUi === false || this.remotePartnerDeclaredCamOff) {
+            return;
+          }
           this.remoteCamEnabled = true;
           this.clearRemoteCamOffTimeout();
           this.notifyRemoteCamStateChange(true);
@@ -6679,7 +6718,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       // But during re-subscribe it can briefly be muted; avoid flashing "away" by debouncing OFF.
       // Если партнёр уже прислал cam-toggle(false), не перетираем заглушку «Отошёл» первым кадром трека.
       if (!track.isMuted) {
-        if (!this.remotePartnerDeclaredCamOff) {
+        if (!this.remotePartnerDeclaredCamOff && this.partnerPeerDirectCallVideoUi !== false) {
           this.remoteCamEnabled = true;
           this.clearRemoteCamOffTimeout();
         }
@@ -6697,7 +6736,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         shouldRemountRemoteView = true;
       }
       
-      if (!track.isMuted && !this.remotePartnerDeclaredCamOff) {
+      if (!track.isMuted && !this.remotePartnerDeclaredCamOff && this.partnerPeerDirectCallVideoUi !== false) {
         this.notifyRemoteCamStateChange(true);
         try {
           const pipUpdate = (global as any).__pipUpdateStateRef?.current;
@@ -6734,7 +6773,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (typeof pipUpdate === 'function') {
         pipUpdate({
           remoteStream: this.remoteStream,
-          remoteCamOn: this.remoteCamEnabled,
+          remoteCamOn: this.getRemoteCamEnabled(),
           pipRemoteViewKey: this.remoteViewKey,
         });
       }
@@ -6823,6 +6862,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private scheduleRemoteCamOff(reason: string): void {
+    if (this.partnerPeerDirectCallVideoUi === false || this.remotePartnerDeclaredCamOff) {
+      return;
+    }
     // If we already consider camera off, don't spam timers/callbacks.
     if (!this.remoteCamEnabled && !this.remoteCamOffTimeout) {
       return;

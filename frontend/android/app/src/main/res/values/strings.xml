@@ -3,8 +3,8 @@
   <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
   <string name="expo_splash_screen_status_bar_translucent" translatable="false">false</string>
   <!-- Full-screen incoming call (WhatsApp/Telegram style) -->
-  <string name="incoming_call_title">Входящий видеозвонок</string>
-  <string name="incoming_call_title_audio">Входящий звонок</string>
+  <string name="incoming_call_title">Входящий вызов</string>
+  <string name="incoming_call_title_audio">Входящий вызов</string>
   <string name="incoming_call_unknown">Кто-то звонит</string>
   <string name="incoming_call_accept">Принять</string>
   <string name="incoming_call_decline">Отклонить</string>
@@ -15,30 +15,30 @@
   <string name="outgoing_call_subtitle_base_audio">Звонок</string>
   <string name="outgoing_call_cancel">Отменить</string>
   <string name="outgoing_call_notification_channel">Исходящий вызов</string>
-  <string name="outgoing_call_notification_title">LiVi — видеозвонок</string>
+  <string name="outgoing_call_notification_title">LiVi — вызов</string>
   <!-- System PiP action: end call from floating window -->
   <string name="pip_action_end_call">Завершить</string>
   <string name="pip_action_audio_call">Аудио</string>
   <string name="pip_action_audio_call_desc">На экран аудиозвонка</string>
-  <!-- Active video call (foreground service so socket stays alive in background/PiP) -->
-  <string name="active_call_notification_channel">Видеозвонок</string>
-  <string name="active_call_notification_title">Видеозвонок</string>
-  <string name="active_call_notification_title_from">Видеозвонок от %s</string>
-  <string name="active_call_notification_title_someone">Видеозвонок от кого-то</string>
-  <string name="active_call_notification_text">Нажмите, чтобы вернуться к звонку</string>
-  <string name="active_audio_call_notification_channel">Аудиозвонок</string>
-  <string name="active_audio_call_notification_title_from">Разговор с %s</string>
-  <string name="active_audio_call_notification_title_someone">Активный аудиозвонок</string>
-  <string name="active_audio_call_notification_text">Нажмите, чтобы вернуться к разговору</string>
+  <!-- Active call (foreground service so socket stays alive in background/PiP) -->
+  <string name="active_call_notification_channel">Вызов</string>
+  <string name="active_call_notification_title">Вызов</string>
+  <string name="active_call_notification_title_from">Вызов от %s</string>
+  <string name="active_call_notification_title_someone">Вызов от кого-то</string>
+  <string name="active_call_notification_text">Нажмите, чтобы вернуться к вызову</string>
+  <string name="active_audio_call_notification_channel">Вызов</string>
+  <string name="active_audio_call_notification_title_from">Вызов от %s</string>
+  <string name="active_audio_call_notification_title_someone">Вызов от кого-то</string>
+  <string name="active_audio_call_notification_text">Нажмите, чтобы вернуться к вызову</string>
   <!-- Missed call notification -->
   <string name="missed_call_title">Пропущенный вызов</string>
-  <string name="missed_call_video">Пропущенный видеозвонок</string>
+  <string name="missed_call_video">Пропущенный вызов</string>
   <string name="missed_call_from">От %s</string>
-  <string name="missed_call_from_count">%d пропущенных от %s</string>
+  <string name="missed_call_from_count">%d пропущенных вызовов от %s</string>
   <string name="notification_new_message">Новое сообщение</string>
   <!-- Summary notifications (общие в шторке) -->
-  <string name="summary_missed_calls_title">Пропущенные звонки</string>
-  <string name="summary_missed_calls_count">%d пропущенных звонков</string>
+  <string name="summary_missed_calls_title">Пропущенные вызовы</string>
+  <string name="summary_missed_calls_count">%d пропущенных вызовов</string>
   <string name="summary_unread_title">Непрочитанные сообщения</string>
   <string name="summary_unread_count">%d непрочитанных</string>
   <string name="summary_unread_from_time">От %1$s в %2$s</string>

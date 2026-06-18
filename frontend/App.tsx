@@ -44,6 +44,7 @@ import {
   isCallKeepAvailable,
   registerCallKeepEvents,
   reportAnswerIncomingCall,
+  registerIncomingCallKeepSession,
   reportRejectCall,
   reportEndCallToCallKeep,
   setCallKeepAvailable,
@@ -64,6 +65,7 @@ import {
   openOverlayPermissionSettings,
   notifyCallCanceled,
   addEndedCallId,
+  isEndedCallId,
   setCallMediaHint,
   getCallMediaHint,
   videoCallNavExtras,
@@ -516,6 +518,10 @@ function AppContent() {
     (async () => {
       const pending = await getAndClearPendingIncomingCallForCallKeep();
       if (!pending?.callId || !pending?.from) return;
+      if (await isEndedCallId(pending.callId)) {
+        try { addEndedCallId(pending.callId); } catch {}
+        return;
+      }
       try {
         const ready = await setupCallKeep({ requestPermission: false });
         if (ready) {
@@ -589,6 +595,12 @@ function AppContent() {
       try { stopIncomingCallAlert(); } catch {}
       try { stopIncomingCallForegroundService(); } catch {}
       try { sendCallAnsweredBroadcast(callId); } catch {}
+      try {
+        const mediaHint = getCallMediaHint(callId);
+        registerIncomingCallKeepSession(callId, from, {
+          hasVideo: mediaHint !== 'audio',
+        });
+      } catch (_) {}
     }
     await openAnswerCallScreen(from, callId, getCallMediaHint(callId));
   }, [rememberExpectedCallAccepted, setIncomingAnswerTransitionGuard]);

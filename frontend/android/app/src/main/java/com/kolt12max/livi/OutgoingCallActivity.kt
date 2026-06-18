@@ -223,6 +223,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         // Убираем системную анимацию закрытия, чтобы не было "мерцания/уезда" Home
         // при возврате с нативного экрана исходящего вызова.
         overridePendingTransition(0, 0)
+        LiviAppModule.scheduleMainActivityAfterOutgoingClose(applicationContext)
     }
 
     /**

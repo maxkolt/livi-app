@@ -244,6 +244,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       setPackage(reactApplicationContext.packageName)
     }
     reactApplicationContext.sendBroadcast(intent)
+    LiviAppModule.scheduleMainActivityAfterOutgoingClose(reactApplicationContext)
   }
 
   /**
@@ -294,18 +295,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       Log.w(NAME, "bringMainActivityToFront: startActivity OutgoingCall(close) failed", e)
     }
     // 3) Вывести задачу приложения на передний план после задержки (OutgoingCallActivity успеет finish()).
-    // Нельзя использовать ActivityManager.moveTaskToFront — для обычных приложений нужен REORDER_TASKS (только системе).
-    val mainIntent = Intent(ctx, MainActivity::class.java).apply {
-      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-    }
-    Handler(Looper.getMainLooper()).postDelayed({
-      try {
-        ctx.startActivity(mainIntent)
-        Log.d(NAME, "bringMainActivityToFront: MainActivity startActivity (reorder to front)")
-      } catch (e: Exception) {
-        Log.w(NAME, "bringMainActivityToFront: startActivity MainActivity failed", e)
-      }
-    }, 500)
+    postMainActivityReorderToFront(ctx, 500L)
   }
 
   /** Прочитать и сбросить флаг «пользователь нажал X на нативном экране исходящего». Вызывать из JS при переходе в active. */
@@ -340,8 +330,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun launchIncomingCallActivity(callId: String, from: String, fromNick: String?, hasVideo: Boolean) {
     val ctx = reactApplicationContext
-    if (callId.isNotBlank() && EndedCallIds.isEnded(ctx, callId)) {
-      Log.d(NAME, "launchIncomingCallActivity skipped (call already ended) callId=$callId")
+    if (callId.isNotBlank() && LiviOngoingCallHelper.shouldSuppressStaleIncoming(ctx, callId)) {
+      Log.d(NAME, "launchIncomingCallActivity skipped (stale/ended) callId=$callId")
+      LiviOngoingCallHelper.clearOngoingCallIfMatches(ctx, callId)
       return
     }
     // НЕ шлём ACTION_INCOMING_CALL_ACTIVITY_SHOWN до реального onCreate IncomingCallActivity:
@@ -363,8 +354,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun showIncomingCallSystemUI(callId: String, from: String, fromNick: String?, hasVideo: Boolean) {
     if (callId.isBlank() || from.isBlank()) return
     val ctx = reactApplicationContext
-    if (EndedCallIds.isEnded(ctx, callId)) {
-      Log.d(NAME, "showIncomingCallSystemUI skipped (call already ended) callId=$callId")
+    if (LiviOngoingCallHelper.shouldSuppressStaleIncoming(ctx, callId)) {
+      Log.d(NAME, "showIncomingCallSystemUI skipped (stale/ended) callId=$callId")
+      LiviOngoingCallHelper.clearOngoingCallIfMatches(ctx, callId)
       return
     }
     try {
@@ -411,6 +403,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun addEndedCallId(callId: String) {
     if (callId.isBlank()) return
     EndedCallIds.add(reactApplicationContext, callId)
+    LiviOngoingCallHelper.clearOngoingCallIfMatches(reactApplicationContext, callId)
   }
 
   /** Уже завершён/отменён ли этот звонок? Чтобы не показывать входящий при запоздалом Expo-пуше «call». */
@@ -453,7 +446,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun getAndClearPendingIncomingCallForCallKeep(promise: Promise) {
     try {
-      val data = getAndClearPendingIncomingCallForCallKeep()
+      val data = getAndClearPendingIncomingCallForCallKeep(reactApplicationContext.applicationContext)
       if (data == null) {
         promise.resolve(null)
         return
@@ -1598,6 +1591,47 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private const val EXIT_SYSTEM_PIP_DEBOUNCE_MS = 1200L
 
     /**
+     * OutgoingCallActivity в отдельной задаче (singleInstance). После finish() без этого пользователь
+     * попадает на лаунчер, хотя MainActivity жива в другой задаче — выглядит как «приложение закрылось».
+     */
+    @JvmStatic
+    fun scheduleMainActivityAfterOutgoingClose(ctx: Context, delayMs: Long = 320L) {
+      val now = System.currentTimeMillis()
+      synchronized(LiviAppModule::class.java) {
+        if (now - lastBringMainToFrontAtMs < BRING_MAIN_TO_FRONT_DEBOUNCE_MS) {
+          Log.d(NAME, "scheduleMainActivityAfterOutgoingClose: skip duplicate within debounce window")
+          return
+        }
+        lastBringMainToFrontAtMs = now
+      }
+      postMainActivityReorderToFront(ctx, delayMs)
+    }
+
+    @JvmStatic
+    internal fun postMainActivityReorderToFront(ctx: Context, delayMs: Long) {
+      if (MainActivity.isInForeground) {
+        Log.d(NAME, "postMainActivityReorderToFront: MainActivity already foreground, skip")
+        return
+      }
+      val mainIntent = Intent(ctx, MainActivity::class.java).apply {
+        addFlags(
+          Intent.FLAG_ACTIVITY_NEW_TASK
+            or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            or Intent.FLAG_ACTIVITY_SINGLE_TOP,
+        )
+      }
+      Handler(Looper.getMainLooper()).postDelayed({
+        try {
+          ctx.applicationContext.startActivity(mainIntent)
+          Log.d(NAME, "postMainActivityReorderToFront: MainActivity startActivity (reorder to front)")
+        } catch (e: Exception) {
+          Log.w(NAME, "postMainActivityReorderToFront: startActivity failed", e)
+        }
+      }, delayMs)
+    }
+
+    /**
      * Жёстко закрыть system PiP (moveTaskToBack + finish), без debounce — только как fallback после soft.
      */
     @JvmStatic
@@ -1788,16 +1822,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
     @JvmStatic
     fun emitEndCallFromPiP() {
-      reactContextRef?.runOnUiQueueThread {
-        reactContextRef?.emitDeviceEvent("EndCallFromPiP", null)
-      }
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("EndCallFromPiP", null) }
     }
 
     @JvmStatic
     fun emitReturnToAudioCallFromPiP() {
-      reactContextRef?.runOnUiQueueThread {
-        reactContextRef?.emitDeviceEvent("ReturnToAudioCallFromPiP", null)
-      }
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("ReturnToAudioCallFromPiP", null) }
     }
 
     /** Уведомить JS, что скоро включится системный PiP — чтобы переключить UI на «только PiP» (видео собеседника + верхние кнопки) до входа в PiP.
@@ -1805,8 +1835,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun emitAboutToEnterSystemPiP(decorWidth: Int = 0, decorHeight: Int = 0, traceId: String? = null) {
       setSystemPiPCaptureFrameReadyStatic(false)
-      reactContextRef?.runOnUiQueueThread {
-        val ctx = reactContextRef ?: return@runOnUiQueueThread
+      runOnReactUiQueueIfAlive { ctx ->
         val params = Arguments.createMap()
         if (decorWidth > 0 && decorHeight > 0) {
           params.putInt("width", decorWidth)
@@ -1826,7 +1855,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         "SysPiPHome",
         "phase=$phase traceId=$traceId ${extras?.keySet()?.joinToString { k -> "$k=${extras.get(k)}" } ?: ""}"
       )
-      reactContextRef?.runOnUiQueueThread {
+      runOnReactUiQueueIfAlive { ctx ->
         val params = Arguments.createMap()
         params.putString("traceId", traceId)
         params.putString("phase", phase)
@@ -1842,31 +1871,31 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
             }
           }
         }
-        reactContextRef?.emitDeviceEvent("SystemPiPHomeTrace", params)
+        ctx.emitDeviceEvent("SystemPiPHomeTrace", params)
       }
     }
 
     /** Уведомить JS о входе/выходе из системного PiP (только видео + системная кнопка X, без кастомных кнопок). */
     @JvmStatic
     fun emitSystemPiPModeChanged(isInPiP: Boolean) {
-      reactContextRef?.runOnUiQueueThread {
+      runOnReactUiQueueIfAlive { ctx ->
         val params = Arguments.createMap()
         params.putBoolean("isInPiP", isInPiP)
-        reactContextRef?.emitDeviceEvent("SystemPiPModeChanged", params)
+        ctx.emitDeviceEvent("SystemPiPModeChanged", params)
       }
     }
 
     /** Пользователь развернул PiP (стрелка или тап по окну) — активность на переднем плане. JS должен открыть экран видеозвонка. */
     @JvmStatic
     fun emitSystemPiPExpanded() {
-      reactContextRef?.emitDeviceEvent("SystemPiPExpanded", null)
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("SystemPiPExpanded", null) }
     }
 
     /** Тап по ongoing-уведомлению «Видеозвонок от …» — вернуться на экран звонка. */
     @JvmStatic
     fun emitReturnToActiveCallFromNotification(audioOnly: Boolean = false) {
-      reactContextRef?.runOnUiQueueThread {
-        reactContextRef?.emitDeviceEvent("ReturnToActiveCallFromNotification", audioOnly)
+      runOnReactUiQueueIfAlive { ctx ->
+        ctx.emitDeviceEvent("ReturnToActiveCallFromNotification", audioOnly)
       }
     }
 
@@ -2029,6 +2058,25 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     private const val HEADLESS_TASK_CALL_KEEP = "RNCallKeepBackgroundMessage"
 
     private var reactContextRef: ReactApplicationContext? = null
+
+    /** Безопасная доставка device events (Home/PiP во время reload или destroy RN). */
+    @JvmStatic
+    private fun runOnReactUiQueueIfAlive(block: (ReactApplicationContext) -> Unit) {
+      val ctx = reactContextRef ?: return
+      if (!ctx.hasActiveReactInstance()) return
+      try {
+        ctx.runOnUiQueueThread {
+          try {
+            if (!ctx.hasActiveReactInstance()) return@runOnUiQueueThread
+            block(ctx)
+          } catch (e: Exception) {
+            Log.w("LiviAppModule", "runOnReactUiQueueIfAlive block failed", e)
+          }
+        }
+      } catch (e: Exception) {
+        Log.w("LiviAppModule", "runOnReactUiQueueIfAlive schedule failed", e)
+      }
+    }
 
     @JvmStatic
     fun normalizeApiServerBase(raw: String?): String? {
@@ -2255,6 +2303,20 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       prefs.edit().putString(KEY_INCOMING_CALL_META, map.toString()).apply()
     }
 
+    /** Время первого FCM/meta для ring window (0 если неизвестно). */
+    @JvmStatic
+    fun incomingCallMetaStartedAtMs(context: Context, callId: String): Long {
+      if (callId.isBlank()) return 0L
+      val prefs = context.getSharedPreferences(PREFS_INCOMING_CALL_META, Context.MODE_PRIVATE)
+      val raw = prefs.getString(KEY_INCOMING_CALL_META, "{}") ?: "{}"
+      val map = try {
+        JSONObject(raw)
+      } catch (_: Exception) {
+        return 0L
+      }
+      return map.optJSONObject(callId.trim())?.optLong("ts", 0L) ?: 0L
+    }
+
     @JvmStatic
     fun resolveIncomingCallMeta(context: Context, callId: String): Pair<String, String>? {
       if (callId.isBlank()) return null
@@ -2440,12 +2502,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     fun emitOutgoingCallCanceledByUser(callId: String?) {
       outgoingCanceledByUserFlag = true
       outgoingCanceledByUserCallId = callId?.takeIf { it.isNotBlank() }
-      reactContextRef?.runOnUiQueueThread {
+      runOnReactUiQueueIfAlive { ctx ->
         val params = Arguments.createMap()
         if (!callId.isNullOrBlank()) {
           params.putString("callId", callId)
         }
-        reactContextRef?.emitDeviceEvent("OutgoingCallCanceledByUser", params)
+        ctx.emitDeviceEvent("OutgoingCallCanceledByUser", params)
       }
     }
 
@@ -2507,9 +2569,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
     @JvmStatic
     fun emitPendingAnswerCallEvent() {
-      reactContextRef?.runOnUiQueueThread {
-        reactContextRef?.emitDeviceEvent("LiviPendingAnswerCall", null)
-      }
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("LiviPendingAnswerCall", null) }
     }
 
     /** Входящий для CallKeep (FCM при разблокированном экране): сохранить в pending; JS вызовет getAndClearPendingIncomingCallForCallKeep → displayIncomingCall. */
@@ -2525,31 +2585,34 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
 
     @JvmStatic
-    fun getAndClearPendingIncomingCallForCallKeep(): Triple<String, String, String>? {
+    fun getAndClearPendingIncomingCallForCallKeep(context: Context): Triple<String, String, String>? {
       val c = pendingCallKeepCallId ?: return null
       val f = pendingCallKeepFrom ?: return null
       val n = pendingCallKeepFromNick ?: ""
       pendingCallKeepCallId = null
       pendingCallKeepFrom = null
       pendingCallKeepFromNick = null
+      if (LiviOngoingCallHelper.shouldSuppressStaleIncoming(context, c)) {
+        EndedCallIds.add(context, c)
+        LiviOngoingCallHelper.clearOngoingCallIfMatches(context, c)
+        return null
+      }
       return Triple(c, f, n)
     }
 
     /** Вызвать из MainActivity.onResume при intent с EXTRA_PENDING_CALL_ACCEPTED_CALL_ID — React запросит call:accepted и перейдёт на VideoCall. */
     @JvmStatic
     fun emitPendingCallAcceptedEvent() {
-      reactContextRef?.runOnUiQueueThread {
-        reactContextRef?.emitDeviceEvent("LiviPendingCallAccepted", null)
-      }
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("LiviPendingCallAccepted", null) }
     }
 
     /** Вызвать из IncomingCallActivity при нажатии X — React очистит состояние входящего. */
     @JvmStatic
     fun emitIncomingCallDeclinedByUser(callId: String) {
-      reactContextRef?.runOnUiQueueThread {
+      runOnReactUiQueueIfAlive { ctx ->
         val params = Arguments.createMap()
         params.putString("callId", callId)
-        reactContextRef?.emitDeviceEvent("IncomingCallDeclinedByUser", params)
+        ctx.emitDeviceEvent("IncomingCallDeclinedByUser", params)
       }
     }
 

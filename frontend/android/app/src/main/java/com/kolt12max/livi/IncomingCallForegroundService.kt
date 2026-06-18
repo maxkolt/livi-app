@@ -40,6 +40,8 @@ class IncomingCallForegroundService : Service() {
     private var stopFullIncomingAudioOnDestroy = true
     /** Уже отцепили foreground после показа IncomingCallActivity (избегаем двойного DETACH). */
     private var didDetachAfterActivityShown = false
+    /** startForeground() до тяжёлой работы (ringtone/receivers) — иначе ANR/FGS timeout при двойном onStartCommand. */
+    private var didPromoteForeground = false
 
     private fun cancelPendingActivityLaunches() {
         for (r in pendingActivityLaunchRunnables) {
@@ -76,20 +78,38 @@ class IncomingCallForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val callId = intent?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID)
-            ?: return stopAndReturn()
-        val from = intent.getStringExtra(EXTRA_FROM) ?: return stopAndReturn()
-        val fromNick = intent.getStringExtra(EXTRA_FROM_NICK) ?: ""
-        val headsUpOnly = intent.getBooleanExtra(EXTRA_HEADS_UP_ONLY, false)
-        val silentNotification = intent.getBooleanExtra(EXTRA_SILENT_NOTIFICATION, false)
-        val minimized = intent.getBooleanExtra(EXTRA_MINIMIZED, false)
-        val remainingTimeoutMs = intent.getLongExtra(EXTRA_REMAINING_TIMEOUT_MS, TIMEOUT_MS).coerceAtLeast(0L)
+        val callId = intent?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID).orEmpty()
+        val from = intent?.getStringExtra(EXTRA_FROM).orEmpty()
+        val fromNick = intent?.getStringExtra(EXTRA_FROM_NICK).orEmpty()
+        val headsUpOnly = intent?.getBooleanExtra(EXTRA_HEADS_UP_ONLY, false) == true
+        val minimized = intent?.getBooleanExtra(EXTRA_MINIMIZED, false) == true
+        val silentNotification = intent?.getBooleanExtra(EXTRA_SILENT_NOTIFICATION, false) == true || minimized
+        val remainingTimeoutMs = intent?.getLongExtra(EXTRA_REMAINING_TIMEOUT_MS, TIMEOUT_MS)?.coerceAtLeast(0L) ?: TIMEOUT_MS
 
         vl("[INCOMING_FGS] onStartCommand callId=$callId minimized=$minimized")
 
+        // Любой startForegroundService() обязан быстро вызвать startForeground() (в т.ч. после DETACH).
+        LiviFirebaseMessagingService.ensureCallChannel(this)
+        promoteForegroundIfNeeded(
+            callId.ifEmpty { "abort" },
+            from,
+            fromNick,
+            silentNotification = true,
+            headsUpOnly = false,
+        )
+
+        if (callId.isEmpty() || from.isEmpty()) {
+            vl("[INCOMING_FGS] onStartCommand abort invalid intent")
+            return finishAbortStart()
+        }
         if (EndedCallIds.isEnded(applicationContext, callId)) {
             vl("[INCOMING_FGS] onStartCommand SKIP call already ended callId=$callId")
-            return stopAndReturn()
+            return finishAbortStart()
+        }
+        if (LiviOngoingCallHelper.shouldSuppressStaleIncoming(applicationContext, callId)) {
+            vl("[INCOMING_FGS] onStartCommand SKIP stale incoming callId=$callId")
+            LiviOngoingCallHelper.clearOngoingCallIfMatches(applicationContext, callId)
+            return finishAbortStart()
         }
 
         currentCallId = callId
@@ -101,7 +121,7 @@ class IncomingCallForegroundService : Service() {
         timeoutRunnable = null
         cancelPendingActivityLaunches()
         didDetachAfterActivityShown = false
-        LiviFirebaseMessagingService.ensureCallChannel(this)
+        promoteForegroundIfNeeded(callId, from, fromNick, silentNotification, headsUpOnly)
         if (!minimized) {
             LiviAppModule.startIncomingCallRingtoneAndVibrationStatic(applicationContext)
         }
@@ -187,6 +207,7 @@ class IncomingCallForegroundService : Service() {
             notification,
             fgsType
         )
+        didPromoteForeground = true
 
         when {
             silentNotification -> vl("[INCOMING_FGS] Mode=silent")
@@ -213,6 +234,11 @@ class IncomingCallForegroundService : Service() {
                     }
                     if (EndedCallIds.isEnded(applicationContext, callId)) {
                         vl("[INCOMING_FGS] startActivity attempt $attemptIndex SKIP ended callId=$callId")
+                        return@Runnable
+                    }
+                    if (LiviOngoingCallHelper.shouldSuppressStaleIncoming(applicationContext, callId)) {
+                        vl("[INCOMING_FGS] startActivity attempt $attemptIndex SKIP stale callId=$callId")
+                        LiviOngoingCallHelper.clearOngoingCallIfMatches(applicationContext, callId)
                         return@Runnable
                     }
                     try {
@@ -280,10 +306,45 @@ class IncomingCallForegroundService : Service() {
         } catch (e: Exception) {
             Log.w(TAG, "[INCOMING_FGS] stopForeground DETACH failed", e)
         }
+        // После DETACH следующий startForegroundService() снова обязан вызвать startForeground().
+        didPromoteForeground = false
+    }
+
+    private fun promoteForegroundIfNeeded(
+        callId: String,
+        from: String,
+        fromNick: String,
+        silentNotification: Boolean,
+        headsUpOnly: Boolean,
+    ) {
+        if (didPromoteForeground) return
+        val notification = when {
+            silentNotification -> LiviFirebaseMessagingService.buildIncomingCallNotificationSilent(this, callId, from, fromNick)
+            headsUpOnly -> LiviFirebaseMessagingService.buildIncomingCallNotificationHeadsUpOnly(this, callId, from, fromNick)
+            else -> LiviFirebaseMessagingService.buildIncomingCallNotification(this, callId, from, fromNick)
+        }
+        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+        } else {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        }
+        try {
+            ServiceCompat.startForeground(
+                this,
+                LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL,
+                notification,
+                fgsType,
+            )
+            didPromoteForeground = true
+            vl("[INCOMING_FGS] promoteForegroundIfNeeded OK callId=$callId")
+        } catch (e: Exception) {
+            Log.e(TAG, "[INCOMING_FGS] promoteForegroundIfNeeded failed callId=$callId", e)
+        }
     }
 
     private fun cleanupAndStopFully() {
         vl("[INCOMING_FGS] cleanupAndStopFully")
+        didPromoteForeground = false
         LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
@@ -302,7 +363,16 @@ class IncomingCallForegroundService : Service() {
         stopSelf()
     }
 
-    private fun stopAndReturn(): Int {
+    /** После startForegroundService(): уже вызвали startForeground — снимаем FGS и останавливаем сервис. */
+    private fun finishAbortStart(): Int {
+        try {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        } catch (e: Exception) {
+            Log.w(TAG, "[INCOMING_FGS] finishAbortStart stopForeground failed", e)
+        }
+        didPromoteForeground = false
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
         stopSelf()
         return START_NOT_STICKY
     }

@@ -905,6 +905,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         fun deliverIncomingCallCanceled(context: Context, callId: String, from: String = "", fromNick: String = "") {
             if (callId.isBlank()) return
             EndedCallIds.add(context, callId)
+            LiviOngoingCallHelper.clearOngoingCallIfMatches(context, callId)
             val cancelIntent = Intent(ACTION_CALL_CANCELED).apply {
                 setPackage(context.packageName)
                 putExtra(EXTRA_CALL_ID, callId)

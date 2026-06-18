@@ -122,12 +122,16 @@ class MainActivity : ReactActivity() {
   }
 
   private fun homePiPTrace(phase: String, extras: Bundle.() -> Unit = {}) {
-    if (currentHomePiPTraceId.isBlank()) {
-      currentHomePiPTraceId = "hp_${System.currentTimeMillis()}"
+    try {
+      if (currentHomePiPTraceId.isBlank()) {
+        currentHomePiPTraceId = "hp_${System.currentTimeMillis()}"
+      }
+      val b = Bundle()
+      extras.invoke(b)
+      LiviAppModule.emitSystemPiPHomeTrace(currentHomePiPTraceId, phase, b)
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "homePiPTrace failed phase=$phase", e)
     }
-    val b = Bundle()
-    extras.invoke(b)
-    LiviAppModule.emitSystemPiPHomeTrace(currentHomePiPTraceId, phase, b)
   }
 
   private fun requestFinish(reason: String) {

@@ -59,7 +59,7 @@ import {
   syncAndroidSystemPiPLeaveHintForActiveVideoCall,
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
-import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia } from '../../utils/activeCallSession';
+import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute } from '../../utils/activeCallSession';
 import { pinVideoCallLoudSpeakerRoute, setPersistedCallAudioRoute } from '../../utils/callAudioRoutePersist';
 import { iconNameForRoute, type InCallAudioRoute, normalizeInCallRoute } from './hooks/audioRouteTypes';
 import { useAudioRouting } from './hooks/useAudioRouting';
@@ -335,7 +335,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const speakerOnRef = useRef(false);
   /** После перехода на видео UI не возвращать на экран аудиозвонка при выключении камеры (только mute видео). */
   const stayOnVideoCallUiRef = useRef(
-    preferVideoUiOnMount || route?.params?.callMedia === 'video',
+    preferVideoUiOnMount ||
+      route?.params?.callMedia === 'video' ||
+      (() => {
+        try {
+          const g = global as any;
+          if (g.__stayOnVideoCallUiRef?.current === true) return true;
+          return ongoingCallPrefersVideoMedia();
+        } catch {
+          return false;
+        }
+      })(),
   );
   useEffect(() => {
     const g = global as any;
@@ -616,19 +626,27 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       pip.localStream ||
       localStreamRef.current ||
       null;
+    const videoTrack = effectiveStream?.getVideoTracks?.()?.[0];
     const trackCamOn = getTrackEnabled(effectiveStream, 'video');
+    const trackLive = videoTrack?.readyState === 'live';
     const sessionWantsCam =
       session && typeof session.getIsCamOn === 'function' ? session.getIsCamOn() : undefined;
+    const pipCamSnapshot = typeof pip.localCamOn === 'boolean' ? pip.localCamOn : undefined;
+    let camOnResolved = camOn;
+    if (pipCamSnapshot !== undefined) {
+      camOnResolved = pipCamSnapshot;
+    } else if (sessionWantsCam === false) {
+      camOnResolved = false;
+    } else if (sessionWantsCam === true && trackLive) {
+      camOnResolved = true;
+    } else if (typeof trackCamOn === 'boolean') {
+      camOnResolved = trackCamOn;
+    } else if (sessionWantsCam === true && !trackLive) {
+      camOnResolved = false;
+    }
     return {
       micOn: micOnFromIntent,
-      camOn:
-        sessionWantsCam === true
-          ? true
-          : typeof trackCamOn === 'boolean'
-            ? trackCamOn
-            : typeof pip.localCamOn === 'boolean'
-              ? pip.localCamOn
-              : camOn,
+      camOn: camOnResolved,
     };
   }, [camOn, getTrackEnabled, pip.isMuted, pip.localCamOn, pip.localStream]);
   const getDesiredRemoteMutedForPiPReturn = useCallback(() => {
@@ -1806,6 +1824,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
       if (pip.remoteStream) {
         setRemoteStream(pip.remoteStream);
+        const sessionForRemote =
+          sessionRef.current ?? ((global as any).__webrtcSessionRef?.current as VideoCallSession | null);
+        const remoteCamFromSession =
+          sessionForRemote && typeof sessionForRemote.getRemoteCamEnabled === 'function'
+            ? sessionForRemote.getRemoteCamEnabled()
+            : undefined;
+        if (typeof remoteCamFromSession === 'boolean') {
+          setRemoteCamOn(remoteCamFromSession);
+        }
       }
       setRemoteMuted(getDesiredRemoteMutedForPiPReturn());
       logMicTraceRef.current('PiP resume effect → setMicOn from local media snapshot', {
@@ -2777,6 +2804,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const handlePartnerDirectCallVideoUiChanged = (payload?: { inVideoCallUi?: boolean }) => {
       if (!isMountedRef.current) return;
       if (isInactiveStateRef.current || isEndingCallRef.current) return;
+      if (payload?.inVideoCallUi === false && !inAudioOnlyUiRef.current) {
+        const sessionNow = sessionRef.current || (global as any).__webrtcSessionRef?.current;
+        const camOff = sessionNow?.getRemoteCamEnabled?.() === false;
+        setRemoteCamOn(camOff);
+        try {
+          pip.updatePiPState({ remoteCamOn: camOff });
+        } catch (_) {}
+      }
       if (inAudioOnlyUiRef.current && payload?.inVideoCallUi === false) {
         setPeerInvitedVideo(false);
       }
@@ -2800,13 +2835,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       // КРИТИЧНО: Когда партнер возвращается из PiP (inPiP: false), включаем видеотрек обратно
       // Только если звонок ещё активен (проверка выше).
       if (previousState === true && inPiP === false) {
-        logger.info('[VideoCall] 🔄 Партнер вернулся из PiP — синхронизируем камеру и PiP', {
-          hasRemoteStream: !!remoteStream,
-          currentRemoteCamOn: remoteCamOn,
-          sessionRemoteStream: !!session?.getRemoteStream?.(),
-          sessionRemoteCamOn: session?.getRemoteCamEnabled?.(),
-        });
-
         const sessionRemoteStream = session?.getRemoteStream?.();
         if (sessionRemoteStream && (!remoteStream || remoteStream.id !== sessionRemoteStream.id)) {
           setRemoteStream(sessionRemoteStream);
@@ -2818,13 +2846,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           });
         }
 
-        const camEnabled = !!session?.getRemoteCamEnabled?.();
+        const camEnabled = inAudioOnlyUiRef.current
+          ? false
+          : !!(session?.getRemoteCamEnabled?.());
         if (!inAudioOnlyUiRef.current) {
           setRemoteCamOn(camEnabled);
           try {
             pip.updatePiPState({ remoteCamOn: camEnabled });
           } catch (_) {}
         }
+
+        logger.info('[VideoCall] 🔄 Партнер вернулся из PiP — синхронизируем камеру и PiP', {
+          hasRemoteStream: !!remoteStream,
+          syncedRemoteCamOn: camEnabled,
+          sessionRemoteCamOn: session?.getRemoteCamEnabled?.(),
+        });
       }
     };
 
@@ -3402,6 +3438,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     if (isInAudioOnlyCallUi()) return;
     if (inAudioOnlyUiRef.current) return;
     if (!stayOnVideoCallUiRef.current) return;
+    markDirectCallVideoMediaActive();
     try {
       const g = global as any;
       if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return;
@@ -3469,6 +3506,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       logger.warn('[VideoCall] Session не найдена для toggleCam');
     }
   }, [pip, syncDirectCallVideoUiSession, pinVideoUiSpeakerAndSyncAudio]);
+
+  const preserveAudioRouteFromInAppPiP = useCallback(() => {
+    try {
+      const route = readInAppPiPAudioOutputRoute();
+      if (route !== 'SPEAKER_PHONE' && route !== 'BLUETOOTH') return;
+      userRouteRef.current = route;
+      speakerOnRef.current = route === 'SPEAKER_PHONE';
+      setPersistedCallAudioRoute(route);
+      const params = (global as any).__currentCallPiPParamsRef?.current;
+      if (params && typeof params === 'object') {
+        params.audioOutputRoute = route;
+      }
+    } catch {}
+  }, []);
 
   const applyAudioOnlyUiState = useCallback((session: VideoCallSession | null) => {
     stayOnVideoCallUiRef.current = false;
@@ -3586,6 +3637,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             (global as any).__pipHidePiPRef?.current?.();
           } catch {}
           applyAudioOnlyUiState(session);
+          if (opts?.fromPiP) {
+            preserveAudioRouteFromInAppPiP();
+          }
         }
         return;
       }
@@ -3614,6 +3668,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         (global as any).__pipHidePiPRef?.current?.();
       } catch {}
       applyAudioOnlyUiState(session);
+      if (opts?.fromPiP) {
+        preserveAudioRouteFromInAppPiP();
+      }
 
       const preparedRecently =
         Date.now() - Number(g.__directCallAudioOnlyPreparedAtRef?.current || 0) < 6000;
@@ -3625,7 +3682,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
       }
     },
-    [route?.params?.directCall, applyAudioOnlyUiState, navigation],
+    [route?.params?.directCall, applyAudioOnlyUiState, navigation, preserveAudioRouteFromInAppPiP],
   );
 
   useEffect(() => {
@@ -4004,6 +4061,18 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           if (sessionForAudio) {
             stayOnVideoCallUiRef.current = false;
             applyAudioOnlyUiState(sessionForAudio);
+            preserveAudioRouteFromInAppPiP();
+            const ls = sessionForAudio.getLocalStream?.();
+            if (ls) {
+              localStreamRef.current = ls as any;
+              setLocalStream(ls as any);
+            }
+            const rs = sessionForAudio.getRemoteStream?.();
+            if (rs && !remoteStreamRef.current) {
+              remoteStreamRef.current = rs as any;
+              setRemoteStream(rs as any);
+              remoteStreamReceivedAtRef.current = Date.now();
+            }
           }
           try {
             syncRouteNow?.();
@@ -4035,8 +4104,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           // ВАЖНО: НЕ форсим включение камеры. Состояние камеры после возврата должно
           // быть ровно таким, каким было до ухода в PiP (pip.localCamOn).
           const sessionLocalStream = session.getLocalStream?.();
-          const effectiveLocalStream = sessionLocalStream || pipLocalStream || localStream || localStreamRef.current;
-          const { camOn: desiredCamOn, micOn: desiredMicOn } = getDesiredLocalMediaStateForPiPReturn(effectiveLocalStream);
+          const effectiveLocalStream =
+            sessionLocalStream || pipLocalStream || localStreamRef.current || localStream;
+          if (!localStream && localStreamRef.current) {
+            setLocalStream(localStreamRef.current as any);
+          }
+          const { camOn: desiredCamOn, micOn: desiredMicOn } =
+            getDesiredLocalMediaStateForPiPReturn(effectiveLocalStream);
           if (sessionLocalStream) {
             setLocalStream(sessionLocalStream);
             localStreamRef.current = sessionLocalStream as any;
@@ -4099,10 +4173,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             setRemoteStream(sessionRemoteStream);
             remoteStreamRef.current = sessionRemoteStream as any;
             remoteStreamReceivedAtRef.current = Date.now();
+            const remoteCamFromSession =
+              typeof session.getRemoteCamEnabled === 'function' ? session.getRemoteCamEnabled() : undefined;
+            if (typeof remoteCamFromSession === 'boolean') {
+              setRemoteCamOn(remoteCamFromSession);
+            }
             logger.info('[VideoCall] ✅ Удаленный стрим восстановлен из сессии при возврате из PiP', {
               streamId: sessionRemoteStream.id,
               hasVideoTrack: !!(sessionRemoteStream as any)?.getVideoTracks?.()?.[0],
               hasAudioTrack: !!(sessionRemoteStream as any)?.getAudioTracks?.()?.[0],
+              remoteCamEnabled: remoteCamFromSession,
             });
             if (!acceptCallTimeRef.current) {
               acceptCallTimeRef.current = Date.now();
@@ -4128,7 +4208,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           // Локальный трек приводим к сохранённому состоянию (desiredCamOn),
           // а удалённый трек/remoteCamOn должен управляться состоянием партнёра (cam-toggle/LiveKit).
           try {
-            const currentLocalStream = sessionLocalStream || pipLocalStream || localStream || localStreamRef.current;
+            const currentLocalStream =
+              sessionLocalStream ||
+              pipLocalStream ||
+              localStreamRef.current ||
+              localStream;
             const lt = currentLocalStream?.getVideoTracks?.()?.[0];
             if (lt) {
               lt.enabled = !!desiredCamOn;
@@ -4139,19 +4223,47 @@ const VideoCall: React.FC<Props> = ({ route }) => {
                 trackMuted: lt.muted,
                 streamId: currentLocalStream?.id,
               });
+              if (
+                desiredCamOn &&
+                (lt.readyState === 'ended' || lt.enabled === false) &&
+                typeof (session as VideoCallSession).restoreLocalCameraAfterPiPReturn === 'function'
+              ) {
+                void (session as VideoCallSession).restoreLocalCameraAfterPiPReturn().catch((e) => {
+                  logger.warn('[VideoCall] restoreLocalCameraAfterPiPReturn failed', e);
+                });
+              }
             } else {
-              logger.warn('[VideoCall] ⚠️ Локальный видеотрек не найден при возврате из PiP', {
-                hasSessionLocalStream: !!sessionLocalStream,
-                hasPipLocalStream: !!pipLocalStream,
-                hasLocalStream: !!localStream,
-                hasLocalStreamRef: !!localStreamRef.current,
-              });
-            }
-
-            if (desiredCamOn && typeof (session as VideoCallSession).restoreLocalCameraAfterPiPReturn === 'function') {
-              void (session as VideoCallSession).restoreLocalCameraAfterPiPReturn().catch((e) => {
-                logger.warn('[VideoCall] restoreLocalCameraAfterPiPReturn failed', e);
-              });
+              const wantsLocalVideo =
+                !!desiredCamOn ||
+                pip.localCamOn === true ||
+                session.getIsCamOn?.() === true;
+              if (
+                wantsLocalVideo &&
+                typeof (session as VideoCallSession).restoreLocalCameraAfterPiPReturn === 'function'
+              ) {
+                void (session as VideoCallSession)
+                  .restoreLocalCameraAfterPiPReturn()
+                  .then(() => {
+                    const refreshed = session.getLocalStream?.();
+                    if (!refreshed) return;
+                    localStreamRef.current = refreshed as any;
+                    setLocalStream(refreshed as any);
+                    setLocalRenderKey((k: number) => k + 1);
+                    setCamOn(!!session.getIsCamOn?.());
+                    const vt = refreshed.getVideoTracks?.()?.[0];
+                    if (vt) vt.enabled = true;
+                  })
+                  .catch((e) => {
+                    logger.warn('[VideoCall] restoreLocalCameraAfterPiPReturn failed', e);
+                  });
+              } else if (wantsLocalVideo) {
+                logger.warn('[VideoCall] ⚠️ Локальный видеотрек не найден при возврате из PiP', {
+                  hasSessionLocalStream: !!sessionLocalStream,
+                  hasPipLocalStream: !!pipLocalStream,
+                  hasLocalStream: !!localStream,
+                  hasLocalStreamRef: !!localStreamRef.current,
+                });
+              }
             }
             
             // Для удалённого видео НЕ делаем принудительную перерисовку через remoteViewKey —
@@ -4366,6 +4478,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       markSystemPiPReturnRestored,
       syncRouteNow,
       applyVideoCallUiFromPiPExpand,
+      applyAudioOnlyUiState,
+      preserveAudioRouteFromInAppPiP,
     ])
   );
   
