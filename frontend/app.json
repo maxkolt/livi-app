@@ -31,7 +31,7 @@
     },
     "android": {
       "package": "com.kolt12max.livi",
-      "versionCode": 150,
+      "versionCode": 151,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -65,6 +65,31 @@
             "BROWSABLE",
             "DEFAULT"
           ]
+        },
+        {
+          "action": "SEND",
+          "category": ["DEFAULT"],
+          "data": [{ "mimeType": "image/*" }]
+        },
+        {
+          "action": "SEND",
+          "category": ["DEFAULT"],
+          "data": [{ "mimeType": "text/plain" }]
+        },
+        {
+          "action": "SEND",
+          "category": ["DEFAULT"],
+          "data": [{ "mimeType": "application/*" }]
+        },
+        {
+          "action": "SEND",
+          "category": ["DEFAULT"],
+          "data": [{ "mimeType": "audio/*" }]
+        },
+        {
+          "action": "SEND_MULTIPLE",
+          "category": ["DEFAULT"],
+          "data": [{ "mimeType": "image/*" }]
         }
       ]
     },

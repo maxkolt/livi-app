@@ -2582,7 +2582,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         return next;
       });
     } catch (e) {
-      logger.warn('[HomeScreen] Batch unread refresh failed:', (e as Error)?.message);
+      logger.info('[HomeScreen] Batch unread refresh failed:', (e as Error)?.message);
     }
   }, []);
 

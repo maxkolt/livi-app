@@ -118,6 +118,32 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="livi" android:host="cancel-outgoing"/>
       </intent-filter>
+      <!-- Системное «Поделиться»: фото, текст/ссылки, файлы (без video/*). -->
+      <intent-filter>
+        <action android:name="android.intent.action.SEND"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:mimeType="image/*"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.SEND"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:mimeType="text/plain"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.SEND"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:mimeType="application/*"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.SEND"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:mimeType="audio/*"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.SEND_MULTIPLE"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:mimeType="image/*"/>
+      </intent-filter>
     </activity>
     <!-- Full-screen incoming call (WhatsApp/Telegram style): показывается поверх блокировки при FCM-пуше о звонке -->
     <activity android:name=".IncomingCallActivity" android:exported="false" android:theme="@style/Theme.App.SplashScreen" android:showWhenLocked="true" android:turnScreenOn="true" android:launchMode="singleInstance" android:finishOnTaskLaunch="false" android:screenOrientation="portrait"/>

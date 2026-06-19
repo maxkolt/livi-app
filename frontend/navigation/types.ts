@@ -1,3 +1,5 @@
+import type { IncomingShareItem } from '../utils/incomingShare';
+
 export type RootStackParamList = {
   Home: undefined;
   RandomChat:
@@ -24,5 +26,13 @@ export type RootStackParamList = {
         systemPiPReturnToken?: number;
       }
     | undefined;
-  Chat: { peerId: string; peerName?: string; peerAvatar?: string };
+  Chat: {
+    peerId: string;
+    peerName?: string;
+    peerAvatar?: string;
+    peerAvatarVer?: number;
+    peerAvatarThumbB64?: string;
+    peerOnline?: boolean;
+    incomingShareItems?: IncomingShareItem[];
+  };
 };

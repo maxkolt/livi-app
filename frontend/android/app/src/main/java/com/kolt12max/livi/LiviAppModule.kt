@@ -38,6 +38,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.jstasks.HeadlessJsTaskConfig
 import com.facebook.react.jstasks.HeadlessJsTaskContext
@@ -314,6 +315,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun getAndClearPendingAnswerCallMap(promise: Promise) {
     promise.resolve(LiviAppModule.getAndClearPendingAnswerCall())
+  }
+
+  @ReactMethod
+  fun getAndClearPendingShareItems(promise: Promise) {
+    promise.resolve(LiviAppModule.getAndClearPendingShareItems())
   }
 
   /** Счётчики пропущенных по userId из нативного хранилища (JSON). Для синхронизации с JS при фокусе — один источник истины. */
@@ -2642,6 +2648,30 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun emitPendingAnswerCallEvent() {
       runOnReactUiQueueIfAlive { it.emitDeviceEvent("LiviPendingAnswerCall", null) }
+    }
+
+    @Volatile private var pendingShareItems: WritableArray? = null
+
+    @JvmStatic
+    fun setPendingShareItems(items: WritableArray) {
+      pendingShareItems = items
+    }
+
+    @JvmStatic
+    fun hasPendingShareItems(): Boolean {
+      return pendingShareItems != null && pendingShareItems!!.size() > 0
+    }
+
+    @JvmStatic
+    fun getAndClearPendingShareItems(): WritableArray {
+      val items = pendingShareItems
+      pendingShareItems = null
+      return items ?: Arguments.createArray()
+    }
+
+    @JvmStatic
+    fun emitPendingShareEvent() {
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("LiviPendingShare", null) }
     }
 
     /** Входящий для CallKeep (FCM при разблокированном экране): сохранить в pending; JS вызовет getAndClearPendingIncomingCallForCallKeep → displayIncomingCall. */

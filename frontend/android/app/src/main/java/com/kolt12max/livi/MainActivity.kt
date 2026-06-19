@@ -58,6 +58,8 @@ class MainActivity : ReactActivity() {
   private var backPressLoggingCallback: OnBackPressedCallback? = null
   /** Был intent с EXTRA_PENDING_ANSWER_* — в onResume шлём LiviPendingAnswerCall (один раз на доставку). */
   private var pendingAnswerFromIntent = false
+  /** Был ACTION_SEND — в onResume шлём LiviPendingShare. */
+  private var pendingShareFromIntent = false
   private var lastFinishRequestAtMs = 0L
   private val pipEnterHandler = Handler(Looper.getMainLooper())
   private val pendingPiPEnterRunnables = mutableListOf<Runnable>()
@@ -193,6 +195,17 @@ class MainActivity : ReactActivity() {
     return true
   }
 
+  private fun tryStashShareFromIntent(i: Intent?): Boolean {
+    if (i == null) return false
+    if (!ShareIntentHandler.isShareIntent(i)) return false
+    return try {
+      ShareIntentHandler.stashFromIntent(applicationContext, i)
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "tryStashShareFromIntent failed", e)
+      false
+    }
+  }
+
   private fun buildSystemPiPSourceRect(placeholderOnly: Boolean = true): Rect? {
     return try {
       val root = window?.decorView ?: return null
@@ -278,6 +291,9 @@ class MainActivity : ReactActivity() {
     if (tryStashPendingAnswerFromIntent(intent)) {
       pendingAnswerFromIntent = true
     }
+    if (tryStashShareFromIntent(intent)) {
+      pendingShareFromIntent = true
+    }
     handleLauncherTapDuringActiveCall(intent)
   }
 
@@ -334,6 +350,10 @@ class MainActivity : ReactActivity() {
     if (pendingAnswerFromIntent && LiviAppModule.hasPendingAnswerCall()) {
       pendingAnswerFromIntent = false
       LiviAppModule.emitPendingAnswerCallEvent()
+    }
+    if (pendingShareFromIntent && LiviAppModule.hasPendingShareItems()) {
+      pendingShareFromIntent = false
+      LiviAppModule.emitPendingShareEvent()
     }
   }
 
@@ -642,6 +662,9 @@ class MainActivity : ReactActivity() {
     handleAudioOnlyFromPiPIntent(intent)
     if (tryStashPendingAnswerFromIntent(intent)) {
       pendingAnswerFromIntent = true
+    }
+    if (tryStashShareFromIntent(intent)) {
+      pendingShareFromIntent = true
     }
     handleLauncherTapDuringActiveCall(intent)
     // Пуш call_ended (endedFromActive): закрыть PiP сразу у собеседника, т.к. сокет в фоне часто отключён.

@@ -26,6 +26,7 @@ import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen
 import VideoCallScreen from "./screens/VideoCallScreen";
 import RandomChatScreen from "./screens/RandomChatScreen";
 import ChatScreen from "./screens/ChatScreen";
+import IncomingSharePickerModal from "./components/IncomingSharePickerModal";
 import { PiPProvider, usePiP } from "./src/pip/PiPContext";
 import PiPOverlay from "./src/pip/PiPOverlay";
 import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
@@ -34,6 +35,7 @@ import type { RootStackParamList } from "./navigation/types";
 import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
+import { notifyIncomingShare, pullPendingShareFromNative, subscribeIncomingShare, type IncomingShareItem } from './utils/incomingShare';
 import { ensureInitialMediaPermissions } from './utils/mediaPermissions';
 import {
   setupCallKeep,
@@ -380,6 +382,16 @@ function AppContent() {
   const [initialUrlProcessed, setInitialUrlProcessed] = React.useState(false);
   /** Android: модалка «Разрешить отображение поверх других окон», пока разрешение не выдано. */
   const [overlayPermissionModalVisible, setOverlayPermissionModalVisible] = React.useState(false);
+  const [incomingShareVisible, setIncomingShareVisible] = React.useState(false);
+  const [incomingShareItems, setIncomingShareItems] = React.useState<IncomingShareItem[]>([]);
+  React.useEffect(() => {
+    return subscribeIncomingShare((items) => {
+      if (!items?.length) return;
+      setIncomingShareItems(items);
+      setIncomingShareVisible(true);
+    });
+  }, []);
+
   /** Пока false — не показываем overlay-модалку (ждём уведомления, камеру, микрофон, BT, CallKeep). */
   const androidInitialPermissionsDoneRef = React.useRef(false);
   /**
@@ -747,6 +759,19 @@ function AppContent() {
         }
       });
     });
+    const deliverPendingShare = () => {
+      pullPendingShareFromNative()
+        .then((items) => {
+          if (items.length) notifyIncomingShare(items);
+        })
+        .catch(() => {});
+    };
+    const subShare = emitter.addListener('LiviPendingShare', () => {
+      deliverPendingShare();
+    });
+    if (Platform.OS === 'android') {
+      deliverPendingShare();
+    }
     const sub4 = emitter.addListener('EndCallFromPiP', () => {
       try {
         const g = (global as any);
@@ -1014,6 +1039,7 @@ function AppContent() {
       sub2.remove();
       sub3.remove();
       subAnswer.remove();
+      subShare.remove();
       sub4.remove();
       sub5.remove();
       sub7.remove();
@@ -3368,6 +3394,19 @@ function AppContent() {
               </TouchableOpacity>
             </Modal>
           )}
+          <IncomingSharePickerModal
+            visible={incomingShareVisible}
+            items={incomingShareItems}
+            onClose={() => {
+              setIncomingShareVisible(false);
+              setIncomingShareItems([]);
+            }}
+            onOpenChat={(params) => {
+              if (navRef.isReady()) {
+                navRef.navigate('Chat', params);
+              }
+            }}
+          />
           </>
       </PaperProvider>
     </>
