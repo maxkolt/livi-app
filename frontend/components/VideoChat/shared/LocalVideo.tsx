@@ -140,9 +140,10 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     // КРИТИЧНО: На Android используем prop `stream` напрямую вместо `streamURL`
     // Это более надежный способ для @livekit/react-native-webrtc на Android, но добавляем streamURL как fallback
     const localStreamURL = localStream.toURL?.();
+    const mirrorKey = isFrontCamera ? 'mirror' : 'nomirror';
     const rtcViewKey = Platform.OS === 'android'
-      ? `local-video-${localStream.id}-${localRenderKey}-${forceUpdateKey}-${isVideoTrackEnabled ? 1 : 0}`
-      : `local-video-${localStream.id}-${localRenderKey}`;
+      ? `local-video-${localStream.id}-${localRenderKey}-${forceUpdateKey}-${mirrorKey}-${isVideoTrackEnabled ? 1 : 0}`
+      : `local-video-${localStream.id}-${localRenderKey}-${mirrorKey}`;
     
     logger.debug('[LocalVideo] Render RTCView', {
       platform: Platform.OS,
@@ -152,6 +153,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
       isVideoTrackEnabled,
       isVideoTrackMuted,
       streamId: localStream.id,
+      isFrontCamera,
       usingStreamProp: Platform.OS === 'android'
     });
 

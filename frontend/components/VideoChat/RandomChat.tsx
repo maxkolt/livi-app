@@ -1165,7 +1165,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     
     try {
       await sessionRef.current.flipCam();
-      setLocalCamSide((prev) => (prev === 'front' ? 'back' : 'front'));
+      const side = sessionRef.current.getCamSide?.();
+      if (side === 'front' || side === 'back') {
+        setLocalCamSide(side);
+      }
       // КРИТИЧНО: Force local RTCView refresh after flip (sometimes streamId stays the same)
       // Переворот камеры - критическое обновление, поэтому обновляем сразу, даже если интервал не прошел
       const now = Date.now();

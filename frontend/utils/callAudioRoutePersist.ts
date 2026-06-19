@@ -10,9 +10,11 @@ import {
   captureCallAudioRouteFromUi,
   isAppInCallBackgroundState,
   isAudioOnlyOngoingCallContext,
+  peekSystemPiPReturnMediaSnapshot,
   resolveActiveCallInCallMedia,
   resolvePersistedCallAudioRouteForReapply,
   readInAppPiPAudioOutputRoute,
+  readLastAppliedCallAudioRoute,
   markDirectCallVideoMediaActive,
 } from './activeCallSession';
 import { isInAudioOnlyCallUi } from '../src/pip/pipPlaceholderOnly';
@@ -44,12 +46,18 @@ export function clearPersistedCallAudioRoute(): void {
 export function pinLoudSpeakerForAudioCallLeavingToBackground(): void {
   if (!isAudioOnlyOngoingCallContext()) return;
   if (resolveActiveCallInCallMedia() === 'video') return;
+  captureCallAudioRouteFromUi();
   const fromParams = normalizeInCallRoute(
     (global as any).__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
   );
   const stored = getPersistedCallAudioRoute();
-  const route = fromParams || stored || 'EARPIECE';
-  if (route === 'BLUETOOTH') return;
+  const lastApplied = readLastAppliedCallAudioRoute();
+  const route =
+    (lastApplied && isExternalHeadsetRoute(lastApplied) ? lastApplied : null) ||
+    fromParams ||
+    stored ||
+    'EARPIECE';
+  if (isExternalHeadsetRoute(route)) return;
   setPersistedCallAudioRoute('SPEAKER_PHONE');
   try {
     const g = global as any;
@@ -69,7 +77,26 @@ export function restoreAudioCallEarpieceAfterHomeReturn(): void {
     if (g.__audioCallHomeSpeakerPinRef?.current !== true) return;
     g.__audioCallHomeSpeakerPinRef.current = false;
     if (!isAudioOnlyOngoingCallContext()) return;
-    if (getPersistedCallAudioRoute() === 'BLUETOOTH') return;
+    const snapRoute = normalizeInCallRoute(peekSystemPiPReturnMediaSnapshot()?.audioRoute || '');
+    if (snapRoute && isExternalHeadsetRoute(snapRoute)) {
+      setPersistedCallAudioRoute(snapRoute);
+      const params = g.__currentCallPiPParamsRef?.current;
+      if (params && typeof params === 'object') {
+        params.audioOutputRoute = snapRoute;
+      }
+      return;
+    }
+    const persisted = getPersistedCallAudioRoute();
+    if (persisted && isExternalHeadsetRoute(persisted)) return;
+    const lastApplied = readLastAppliedCallAudioRoute();
+    if (lastApplied && isExternalHeadsetRoute(lastApplied)) {
+      setPersistedCallAudioRoute(lastApplied);
+      const params = g.__currentCallPiPParamsRef?.current;
+      if (params && typeof params === 'object') {
+        params.audioOutputRoute = lastApplied;
+      }
+      return;
+    }
     setPersistedCallAudioRoute('EARPIECE');
     const params = g.__currentCallPiPParamsRef?.current;
     if (params && typeof params === 'object') {

@@ -69,9 +69,9 @@ import {
   syncAndroidSystemPiPLeaveHintForActiveVideoCall,
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
-import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute } from '../../utils/activeCallSession';
-import { pinVideoCallLoudSpeakerRoute, setPersistedCallAudioRoute } from '../../utils/callAudioRoutePersist';
-import { iconNameForRoute, type InCallAudioRoute, normalizeInCallRoute } from './hooks/audioRouteTypes';
+import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readLastAppliedCallAudioRoute } from '../../utils/activeCallSession';
+import { getPersistedCallAudioRoute, pinVideoCallLoudSpeakerRoute, setPersistedCallAudioRoute } from '../../utils/callAudioRoutePersist';
+import { iconNameForRoute, isExternalHeadsetRoute, type InCallAudioRoute, normalizeInCallRoute } from './hooks/audioRouteTypes';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
 import { useIncomingCall } from './hooks/useIncomingCall';
@@ -922,6 +922,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         const plugged = !!((res as { isWiredHeadsetPluggedIn?: boolean })?.isWiredHeadsetPluggedIn ?? res);
         if (plugged) return;
       } catch {}
+      const external =
+        [
+          normalizeInCallRoute(userRouteRef.current),
+          getPersistedCallAudioRoute(),
+          readLastAppliedCallAudioRoute(),
+        ].find((r) => r && isExternalHeadsetRoute(r)) || null;
+      if (external) return;
       userRouteRef.current = 'EARPIECE';
       speakerOnRef.current = false;
       try {
@@ -1971,11 +1978,18 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           if (stream) {
             // КРИТИЧНО: Всегда обновляем localRenderKey при изменении стрима для Android
             if (!prevStream || prevStream.id !== stream.id) {
+              const liveSession =
+                sessionRef.current ?? ((global as any).__webrtcSessionRef?.current as VideoCallSession | null);
+              const side = liveSession?.getCamSide?.();
+              if (side === 'front' || side === 'back') {
+                setLocalCamSide(side);
+              }
               setLocalRenderKey((k: number) => k + 1);
               logger.info('[VideoCall] Local stream changed - updating render key', {
                 prevStreamId: prevStream?.id,
                 newStreamId: stream.id,
-                hasVideoTrack: !!stream.getVideoTracks()?.[0]
+                hasVideoTrack: !!stream.getVideoTracks()?.[0],
+                camSide: side,
               });
             }
             // ВАЖНО: Не управляем camOn/micOn из onLocalStreamChange.
@@ -3550,14 +3564,21 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
   const applyAudioOnlyUiState = useCallback((session: VideoCallSession | null) => {
     stayOnVideoCallUiRef.current = false;
-    userRouteRef.current = 'EARPIECE';
-    speakerOnRef.current = false;
-    setPersistedCallAudioRoute('EARPIECE');
+    const externalRoute =
+      [
+        normalizeInCallRoute(userRouteRef.current),
+        getPersistedCallAudioRoute(),
+        readLastAppliedCallAudioRoute(),
+      ].find((r) => r && isExternalHeadsetRoute(r)) || null;
+    const audioRoute: InCallAudioRoute = externalRoute || 'EARPIECE';
+    userRouteRef.current = audioRoute;
+    speakerOnRef.current = audioRoute === 'SPEAKER_PHONE';
+    setPersistedCallAudioRoute(audioRoute);
     try {
       const g = global as any;
       const paramsRef = g.__currentCallPiPParamsRef?.current;
       if (paramsRef && typeof paramsRef === 'object') {
-        paramsRef.audioOutputRoute = 'EARPIECE';
+        paramsRef.audioOutputRoute = audioRoute;
         paramsRef.localCamOn = false;
         paramsRef.inAudioOnlyUi = true;
         paramsRef.preferVideoCallUi = false;
@@ -4880,13 +4901,18 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             onFlipCamera={() => {
               const session = sessionRef.current ?? (global as any).__webrtcSessionRef?.current;
               if (!session?.flipCam) return;
-              Promise.resolve(session.flipCam())
-                .then(() => {
-                  setLocalCamSide((prev) => (prev === 'front' ? 'back' : 'front'));
-                })
-                .catch((e: any) => {
+              void (async () => {
+                try {
+                  await session.flipCam();
+                  const side = session.getCamSide?.();
+                  if (side === 'front' || side === 'back') {
+                    setLocalCamSide(side);
+                  }
+                  setLocalRenderKey((k) => k + 1);
+                } catch (e: any) {
                   logger.warn('[VideoCall] flipCam error:', e);
-                });
+                }
+              })();
             }}
             localStream={localStream}
             visible={showControls}

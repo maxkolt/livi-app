@@ -119,6 +119,9 @@ export const useAudioRouting = (
       opts.speakerOnRef.current = route === 'SPEAKER_PHONE';
     }
     setPersistedCallAudioRoute(route);
+    try {
+      (global as any).__lastAppliedCallAudioRouteRef = { current: route };
+    } catch {}
   };
 
   const publishRouteState = (available: string[], selected: string) => {
@@ -757,7 +760,15 @@ export const useAudioRouting = (
 
   useEffect(() => {
     if (!enabled || !routingOptionsRef.current?.defaultToEarpiece) return;
-    if (lastAvailableRef.current.includes('WIRED_HEADSET')) return;
+    const av = lastAvailableRef.current;
+    if (av.includes('WIRED_HEADSET')) {
+      applySpecificRoute('WIRED_HEADSET', 'preferAudioMode', true);
+      return;
+    }
+    if (av.includes('BLUETOOTH')) {
+      applySpecificRoute('BLUETOOTH', 'preferAudioMode', true);
+      return;
+    }
     setUserRoute('EARPIECE');
     setSelectedRoute('EARPIECE');
     applySpecificRoute('EARPIECE', 'preferAudioMode', true);

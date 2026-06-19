@@ -190,19 +190,31 @@ export function resolvePersistedCallAudioRouteForReapply(
 ): InCallAudioRoute | null {
   const inBackground = isAppInCallBackgroundState();
   if (inBackground && isAudioOnlyOngoingCallContext()) {
-    if (route === 'BLUETOOTH') return 'BLUETOOTH';
+    if (route && isExternalHeadsetRoute(route)) return route;
     return 'SPEAKER_PHONE';
   }
   return resolvePersistedCallAudioRouteForActiveUi(route);
 }
 
 /** Сохранить маршрут из PiP params / persisted перед уходом в фон. */
+export function readLastAppliedCallAudioRoute(): InCallAudioRoute | null {
+  try {
+    return normalizeInCallRoute((global as any).__lastAppliedCallAudioRouteRef?.current || '');
+  } catch {
+    return null;
+  }
+}
+
 export function captureCallAudioRouteFromUi(): void {
   try {
     const g = global as any;
     const fromParams = normalizeInCallRoute(g.__currentCallPiPParamsRef?.current?.audioOutputRoute || '');
     const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
-    const base = fromParams || stored;
+    const lastApplied = readLastAppliedCallAudioRoute();
+    const base =
+      (lastApplied && isExternalHeadsetRoute(lastApplied) ? lastApplied : null) ||
+      fromParams ||
+      stored;
     const effective = resolvePersistedCallAudioRouteForReapply(base);
     if (effective) {
       g.__persistedCallAudioRouteRef = g.__persistedCallAudioRouteRef || { current: null };
