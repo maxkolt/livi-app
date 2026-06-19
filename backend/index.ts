@@ -1846,6 +1846,9 @@ function isSocketBusyForFriendsExport(
   const inCall = d.inCall === true;
   const busy = d.busy === true;
   if (inCall) {
+    if (!callOfUser.has(userId) && !activeRoomByUserId.has(userId)) {
+      return false;
+    }
     return true;
   }
   // partnerSid при исходящем direct-call (до accept) не должен давать бейдж «Занято».
@@ -2588,6 +2591,21 @@ io.on('connection', async (sock: AuthedSocket) => {
       const inRandomChat = await userHasActiveRandomChat(io, userId);
 
       if (idleOnline) {
+        // Клиент явно сообщает «не в звонке» (вкладка Друзья / Home). Снимаем залипший inCall на всех сокетах userId.
+        if (!inRandomChat && !busy) {
+          for (const s of getSocketsForUser(io, userId)) {
+            const d = ((s as any).data || {}) as Record<string, unknown>;
+            if (d.inCall !== true) continue;
+            (s as any).data.inCall = false;
+            (s as any).data.busy = false;
+            delete (s as any).data.roomId;
+            delete (s as any).data.partnerSid;
+            try {
+              activeCallBySocket.delete(s.id);
+            } catch {}
+          }
+        }
+
         const hasLiveSameUserCallSocket = getSocketsForUser(io, userId).some((s) => {
           if (s.id === sock.id) return false;
           return (s as any)?.data?.inCall === true;

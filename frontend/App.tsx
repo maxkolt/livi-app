@@ -179,6 +179,33 @@ function addEndedCallIdFromSocket(callId: string) {
   setTimeout(() => endedCallIdsFromSocket.delete(callId), ENDED_CALL_IDS_TTL_MS);
 }
 
+/** reauth шлёт call:accepted для «висящей» сессии — на Home без контекста звонка снимаем её на сервере. */
+const staleCallEndSentIds = new Set<string>();
+function endStaleCallAcceptedOnServer(callId: string, data: unknown, reason: string) {
+  const cid = String(callId || '').trim();
+  if (!cid || endedCallIdsFromSocket.has(cid) || staleCallEndSentIds.has(cid)) return;
+  staleCallEndSentIds.add(cid);
+  setTimeout(() => staleCallEndSentIds.delete(cid), ENDED_CALL_IDS_TTL_MS);
+  const d = (data || {}) as Record<string, unknown>;
+  const roomId = String(d.livekitRoomName ?? d.roomId ?? '').trim();
+  try {
+    logger.info('[App] call:end for stale call:accepted replay (no local call UI)', {
+      callId: cid,
+      reason,
+      roomId: roomId || undefined,
+    });
+    socket.emit('call:end', buildCallEndSocketPayload(cid, roomId));
+    try {
+      (global as any).__onVideoCallEndedRef?.current?.();
+    } catch (_) {}
+  } catch (e) {
+    logger.warn('[App] failed call:end for stale call:accepted', {
+      callId: cid,
+      error: (e as Error)?.message,
+    });
+  }
+}
+
 const isVideoSessionRoute = (routeName?: string | null) =>
   routeName === 'VideoCall' || routeName === 'RandomChat';
 
@@ -2985,6 +3012,9 @@ function AppContent() {
           isCaller,
         });
         if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
+        if (callId && currentRouteName !== 'VideoCall') {
+          endStaleCallAcceptedOnServer(callId, data, 'no-active-call-context');
+        }
         return;
       }
       // Инициатор: закрывать нативный экран исходящего только если принят именно текущий звонок
