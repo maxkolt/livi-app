@@ -5,6 +5,7 @@ import {
   normalizeInCallRoute,
 } from '../components/VideoChat/hooks/audioRouteTypes';
 import { isInAudioOnlyCallUi, setPipAudioOnlyPlaceholderSticky } from '../src/pip/pipPlaceholderOnly';
+import { readNativeProbedExternalRoute } from './nativeCallAudioProbe';
 
 /** Direct-call / video UI: сброс sticky audio-only refs (Home/PiP не должны включать audio_home speaker). */
 export function markDirectCallVideoMediaActive(): void {
@@ -71,6 +72,21 @@ export function isOngoingCallSession(): boolean {
     if (session && typeof session.isEnded === 'function' && session.isEnded()) return false;
     if (session) return true;
     return g.__videoCallActiveRef?.current === true;
+  } catch {
+    return false;
+  }
+}
+
+/** InCallManager.start уже поднят (не делать stop/start при remount VideoCall). */
+export function markInCallAudioSessionStarted(started: boolean): void {
+  try {
+    (global as any).__inCallAudioSessionStartedRef = { current: started };
+  } catch {}
+}
+
+export function isInCallAudioSessionStarted(): boolean {
+  try {
+    return (global as any).__inCallAudioSessionStartedRef?.current === true;
   } catch {
     return false;
   }
@@ -190,6 +206,20 @@ export function resolvePersistedCallAudioRouteForReapply(
 ): InCallAudioRoute | null {
   const inBackground = isAppInCallBackgroundState();
   if (inBackground && isAudioOnlyOngoingCallContext()) {
+    try {
+      const g = global as any;
+      const now = Date.now();
+      const pipTransition =
+        now < Number(g.__returningFromSystemPiPUntilRef?.current || 0) ||
+        g.__pipInSystemModeRef?.current === true ||
+        now < Number(g.__systemPiPEntryInProgressUntilRef?.current || 0) ||
+        now < Number(g.__callAudioPreservePriorityUntilRef?.current || 0);
+      if (pipTransition) {
+        if (route && isExternalHeadsetRoute(route)) return route;
+        if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') return route;
+        return route || 'EARPIECE';
+      }
+    } catch {}
     if (route && isExternalHeadsetRoute(route)) return route;
     return 'SPEAKER_PHONE';
   }
@@ -208,6 +238,17 @@ export function readLastAppliedCallAudioRoute(): InCallAudioRoute | null {
 export function captureCallAudioRouteFromUi(): void {
   try {
     const g = global as any;
+    const external = readConnectedExternalCallAudioRoute() || readActiveExternalCallAudioRoute();
+    if (external) {
+      g.__persistedCallAudioRouteRef = g.__persistedCallAudioRouteRef || { current: null };
+      g.__persistedCallAudioRouteRef.current = external;
+      g.__lastAppliedCallAudioRouteRef = { current: external };
+      const params = g.__currentCallPiPParamsRef?.current;
+      if (params && typeof params === 'object') {
+        params.audioOutputRoute = external;
+      }
+      return;
+    }
     const fromParams = normalizeInCallRoute(g.__currentCallPiPParamsRef?.current?.audioOutputRoute || '');
     const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
     const lastApplied = readLastAppliedCallAudioRoute();
@@ -223,13 +264,70 @@ export function captureCallAudioRouteFromUi(): void {
   } catch {}
 }
 
+/** BT / провод из lastApplied, params, persist и live user route (VideoCall). */
+export function readActiveExternalCallAudioRoute(
+  liveUserRoute?: InCallAudioRoute | string | null,
+): InCallAudioRoute | null {
+  try {
+    const candidates = [
+      normalizeInCallRoute(liveUserRoute || ''),
+      readLastAppliedCallAudioRoute(),
+      normalizeInCallRoute((global as any).__currentCallPiPParamsRef?.current?.audioOutputRoute || ''),
+      normalizeInCallRoute((global as any).__persistedCallAudioRouteRef?.current || ''),
+    ];
+    return candidates.find((r) => r && isExternalHeadsetRoute(r)) || null;
+  } catch {
+    return null;
+  }
+}
+
+function readInCallAvailableAudioRoutesList(): string[] {
+  try {
+    const av = (global as any).__inCallAvailableAudioRoutesRef?.current;
+    return Array.isArray(av) ? av.map((s: unknown) => String(s)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Гарнитура, которая реально в списке InCallManager (persist + selected + hint).
+ * Нужно для in-app PiP, когда persist на миг EARPIECE, а BT уже в available/selected.
+ */
+export function readConnectedExternalCallAudioRoute(
+  hint?: InCallAudioRoute | string | null,
+): InCallAudioRoute | null {
+  const nativeExt = readNativeProbedExternalRoute();
+  if (nativeExt) return nativeExt;
+  const available = readInCallAvailableAudioRoutesList();
+  const fromPersist = readActiveExternalCallAudioRoute(hint);
+  if (fromPersist && (!available.length || available.includes(fromPersist))) {
+    return fromPersist;
+  }
+  try {
+    const selected = normalizeInCallRoute((global as any).__inCallSelectedAudioRouteRef?.current || '');
+    if (isExternalHeadsetRoute(selected) && available.includes(selected)) {
+      return selected;
+    }
+  } catch {}
+  const hintNorm = normalizeInCallRoute(hint || '');
+  if (hintNorm === 'BLUETOOTH' && available.includes('BLUETOOTH')) return 'BLUETOOTH';
+  if (hintNorm === 'WIRED_HEADSET' && available.includes('WIRED_HEADSET')) return 'WIRED_HEADSET';
+  return null;
+}
+
 /** Маршрут из PiP params + persist ref (без импорта callAudioRoutePersist — без циклов). */
 export function readInAppPiPAudioOutputRoute(): InCallAudioRoute {
   try {
     const g = global as any;
     const fromParams = normalizeInCallRoute(g.__currentCallPiPParamsRef?.current?.audioOutputRoute || '');
     const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
-    return fromParams || stored || 'EARPIECE';
+    const lastApplied = readLastAppliedCallAudioRoute();
+    const external =
+      readConnectedExternalCallAudioRoute(lastApplied || fromParams || stored) ||
+      readActiveExternalCallAudioRoute(lastApplied || fromParams || stored);
+    if (external) return external;
+    return fromParams || stored || lastApplied || 'EARPIECE';
   } catch {
     return 'EARPIECE';
   }

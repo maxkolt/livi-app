@@ -184,7 +184,14 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     LiviAppModule.beginBackgroundMediaSuppressionStatic(this@LiviFirebaseMessagingService)
                 } catch (_: Exception) {}
                 try {
-                    val launchIntent = buildIncomingCallActivityIntent(this@LiviFirebaseMessagingService, callId, from, fromNick, hasVideoCall).apply {
+                    val launchIntent = buildIncomingCallActivityIntent(
+                        this@LiviFirebaseMessagingService,
+                        callId,
+                        from,
+                        fromNick,
+                        hasVideoCall,
+                        returnMainOnDismiss = MainActivity.isInForeground,
+                    ).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     startActivity(launchIntent)
@@ -627,7 +634,10 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             fromUserId: String,
             fromNick: String
         ) {
-            if (callId.isNotEmpty() && LiviAppModule.wasMissedShownForCallId(context, callId)) return
+            if (callId.isNotEmpty() && !LiviAppModule.tryClaimMissedCallNotification(context, callId)) {
+                Log.i(TAG, "notifyMissedCallFromPushOnMain: skip duplicate callId=$callId")
+                return
+            }
             var uid = fromUserId.trim()
             var nick = fromNick
             if (uid.isEmpty() && callId.isNotEmpty()) {
@@ -641,7 +651,6 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 Log.w(TAG, "notifyMissedCallFromPushOnMain: missing caller userId callId=$callId")
                 return
             }
-            if (callId.isNotEmpty()) LiviAppModule.markMissedShownForCallId(context, callId)
             ensureMissedCallChannel(context)
             LiviAppModule.addPendingMissedCall(context, uid)
             LiviAppModule.saveMissedCallNick(context, uid, nick)
@@ -1003,7 +1012,14 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
 
         /** Intent для IncomingCallActivity (поверх блокировки и домашнего экрана). */
         @JvmStatic
-        fun buildIncomingCallActivityIntent(context: Context, callId: String, from: String, fromNick: String, hasVideo: Boolean = true): Intent {
+        fun buildIncomingCallActivityIntent(
+            context: Context,
+            callId: String,
+            from: String,
+            fromNick: String,
+            hasVideo: Boolean = true,
+            returnMainOnDismiss: Boolean = false,
+        ): Intent {
             return Intent(context, IncomingCallActivity::class.java).apply {
                 addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -1020,6 +1036,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 putExtra(IncomingCallActivity.EXTRA_FROM, from)
                 putExtra(IncomingCallActivity.EXTRA_FROM_NICK, fromNick)
                 putExtra(IncomingCallActivity.EXTRA_HAS_VIDEO, hasVideo)
+                putExtra(IncomingCallActivity.EXTRA_RETURN_MAIN_ON_DISMISS, returnMainOnDismiss)
             }
         }
 

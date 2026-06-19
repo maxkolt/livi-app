@@ -1959,9 +1959,10 @@ function AppContent() {
     const activateAndroidKeepScreenOn = () => {
       if (Platform.OS === 'android') {
         try {
-          // Убеждаемся что InCallManager запущен
-          InCallManager.start({ media: 'video', ringback: '' });
-          // Устанавливаем keep screen on
+          // Не перезапускать InCallManager во время звонка — start(media) сбрасыает BT/маршрут.
+          if (!isOngoingCallSession()) {
+            InCallManager.start({ media: 'video', ringback: '' });
+          }
           (InCallManager as any).setKeepScreenOn?.(true);
           // Также активируем expo-keep-awake для Android (дополнительная защита)
           if (activateKeepAwakeAsync) {

@@ -69,8 +69,8 @@ import {
   syncAndroidSystemPiPLeaveHintForActiveVideoCall,
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
-import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readLastAppliedCallAudioRoute } from '../../utils/activeCallSession';
-import { getPersistedCallAudioRoute, pinVideoCallLoudSpeakerRoute, setPersistedCallAudioRoute } from '../../utils/callAudioRoutePersist';
+import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, markInCallAudioSessionStarted } from '../../utils/activeCallSession';
+import { getPersistedCallAudioRoute, pinVideoCallLoudSpeakerRoute, setPersistedCallAudioRoute, scheduleReapplyPersistedCallAudioRoute, isCallAudioPiPTransitionWindow } from '../../utils/callAudioRoutePersist';
 import { iconNameForRoute, isExternalHeadsetRoute, type InCallAudioRoute, normalizeInCallRoute } from './hooks/audioRouteTypes';
 import { useAudioRouting } from './hooks/useAudioRouting';
 import { usePiP as usePiPHook } from './hooks/usePiP';
@@ -341,7 +341,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   );
   const inAudioOnlyUiRef = useRef(inAudioOnlyUi);
   inAudioOnlyUiRef.current = inAudioOnlyUi;
-  const userRouteRef = useRef<InCallAudioRoute>('EARPIECE');
+  const userRouteRef = useRef<InCallAudioRoute>(readActiveExternalCallAudioRoute() || 'EARPIECE');
   const speakerOnRef = useRef(false);
   /** После перехода на видео UI не возвращать на экран аудиозвонка при выключении камеры (только mute видео). */
   const stayOnVideoCallUiRef = useRef(
@@ -888,16 +888,40 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     directCallRoute &&
     route?.params?.callMedia !== 'video' &&
     route?.params?.preferVideoCallUi !== true;
+  const audioRoutingOptions =
+    hasActiveCallForAudio && !isInactiveState
+      ? {
+          defaultToEarpiece: !!(audioFirstDirectCall && inAudioOnlyUi),
+          userRouteRef,
+          speakerOnRef,
+        }
+      : undefined;
   const { syncRouteNow, cycleUserRoute, selectedRoute } = useAudioRouting(
     hasActiveCallForAudio && !isInactiveState,
     currentRemoteStream,
     inAudioOnlyUi,
-    audioFirstDirectCall && inAudioOnlyUi
-      ? { defaultToEarpiece: true, userRouteRef, speakerOnRef }
-      : undefined,
+    audioRoutingOptions,
   );
   const syncRouteNowRef = useRef(syncRouteNow);
   syncRouteNowRef.current = syncRouteNow;
+  useEffect(() => {
+    try {
+      const g = global as any;
+      g.__syncDirectCallAudioRouteRef = g.__syncDirectCallAudioRouteRef || { current: null };
+      g.__syncDirectCallAudioRouteRef.current = () => {
+        try {
+          syncRouteNowRef.current?.();
+        } catch {}
+      };
+      return () => {
+        if (g.__syncDirectCallAudioRouteRef?.current) {
+          g.__syncDirectCallAudioRouteRef.current = null;
+        }
+      };
+    } catch {
+      return undefined;
+    }
+  }, []);
   const scheduleDirectCallAudioRepinRef = useRef<() => void>(() => {});
   const directCallAudioRepinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleDirectCallAudioRepin = useCallback(() => {
@@ -916,6 +940,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     if (!directCallRoute || route?.params?.callMedia === 'video') return;
     const audioFirst = resolveDirectCallAudioFirst(route?.params ?? {}, callId ?? null);
     if (!inAudioOnlyUiRef.current && !audioFirst) return;
+    if (isCallAudioPiPTransitionWindow()) return;
     void (async () => {
       try {
         const res = await InCallManager.getIsWiredHeadsetPluggedIn();
@@ -946,11 +971,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         if (params && typeof params === 'object') {
           params.audioOutputRoute = route;
         }
+        (global as any).__onInAppPiPAudioRouteChanged?.(route);
       } catch {}
     } catch {}
   }, [cycleUserRoute]);
   const audioRouteIcon = iconNameForRoute(selectedRoute);
-  const loudSpeakerRouteActive = selectedRoute === 'SPEAKER_PHONE';
+  const btAccent = useMemo(() => uiAccent(!isDark), [isDark]);
+  const audioOutputRouteAccent = selectedRoute === 'BLUETOOTH' ? btAccent : accent;
+  const audioOutputRouteHighlighted =
+    selectedRoute === 'SPEAKER_PHONE' ||
+    selectedRoute === 'BLUETOOTH' ||
+    selectedRoute === 'WIRED_HEADSET';
 
   
   // Refs
@@ -1322,6 +1353,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
     }
   }, [roomId, callId, partnerId, isInactiveState, friendCallAccepted, remoteStream, started, wasFriendCallEnded]);
+
+  useEffect(() => {
+    if (!wasFriendCallEnded && !isInactiveState) return;
+    try {
+      emitPresenceUpdateIfChanged({ status: 'online', idle: true }, { force: true });
+    } catch (e) {
+      logger.warn('[VideoCall] Error sending presence online after call end', e);
+    }
+  }, [wasFriendCallEnded, isInactiveState]);
   
   // При реконнекте сокета сервер может сбросить busy — переотправляем busy, если мы всё ещё в звонке
   useEffect(() => {
@@ -1628,6 +1668,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       try { (InCallManager as any).setForceSpeakerphoneOn?.('auto'); } catch {}
       try { InCallManager.setSpeakerphoneOn(false); } catch {}
       try { InCallManager.stop(); } catch {}
+      markInCallAudioSessionStarted(false);
       pauseBackgroundMediaAfterCall();
       try { (InCallManager as any).abandonAudioFocus?.(); } catch {}
       clearSessionRefs();
@@ -1793,6 +1834,31 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   ]);
 
   const pinVideoUiSpeakerAndSyncAudio = useCallback(() => {
+    const external = readActiveExternalCallAudioRoute(userRouteRef.current);
+    if (external) {
+      userRouteRef.current = external;
+      speakerOnRef.current = false;
+      setPersistedCallAudioRoute(external);
+      try {
+        const params = (global as any).__currentCallPiPParamsRef?.current;
+        if (params && typeof params === 'object') {
+          params.audioOutputRoute = external;
+          params.inAudioOnlyUi = false;
+          params.preferVideoCallUi = true;
+        }
+      } catch {}
+      scheduleReapplyPersistedCallAudioRoute('direct_call_video_ui_preserve_headset', {
+        media: 'video',
+        delaysMs: [0, 250, 800, 1500],
+      });
+      try {
+        syncRouteNowRef.current?.();
+      } catch {}
+      try {
+        scheduleDirectCallAudioRepinRef.current?.();
+      } catch {}
+      return;
+    }
     pinVideoCallLoudSpeakerRoute();
     userRouteRef.current = 'SPEAKER_PHONE';
     speakerOnRef.current = true;
@@ -3502,9 +3568,22 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     try {
       session.notifyPeerDirectCallVideoUi?.(true);
     } catch {}
-    pinVideoCallLoudSpeakerRoute();
-    userRouteRef.current = 'SPEAKER_PHONE';
-    speakerOnRef.current = true;
+    const external = readActiveExternalCallAudioRoute(userRouteRef.current);
+    if (external) {
+      userRouteRef.current = external;
+      speakerOnRef.current = false;
+      setPersistedCallAudioRoute(external);
+      try {
+        const params = (global as any).__currentCallPiPParamsRef?.current;
+        if (params && typeof params === 'object') {
+          params.audioOutputRoute = external;
+        }
+      } catch {}
+    } else {
+      pinVideoCallLoudSpeakerRoute();
+      userRouteRef.current = 'SPEAKER_PHONE';
+      speakerOnRef.current = true;
+    }
   }, []);
 
   const toggleCam = useCallback(() => {
@@ -3515,6 +3594,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
       const leavingAudioOnlyUi = inAudioOnlyUiRef.current || isInAudioOnlyCallUi();
       if (leavingAudioOnlyUi) {
+        const headsetBeforeVideo = readActiveExternalCallAudioRoute(userRouteRef.current);
         stayOnVideoCallUiRef.current = true;
         setPipAudioOnlyPlaceholderSticky(false);
         inAudioOnlyUiRef.current = false;
@@ -3530,6 +3610,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           session.enableRemoteVideoConsumption?.({ leaveAudioOnlyConsumer: true });
         } catch {}
         syncDirectCallVideoUiSession(session as VideoCallSession);
+        if (headsetBeforeVideo) {
+          userRouteRef.current = headsetBeforeVideo;
+          speakerOnRef.current = false;
+          setPersistedCallAudioRoute(headsetBeforeVideo);
+        }
         pinVideoUiSpeakerAndSyncAudio();
       }
       setCamOn((prev) => {
@@ -3550,14 +3635,29 @@ const VideoCall: React.FC<Props> = ({ route }) => {
 
   const preserveAudioRouteFromInAppPiP = useCallback(() => {
     try {
-      const route = readInAppPiPAudioOutputRoute();
-      if (route !== 'SPEAKER_PHONE' && route !== 'BLUETOOTH') return;
+      const route =
+        readActiveExternalCallAudioRoute(userRouteRef.current) ||
+        readInAppPiPAudioOutputRoute();
+      if (!route) return;
       userRouteRef.current = route;
       speakerOnRef.current = route === 'SPEAKER_PHONE';
       setPersistedCallAudioRoute(route);
       const params = (global as any).__currentCallPiPParamsRef?.current;
       if (params && typeof params === 'object') {
         params.audioOutputRoute = route;
+      }
+      try {
+        (global as any).__lastAppliedCallAudioRouteRef = { current: route };
+      } catch {}
+      if (isExternalHeadsetRoute(route)) {
+        scheduleReapplyPersistedCallAudioRoute('preserve_in_app_pip_headset', {
+          media: resolveActiveCallInCallMedia(),
+          delaysMs: [0, 250, 800],
+        });
+      } else {
+        try {
+          syncRouteNowRef.current?.();
+        } catch {}
       }
     } catch {}
   }, []);
@@ -3650,6 +3750,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     if ((global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current === true) {
       return;
     }
+    const headsetBeforeVideo = readActiveExternalCallAudioRoute(userRouteRef.current);
     stayOnVideoCallUiRef.current = true;
     setPipAudioOnlyPlaceholderSticky(false);
     setPipInAppRtcFromAudioOnlySticky(false);
@@ -3669,6 +3770,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     setLoading(false);
     setIsInactiveState(false);
     restoreOngoingCallMicrophoneIfEnabled();
+    if (headsetBeforeVideo) {
+      userRouteRef.current = headsetBeforeVideo;
+      speakerOnRef.current = false;
+      setPersistedCallAudioRoute(headsetBeforeVideo);
+    }
     pinVideoUiSpeakerAndSyncAudio();
   }, [syncDirectCallVideoUiSession, pinVideoUiSpeakerAndSyncAudio]);
 
@@ -4447,7 +4553,15 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
         
         // Восстанавливаем корректный аудио-роут при возврате из PiP (наушники/BT должны "побеждать").
-        try { syncRouteNow?.(); } catch {}
+        preserveAudioRouteFromInAppPiP();
+        if (readActiveExternalCallAudioRoute(userRouteRef.current)) {
+          scheduleReapplyPersistedCallAudioRoute('video_call_return_from_pip', {
+            media: 'video',
+            delaysMs: [0, 350, 900],
+          });
+        } else {
+          try { syncRouteNow?.(); } catch {}
+        }
         if (returnToken) {
           markSystemPiPReturnRestored(returnToken);
         }
@@ -4695,27 +4809,27 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             <TouchableOpacity
               style={[
                 styles.audioRoundBtn,
-                loudSpeakerRouteActive && {
+                audioOutputRouteHighlighted && {
                   borderWidth: 2,
-                  borderColor: accent.solid,
-                  backgroundColor: accent.solid15,
+                  borderColor: audioOutputRouteAccent.solid,
+                  backgroundColor: audioOutputRouteAccent.solid15,
                 },
               ]}
               onPress={cycleAudioRoute}
               activeOpacity={0.85}
-              accessibilityState={{ selected: loudSpeakerRouteActive }}
+              accessibilityState={{ selected: audioOutputRouteHighlighted }}
             >
               {audioRouteIcon === 'ear-hearing' ? (
                 <MaterialCommunityIcons
                   name="ear-hearing"
                   size={28}
-                  color={loudSpeakerRouteActive ? accent.softText : '#FFFFFF'}
+                  color={audioOutputRouteHighlighted ? audioOutputRouteAccent.softText : '#FFFFFF'}
                 />
               ) : (
                 <MaterialIcons
                   name={audioRouteIcon}
                   size={28}
-                  color={loudSpeakerRouteActive ? accent.softText : '#FFFFFF'}
+                  color={audioOutputRouteHighlighted ? audioOutputRouteAccent.softText : '#FFFFFF'}
                 />
               )}
             </TouchableOpacity>

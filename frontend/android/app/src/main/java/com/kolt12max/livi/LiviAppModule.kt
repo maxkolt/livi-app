@@ -348,7 +348,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
     // Те же флаги, что и в FCM (buildIncomingCallActivityIntent): иначе при активном процессе + заблокированном экране
     // startActivity без SHOW_WHEN_LOCKED / TURN_SCREEN_ON часто не показывает входящий поверх блокировки.
-    val intent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: "", hasVideo)
+    val intent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(
+      ctx,
+      callId,
+      from,
+      fromNick ?: "",
+      hasVideo,
+      returnMainOnDismiss = MainActivity.isInForeground,
+    )
     ctx.startActivity(intent)
   }
 
@@ -372,7 +379,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     // Как в LiviFirebaseMessagingService: сначала пробуем Activity сразу (сокет в фоне / экран выключен — иначе только FGS с «тихим»
     // уведомлением без fullScreenIntent часто не пробивает BAL на блокировке).
     try {
-      val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: "", hasVideo)
+      val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(
+        ctx,
+        callId,
+        from,
+        fromNick ?: "",
+        hasVideo,
+        returnMainOnDismiss = MainActivity.isInForeground,
+      )
       ctx.startActivity(launchIntent)
       Log.d(NAME, "showIncomingCallSystemUI: immediate startActivity OK")
     } catch (e: Exception) {
@@ -608,6 +622,83 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  private fun audioRouteFromCommunicationDeviceType(type: Int): String? = when (type) {
+    AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+    AudioDeviceInfo.TYPE_BLE_HEADSET,
+    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "BLUETOOTH"
+    AudioDeviceInfo.TYPE_WIRED_HEADSET,
+    AudioDeviceInfo.TYPE_USB_HEADSET,
+    AudioDeviceInfo.TYPE_USB_DEVICE -> "WIRED_HEADSET"
+    AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "SPEAKER_PHONE"
+    AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "EARPIECE"
+    else -> null
+  }
+
+  private fun hasExternalVoiceCallCommunicationDevice(am: AudioManager): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      return am.availableCommunicationDevices.any { dev ->
+        when (dev.type) {
+          AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+          AudioDeviceInfo.TYPE_BLE_HEADSET,
+          AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+          AudioDeviceInfo.TYPE_WIRED_HEADSET,
+          AudioDeviceInfo.TYPE_USB_HEADSET,
+          AudioDeviceInfo.TYPE_USB_DEVICE -> true
+          else -> false
+        }
+      }
+    }
+    @Suppress("DEPRECATION")
+    return am.isBluetoothScoOn || am.isBluetoothA2dpOn || am.isWiredHeadsetOn
+  }
+
+  /** Список маршрутов до событий InCallManager (availableCommunicationDevices / legacy flags). */
+  @ReactMethod
+  fun getVoiceCallCommunicationRoutes(promise: Promise) {
+    UiThreadUtil.runOnUiThread {
+      try {
+        val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        if (am == null) {
+          promise.resolve(Arguments.createMap())
+          return@runOnUiThread
+        }
+        am.mode = AudioManager.MODE_IN_COMMUNICATION
+        val available = Arguments.createArray()
+        val seen = mutableSetOf<String>()
+        fun pushRoute(route: String) {
+          if (seen.add(route)) available.pushString(route)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          for (dev in am.availableCommunicationDevices) {
+            audioRouteFromCommunicationDeviceType(dev.type)?.let { pushRoute(it) }
+          }
+          if (seen.isEmpty()) {
+            pushRoute("EARPIECE")
+            pushRoute("SPEAKER_PHONE")
+          }
+        } else {
+          @Suppress("DEPRECATION")
+          if (am.isBluetoothScoOn || am.isBluetoothA2dpOn) pushRoute("BLUETOOTH")
+          @Suppress("DEPRECATION")
+          if (am.isWiredHeadsetOn) pushRoute("WIRED_HEADSET")
+          pushRoute("EARPIECE")
+          pushRoute("SPEAKER_PHONE")
+        }
+        val result = Arguments.createMap()
+        result.putArray("available", available)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          val current = am.communicationDevice
+          val preferred = current?.let { audioRouteFromCommunicationDeviceType(it.type) }
+          if (preferred != null) result.putString("preferred", preferred)
+        }
+        promise.resolve(result)
+      } catch (e: Exception) {
+        Log.e(NAME, "getVoiceCallCommunicationRoutes failed", e)
+        promise.reject("ERR_AUDIO_ROUTE", e.message, e)
+      }
+    }
+  }
+
   /**
    * Маршрут голосового звонка: earpiece vs speaker.
    * На Android 12+ setSpeakerphoneOn часто игнорируется — используем setCommunicationDevice.
@@ -622,6 +713,22 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           return@runOnUiThread
         }
         am.mode = AudioManager.MODE_IN_COMMUNICATION
+        if (!speakerOn && hasExternalVoiceCallCommunicationDevice(am)) {
+          val btDev = findCommunicationDeviceForRoute(am, "BLUETOOTH")
+          if (btDev != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+              am.setCommunicationDevice(btDev)
+            } catch (_: Exception) {}
+          } else {
+            @Suppress("DEPRECATION")
+            if (!am.isBluetoothScoOn) am.startBluetoothSco()
+            @Suppress("DEPRECATION")
+            am.isBluetoothScoOn = true
+          }
+          Log.i(NAME, "setVoiceCallSpeakerOn redirected to BLUETOOTH (external device)")
+          promise.resolve(true)
+          return@runOnUiThread
+        }
         var applied = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           try {
@@ -648,6 +755,88 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         promise.resolve(applied)
       } catch (e: Exception) {
         Log.e(NAME, "setVoiceCallSpeakerOn failed", e)
+        promise.reject("ERR_AUDIO_ROUTE", e.message, e)
+      }
+    }
+  }
+
+  private fun findCommunicationDeviceForRoute(am: AudioManager, route: String): AudioDeviceInfo? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+    val devices = am.availableCommunicationDevices
+    return when (route) {
+      "BLUETOOTH" ->
+        devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+          ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLE_HEADSET }
+          ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+      "WIRED_HEADSET" ->
+        devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET }
+          ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
+          ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_USB_DEVICE }
+      "SPEAKER_PHONE" -> devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+      "EARPIECE" -> devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+      else -> null
+    }
+  }
+
+  /** Явный маршрут звонка (BT / провод / earpiece / speaker) через setCommunicationDevice / SCO. */
+  @ReactMethod
+  fun setVoiceCallAudioRoute(route: String, promise: Promise) {
+    UiThreadUtil.runOnUiThread {
+      try {
+        val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        if (am == null) {
+          promise.resolve(false)
+          return@runOnUiThread
+        }
+        am.mode = AudioManager.MODE_IN_COMMUNICATION
+        var applied = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          val device = findCommunicationDeviceForRoute(am, route)
+          if (device != null) {
+            try {
+              applied = am.setCommunicationDevice(device)
+            } catch (e: Exception) {
+              Log.w(NAME, "setVoiceCallAudioRoute setCommunicationDevice failed: ${e.message}")
+            }
+          }
+        }
+        if (!applied) {
+          when (route) {
+            "BLUETOOTH" -> {
+              @Suppress("DEPRECATION")
+              if (!am.isBluetoothScoOn) {
+                am.startBluetoothSco()
+              }
+              @Suppress("DEPRECATION")
+              am.isBluetoothScoOn = true
+              @Suppress("DEPRECATION")
+              am.isSpeakerphoneOn = false
+              applied = true
+            }
+            "WIRED_HEADSET" -> {
+              @Suppress("DEPRECATION")
+              am.isSpeakerphoneOn = false
+              applied = true
+            }
+            "SPEAKER_PHONE" -> {
+              @Suppress("DEPRECATION")
+              am.isSpeakerphoneOn = true
+              applied = true
+            }
+            "EARPIECE" -> {
+              @Suppress("DEPRECATION")
+              am.isSpeakerphoneOn = false
+              applied = true
+            }
+          }
+        }
+        Log.i(
+          NAME,
+          "setVoiceCallAudioRoute route=$route applied=$applied commDev=${if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) am.communicationDevice?.type else null}",
+        )
+        promise.resolve(applied)
+      } catch (e: Exception) {
+        Log.e(NAME, "setVoiceCallAudioRoute failed", e)
         promise.reject("ERR_AUDIO_ROUTE", e.message, e)
       }
     }
@@ -2296,6 +2485,20 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         if (now - ts > MISSED_SHOWN_EXPIRY_MS) null else id to ts
       }
       return entries.any { it.first == callId.trim() }
+    }
+
+    /**
+     * Атомарно «забрать» право показать пропущенный для callId (Activity + FGS + FCM в одну миллисекунду).
+     * Пустой callId — без дедупа по id (legacy), возвращает true.
+     */
+    @JvmStatic
+    fun tryClaimMissedCallNotification(context: Context, callId: String): Boolean {
+      if (callId.isBlank()) return true
+      synchronized(LiviAppModule::class.java) {
+        if (wasMissedShownForCallId(context, callId)) return false
+        markMissedShownForCallId(context, callId)
+        return true
+      }
     }
 
     /** Уже показывали heads-up для этого messageId? (дедуп FCM + Expo fallback) */

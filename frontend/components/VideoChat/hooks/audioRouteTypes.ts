@@ -8,7 +8,9 @@ export const INCALL_ROUTE_CYCLE: InCallAudioRoute[] = [
   'BLUETOOTH',
 ];
 
-export function isExternalHeadsetRoute(route: InCallAudioRoute): boolean {
+export function isExternalHeadsetRoute(
+  route: InCallAudioRoute | null | undefined,
+): route is 'BLUETOOTH' | 'WIRED_HEADSET' {
   return route === 'WIRED_HEADSET' || route === 'BLUETOOTH';
 }
 

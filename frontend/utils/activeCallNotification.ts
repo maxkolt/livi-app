@@ -5,7 +5,9 @@ import { isOngoingCallSession, resolveActiveCallInCallMedia } from './activeCall
 import {
   pinLoudSpeakerForAudioCallLeavingToBackground,
   scheduleReapplyPersistedCallAudioRoute,
+  isInAppPiPContextIncludingSuspended,
 } from './callAudioRoutePersist';
+import { readActiveExternalCallAudioRoute } from './activeCallSession';
 
 /** Ongoing FGS: audio channel + return intent when пользователь на экране аудиозвонка. */
 function resolveActiveCallNotificationAudioOnly(): boolean {
@@ -355,14 +357,25 @@ export function setAndroidSystemPiPLeaveHintEnabled(enabled: boolean): void {
 export function armAndroidLeaveHintForVideoCallHome(): void {
   if (Platform.OS !== 'android') return;
   try {
+    if (isInAppPiPContextIncludingSuspended()) return;
+  } catch {}
+  try {
     refreshSystemPiPLeaveContextSnapshot();
     const media = resolveActiveCallInCallMedia();
     if (media === 'audio') {
-      pinLoudSpeakerForAudioCallLeavingToBackground();
-      scheduleReapplyPersistedCallAudioRoute('audio_home_loud_speaker', {
-        media: 'audio',
-        delaysMs: [0, 300, 900, 1500],
-      });
+      const external = readActiveExternalCallAudioRoute();
+      if (external) {
+        scheduleReapplyPersistedCallAudioRoute('audio_home_preserve_headset', {
+          media: 'audio',
+          delaysMs: [0, 400, 1200],
+        });
+      } else {
+        pinLoudSpeakerForAudioCallLeavingToBackground();
+        scheduleReapplyPersistedCallAudioRoute('audio_home_loud_speaker', {
+          media: 'audio',
+          delaysMs: [0, 300, 900, 1500],
+        });
+      }
     }
     const g = global as any;
     g.__leavingVideoCallByHomeRef = g.__leavingVideoCallByHomeRef || { current: false };

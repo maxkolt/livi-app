@@ -77,9 +77,12 @@ class IncomingCallActivity : AppCompatActivity() {
     private var acceptInProgress: Boolean = false
     /** После закрытия входящего (отмена/таймаут) — вернуть Main без debounce. */
     private var mainReturnScheduled = false
+    /** true только если входящий открыли поверх уже активного приложения (не с лаунчера/lock screen). */
+    private var returnMainOnDismiss = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        returnMainOnDismiss = intent.getBooleanExtra(EXTRA_RETURN_MAIN_ON_DISMISS, false)
         val callIdFromIntent = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
         // FCM call_canceled может запустить активность с флагом «только закрыть» (приложение в фоне/убито — broadcast не дошёл)
         if (intent.getBooleanExtra(EXTRA_JUST_CLOSE, false) && callIdFromIntent.isNotEmpty()) {
@@ -490,6 +493,10 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.hasExtra(EXTRA_RETURN_MAIN_ON_DISMISS)) {
+            returnMainOnDismiss = intent.getBooleanExtra(EXTRA_RETURN_MAIN_ON_DISMISS, false)
+        }
         if (intent.getBooleanExtra(EXTRA_JUST_CLOSE, false)) {
             val cid = intent.getStringExtra(EXTRA_CALL_ID) ?: ""
             if (cid.isNotEmpty()) {
@@ -832,7 +839,7 @@ class IncomingCallActivity : AppCompatActivity() {
                 LiviAppModule.releaseBackgroundMediaSuppressionStatic(applicationContext)
             } catch (_: Exception) {}
         }
-        if (!acceptInProgress && !mainReturnScheduled) {
+        if (!acceptInProgress && !mainReturnScheduled && returnMainOnDismiss) {
             mainReturnScheduled = true
             LiviAppModule.scheduleMainActivityAfterOutgoingUserCancel(applicationContext)
         }
@@ -873,6 +880,8 @@ class IncomingCallActivity : AppCompatActivity() {
         const val EXTRA_HAS_VIDEO = "hasVideo"
         /** FCM call_canceled запускает активность с этим флагом, чтобы закрыть экран без показа UI (приложение в фоне/убито). */
         const val EXTRA_JUST_CLOSE = "just_close"
+        /** Закрытие входящего (таймаут/отмена): вернуть MainActivity только если true (пользователь был в приложении). */
+        const val EXTRA_RETURN_MAIN_ON_DISMISS = "returnMainOnDismiss"
         const val ACTION_CALL_ANSWERED = "com.kolt12max.livi.CALL_ANSWERED"
         /** true пока нативный экран входящего на экране (защита от heads-up поверх него). */
         @JvmField

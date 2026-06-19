@@ -1,11 +1,15 @@
 import { AppState, Platform, type AppStateStatus, NativeModules } from 'react-native';
-import { captureCallAudioRouteFromUi, isOngoingCallSession, peekSystemPiPReturnMediaSnapshot, resolveActiveCallInCallMedia } from './activeCallSession';
+import { captureCallAudioRouteFromUi, isOngoingCallSession, peekSystemPiPReturnMediaSnapshot, resolveActiveCallInCallMedia, readActiveExternalCallAudioRoute } from './activeCallSession';
 import {
   pinLoudSpeakerForAudioCallLeavingToBackground,
   reapplyPersistedCallAudioRoute,
   restoreAudioCallEarpieceAfterHomeReturn,
   restoreCallMediaAfterSystemPiPReturn,
   scheduleReapplyPersistedCallAudioRoute,
+  restoreCallAudioForInAppPiPPlaque,
+  shouldApplyHomeLoudSpeakerPin,
+  armCallAudioPreservePriority,
+  isCallAudioPiPTransitionWindow,
 } from './callAudioRoutePersist';
 import { armAndroidLeaveHintForVideoCallHome, syncAndroidLeaveHintForOngoingCall } from './activeCallNotification';
 
@@ -49,8 +53,10 @@ function nativeMaintainCallVoiceAudio(force = false): void {
 export function maintainCallAudioForActiveCall(reason = 'maintain_active_call'): void {
   if (!isOngoingCallSession()) return;
   const media = resolveActiveCallInCallMedia();
-  if (media === 'audio') {
+  if (media === 'audio' && shouldApplyHomeLoudSpeakerPin()) {
     pinLoudSpeakerForAudioCallLeavingToBackground();
+  } else if (media === 'audio') {
+    armCallAudioPreservePriority();
   }
   captureCallAudioRouteFromUi();
   nativeMaintainCallVoiceAudio(reason === 'app_state_background');
@@ -107,10 +113,32 @@ function onAppStateChange(next: AppStateStatus): void {
     }
     captureCallAudioRouteFromUi();
     if (prev !== 'active') {
-      scheduleReapplyPersistedCallAudioRoute('app_state_foreground', {
-        media: resolveActiveCallInCallMedia(),
-        delaysMs: FOREGROUND_REAPPLY_DELAYS_MS,
-      });
+      armCallAudioPreservePriority(isCallAudioPiPTransitionWindow() ? 5000 : 3500);
+      try {
+        const g = global as any;
+        const onHomeWithPlaque =
+          g.__pipVisibleRef?.current === true &&
+          g.__navRef?.getCurrentRoute?.()?.name !== 'VideoCall';
+        const external = readActiveExternalCallAudioRoute();
+        if (onHomeWithPlaque) {
+          restoreCallAudioForInAppPiPPlaque('app_state_foreground_in_app_pip');
+        } else if (external) {
+          scheduleReapplyPersistedCallAudioRoute('app_state_foreground_headset', {
+            media: resolveActiveCallInCallMedia(),
+            delaysMs: [0, 400, 1200],
+          });
+        } else {
+          scheduleReapplyPersistedCallAudioRoute('app_state_foreground', {
+            media: resolveActiveCallInCallMedia(),
+            delaysMs: FOREGROUND_REAPPLY_DELAYS_MS,
+          });
+        }
+      } catch {
+        scheduleReapplyPersistedCallAudioRoute('app_state_foreground', {
+          media: resolveActiveCallInCallMedia(),
+          delaysMs: FOREGROUND_REAPPLY_DELAYS_MS,
+        });
+      }
       restoreSessionMicrophoneIfNeeded();
     }
     try {

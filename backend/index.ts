@@ -1777,21 +1777,44 @@ async function userHasActiveRandomChat(io: Server, userId: string): Promise<bool
 }
 
 /** Callee в ожидающем звонке (без inCall) не считается занятым при отображении в списке друзей. */
-function isSocketBusyForFriendsExport(data: Record<string, unknown> | undefined, userId: string): boolean {
+function isSocketBusyForFriendsExport(
+  io: Server,
+  data: Record<string, unknown> | undefined,
+  userId: string,
+): boolean {
   const d = data || {};
   const inCall = d.inCall === true;
   const busy = d.busy === true;
-  const inSession = !!(inCall || busy || d.roomId || d.partnerSid);
-  if (!inSession) return false;
+  if (inCall || d.partnerSid) {
+    return true;
+  }
+  if (!busy && !d.roomId) return false;
 
   const entry = callOfUser.get(userId);
   if (entry) {
     const link = callsById.get(entry.callId);
     if (link && link.b === userId && !inCall && !busy) return false;
-    // Инициатор на дозвоне (нативный исходящий, вызов ещё не принят) — не «Занято» в списке друзей.
     if (link && link.a === userId && !inCall) return false;
+    return true;
   }
-  return true;
+
+  if (activeRoomByUserId.has(userId)) {
+    const pending = activeRoomByUserId.get(userId);
+    const link = pending?.callId ? callsById.get(pending.callId) : undefined;
+    if (pending?.callId && isDirectCallAcceptedOrActive(pending.callId, link) && (inCall || busy)) {
+      return true;
+    }
+  }
+
+  if (busy || d.roomId) {
+    const rid = String(d.roomId || '');
+    if (rid.startsWith('room_')) {
+      const room = io.sockets.adapter.rooms.get(rid);
+      if (room && room.size > 1 && (inCall || busy)) return true;
+    }
+    return false;
+  }
+  return false;
 }
 
 function clearDirectCallSessionForUser(io: Server, userId: string) {
@@ -1806,7 +1829,7 @@ function clearDirectCallSessionForUser(io: Server, userId: string) {
 
 function getEffectiveBusyForExport(io: Server, userId: string): boolean {
   for (const s of getSocketsForUser(io, userId)) {
-    if (isSocketBusyForFriendsExport((s as any).data, userId)) return true;
+    if (isSocketBusyForFriendsExport(io, (s as any).data, userId)) return true;
   }
   return false;
 }

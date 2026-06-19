@@ -114,8 +114,21 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
 
   useEffect(() => {
     if (!visible) return;
+    const syncRoute = () => setPipAudioRoute(readInAppPiPAudioOutputRoute());
     setLocalMicMuted(resolvePiPLocalMutedState());
-    setPipAudioRoute(readInAppPiPAudioOutputRoute());
+    syncRoute();
+    const g = global as any;
+    const onRoute = (route: InCallAudioRoute) => setPipAudioRoute(route);
+    g.__onInAppPiPAudioRouteChanged = onRoute;
+    const interval = setInterval(syncRoute, 500);
+    const stopPoll = setTimeout(() => clearInterval(interval), 5000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(stopPoll);
+      if (g.__onInAppPiPAudioRouteChanged === onRoute) {
+        g.__onInAppPiPAudioRouteChanged = null;
+      }
+    };
   }, [visible, isMuted]);
 
   const micIconMuted = visible ? localMicMuted : isMuted;
@@ -163,7 +176,13 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const pipFromAudioOnly = pipInAppBarEnteredFromAudioOnly();
   /** Ушли с видео-экрана в in-app PiP — подсветить «вернуться в видео», как активный динамик. */
   const pipVideoReturnHighlight = !pipFromAudioOnly;
-  const loudSpeakerActive = pipAudioRoute === 'SPEAKER_PHONE';
+  const btAccent = useMemo(() => uiAccent(!isDark), [isDark]);
+  const pipAudioRouteHighlight =
+    pipAudioRoute === 'SPEAKER_PHONE' ||
+    pipAudioRoute === 'BLUETOOTH' ||
+    pipAudioRoute === 'WIRED_HEADSET';
+  const pipRouteAccent = pipAudioRoute === 'BLUETOOTH' ? btAccent : accent;
+  const pipAudioRouteIconColor = pipAudioRouteHighlight ? pipRouteAccent.softText : chrome.icon;
   const pipAudioRouteIcon = iconNameForRoute(pipAudioRoute);
 
   const toggleAudioOutputRoute = useCallback(() => {
@@ -403,20 +422,20 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
                 onPress={toggleAudioOutputRoute}
                 accessibilityLabel="Переключить динамик"
                 chrome={chrome}
-                active={loudSpeakerActive}
-                activeAccent={accent}
+                active={pipAudioRouteHighlight}
+                activeAccent={pipAudioRouteHighlight ? pipRouteAccent : undefined}
               >
                 {pipAudioRouteIcon === 'ear-hearing' ? (
                   <MaterialCommunityIcons
                     name="ear-hearing"
                     size={PIP_ICON_SIZE}
-                    color={loudSpeakerActive ? accent.softText : chrome.icon}
+                    color={pipAudioRouteIconColor}
                   />
                 ) : (
                   <MaterialIcons
                     name={pipAudioRouteIcon}
                     size={PIP_ICON_SIZE}
-                    color={loudSpeakerActive ? accent.softText : chrome.icon}
+                    color={pipAudioRouteIconColor}
                   />
                 )}
               </PiPActionButton>

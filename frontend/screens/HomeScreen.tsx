@@ -311,16 +311,9 @@ const mapToFriend = (u: any): Friend => {
   return mapped;
 };
 
-/** Не залипаем «Занято» локально, если сервер уже вернул busy: false (напр. после отмены исходящего). */
-function mergeFriendBusyFromFetch(
-  serverBusy: boolean,
-  prevBusy?: boolean,
-  friendLooksOnline?: boolean,
-): boolean {
-  if (serverBusy) return true;
-  // REST может отставать от presence:update (busy:true) во время рандом-чата.
-  if (prevBusy && friendLooksOnline) return true;
-  return false;
+/** Не залипаем «Занято»: если REST/presence уже сняли busy — доверяем серверу. */
+function mergeFriendBusyFromFetch(serverBusy: boolean): boolean {
+  return !!serverBusy;
 }
 
 /** Есть ли реально активный direct-call (не залипшие global refs после завершения). */
@@ -2406,7 +2399,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                 avatarVer: newAvatarVer,
                 avatarThumbB64: finalAvatarThumbB64,
                 online: mergedOnlineCorr,
-                isBusy: mergeFriendBusyFromFetch(!!f.isBusy, !!prevOne?.isBusy, mergedOnlineCorr),
+                isBusy: mergeFriendBusyFromFetch(!!f.isBusy),
                 isRandomBusy: !!prevOne?.isRandomBusy,
                 inCall: !!prevOne?.inCall,
               } as any;
@@ -2449,7 +2442,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               avatarVer: newAvatarVer,
               avatarThumbB64: finalAvatarThumbB64,
               online: mergedOnlineMain,
-              isBusy: mergeFriendBusyFromFetch(!!f.isBusy, !!prevOne?.isBusy, mergedOnlineMain),
+              isBusy: mergeFriendBusyFromFetch(!!f.isBusy),
               isRandomBusy: !!prevOne?.isRandomBusy,
               inCall: !!prevOne?.inCall,
             } as any;

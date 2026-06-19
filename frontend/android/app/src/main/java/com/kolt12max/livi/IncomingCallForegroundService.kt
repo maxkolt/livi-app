@@ -147,7 +147,11 @@ class IncomingCallForegroundService : Service() {
                 val shownCallId = i?.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID) ?: return
                 if (shownCallId == currentCallId) {
                     handler.post {
-                        if (shownCallId == currentCallId) detachForegroundAfterIncomingActivityVisible()
+                        if (shownCallId != currentCallId) return@post
+                        // IncomingCallActivity ведёт ring window и missed — FGS-таймаут не нужен (иначе двойной missed).
+                        timeoutRunnable?.let { handler.removeCallbacks(it) }
+                        timeoutRunnable = null
+                        detachForegroundAfterIncomingActivityVisible()
                     }
                 }
             }
@@ -259,11 +263,14 @@ class IncomingCallForegroundService : Service() {
         if (!minimized || remainingTimeoutMs > 0L) {
             val timeoutMsToUse = if (minimized) remainingTimeoutMs else TIMEOUT_MS
             timeoutRunnable = Runnable {
-                vl("[INCOMING_FGS] timeout closing — show missed + stop incoming")
+                vl("[INCOMING_FGS] timeout closing — stop incoming")
                 val cid = currentCallId
                 val fromUid = currentFrom
                 val nick = currentFromNick ?: ""
-                if (!cid.isNullOrEmpty() && !fromUid.isNullOrEmpty()) {
+                val activityHandlesMissed = !cid.isNullOrEmpty() &&
+                    IncomingCallActivity.isAlive &&
+                    IncomingCallActivity.activeCallId == cid
+                if (!activityHandlesMissed && !cid.isNullOrEmpty() && !fromUid.isNullOrEmpty()) {
                     try {
                         LiviFirebaseMessagingService.notifyMissedCallFromPush(
                             applicationContext,
