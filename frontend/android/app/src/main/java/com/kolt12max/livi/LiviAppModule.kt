@@ -9,6 +9,9 @@ import android.service.notification.StatusBarNotification
 import android.content.Intent
 import android.app.KeyguardManager
 import android.graphics.Rect
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
@@ -634,13 +637,59 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     else -> null
   }
 
-  private fun hasExternalVoiceCallCommunicationDevice(am: AudioManager): Boolean {
+  private fun isBluetoothCommunicationDeviceType(type: Int): Boolean =
+    type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+      type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+      type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+
+  /** SCO/BLE в списке comm-устройств и профиль гарнитуры CONNECTED (не idle A2DP без наушников). */
+  private fun isBluetoothHeadsetConnectedForUi(am: AudioManager): Boolean {
+    if (isBluetoothActiveForVoiceCall(am)) return true
+    if (!isBluetoothHeadsetProfileConnected()) return false
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      return am.availableCommunicationDevices.any { dev ->
+        dev.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+          dev.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+      }
+    }
+    @Suppress("DEPRECATION")
+    return am.isBluetoothScoOn
+  }
+
+  @Suppress("MissingPermission")
+  private fun isBluetoothHeadsetProfileConnected(): Boolean {
+    try {
+      val bm =
+        reactApplicationContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+          ?: return false
+      val adapter: BluetoothAdapter = bm.adapter ?: return false
+      if (!adapter.isEnabled) return false
+      if (adapter.getProfileConnectionState(BluetoothProfile.HEADSET) == BluetoothProfile.STATE_CONNECTED) {
+        return true
+      }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (adapter.getProfileConnectionState(BluetoothProfile.LE_AUDIO) == BluetoothProfile.STATE_CONNECTED) {
+          return true
+        }
+      }
+    } catch (_: Exception) {}
+    return false
+  }
+
+  /** Активный маршрут BT (SCO / communicationDevice) — для redirect speakerOff, не для idle A2DP. */
+  private fun isBluetoothActiveForVoiceCall(am: AudioManager): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      val comm = am.communicationDevice
+      if (comm != null && isBluetoothCommunicationDeviceType(comm.type)) return true
+    }
+    @Suppress("DEPRECATION")
+    return am.isBluetoothScoOn
+  }
+
+  private fun isWiredActiveForVoiceCall(am: AudioManager): Boolean {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       return am.availableCommunicationDevices.any { dev ->
         when (dev.type) {
-          AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-          AudioDeviceInfo.TYPE_BLE_HEADSET,
-          AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
           AudioDeviceInfo.TYPE_WIRED_HEADSET,
           AudioDeviceInfo.TYPE_USB_HEADSET,
           AudioDeviceInfo.TYPE_USB_DEVICE -> true
@@ -649,7 +698,24 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       }
     }
     @Suppress("DEPRECATION")
-    return am.isBluetoothScoOn || am.isBluetoothA2dpOn || am.isWiredHeadsetOn
+    return am.isWiredHeadsetOn
+  }
+
+  private fun hasExternalVoiceCallCommunicationDevice(am: AudioManager): Boolean =
+    isBluetoothActiveForVoiceCall(am) || isWiredActiveForVoiceCall(am)
+
+  /** JS: реально подключённая BT-гарнитура (профиль + comm), не idle A2DP в списке OEM. */
+  @ReactMethod
+  fun isBluetoothHeadsetConnectedForCall(promise: Promise) {
+    UiThreadUtil.runOnUiThread {
+      try {
+        val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val connected = if (am != null) isBluetoothHeadsetConnectedForUi(am) else false
+        promise.resolve(connected)
+      } catch (_: Exception) {
+        promise.resolve(false)
+      }
+    }
   }
 
   /** Список маршрутов до событий InCallManager (availableCommunicationDevices / legacy flags). */
@@ -670,7 +736,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           for (dev in am.availableCommunicationDevices) {
-            audioRouteFromCommunicationDeviceType(dev.type)?.let { pushRoute(it) }
+            val route = audioRouteFromCommunicationDeviceType(dev.type) ?: continue
+            when (route) {
+              "BLUETOOTH" -> if (isBluetoothHeadsetConnectedForUi(am)) pushRoute(route)
+              "WIRED_HEADSET" -> if (isWiredActiveForVoiceCall(am)) pushRoute(route)
+              else -> pushRoute(route)
+            }
           }
           if (seen.isEmpty()) {
             pushRoute("EARPIECE")
@@ -678,7 +749,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           }
         } else {
           @Suppress("DEPRECATION")
-          if (am.isBluetoothScoOn || am.isBluetoothA2dpOn) pushRoute("BLUETOOTH")
+          if (am.isBluetoothScoOn) pushRoute("BLUETOOTH")
           @Suppress("DEPRECATION")
           if (am.isWiredHeadsetOn) pushRoute("WIRED_HEADSET")
           pushRoute("EARPIECE")

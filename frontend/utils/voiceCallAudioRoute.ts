@@ -30,24 +30,33 @@ export async function applyNativeVoiceCallRoute(route: InCallAudioRoute): Promis
 }
 
 /** Android: earpiece / speaker через AudioManager (API 31+ setCommunicationDevice). */
-export async function applyNativeVoiceCallSpeaker(speakerOn: boolean): Promise<void> {
+export async function applyNativeVoiceCallSpeaker(
+  speakerOn: boolean,
+  opts?: { forceBuiltIn?: boolean },
+): Promise<void> {
   if (Platform.OS !== 'android') return;
-  const external =
-    readActiveExternalCallAudioRoute() ||
-    readConnectedExternalCallAudioRoute() ||
-    readNativeProbedExternalRoute();
-  if (isExternalHeadsetRoute(external)) {
-    await applyNativeVoiceCallRoute(external);
+  const forceBuiltIn = !!opts?.forceBuiltIn;
+  if (!forceBuiltIn) {
+    const external =
+      readActiveExternalCallAudioRoute() ||
+      readConnectedExternalCallAudioRoute() ||
+      readNativeProbedExternalRoute();
+    if (isExternalHeadsetRoute(external)) {
+      await applyNativeVoiceCallRoute(external);
+      return;
+    }
+    if (!speakerOn) {
+      try {
+        const av = (global as any).__inCallAvailableAudioRoutesRef?.current;
+        if (Array.isArray(av) && av.includes('BLUETOOTH')) {
+          await applyNativeVoiceCallRoute('BLUETOOTH');
+          return;
+        }
+      } catch {}
+    }
+  } else {
+    await applyNativeVoiceCallRoute(speakerOn ? 'SPEAKER_PHONE' : 'EARPIECE');
     return;
-  }
-  if (!speakerOn) {
-    try {
-      const av = (global as any).__inCallAvailableAudioRoutesRef?.current;
-      if (Array.isArray(av) && av.includes('BLUETOOTH')) {
-        await applyNativeVoiceCallRoute('BLUETOOTH');
-        return;
-      }
-    } catch {}
   }
   try {
     const mod = liviAudioModule();

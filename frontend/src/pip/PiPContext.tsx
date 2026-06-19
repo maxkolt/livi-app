@@ -31,7 +31,7 @@ import {
   armCallAudioPreservePriority,
   shouldApplyHomeLoudSpeakerPin,
 } from '../../utils/callAudioRoutePersist';
-import { resolveBuiltinCallRouteAfterHeadsetDisconnect } from '../../utils/callHeadsetAudioFallback';
+import { resolveCallRouteAfterHeadsetDisconnect } from '../../utils/callHeadsetAudioFallback';
 import type { InCallAudioRoute } from '../../components/VideoChat/hooks/audioRouteTypes';
 import { isExternalHeadsetRoute, normalizeInCallRoute } from '../../components/VideoChat/hooks/audioRouteTypes';
 import {
@@ -971,7 +971,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             if (latestList.includes('WIRED_HEADSET') && stillLostBt && !stillLostWired) {
               route = 'WIRED_HEADSET';
             } else {
-              route = resolveBuiltinCallRouteAfterHeadsetDisconnect(isInAudioOnlyCallUi());
+              route = resolveCallRouteAfterHeadsetDisconnect();
             }
 
             setPersistedCallAudioRoute(route);

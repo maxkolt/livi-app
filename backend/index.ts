@@ -1776,6 +1776,23 @@ async function userHasActiveRandomChat(io: Server, userId: string): Promise<bool
   return false;
 }
 
+/** Снять залипшие callOfUser / activeRoom без живого accepted-звонка (friends:fetch, effectiveBusy). */
+function reconcileStaleDirectCallOccupancyForUser(userId: string): void {
+  const uid = normalizeMongoObjectId(String(userId || ''));
+  if (!isOid(uid)) return;
+  pruneOrphanCallOfUserEntry(uid);
+  const entry = callOfUser.get(uid);
+  if (entry?.callId && !callsById.has(entry.callId) && !isDirectCallAcceptedOrActive(entry.callId, null)) {
+    const other = entry.with ? normalizeMongoObjectId(String(entry.with)) : '';
+    callOfUser.delete(uid);
+    if (other && isOid(other)) callOfUser.delete(other);
+  }
+  const pending = activeRoomByUserId.get(uid);
+  if (pending?.callId && !isDirectCallAcceptedOrActive(pending.callId, callsById.get(pending.callId))) {
+    activeRoomByUserId.delete(uid);
+  }
+}
+
 /** Callee в ожидающем звонке (без inCall) не считается занятым при отображении в списке друзей. */
 function isSocketBusyForFriendsExport(
   io: Server,
@@ -1785,7 +1802,11 @@ function isSocketBusyForFriendsExport(
   const d = data || {};
   const inCall = d.inCall === true;
   const busy = d.busy === true;
-  if (inCall || d.partnerSid) {
+  if (inCall) {
+    return true;
+  }
+  // partnerSid при исходящем direct-call (до accept) не должен давать бейдж «Занято».
+  if (d.partnerSid && !callOfUser.has(userId) && !activeRoomByUserId.has(userId) && (busy || inCall)) {
     return true;
   }
   if (!busy && !d.roomId) return false;
@@ -1793,9 +1814,14 @@ function isSocketBusyForFriendsExport(
   const entry = callOfUser.get(userId);
   if (entry) {
     const link = callsById.get(entry.callId);
-    if (link && link.b === userId && !inCall && !busy) return false;
-    if (link && link.a === userId && !inCall) return false;
-    return true;
+    if (link) {
+      if (link.b === userId && !inCall && !busy) return false;
+      if (link.a === userId && !inCall) return false;
+      if (isDirectCallAcceptedOrActive(entry.callId, link) && (inCall || busy)) return true;
+      return false;
+    }
+    if (isDirectCallAcceptedOrActive(entry.callId, null) && (inCall || busy)) return true;
+    callOfUser.delete(userId);
   }
 
   if (activeRoomByUserId.has(userId)) {
@@ -1810,7 +1836,7 @@ function isSocketBusyForFriendsExport(
     const rid = String(d.roomId || '');
     if (rid.startsWith('room_')) {
       const room = io.sockets.adapter.rooms.get(rid);
-      if (room && room.size > 1 && (inCall || busy)) return true;
+      if (room && room.size > 1 && inCall && busy) return true;
     }
     return false;
   }
@@ -1828,6 +1854,7 @@ function clearDirectCallSessionForUser(io: Server, userId: string) {
 }
 
 function getEffectiveBusyForExport(io: Server, userId: string): boolean {
+  reconcileStaleDirectCallOccupancyForUser(userId);
   for (const s of getSocketsForUser(io, userId)) {
     if (isSocketBusyForFriendsExport(io, (s as any).data, userId)) return true;
   }

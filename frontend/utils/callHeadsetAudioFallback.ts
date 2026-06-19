@@ -1,5 +1,6 @@
 import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { normalizeInCallRoute } from '../components/VideoChat/hooks/audioRouteTypes';
+import { isInAudioOnlyCallUi } from '../src/pip/pipPlaceholderOnly';
 
 export type BuiltinCallAudioRoute = 'EARPIECE' | 'SPEAKER_PHONE';
 
@@ -39,6 +40,21 @@ export function resolveBuiltinCallRouteAfterHeadsetDisconnect(
   const stored = readBuiltinCallRouteBeforeHeadset();
   if (stored) return stored;
   return productDefaultEarpiece ? 'EARPIECE' : 'SPEAKER_PHONE';
+}
+
+/** После снятия гарнитуры: earpiece только на экране аудиозвонка; video UI / system PiP → громкий. */
+export function shouldDefaultToEarpieceAfterHeadsetDisconnect(): boolean {
+  try {
+    if ((global as any).__pipInSystemModeRef?.current === true) return false;
+  } catch {}
+  return isInAudioOnlyCallUi();
+}
+
+export function resolveCallRouteAfterHeadsetDisconnect(): BuiltinCallAudioRoute {
+  if (!shouldDefaultToEarpieceAfterHeadsetDisconnect()) {
+    return 'SPEAKER_PHONE';
+  }
+  return resolveBuiltinCallRouteAfterHeadsetDisconnect(true);
 }
 
 export function clearBuiltinCallRouteBeforeHeadset(): void {

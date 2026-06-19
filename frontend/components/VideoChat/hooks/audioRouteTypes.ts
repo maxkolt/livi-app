@@ -15,9 +15,14 @@ export function isExternalHeadsetRoute(
 }
 
 export function routeOrderForAvailable(available: string[]): InCallAudioRoute[] {
-  return INCALL_ROUTE_CYCLE.filter(
-    (r) => r === 'EARPIECE' || r === 'SPEAKER_PHONE' || available.includes(r),
-  );
+  const hasBt = available.includes('BLUETOOTH');
+  const hasWired = available.includes('WIRED_HEADSET');
+  const order: InCallAudioRoute[] = [];
+  if (hasBt) order.push('BLUETOOTH');
+  order.push('EARPIECE', 'SPEAKER_PHONE');
+  if (hasWired) order.push('WIRED_HEADSET');
+  if (order.length === 0) return ['EARPIECE', 'SPEAKER_PHONE'];
+  return order;
 }
 
 export function nextRouteInCycle(current: InCallAudioRoute, available: string[]): InCallAudioRoute {

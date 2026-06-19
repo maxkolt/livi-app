@@ -21,7 +21,7 @@ import {
   isOngoingCallSession,
 } from './activeCallSession';
 import { isInAudioOnlyCallUi } from '../src/pip/pipPlaceholderOnly';
-import { resolveBuiltinCallRouteAfterHeadsetDisconnect, rememberBuiltinCallRouteBeforeHeadset } from './callHeadsetAudioFallback';
+import { resolveCallRouteAfterHeadsetDisconnect, rememberBuiltinCallRouteBeforeHeadset } from './callHeadsetAudioFallback';
 import { readNativeProbedExternalRoute, mergeNativeProbeIntoGlobal, probeNativeCallAudioRoutes } from './nativeCallAudioProbe';
 
 function readAvailableAudioDeviceList(): string[] {
@@ -136,11 +136,11 @@ function coercePersistedRouteForAvailableDevices(route: InCallAudioRoute): InCal
     }
     if (route === 'BLUETOOTH' && !list.includes('BLUETOOTH')) {
       if (readNativeProbedExternalRoute() === 'BLUETOOTH') return route;
-      return resolveBuiltinCallRouteAfterHeadsetDisconnect(isInAudioOnlyCallUi());
+      return resolveCallRouteAfterHeadsetDisconnect();
     }
     if (route === 'WIRED_HEADSET' && !list.includes('WIRED_HEADSET')) {
       if (readNativeProbedExternalRoute() === 'WIRED_HEADSET') return route;
-      return resolveBuiltinCallRouteAfterHeadsetDisconnect(isInAudioOnlyCallUi());
+      return resolveCallRouteAfterHeadsetDisconnect();
     }
   } catch {}
   return route;
