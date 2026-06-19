@@ -38,12 +38,19 @@ Backend будет доступен на **http://localhost:3000**. Провер
 - **Вариант A:** Приложение уже ходит на **сервер** (api.staging.liviapp.com) — ничего локально поднимать не нужно, просто правите код и деплоите бэкенд на сервер.
 - **Вариант B:** Локальный бэкенд — в настройках приложения или в `frontend/.env` укажите API на `http://ВАШ_IP:3000` (для телефона в той же сети — IP ноутбука, для эмулятора часто `http://localhost:3000` или `http://10.0.2.2:3000` на Android).
 
-Expo/React Native запуск как обычно:
+Нужен **development build** (не Expo Go) — звонки, CallKeep, WebRTC. Сборка: см. корневой `README.md` (`eas build --profile development`).
+
+Metro (из `frontend/` после `npm install`):
+
 ```bash
-cd /Users/maximkoltovich/LiVi/livi-app/frontend
-npm install
-npx expo start
+# телефон в той же Wi‑Fi, что и ноутбук
+npm run start:lan
+
+# Android по USB
+npm run start:usb
 ```
+
+Release AAB для Play: `npm run android:build-aab` (см. вывод скрипта).
 
 ---
 
@@ -68,6 +75,6 @@ brew services start redis
 | MongoDB   | Облачный (Mongo Atlas) или локальный установленный |
 | Redis     | Не обязателен; при необходимости: `brew install redis` + `REDIS_URL=redis://127.0.0.1:6379` |
 | LiveKit   | Использовать ваш сервер (livekit.staging.liviapp.com) |
-| Фронт     | `cd frontend && npx expo start`; API в настройках — сервер или localhost |
+| Фронт     | `cd frontend && npm run start:lan` (или `start:usb`); API в `.env.development` — сервер или IP:3000 |
 
 Docker Desktop для этого не нужен.
