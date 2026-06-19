@@ -1759,8 +1759,10 @@ async function runCallPushRetryCycle(callId: string): Promise<void> {
 }
 
 function socketDataLooksRandomOrQueueBusy(sdata: Record<string, unknown>, uid: string): boolean {
-  if (sdata.inCall === true || sdata.partnerSid) return true;
-  if (sdata.busy === true && !callOfUser.has(uid)) return true;
+  if (sdata.inCall === true) return true;
+  if (callOfUser.has(uid) || activeRoomByUserId.has(uid)) return false;
+  if (sdata.partnerSid) return true;
+  if (sdata.busy === true) return true;
   return false;
 }
 
@@ -1776,6 +1778,47 @@ async function userHasActiveRandomChat(io: Server, userId: string): Promise<bool
   return false;
 }
 
+/** Есть ли у userId хотя бы один сокет в принятом direct-call (inCall + room_*). */
+function isUserInLiveDirectCall(io: Server, userId: string): boolean {
+  const uid = normalizeMongoObjectId(String(userId || ''));
+  if (!isOid(uid)) return false;
+  for (const s of getSocketsForUser(io, uid)) {
+    if ((s as any)?.data?.inCall !== true) continue;
+    const rid = String((s as any)?.data?.roomId || activeCallBySocket.get(s.id) || '');
+    if (rid.startsWith('room_')) return true;
+  }
+  return false;
+}
+
+/** pending после accept — держим только пока кто-то реально inCall; не по одному callIdToRoomId. */
+function shouldRetainPendingAcceptedRoomForUser(
+  io: Server,
+  userId: string,
+  pending: PendingAcceptedRoom,
+): boolean {
+  if (!pending?.callId || !pending?.roomId) return false;
+  if (recentlyEndedCalls.has(pending.callId) || recentlyEndedCalls.has(pending.roomId)) return false;
+  const uid = normalizeMongoObjectId(String(userId || ''));
+  const peer = normalizeMongoObjectId(String(pending.peerUserId || ''));
+  if (isUserInLiveDirectCall(io, uid)) return true;
+  if (isOid(peer) && isUserInLiveDirectCall(io, peer)) return true;
+  return false;
+}
+
+async function clearStaleDirectCallPresenceForUser(io: Server, userId: string, reason: string): Promise<void> {
+  const uid = normalizeMongoObjectId(String(userId || ''));
+  if (!isOid(uid)) return;
+  const pending = activeRoomByUserId.get(uid);
+  const peerId = pending?.peerUserId ? normalizeMongoObjectId(String(pending.peerUserId)) : '';
+  clearAcceptedCallStateForUser(uid, reason);
+  lastBroadcastBusyByUserId.set(uid, false);
+  await emitPresenceUpdateToFriends(io, uid, false);
+  if (peerId && isOid(peerId) && peerId !== uid) {
+    lastBroadcastBusyByUserId.set(peerId, false);
+    await emitPresenceUpdateToFriends(io, peerId, false);
+  }
+}
+
 /** Снять залипшие callOfUser / activeRoom без живого accepted-звонка (friends:fetch, effectiveBusy). */
 function reconcileStaleDirectCallOccupancyForUser(userId: string): void {
   const uid = normalizeMongoObjectId(String(userId || ''));
@@ -1788,8 +1831,8 @@ function reconcileStaleDirectCallOccupancyForUser(userId: string): void {
     if (other && isOid(other)) callOfUser.delete(other);
   }
   const pending = activeRoomByUserId.get(uid);
-  if (pending?.callId && !isDirectCallAcceptedOrActive(pending.callId, callsById.get(pending.callId))) {
-    activeRoomByUserId.delete(uid);
+  if (pending && !shouldRetainPendingAcceptedRoomForUser(io, uid, pending)) {
+    void clearStaleDirectCallPresenceForUser(io, uid, 'reconcile-stale-pending');
   }
 }
 
@@ -2187,15 +2230,8 @@ io.on('connection', async (sock: AuthedSocket) => {
       const pendingRoom = activeRoomByUserId.get(mappedUserId);
       if (pendingRoom) {
         try {
-          const callStillTracked =
-            callsById.has(pendingRoom.callId) ||
-            callIdToRoomId.has(pendingRoom.callId) ||
-            activeRoomByUserId.has(mappedUserId);
-          const recentlyEnded =
-            recentlyEndedCalls.has(pendingRoom.callId) ||
-            recentlyEndedCalls.has(pendingRoom.roomId);
-          if (!callStillTracked || recentlyEnded) {
-            clearAcceptedCallStateForUser(mappedUserId, `reauth-stale:${callStillTracked ? 'recently-ended' : 'missing-call'}`);
+          if (!shouldRetainPendingAcceptedRoomForUser(io, mappedUserId, pendingRoom)) {
+            await clearStaleDirectCallPresenceForUser(io, mappedUserId, 'reauth-stale:not-live');
           } else {
             const emitted = await emitPendingCallAcceptedToSocket(io, sock, mappedUserId, pendingRoom, 'reauth');
             if (emitted) {
@@ -2464,6 +2500,10 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
 
       if (callId) callIdToRoomId.delete(String(callId));
+      const cidToCleanupEarly = resolveCallIdFromEndIdentifier(id, callId);
+      if (cidToCleanupEarly) {
+        try { callIdToRoomId.delete(String(cidToCleanupEarly)); } catch {}
+      }
       // Очищаем ожидание повторного входа в комнату (инициатор мог переподключиться и уже получил call:accepted)
       try {
         const parts = String(id).match(/^room_(.+)_(.+)$/);
@@ -2542,8 +2582,7 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       const hasAnotherBusySocket = getSocketsForUser(io, userId).some((s) => {
         if (s.id === sock.id) return false;
-        const sdata = (s as any)?.data || {};
-        return !!(sdata.inCall || sdata.busy || sdata.roomId || sdata.partnerSid);
+        return (s as any)?.data?.inCall === true;
       });
 
       const inRandomChat = await userHasActiveRandomChat(io, userId);
@@ -2551,50 +2590,21 @@ io.on('connection', async (sock: AuthedSocket) => {
       if (idleOnline) {
         const hasLiveSameUserCallSocket = getSocketsForUser(io, userId).some((s) => {
           if (s.id === sock.id) return false;
-          const sdata = (s as any)?.data || {};
-          if (!sdata.inCall && !sdata.roomId && !sdata.partnerSid) return false;
-          const rid = String(sdata.roomId || activeCallBySocket.get(s.id) || '');
-          const room = rid ? io.sockets.adapter.rooms.get(rid) : null;
-          return !!room && room.size > 1;
+          return (s as any)?.data?.inCall === true;
         });
 
         const sockData = (sock as any)?.data || {};
         const sockStillBusy =
-          !!(sockData.busy || sockData.inCall || sockData.roomId || sockData.partnerSid);
+          sockData.inCall === true || socketDataLooksRandomOrQueueBusy(sockData, userId);
 
-        if (!hasLiveSameUserCallSocket && !sockStillBusy && !hasAnotherBusySocket && !inRandomChat) {
-          const pendingActive = activeRoomByUserId.get(userId);
-          if (pendingActive?.callId) {
-            const timeline = getCallTimeline(pendingActive.callId);
-            if (
-              timeline?.state === 'accepted' ||
-              callIdToRoomId.has(pendingActive.callId)
-            ) {
-              // In an accepted LiveKit call — do not tear down activeRoom / callIdToRoomId on idle presence.
-            } else {
-              const pending = pendingActive;
-              const entry = callOfUser.get(userId);
-              const peerId = pending?.peerUserId || entry?.with || null;
-              clearAcceptedCallStateForUser(userId, 'presence-idle-online');
-              lastBroadcastBusyByUserId.set(userId, false);
-              await emitPresenceUpdateToFriends(io, userId, false);
-              if (peerId && peerId !== userId) {
-                lastBroadcastBusyByUserId.set(String(peerId), false);
-                await emitPresenceUpdateToFriends(io, String(peerId), false);
-              }
-            }
-          } else {
-            const entry = callOfUser.get(userId);
-            const peerId = entry?.with || null;
-            clearAcceptedCallStateForUser(userId, 'presence-idle-online');
+        const pendingActive = activeRoomByUserId.get(userId);
+        const pendingStillLive =
+          !!pendingActive && shouldRetainPendingAcceptedRoomForUser(io, userId, pendingActive);
 
-            lastBroadcastBusyByUserId.set(userId, false);
-            await emitPresenceUpdateToFriends(io, userId, false);
-            if (peerId && peerId !== userId) {
-              lastBroadcastBusyByUserId.set(String(peerId), false);
-              await emitPresenceUpdateToFriends(io, String(peerId), false);
-            }
-          }
+        if (!hasLiveSameUserCallSocket && !sockStillBusy && !hasAnotherBusySocket && !inRandomChat && !pendingStillLive) {
+          await clearStaleDirectCallPresenceForUser(io, userId, 'presence-idle-online');
+        } else if (idleOnline && pendingActive && !pendingStillLive && !inRandomChat) {
+          await clearStaleDirectCallPresenceForUser(io, userId, 'presence-idle-stale-pending');
         }
       }
       // Другие сокеты того же userId: пока хоть один в звонке/рандоме — не даём сбросить «занят» для друзей.
@@ -2634,7 +2644,11 @@ io.on('connection', async (sock: AuthedSocket) => {
           }
         }
       }
-      const effectiveBusy = busyRequested && !ignoreBusyForCallee && !ignoreBusyForCaller;
+      const effectiveBusyRaw = busyRequested && !ignoreBusyForCallee && !ignoreBusyForCaller;
+      const effectiveBusy =
+        idleOnline && !busy && !inRandomChat && !isUserInLiveDirectCall(io, userId)
+          ? false
+          : effectiveBusyRaw;
 
       // Обновляем состояние сокета (при ignoreBusyForCaller не трогаем data.busy — он уже true с call:initiate, просто не рассылаем друзьям)
       const prevBusy = !!(sock as any).data?.busy;
