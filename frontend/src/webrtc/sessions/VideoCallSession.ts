@@ -199,6 +199,9 @@ export class VideoCallSession extends SimpleEventEmitter {
   private fastStartVideoUpgradeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Set when camera flip ends; used to ignore late TrackUnsubscribed for ~2s and avoid black remote view. */
   private lastCameraFlipEndedAt = 0;
+  /** Partner sent cam-toggle sideOnly (camera flip without on/off); suppress remote video teardown flicker. */
+  private lastRemotePartnerCameraSideFlipAt = 0;
+  private lastRebindVideoCallMountAt = 0;
 
   /* ========= Mic level monitoring (VoiceEqualizer) ========= */
   private micBarsCount = 21;
@@ -801,6 +804,13 @@ export class VideoCallSession extends SimpleEventEmitter {
    * подставляем актуальные колбэки и геттеры, иначе остаются замыкания от размонтированного экрана.
    */
   rebindVideoCallMount(config: WebRTCSessionConfig): void {
+    const now = Date.now();
+    if (now - this.lastRebindVideoCallMountAt < 120) {
+      this.config.callbacks = config.callbacks;
+      if (config.myUserId != null) this.config.myUserId = config.myUserId;
+      return;
+    }
+    this.lastRebindVideoCallMountAt = now;
     this.config.callbacks = config.callbacks;
     if (config.myUserId != null) this.config.myUserId = config.myUserId;
     if (config.initialCallId !== undefined) this.config.initialCallId = config.initialCallId;
@@ -844,7 +854,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       const v = (config as any)[k];
       if (v !== undefined) (this.config as any)[k] = v;
     }
-    logger.info('[VideoCallSession] 🔁 rebindVideoCallMount — мост к UI обновлён после ремаунта');
+    logger.debug('[VideoCallSession] rebindVideoCallMount — UI bridge refreshed');
   }
 
   /**
@@ -1474,10 +1484,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     const nextSide: CamSide = this.camSide === 'front' ? 'back' : 'front';
     this.camSide = nextSide;
     try {
-      // В видеозвонках всегда пересоздаём видео-трек с нужной камерой (restartLocalCamera).
-      // Так переворот работает стабильно на всех устройствах; applyConstraints на треке
-      // от livekit-client часто не переключает камеру на нативной стороне.
-      await this.restartLocalCamera();
       const currentRoomId = this.getRoomId();
       if (!this.ended && !this.endCallInProgress && currentRoomId) {
         try {
@@ -1490,6 +1496,7 @@ export class VideoCallSession extends SimpleEventEmitter {
           });
         } catch {}
       }
+      await this.restartLocalCamera();
       logger.info('[VideoCallSession] flipCam done via restartLocalCamera', {
         prevSide,
         nextSide,
@@ -1509,8 +1516,6 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   async restartLocalCamera(): Promise<void> {
-    // Preferred path for this LiveKit SDK: restart the already published LocalVideoTrack in place.
-    // This keeps the same publication and avoids remote unpublish/publish churn during camera flip.
     if (this.room && this.room.state === 'connected' && this.room.localParticipant && this.localVideoTrack) {
       try {
         const facingMode = this.camSide === 'front' ? 'user' : 'environment';
@@ -1539,26 +1544,52 @@ export class VideoCallSession extends SimpleEventEmitter {
           }
         } catch {}
 
-        const stream = new MediaStream();
-        try {
-          const mt = this.localVideoTrack.mediaStreamTrack;
-          if (mt) stream.addTrack(mt as any);
-        } catch {}
-        try {
-          const at = this.localAudioTrack?.mediaStreamTrack;
-          if (at) stream.addTrack(at as any);
-        } catch {}
-        this.localStream = stream;
-        this.emit('localStream', stream);
-        this.notifyLocalStreamChange(stream);
+        // Новый stream.id → локальный RTCView remount (Android не подхватывает in-place track swap).
+        this.emitLocalMediaStream({ forceNewStream: true });
 
         logger.info('[VideoCallSession] Camera restarted in place via LocalVideoTrack.restartTrack', {
           trackId: this.localVideoTrack?.sid || this.localVideoTrack?.mediaStreamTrack?.id,
-          streamId: stream.id,
+          streamId: this.localStream?.id,
           camSide: this.camSide,
         });
+        return;
       } catch (e) {
-        logger.warn('[VideoCallSession] restartTrack path failed, falling back to recreateLocalVideoTrack', {
+        logger.warn('[VideoCallSession] restartTrack flip path failed; trying replacePublishedVideoTrack', {
+          error: (e as any)?.message || String(e || ''),
+        });
+      }
+
+      const oldVideoTrack = this.localVideoTrack;
+      try {
+        const newVideoTrack = await this.createFreshLocalVideoTrack('restartLocalCamera');
+        try {
+          this.swapLocalVideoTrack(newVideoTrack);
+          await this.replacePublishedVideoTrack(newVideoTrack, oldVideoTrack);
+        } catch (replaceErr) {
+          try {
+            newVideoTrack.stop();
+          } catch {}
+          throw replaceErr;
+        }
+        if (oldVideoTrack && oldVideoTrack !== newVideoTrack) {
+          try {
+            if (oldVideoTrack.mediaStreamTrack) {
+              oldVideoTrack.mediaStreamTrack.enabled = false;
+            }
+            oldVideoTrack.mute().catch(() => {});
+            oldVideoTrack.stop();
+          } catch {}
+          if (Platform.OS === 'android') {
+            await new Promise((resolve) => setTimeout(resolve, 120));
+          }
+        }
+        logger.info('[VideoCallSession] Camera restarted via replacePublishedVideoTrack', {
+          camSide: this.camSide,
+          trackId: newVideoTrack?.sid || newVideoTrack?.mediaStreamTrack?.id,
+        });
+        return;
+      } catch (e) {
+        logger.warn('[VideoCallSession] replacePublishedVideoTrack path failed, falling back to recreateLocalVideoTrack', {
           error: (e as any)?.message || String(e || ''),
         });
         await this.restartLocalCameraRecreatePath();
@@ -2571,6 +2602,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.notifyRemoteCamSideChange(nextCamSide);
       }
       if (data.sideOnly) {
+        this.lastRemotePartnerCameraSideFlipAt = Date.now();
         return;
       }
       this.remotePartnerDeclaredCamOff = !data.enabled;
@@ -3864,19 +3896,48 @@ export class VideoCallSession extends SimpleEventEmitter {
    * Updates local state with new video track and emits new localStream (new stream id for UI refresh).
    * Does not stop the old track; caller must stop it after replacePublishedVideoTrack.
    */
-  private swapLocalVideoTrack(newVideoTrack: LocalVideoTrack): void {
+  private swapLocalVideoTrack(
+    newVideoTrack: LocalVideoTrack,
+    opts?: { preserveStreamId?: boolean },
+  ): void {
     const prevTrackId = this.localVideoTrack?.mediaStreamTrack?.id;
     this.localVideoTrack = newVideoTrack;
 
-    const stream = new MediaStream();
-    try {
-      const mt = this.localVideoTrack.mediaStreamTrack;
-      if (mt) stream.addTrack(mt as any);
-    } catch {}
-    try {
-      const at = this.localAudioTrack?.mediaStreamTrack;
-      if (at) stream.addTrack(at as any);
-    } catch {}
+    const mt = this.localVideoTrack.mediaStreamTrack;
+    let stream: MediaStream;
+    const existingLocalStream = this.localStream;
+    const canPreserve =
+      !!opts?.preserveStreamId &&
+      !!existingLocalStream &&
+      !!mt;
+    if (canPreserve) {
+      stream = existingLocalStream;
+      try {
+        const existingVideo = stream.getVideoTracks();
+        for (const t of existingVideo) {
+          try {
+            stream.removeTrack(t);
+          } catch {}
+        }
+        stream.addTrack(mt as any);
+      } catch {
+        stream = new MediaStream();
+        if (mt) stream.addTrack(mt as any);
+        try {
+          const at = this.localAudioTrack?.mediaStreamTrack;
+          if (at) stream.addTrack(at as any);
+        } catch {}
+      }
+    } else {
+      stream = new MediaStream();
+      try {
+        if (mt) stream.addTrack(mt as any);
+      } catch {}
+      try {
+        const at = this.localAudioTrack?.mediaStreamTrack;
+        if (at) stream.addTrack(at as any);
+      } catch {}
+    }
     this.localStream = stream;
     this.emit('localStream', stream);
     this.notifyLocalStreamChange(stream);
@@ -3884,6 +3945,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     logger.info('[VideoCallSession] Local video track swapped', {
       prevTrackId,
       newTrackId: newVideoTrack?.mediaStreamTrack?.id,
+      preserveStreamId: !!opts?.preserveStreamId,
+      streamId: stream.id,
     });
   }
 
@@ -6897,7 +6960,16 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.remoteAudioTrack = null;
     }
     if (publication.kind === Track.Kind.Video && this.remoteVideoTrack) {
+      const duringPartnerSideFlip =
+        Date.now() - this.lastRemotePartnerCameraSideFlipAt < 3500;
       this.lastUnsubscribedRemoteVideoTrackSid = this.remoteVideoTrack.sid ?? null;
+      if (duringPartnerSideFlip) {
+        logger.debug('[VideoCallSession] TrackUnsubscribed video during partner side flip — keep stream', {
+          trackSid: this.remoteVideoTrack.sid,
+        });
+        this.remoteVideoTrack = null;
+        return;
+      }
       const mediaTrack = this.remoteVideoTrack.mediaStreamTrack;
       if (mediaTrack && this.remoteStream) {
         this.remoteStream.removeTrack(mediaTrack as any);
@@ -6935,8 +7007,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     }
 
+    const suppressRemoteViewRemount =
+      publication.kind === Track.Kind.Video &&
+      Date.now() - this.lastRemotePartnerCameraSideFlipAt < 3500;
     this.remoteViewKey = Date.now();
-    this.emit('remoteViewKeyChanged', this.remoteViewKey);
+    if (!suppressRemoteViewRemount) {
+      this.emit('remoteViewKeyChanged', this.remoteViewKey);
+    }
   }
 
   private clearRemoteCamOffTimeout(): void {

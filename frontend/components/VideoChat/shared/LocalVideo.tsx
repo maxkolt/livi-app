@@ -39,19 +39,24 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   // На старых Android используем TextureView, чтобы RN-оверлеи (кнопки) гарантированно рисовались поверх видео.
   const useTextureViewOnAndroid = Platform.OS === 'android' && isLegacyAndroidSurface;
 
+  const [trackLiveTick, setTrackLiveTick] = useState(0);
+  const [forceUpdateKey, setForceUpdateKey] = useState(0);
+
   // КРИТИЧНО: Все хуки должны быть вызваны ДО любых условных return
   // Проверяем готовность стрима
   const hasLocalStream = localStream && isValidStream(localStream);
   const videoTrack = hasLocalStream ? (localStream as any)?.getVideoTracks?.()?.[0] : null;
+  const localVideoTrackId = videoTrack?.id ?? null;
   const isVideoTrackLive = !!videoTrack && videoTrack.readyState === 'live';
   const isVideoTrackEnabled = !!videoTrack && (videoTrack.enabled ?? true) === true;
   const isVideoTrackMuted = !!videoTrack && (videoTrack.muted ?? false) === true;
   // На Android (особенно 8.1/ColorOS) `muted` у локального трека может быть true даже при реальных кадрах,
   // из-за чего UI ошибочно показывает плейсхолдер "Вы". Поэтому для Android игнорируем `muted` при решении рендера.
   const canRenderVideo =
-    isVideoTrackLive &&
+    !!videoTrack &&
     isVideoTrackEnabled &&
-    (Platform.OS === 'android' ? true : !isVideoTrackMuted);
+    (Platform.OS === 'android' ? true : !isVideoTrackMuted) &&
+    (isVideoTrackLive || trackLiveTick > 0);
   
   // Логирование для отладки на Android
   useEffect(() => {
@@ -68,28 +73,51 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     }
   }, [localStream?.id, isVideoTrackLive, isVideoTrackEnabled, isVideoTrackMuted]);
 
+  // После flip readyState может не быть 'live' сразу — один отложенный re-render (как у RemoteVideo).
+  useEffect(() => {
+    if (!localStream || !isValidStream(localStream)) return;
+    const vt = (localStream as any)?.getVideoTracks?.()?.[0];
+    if (!vt) return;
+    setTrackLiveTick(0);
+    const t = setTimeout(() => setTrackLiveTick((k) => k + 1), 150);
+    return () => clearTimeout(t);
+  }, [localStream?.id, localVideoTrackId]);
+
   // КРИТИЧНО: На Android нужен force-update для RTCView при изменении стрима
-  const [forceUpdateKey, setForceUpdateKey] = useState(0);
-  
   useEffect(() => {
     if (Platform.OS === 'android' && localStream && isValidStream(localStream)) {
-      const videoTrack = (localStream as any)?.getVideoTracks?.()?.[0];
-      // На Android используем stream prop, поэтому проверяем только наличие трека
-      if (videoTrack && videoTrack.readyState === 'live') {
+      const vt = (localStream as any)?.getVideoTracks?.()?.[0];
+      if (!vt) return;
+      const bump = () => {
         setForceUpdateKey((prev) => {
           const next = prev + 1;
           logger.debug('[LocalVideo] Android: force-update RTCView', {
             streamId: localStream.id,
-            trackId: videoTrack.id,
-            trackEnabled: videoTrack.enabled,
-            trackMuted: videoTrack.muted,
+            trackId: vt.id,
+            trackEnabled: vt.enabled,
+            trackReady: vt.readyState,
             key: next,
           });
           return next;
         });
+      };
+      if (vt.readyState === 'live') {
+        bump();
+        return;
       }
+      const poll = setInterval(() => {
+        if (vt.readyState === 'live') {
+          clearInterval(poll);
+          bump();
+        }
+      }, 80);
+      const stop = setTimeout(() => clearInterval(poll), 3500);
+      return () => {
+        clearInterval(poll);
+        clearTimeout(stop);
+      };
     }
-  }, [localStream?.id, localRenderKey]);
+  }, [localStream?.id, localVideoTrackId, localRenderKey]);
 
   // КРИТИЧНО: На Android RTCView может "залипать" на черном экране при переключении enabled у videoTrack
   // (камера OFF -> ON). Поэтому при изменении enabled/ camOn форсим remount.

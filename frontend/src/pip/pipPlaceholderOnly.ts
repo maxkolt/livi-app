@@ -127,9 +127,10 @@ export function runDirectCallVideoExpandOnce(run: () => Promise<void>): Promise<
  */
 export function prepareDirectCallAudioReturnFromPiP(): void {
   try {
-    if (isDirectCallVideoExpandGuardActive()) return;
     const g = global as any;
-    if (g.__expandToVideoCallUiFromPiPRef?.current === true) return;
+    finishDirectCallVideoExpandInFlight();
+    g.__directCallVideoExpandUntilRef = g.__directCallVideoExpandUntilRef || { current: 0 };
+    g.__directCallVideoExpandUntilRef.current = 0;
     g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
     g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
     g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };

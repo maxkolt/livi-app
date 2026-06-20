@@ -705,7 +705,9 @@ function AppContent() {
                 callId: params.callId,
                 roomId: params.roomId,
                 directCall: true,
-                ...(preferAudioOnlyUi ? { audioOnlyPiPReturn: true } : { preferVideoCallUi: true }),
+                ...(preferAudioOnlyUi
+                  ? { audioOnlyPiPReturn: true, preferVideoCallUi: false }
+                  : { audioOnlyPiPReturn: false, preferVideoCallUi: true }),
               },
             },
           ],
@@ -1003,8 +1005,8 @@ function AppContent() {
                     roomId: params.roomId,
                     directCall: true,
                     ...(preferAudioOnly
-                      ? { audioOnlyPiPReturn: true }
-                      : { preferVideoCallUi: true }),
+                      ? { audioOnlyPiPReturn: true, preferVideoCallUi: false }
+                      : { audioOnlyPiPReturn: false, preferVideoCallUi: true }),
                   },
                 },
               ],
@@ -3012,7 +3014,7 @@ function AppContent() {
           isCaller,
         });
         if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
-        if (callId && currentRouteName !== 'VideoCall') {
+        if (callId && !alreadyOnVideoCall) {
           endStaleCallAcceptedOnServer(callId, data, 'no-active-call-context');
         }
         return;
@@ -3079,11 +3081,13 @@ function AppContent() {
           const closeAcceptedCallUi = () => {
             try { setOutgoingCallScreenVisible(false); } catch {}
             try { emitCloseOutgoingCall({ reason: 'accepted' }); } catch {}
+            try { closeOutgoingCallActivity(); } catch {}
             if (isCaller) {
               const bringCallerMain = () => {
-                logger.info('[App] 📱 bringMainActivityToFront (socket-only path, caller)');
+                logger.info('[App] 📱 bringMainActivityToFront (call:accepted, caller)');
                 try { bringMainActivityToFront(); } catch {}
               };
+              bringCallerMain();
               InteractionManager.runAfterInteractions(() => {
                 if (typeof requestAnimationFrame === 'function') {
                   requestAnimationFrame(bringCallerMain);
@@ -3091,8 +3095,6 @@ function AppContent() {
                   setTimeout(bringCallerMain, 0);
                 }
               });
-            } else {
-              try { closeOutgoingCallActivity(); } catch {}
             }
           };
 
@@ -3135,7 +3137,8 @@ function AppContent() {
             const doNavigate = () => {
               try {
                 if (!navRef.isReady() || navRef.getCurrentRoute()?.name === 'VideoCall') return;
-                if (isAppBackgroundOrInactive()) {
+                // Инициатор: сразу на экран звонка (не ждать active AppState — иначе остаётся native outgoing).
+                if (isAppBackgroundOrInactive() && !isCaller) {
                   stashPendingVideoCallNavigation(params as Record<string, unknown>);
                   logger.info('[App] call:accepted navigation deferred until foreground', {
                     callId: data?.callId,
@@ -3145,12 +3148,32 @@ function AppContent() {
                 setActiveVideoCall(true);
                 try { emitCloseHomeModals(); } catch {}
                 navRef.navigate('VideoCall' as any, params);
+                try {
+                  (global as any).__pendingForegroundVideoCallNavRef = (global as any)
+                    .__pendingForegroundVideoCallNavRef || { current: null };
+                  (global as any).__pendingForegroundVideoCallNavRef.current = null;
+                } catch (_) {}
               } catch (err) {
                 logger.error('[App] ❌ Error navigating to VideoCall', { error: err, callId: data?.callId });
               }
             };
+            if (isCaller) {
+              closeAcceptedCallUi();
+            }
             doNavigate();
-            closeAcceptedCallUi();
+            if (!isCaller) {
+              closeAcceptedCallUi();
+            }
+            if (isCaller) {
+              InteractionManager.runAfterInteractions(() => {
+                try {
+                  if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'VideoCall') {
+                    flushPendingVideoCallNavigation(navRef);
+                    doNavigate();
+                  }
+                } catch (_) {}
+              });
+            }
           } else {
             logger.warn('[App] call:accepted missing fromUserId — skip VideoCall navigation', {
               callId: data?.callId,

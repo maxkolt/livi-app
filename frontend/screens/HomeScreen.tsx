@@ -901,6 +901,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [initialized, setInitialized] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const friendsRef = useRef<Friend[]>([]);
+  const pendingUnreadBatchRefreshRef = useRef(false);
   useEffect(() => { friendsRef.current = friends; }, [friends]);
 
   /** Метки времени «точно онлайн» для debounce офлайна в onPresenceUpdate (loadFriends больше не затирает online сервера). */
@@ -2553,12 +2554,13 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     };
   }, [loadFriends]);
 
-  const refreshUnreadCountsForFriends = useCallback(async (list: Friend[]) => {
+  const refreshUnreadCountsForFriends = useCallback(async (list: Friend[], attempt = 0) => {
     if (!list.length) return;
     const ids = list.map((f) => String(f.id));
     try {
       const result = await getUnreadCounts(ids);
       if (!result?.ok || !result.counts) return;
+      pendingUnreadBatchRefreshRef.current = false;
       const entries: Record<string, number> = {};
       for (const id of ids) {
         const n = result.counts[id];
@@ -2575,7 +2577,19 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         return next;
       });
     } catch (e) {
-      logger.info('[HomeScreen] Batch unread refresh failed:', (e as Error)?.message);
+      const msg = (e as Error)?.message || String(e);
+      const retriable =
+        attempt < 2 &&
+        (msg.includes('offline') || msg.includes('timeout') || msg.includes('Ack timeout'));
+      if (retriable) {
+        pendingUnreadBatchRefreshRef.current = true;
+        await new Promise((r) => setTimeout(r, 600 + attempt * 400));
+        return refreshUnreadCountsForFriends(list, attempt + 1);
+      }
+      if (msg.includes('offline') || msg.includes('timeout')) {
+        pendingUnreadBatchRefreshRef.current = true;
+      }
+      logger.info('[HomeScreen] Batch unread refresh failed:', msg);
     }
   }, []);
 
@@ -3648,9 +3662,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const list = friendsRef.current;
       if (!list.length) return;
       void refreshUnreadCountsForFriends(list).then(() => {
-        logger.debug('[HomeScreen] Unread counts refreshed after socket connect/reconnect (batch)', {
-          n: list.length,
-        });
+        if (!pendingUnreadBatchRefreshRef.current) {
+          logger.debug('[HomeScreen] Unread counts refreshed after socket connect/reconnect (batch)', {
+            n: list.length,
+          });
+        }
       }).catch((e) => {
         logger.warn('[HomeScreen] Unread refresh after socket failed:', e);
       });

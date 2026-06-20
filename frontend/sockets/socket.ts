@@ -3044,11 +3044,30 @@ export function getUnreadCounts(fromIds?: string[]) {
   const ids = Array.isArray(fromIds)
     ? fromIds.map((id) => String(id).trim()).filter(Boolean)
     : undefined;
-  return emitAck<{
-    ok: boolean;
-    counts?: Record<string, number>;
-    error?: string;
-  }>('messages:unread_counts', ids?.length ? { fromIds: ids } : {});
+  const payload = ids?.length ? { fromIds: ids } : {};
+  const viaSocket = () =>
+    emitAck<{
+      ok: boolean;
+      counts?: Record<string, number>;
+      error?: string;
+    }>('messages:unread_counts', payload, 12000, 2);
+
+  return (async () => {
+    try {
+      return await viaSocket();
+    } catch (e: any) {
+      const msg = String(e?.message || e || '');
+      const retriable =
+        msg.includes('offline') || msg.includes('timeout') || msg.includes('Ack timeout');
+      if (!retriable) throw e;
+      try {
+        await waitForConnect(20000);
+      } catch {
+        throw e;
+      }
+      return viaSocket();
+    }
+  })();
 }
 
 export function onMessageReceived(

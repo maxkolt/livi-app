@@ -1596,8 +1596,8 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         resume: true,
         fromPiP: true,
         ...(preferAudioOnlyUi
-          ? { audioOnlyPiPReturn: true, preferVideoCallUi: undefined }
-          : { preferVideoCallUi: true }),
+          ? { audioOnlyPiPReturn: true, preferVideoCallUi: false }
+          : { audioOnlyPiPReturn: false, preferVideoCallUi: true }),
         systemPiPReturnToken: Number(g.__systemPiPReturnTokenRef?.current || Date.now()),
         directCall: true,
         directInitiator: undefined,
