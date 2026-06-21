@@ -316,18 +316,52 @@ export function readConnectedExternalCallAudioRoute(
   return null;
 }
 
+/** Явный выбор маршрута (PiP / cycle) — не перебивать авто-BT в UI. */
+export function readUserSelectedCallAudioRoute(): InCallAudioRoute | null {
+  try {
+    return normalizeInCallRoute((global as any).__userSelectedCallAudioRouteRef?.current || '');
+  } catch {
+    return null;
+  }
+}
+
+export function setUserSelectedCallAudioRoute(route: InCallAudioRoute | null): void {
+  try {
+    const g = global as any;
+    g.__userSelectedCallAudioRouteRef = g.__userSelectedCallAudioRouteRef || { current: null };
+    g.__userSelectedCallAudioRouteRef.current = route;
+    if (route) {
+      g.__lastAppliedCallAudioRouteRef = { current: route };
+    }
+  } catch {}
+}
+
 /** Маршрут из PiP params + persist ref (без импорта callAudioRoutePersist — без циклов). */
 export function readInAppPiPAudioOutputRoute(): InCallAudioRoute {
   try {
     const g = global as any;
+    const userSel = readUserSelectedCallAudioRoute();
+    if (userSel) {
+      return userSel;
+    }
     const fromParams = normalizeInCallRoute(g.__currentCallPiPParamsRef?.current?.audioOutputRoute || '');
     const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
     const lastApplied = readLastAppliedCallAudioRoute();
+    const intent = fromParams || stored || lastApplied;
+    if (intent === 'SPEAKER_PHONE' || intent === 'EARPIECE') {
+      return intent;
+    }
+    if (intent && isExternalHeadsetRoute(intent)) {
+      const available = readInCallAvailableAudioRoutesList();
+      if (!available.length || available.includes(intent)) {
+        return intent;
+      }
+    }
     const external =
-      readConnectedExternalCallAudioRoute(lastApplied || fromParams || stored) ||
-      readActiveExternalCallAudioRoute(lastApplied || fromParams || stored);
+      readConnectedExternalCallAudioRoute(intent) ||
+      readActiveExternalCallAudioRoute(intent);
     if (external) return external;
-    return fromParams || stored || lastApplied || 'EARPIECE';
+    return intent || 'EARPIECE';
   } catch {
     return 'EARPIECE';
   }

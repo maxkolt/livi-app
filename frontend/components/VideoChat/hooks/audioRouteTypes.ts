@@ -14,21 +14,87 @@ export function isExternalHeadsetRoute(
   return route === 'WIRED_HEADSET' || route === 'BLUETOOTH';
 }
 
-export function routeOrderForAvailable(available: string[]): InCallAudioRoute[] {
+/** Где показывается кнопка цикла маршрута. */
+export type CallAudioRouteCycleContext = 'audio_ui' | 'in_app_pip' | 'video_ui' | 'system_pip';
+
+/** Аудио-страница и in-app PiP: 3 режима при BT; видео-экран и system PiP: только BT ↔ громкий. */
+export function routeOrderForContext(
+  context: CallAudioRouteCycleContext,
+  available: string[],
+): InCallAudioRoute[] {
   const hasBt = available.includes('BLUETOOTH');
   const hasWired = available.includes('WIRED_HEADSET');
+  const twoModeVideo = context === 'video_ui' || context === 'system_pip';
+
+  if (twoModeVideo) {
+    const order: InCallAudioRoute[] = [];
+    if (hasBt) order.push('BLUETOOTH');
+    order.push('SPEAKER_PHONE');
+    if (hasWired && !hasBt) order.push('WIRED_HEADSET');
+    if (order.length === 0) return ['SPEAKER_PHONE'];
+    return order;
+  }
+
   const order: InCallAudioRoute[] = [];
-  if (hasBt) order.push('BLUETOOTH');
-  order.push('EARPIECE', 'SPEAKER_PHONE');
-  if (hasWired) order.push('WIRED_HEADSET');
+  if (hasBt) {
+    order.push('BLUETOOTH', 'EARPIECE', 'SPEAKER_PHONE');
+  } else {
+    order.push('EARPIECE', 'SPEAKER_PHONE');
+  }
+  if (hasWired && !hasBt) order.push('WIRED_HEADSET');
   if (order.length === 0) return ['EARPIECE', 'SPEAKER_PHONE'];
   return order;
 }
 
-export function nextRouteInCycle(current: InCallAudioRoute, available: string[]): InCallAudioRoute {
-  const order = routeOrderForAvailable(available.length ? available : ['EARPIECE', 'SPEAKER_PHONE']);
+/** @deprecated используй routeOrderForContext */
+export function routeOrderForAvailable(available: string[]): InCallAudioRoute[] {
+  return routeOrderForContext('audio_ui', available);
+}
+
+export function cycleRoutesForContext(
+  context: CallAudioRouteCycleContext,
+  available: string[],
+): InCallAudioRoute[] {
+  const order = routeOrderForContext(
+    context,
+    available.length ? available : ['EARPIECE', 'SPEAKER_PHONE'],
+  );
+  const av = new Set(available.map((s) => String(s)));
+  return order.filter((r) => {
+    if (r === 'EARPIECE' || r === 'SPEAKER_PHONE') return true;
+    return av.has(r);
+  });
+}
+
+/** Список маршрутов для кнопки цикла (только реально доступные). */
+export function cycleRoutesForAvailable(available: string[]): InCallAudioRoute[] {
+  return cycleRoutesForContext('audio_ui', available);
+}
+
+export function nextRouteInCycleForContext(
+  current: InCallAudioRoute,
+  available: string[],
+  context: CallAudioRouteCycleContext,
+): InCallAudioRoute {
+  const order = cycleRoutesForContext(
+    context,
+    available.length ? available : ['EARPIECE', 'SPEAKER_PHONE'],
+  );
   const idx = Math.max(0, order.indexOf(current));
+  if (idx < 0 || order.length === 0) {
+    return order[0] || 'SPEAKER_PHONE';
+  }
   return order[(idx + 1) % order.length];
+}
+
+export function nextRouteInCycle(current: InCallAudioRoute, available: string[]): InCallAudioRoute {
+  return nextRouteInCycleForContext(current, available, 'audio_ui');
+}
+
+export function mapRouteForEnterVideoUi(route: InCallAudioRoute): InCallAudioRoute {
+  if (route === 'EARPIECE') return 'SPEAKER_PHONE';
+  if (route === 'BLUETOOTH' || route === 'WIRED_HEADSET') return route;
+  return 'SPEAKER_PHONE';
 }
 
 export function iconNameForRoute(

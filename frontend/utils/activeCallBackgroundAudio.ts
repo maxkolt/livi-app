@@ -10,10 +10,12 @@ import {
   shouldApplyHomeLoudSpeakerPin,
   armCallAudioPreservePriority,
   isCallAudioPiPTransitionWindow,
+  setPersistedCallAudioRoute,
 } from './callAudioRoutePersist';
 import { armAndroidLeaveHintForVideoCallHome, syncAndroidLeaveHintForOngoingCall } from './activeCallNotification';
+import { readNativeProbedExternalRoute } from './nativeCallAudioProbe';
 
-const BACKGROUND_REAPPLY_DELAYS_MS = [0, 400, 1200, 3000];
+const BACKGROUND_REAPPLY_DELAYS_MS = [0, 450, 1200];
 const FOREGROUND_REAPPLY_DELAYS_MS = [0, 350];
 const BACKGROUND_INTERVAL_MS = 12_000;
 const NATIVE_VOICE_MAINTAIN_MIN_MS = 12_000;
@@ -111,7 +113,16 @@ function onAppStateChange(next: AppStateStatus): void {
     } catch {
       restoreAudioCallEarpieceAfterHomeReturn();
     }
-    captureCallAudioRouteFromUi();
+    const foregroundExternal =
+      readActiveExternalCallAudioRoute() || readNativeProbedExternalRoute();
+    if (foregroundExternal) {
+      setPersistedCallAudioRoute(foregroundExternal);
+      try {
+        (global as any).__lastAppliedCallAudioRouteRef = { current: foregroundExternal };
+      } catch {}
+    } else {
+      captureCallAudioRouteFromUi();
+    }
     if (prev !== 'active') {
       armCallAudioPreservePriority(isCallAudioPiPTransitionWindow() ? 5000 : 3500);
       try {
@@ -119,13 +130,16 @@ function onAppStateChange(next: AppStateStatus): void {
         const onHomeWithPlaque =
           g.__pipVisibleRef?.current === true &&
           g.__navRef?.getCurrentRoute?.()?.name !== 'VideoCall';
-        const external = readActiveExternalCallAudioRoute();
+        const external =
+          readActiveExternalCallAudioRoute() || readNativeProbedExternalRoute();
         if (onHomeWithPlaque) {
           restoreCallAudioForInAppPiPPlaque('app_state_foreground_in_app_pip');
         } else if (external) {
+          setPersistedCallAudioRoute(external);
           scheduleReapplyPersistedCallAudioRoute('app_state_foreground_headset', {
             media: resolveActiveCallInCallMedia(),
-            delaysMs: [0, 400, 1200],
+            delaysMs: [0, 450],
+            skipInCallRestart: true,
           });
         } else {
           scheduleReapplyPersistedCallAudioRoute('app_state_foreground', {

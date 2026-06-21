@@ -22,7 +22,8 @@ import {
   prepareDirectCallVideoReturnFromPiP,
   pipInAppBarEnteredFromAudioOnly,
 } from './pipPlaceholderOnly';
-import { resolvePiPLocalMutedState } from '../../utils/activeCallSession';
+import { resolvePiPLocalMutedState, setUserSelectedCallAudioRoute } from '../../utils/activeCallSession';
+import { setPersistedCallAudioRoute } from '../../utils/callAudioRoutePersist';
 import {
   readInAppPiPAudioOutputRoute,
   toggleInAppPiPAudioOutputRoute,
@@ -186,12 +187,14 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const pipAudioRouteIcon = iconNameForRoute(pipAudioRoute);
 
   const toggleAudioOutputRoute = useCallback(() => {
-    const next = toggleInAppPiPAudioOutputRoute();
-    if (next) {
-      setPipAudioRoute(next);
-    } else {
-      setPipAudioRoute(readInAppPiPAudioOutputRoute());
-    }
+    void (async () => {
+      const next = await toggleInAppPiPAudioOutputRoute();
+      if (next) {
+        setPipAudioRoute(next);
+      } else {
+        setPipAudioRoute(readInAppPiPAudioOutputRoute());
+      }
+    })();
   }, []);
 
   const showAudioReturnFromVideoPiP = useMemo(() => {
@@ -213,6 +216,9 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const returnToAudioFromVideoPiP = useCallback(() => {
     try {
       const g = global as any;
+      const pipRoute = readInAppPiPAudioOutputRoute();
+      setUserSelectedCallAudioRoute(pipRoute);
+      setPersistedCallAudioRoute(pipRoute);
       const onVideoCallScreen = shouldSuppressInAppPiPOnRoute(currentRouteName);
       hidePiP();
       if (onVideoCallScreen) {
