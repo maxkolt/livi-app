@@ -44,6 +44,8 @@ import {
   isInCallAudioSessionStarted,
   setUserSelectedCallAudioRoute,
   readUserSelectedCallAudioRoute,
+  markUserSelectedExternalCallAudioRoute,
+  isDirectAudioEarpieceStabilizeWindow,
 } from '../../../utils/activeCallSession';
 import {
   type InCallAudioRoute,
@@ -545,6 +547,31 @@ export const useAudioRouting = (
       }
     }
 
+    if (isDirectAudioEarpieceStabilizeWindow() && !readExplicitUserSelectedBuiltInRoute() && !explicitBuiltInChoiceRef.current) {
+      const userIntentStabilize =
+        reason.startsWith('cycle') ||
+        reason.startsWith('toggle') ||
+        reason === 'in_app_pip_audio_route_toggle';
+      if (!userIntentStabilize) {
+        const connected = readConnectedExternalCallAudioRoute(getUserRoute());
+        if (isExternalHeadsetRoute(connected) && (!available.length || available.includes(connected))) {
+          return connected;
+        }
+        const nativeExt = readNativeProbedExternalRoute();
+        if (isExternalHeadsetRoute(nativeExt) && (!available.length || available.includes(nativeExt))) {
+          return nativeExt;
+        }
+        const lockedExt = readUserSelectedExternalRoute();
+        if (lockedExt && (!available.length || available.includes(lockedExt))) {
+          return lockedExt;
+        }
+        if (isExternalHeadsetRoute(userNow) && available.includes(userNow)) {
+          return userNow;
+        }
+        return 'EARPIECE';
+      }
+    }
+
     if (earpieceMode) {
       if (isHeadsetUnplugReason(reason)) {
         const nativeExt = readNativeProbedExternalRoute();
@@ -730,6 +757,17 @@ export const useAudioRouting = (
           }
         }
       }
+    }
+
+    if (
+      isDirectAudioEarpieceStabilizeWindow() &&
+      (effectiveRoute === 'SPEAKER_PHONE' || effectiveRoute === 'EARPIECE') &&
+      effectiveRoute === 'SPEAKER_PHONE' &&
+      !isExplicitBuiltInRouteChoice(reason, 'SPEAKER_PHONE') &&
+      !reason.startsWith('cycle') &&
+      !reason.startsWith('toggle')
+    ) {
+      effectiveRoute = 'EARPIECE';
     }
 
     const now = Date.now();
@@ -1030,10 +1068,6 @@ export const useAudioRouting = (
     };
 
     const applyBluetoothReconnect = async (reason: string) => {
-      const userSelBuiltin = readExplicitUserSelectedBuiltInRoute();
-      if (userSelBuiltin) {
-        return;
-      }
       const probe = await probeNativeCallAudioRoutes();
       if (!probe.available.includes('BLUETOOTH')) return;
       const merged = mergeNativeProbeIntoGlobal(probe);
@@ -1045,8 +1079,12 @@ export const useAudioRouting = (
       setAvailableRoutes(withBt);
       try {
         (global as any).__inCallAvailableAudioRoutesRef = { current: withBt };
+        if ((global as any).__explicitBuiltInCallAudioRouteRef) {
+          (global as any).__explicitBuiltInCallAudioRouteRef.current = false;
+        }
       } catch {}
       explicitBuiltInChoiceRef.current = false;
+      setUserSelectedCallAudioRoute(null);
       deviceChangeContextRef.current = { gainedWired: false, gainedBt: true };
       await applySpecificRoute('BLUETOOTH', reason, true);
       deviceChangeContextRef.current = { gainedWired: false, gainedBt: false };
@@ -1711,6 +1749,9 @@ export const useAudioRouting = (
       lastAppliedRouteRef.current = next;
       setUserSelectedCallAudioRoute(next);
       setPersistedCallAudioRoute(next);
+      if (isExternalHeadsetRoute(next)) {
+        markUserSelectedExternalCallAudioRoute(next);
+      }
       try {
         const params = (global as any).__currentCallPiPParamsRef?.current;
         if (params && typeof params === 'object') {

@@ -6,7 +6,7 @@ import InCallManager from 'react-native-incall-manager';
 import { CommonActions } from '@react-navigation/native';
 import socket, { onConnected, emitPresenceUpdateIfChanged } from '../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
-import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState, markDirectCallVideoMediaActive, ongoingCallPrefersVideoMedia, resolveActiveCallInCallMedia, readInAppPiPAudioOutputRoute, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute } from '../../utils/activeCallSession';
+import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState, markDirectCallVideoMediaActive, ongoingCallPrefersVideoMedia, resolveActiveCallInCallMedia, readInAppPiPAudioOutputRoute, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute } from '../../utils/activeCallSession';
 import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
@@ -51,6 +51,17 @@ function readAvailableAudioDeviceListFromGlobal(): string[] {
     return Array.isArray(av) ? av.map((s: unknown) => String(s)) : [];
   } catch {
     return [];
+  }
+}
+
+function readNativePreferredExternalRoute(): InCallAudioRoute | null {
+  try {
+    const preferred = normalizeInCallRoute(
+      (global as any).__nativeCallAudioRoutesRef?.current?.preferred || '',
+    );
+    return preferred && isExternalHeadsetRoute(preferred) ? preferred : null;
+  } catch {
+    return null;
   }
 }
 
@@ -561,7 +572,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
 
     if (fromAudioOnlyUi) {
       const userSel = readUserSelectedCallAudioRoute();
+      const lockedExternal = readUserSelectedExternalCallAudioRoute();
       let routeNorm =
+        lockedExternal ||
         userSel ||
         normalizeInCallRoute(p.audioOutputRoute || '') ||
         readInAppPiPAudioOutputRoute() ||
@@ -619,7 +632,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         scheduleReapplyPersistedCallAudioRoute('in_app_pip_from_audio', audioReapplyOpts);
       }
     } else {
+      const lockedExternal = readUserSelectedExternalCallAudioRoute();
       let videoRouteNorm =
+        lockedExternal ||
         readUserSelectedCallAudioRoute() ||
         normalizeInCallRoute(p.audioOutputRoute || '') ||
         readInAppPiPAudioOutputRoute();
@@ -931,17 +946,6 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
       return [];
     };
-
-function readNativePreferredExternalRoute(): InCallAudioRoute | null {
-  try {
-    const preferred = normalizeInCallRoute(
-      (global as any).__nativeCallAudioRoutesRef?.current?.preferred || '',
-    );
-    return preferred && isExternalHeadsetRoute(preferred) ? preferred : null;
-  } catch {
-    return null;
-  }
-}
 
     let unplugConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 

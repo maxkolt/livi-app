@@ -34,6 +34,11 @@ import { logger } from '../../../utils/logger';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { trackReleaseEvent } from '../../../utils/telemetry';
 import { getIceConfiguration } from '../../../utils/iceConfig';
+import {
+  adoptDirectCallAudioPrewarm,
+  disposeDirectCallAudioPrewarm,
+  prefetchDirectCallIce,
+} from '../../../utils/directCallConnectPrewarm';
 import { getFastStartVideoCaptureOptions, getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { buildCallEndSocketPayload } from '../../../utils/callEndPayload';
 import { getInstallId } from '../../../utils/installId';
@@ -241,6 +246,10 @@ export class VideoCallSession extends SimpleEventEmitter {
   constructor(config: WebRTCSessionConfig) {
     super();
     this.config = config;
+    const initialCallId = String((config as { initialCallId?: string | null }).initialCallId || '').trim();
+    if (initialCallId) {
+      this.callId = initialCallId;
+    }
     if (config.startWithCamOff) {
       this.isCamOn = false;
       this.deferRemoteVideoSubscription = true;
@@ -274,7 +283,6 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Проверяем, есть ли сохраненное событие call:accepted, которое пришло до создания сессии
     // Это решает проблему, когда call:accepted приходит до того, как VideoCallSession создан
     const pendingCallAccepted = (global as any).__pendingCallAcceptedRef?.current;
-    const initialCallId = (config as { initialCallId?: string | null }).initialCallId;
     const pendingCallId = pendingCallAccepted ? String(pendingCallAccepted?.callId ?? '') : '';
     const usePending = pendingCallAccepted && (!initialCallId || pendingCallId === String(initialCallId));
     if (pendingCallAccepted && !usePending) {
@@ -293,6 +301,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       });
       // Очищаем сохраненное событие
       (global as any).__pendingCallAcceptedRef.current = null;
+      prefetchDirectCallIce('session:pending-call-accepted');
       // Microtask: раньше, чем setTimeout(0), чтобы инициатор начал Room.connect до конца текущего
       // React useEffect и уменьшил окно «ответивший один в комнате».
       // Параллельно поднимаем локальные треки тем же тиком, что и handleCallAccepted — пока идёт
@@ -694,6 +703,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     });
     
     // Останавливаем локальные треки и сбрасываем состояние
+    disposeDirectCallAudioPrewarm('session:endCall');
     void this.disconnectRoom('user');
     this.resetRemoteState();
     this.stopLocalTracks();
@@ -2745,6 +2755,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   private async handleCallAccepted(data: CallAcceptedPayload): Promise<void> {
     const targetRoomName = data.livekitRoomName ?? data.roomId ?? null;
     const callId = data.callId ?? null;
+    prefetchDirectCallIce('session:call-accepted');
     
     // КРИТИЧНО: Обрабатывать call:accepted должна только "активная" сессия (та, что в глобальном ref).
     // Иначе несколько экземпляров сессии (например, до очистки старых при ремаунте) все подключаются к комнате
@@ -3740,12 +3751,20 @@ export class VideoCallSession extends SimpleEventEmitter {
 
     const wantVideo = this.isCamOn;
     let tracks: LocalTrack[] = [];
+    const adoptedAudioTrack = !wantVideo ? adoptDirectCallAudioPrewarm() : null;
+    if (!wantVideo && !adoptedAudioTrack) {
+      disposeDirectCallAudioPrewarm('session:create-own-audio');
+    }
     try {
-      tracks = await createLocalTracks(
-        wantVideo
-          ? { audio: true, video: preferred.primary }
-          : { audio: true, video: false },
-      );
+      if (adoptedAudioTrack) {
+        tracks = [adoptedAudioTrack];
+      } else {
+        tracks = await createLocalTracks(
+          wantVideo
+            ? { audio: true, video: preferred.primary }
+            : { audio: true, video: false },
+        );
+      }
     } catch (e1) {
       if (!wantVideo) {
         logger.error('[VideoCallSession] Failed to create audio-only local tracks', {

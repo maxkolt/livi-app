@@ -168,6 +168,8 @@ export function applyCallEndedGlobalRefsOnce(
     g.__currentCallPiPParamsRef.current = null;
     g.__acceptCallTimeRef = g.__acceptCallTimeRef || { current: 0 };
     g.__acceptCallTimeRef.current = 0;
+    g.__directAudioEarpieceStabilizeUntilRef = g.__directAudioEarpieceStabilizeUntilRef || { current: 0 };
+    g.__directAudioEarpieceStabilizeUntilRef.current = 0;
     g.__callConnectedAtRef = g.__callConnectedAtRef || { current: null };
     g.__callConnectedAtRef.current = null;
     g.__directCallAudioOnlyMountKeyRef = g.__directCallAudioOnlyMountKeyRef || { current: null };

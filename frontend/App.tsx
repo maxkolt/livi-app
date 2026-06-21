@@ -98,6 +98,11 @@ import {
   clearEndingCallInProgress,
   shouldKeepInCallAudioOnAppBackground,
 } from './utils/activeCallSession';
+import {
+  disposeDirectCallAudioPrewarm,
+  prefetchDirectCallIce,
+  prewarmDirectCallAudioCapture,
+} from './utils/directCallConnectPrewarm';
 import { restoreCallMediaAfterSystemPiPReturn } from './utils/callAudioRoutePersist';
 import {
   installAppNavigationGuard,
@@ -177,6 +182,29 @@ const ENDED_CALL_IDS_TTL_MS = 120000;
 function addEndedCallIdFromSocket(callId: string) {
   endedCallIdsFromSocket.add(callId);
   setTimeout(() => endedCallIdsFromSocket.delete(callId), ENDED_CALL_IDS_TTL_MS);
+}
+
+// call:accepted может прийти дважды до того, как React Navigation успеет сменить route.
+// Короткий guard не даёт инициатору открыть второй VideoCall/mount поверх первого.
+const acceptedVideoCallNavInFlight = new Map<string, number>();
+const ACCEPTED_VIDEO_CALL_NAV_IN_FLIGHT_TTL_MS = 5000;
+function isAcceptedVideoCallNavigationInFlight(callId?: string | null): boolean {
+  const cid = String(callId || '').trim();
+  if (!cid) return false;
+  const markedAt = acceptedVideoCallNavInFlight.get(cid);
+  if (!markedAt) return false;
+  if (Date.now() - markedAt > ACCEPTED_VIDEO_CALL_NAV_IN_FLIGHT_TTL_MS) {
+    acceptedVideoCallNavInFlight.delete(cid);
+    return false;
+  }
+  return true;
+}
+
+function markAcceptedVideoCallNavigationInFlight(callId?: string | null): void {
+  const cid = String(callId || '').trim();
+  if (!cid) return;
+  acceptedVideoCallNavInFlight.set(cid, Date.now());
+  setTimeout(() => acceptedVideoCallNavInFlight.delete(cid), ACCEPTED_VIDEO_CALL_NAV_IN_FLIGHT_TTL_MS);
 }
 
 /** reauth шлёт call:accepted для «висящей» сессии — на Home без контекста звонка снимаем её на сервере. */
@@ -632,11 +660,16 @@ function AppContent() {
     logger.info('[App] Completing incoming answer', { callId, from });
     clearEndingCallInProgress();
     incomingCallIdRef.current = callId;
+    const answerMediaHint = getCallMediaHint(callId);
     const gAns = global as any;
     gAns.__incomingAnswerPeerUserIdRef = gAns.__incomingAnswerPeerUserIdRef || { current: null as string | null };
     gAns.__incomingAnswerPeerUserIdRef.current = String(from || '').trim() || null;
     rememberExpectedCallAccepted(callId, 'incoming-answer');
     beginEarlyIncomingCallAccept(callId);
+    prefetchDirectCallIce('app:android-incoming-answer');
+    if (answerMediaHint === 'audio') {
+      prewarmDirectCallAudioCapture('app:android-incoming-answer');
+    }
     if (Platform.OS === 'android' && callId) {
       try {
         primeAndroidCallContextForLeaveHint({ callId });
@@ -650,13 +683,12 @@ function AppContent() {
       try { stopIncomingCallForegroundService(); } catch {}
       try { sendCallAnsweredBroadcast(callId); } catch {}
       try {
-        const mediaHint = getCallMediaHint(callId);
         registerIncomingCallKeepSession(callId, from, {
-          hasVideo: mediaHint !== 'audio',
+          hasVideo: answerMediaHint !== 'audio',
         });
       } catch (_) {}
     }
-    await openAnswerCallScreen(from, callId, getCallMediaHint(callId));
+    await openAnswerCallScreen(from, callId, answerMediaHint);
   }, [rememberExpectedCallAccepted, setIncomingAnswerTransitionGuard]);
 
   const completeAndroidIncomingAnswerRef = React.useRef(completeAndroidIncomingAnswer);
@@ -1111,6 +1143,7 @@ function AppContent() {
           });
         },
         onEnd: (callId) => {
+          disposeDirectCallAudioPrewarm('app:callkeep-end');
           stopIncomingCallRingtoneAndVibration();
           try { stopIncomingCallForegroundService(); } catch {}
           const routeName = navRef.getCurrentRoute()?.name;
@@ -2295,6 +2328,10 @@ function AppContent() {
       String((d as any).media || '').toLowerCase() === 'video' ? 'video' : 'audio';
     const hasVideo = incomingMedia === 'video';
     try { setCallMediaHint(d.callId, incomingMedia); } catch {}
+    prefetchDirectCallIce('app:call-incoming');
+    if (Platform.OS === 'android' && incomingMedia === 'audio') {
+      prewarmDirectCallAudioCapture('app:call-incoming');
+    }
 
     // Android: мы отказались от кастомных модалок — входящий всегда открываем нативным экраном
     // поверх любого экрана/вкладки/модалки в приложении (в т.ч. "неактивный" VideoCall после завершения).
@@ -2829,6 +2866,7 @@ function AppContent() {
         return;
       }
       if (id) markOutgoingDeclineHandled(id);
+      disposeDirectCallAudioPrewarm('app:call-declined');
       incomingCallIdRef.current = null;
       if (d?.callId) try { reportEndCallToCallKeep(d.callId); } catch {}
       stopIncomingCallRingtoneAndVibration();
@@ -2850,6 +2888,7 @@ function AppContent() {
       const callerId = String((d as any)?.from || '');
       const myUserId = getCurrentUserId?.() ?? '';
       const isCallee = callerId && myUserId && callerId !== myUserId;
+      disposeDirectCallAudioPrewarm('app:call-canceled');
       incomingCallIdRef.current = null;
       const callIdStr = (d as any)?.callId ? String((d as any).callId) : '';
       if (callIdStr) {
@@ -2957,6 +2996,7 @@ function AppContent() {
       // Не переходить на VideoCall, если по сокету уже пришло call:ended (звонок уже завершён) — избегаем мелькания и лишних сессий
       if (callId && endedCallIdsFromSocket.has(callId)) {
         logger.info('[App] ⏭️ call:accepted ignored (call already ended)', { callId });
+        disposeDirectCallAudioPrewarm('app:accepted-already-ended');
         try { setOutgoingCallScreenVisible(false); } catch {}
         try { setIncomingCallScreenVisible(false); } catch {}
         try { emitCloseOutgoingCall(); } catch {}
@@ -3013,6 +3053,7 @@ function AppContent() {
           incomingCallId: incomingCallIdRef.current,
           isCaller,
         });
+        disposeDirectCallAudioPrewarm('app:accepted-no-context');
         if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
         if (callId && !alreadyOnVideoCall) {
           endStaleCallAcceptedOnServer(callId, data, 'no-active-call-context');
@@ -3022,6 +3063,7 @@ function AppContent() {
       // Инициатор: закрывать нативный экран исходящего только если принят именно текущий звонок
       if (isCaller && callId && currentOutgoing != null && String(currentOutgoing) !== String(callId)) {
         logger.info('[App] ⏭️ call:accepted ignored (callId not current outgoing)', { callId, currentOutgoing });
+        disposeDirectCallAudioPrewarm('app:accepted-wrong-outgoing');
         if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
         return;
       }
@@ -3046,6 +3088,12 @@ function AppContent() {
       // не перезаписываем pending ref и не дёргаем UI (в логах второй дубль часто приходит в `connecting`, не только в `connected`).
       if (alreadyOnVideoCall && callId) {
         try {
+          if (isAcceptedVideoCallNavigationInFlight(callId)) {
+            logger.info('[App] ⏭️ call:accepted duplicate ignored (VideoCall navigation already in flight)', {
+              callId,
+            });
+            return;
+          }
           const sess = (global as any).__webrtcSessionRef?.current;
           const sid =
             sess && typeof sess.getCallId === 'function' ? String(sess.getCallId() || '').trim() : '';
@@ -3064,12 +3112,27 @@ function AppContent() {
           }
         } catch (_) {}
       }
+      if (isCaller && callId && isAcceptedVideoCallNavigationInFlight(callId)) {
+        logger.info('[App] ⏭️ call:accepted duplicate ignored before pending overwrite (caller navigation in flight)', {
+          callId,
+          currentRouteName,
+        });
+        return;
+      }
       (global as any).__pendingCallAcceptedRef.current = data;
       logger.info('[App] 💾 Saved call:accepted event to global ref', {
         callId: data?.callId,
         hasLivekitToken: !!(data as any)?.livekitToken,
         hasLivekitRoomName: !!(data as any)?.livekitRoomName,
       });
+      prefetchDirectCallIce(isCaller ? 'app:call-accepted:caller' : 'app:call-accepted:callee');
+      const acceptedMedia =
+        isCaller && (global as any).__outgoingCallMediaRef?.current === 'video'
+          ? 'video'
+          : getCallMediaHint(callId);
+      if (Platform.OS === 'android' && acceptedMedia === 'audio') {
+        prewarmDirectCallAudioCapture(isCaller ? 'app:call-accepted:caller' : 'app:call-accepted:callee');
+      }
       
       try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
@@ -3128,6 +3191,18 @@ function AppContent() {
                   peerUserId,
                   ...videoCallNavExtras((data as any)?.callId),
                 };
+            if (isCaller && callId) {
+              if (isAcceptedVideoCallNavigationInFlight(callId)) {
+                logger.info('[App] ⏭️ call:accepted duplicate ignored (caller VideoCall navigation already in flight)', {
+                  callId: data?.callId,
+                  peerUserId,
+                  myUserId: myUserId || undefined,
+                });
+                closeAcceptedCallUi();
+                return;
+              }
+              markAcceptedVideoCallNavigationInFlight(callId);
+            }
             logger.info('[App] 🚀 Navigating to VideoCall screen', {
               callId: data?.callId,
               peerUserId,
@@ -3204,6 +3279,7 @@ function AppContent() {
       logger.debug('Call timeout received', { callId: d?.callId });
       const callId = String((d as any)?.callId || '');
       const wasCanceled = !!(callId && canceledCallsRef.current.has(callId));
+      disposeDirectCallAudioPrewarm('app:call-timeout');
       incomingCallIdRef.current = null;
       if (callId) try { reportEndCallToCallKeep(callId); } catch {}
       if (callId) {
@@ -3255,6 +3331,7 @@ function AppContent() {
         // если всё ещё висит входящий — считаем пропущенным и сворачиваем
         const cur = incoming; // замкнём
         if (cur) {
+          disposeDirectCallAudioPrewarm('app:incoming-fallback-timeout');
           try {
             // если уже пришёл реальный timeout/cancel для этого звонка — не инкрементим повторно
             const cid = String((cur as any)?.callId || '');

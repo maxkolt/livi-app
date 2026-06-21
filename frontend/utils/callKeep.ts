@@ -6,6 +6,7 @@ import { Platform, NativeModules } from 'react-native';
 import { logger } from './logger';
 import { setIncomingCallScreenVisible } from '../sockets/socket';
 import { loadLang, t } from './i18n';
+import { prefetchDirectCallIce, prewarmDirectCallAudioCapture } from './directCallConnectPrewarm';
 
 /** Единый источник таймаута исходящего вызова (мс). Передаётся в натив при старте, используется в HomeScreen/App и в LiviOutgoingCallService. */
 export const OUTGOING_CALL_TIMEOUT_MS = 27_000;
@@ -503,6 +504,10 @@ export function setOutgoingCallTimeoutMs(ms: number): void {
  * Вызывать в момент нажатия кнопки видеозвонка. После получения callId вызвать notifyOutgoingCallId(callId).
  */
 export function displayOutgoingCallImmediate(toUserId: string, toNick?: string, hasVideo = true): void {
+  prefetchDirectCallIce('callKeep:outgoing-immediate');
+  if (!hasVideo) {
+    prewarmDirectCallAudioCapture('callKeep:outgoing-immediate');
+  }
   logger.info('[outgoing] displayOutgoingCallImmediate called', {
     toUserId,
     toNick: toNick ?? '',

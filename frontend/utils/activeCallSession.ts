@@ -10,6 +10,7 @@ import { readNativeProbedExternalRoute } from './nativeCallAudioProbe';
 /** Direct-call / video UI: сброс sticky audio-only refs (Home/PiP не должны включать audio_home speaker). */
 export function markDirectCallVideoMediaActive(): void {
   try {
+    clearDirectAudioEarpieceStabilizeWindow();
     const g = global as any;
     g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
     g.__stayOnVideoCallUiRef.current = true;
@@ -24,6 +25,42 @@ export function markDirectCallVideoMediaActive(): void {
       params.preferVideoCallUi = true;
     }
   } catch {}
+}
+
+const DIRECT_AUDIO_EARPIECE_STABILIZE_MS = 3200;
+
+/** После accept direct audio: не давать foreground/reapply/poll переключать на громкую связь. */
+export function armDirectAudioEarpieceStabilizeWindow(ms = DIRECT_AUDIO_EARPIECE_STABILIZE_MS): void {
+  try {
+    const g = global as any;
+    g.__directAudioEarpieceStabilizeUntilRef = g.__directAudioEarpieceStabilizeUntilRef || { current: 0 };
+    g.__directAudioEarpieceStabilizeUntilRef.current = Math.max(
+      Number(g.__directAudioEarpieceStabilizeUntilRef.current || 0),
+      Date.now() + ms,
+    );
+  } catch {}
+}
+
+export function clearDirectAudioEarpieceStabilizeWindow(): void {
+  try {
+    const g = global as any;
+    if (g.__directAudioEarpieceStabilizeUntilRef) {
+      g.__directAudioEarpieceStabilizeUntilRef.current = 0;
+    }
+  } catch {}
+}
+
+export function isDirectAudioEarpieceStabilizeWindow(): boolean {
+  try {
+    const g = global as any;
+    if (Date.now() >= Number(g.__directAudioEarpieceStabilizeUntilRef?.current || 0)) return false;
+    if (isInAudioOnlyCallUi()) return true;
+    if (g.__inAudioOnlyUiRef?.current === true) return true;
+    const params = g.__currentCallPiPParamsRef?.current;
+    if (params?.inAudioOnlyUi === true) return true;
+    if (params?.preferVideoCallUi === false && params?.callMedia !== 'video') return true;
+  } catch {}
+  return false;
 }
 
 /** Активный звонок уже на video UI / с камерой — не трактовать как audio-only для маршрута. */
@@ -148,6 +185,7 @@ export function shouldDeferRandomChatStopOnAppBackground(): boolean {
 
 export function resolveActiveCallInCallMedia(): 'audio' | 'video' {
   try {
+    if (isDirectAudioEarpieceStabilizeWindow()) return 'audio';
     if (ongoingCallPrefersVideoMedia()) return 'video';
     if (isInAudioOnlyCallUi()) return 'audio';
     const g = global as any;
@@ -174,6 +212,7 @@ export function resolvePersistedCallAudioRouteForActiveUi(
   if (!route) return null;
   if (isExternalHeadsetRoute(route)) return route;
   if (isInAudioOnlyCallUi()) return route;
+  if (isDirectAudioEarpieceStabilizeWindow()) return route;
   if (route === 'EARPIECE') return 'SPEAKER_PHONE';
   return route;
 }
@@ -235,6 +274,40 @@ export function readLastAppliedCallAudioRoute(): InCallAudioRoute | null {
   }
 }
 
+export function markUserSelectedExternalCallAudioRoute(route: InCallAudioRoute, ttlMs = 10000): void {
+  if (!isExternalHeadsetRoute(route)) return;
+  try {
+    const g = global as any;
+    g.__userSelectedExternalCallAudioRouteRef = {
+      current: {
+        route,
+        until: Date.now() + ttlMs,
+      },
+    };
+  } catch {}
+}
+
+export function readUserSelectedExternalCallAudioRoute(): InCallAudioRoute | null {
+  try {
+    const entry = (global as any).__userSelectedExternalCallAudioRouteRef?.current;
+    const route = normalizeInCallRoute(entry?.route || '');
+    if (!route || !isExternalHeadsetRoute(route)) return null;
+    if (Number(entry?.until || 0) <= Date.now()) return null;
+    const available = (() => {
+      try {
+        const av = (global as any).__inCallAvailableAudioRoutesRef?.current;
+        return Array.isArray(av) ? av.map((s: unknown) => String(s)) : [];
+      } catch {
+        return [];
+      }
+    })();
+    if (available.length && !available.includes(route)) return null;
+    return route;
+  } catch {
+    return null;
+  }
+}
+
 export function captureCallAudioRouteFromUi(): void {
   try {
     const g = global as any;
@@ -270,6 +343,7 @@ export function readActiveExternalCallAudioRoute(
 ): InCallAudioRoute | null {
   try {
     const candidates = [
+      readUserSelectedExternalCallAudioRoute(),
       normalizeInCallRoute(liveUserRoute || ''),
       readLastAppliedCallAudioRoute(),
       normalizeInCallRoute((global as any).__currentCallPiPParamsRef?.current?.audioOutputRoute || ''),
@@ -330,6 +404,11 @@ export function setUserSelectedCallAudioRoute(route: InCallAudioRoute | null): v
     const g = global as any;
     g.__userSelectedCallAudioRouteRef = g.__userSelectedCallAudioRouteRef || { current: null };
     g.__userSelectedCallAudioRouteRef.current = route;
+    if (!route || route === 'EARPIECE' || route === 'SPEAKER_PHONE') {
+      if (g.__userSelectedExternalCallAudioRouteRef) {
+        g.__userSelectedExternalCallAudioRouteRef.current = null;
+      }
+    }
     if (route) {
       g.__lastAppliedCallAudioRouteRef = { current: route };
     }

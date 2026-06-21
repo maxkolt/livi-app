@@ -79,6 +79,11 @@ import ChatStyleBackButton from '../components/ChatStyleBackButton';
 import { loadProfileFromStorage, saveProfileToStorage, clearAllAvatarCaches } from '../utils/profileStorage';
 // УБРАНО: forceClearUserDataOnly не используется - вместо этого используется hardLocalReset() и clearAllUserData() из socket.ts
 import { warmAvatar, putThumb, putFull, getFull, clearAvatarCacheFor } from '../utils/avatarCache';
+import {
+  disposeDirectCallAudioPrewarm,
+  prefetchDirectCallIce,
+  prewarmDirectCallAudioCapture,
+} from '../utils/directCallConnectPrewarm';
 import * as FileSystem from 'expo-file-system';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
@@ -1787,6 +1792,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     const outgoingPeerId =
       (calling.friend?.id != null ? String(calling.friend.id) : '') ||
       String(lastOutgoingPeerIdRef.current || '');
+    disposeDirectCallAudioPrewarm(`home:outgoing-external-close:${source}`);
     activeOutgoingAttemptRef.current = 0;
     pendingCancelRef.current = true;
     outgoingCallUserCanceledRef.current = true;
@@ -1962,6 +1968,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     clearOutgoingDeclineHandled();
     try {
       warmCallSignaling();
+      prefetchDirectCallIce('home:direct-call-start');
+      if (Platform.OS === 'android' && media === 'audio') {
+        prewarmDirectCallAudioCapture('home:direct-call-start');
+      }
       pendingCancelRef.current = false;
       outgoingCallUserCanceledRef.current = false;
       lastOutgoingPeerIdRef.current = String(friend.id);
@@ -2048,6 +2058,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       sub(
         onCallDeclined?.(() => {
           finishOutgoing(() => {
+            disposeDirectCallAudioPrewarm('home:outgoing-declined');
             logger.info('[decline/инициатор] HomeScreen offDeclined: setCalling(false), stopWaves, showNotice');
             try { setOutgoingCallScreenVisible(false); } catch {}
             try { closeOutgoingCallActivity(); } catch {}
@@ -2064,6 +2075,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       sub(
         onCallTimeout?.(() => {
           finishOutgoing(() => {
+            disposeDirectCallAudioPrewarm('home:outgoing-timeout');
             try { setOutgoingCallScreenVisible(false); } catch {}
             try { closeOutgoingCallActivity(); } catch {}
             forceResetCallBusyRefs();
@@ -2077,6 +2089,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       sub(
         onCallRoomFull?.(() => {
           finishOutgoing(() => {
+            disposeDirectCallAudioPrewarm('home:outgoing-room-full');
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             stopWaves();
@@ -2089,6 +2102,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       sub(
         onCallCanceled?.(() => {
           finishOutgoing(() => {
+            disposeDirectCallAudioPrewarm('home:outgoing-canceled');
             try { setOutgoingCallScreenVisible(false); } catch {}
             try { closeOutgoingCallActivity(); } catch {}
             forceResetCallBusyRefs();
@@ -2153,6 +2167,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         try { cancelCall(r.callId); } catch {}
         pendingCancelRef.current = false;
         finishOutgoing(() => {
+          disposeDirectCallAudioPrewarm('home:outgoing-canceled-after-start');
           try { setOutgoingCallScreenVisible(false); } catch {}
           try { closeOutgoingCallActivity(); } catch {}
           forceResetCallBusyRefs();
@@ -2168,6 +2183,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const callIdForTimeout = r.callId;
       safeguardTimer = setTimeout(() => {
         finishOutgoing(() => {
+          disposeDirectCallAudioPrewarm('home:outgoing-safeguard-timeout');
           try { setOutgoingCallScreenVisible(false); } catch {}
           try { closeOutgoingCallActivity(); } catch {}
           if (callIdForTimeout) try { reportEndCallToCallKeep(callIdForTimeout); } catch {}
@@ -2180,6 +2196,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     } catch (e: any) {
       const errCode = String(e?.message ?? e ?? '').trim();
       logger.warn('[outgoing] handleStartDirectCall failed', { error: errCode, media });
+      disposeDirectCallAudioPrewarm('home:outgoing-start-failed');
       if (isCurrentAttempt()) activeOutgoingAttemptRef.current = 0;
       try { setOutgoingCallScreenVisible(false); } catch {}
       try { closeOutgoingCallActivity(); } catch {}

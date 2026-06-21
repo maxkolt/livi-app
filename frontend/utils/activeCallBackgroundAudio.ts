@@ -1,5 +1,5 @@
 import { AppState, Platform, type AppStateStatus, NativeModules } from 'react-native';
-import { captureCallAudioRouteFromUi, isOngoingCallSession, peekSystemPiPReturnMediaSnapshot, resolveActiveCallInCallMedia, readActiveExternalCallAudioRoute } from './activeCallSession';
+import { captureCallAudioRouteFromUi, isOngoingCallSession, peekSystemPiPReturnMediaSnapshot, resolveActiveCallInCallMedia, readActiveExternalCallAudioRoute, isDirectAudioEarpieceStabilizeWindow } from './activeCallSession';
 import {
   pinLoudSpeakerForAudioCallLeavingToBackground,
   reapplyPersistedCallAudioRoute,
@@ -115,10 +115,16 @@ function onAppStateChange(next: AppStateStatus): void {
     }
     const foregroundExternal =
       readActiveExternalCallAudioRoute() || readNativeProbedExternalRoute();
+    const stabilizeEarpiece = isDirectAudioEarpieceStabilizeWindow() && !foregroundExternal;
     if (foregroundExternal) {
       setPersistedCallAudioRoute(foregroundExternal);
       try {
         (global as any).__lastAppliedCallAudioRouteRef = { current: foregroundExternal };
+      } catch {}
+    } else if (stabilizeEarpiece) {
+      setPersistedCallAudioRoute('EARPIECE');
+      try {
+        (global as any).__lastAppliedCallAudioRouteRef = { current: 'EARPIECE' };
       } catch {}
     } else {
       captureCallAudioRouteFromUi();
@@ -134,6 +140,8 @@ function onAppStateChange(next: AppStateStatus): void {
           readActiveExternalCallAudioRoute() || readNativeProbedExternalRoute();
         if (onHomeWithPlaque) {
           restoreCallAudioForInAppPiPPlaque('app_state_foreground_in_app_pip');
+        } else if (stabilizeEarpiece) {
+          // Маршрут уже зафиксирован на earpiece в окне после accept — без цепочки reapply.
         } else if (external) {
           setPersistedCallAudioRoute(external);
           scheduleReapplyPersistedCallAudioRoute('app_state_foreground_headset', {
@@ -143,15 +151,17 @@ function onAppStateChange(next: AppStateStatus): void {
           });
         } else {
           scheduleReapplyPersistedCallAudioRoute('app_state_foreground', {
-            media: resolveActiveCallInCallMedia(),
+            media: isDirectAudioEarpieceStabilizeWindow() ? 'audio' : resolveActiveCallInCallMedia(),
             delaysMs: FOREGROUND_REAPPLY_DELAYS_MS,
           });
         }
       } catch {
-        scheduleReapplyPersistedCallAudioRoute('app_state_foreground', {
-          media: resolveActiveCallInCallMedia(),
-          delaysMs: FOREGROUND_REAPPLY_DELAYS_MS,
-        });
+        if (!isDirectAudioEarpieceStabilizeWindow()) {
+          scheduleReapplyPersistedCallAudioRoute('app_state_foreground', {
+            media: resolveActiveCallInCallMedia(),
+            delaysMs: FOREGROUND_REAPPLY_DELAYS_MS,
+          });
+        }
       }
       restoreSessionMicrophoneIfNeeded();
     }

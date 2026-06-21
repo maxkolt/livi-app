@@ -25,6 +25,11 @@ import { recordAppliedFromPending } from '../sockets/socket';
 import { loadLang, t } from './i18n';
 import { isIncomingCallExpired } from './callExpiry';
 import { getVoipPushToken } from './voipPush';
+import {
+  disposeDirectCallAudioPrewarm,
+  prefetchDirectCallIce,
+  prewarmDirectCallAudioCapture,
+} from './directCallConnectPrewarm';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 /** Флаг: пользователь заходил во вкладку «Друзья» и «увидел» пропущенные — бейдж и уведомления в шторке скрываем, счётчики в приложении не трогаем. */
@@ -1051,11 +1056,16 @@ export async function openAnswerCallScreen(
     stopIncomingCallAlert();
   } catch {}
   warmCallSignaling();
+  const mediaHint = media ?? getCallMediaHint(callId);
+  prefetchDirectCallIce('push:answer-call-screen');
+  if (Platform.OS === 'android' && mediaHint === 'audio') {
+    prewarmDirectCallAudioCapture('push:answer-call-screen');
+  }
   beginEarlyIncomingCallAccept(callId);
   if (Platform.OS === 'android') {
     sendCallAnsweredBroadcast(callId);
   }
-  await navigateToVideoCallIncoming(peerUserId, callId, media ?? getCallMediaHint(callId));
+  await navigateToVideoCallIncoming(peerUserId, callId, mediaHint);
   try {
     await clearCallRelatedNotificationsAndSyncBadge();
   } catch {}
@@ -1075,6 +1085,7 @@ function moveAppToBackAfterDecline() {
 /** Отклонить звонок (для livi://decline-call из нативного IncomingCallActivity). Ждём сокет, чтобы call:decline дошёл до сервера и у звонящего завершился вызов. После этого уводим приложение в фон.
  * Отклонение получателем не считается пропущенным вызовом — очищаем last_incoming_from. */
 export async function handleDeclineCallFromDeepLink(callId: string): Promise<void> {
+  disposeDirectCallAudioPrewarm('push:decline-call');
   try { setIncomingCallScreenVisible(false); } catch {}
   try {
     stopIncomingCallAlert();
