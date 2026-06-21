@@ -942,7 +942,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     const audioFirst = resolveDirectCallAudioFirst(route?.params ?? {}, callId ?? null);
     if (!inAudioOnlyUiRef.current && !audioFirst) return;
     if (isCallAudioPiPTransitionWindow()) return;
-    if (!opts?.force && readBuiltinCallRouteBeforeHeadset() === 'SPEAKER_PHONE') return;
+    if (
+      userRouteRef.current === 'SPEAKER_PHONE' ||
+      speakerOnRef.current ||
+      readBuiltinCallRouteBeforeHeadset() === 'SPEAKER_PHONE' ||
+      getPersistedCallAudioRoute() === 'SPEAKER_PHONE'
+    ) {
+      return;
+    }
     void (async () => {
       try {
         const res = await InCallManager.getIsWiredHeadsetPluggedIn();
@@ -956,7 +963,13 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           readLastAppliedCallAudioRoute(),
         ].find((r) => r && isExternalHeadsetRoute(r)) || null;
       if (external) return;
-      if (!opts?.force && readBuiltinCallRouteBeforeHeadset() === 'SPEAKER_PHONE') return;
+      if (
+        userRouteRef.current === 'SPEAKER_PHONE' ||
+        speakerOnRef.current ||
+        readBuiltinCallRouteBeforeHeadset() === 'SPEAKER_PHONE'
+      ) {
+        return;
+      }
       userRouteRef.current = 'EARPIECE';
       speakerOnRef.current = false;
       try {

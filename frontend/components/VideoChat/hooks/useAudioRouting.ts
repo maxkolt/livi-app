@@ -412,6 +412,9 @@ export const useAudioRouting = (
     const earpieceMode = !!routingOptionsRef.current?.defaultToEarpiece;
     const { gainedWired, gainedBt } = deviceChangeContextRef.current;
     const userNow = getUserRoute();
+    if (explicitBuiltInChoiceRef.current && (userNow === 'SPEAKER_PHONE' || userNow === 'EARPIECE')) {
+      return userNow;
+    }
     if (isExternalHeadsetRoute(userNow) && available.includes(userNow)) {
       return userNow;
     }
@@ -1249,7 +1252,13 @@ export const useAudioRouting = (
         if (routingOptionsRef.current?.defaultToEarpiece && !readNativeProbedExternalRoute()) {
           const ext = readConnectedExternalCallAudioRoute(getUserRoute());
           if (!ext && !av.includes('BLUETOOTH') && !av.includes('WIRED_HEADSET')) {
-            applySpecificRoute('EARPIECE', 'bootstrap_done', true);
+            const userAtDone = getUserRoute();
+            const doneRoute =
+              explicitBuiltInChoiceRef.current &&
+              (userAtDone === 'SPEAKER_PHONE' || userAtDone === 'EARPIECE')
+                ? userAtDone
+                : 'EARPIECE';
+            applySpecificRoute(doneRoute, 'bootstrap_done', true);
           }
         }
       }
@@ -1312,6 +1321,13 @@ export const useAudioRouting = (
         setSelectedRoute(restoreBuiltin);
         applySpecificRoute(restoreBuiltin, 'preferAudioMode', true);
         return;
+      }
+      if (explicitBuiltInChoiceRef.current) {
+        const pinned = getUserRoute();
+        if (pinned === 'SPEAKER_PHONE' || pinned === 'EARPIECE') {
+          applySpecificRoute(pinned, 'preferAudioMode', true);
+          return;
+        }
       }
       setUserRoute('EARPIECE');
       setSelectedRoute('EARPIECE');
