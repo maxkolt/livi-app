@@ -8,7 +8,7 @@ import {
   scheduleReapplyPersistedCallAudioRoute,
   setPersistedCallAudioRoute,
 } from './callAudioRoutePersist';
-import { rememberBuiltinCallRouteBeforeHeadset } from './callHeadsetAudioFallback';
+import { rememberBuiltinCallRouteBeforeHeadset, rememberDirectCallAudioRouteBeforeVideo } from './callHeadsetAudioFallback';
 
 export { readInAppPiPAudioOutputRoute } from './activeCallSession';
 
@@ -32,6 +32,7 @@ function persistInAppPiPAudioRoute(route: InCallAudioRoute): void {
   const fromAudioPiP = (global as any).__pipInAppRtcFromAudioOnlyRef?.current === true;
   if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') {
     rememberBuiltinCallRouteBeforeHeadset(route, fromAudioPiP);
+    rememberDirectCallAudioRouteBeforeVideo(route);
   }
   setPersistedCallAudioRoute(route);
   try {

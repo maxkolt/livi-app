@@ -334,24 +334,34 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     } catch (_: Exception) {}
                 }
                 showMissedCallNotification(callId, fromUserId, fromNickEnded)
+                Log.d(TAG, "FCM call_ended: missed/timeout, notification only (no startActivity) callId=$callId")
+                return
             }
+
             val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
                 setPackage(packageName)
                 putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
             }
             sendBroadcast(closeIntent)
-            val activityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
-                putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+            if (!isAppProcessForeground()) {
+                val activityIntent = Intent(this, OutgoingCallActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(OutgoingCallActivity.EXTRA_CLOSE_IMMEDIATELY, true)
+                    putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
+                }
+                try {
+                    startActivity(activityIntent)
+                } catch (e: Exception) {
+                    Log.w(TAG, "FCM call_ended: startActivity failed", e)
+                }
+                Log.d(TAG, "FCM call_ended: endedFromActive, broadcast + fallback startActivity(close) callId=$callId")
+            } else {
+                Log.d(TAG, "FCM call_ended: endedFromActive, broadcast only (foreground) callId=$callId")
             }
-            try { startActivity(activityIntent) } catch (e: Exception) { Log.w(TAG, "FCM call_ended: startActivity failed", e) }
             // Собеседник в системном PiP часто без call:ended по сокету. MainActivity закрывает PiP только если isInPictureInPictureMode.
-            // Раньше broadcast шли только при endedFromActive=true — при потере флага в payload (OEM/Expo) окно оставалось висеть.
             val closePipIntent = Intent(ACTION_CLOSE_PIP_CALL_ENDED).apply { setPackage(packageName) }
             sendBroadcast(closePipIntent)
-            Log.d(TAG, "FCM call_ended: sent ACTION_CLOSE_PIP_CALL_ENDED (endedFromActive=$endedFromActive)")
-            Log.d(TAG, "FCM call_ended: incoming canceled, missed=${!endedFromActive}, outgoing closed callId=$callId")
+            Log.d(TAG, "FCM call_ended: sent ACTION_CLOSE_PIP_CALL_ENDED (endedFromActive=true) callId=$callId")
             return
         }
         // Сообщение: одно уведомление на чат (от одного отправителя) — «От кого HH:MM» + превью; бейдж по общему unreadCount из пуша.

@@ -10,6 +10,37 @@ function builtinRef(): { current: BuiltinCallAudioRoute | null } {
   return g.__builtinCallAudioRouteBeforeHeadsetRef;
 }
 
+function beforeVideoRef(): { current: BuiltinCallAudioRoute | null } {
+  const g = global as any;
+  g.__directCallAudioRouteBeforeVideoRef = g.__directCallAudioRouteBeforeVideoRef || { current: null };
+  return g.__directCallAudioRouteBeforeVideoRef;
+}
+
+/** Маршрут (разговорный/громкий) на экране audio до перехода на video UI — не перезаписывается video pin. */
+export function rememberDirectCallAudioRouteBeforeVideo(
+  fromRoute?: InCallAudioRoute | string | null,
+): void {
+  const norm = normalizeInCallRoute(fromRoute || '') as BuiltinCallAudioRoute | null;
+  if (norm === 'EARPIECE' || norm === 'SPEAKER_PHONE') {
+    beforeVideoRef().current = norm;
+    builtinRef().current = norm;
+  }
+}
+
+export function readDirectCallAudioRouteBeforeVideo(): BuiltinCallAudioRoute | null {
+  try {
+    return normalizeInCallRoute(beforeVideoRef().current || '') as BuiltinCallAudioRoute | null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearDirectCallAudioRouteBeforeVideo(): void {
+  try {
+    beforeVideoRef().current = null;
+  } catch {}
+}
+
 export function readBuiltinCallRouteBeforeHeadset(): BuiltinCallAudioRoute | null {
   try {
     return normalizeInCallRoute(builtinRef().current || '') as BuiltinCallAudioRoute | null;
@@ -60,5 +91,6 @@ export function resolveCallRouteAfterHeadsetDisconnect(): BuiltinCallAudioRoute 
 export function clearBuiltinCallRouteBeforeHeadset(): void {
   try {
     builtinRef().current = null;
+    clearDirectCallAudioRouteBeforeVideo();
   } catch {}
 }

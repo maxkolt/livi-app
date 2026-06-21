@@ -29,6 +29,9 @@ import {
 import {
   rememberBuiltinCallRouteBeforeHeadset,
   resolveCallRouteAfterHeadsetDisconnect,
+  readBuiltinCallRouteBeforeHeadset,
+  readDirectCallAudioRouteBeforeVideo,
+  rememberDirectCallAudioRouteBeforeVideo,
 } from '../../../utils/callHeadsetAudioFallback';
 import {
   isOngoingCallSession,
@@ -171,6 +174,9 @@ export const useAudioRouting = (
     const opts = routingOptionsRef.current;
     if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') {
       rememberBuiltinCallRouteBeforeHeadset(route, !!opts?.defaultToEarpiece);
+      if (opts?.defaultToEarpiece) {
+        rememberDirectCallAudioRouteBeforeVideo(route);
+      }
     }
     if (opts?.userRouteRef) {
       opts.userRouteRef.current = route;
@@ -1297,6 +1303,14 @@ export const useAudioRouting = (
         }
       }
       if (isCallAudioBootstrapPending()) {
+        return;
+      }
+      const restoreBuiltin =
+        readDirectCallAudioRouteBeforeVideo() || readBuiltinCallRouteBeforeHeadset();
+      if (restoreBuiltin === 'SPEAKER_PHONE' || restoreBuiltin === 'EARPIECE') {
+        setUserRoute(restoreBuiltin);
+        setSelectedRoute(restoreBuiltin);
+        applySpecificRoute(restoreBuiltin, 'preferAudioMode', true);
         return;
       }
       setUserRoute('EARPIECE');
