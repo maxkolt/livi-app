@@ -85,6 +85,20 @@ function getActiveCallIds(): { roomId: string; callId: string } {
   }
 }
 
+function shouldBlockActiveCallNotificationStart(): boolean {
+  try {
+    const g = global as any;
+    if (g.__endingCallInProgressRef?.current === true) return true;
+    if (g.__callEndedFromPiPNoOpenRef?.current === true) return true;
+    if (g.__endingFromPiPButtonRef?.current === true) return true;
+    const session = g.__webrtcSessionRef?.current;
+    if (session && typeof session.isEnded === 'function' && session.isEnded()) return true;
+    const { roomId, callId } = getActiveCallIds();
+    if (g.__videoCallActiveRef?.current === false && !roomId && !callId) return true;
+  } catch (_) {}
+  return false;
+}
+
 /** Home / system PiP entry window — не сбрасывать leaveHint до onUserLeaveHint. */
 export function isAndroidLeaveHintHomeTransitionHold(): boolean {
   if (Platform.OS !== 'android') return false;
@@ -127,6 +141,7 @@ export function startActiveCallNotification(
 ): void {
   if (Platform.OS !== 'android') return;
   try {
+    if (shouldBlockActiveCallNotificationStart()) return;
     const nick = typeof partnerNick === 'string' ? partnerNick.trim() : '';
     const audioOnly = opts?.audioOnly ?? resolveActiveCallNotificationAudioOnly();
     const signature = `${audioOnly ? 'a' : 'v'}|${nick}`;

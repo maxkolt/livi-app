@@ -284,8 +284,27 @@ export class VideoCallSession extends SimpleEventEmitter {
     // Это решает проблему, когда call:accepted приходит до того, как VideoCallSession создан
     const pendingCallAccepted = (global as any).__pendingCallAcceptedRef?.current;
     const pendingCallId = pendingCallAccepted ? String(pendingCallAccepted?.callId ?? '') : '';
+    const pendingBlockedByTeardown = (() => {
+      try {
+        const g = global as any;
+        return (
+          g.__endingCallInProgressRef?.current === true ||
+          g.__callEndedFromPiPNoOpenRef?.current === true ||
+          g.__endingFromPiPButtonRef?.current === true
+        );
+      } catch {
+        return false;
+      }
+    })();
     const usePending = pendingCallAccepted && (!initialCallId || pendingCallId === String(initialCallId));
-    if (pendingCallAccepted && !usePending) {
+    if (pendingCallAccepted && pendingBlockedByTeardown) {
+      logger.info('[VideoCallSession] ⏭️ Ignoring pending call:accepted during teardown', {
+        pendingCallId,
+        initialCallId: initialCallId ?? undefined,
+        myUserId: config.myUserId,
+      });
+      (global as any).__pendingCallAcceptedRef.current = null;
+    } else if (pendingCallAccepted && !usePending) {
       logger.info('[VideoCallSession] 🔄 Ignoring stale pending call:accepted (callId mismatch)', {
         pendingCallId,
         initialCallId: initialCallId ?? undefined,
@@ -307,6 +326,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       // Параллельно поднимаем локальные треки тем же тиком, что и handleCallAccepted — пока идёт
       // синхронная часть handleCallAccepted / roomLock, камера успевает стартовать (dedupe в ensureLocalTracks).
       queueMicrotask(() => {
+        if (this.ended || this.endCallInProgress || this.isGlobalCallTeardownInProgress()) {
+          logger.info('[VideoCallSession] ⏭️ Pending call:accepted microtask cancelled during teardown', {
+            callId: pendingCallAccepted.callId,
+            myUserId: config.myUserId,
+          });
+          return;
+        }
         void this.ensureLocalTracks().catch((e) => {
           logger.warn('[VideoCallSession] ensureLocalTracks (pending call:accepted) failed', {
             error: (e as Error)?.message || String(e),
@@ -320,6 +346,19 @@ export class VideoCallSession extends SimpleEventEmitter {
           });
         });
       });
+    }
+  }
+
+  private isGlobalCallTeardownInProgress(): boolean {
+    try {
+      const g = global as any;
+      return (
+        g.__endingCallInProgressRef?.current === true ||
+        g.__callEndedFromPiPNoOpenRef?.current === true ||
+        g.__endingFromPiPButtonRef?.current === true
+      );
+    } catch {
+      return false;
     }
   }
 
@@ -669,6 +708,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Сразу помечаем звонок завершённым, чтобы асинхронный код (handleCallAccepted, connectToLiveKit)
     // видел ended и не выполнял пост-подключение / setLocalDescription после disconnect
     this.ended = true;
+    try {
+      if ((global as any).__pendingCallAcceptedRef) {
+        (global as any).__pendingCallAcceptedRef.current = null;
+      }
+    } catch {}
     this.cameraSuspendedForAppBackground = false;
     // КРИТИЧНО: При завершении звонка выключаем системный PiP hint максимально рано,
     // чтобы на некоторых устройствах не происходил автовход в PiP (onUserLeaveHint) во время очистки.
@@ -2755,6 +2799,19 @@ export class VideoCallSession extends SimpleEventEmitter {
   private async handleCallAccepted(data: CallAcceptedPayload): Promise<void> {
     const targetRoomName = data.livekitRoomName ?? data.roomId ?? null;
     const callId = data.callId ?? null;
+    if (this.ended || this.endCallInProgress || this.isGlobalCallTeardownInProgress()) {
+      logger.info('[VideoCallSession] ⏭️ call:accepted ignored during teardown', {
+        callId,
+        roomName: targetRoomName,
+        myUserId: this.config.myUserId,
+      });
+      try {
+        if ((global as any).__pendingCallAcceptedRef) {
+          (global as any).__pendingCallAcceptedRef.current = null;
+        }
+      } catch {}
+      return;
+    }
     prefetchDirectCallIce('session:call-accepted');
     
     // КРИТИЧНО: Обрабатывать call:accepted должна только "активная" сессия (та, что в глобальном ref).
