@@ -203,9 +203,9 @@ const ANDROID_INSTANT_TOUCH =
 /** Изолированные кнопки (меню «прочитано» и т.п.) — со всех сторон одинаково. */
 const ANDROID_FRIEND_ACTION_HIT_SLOP = { top: 14, bottom: 14, left: 14, right: 14 };
 const ANDROID_MENU_HIT_SLOP = { top: 12, bottom: 12, left: 12, right: 12 };
-const MENU_BTN_BORDER = 1;
 const MENU_BTN_RADIUS = 12;
-const MENU_BTN_INNER_RADIUS = MENU_BTN_RADIUS - MENU_BTN_BORDER;
+const MENU_BTN_SIZE = 42;
+const ANIMATED_BORDER_WIDTH = 0.8;
 const ANDROID_SEG_RIPPLE = { color: 'rgba(255,255,255,0.14)', borderless: false as const };
 const FRIENDS_PAGE_SIZE = 50;
 const FRIENDS_MAX_PAGES_PER_LOAD = 10;
@@ -564,6 +564,123 @@ const useLiviNotice = () => {
   return { askConfirm: ask, ConfirmView: view };
 };
 
+/* ================= Animated gradient border (кнопка «Начать поиск», меню) ================= */
+
+const EQUALIZER_GRADIENT_DARK = [
+  '#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0',
+  '#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0',
+];
+const EQUALIZER_GRADIENT_LIGHT = [
+  '#8f7ad8', '#FFF8F0', '#B0B5BF',
+  '#8f7ad8', '#FFF8F0', '#B0B5BF',
+];
+
+type AnimatedGradientBorderProps = {
+  isDark: boolean;
+  width: number;
+  height: number;
+  borderRadius?: number;
+  borderWidth?: number;
+  outerStyle?: StyleProp<ViewStyle>;
+  innerStyle?: StyleProp<ViewStyle>;
+  children: React.ReactNode;
+};
+
+const AnimatedGradientBorder: React.FC<AnimatedGradientBorderProps> = ({
+  isDark,
+  width,
+  height,
+  borderRadius = 12,
+  borderWidth = ANIMATED_BORDER_WIDTH,
+  outerStyle,
+  innerStyle,
+  children,
+}) => {
+  const rotateAnim = useRef(new Animated.Value(0)).current;
+  const colors = isDark ? EQUALIZER_GRADIENT_DARK : EQUALIZER_GRADIENT_LIGHT;
+
+  useEffect(() => {
+    rotateAnim.setValue(0);
+    const rotateAnimation = Animated.loop(
+      Animated.timing(rotateAnim, {
+        toValue: 1,
+        duration: 3000,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+      { iterations: -1 }
+    );
+    rotateAnimation.start();
+    return () => {
+      rotateAnimation.stop();
+      rotateAnim.stopAnimation();
+    };
+  }, [rotateAnim]);
+
+  const rotate = rotateAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  const outerW = width + borderWidth * 2;
+  const outerH = height + borderWidth * 2;
+  const gradientSize = Math.max(width, height) * 2;
+
+  return (
+    <Animated.View
+      style={[
+        {
+          width: outerW,
+          height: outerH,
+          borderRadius: borderRadius + borderWidth,
+          overflow: 'hidden',
+          ...(Platform.OS === 'android' && !isDark
+            ? {
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: 'rgba(138, 143, 153, 0.3)',
+              }
+            : {}),
+        },
+        outerStyle,
+      ]}
+    >
+      <Animated.View
+        style={{
+          position: 'absolute',
+          width: gradientSize,
+          height: gradientSize,
+          left: (outerW - gradientSize) / 2,
+          top: (outerH - gradientSize) / 2,
+          transform: [{ rotate }],
+        }}
+      >
+        <LinearGradient
+          colors={colors as unknown as readonly [string, string, ...string[]]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ width: '100%', height: '100%' }}
+        />
+      </Animated.View>
+      <View
+        style={[
+          {
+            position: 'absolute',
+            top: borderWidth,
+            left: borderWidth,
+            right: borderWidth,
+            bottom: borderWidth,
+            borderRadius,
+            overflow: 'hidden',
+          },
+          innerStyle,
+        ]}
+      >
+        {children}
+      </View>
+    </Animated.View>
+  );
+};
+
 /* ================= Animated Border Button Component ================= */
 
 type AnimatedBorderButtonProps = {
@@ -585,68 +702,16 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
   disabled = false,
   onDisabledPress,
 }) => {
-  const rotateAnim = useRef(new Animated.Value(0)).current;
   const [blurIntensity, setBlurIntensity] = useState<number>(isDark ? 15 : 20);
   const titanOpacity = useRef(new Animated.Value(0.25)).current;
   const blockedFlashOpacity = useRef(new Animated.Value(0)).current;
   const blockedShakeX = useRef(new Animated.Value(0)).current;
-  const borderWidth = 0.8; // Рамка кнопки «Начать поиск»
 
-  // Цвета из палитры эквалайзера для темной темы - зациклены для непрерывности
-  const darkColors = [
-    '#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0', // бирюзовый, синий, голубой, жемчужно-белый
-    '#14b8a6', '#3b82f6', '#00b5ff', '#FFF8F0', // дублируем для плавного перехода
-  ];
-  
-  // Цвета из палитры эквалайзера для светлой темы - зациклены для непрерывности
-  const lightColors = [
-    '#8f7ad8', '#FFF8F0', '#B0B5BF', // фиолетовый (чуть темнее), жемчужно-белый, светлый титан (осветлен)
-    '#8f7ad8', '#FFF8F0', '#B0B5BF', // дублируем для плавного перехода
-  ];
-  
-  const colors = isDark ? darkColors : lightColors;
-
-  useEffect(() => {
-    // Запускаем анимацию сразу при монтировании
-    rotateAnim.setValue(0);
-    const rotateAnimation = Animated.loop(
-      Animated.timing(rotateAnim, {
-        toValue: 1,
-        duration: 3000, // одинаковая скорость для обеих тем
-        easing: Easing.linear, // линейная для непрерывности
-        useNativeDriver: true,
-      }),
-      { iterations: -1 } // бесконечный цикл
-    );
-    rotateAnimation.start();
-
-    return () => {
-      rotateAnimation.stop();
-      rotateAnim.stopAnimation();
-    };
-  }, [rotateAnim]);
-
-  const rotate = rotateAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg'],
-  });
-
-  // Функция для конвертации hex в rgba
-  const hexToRgba = (hex: string, alpha: number): string => {
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  };
-
-  // Цвет титана в зависимости от темы
-  const titanColor = isDark ? '#8A8F99' : '#3B4453'; // LIVI.titan для темной, LightPalette.titan для светлой
-  const titanRgba = hexToRgba(titanColor, 0.25); // 25% непрозрачности для еще большей прозрачности
+  const titanColor = isDark ? '#8A8F99' : '#3B4453';
 
   const buttonWidth = Platform.OS === "ios" ? screenWidth - 60 : screenWidth - 40;
   const buttonHeight = Platform.OS === "ios" ? 60 : 50;
   const borderRadius = 12;
-  const gradientSize = Math.max(buttonWidth, buttonHeight) * 2; // Достаточно большой для плавного движения
 
   const triggerBlockedFeedback = useCallback(() => {
     // Короткий визуальный "нельзя": красный пульс + мягкий шейк.
@@ -680,65 +745,20 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
 
   return (
     <View style={[{ alignItems: 'center', justifyContent: 'center' }, style]}>
-      {/* Внешний контейнер для отражения/тени */}
-      <View
-        style={{
-        
-          alignItems: 'center',
-          justifyContent: 'center',
+      <AnimatedGradientBorder
+        isDark={isDark}
+        width={buttonWidth}
+        height={buttonHeight}
+        borderRadius={borderRadius}
+        outerStyle={{
+          transform: [{ translateX: blockedShakeX }],
+          shadowOpacity: 0,
+          elevation: 0,
+        }}
+        innerStyle={{
+          backgroundColor: backgroundColor || (isDark ? '#151F33' : '#8a8f99'),
         }}
       >
-        {/* Контейнер с градиентной рамкой и внешним отражением */}
-        <Animated.View
-          style={{
-            width: buttonWidth + borderWidth * 2,
-            height: buttonHeight + borderWidth * 2,
-            borderRadius: borderRadius + borderWidth,
-            overflow: 'hidden',
-            transform: [{ translateX: blockedShakeX }],
-            shadowOpacity: 0, // Тень убрана
-            elevation: 0,
-            ...(Platform.OS === "android" && !isDark ? {
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: 'rgba(138, 143, 153, 0.3)', // Титановый цвет с прозрачностью для светлой темы
-            } : {}),
-          }}
-        >
-          {/* Анимированный градиент - заполняет весь контейнер */}
-          <Animated.View
-            style={{
-              position: 'absolute',
-              width: gradientSize,
-              height: gradientSize,
-              left: (buttonWidth + borderWidth * 2 - gradientSize) / 2,
-              top: (buttonHeight + borderWidth * 2 - gradientSize) / 2,
-              transform: [{ rotate }],
-            }}
-          >
-            <LinearGradient
-              colors={colors as unknown as readonly [string, string, ...string[]]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={{
-                width: '100%',
-                height: '100%',
-              }}
-            />
-          </Animated.View>
-          
-          {/* Внутренний контейнер - перекрывает центр градиента, создавая эффект рамки */}
-          <View
-            style={{
-              position: 'absolute',
-              top: borderWidth,
-              left: borderWidth,
-              right: borderWidth,
-              bottom: borderWidth,
-              borderRadius: borderRadius,
-              overflow: 'hidden',
-              backgroundColor: backgroundColor || (isDark ? '#151F33' : '#8a8f99'), // Для светлой темы используем цвет как у других кнопок (btnTitan)
-            }}
-          >
             {/* Эффект стекла с blur - фон страницы просвечивает через размытие */}
             <BlurView
               pointerEvents={Platform.OS === 'android' ? 'none' : 'auto'}
@@ -877,9 +897,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
                 android_ripple={{ color: 'rgba(255,90,103,0.10)', borderless: false }}
               />
             )}
-          </View>
-        </Animated.View>
-      </View>
+      </AnimatedGradientBorder>
     </View>
   );
 };
@@ -5686,12 +5704,11 @@ const handleClearNick = useCallback(async () => {
         </Text>
 
         <View style={{ position: 'relative', flexShrink: 0 }}>
-          {/* Рамка через обёртку: одинаковая толщина на прямых и скруглениях (borderWidth на скруглениях рендерится тоньше) */}
-          <View
-            style={[
-              styles.menuBtnOuter,
-              { backgroundColor: isDark ? LIVI.text : LIVI.textThemeWhite },
-            ]}
+          <AnimatedGradientBorder
+            isDark={isDark}
+            width={MENU_BTN_SIZE}
+            height={MENU_BTN_SIZE}
+            borderRadius={MENU_BTN_RADIUS}
           >
             <Pressable
               hitSlop={Platform.OS === 'android' ? ANDROID_MENU_HIT_SLOP : { top: 8, bottom: 8, left: 8, right: 8 }}
@@ -5713,14 +5730,14 @@ const handleClearNick = useCallback(async () => {
                 pointerEvents="none"
                 intensity={isDark ? 15 : 20}
                 tint={isDark ? 'dark' : 'light'}
-                style={[StyleSheet.absoluteFillObject, { borderRadius: MENU_BTN_INNER_RADIUS }]}
+                style={[StyleSheet.absoluteFillObject, { borderRadius: MENU_BTN_RADIUS }]}
               />
               <View
                 pointerEvents="none"
                 style={[
                   StyleSheet.absoluteFillObject,
                   {
-                    borderRadius: MENU_BTN_INNER_RADIUS,
+                    borderRadius: MENU_BTN_RADIUS,
                     backgroundColor: isDark ? '#8A8F99' : '#3B4453',
                     opacity: isDark ? 0.25 : 0.14,
                   },
@@ -5734,7 +5751,7 @@ const handleClearNick = useCallback(async () => {
                 />
               </View>
             </Pressable>
-          </View>
+          </AnimatedGradientBorder>
           {(() => {
             // КРИТИЧНО: Проверяем наличие непрочитанных сообщений или пропущенных видеозвонков
             // Фильтруем только значения > 0, игнорируем нулевые и отрицательные
@@ -6658,14 +6675,11 @@ const styles = StyleSheet.create({
   topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
   brand: { color: LIVI.text, fontSize: 41, lineHeight: 40, fontWeight: '600', letterSpacing: 0.3 },
   menuBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
-  menuBtnOuter: { borderRadius: MENU_BTN_RADIUS, padding: MENU_BTN_BORDER, alignSelf: 'flex-start', overflow: 'hidden' },
   menuBtnInner: {
-    borderRadius: MENU_BTN_INNER_RADIUS,
+    borderRadius: MENU_BTN_RADIUS,
     overflow: 'hidden',
-    width: 42,
-    height: 42,
-    minWidth: 42,
-    minHeight: 42,
+    width: '100%',
+    height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
   },
