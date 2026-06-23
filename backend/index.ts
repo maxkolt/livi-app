@@ -1259,6 +1259,18 @@ setOnCallSocketDetached((sid) => {
 const callIdToRoomId = new Map<string, string>();
 /** roomId/callId, для которых call:end уже обработан недавно (защита от дублирующих call:end). */
 const recentlyEndedCalls = new Map<string, ReturnType<typeof setTimeout>>();
+const RECENTLY_ENDED_CALL_TTL_MS = 15_000;
+function markRecentlyEndedCallIdentifier(id?: string | null): void {
+  const key = String(id || '').trim();
+  if (!key) return;
+  const prev = recentlyEndedCalls.get(key);
+  if (prev) {
+    try { clearTimeout(prev); } catch {}
+  }
+  recentlyEndedCalls.set(key, setTimeout(() => {
+    try { recentlyEndedCalls.delete(key); } catch {}
+  }, RECENTLY_ENDED_CALL_TTL_MS));
+}
 /** Участник не был подключён в момент call:accept — при reauth отправим ему call:accepted и он подключится в комнату */
 type PendingAcceptedRoom = {
   callId: string;
@@ -1397,6 +1409,21 @@ async function emitPendingCallAcceptedToSocket(
   pendingRoom: PendingAcceptedRoom,
   source: CallAcceptedDeliverySource,
 ): Promise<boolean> {
+  if (
+    recentlyEndedCalls.has(pendingRoom.callId) ||
+    recentlyEndedCalls.has(pendingRoom.roomId) ||
+    !shouldRetainPendingAcceptedRoomForUser(io, userId, pendingRoom)
+  ) {
+    logger.info('[call:accepted_replay] skipped stale pending room', {
+      userId,
+      callId: pendingRoom.callId,
+      roomId: pendingRoom.roomId,
+      source,
+      recentlyEndedCall: recentlyEndedCalls.has(pendingRoom.callId),
+      recentlyEndedRoom: recentlyEndedCalls.has(pendingRoom.roomId),
+    });
+    return false;
+  }
   const deliveryState = rememberCallAcceptedDelivery(pendingRoom.callId, userId, pendingRoom);
   if (socketAlreadyAttachedToPendingRoom(sock, pendingRoom)) {
     return false;
@@ -1823,6 +1850,56 @@ function shouldRetainPendingAcceptedRoomForUser(
   if (isUserInLiveDirectCall(io, uid)) return true;
   if (isOid(peer) && isUserInLiveDirectCall(io, peer)) return true;
   return false;
+}
+
+const DIRECT_CALL_ROOM_RE = /^room_[a-f\d]{24}_[a-f\d]{24}$/i;
+function isDirectCallRoomId(value?: unknown): boolean {
+  return DIRECT_CALL_ROOM_RE.test(String(value ?? '').trim());
+}
+
+function pendingAcceptedRoomMatchesPresencePayload(
+  pending: PendingAcceptedRoom,
+  payloadRoomId?: unknown,
+  socketRoomId?: unknown,
+): boolean {
+  const payloadId = String(payloadRoomId ?? '').trim();
+  const sockId = String(socketRoomId ?? '').trim();
+  if (!payloadId && !sockId) return true;
+  return [payloadId, sockId].some((id) => {
+    if (!id) return false;
+    return id === pending.callId || id === pending.roomId || id === pending.livekitRoomName;
+  });
+}
+
+function getValidActiveDirectPresenceRoom(
+  io: Server,
+  sock: AuthedSocket,
+  userId: string,
+  payload: any,
+): PendingAcceptedRoom | null {
+  const pending = activeRoomByUserId.get(userId);
+  const sockRoomId = String((sock as any)?.data?.roomId || activeCallBySocket.get(sock.id) || '').trim();
+  if (
+    pending &&
+    pendingAcceptedRoomMatchesPresencePayload(pending, payload?.roomId, sockRoomId) &&
+    shouldRetainPendingAcceptedRoomForUser(io, userId, pending)
+  ) {
+    return pending;
+  }
+  if (
+    isDirectCallRoomId(sockRoomId) &&
+    !recentlyEndedCalls.has(sockRoomId) &&
+    (sock as any)?.data?.inCall === true &&
+    String(activeCallBySocket.get(sock.id) || sockRoomId) === sockRoomId
+  ) {
+    return {
+      callId: String(payload?.callId || payload?.roomId || sockRoomId),
+      roomId: sockRoomId,
+      livekitRoomName: sockRoomId,
+      peerUserId: '',
+    };
+  }
+  return null;
 }
 
 async function clearStaleDirectCallPresenceForUser(io: Server, userId: string, reason: string): Promise<void> {
@@ -2387,7 +2464,7 @@ io.on('connection', async (sock: AuthedSocket) => {
         });
         return;
       }
-      if (recentlyEndedCalls.has(id)) {
+      if (recentlyEndedCalls.has(id) || (callId ? recentlyEndedCalls.has(String(callId)) : false)) {
         logger.info('⏭️ [call:end] duplicate ignored (already ended recently)', {
           roomId: id,
           callId: callId || null,
@@ -2395,9 +2472,8 @@ io.on('connection', async (sock: AuthedSocket) => {
         });
         return;
       }
-      recentlyEndedCalls.set(id, setTimeout(() => {
-        try { recentlyEndedCalls.delete(id); } catch {}
-      }, 15_000));
+      markRecentlyEndedCallIdentifier(id);
+      if (callId) markRecentlyEndedCallIdentifier(String(callId));
       if (callId) {
         transitionCall(String(callId), 'ended', {
           actionKey: `socket_end:${String(callId)}`,
@@ -2521,10 +2597,18 @@ io.on('connection', async (sock: AuthedSocket) => {
       for (const uid of callEndedParticipantUserIds) {
         applyFastOfflineAfterCallIfAllSocketsBackground(io, uid);
       }
+      if (callEndedParticipantUserIds.size > 0) {
+        logger.info('[call:end] emitted busy=false for direct call participants', {
+          callId: callId || null,
+          roomId: id,
+          userIds: Array.from(callEndedParticipantUserIds),
+        });
+      }
 
       if (callId) callIdToRoomId.delete(String(callId));
       const cidToCleanupEarly = resolveCallIdFromEndIdentifier(id, callId);
       if (cidToCleanupEarly) {
+        markRecentlyEndedCallIdentifier(String(cidToCleanupEarly));
         try { callIdToRoomId.delete(String(cidToCleanupEarly)); } catch {}
       }
       // Очищаем ожидание повторного входа в комнату (инициатор мог переподключиться и уже получил call:accepted)
@@ -2609,6 +2693,42 @@ io.on('connection', async (sock: AuthedSocket) => {
       });
 
       const inRandomChat = await userHasActiveRandomChat(io, userId);
+
+      if (busy && !inRandomChat) {
+        const activeDirectRoom = getValidActiveDirectPresenceRoom(io, sock, userId, payload);
+        if (!activeDirectRoom) {
+          const entry = await getUserCallEntryFromAnyStore(userId);
+          const link = entry?.callId ? await getCallLinkFromAnyStore(entry.callId) : null;
+          const isRingingDirectCall = !!entry?.callId && !!link && !isDirectCallAcceptedOrActive(entry.callId, link);
+          if (isRingingDirectCall) {
+            logger.info('📍 [presence:update] Direct busy ignored until call accepted', {
+              userId,
+              callId: entry?.callId,
+              roomId: payload?.roomId || null,
+            });
+            return;
+          }
+
+          clearDirectCallSessionForUser(io, userId);
+          try {
+            activeCallBySocket.delete(sock.id);
+          } catch {}
+          const stalePending = activeRoomByUserId.get(userId);
+          if (stalePending && !shouldRetainPendingAcceptedRoomForUser(io, userId, stalePending)) {
+            await clearStaleDirectCallPresenceForUser(io, userId, 'presence-busy-stale-direct');
+          } else if (lastBroadcastBusyByUserId.get(userId) === true) {
+            await emitPresenceUpdateToFriends(io, userId, false);
+          }
+          logger.info('📍 [presence:update] Stale direct busy suppressed', {
+            userId,
+            roomId: payload?.roomId || null,
+            socketRoomId: (sock as any)?.data?.roomId || null,
+            hadPending: !!stalePending,
+            lastBroadcastBusy: lastBroadcastBusyByUserId.get(userId),
+          });
+          return;
+        }
+      }
 
       if (idleOnline) {
         // Клиент явно сообщает «не в звонке» (вкладка Друзья / Home). Снимаем залипший inCall на всех сокетах userId.
@@ -3579,6 +3699,17 @@ io.on('connection', async (sock: AuthedSocket) => {
     const pendingRoom = activeRoomByUserId.get(userId);
     if (!pendingRoom || pendingRoom.callId !== id) return;
     try {
+      if (!shouldRetainPendingAcceptedRoomForUser(io, String(userId), pendingRoom)) {
+        logger.info('[call:getAccepted] stale accepted replay suppressed', {
+          userId,
+          callId: id,
+          roomId: pendingRoom.roomId,
+          recentlyEndedCall: recentlyEndedCalls.has(id),
+          recentlyEndedRoom: recentlyEndedCalls.has(pendingRoom.roomId),
+        });
+        await clearStaleDirectCallPresenceForUser(io, String(userId), 'call-getAccepted-stale');
+        return;
+      }
       const emitted = await emitPendingCallAcceptedToSocket(io, sock, String(userId), pendingRoom, 'call:getAccepted');
       if (emitted) {
         logger.info('[call:getAccepted] Sent call:accepted to caller', { userId, callId: id });

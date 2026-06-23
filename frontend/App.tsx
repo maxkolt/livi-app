@@ -569,10 +569,35 @@ function AppContent() {
   const shouldRequestPendingCallAccepted = React.useCallback((callId?: string | null, source?: string) => {
     const normalizedCallId = String(callId || '').trim();
     if (!normalizedCallId) return false;
+    if (endedCallIdsFromSocket.has(normalizedCallId)) {
+      logger.info('[App] ⏭️ pending call:accepted ignored - call already ended', {
+        callId: normalizedCallId,
+        source,
+      });
+      return false;
+    }
     const currentRouteName = navRef.getCurrentRoute()?.name;
+    const g = global as any;
     const session = (global as any).__webrtcSessionRef?.current;
+    const sessionEnded =
+      !!session && (typeof session.isEnded === 'function' ? !!session.isEnded() : false);
+    const sessionCallId =
+      session && typeof session.getCallId === 'function' ? String(session.getCallId() || '').trim() : '';
+    if (
+      sessionCallId === normalizedCallId &&
+      (sessionEnded ||
+        g.__endingCallInProgressRef?.current === true ||
+        g.__callEndedFromPiPNoOpenRef?.current === true)
+    ) {
+      logger.info('[App] ⏭️ pending call:accepted ignored - same call is ending', {
+        callId: normalizedCallId,
+        source,
+        sessionEnded,
+      });
+      return false;
+    }
     const sessionNotEnded =
-      !!session && (typeof session.isEnded === 'function' ? !session.isEnded() : true);
+      !!session && !sessionEnded;
     const hasMatchingOutgoing =
       (global as any).__outgoingCallIdRef?.current != null &&
       String((global as any).__outgoingCallIdRef.current) === normalizedCallId;
