@@ -2081,6 +2081,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             try { setOutgoingCallScreenVisible(false); } catch {}
             try { closeOutgoingCallActivity(); } catch {}
             forceResetCallBusyRefs();
+            clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
+            lastOutgoingPeerIdRef.current = null;
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             setSwipeActionsHiddenForCall(null);
@@ -2097,6 +2099,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             try { setOutgoingCallScreenVisible(false); } catch {}
             try { closeOutgoingCallActivity(); } catch {}
             forceResetCallBusyRefs();
+            clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
+            lastOutgoingPeerIdRef.current = null;
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             stopWaves();
@@ -2108,6 +2112,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         onCallRoomFull?.(() => {
           finishOutgoing(() => {
             disposeDirectCallAudioPrewarm('home:outgoing-room-full');
+            clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
+            lastOutgoingPeerIdRef.current = null;
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             stopWaves();
@@ -2124,6 +2130,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             try { setOutgoingCallScreenVisible(false); } catch {}
             try { closeOutgoingCallActivity(); } catch {}
             forceResetCallBusyRefs();
+            clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
+            lastOutgoingPeerIdRef.current = null;
             callingVisibleRef.current = false;
             setCalling({ visible: false, friend: null, callId: null });
             stopWaves();
@@ -2205,6 +2213,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           try { setOutgoingCallScreenVisible(false); } catch {}
           try { closeOutgoingCallActivity(); } catch {}
           if (callIdForTimeout) try { reportEndCallToCallKeep(callIdForTimeout); } catch {}
+          clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
+          lastOutgoingPeerIdRef.current = null;
           callingVisibleRef.current = false;
           setCalling({ visible: false, friend: null, callId: null });
           stopWaves();
@@ -3822,7 +3832,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                   friendLastOnlineTrueAtRef.current.delete(id);
                   setFriends((p) =>
                     p.map((x) =>
-                      String(x.id) === id ? { ...x, online: false } : x,
+                      String(x.id) === id ? { ...x, online: false, isBusy: false } : x,
                     ),
                   );
                 }, PRESENCE_OFFLINE_DEBOUNCE_MS);
@@ -5037,7 +5047,7 @@ const handleClearNick = useCallback(async () => {
     const incomingInProgress = incomingCallScreen.visible;
     const isIncomingFromThisFriend = incomingInProgress && incomingCallScreen.fromUserId != null && String(incomingCallScreen.fromUserId) === friendIdStr;
     // Бейдж «Занято» только когда друг реально в звонке (принят вызов). Не показывать: (1) при входящем от этого друга — защита от старого busy и от незадеплоенного бэкенда; (2) при исходящем к этому другу уже учтено (showBusyBadge не использует isOutgoingToThisFriend).
-    const showBusyBadge = isFriendBusy && !isIncomingFromThisFriend;
+    const showBusyBadge = isFriendBusy && friend.online && !isIncomingFromThisFriend;
     const hardVideoDisabled = busy || incomingInProgress || activeCallInProgress;
     const videoDisabled = hardVideoDisabled || outgoingInProgress;
     const pulse = React.useRef(new Animated.Value(0)).current;

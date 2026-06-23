@@ -1448,6 +1448,23 @@ function logCallEndSkipped(callId: string, action: 'cancel' | 'timeout', source:
   });
 }
 
+async function resendBusyFalseForStaleRingingCall(
+  callId: string,
+  link: { a: string; b: string },
+  source: string,
+): Promise<void> {
+  if (isDirectCallAcceptedOrActive(callId, link)) return;
+  clearDirectCallSessionForUser(io, link.a);
+  clearDirectCallSessionForUser(io, link.b);
+  await emitPresenceUpdateCallToFriends(io, link.a, link.b, false);
+  logger.info('[call:presence] resent busy=false for stale ringing call', {
+    callId,
+    source,
+    caller: link.a,
+    callee: link.b,
+  });
+}
+
 /** Late cancel after accept (or duplicate cancel): never emit canceled delivery_summary for an active call. */
 function handleCancelDeduped(callId: string, link: { a: string; b: string }, source: 'socket_deduped' | 'http_deduped'): void {
   logCallEndSkipped(callId, 'cancel', source);
@@ -1457,6 +1474,9 @@ function handleCancelDeduped(callId: string, link: { a: string; b: string }, sou
     });
     return;
   }
+  void resendBusyFalseForStaleRingingCall(callId, link, `cancel_${source}`).catch((e: any) => {
+    logger.warn('[call:cancel] dedupe busy=false replay failed', { callId, source, error: e?.message });
+  });
   if (callsById.has(callId)) cleanupCall(callId, 'canceled');
 }
 
@@ -3078,6 +3098,9 @@ io.on('connection', async (sock: AuthedSocket) => {
         });
         if (!shouldProcess) {
           logCallEndSkipped(callId, 'timeout', 'timer_after_cancel_or_dedup');
+          await resendBusyFalseForStaleRingingCall(callId, link, 'timeout_timer_after_cancel_or_dedup').catch((e: any) => {
+            logger.warn('[call:timeout] dedupe busy=false replay failed', { callId, error: e?.message });
+          });
           if (callsById.has(callId)) cleanupCall(callId);
           return;
         }
