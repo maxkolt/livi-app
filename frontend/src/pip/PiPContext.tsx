@@ -65,6 +65,23 @@ function readNativePreferredExternalRoute(): InCallAudioRoute | null {
   }
 }
 
+function resolvePiPExternalAudioRoute(hint?: InCallAudioRoute | string | null): InCallAudioRoute | null {
+  const lockedExternal = readUserSelectedExternalCallAudioRoute();
+  if (lockedExternal) return lockedExternal;
+  const nativePreferred = readNativePreferredExternalRoute();
+  if (nativePreferred) return nativePreferred;
+  const activeExternal = readActiveExternalCallAudioRoute(hint);
+  if (activeExternal) return activeExternal;
+  const connectedExternal = readConnectedExternalCallAudioRoute(hint);
+  if (connectedExternal) return connectedExternal;
+  const lastApplied = readLastAppliedCallAudioRoute();
+  if (lastApplied && isExternalHeadsetRoute(lastApplied)) {
+    const available = readAvailableAudioDeviceListFromGlobal();
+    if (!available.length || available.includes(lastApplied)) return lastApplied;
+  }
+  return null;
+}
+
 function shouldSkipSuppressOverlayWhenLeavingSystemPiP(): boolean {
   try {
     const g = global as any;
@@ -573,7 +590,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     if (fromAudioOnlyUi) {
       const userSel = readUserSelectedCallAudioRoute();
       const lockedExternal = readUserSelectedExternalCallAudioRoute();
+      const externalRoute = resolvePiPExternalAudioRoute(p.audioOutputRoute || userSel);
       let routeNorm =
+        externalRoute ||
         lockedExternal ||
         userSel ||
         normalizeInCallRoute(p.audioOutputRoute || '') ||
@@ -633,7 +652,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
     } else {
       const lockedExternal = readUserSelectedExternalCallAudioRoute();
+      const externalRoute = resolvePiPExternalAudioRoute(p.audioOutputRoute || readUserSelectedCallAudioRoute());
       let videoRouteNorm =
+        externalRoute ||
         lockedExternal ||
         readUserSelectedCallAudioRoute() ||
         normalizeInCallRoute(p.audioOutputRoute || '') ||
@@ -641,8 +662,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const videoAvailable = readAvailableAudioDeviceListFromGlobal();
       const videoLastApplied = readLastAppliedCallAudioRoute();
       const activeVideoExternal =
-        readActiveExternalCallAudioRoute(videoRouteNorm) ||
-        readNativePreferredExternalRoute();
+        resolvePiPExternalAudioRoute(videoRouteNorm);
       if (activeVideoExternal) {
         videoRouteNorm = activeVideoExternal;
       }
@@ -682,6 +702,34 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           skipInCallRestart: true,
         });
       }
+    }
+
+    if (Platform.OS === 'android') {
+      void probeNativeCallAudioRoutes()
+        .then((probe) => {
+          mergeNativeProbeIntoGlobal(probe);
+          const externalRoute = resolvePiPExternalAudioRoute(p.audioOutputRoute);
+          if (!externalRoute) return;
+          setUserSelectedCallAudioRoute(externalRoute);
+          setPersistedCallAudioRoute(externalRoute);
+          try {
+            const gAudio = global as any;
+            gAudio.__currentCallPiPParamsRef = gAudio.__currentCallPiPParamsRef || { current: null };
+            const params = gAudio.__currentCallPiPParamsRef.current;
+            if (params && typeof params === 'object') {
+              params.audioOutputRoute = externalRoute;
+            }
+            gAudio.__lastAppliedCallAudioRouteRef = { current: externalRoute };
+            gAudio.__onInAppPiPAudioRouteChanged?.(externalRoute);
+            gAudio.__pipUpdateStateRef?.current?.({ audioOutputRoute: externalRoute });
+          } catch {}
+          scheduleReapplyPersistedCallAudioRoute('in_app_pip_preserve_external', {
+            media: fromAudioOnlyUi ? 'audio' : 'video',
+            delaysMs: [0, 450],
+            skipInCallRestart: true,
+          });
+        })
+        .catch(() => {});
     }
 
     // КРИТИЧНО: Ставим флаг PiP синхронно

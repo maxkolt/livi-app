@@ -99,6 +99,20 @@ function readExplicitUserSelectedBuiltInRoute(): InCallAudioRoute | null {
   return null;
 }
 
+function hasExplicitBuiltInIntent(route?: InCallAudioRoute | null): boolean {
+  const explicit = readExplicitUserSelectedBuiltInRoute();
+  if (explicit) return !route || explicit === route;
+  return readExplicitBuiltInFromGlobal();
+}
+
+function isManualRouteReason(reason: string): boolean {
+  return (
+    reason.startsWith('cycle') ||
+    reason.startsWith('toggle') ||
+    reason === 'in_app_pip_audio_route_toggle'
+  );
+}
+
 function readUserSelectedExternalRoute(): InCallAudioRoute | null {
   const userSel = readUserSelectedCallAudioRoute();
   if (userSel === 'BLUETOOTH' || userSel === 'WIRED_HEADSET') return userSel;
@@ -107,11 +121,7 @@ function readUserSelectedExternalRoute(): InCallAudioRoute | null {
 
 function isExplicitBuiltInRouteChoice(reason: string, route: InCallAudioRoute): boolean {
   if (route !== 'EARPIECE' && route !== 'SPEAKER_PHONE') return false;
-  if (
-    reason.startsWith('cycle') ||
-    reason.startsWith('toggle') ||
-    reason === 'in_app_pip_audio_route_toggle'
-  ) {
+  if (isManualRouteReason(reason)) {
     return true;
   }
   if (reason === 'return_to_audio_ui' && readUserSelectedCallAudioRoute() === route) {
@@ -219,7 +229,24 @@ export const useAudioRouting = (
     return defaultUserRoute(opts);
   };
 
-  const setUserRoute = (route: InCallAudioRoute) => {
+  const shouldPersistAppliedRoute = (route: InCallAudioRoute, reason?: string): boolean => {
+    if (isExternalHeadsetRoute(route)) return true;
+    const r = String(reason || '');
+    return (
+      isManualRouteReason(r) ||
+      isHeadsetDisconnectFallbackReason(r) ||
+      r === 'WiredHeadset_unplug' ||
+      r === 'headset_unplug' ||
+      r === 'headset_poll_unplug' ||
+      r === 'headset_bt_unplug' ||
+      hasExplicitBuiltInIntent(route)
+    );
+  };
+
+  const setUserRoute = (
+    route: InCallAudioRoute,
+    writeOpts?: { persist?: boolean },
+  ) => {
     const opts = routingOptionsRef.current;
     if (route === 'EARPIECE' || route === 'SPEAKER_PHONE') {
       rememberBuiltinCallRouteBeforeHeadset(route, !!opts?.defaultToEarpiece);
@@ -233,7 +260,9 @@ export const useAudioRouting = (
     if (opts?.speakerOnRef) {
       opts.speakerOnRef.current = route === 'SPEAKER_PHONE';
     }
-    setPersistedCallAudioRoute(route);
+    if (writeOpts?.persist !== false) {
+      setPersistedCallAudioRoute(route);
+    }
     try {
       (global as any).__lastAppliedCallAudioRouteRef = { current: route };
     } catch {}
@@ -283,7 +312,9 @@ export const useAudioRouting = (
 
     lastAppliedRouteRef.current = norm;
     setSelectedRoute(norm);
-    setUserRoute(norm);
+    setUserRoute(norm, {
+      persist: isExternalHeadsetRoute(norm) || hasExplicitBuiltInIntent(norm),
+    });
   };
 
   const wantsSpeakerOutput = () => getUserRoute() === 'SPEAKER_PHONE';
@@ -375,7 +406,7 @@ export const useAudioRouting = (
     const route: InCallAudioRoute = wantSpeaker ? 'SPEAKER_PHONE' : 'EARPIECE';
     lastAppliedRouteRef.current = route;
     setSelectedRoute(route);
-    setUserRoute(route);
+    setUserRoute(route, { persist: shouldPersistAppliedRoute(route, reason) });
 
     if (Platform.OS === 'android') {
       enqueueInCallOp(async () => {
@@ -629,9 +660,8 @@ export const useAudioRouting = (
         return 'BLUETOOTH';
       }
 
-      const userIntent =
+      const autoReapplyReason =
         reason === 'manualSync' ||
-        reason.startsWith('cycle') ||
         reason === 'preferAudioMode' ||
         reason === 'applyRouting' ||
         reason === 'applyRouting_repin' ||
@@ -639,7 +669,7 @@ export const useAudioRouting = (
         reason === 'remote_stream_repin' ||
         reason === 'session_re_enable';
 
-      if (userIntent) {
+      if (autoReapplyReason || isManualRouteReason(reason)) {
         const user = getUserRoute();
         const last = normalizeInCallRoute(lastAppliedRouteRef.current);
         if (
@@ -651,11 +681,13 @@ export const useAudioRouting = (
         ) {
           return last;
         }
-        if (available.includes(user)) {
+        if (available.includes(user) && isExternalHeadsetRoute(user)) {
           return user;
         }
         if (user === 'SPEAKER_PHONE' || user === 'EARPIECE') {
-          return user;
+          return hasExplicitBuiltInIntent(user) || isManualRouteReason(reason)
+            ? user
+            : defaultUserRoute(routingOptionsRef.current);
         }
       }
 
@@ -682,7 +714,10 @@ export const useAudioRouting = (
     if (user === 'WIRED_HEADSET' && available.includes('WIRED_HEADSET')) {
       return 'WIRED_HEADSET';
     }
-    if (user === 'SPEAKER_PHONE' || user === 'EARPIECE') {
+    if (
+      (user === 'SPEAKER_PHONE' || user === 'EARPIECE') &&
+      hasExplicitBuiltInIntent(user)
+    ) {
       return user;
     }
 
@@ -695,9 +730,8 @@ export const useAudioRouting = (
       return 'WIRED_HEADSET';
     }
 
-    const userIntent =
+    const autoReapplyReason =
       reason === 'manualSync' ||
-      reason.startsWith('cycle') ||
       reason === 'preferAudioMode' ||
       reason === 'applyRouting' ||
       reason === 'applyRouting_repin' ||
@@ -705,9 +739,22 @@ export const useAudioRouting = (
       reason === 'remote_stream_repin' ||
       reason === 'session_re_enable';
 
-    if (userIntent) {
-      if (available.includes(user)) {
+    if (autoReapplyReason || isManualRouteReason(reason)) {
+      if (available.includes(user) && isExternalHeadsetRoute(user)) {
         return user;
+      }
+      if (
+        (user === 'SPEAKER_PHONE' || user === 'EARPIECE') &&
+        (hasExplicitBuiltInIntent(user) || isManualRouteReason(reason))
+      ) {
+        return user;
+      }
+      if (
+        (user === 'SPEAKER_PHONE' || user === 'EARPIECE') &&
+        !hasExplicitBuiltInIntent(user) &&
+        !isManualRouteReason(reason)
+      ) {
+        return defaultUserRoute(routingOptionsRef.current);
       }
     }
 
@@ -801,7 +848,9 @@ export const useAudioRouting = (
 
     lastAppliedRouteRef.current = effectiveRoute;
     lastHardRouteAtRef.current = now;
-    setUserRoute(effectiveRoute);
+    setUserRoute(effectiveRoute, {
+      persist: shouldPersistAppliedRoute(effectiveRoute, reason),
+    });
     setSelectedRoute(effectiveRoute);
     lastSelectedRef.current = effectiveRoute;
     if (
@@ -1079,6 +1128,17 @@ export const useAudioRouting = (
       setAvailableRoutes(withBt);
       try {
         (global as any).__inCallAvailableAudioRoutesRef = { current: withBt };
+      } catch {}
+      if (hasExplicitBuiltInIntent()) {
+        routeLog('bluetooth reconnect kept explicit builtin route', {
+          reason,
+          available: withBt,
+          userRoute: getUserRoute(),
+        });
+        await applyDesiredRoute(withBt, reason, true);
+        return;
+      }
+      try {
         if ((global as any).__explicitBuiltInCallAudioRouteRef) {
           (global as any).__explicitBuiltInCallAudioRouteRef.current = false;
         }
@@ -1579,7 +1639,7 @@ export const useAudioRouting = (
           return;
         }
       }
-      setUserRoute('EARPIECE');
+      setUserRoute('EARPIECE', { persist: false });
       setSelectedRoute('EARPIECE');
       applySpecificRoute('EARPIECE', 'preferAudioMode', true);
     };
@@ -1687,7 +1747,10 @@ export const useAudioRouting = (
             route = user;
           } else if (isExternalHeadsetRoute(normalizeInCallRoute(lastAppliedRouteRef.current))) {
             route = normalizeInCallRoute(lastAppliedRouteRef.current) as InCallAudioRoute;
-          } else if (user === 'SPEAKER_PHONE' || user === 'EARPIECE') {
+          } else if (
+            (user === 'SPEAKER_PHONE' || user === 'EARPIECE') &&
+            hasExplicitBuiltInIntent(user)
+          ) {
             route = user;
           } else {
             route = pickDesiredRoute(av.length ? av : ['EARPIECE', 'SPEAKER_PHONE'], 'manualSync');
@@ -1696,7 +1759,10 @@ export const useAudioRouting = (
           route = 'BLUETOOTH';
         } else if (user === 'WIRED_HEADSET' && av.includes('WIRED_HEADSET')) {
           route = 'WIRED_HEADSET';
-        } else if (user === 'SPEAKER_PHONE' || user === 'EARPIECE') {
+        } else if (
+          (user === 'SPEAKER_PHONE' || user === 'EARPIECE') &&
+          hasExplicitBuiltInIntent(user)
+        ) {
           route = user;
         } else {
           route = pickDesiredRoute(av.length ? av : ['EARPIECE', 'SPEAKER_PHONE'], 'manualSync');

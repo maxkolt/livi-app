@@ -177,6 +177,8 @@ export class VideoCallSession extends SimpleEventEmitter {
   private cameraSuspendedForAppBackground = false;
   /** Сериализация pause/restore и recreate, чтобы App + VideoCall не гоняли два reconnect подряд. */
   private cameraAppLifecyclePromise: Promise<void> | null = null;
+  /** Serialize camera enable/disable/recreate paths so rapid PiP/camera taps cannot publish two camera tracks. */
+  private cameraMutationPromise: Promise<void> | null = null;
   private localVideoRecreatePromise: Promise<void> | null = null;
   private localCameraRestoreAfterPiPPromise: Promise<void> | null = null;
   /** После foreground/pip restore не дублировать recreate через reconnectCameraOnResume. */
@@ -360,6 +362,30 @@ export class VideoCallSession extends SimpleEventEmitter {
     } catch {
       return false;
     }
+  }
+
+  private isSessionEndedLike(session: unknown): boolean {
+    if (!session) return false;
+    try {
+      const maybeSession = session as { isEnded?: () => boolean; ended?: boolean; endCallInProgress?: boolean };
+      if (typeof maybeSession.isEnded === 'function') return !!maybeSession.isEnded();
+      return maybeSession.ended === true || maybeSession.endCallInProgress === true;
+    } catch {
+      return false;
+    }
+  }
+
+  private clearGlobalSessionRefIfCurrent(reason: string): void {
+    try {
+      const ref = (global as any).__webrtcSessionRef;
+      if (ref?.current === this) {
+        ref.current = null;
+        logger.info('[VideoCallSession] Cleared global session ref', {
+          reason,
+          myUserId: this.config.myUserId,
+        });
+      }
+    } catch (_) {}
   }
 
   /* ===================== Public API ===================== */
@@ -801,6 +827,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.config.setIsInactiveState?.(true);
     this.config.setWasFriendCallEnded?.(true);
     this.emit('callEnded');
+    this.clearGlobalSessionRefIfCurrent('endCall');
     logger.info('[VideoCallSession] ✅ Состояние сессии сброшено и callEnded событие отправлено');
     this.endCallInProgress = false;
   }
@@ -1283,6 +1310,20 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async applyLocalCameraEnabled(enabled: boolean): Promise<void> {
+    const work = (this.cameraMutationPromise ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => this.applyLocalCameraEnabledNow(enabled));
+    this.cameraMutationPromise = work;
+    try {
+      await work;
+    } finally {
+      if (this.cameraMutationPromise === work) {
+        this.cameraMutationPromise = null;
+      }
+    }
+  }
+
+  private async applyLocalCameraEnabledNow(enabled: boolean): Promise<void> {
     if (
       enabled &&
       this.config.getIsDirectCall?.() &&
@@ -1795,6 +1836,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.ended = true;
     this.clearSocketRecoveryTimer();
     this.unregisterSocketHandlers('detach');
+    this.clearGlobalSessionRefIfCurrent('detach');
     logger.info('[VideoCallSession] 🔌 Сессия отключена от сокета (skip path), handlers сняты');
   }
 
@@ -2817,15 +2859,27 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Обрабатывать call:accepted должна только "активная" сессия (та, что в глобальном ref).
     // Иначе несколько экземпляров сессии (например, до очистки старых при ремаунте) все подключаются к комнате
     // и одна попытка падает с "could not establish pc connection".
-    const globalSession = (global as any).__webrtcSessionRef?.current;
+    const globalSessionRef = (global as any).__webrtcSessionRef;
+    const globalSession = globalSessionRef?.current;
     if (globalSession != null && globalSession !== this) {
-      logger.info('[VideoCallSession] ⏭️ Another session is active, skipping call:accepted', {
-        callId,
-        roomName: targetRoomName,
-        myUserId: this.config.myUserId,
-      });
-      this.detachFromCall();
-      return;
+      if (this.isSessionEndedLike(globalSession)) {
+        if (globalSessionRef && typeof globalSessionRef.current !== 'undefined') {
+          globalSessionRef.current = this;
+        }
+        logger.info('[VideoCallSession] Reclaimed global session ref from ended session', {
+          callId,
+          roomName: targetRoomName,
+          myUserId: this.config.myUserId,
+        });
+      } else {
+        logger.info('[VideoCallSession] ⏭️ Another session is active, skipping call:accepted', {
+          callId,
+          roomName: targetRoomName,
+          myUserId: this.config.myUserId,
+        });
+        this.detachFromCall();
+        return;
+      }
     }
     
     // КРИТИЧНО: Защита от повторной обработки одного и того же события (socket + FCM + reauth).
@@ -2999,6 +3053,19 @@ export class VideoCallSession extends SimpleEventEmitter {
         (global as any).__connectingToRoomRef = { roomName: null as string | null, session: null as VideoCallSession | null };
       }
       const roomLock = (global as any).__connectingToRoomRef as { roomName: string | null; session: VideoCallSession | null };
+      if (
+        roomLock.roomName === targetRoomName &&
+        roomLock.session != null &&
+        roomLock.session !== this &&
+        this.isSessionEndedLike(roomLock.session)
+      ) {
+        logger.info('[VideoCallSession] Cleared stale room connect lock from ended session', {
+          roomName: targetRoomName,
+          myUserId: this.config.myUserId,
+        });
+        roomLock.roomName = null;
+        roomLock.session = null;
+      }
       if (roomLock.roomName === targetRoomName && roomLock.session != null && roomLock.session !== this) {
         logger.info('[VideoCallSession] ⏭️ Another session is already connecting to this room, skipping', {
           roomName: targetRoomName,
@@ -3409,6 +3476,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Это событие должно быть отправлено даже если состояние уже очищено
     // Компоненты должны обработать завершение звонка независимо от состояния сессии
     this.emit('callEnded');
+    this.clearGlobalSessionRefIfCurrent('callEnded');
   }
 
   private handleDisconnected(): void {

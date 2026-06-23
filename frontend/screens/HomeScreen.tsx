@@ -229,6 +229,7 @@ type FriendRowIconActionButtonProps = {
   delayLongPress?: number;
   disabled?: boolean;
   accessibilityState?: { disabled?: boolean };
+  onPressIn?: () => void;
   onPress?: () => void;
   onLongPress?: () => void;
 };
@@ -240,18 +241,20 @@ function FriendRowIconActionButton({
   delayLongPress,
   disabled,
   accessibilityState,
+  onPressIn,
   onPress,
   onLongPress,
 }: FriendRowIconActionButtonProps) {
   return (
     <Pressable
-      disabled={disabled}
       accessibilityState={accessibilityState}
       hitSlop={hitSlop}
       pressRetentionOffset={FRIEND_ACTION_PRESS_RETENTION}
       delayLongPress={delayLongPress}
+      unstable_pressDelay={0}
       android_disableSound
       android_ripple={null}
+      onPressIn={onPressIn}
       onPress={onPress}
       onLongPress={onLongPress}
       style={[
@@ -1260,7 +1263,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const ensureIdentityRef = useRef<Promise<any> | null>(null);
   const attachIdentityRef = useRef<Promise<any> | null>(null);
   const lastChatOpenRef = useRef<{ peerId: string; at: number } | null>(null);
+  const recentlyEndedCallFriendIdsRef = useRef<Map<string, number>>(new Map());
   const CHAT_OPEN_DEBOUNCE_MS = 220;
+  const RECENT_CALL_END_UNLOCK_MS = 5000;
 
   /* ===== Сброс всего React state ===== */
   const resetAllState = useCallback(async () => {
@@ -1677,9 +1682,38 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       userIds.map((id) => String(id || '').trim()).filter(Boolean),
     );
     if (!ids.size) return;
+    const now = Date.now();
+    const ended = recentlyEndedCallFriendIdsRef.current;
+    ids.forEach((id) => ended.set(id, now));
+    for (const [key, at] of ended) {
+      if (now - at > RECENT_CALL_END_UNLOCK_MS) ended.delete(key);
+    }
     setFriends((prev) =>
       prev.map((f) => (ids.has(String(f.id)) ? { ...f, isBusy: false } : f)),
     );
+  }, []);
+
+  const markRecentlyEndedCallFriend = useCallback((userId: string | null | undefined) => {
+    const id = String(userId || '').trim();
+    if (!id) return;
+    const now = Date.now();
+    const ended = recentlyEndedCallFriendIdsRef.current;
+    ended.set(id, now);
+    for (const [key, at] of ended) {
+      if (now - at > RECENT_CALL_END_UNLOCK_MS) ended.delete(key);
+    }
+  }, []);
+
+  const isRecentlyEndedCallFriend = useCallback((userId: string | null | undefined) => {
+    const id = String(userId || '').trim();
+    if (!id) return false;
+    const at = recentlyEndedCallFriendIdsRef.current.get(id);
+    if (!at) return false;
+    if (Date.now() - at > RECENT_CALL_END_UNLOCK_MS) {
+      recentlyEndedCallFriendIdsRef.current.delete(id);
+      return false;
+    }
+    return true;
   }, []);
 
   const forceResetCallBusyRefs = useCallback(() => {
@@ -2213,6 +2247,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           try { setOutgoingCallScreenVisible(false); } catch {}
           try { closeOutgoingCallActivity(); } catch {}
           if (callIdForTimeout) try { reportEndCallToCallKeep(callIdForTimeout); } catch {}
+          forceResetCallBusyRefs();
           clearFriendsCallBusy([String(friend.id), lastOutgoingPeerIdRef.current]);
           lastOutgoingPeerIdRef.current = null;
           callingVisibleRef.current = false;
@@ -3741,6 +3776,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const lastOutgoingPeer = String(lastOutgoingPeerIdRef.current ?? '').trim();
       const partnerToClear = currentPartner || lastPartner || lastOutgoingPeer;
       if (partnerToClear) {
+        markRecentlyEndedCallFriend(partnerToClear);
         setFriends((prev) => prev.map((f) => String(f.id) === partnerToClear ? { ...f, isBusy: false } : f));
       }
       lastOutgoingPeerIdRef.current = null;
@@ -3749,7 +3785,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => {
       if (g.__onVideoCallEndedRef) g.__onVideoCallEndedRef.current = null;
     };
-  }, []);
+  }, [markRecentlyEndedCallFriend]);
 
   // Запоминаем последнего партнера активного видеозвонка, чтобы при завершении можно было снять stale busy.
   useEffect(() => {
@@ -4915,6 +4951,7 @@ const handleClearNick = useCallback(async () => {
             icon="chat-processing-outline"
             hitSlop={FRIEND_ROW_HIT_CHAT}
             delayLongPress={280}
+            onPressIn={prepareFriendRowActionTap}
             onPress={handlePress}
             onLongPress={
               count > 0
@@ -5040,14 +5077,16 @@ const handleClearNick = useCallback(async () => {
     const g = global as any;
     const videoCallPartner = g.__videoCallPartnerUserIdRef?.current;
     const activeCallInProgress = isDirectCallSessionLive(g);
-    const busy = isFriendBusy || (activeCallInProgress && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
+    const recentlyEndedCallFriend = isRecentlyEndedCallFriend(friendIdStr);
+    const friendBusyBlocksCall = friend.online && isFriendBusy && !recentlyEndedCallFriend;
+    const busy = friendBusyBlocksCall || (activeCallInProgress && !!videoCallPartner && String(videoCallPartner) === friendIdStr);
     // Исходящий вызов в процессе (инициатор свернул нативный экран в шторку): у того, кому звоним — стиль «занято» без бейджа; у остальных — просто неактивная кнопка
     const outgoingInProgress = calling.visible;
     // Входящий вызов в процессе (нативный экран входящего): у звонящего — стиль «занято» без бейджа; у остальных — неактивная кнопка. На всё время активного звонка все кнопки неактивны.
     const incomingInProgress = incomingCallScreen.visible;
     const isIncomingFromThisFriend = incomingInProgress && incomingCallScreen.fromUserId != null && String(incomingCallScreen.fromUserId) === friendIdStr;
     // Бейдж «Занято» только когда друг реально в звонке (принят вызов). Не показывать: (1) при входящем от этого друга — защита от старого busy и от незадеплоенного бэкенда; (2) при исходящем к этому другу уже учтено (showBusyBadge не использует isOutgoingToThisFriend).
-    const showBusyBadge = isFriendBusy && friend.online && !isIncomingFromThisFriend;
+    const showBusyBadge = friendBusyBlocksCall && !isIncomingFromThisFriend;
     const hardVideoDisabled = busy || incomingInProgress || activeCallInProgress;
     const videoDisabled = hardVideoDisabled || outgoingInProgress;
     const pulse = React.useRef(new Animated.Value(0)).current;
@@ -5084,6 +5123,9 @@ const handleClearNick = useCallback(async () => {
             accessibilityState={{ disabled: !!videoDisabled }}
             hitSlop={FRIEND_ROW_HIT_AUDIO}
             delayLongPress={280}
+            onPressIn={() => {
+              prepareFriendRowActionTap();
+            }}
             onLongPress={
               missedCount > 0 && !hardVideoDisabled
                 ? () => {
@@ -5094,7 +5136,19 @@ const handleClearNick = useCallback(async () => {
             }
             onPress={() => {
               prepareFriendRowActionTap();
-              if (hardVideoDisabled) return;
+              const gAfterTap = global as any;
+              const activeCallAfterTap = isDirectCallSessionLive(gAfterTap);
+              const videoCallPartnerAfterTap = gAfterTap.__videoCallPartnerUserIdRef?.current;
+              const recentlyEndedAfterTap = isRecentlyEndedCallFriend(friendIdStr);
+              const friendBusyBlocksAfterTap = friend.online && !!friend.isBusy && !recentlyEndedAfterTap;
+              const busyAfterTap =
+                friendBusyBlocksAfterTap ||
+                (activeCallAfterTap &&
+                  !!videoCallPartnerAfterTap &&
+                  String(videoCallPartnerAfterTap) === friendIdStr);
+              const hardVideoDisabledAfterTap =
+                busyAfterTap || incomingCallScreen.visible || activeCallAfterTap;
+              if (hardVideoDisabledAfterTap) return;
               if (outgoingInProgress && activeOutgoingAttemptRef.current > 0) {
                 const shouldResetStaleOutgoing =
                   Platform.OS === 'android' &&
