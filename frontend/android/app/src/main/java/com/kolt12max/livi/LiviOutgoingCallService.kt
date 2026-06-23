@@ -55,6 +55,8 @@ class LiviOutgoingCallService : Service() {
                 if (broadcastCallId.isEmpty() || broadcastCallId == this@LiviOutgoingCallService.callId) {
                     android.util.Log.d(TAG, "close broadcast received, stopping service callId=$callId")
                     requestStop()
+                } else {
+                    android.util.Log.d(TAG, "close broadcast ignored broadcastCallId=$broadcastCallId currentCallId=$callId")
                 }
             }
         }

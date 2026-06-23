@@ -776,9 +776,9 @@ Notifications.setNotificationHandler({
         return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
       }
       if (id) markOutgoingDeclineHandled(id);
-      try { closeOutgoingCallActivity(); } catch {}
+      try { closeOutgoingCallActivity(id || null, { force: true }); } catch {}
       try { setOutgoingCallScreenVisible(false); } catch {}
-      try { emitCloseOutgoingCall(); } catch {}
+      try { emitCloseOutgoingCall({ reason: 'remote_closed', callId: id || null }); } catch {}
       logger.info('[decline/инициатор] push setNotificationHandler: закрыли и emitCloseOutgoingCall');
       return {
         shouldShowBanner: false,
@@ -1131,9 +1131,9 @@ async function handleNotificationResponse(data: any, actionIdentifier: string, r
         return;
       }
       if (id) markOutgoingDeclineHandled(id);
-      try { closeOutgoingCallActivity(); } catch {}
+      try { closeOutgoingCallActivity(id || null, { force: true }); } catch {}
       try { setOutgoingCallScreenVisible(false); } catch {}
-      try { emitCloseOutgoingCall(); } catch {}
+      try { emitCloseOutgoingCall({ reason: 'remote_closed', callId: id || null }); } catch {}
       logger.info('[decline/инициатор] push handleNotificationResponse: закрыли и emitCloseOutgoingCall');
       return;
     }
@@ -1604,9 +1604,9 @@ export function addNotificationListeners() {
           return;
         }
         if (id) markOutgoingDeclineHandled(id);
-        try { closeOutgoingCallActivity(); } catch {}
+        try { closeOutgoingCallActivity(id || null, { force: true }); } catch {}
         try { setOutgoingCallScreenVisible(false); } catch {}
-        try { emitCloseOutgoingCall(); } catch {}
+        try { emitCloseOutgoingCall({ reason: 'remote_closed', callId: id || null }); } catch {}
         logger.info('[decline/инициатор] push notificationReceived: закрыли и emitCloseOutgoingCall');
         return;
       }

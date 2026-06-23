@@ -138,12 +138,15 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
   /** Задержка (мс) перед запуском OutgoingCallActivity после broadcast закрытия: даём предыдущему экземпляру (singleInstance) успеть finish(); после завершения звонка UI успевает стабилизироваться. */
   private val OUTGOING_LAUNCH_DELAY_MS = 250L
+  /** Короткая пауза перед новым входящим: старый IncomingCallActivity должен успеть обработать JUST_CLOSE. */
+  private val INCOMING_RELAUNCH_DELAY_MS = 120L
 
   /** Показать нативный экран исходящего сразу (без callId). callId придёт позже через notifyOutgoingCallId. Сохраняем toUserId/toNick, чтобы запустить звук из notifyOutgoingCallId даже если broadcast не успел дойти до Activity. Перед запуском шлём broadcast закрытия предыдущего экрана, чтобы при повторном звонке (пока друг на неактивном экране) не поднимался старый singleInstance. */
   @ReactMethod
   fun launchOutgoingCallActivityWithoutCallId(toUserId: String, toNick: String?, hasVideo: Boolean) {
     Log.d(NAME, "launchOutgoingCallActivityWithoutCallId: toUserId=$toUserId toNick=${toNick?.take(20)} hasVideo=$hasVideo hasCurrentActivity=${currentActivity != null}")
     val ctx = reactApplicationContext
+    val previousCallId = LiviOngoingCallHelper.peekOutgoingCall(ctx)?.first.orEmpty()
     LiviOngoingCallHelper.setOutgoingCall(ctx, "", toUserId, toNick ?: "")
     val intent = Intent(ctx, OutgoingCallActivity::class.java).apply {
       putExtra(OutgoingCallActivity.EXTRA_CALL_ID, "")
@@ -151,17 +154,53 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       putExtra(OutgoingCallActivity.EXTRA_TO_NICK, toNick ?: "")
       putExtra(OutgoingCallActivity.EXTRA_HAS_VIDEO, hasVideo)
     }
-    closeAnyOutgoingScreenThenLaunch(ctx, intent, retryIfNoActivity = true)
+    closeAnyOutgoingScreenThenLaunch(ctx, intent, retryIfNoActivity = true, closeCallId = previousCallId)
   }
 
   /** Закрыть любой видимый экран исходящего (broadcast), затем через OUTGOING_LAUNCH_DELAY_MS запустить новый — чтобы при повторном звонке не поднимался старый singleInstance. */
-  private fun closeAnyOutgoingScreenThenLaunch(ctx: Context, intent: Intent, retryIfNoActivity: Boolean) {
-    val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply { setPackage(ctx.packageName) }
+  private fun closeAnyOutgoingScreenThenLaunch(ctx: Context, intent: Intent, retryIfNoActivity: Boolean, closeCallId: String? = null) {
+    val scopedCallId = closeCallId?.takeIf { it.isNotBlank() }
+    val closeIntent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
+      setPackage(ctx.packageName)
+      scopedCallId?.let { putExtra(OutgoingCallActivity.EXTRA_CALL_ID, it) }
+      if (scopedCallId == null) putExtra(OutgoingCallActivity.EXTRA_FORCE_CLOSE, true)
+    }
     ctx.sendBroadcast(closeIntent)
-    Log.d(NAME, "launchOutgoing: sent close broadcast, posting launch in ${OUTGOING_LAUNCH_DELAY_MS}ms")
+    Log.d(NAME, "launchOutgoing: sent close broadcast oldCallId=${scopedCallId ?: "<unscoped>"}, posting launch in ${OUTGOING_LAUNCH_DELAY_MS}ms")
     Handler(Looper.getMainLooper()).postDelayed({
       runOnUiThreadLaunchOutgoing(intent, ctx, retryIfNoActivity)
     }, OUTGOING_LAUNCH_DELAY_MS)
+  }
+
+  /** Закрыть старый экран входящего перед новым звонком, чтобы singleTop не показывал визуально "залипший" incoming. */
+  private fun closeAnyIncomingScreen(ctx: Context) {
+    val activeIncomingId = IncomingCallActivity.activeCallId.takeIf { it.isNotBlank() }
+    if (!IncomingCallActivity.isAlive && activeIncomingId == null) return
+
+    activeIncomingId?.let { oldCallId ->
+      try {
+        LiviFirebaseMessagingService.deliverIncomingCallCanceled(ctx, oldCallId)
+      } catch (_: Exception) {}
+      try {
+        ctx.stopService(Intent(ctx, IncomingCallForegroundService::class.java))
+      } catch (_: Exception) {}
+    }
+
+    try {
+      val closeIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(
+        ctx,
+        activeIncomingId ?: "",
+        "",
+        "",
+        hasVideo = false,
+      ).apply {
+        putExtra(IncomingCallActivity.EXTRA_JUST_CLOSE, true)
+      }
+      ctx.startActivity(closeIntent)
+      Log.d(NAME, "closeAnyIncomingScreen: JUST_CLOSE sent oldCallId=${activeIncomingId ?: "<none>"}")
+    } catch (e: Exception) {
+      Log.w(NAME, "closeAnyIncomingScreen failed", e)
+    }
   }
 
   /** Флаги для запуска OutgoingCallActivity из currentActivity: NEW_TASK + CLEAR_TASK чтобы при повторном вызове не подхватить старый close intent (FCM/bringMainActivityToFront) — задача очищается и создаётся с нашим intent. */
@@ -214,13 +253,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   fun launchOutgoingCallActivity(callId: String, toUserId: String, toNick: String?) {
     Log.d(NAME, "launchOutgoingCallActivity: callId=${callId.take(24)} toUserId=$toUserId hasCurrentActivity=${currentActivity != null}")
     val ctx = reactApplicationContext
+    val previousCallId = LiviOngoingCallHelper.peekOutgoingCall(ctx)?.first.orEmpty()
     LiviOngoingCallHelper.setOutgoingCall(ctx, callId, toUserId, toNick ?: "")
     val intent = Intent(ctx, OutgoingCallActivity::class.java).apply {
       putExtra(OutgoingCallActivity.EXTRA_CALL_ID, callId)
       putExtra(OutgoingCallActivity.EXTRA_TO_USER_ID, toUserId)
       putExtra(OutgoingCallActivity.EXTRA_TO_NICK, toNick ?: "")
     }
-    closeAnyOutgoingScreenThenLaunch(ctx, intent, retryIfNoActivity = true)
+    closeAnyOutgoingScreenThenLaunch(ctx, intent, retryIfNoActivity = true, closeCallId = previousCallId)
   }
 
   /** Передать callId уже открытому экрану исходящего (после ответа сервера). Запускаем сервис (звук, таймаут) сразу отсюда, чтобы рингтон не зависел от того, успела ли Activity принять broadcast. */
@@ -242,12 +282,20 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   @ReactMethod
-  fun closeOutgoingCallActivity() {
-    LiviOngoingCallHelper.clearOngoingCall(reactApplicationContext)
+  fun closeOutgoingCallActivity(callId: String?, force: Boolean) {
+    val id = callId?.trim().orEmpty()
+    if (id.isNotBlank()) {
+      LiviOngoingCallHelper.clearOngoingCallIfMatches(reactApplicationContext, id)
+    } else if (force) {
+      LiviOngoingCallHelper.clearOngoingCall(reactApplicationContext)
+    }
     val intent = Intent(OutgoingCallActivity.ACTION_CLOSE_OUTGOING_CALL).apply {
       setPackage(reactApplicationContext.packageName)
+      if (id.isNotBlank()) putExtra(OutgoingCallActivity.EXTRA_CALL_ID, id)
+      if (force) putExtra(OutgoingCallActivity.EXTRA_FORCE_CLOSE, true)
     }
     reactApplicationContext.sendBroadcast(intent)
+    Log.d(NAME, "closeOutgoingCallActivity: sent close broadcast callId=${id.ifBlank { "<unscoped>" }} force=$force")
     LiviAppModule.scheduleMainActivityAfterOutgoingClose(reactApplicationContext)
   }
 
@@ -348,18 +396,22 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     // иначе FGS делает detach до старта рингтона на экране — на keyguard/фоне плеер Activity часто
     // не успевает, а FGS уже заглушён через stopRingtonePlayerForCallKeepOnly → тишина.
 
-    LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
-    // Те же флаги, что и в FCM (buildIncomingCallActivityIntent): иначе при активном процессе + заблокированном экране
-    // startActivity без SHOW_WHEN_LOCKED / TURN_SCREEN_ON часто не показывает входящий поверх блокировки.
-    val intent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(
-      ctx,
-      callId,
-      from,
-      fromNick ?: "",
-      hasVideo,
-      returnMainOnDismiss = MainActivity.isInForeground,
-    )
-    ctx.startActivity(intent)
+    closeAnyIncomingScreen(ctx)
+    Handler(Looper.getMainLooper()).postDelayed({
+      LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
+      // Те же флаги, что и в FCM (buildIncomingCallActivityIntent): иначе при активном процессе + заблокированном экране
+      // startActivity без SHOW_WHEN_LOCKED / TURN_SCREEN_ON часто не показывает входящий поверх блокировки.
+      val intent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(
+        ctx,
+        callId,
+        from,
+        fromNick ?: "",
+        hasVideo,
+        returnMainOnDismiss = MainActivity.isInForeground,
+      )
+      ctx.startActivity(intent)
+      Log.d(NAME, "launchIncomingCallActivity: launched after old incoming close callId=$callId")
+    }, if (IncomingCallActivity.isAlive) INCOMING_RELAUNCH_DELAY_MS else 0L)
   }
 
   /**
@@ -375,49 +427,67 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       LiviOngoingCallHelper.clearOngoingCallIfMatches(ctx, callId)
       return
     }
-    try {
-      LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
-    } catch (_: Exception) {}
+    closeAnyIncomingScreen(ctx)
+
+    val keyguardLocked = try {
+      (ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
+    } catch (_: Exception) {
+      false
+    }
+    val isInteractive = try {
+      (ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive == true
+    } catch (_: Exception) {
+      true
+    }
+    var fgsStarted = false
+    fun startIncomingFgs(reason: String) {
+      if (fgsStarted) return
+      fgsStarted = true
+      try {
+        LiviFirebaseMessagingService.ensureCallChannel(ctx)
+        val serviceIntent = Intent(ctx, IncomingCallForegroundService::class.java).apply {
+          putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
+          putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
+          putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick ?: "")
+          putExtra(IncomingCallForegroundService.EXTRA_HEADS_UP_ONLY, false)
+          putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, !keyguardLocked)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(serviceIntent) else ctx.startService(serviceIntent)
+        Log.d(NAME, "showIncomingCallSystemUI: started IncomingCallForegroundService reason=$reason silentShade=${!keyguardLocked}")
+      } catch (e: Exception) {
+        Log.w(NAME, "showIncomingCallSystemUI: failed to start IncomingCallForegroundService reason=$reason", e)
+      }
+    }
 
     // Как в LiviFirebaseMessagingService: сначала пробуем Activity сразу (сокет в фоне / экран выключен — иначе только FGS с «тихим»
     // уведомлением без fullScreenIntent часто не пробивает BAL на блокировке).
-    try {
-      val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(
-        ctx,
-        callId,
-        from,
-        fromNick ?: "",
-        hasVideo,
-        returnMainOnDismiss = MainActivity.isInForeground,
-      )
-      ctx.startActivity(launchIntent)
-      Log.d(NAME, "showIncomingCallSystemUI: immediate startActivity OK")
-    } catch (e: Exception) {
-      Log.w(NAME, "showIncomingCallSystemUI: immediate startActivity failed, relying on FGS", e)
-    }
-
-    try {
-      LiviFirebaseMessagingService.ensureCallChannel(ctx)
-      val keyguardLocked = try {
-        (ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
-      } catch (_: Exception) {
-        false
-      }
-      // Разблокирован: тихое уведомление в шторке (как FCM). Заблокирован: уведомление с fullScreenIntent — запасной путь к экрану.
-      val serviceIntent = Intent(ctx, IncomingCallForegroundService::class.java).apply {
-        putExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID, callId)
-        putExtra(IncomingCallForegroundService.EXTRA_FROM, from)
-        putExtra(IncomingCallForegroundService.EXTRA_FROM_NICK, fromNick ?: "")
-        putExtra(IncomingCallForegroundService.EXTRA_HEADS_UP_ONLY, false)
-        putExtra(IncomingCallForegroundService.EXTRA_SILENT_NOTIFICATION, !keyguardLocked)
-      }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(serviceIntent) else ctx.startService(serviceIntent)
-      Log.d(NAME, "showIncomingCallSystemUI: started IncomingCallForegroundService (silentShade=${!keyguardLocked})")
-    } catch (e: Exception) {
-      Log.w(NAME, "showIncomingCallSystemUI: failed to start IncomingCallForegroundService", e)
+    Handler(Looper.getMainLooper()).postDelayed({
       try {
-        ctx.startActivity(LiviFirebaseMessagingService.buildIncomingCallActivityIntent(ctx, callId, from, fromNick ?: "", hasVideo))
+        LiviOngoingCallHelper.setIncomingCall(ctx, callId, from, fromNick ?: "")
       } catch (_: Exception) {}
+      try {
+        val launchIntent = LiviFirebaseMessagingService.buildIncomingCallActivityIntent(
+          ctx,
+          callId,
+          from,
+          fromNick ?: "",
+          hasVideo,
+          returnMainOnDismiss = MainActivity.isInForeground,
+        )
+        ctx.startActivity(launchIntent)
+        Log.d(NAME, "showIncomingCallSystemUI: immediate startActivity OK")
+      } catch (e: Exception) {
+        Log.w(NAME, "showIncomingCallSystemUI: immediate startActivity failed, relying on FGS", e)
+        startIncomingFgs("activity_failed")
+      }
+    }, if (IncomingCallActivity.isAlive) INCOMING_RELAUNCH_DELAY_MS else 0L)
+
+    // На unlocked/interactive redial сверху уже живет IncomingCallActivity; лишний FGS при каждом socket-событии
+    // создаёт start/stop storm и приводит к ForegroundServiceDidNotStartInTimeException. Для locked/sleep FGS остаётся fallback.
+    if (keyguardLocked || !isInteractive) {
+      startIncomingFgs("locked_or_sleep")
+    } else {
+      Log.d(NAME, "showIncomingCallSystemUI: skip FGS, Activity owns unlocked incoming UI callId=$callId")
     }
   }
 
@@ -530,7 +600,11 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun notifyCallCanceled(callId: String) {
     if (callId.isBlank()) return
-    (reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+    val activeIncomingId = IncomingCallActivity.activeCallId
+    if (activeIncomingId.isBlank() || activeIncomingId == callId) {
+      (reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+        .cancel(LiviFirebaseMessagingService.NOTIFICATION_ID_INCOMING_CALL)
+    }
     LiviFirebaseMessagingService.deliverIncomingCallCanceled(reactApplicationContext, callId)
   }
 
@@ -2852,12 +2926,14 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     /** Вызвать из OutgoingCallActivity при нажатии X — React очистит состояние исходящего. */
     @JvmStatic
     fun emitOutgoingCallCanceledByUser(callId: String?) {
+      val resolvedCallId = callId?.takeIf { it.isNotBlank() }
+        ?: reactContextRef?.let { ctx -> LiviOngoingCallHelper.peekOutgoingCall(ctx)?.first?.takeIf { it.isNotBlank() } }
       outgoingCanceledByUserFlag = true
-      outgoingCanceledByUserCallId = callId?.takeIf { it.isNotBlank() }
+      outgoingCanceledByUserCallId = resolvedCallId
       runOnReactUiQueueIfAlive { ctx ->
         val params = Arguments.createMap()
-        if (!callId.isNullOrBlank()) {
-          params.putString("callId", callId)
+        if (!resolvedCallId.isNullOrBlank()) {
+          params.putString("callId", resolvedCallId)
         }
         ctx.emitDeviceEvent("OutgoingCallCanceledByUser", params)
       }

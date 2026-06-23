@@ -226,28 +226,37 @@ export function clearOutgoingDeclineHandled(): void {
   outgoingDeclineHandledCallId = null;
 }
 
-/** Дебаунс: не вызывать нативный finish повторно в течение окна (сокет+пуш могут оба вызвать close; увеличенное окно реже даёт «пропуск» при двойных вызовах). */
+/** Дебаунс: не вызывать нативный finish повторно для одного и того же callId; разные звонки закрываем независимо. */
 const OUTGOING_CLOSE_DEBOUNCE_MS = 2000;
-let lastOutgoingCloseAt = 0;
+const lastOutgoingCloseAtByKey: Record<string, number> = {};
 
 /** Сбросить дебаунс при открытии нового исходящего (чтобы следующий decline мог закрыть). */
 export function resetOutgoingCloseDebounce(): void {
-  lastOutgoingCloseAt = 0;
+  for (const key of Object.keys(lastOutgoingCloseAtByKey)) delete lastOutgoingCloseAtByKey[key];
 }
 
 /** Закрыть нативный экран исходящего (OutgoingCallActivity) при принятии/отклонении/таймауте. */
-export function closeOutgoingCallActivity(): void {
+export function closeOutgoingCallActivity(callId?: string | null, opts?: { force?: boolean }): void {
   if (Platform.OS !== 'android') return;
+  const id = String(callId || '').trim();
+  const key = id || '__unscoped__';
   const now = Date.now();
-  const sinceLast = lastOutgoingCloseAt > 0 ? now - lastOutgoingCloseAt : Infinity;
-  if (sinceLast < OUTGOING_CLOSE_DEBOUNCE_MS) {
-    logger.info('[decline/инициатор] callKeep.closeOutgoingCallActivity — пропуск (дебаунс)', { sinceLastMs: Math.round(sinceLast) });
+  const lastAt = lastOutgoingCloseAtByKey[key] || 0;
+  const sinceLast = lastAt > 0 ? now - lastAt : Infinity;
+  if (!opts?.force && sinceLast < OUTGOING_CLOSE_DEBOUNCE_MS) {
+    logger.info('[decline/инициатор] callKeep.closeOutgoingCallActivity — пропуск (дебаунс)', {
+      callId: id || null,
+      sinceLastMs: Math.round(sinceLast),
+    });
     return;
   }
-  lastOutgoingCloseAt = now;
-  logger.info('[decline/инициатор] callKeep.closeOutgoingCallActivity — вызываем нативный finish');
+  lastOutgoingCloseAtByKey[key] = now;
+  logger.info('[decline/инициатор] callKeep.closeOutgoingCallActivity — вызываем нативный finish', {
+    callId: id || null,
+    force: opts?.force === true,
+  });
   try {
-    NativeModules.LiviAppModule?.closeOutgoingCallActivity?.();
+    NativeModules.LiviAppModule?.closeOutgoingCallActivity?.(id, opts?.force === true);
   } catch {}
 }
 

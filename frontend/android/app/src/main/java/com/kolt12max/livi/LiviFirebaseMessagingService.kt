@@ -171,6 +171,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             }, 8000L)
             // onMessageReceived — worker thread: startActivity/startForegroundService и показ уведомлений только с main looper (иначе экран/FGS и мелодия нестабильны в фоне).
             Handler(Looper.getMainLooper()).post {
+                val appForegroundNow = isAppProcessForeground()
+                var activityLaunchOk = false
                 try {
                     val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                     nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
@@ -195,6 +197,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     startActivity(launchIntent)
+                    activityLaunchOk = true
                     Log.i(TAG, "[INCOMING_CALL] startActivity OK callId=$callId")
                     vLog("[INCOMING_CALL] startActivity(IncomingCallActivity) on main OK callId=$callId")
                 } catch (e: Exception) {
@@ -204,16 +207,20 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                         e
                     )
                 }
-                startIncomingCallForegroundService(
-                    callId,
-                    from,
-                    fromNick,
-                    headsUpOnly = false,
-                    silentNotification = true
-                )
+                val needsForegroundService = !activityLaunchOk || keyguardLocked || !isInteractive
+                if (needsForegroundService) {
+                    startIncomingCallForegroundService(
+                        callId,
+                        from,
+                        fromNick,
+                        headsUpOnly = false,
+                        silentNotification = true
+                    )
+                } else {
+                    vLog("[INCOMING_CALL] skip FGS: foreground activity launch owns incoming UI callId=$callId")
+                }
                 try {
-                    val isForeground = isAppProcessForeground()
-                    if (!isForeground) {
+                    if (!appForegroundNow) {
                         val params = JSONObject()
                             .put("callId", callId)
                             .put("source", "incoming_call_fcm")
@@ -223,15 +230,22 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                         LiviAppModule.trackAppEventStatic(this@LiviFirebaseMessagingService, "fgs_start_background", params)
                     }
                 } catch (_: Exception) {}
-                vLog("[INCOMING_CALL] startIncomingCallForegroundService returned callId=$callId")
+                vLog("[INCOMING_CALL] incoming UI dispatch done callId=$callId needsFgs=$needsForegroundService")
             }
             return
         }
         if (typeNorm == "call_canceled" && callId != null) {
-            LiviOngoingCallHelper.clearOngoingCall(applicationContext)
-            LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
+            LiviOngoingCallHelper.clearOngoingCallIfMatches(applicationContext, callId)
+            val activeIncomingId = IncomingCallActivity.activeCallId
+            val clearSharedIncomingUi = activeIncomingId.isBlank() || activeIncomingId == callId
+            if (clearSharedIncomingUi) {
+                try {
+                    stopService(Intent(this, IncomingCallForegroundService::class.java))
+                } catch (_: Exception) {}
+                LiviAppModule.stopIncomingCallRingtoneAndVibrationStatic(applicationContext)
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
+            }
             deliverIncomingCallCanceled(applicationContext, callId)
             // Инициатор отменил — показываем «пропущенный вызов» и счётчик (fromUserId/fromNick в data или body)
             var fromCanceled = data["fromUserId"] ?: data["from"]
@@ -308,8 +322,11 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         // Звонок завершён: снять уведомление входящего, закрыть экран исходящего. «Пропущенный вызов» только если разговор не был принят (таймаут/отмена).
         if (typeNorm == "call_ended" && callId != null) {
             EndedCallIds.add(this, callId)
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
+            val activeIncomingId = IncomingCallActivity.activeCallId
+            if (activeIncomingId.isBlank() || activeIncomingId == callId) {
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(NOTIFICATION_ID_INCOMING_CALL)
+            }
             val cancelIntent = Intent(ACTION_CALL_CANCELED).apply {
                 setPackage(packageName)
                 putExtra(EXTRA_CALL_ID, callId)

@@ -809,10 +809,13 @@ function AppContent() {
         .catch(() => {});
     };
     const sub1 = emitter.addListener('OutgoingCallCanceledByUser', (payload?: { callId?: string | null }) => {
+      const callId =
+        String(payload?.callId || '').trim() ||
+        String((global as any).__outgoingCallIdRef?.current || '').trim();
       (global as any).__outgoingCanceledByNativeRef = (global as any).__outgoingCanceledByNativeRef ?? { current: false };
       (global as any).__outgoingCanceledByNativeRef.current = true;
-      repeatNativeCallSignal('cancel', payload?.callId);
-      try { emitCloseOutgoingCall(); } catch {}
+      repeatNativeCallSignal('cancel', callId);
+      try { emitCloseOutgoingCall({ reason: 'native_cancel', callId: callId || null }); } catch {}
     });
     const sub2 = emitter.addListener('IncomingCallDeclinedByUser', (payload?: { callId?: string | null }) => {
       repeatNativeCallSignal('decline', payload?.callId);
@@ -1190,7 +1193,7 @@ function AppContent() {
             } else {
               // Звонящий отменил с нативного экрана — отменяем исходящий и сразу закрываем модалку
               try { cancelCall(callId); } catch {}
-              try { emitCloseOutgoingCall(); } catch {}
+              try { emitCloseOutgoingCall({ reason: 'native_cancel', callId }); } catch {}
             }
           }
           incomingCallIdRef.current = null;
@@ -1667,8 +1670,8 @@ function AppContent() {
           setTimeout(() => { try { cancelCall(callId); } catch {} }, 150);
           try { reportEndCallToCallKeep(callId); } catch {}
           try { setOutgoingCallScreenVisible(false); } catch {}
-          try { emitCloseOutgoingCall(); } catch {}
-          try { closeOutgoingCallActivity(); } catch {}
+          try { emitCloseOutgoingCall({ reason: 'native_cancel', callId }); } catch {}
+          try { closeOutgoingCallActivity(callId, { force: true }); } catch {}
           return true;
         }
       }
@@ -2603,7 +2606,7 @@ function AppContent() {
       stopIncomingCallAlert();
       setIncoming(null);
       stopAnim();
-      try { emitCloseOutgoingCall(); } catch {}
+      try { emitCloseOutgoingCall({ reason: 'remote_closed', callId: data?.callId || null }); } catch {}
       try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
 
@@ -2818,21 +2821,24 @@ function AppContent() {
         const canceledByNative = (global as any).__outgoingCanceledByNativeRef?.current === true;
         if (canceledByNative) {
           (global as any).__outgoingCanceledByNativeRef.current = false;
-          try { emitCloseOutgoingCall(); } catch {}
         }
         if (Platform.OS === 'android') {
           const LiviAppModule = NativeModules.LiviAppModule;
-          LiviAppModule?.getAndClearOutgoingCanceledByUserFlag?.()?.then?.((flag: boolean) => {
-            if (flag) try { emitCloseOutgoingCall(); } catch {}
-          });
           LiviAppModule?.getAndClearOutgoingCanceledByUserCallId?.()?.then?.((callId: string | null) => {
-            if (callId) {
-              try { cancelCall(callId); } catch {}
-              setTimeout(() => { try { cancelCall(callId); } catch {} }, 150);
+            const id = String(callId || '').trim();
+            if (id) {
+              try { emitCloseOutgoingCall({ reason: 'native_cancel', callId: id }); } catch {}
+              try { cancelCall(id); } catch {}
+              setTimeout(() => { try { cancelCall(id); } catch {} }, 150);
               void ensureSocketConnected(2500)
-                .then(() => { try { cancelCall(callId); } catch {} })
+                .then(() => { try { cancelCall(id); } catch {} })
                 .catch(() => {});
+              return;
             }
+            LiviAppModule?.getAndClearOutgoingCanceledByUserFlag?.()?.then?.((flag: boolean) => {
+              if (!flag) return;
+              try { emitCloseOutgoingCall({ reason: 'native_cancel', callId }); } catch {}
+            });
           });
           // FCM call_accepted вывел приложение — запросить call:accepted у сервера → переход на VideoCall
           LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
@@ -2898,7 +2904,7 @@ function AppContent() {
       stopIncomingCallAlert();
       setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
       logger.info('[decline/инициатор] App: закрываем нативное окно и сбрасываем visible');
-      try { closeOutgoingCallActivity(); } catch {}
+      try { closeOutgoingCallActivity(id || null, { force: true }); } catch {}
       try { setOutgoingCallScreenVisible(false); } catch {}
       // Сбрасываем refs активного звонка, чтобы кнопки видеозвонка у инициатора снова стали активными
       try {
@@ -2949,7 +2955,7 @@ function AppContent() {
       // Callee уже на Home: страница приветствия не должна ре-рендериться — не вызываем setIncoming и эмиты с подписчиками-setState
       const calleeAlreadyOnHome = isCallee && routeName === 'Home';
       const runCloseUI = () => {
-        setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
+        setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall({ reason: 'remote_closed', callId }); } catch {}
       };
 
       if (calleeAlreadyOnHome) {
@@ -3024,8 +3030,8 @@ function AppContent() {
         disposeDirectCallAudioPrewarm('app:accepted-already-ended');
         try { setOutgoingCallScreenVisible(false); } catch {}
         try { setIncomingCallScreenVisible(false); } catch {}
-        try { emitCloseOutgoingCall(); } catch {}
-        try { closeOutgoingCallActivity(); } catch {}
+        try { emitCloseOutgoingCall({ reason: 'remote_closed', callId }); } catch {}
+        try { closeOutgoingCallActivity(callId || null, { force: true }); } catch {}
         if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
         stopIncomingCallAlert();
         setIncoming(null);
@@ -3168,8 +3174,8 @@ function AppContent() {
         if (navRef.isReady() && currentRoute?.name !== 'VideoCall') {
           const closeAcceptedCallUi = () => {
             try { setOutgoingCallScreenVisible(false); } catch {}
-            try { emitCloseOutgoingCall({ reason: 'accepted' }); } catch {}
-            try { closeOutgoingCallActivity(); } catch {}
+            try { emitCloseOutgoingCall({ reason: 'accepted', callId: callId || null }); } catch {}
+            try { closeOutgoingCallActivity(callId || null, { force: true }); } catch {}
             if (isCaller) {
               const bringCallerMain = () => {
                 logger.info('[App] 📱 bringMainActivityToFront (call:accepted, caller)');
@@ -3294,8 +3300,8 @@ function AppContent() {
         logger.error('[App] ❌ Error navigating to VideoCall', { error: e, callId: data?.callId });
         try { setOutgoingCallScreenVisible(false); } catch {}
         try { setIncomingCallScreenVisible(false); } catch {}
-        try { emitCloseOutgoingCall(); } catch {}
-        try { closeOutgoingCallActivity(); } catch {}
+        try { emitCloseOutgoingCall({ reason: 'remote_closed', callId: data?.callId || null }); } catch {}
+        try { closeOutgoingCallActivity(data?.callId ? String(data.callId) : null, { force: true }); } catch {}
         try { bringMainActivityToFront(); } catch {}
       }
     });
@@ -3321,7 +3327,7 @@ function AppContent() {
         (global as any).__onVideoCallEndedRef?.current?.();
       } catch (_) {}
       // Мгновенно закрываем UI
-      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall(); } catch {}
+      setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall({ reason: 'remote_closed', callId }); } catch {}
       // Переход на Home с бейджем «Вызов отменен» (не дублируем, если уже обработали call:cancel)
       if (!wasCanceled && navRef.isReady()) {
         applyCallCancelledHomeNotice(navRef);
@@ -3657,7 +3663,7 @@ export default function App() {
     reportEndCallToCallKeep(callId);
     setCallKeepAvailable(true);
     clearCallRelatedNotificationsAndSyncBadge().catch(() => {});
-    try { emitCloseOutgoingCall(); } catch {}
+    try { emitCloseOutgoingCall({ reason: 'remote_closed', callId }); } catch {}
     try { emitCloseIncoming(); emitRequestCloseIncoming(); } catch {}
 
     // КРИТИЧНО: Завершение видеозвонка из PiP (кнопка X) завершает звонок у обоих: отправка call:end на сервер,

@@ -90,8 +90,10 @@ export function emitRequestCloseIncoming() {
 }
 
 export type CloseOutgoingCallPayload = {
-  /** accepted — звонок принят, только снять исходящий UI без cancelCall и сброса refs звонка */
-  reason?: 'external' | 'accepted';
+  /** accepted — звонок принят; native_cancel — инициатор нажал X; remote_closed — сервер/пуш сообщил decline/cancel/timeout. */
+  reason?: 'external' | 'accepted' | 'native_cancel' | 'remote_closed';
+  /** callId события закрытия, если известен. Нужен, чтобы старые native/push события не сбрасывали новый исходящий. */
+  callId?: string | null;
 };
 
 /** Закрыть модалку исходящего вызова (когда абонент отклонил/отменил/таймаут вне приложения). */
@@ -102,7 +104,10 @@ export function onCloseOutgoingCall(cb: (payload?: CloseOutgoingCallPayload) => 
 }
 
 export function emitCloseOutgoingCall(opts?: CloseOutgoingCallPayload) {
-  const payload: CloseOutgoingCallPayload = { reason: opts?.reason ?? 'external' };
+  const payload: CloseOutgoingCallPayload = {
+    reason: opts?.reason ?? 'external',
+    callId: opts?.callId ?? null,
+  };
   for (const l of closeOutgoingCallListeners) {
     try { (l as any)(payload); } catch {}
   }

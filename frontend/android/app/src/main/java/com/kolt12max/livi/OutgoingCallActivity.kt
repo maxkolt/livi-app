@@ -51,6 +51,8 @@ class OutgoingCallActivity : AppCompatActivity() {
     private var toNick: String = ""
     /** Отмена с кнопки X: Main уже запланирован без debounce — не дублировать в finish(). */
     private var mainReturnScheduledForUserCancel = false
+    /** Внутренний переход обратно в MainActivity не должен трактоваться как Home/Recents. */
+    private var suppressMoveToBackOnUserLeaveHint = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,6 +135,7 @@ class OutgoingCallActivity : AppCompatActivity() {
             }
             LiviOutgoingCallService.stop(this)
             mainReturnScheduledForUserCancel = true
+            returnMainActivityImmediately()
             LiviAppModule.scheduleMainActivityAfterOutgoingUserCancel(applicationContext)
             finish()
         }
@@ -140,9 +143,15 @@ class OutgoingCallActivity : AppCompatActivity() {
         closeReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val broadcastCallId = intent?.getStringExtra(EXTRA_CALL_ID) ?: ""
-                if (broadcastCallId.isEmpty() || broadcastCallId == this@OutgoingCallActivity.callId) {
+                val forceClose = intent?.getBooleanExtra(EXTRA_FORCE_CLOSE, false) == true
+                val forceUnscopedClose = forceClose && broadcastCallId.isEmpty()
+                val matchesCurrentCall = broadcastCallId.isNotEmpty() && broadcastCallId == this@OutgoingCallActivity.callId
+                val closesPendingNoCallId = broadcastCallId.isEmpty() && this@OutgoingCallActivity.callId.isEmpty()
+                if (forceUnscopedClose || matchesCurrentCall || closesPendingNoCallId) {
                     LiviOutgoingCallService.stop(this@OutgoingCallActivity)
                     finish()
+                } else {
+                    Log.d(TAG, "ACTION_CLOSE_OUTGOING_CALL ignored broadcastCallId=${broadcastCallId.take(24)} currentCallId=${this@OutgoingCallActivity.callId.take(24)} force=$forceClose")
                 }
             }
         }
@@ -238,7 +247,30 @@ class OutgoingCallActivity : AppCompatActivity() {
      */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        if (suppressMoveToBackOnUserLeaveHint) {
+            Log.d(TAG, "onUserLeaveHint: skip moveTaskToBack for internal MainActivity return")
+            return
+        }
         moveTaskToBack(true)
+    }
+
+    private fun returnMainActivityImmediately() {
+        suppressMoveToBackOnUserLeaveHint = true
+        try {
+            val mainIntent = Intent(this, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        or Intent.FLAG_ACTIVITY_NO_ANIMATION
+                )
+            }
+            startActivity(mainIntent)
+            overridePendingTransition(0, 0)
+            Log.d(TAG, "returnMainActivityImmediately: MainActivity started before finish")
+        } catch (e: Exception) {
+            Log.w(TAG, "returnMainActivityImmediately failed", e)
+        }
     }
 
     private var dotsCount = 0
@@ -300,6 +332,7 @@ class OutgoingCallActivity : AppCompatActivity() {
         const val EXTRA_HAS_VIDEO = "hasVideo"
         /** FCM call_declined запускает активность с этим флагом, чтобы закрыть экран, если broadcast не дошёл (приложение в фоне/убито). */
         const val EXTRA_CLOSE_IMMEDIATELY = "close_immediately"
+        const val EXTRA_FORCE_CLOSE = "force_close"
         const val ACTION_CLOSE_OUTGOING_CALL = "com.kolt12max.livi.CLOSE_OUTGOING_CALL"
         /** Broadcast: JS получил callId с сервера — запустить сервис (звук, таймаут). */
         const val ACTION_OUTGOING_CALL_ID_READY = "com.kolt12max.livi.OUTGOING_CALL_ID_READY"
