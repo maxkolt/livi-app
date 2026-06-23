@@ -2955,7 +2955,7 @@ function AppContent() {
       // Callee уже на Home: страница приветствия не должна ре-рендериться — не вызываем setIncoming и эмиты с подписчиками-setState
       const calleeAlreadyOnHome = isCallee && routeName === 'Home';
       const runCloseUI = () => {
-        setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall({ reason: 'remote_closed', callId }); } catch {}
+        setIncoming(null); stopAnim(); try { emitCloseIncoming(); emitRequestCloseIncoming(); emitCloseOutgoingCall({ reason: 'remote_closed', callId: callIdStr || null }); } catch {}
       };
 
       if (calleeAlreadyOnHome) {
