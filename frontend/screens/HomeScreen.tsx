@@ -7014,15 +7014,15 @@ const styles = StyleSheet.create({
   // notice (бейдж «Вызов завершён» и др.): по центру между подзаголовком и кнопкой
   notice: {
     borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingVertical: 7,
+    paddingHorizontal: 9,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    width: '82%',
     alignSelf: 'center',
+    maxWidth: '60%',
   },
-  noticeText: { color: LIVI.text2, fontSize: 13, fontWeight: '500', textAlign: 'center' },
+  noticeText: { color: LIVI.text2, fontSize: 12, fontWeight: '400', textAlign: 'center' },
 
   confirmCard: {
     width: '92%', backgroundColor: 'rgba(13,14,16,0.94)', borderRadius: 12,
