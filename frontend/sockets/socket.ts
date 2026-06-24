@@ -1060,9 +1060,11 @@ setTimeout(() => {
  * Android при агрессивном Doze может рвать сеть — клиент переподключится при пробуждении.
  */
 const SOCKET_KEEP_ALIVE_IN_BACKGROUND = true;
+const APP_VISIBILITY_FOREGROUND_HEARTBEAT_MS = 25_000;
 
 let __lastAppState: AppStateStatus = AppState.currentState;
 let __realtimePaused = SOCKET_KEEP_ALIVE_IN_BACKGROUND ? false : __lastAppState !== 'active';
+let __appVisibilityHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 /** Пока на нативном экране исходящего (OutgoingCallActivity) — не отключать сокет при «background», чтобы инициатор получил call:accepted. */
 let __outgoingCallScreenVisible = false;
 /** Пока на нативном экране входящего (IncomingCallActivity) — не отключать сокет при «background», чтобы получатель мог принять/отклонить по сокету. */
@@ -1096,10 +1098,77 @@ function mirrorCallPresenceFlagsToGlobal(patch: {
   } catch {}
 }
 
-function emitAppVisibilityToServer(foreground: boolean) {
+function emitAppVisibilityToServer(foreground: boolean, options: { heartbeat?: boolean } = {}) {
   try {
-    if (socket?.connected) socket.emit('app:visibility', { foreground });
+    if (socket?.connected) socket.emit('app:visibility', { foreground, ...(options.heartbeat ? { heartbeat: true } : {}) });
   } catch {}
+}
+
+function isAppForegroundForPresence(): boolean {
+  const state = AppState.currentState || __lastAppState;
+  return state === 'active' || state === 'inactive';
+}
+
+async function readAndroidMainActivityForeground(): Promise<boolean | null> {
+  if (Platform.OS !== 'android') return null;
+  try {
+    const mod = NativeModules.LiviAppModule;
+    if (typeof mod?.isMainActivityForeground !== 'function') return null;
+    const value = await mod.isMainActivityForeground();
+    return typeof value === 'boolean' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function stopAppVisibilityForegroundHeartbeat(): void {
+  if (__appVisibilityHeartbeatTimer) {
+    clearInterval(__appVisibilityHeartbeatTimer);
+    __appVisibilityHeartbeatTimer = null;
+  }
+}
+
+function startAppVisibilityForegroundHeartbeat(): void {
+  if (__appVisibilityHeartbeatTimer) return;
+  __appVisibilityHeartbeatTimer = setInterval(() => {
+    if (Platform.OS === 'android') {
+      readAndroidMainActivityForeground()
+        .then((nativeForeground) => {
+          const foreground = nativeForeground ?? isAppForegroundForPresence();
+          if (!foreground) {
+            stopAppVisibilityForegroundHeartbeat();
+            emitAppVisibilityToServer(false);
+            return;
+          }
+          emitAppVisibilityToServer(true, { heartbeat: true });
+        })
+        .catch(() => {});
+      return;
+    }
+    if (!isAppForegroundForPresence()) {
+      stopAppVisibilityForegroundHeartbeat();
+      emitAppVisibilityToServer(false);
+      return;
+    }
+    emitAppVisibilityToServer(true, { heartbeat: true });
+  }, APP_VISIBILITY_FOREGROUND_HEARTBEAT_MS);
+}
+
+function syncAppVisibilityToServerFromAppState(): void {
+  const foreground = isAppForegroundForPresence();
+  emitAppVisibilityToServer(foreground);
+  if (foreground) startAppVisibilityForegroundHeartbeat();
+  else stopAppVisibilityForegroundHeartbeat();
+  if (Platform.OS === 'android') {
+    readAndroidMainActivityForeground()
+      .then((nativeForeground) => {
+        if (typeof nativeForeground !== 'boolean') return;
+        emitAppVisibilityToServer(nativeForeground);
+        if (nativeForeground) startAppVisibilityForegroundHeartbeat();
+        else stopAppVisibilityForegroundHeartbeat();
+      })
+      .catch(() => {});
+  }
 }
 
 function shouldAttemptRealtimeConnection(): boolean {
@@ -1200,6 +1269,7 @@ try {
 
       if (wasForeground && !isForeground) {
         emitAppVisibilityToServer(false);
+        stopAppVisibilityForegroundHeartbeat();
         if (SOCKET_KEEP_ALIVE_IN_BACKGROUND) return;
         const inSystemPiP = typeof (global as any).__pipInSystemModeRef?.current === 'boolean' && (global as any).__pipInSystemModeRef?.current === true;
         if (__outgoingCallScreenVisible || __incomingCallScreenVisible || __activeVideoCall || inSystemPiP) return;
@@ -1213,6 +1283,7 @@ try {
 
       if (!wasForeground && isForeground) {
         emitAppVisibilityToServer(true);
+        startAppVisibilityForegroundHeartbeat();
         if (!SOCKET_KEEP_ALIVE_IN_BACKGROUND) __realtimePaused = false;
         // Не сбрасываем __incomingCallScreenVisible / __outgoingCallScreenVisible / __activeVideoCall здесь:
         // нативные экраны звонка и видеозвонок могут оставаться активными при возврате из фона; сброс давал
@@ -1274,8 +1345,7 @@ socket.on("connect", async () => {
   // После bind на сервере: для друзей «онлайн» только на переднем плане (сокет может оставаться в фоне).
   const syncAppVisibilityAfterConnect = () => {
     try {
-      const fg = __lastAppState === 'active' || __lastAppState === 'inactive';
-      if (socket.connected) emitAppVisibilityToServer(fg);
+      if (socket.connected) syncAppVisibilityToServerFromAppState();
     } catch {}
   };
   syncAppVisibilityAfterConnect();

@@ -86,6 +86,15 @@ function readExplicitBuiltInFromGlobal(): boolean {
   }
 }
 
+function setExplicitBuiltInGlobal(explicit: boolean): void {
+  try {
+    const g = global as any;
+    g.__explicitBuiltInCallAudioRouteRef =
+      g.__explicitBuiltInCallAudioRouteRef || { current: false };
+    g.__explicitBuiltInCallAudioRouteRef.current = explicit;
+  } catch {}
+}
+
 function readUserSelectedBuiltInRoute(): InCallAudioRoute | null {
   const userSel = readUserSelectedCallAudioRoute();
   if (userSel === 'SPEAKER_PHONE' || userSel === 'EARPIECE') return userSel;
@@ -1809,6 +1818,7 @@ export const useAudioRouting = (
       );
       routeLog('cycleUserRoute', { from: current, next, available: av, cycleCtx });
       explicitBuiltInChoiceRef.current = next === 'EARPIECE' || next === 'SPEAKER_PHONE';
+      setExplicitBuiltInGlobal(explicitBuiltInChoiceRef.current);
       setUserRoute(next);
       setSelectedRoute(next);
       lastSelectedRef.current = next;

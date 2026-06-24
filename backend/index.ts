@@ -2867,16 +2867,19 @@ io.on('connection', async (sock: AuthedSocket) => {
       const userId = String((sock as any).data?.userId || '');
       if (!userId) return;
       if (typeof payload?.foreground !== 'boolean') return;
+      const isHeartbeat = payload?.heartbeat === true;
       (sock as any).data = (sock as any).data || {};
       (sock as any).data.appForeground = payload.foreground;
       if (payload.foreground) {
-        scheduleDebouncedClearBackgroundOnForeground(io, userId);
+        (sock as any).data.appForegroundLastSeenAt = Date.now();
+        scheduleDebouncedClearBackgroundOnForeground(io, userId, !isHeartbeat);
       } else {
+        delete (sock as any).data.appForegroundLastSeenAt;
         cancelDebouncedForegroundAck(userId);
         clearStickyPresenceStateForUser(userId);
         armInAppOfflinePresenceEmit(io, userId);
       }
-      scheduleGlobalFriendPresenceEmit(io, userId);
+      if (!isHeartbeat) scheduleGlobalFriendPresenceEmit(io, userId);
     } catch (e) {
       logger.error('❌ [app:visibility] Error', { error: (e as any)?.message || String(e) });
     }

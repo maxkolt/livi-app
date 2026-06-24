@@ -2979,9 +2979,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         try {
           getGlobalCallTimerRefs().accept.current = acceptCallTimeRef.current;
         } catch {}
-        userRouteRef.current = 'EARPIECE';
-        speakerOnRef.current = false;
-        setPersistedCallAudioRoute('EARPIECE');
+        const selectedAudioRoute = readUserSelectedCallAudioRoute();
+        const initialAudioRoute =
+          selectedAudioRoute === 'SPEAKER_PHONE' || selectedAudioRoute === 'EARPIECE'
+            ? selectedAudioRoute
+            : 'EARPIECE';
+        userRouteRef.current = initialAudioRoute;
+        speakerOnRef.current = initialAudioRoute === 'SPEAKER_PHONE';
+        setPersistedCallAudioRoute(initialAudioRoute);
         inAudioOnlyUiRef.current = true;
         try {
           (global as any).__inAudioOnlyUiRef.current = true;

@@ -136,6 +136,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /** Для presence: сокет может жить в фоне, но друзьям показываем online только когда MainActivity реально foreground. */
+  @ReactMethod
+  fun isMainActivityForeground(promise: Promise) {
+    promise.resolve(MainActivity.isInForeground)
+  }
+
   /** Задержка (мс) перед запуском OutgoingCallActivity после broadcast закрытия: даём предыдущему экземпляру (singleInstance) успеть finish(); после завершения звонка UI успевает стабилизироваться. */
   private val OUTGOING_LAUNCH_DELAY_MS = 250L
   /** Короткая пауза перед новым входящим: старый IncomingCallActivity должен успеть обработать JUST_CLOSE. */

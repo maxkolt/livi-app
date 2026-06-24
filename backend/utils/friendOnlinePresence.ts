@@ -9,6 +9,7 @@ import { getFriendIdsForUsers } from './friendshipUtils';
  * - Офлайн: нет сокетов (см. disconnect grace в index) или устойчивый фон дольше гистерезиса без звонка.
  */
 export const IN_APP_OFFLINE_DEBOUNCE_MS = 2_000;
+export const APP_FOREGROUND_HEARTBEAT_STALE_MS = 90_000;
 
 const userAllBackgroundSince = new Map<string, number>();
 
@@ -18,6 +19,9 @@ const inAppOfflinePresenceTimers = new Map<string, ReturnType<typeof setTimeout>
 /** Не сбрасываем «отсчёт фона» на каждый краткий foreground — только после устойчивого true. */
 const FOREGROUND_ACK_CLEAR_BACKGROUND_MS = 480;
 const foregroundAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** foreground:true от живого сокета не должен быть вечным, если клиент уснул и перестал подтверждать foreground. */
+const foregroundStalePresenceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function cancelForegroundAckForUser(userId: string): void {
   const key = normalizeUid(userId);
@@ -57,7 +61,8 @@ function anySocketForegroundOrLegacy(io: Server, uid: string): boolean {
   const id = String(uid);
   for (const s of io.sockets.sockets.values()) {
     if (String((s as any)?.data?.userId || '') !== id) continue;
-    if ((s as any).data?.appForeground !== false) return true;
+    const tri = socketForegroundTriState(s);
+    if (tri === 'legacy' || tri === 'true') return true;
   }
   return false;
 }
@@ -78,10 +83,20 @@ function userHasBusyCallSocket(io: Server, uid: string): boolean {
 
 type FgTri = 'legacy' | 'true' | 'false';
 
+function socketForegroundLastSeenAt(s: { data?: Record<string, unknown> }): number {
+  const raw = (s as any).data?.appForegroundLastSeenAt;
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+}
+
+function isForegroundHeartbeatFresh(s: { data?: Record<string, unknown> }): boolean {
+  const lastSeenAt = socketForegroundLastSeenAt(s);
+  return lastSeenAt > 0 && Date.now() - lastSeenAt <= APP_FOREGROUND_HEARTBEAT_STALE_MS;
+}
+
 function socketForegroundTriState(s: { data?: Record<string, unknown> }): FgTri {
   const v = (s as any).data?.appForeground;
   if (v === false) return 'false';
-  if (v === true) return 'true';
+  if (v === true) return isForegroundHeartbeatFresh(s) ? 'true' : 'false';
   return 'legacy';
 }
 
@@ -104,6 +119,7 @@ export function syncInAppTrackingForAllConnectedUsers(io: Server): void {
 
     let hasLegacy = false;
     let allExplicitFalse = true;
+    let allBackgroundSinceCandidate = 0;
     let sawSocket = false;
     for (const s of io.sockets.sockets.values()) {
       if (String((s as any)?.data?.userId || '') !== uid) continue;
@@ -114,6 +130,15 @@ export function syncInAppTrackingForAllConnectedUsers(io: Server): void {
         allExplicitFalse = false;
       } else if (tri === 'true') {
         allExplicitFalse = false;
+      } else {
+        const staleForegroundAt =
+          (s as any).data?.appForeground === true
+            ? socketForegroundLastSeenAt(s) + APP_FOREGROUND_HEARTBEAT_STALE_MS
+            : 0;
+        allBackgroundSinceCandidate = Math.max(
+          allBackgroundSinceCandidate,
+          staleForegroundAt > 0 ? Math.min(Date.now(), staleForegroundAt) : Date.now(),
+        );
       }
     }
     if (!sawSocket) continue;
@@ -126,7 +151,7 @@ export function syncInAppTrackingForAllConnectedUsers(io: Server): void {
     if (allExplicitFalse) {
       cancelForegroundAckForUser(uid);
       if (!userAllBackgroundSince.has(uid)) {
-        userAllBackgroundSince.set(uid, Date.now());
+        userAllBackgroundSince.set(uid, allBackgroundSinceCandidate || Date.now());
       }
       continue;
     }
@@ -150,6 +175,13 @@ export function syncInAppTrackingForAllConnectedUsers(io: Server): void {
       inAppOfflinePresenceTimers.delete(k);
     }
   }
+  for (const k of [...foregroundStalePresenceTimers.keys()]) {
+    if (!active.has(k)) {
+      const t = foregroundStalePresenceTimers.get(k);
+      if (t) clearTimeout(t);
+      foregroundStalePresenceTimers.delete(k);
+    }
+  }
 }
 
 export function cancelInAppOfflinePresenceEmit(userId: string): void {
@@ -160,11 +192,44 @@ export function cancelInAppOfflinePresenceEmit(userId: string): void {
   inAppOfflinePresenceTimers.delete(key);
 }
 
+function cancelForegroundStalePresenceEmit(userId: string): void {
+  const key = normalizeUid(userId);
+  if (!key) return;
+  const t = foregroundStalePresenceTimers.get(key);
+  if (t) clearTimeout(t);
+  foregroundStalePresenceTimers.delete(key);
+}
+
+/** Если foreground:true перестал подтверждаться, переслать друзьям актуальный список без разрыва сокета. */
+export function armForegroundStalePresenceEmit(io: Server, userId: string): void {
+  const key = normalizeUid(userId);
+  if (!key) return;
+  cancelForegroundStalePresenceEmit(key);
+
+  let newestSeenAt = 0;
+  for (const s of io.sockets.sockets.values()) {
+    if (String((s as any)?.data?.userId || '') !== key) continue;
+    if ((s as any).data?.appForeground === true) {
+      newestSeenAt = Math.max(newestSeenAt, socketForegroundLastSeenAt(s));
+    }
+  }
+  if (newestSeenAt <= 0) return;
+
+  const elapsed = Date.now() - newestSeenAt;
+  const wait = Math.max(0, APP_FOREGROUND_HEARTBEAT_STALE_MS - elapsed + IN_APP_OFFLINE_DEBOUNCE_MS + 15);
+  const t = setTimeout(() => {
+    foregroundStalePresenceTimers.delete(key);
+    scheduleGlobalFriendPresenceEmit(io, key);
+  }, wait);
+  foregroundStalePresenceTimers.set(key, t);
+}
+
 /** После ухода в фон: один раз переслать глобальный список, когда гистерезис «в приложении» истечёт. */
 export function armInAppOfflinePresenceEmit(io: Server, userId: string): void {
   const key = normalizeUid(userId);
   if (!key) return;
   cancelInAppOfflinePresenceEmit(key);
+  cancelForegroundStalePresenceEmit(key);
   syncInAppTrackingForAllConnectedUsers(io);
   const since = userAllBackgroundSince.get(key);
   if (since == null) return;
@@ -309,11 +374,13 @@ export function scheduleGlobalFriendPresenceEmit(io: Server, changedUserIds?: st
 }
 
 /** app:visibility foreground:true — сброс отсчёта «фон» только если true удержался ~FOREGROUND_ACK_CLEAR_BACKGROUND_MS. */
-export function scheduleDebouncedClearBackgroundOnForeground(io: Server, userId: string): void {
+export function scheduleDebouncedClearBackgroundOnForeground(io: Server, userId: string, broadcast = true): void {
   const key = normalizeUid(userId);
   if (!key) return;
   cancelInAppOfflinePresenceEmit(key);
   cancelForegroundAckForUser(key);
+  armForegroundStalePresenceEmit(io, key);
+  if (!broadcast && !userAllBackgroundSince.has(key)) return;
   const t = setTimeout(() => {
     foregroundAckTimers.delete(key);
     userAllBackgroundSince.delete(key);
