@@ -1277,6 +1277,7 @@ type PendingAcceptedRoom = {
   roomId: string;
   livekitRoomName: string;
   peerUserId: string;
+  acceptedAt?: number;
 };
 const activeRoomByUserId = new Map<string, PendingAcceptedRoom>();
 type CallAcceptedDeliverySource = 'call:accept' | 'reauth' | 'call:getAccepted';
@@ -1457,6 +1458,7 @@ async function emitPendingCallAcceptedToSocket(
     livekitToken: token,
     livekitRoomName: pendingRoom.livekitRoomName,
     livekitUrl: getLiveKitUrl() || null,
+    acceptedAt: pendingRoom.acceptedAt,
   });
   rememberCallAcceptedDelivery(pendingRoom.callId, userId, pendingRoom, {
     source,
@@ -3597,6 +3599,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       }
 
       // Отправляем call:accepted с LiveKit credentials
+      const acceptedAt = Date.now();
       if (aSock) {
         try {
           aSock.emit('call:accepted', {
@@ -3607,12 +3610,14 @@ io.on('connection', async (sock: AuthedSocket) => {
             livekitToken: livekitTokenA,
             livekitRoomName,
             livekitUrl: getLiveKitUrl() || null,
+            acceptedAt,
           });
           rememberCallAcceptedDelivery(id, link.a, {
             callId: id,
             roomId,
             livekitRoomName,
             peerUserId: link.b,
+            acceptedAt,
           }, {
             source: 'call:accept',
             socketId: aSock.id,
@@ -3631,12 +3636,14 @@ io.on('connection', async (sock: AuthedSocket) => {
             livekitToken: livekitTokenB,
             livekitRoomName,
             livekitUrl: getLiveKitUrl() || null,
+            acceptedAt,
           });
           rememberCallAcceptedDelivery(id, link.b, {
             callId: id,
             roomId,
             livekitRoomName,
             peerUserId: link.a,
+            acceptedAt,
           }, {
             source: 'call:accept',
             socketId: bSock.id,
@@ -3658,8 +3665,8 @@ io.on('connection', async (sock: AuthedSocket) => {
 
       // Сохраняем pending room для обоих участников, чтобы reconnect/reauth могли
       // восстановить call:accepted и подключение к LiveKit без повторного входящего.
-      const pendingRoomForA: PendingAcceptedRoom = { callId: id, roomId, livekitRoomName, peerUserId: link.b };
-      const pendingRoomForB: PendingAcceptedRoom = { callId: id, roomId, livekitRoomName, peerUserId: link.a };
+      const pendingRoomForA: PendingAcceptedRoom = { callId: id, roomId, livekitRoomName, peerUserId: link.b, acceptedAt };
+      const pendingRoomForB: PendingAcceptedRoom = { callId: id, roomId, livekitRoomName, peerUserId: link.a, acceptedAt };
       try {
         activeRoomByUserId.set(link.a, pendingRoomForA);
         activeRoomByUserId.set(link.b, pendingRoomForB);
@@ -3680,6 +3687,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           io.to(`u:${link.b}`).emit('call:accepted', {
             callId: id, from: aSock?.id, fromUserId: link.a, roomId,
             livekitToken: livekitTokenB, livekitRoomName, livekitUrl: getLiveKitUrl() || null,
+            acceptedAt,
           });
         }
       } catch {}
