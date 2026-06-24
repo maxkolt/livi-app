@@ -113,6 +113,7 @@ import {
   leaveVideoCallScreenPreservingStack,
   stashPendingVideoCallNavigation,
   flushPendingVideoCallNavigation,
+  navigateToVideoCallScreen,
 } from './utils/appNavigationGuard';
 
 // Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
@@ -1174,14 +1175,18 @@ function AppContent() {
           reportAnswerIncomingCall(callId);
           try { emitCloseHomeModals(); } catch {}
           // Push VideoCall поверх текущего экрана (не reset), чтобы после завершения звонка goBack() вернул на тот же экран (Chat, Friends и т.д.).
-          navRef.navigate('VideoCall' as any, {
-            peerUserId: info.from,
-            directCall: true,
-            directInitiator: false,
-            callId,
-            isIncoming: true,
-            ...videoCallNavExtras(callId, info.hasVideo === false ? 'audio' : undefined),
-          });
+          navigateToVideoCallScreen(
+            navRef,
+            {
+              peerUserId: info.from,
+              directCall: true,
+              directInitiator: false,
+              callId,
+              isIncoming: true,
+              ...videoCallNavExtras(callId, info.hasVideo === false ? 'audio' : undefined),
+            },
+            'callkeep_answer',
+          );
         },
         onEnd: (callId) => {
           disposeDirectCallAudioPrewarm('app:callkeep-end');
@@ -3266,7 +3271,7 @@ function AppContent() {
                 }
                 setActiveVideoCall(true);
                 try { emitCloseHomeModals(); } catch {}
-                navRef.navigate('VideoCall' as any, params);
+                navigateToVideoCallScreen(navRef, params as Record<string, unknown>, 'call_accepted');
                 try {
                   (global as any).__pendingForegroundVideoCallNavRef = (global as any)
                     .__pendingForegroundVideoCallNavRef || { current: null };
@@ -3487,6 +3492,10 @@ function AppContent() {
               <Stack.Screen
                 name="VideoCall"
                 component={VideoCallScreen}
+                getId={({ params }) => {
+                  const cid = params?.callId != null ? String(params.callId).trim() : '';
+                  return cid ? `videocall-${cid}` : undefined;
+                }}
                 options={{
                   presentation: 'card',
                   gestureEnabled: true,
@@ -3586,12 +3595,16 @@ export default function App() {
     console.log('[App] navigateToCall called with:', { callId, roomId });
     // возвращаем ровно на экран друга, НЕ на «Начать/Далее»
     if (navRef.isReady()) {
-      navRef.navigate('VideoCall', {
-        resume: true,
-        callId: callId || undefined,
-        roomId: roomId || undefined,
-        fromPiP: true,
-      });
+      navigateToVideoCallScreen(
+        navRef,
+        {
+          resume: true,
+          callId: callId || undefined,
+          roomId: roomId || undefined,
+          fromPiP: true,
+        },
+        'navigate_to_call',
+      );
     }
   };
 

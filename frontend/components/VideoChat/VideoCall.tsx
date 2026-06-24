@@ -4,7 +4,7 @@
  * Имеет кнопку: Завершить
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -69,7 +69,7 @@ import {
   syncAndroidSystemPiPLeaveHintForActiveVideoCall,
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
-import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, markInCallAudioSessionStarted, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, armDirectAudioEarpieceStabilizeWindow, isDirectAudioEarpieceStabilizeWindow } from '../../utils/activeCallSession';
+import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, markInCallAudioSessionStarted, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserLockedBuiltinCallAudioRoute, armDirectAudioEarpieceStabilizeWindow, isDirectAudioEarpieceStabilizeWindow, markActiveCallAudioRouteCallId } from '../../utils/activeCallSession';
 import { readNativeProbedExternalRoute } from '../../utils/nativeCallAudioProbe';
 import { getPersistedCallAudioRoute, persistVideoInAppPiPAudioRoute, readPreferredCallAudioRouteForTransition, setPersistedCallAudioRoute, scheduleReapplyPersistedCallAudioRoute, isCallAudioPiPTransitionWindow, shouldPreserveCallAudioRouteInInAppPiP } from '../../utils/callAudioRoutePersist';
 import { readBuiltinCallRouteBeforeHeadset, rememberBuiltinCallRouteBeforeHeadset, rememberDirectCallAudioRouteBeforeVideo, readDirectCallAudioRouteBeforeVideo } from '../../utils/callHeadsetAudioFallback';
@@ -88,6 +88,8 @@ import {
 } from '../../utils/callKeep';
 import { clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount } from '../../utils/pushNotifications';
 import { emitMissedClear, emitCallEndedOnHome } from '../../utils/globalEvents';
+import { dispatchLeaveVideoCallScreen } from '../../utils/appNavigationGuard';
+import { isCallAudioBootstrapPending } from '../../utils/nativeCallAudioProbe';
 
 type Props = { 
   route?: { 
@@ -224,11 +226,23 @@ function clearVideoCallHomeScreenLocks(reason: string) {
   }
 }
 
-function getGlobalCallTimerRefs() {
+function normalizeTimerCallId(callId?: string | null): string {
+  return String(callId || '').trim();
+}
+
+function getGlobalCallTimerRefs(callId?: string | null) {
   const g = global as any;
+  const nextCallId = normalizeTimerCallId(callId);
+  g.__callTimerCallIdRef = g.__callTimerCallIdRef || { current: '' };
+  if (nextCallId && g.__callTimerCallIdRef.current !== nextCallId) {
+    g.__callTimerCallIdRef.current = nextCallId;
+    g.__acceptCallTimeRef = { current: 0 };
+    g.__callConnectedAtRef = { current: null as number | null };
+  }
   g.__acceptCallTimeRef = g.__acceptCallTimeRef || { current: 0 };
   g.__callConnectedAtRef = g.__callConnectedAtRef || { current: null as number | null };
   return {
+    callId: g.__callTimerCallIdRef as { current: string },
     accept: g.__acceptCallTimeRef as { current: number },
     connected: g.__callConnectedAtRef as { current: number | null },
   };
@@ -237,8 +251,11 @@ function getGlobalCallTimerRefs() {
 function syncCallTimerFromGlobal(
   acceptCallTimeRef: React.MutableRefObject<number>,
   callConnectedAtRef: React.MutableRefObject<number | null>,
+  callId?: string | null,
 ) {
-  const { accept, connected } = getGlobalCallTimerRefs();
+  const requestedCallId = normalizeTimerCallId(callId);
+  const { callId: globalCallId, accept, connected } = getGlobalCallTimerRefs(callId);
+  if (requestedCallId && globalCallId.current !== requestedCallId) return;
   if (accept.current > 0) acceptCallTimeRef.current = accept.current;
   if (connected.current != null) callConnectedAtRef.current = connected.current;
 }
@@ -246,14 +263,27 @@ function syncCallTimerFromGlobal(
 function persistCallTimerToGlobal(
   acceptCallTimeRef: React.MutableRefObject<number>,
   callConnectedAtRef: React.MutableRefObject<number | null>,
+  callId?: string | null,
 ) {
-  const { accept, connected } = getGlobalCallTimerRefs();
+  const { accept, connected } = getGlobalCallTimerRefs(callId);
   if (acceptCallTimeRef.current > 0) accept.current = acceptCallTimeRef.current;
   if (callConnectedAtRef.current != null) connected.current = callConnectedAtRef.current;
 }
 
+function clearGlobalCallTimer(callId?: string | null): void {
+  const g = global as any;
+  const requestedCallId = normalizeTimerCallId(callId);
+  const currentCallId = normalizeTimerCallId(g.__callTimerCallIdRef?.current || '');
+  if (requestedCallId && currentCallId && requestedCallId !== currentCallId) return;
+  g.__callTimerCallIdRef = g.__callTimerCallIdRef || { current: '' };
+  g.__callTimerCallIdRef.current = '';
+  g.__acceptCallTimeRef = { current: 0 };
+  g.__callConnectedAtRef = { current: null as number | null };
+}
+
 const VideoCall: React.FC<Props> = ({ route }) => {
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useAppTheme();
   const accent = useMemo(() => uiAccent(isDark), [isDark]);
@@ -576,16 +606,28 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   
   const currentCallIdRef = useRef<string | null>(route?.params?.callId || null);
   const acceptCallTimeRef = useRef<number>(0);
+  const timerCallIdRef = useRef<string>(normalizeTimerCallId(route?.params?.callId || null));
   const sessionRef = useRef<VideoCallSession | null>(null);
   const screenInstanceIdRef = useRef(`video-call-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
   useEffect(() => {
-    syncCallTimerFromGlobal(acceptCallTimeRef, callConnectedAtRef);
-    const { connected } = getGlobalCallTimerRefs();
+    const timerCallId = currentCallIdRef.current || callId || route?.params?.callId || null;
+    syncCallTimerFromGlobal(acceptCallTimeRef, callConnectedAtRef, timerCallId);
+    const { connected } = getGlobalCallTimerRefs(timerCallId);
     if (connected.current != null) {
       setCallElapsedSec(Math.floor((Date.now() - connected.current) / 1000));
     }
-  }, []);
+  }, [callId, route?.params?.callId]);
+
+  useEffect(() => {
+    const nextTimerCallId = normalizeTimerCallId(callId || route?.params?.callId || null);
+    if (!nextTimerCallId || timerCallIdRef.current === nextTimerCallId) return;
+    timerCallIdRef.current = nextTimerCallId;
+    acceptCallTimeRef.current = 0;
+    callConnectedAtRef.current = null;
+    setCallElapsedSec(0);
+    getGlobalCallTimerRefs(nextTimerCallId);
+  }, [callId, route?.params?.callId]);
 
   const notifyPeerDirectCallVideoUi = useCallback((inVideoCallUi: boolean) => {
     if (!route?.params?.directCall) return;
@@ -897,6 +939,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     directCallRoute &&
     route?.params?.callMedia !== 'video' &&
     route?.params?.preferVideoCallUi !== true;
+  useLayoutEffect(() => {
+    const key = String(callId || route?.params?.callId || '').trim();
+    if (key) {
+      markActiveCallAudioRouteCallId(key);
+    }
+  }, [callId, route?.params?.callId]);
   const audioRoutingOptions =
     hasActiveCallForAudio && !isInactiveState
       ? {
@@ -909,13 +957,31 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
       : undefined;
   const { syncRouteNow, cycleUserRoute, selectedRoute } = useAudioRouting(
-    hasActiveCallForAudio && !isInactiveState,
+    hasActiveCallForAudio && !isInactiveState && isFocused,
     currentRemoteStream,
     inAudioOnlyUi,
     audioRoutingOptions,
   );
   const syncRouteNowRef = useRef(syncRouteNow);
   syncRouteNowRef.current = syncRouteNow;
+
+  useEffect(() => {
+    if (!isFocused) return;
+    const key = String(callId || route?.params?.callId || '').trim();
+    if (!key) return;
+    markActiveCallAudioRouteCallId(key);
+    const g = global as any;
+    g.__callAudioRoutingOwnerRef = g.__callAudioRoutingOwnerRef || { current: null };
+    g.__callAudioRoutingOwnerRef.current = { id: screenInstanceIdRef.current, key };
+    return () => {
+      if (g.__callAudioRoutingOwnerRef?.current?.id === screenInstanceIdRef.current) {
+        if (!isOngoingCallSession()) {
+          g.__callAudioRoutingOwnerRef.current = null;
+        }
+      }
+    };
+  }, [isFocused, callId, route?.params?.callId]);
+
   const normalizedInitialAudioRouteCallRef = useRef<string | null>(null);
   useEffect(() => {
     if (!audioFirstDirectCall) {
@@ -924,14 +990,42 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }
     if (isInactiveState || isCallAudioPiPTransitionWindow()) return;
     const key = String(callId || roomId || route?.params?.callId || route?.params?.roomId || 'pending-direct-audio');
+    try {
+      const g = global as any;
+      g.__directAudioInitialRouteNormalizedKeyRef =
+        g.__directAudioInitialRouteNormalizedKeyRef || { current: '' };
+      if (g.__directAudioInitialRouteNormalizedKeyRef.current === key) {
+        normalizedInitialAudioRouteCallRef.current = key;
+        return;
+      }
+    } catch {}
     if (normalizedInitialAudioRouteCallRef.current != null) return;
     const activeExternal =
       readNativeProbedExternalRoute() ||
       readConnectedExternalCallAudioRoute(userRouteRef.current) ||
       readActiveExternalCallAudioRoute(userRouteRef.current);
     if (activeExternal) return;
+    const userBuiltin = readUserSelectedCallAudioRoute();
+    if (userBuiltin === 'SPEAKER_PHONE' || userBuiltin === 'EARPIECE') {
+      normalizedInitialAudioRouteCallRef.current = key;
+      try {
+        (global as any).__directAudioInitialRouteNormalizedKeyRef.current = key;
+      } catch {}
+      return;
+    }
+    const persisted = getPersistedCallAudioRoute();
+    if (persisted === 'SPEAKER_PHONE') {
+      normalizedInitialAudioRouteCallRef.current = key;
+      try {
+        (global as any).__directAudioInitialRouteNormalizedKeyRef.current = key;
+      } catch {}
+      return;
+    }
 
     normalizedInitialAudioRouteCallRef.current = key;
+    try {
+      (global as any).__directAudioInitialRouteNormalizedKeyRef.current = key;
+    } catch {}
     userRouteRef.current = 'EARPIECE';
     speakerOnRef.current = false;
     setUserSelectedCallAudioRoute(null);
@@ -960,6 +1054,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const directCallAudioRepinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleDirectCallAudioRepin = useCallback(() => {
     if (!directCallRoute) return;
+    if (readUserLockedBuiltinCallAudioRoute()) return;
     if (directCallAudioRepinTimerRef.current) {
       clearTimeout(directCallAudioRepinTimerRef.current);
     }
@@ -1069,13 +1164,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const cycleAudioRoute = useCallback(() => {
     void cycleUserRoute();
   }, [cycleUserRoute]);
-  const audioRouteIcon = iconNameForRoute(selectedRoute);
+  const callAudioRouteUiPending = isCallAudioBootstrapPending();
+  const audioRouteForUi = callAudioRouteUiPending ? ('EARPIECE' as const) : selectedRoute;
+  const audioRouteIcon = iconNameForRoute(audioRouteForUi);
   const btAccent = useMemo(() => uiAccent(!isDark), [isDark]);
-  const audioOutputRouteAccent = selectedRoute === 'BLUETOOTH' ? btAccent : accent;
+  const audioOutputRouteAccent = audioRouteForUi === 'BLUETOOTH' ? btAccent : accent;
   const audioOutputRouteHighlighted =
-    selectedRoute === 'SPEAKER_PHONE' ||
-    selectedRoute === 'BLUETOOTH' ||
-    selectedRoute === 'WIRED_HEADSET';
+    !callAudioRouteUiPending &&
+    (selectedRoute === 'SPEAKER_PHONE' ||
+      selectedRoute === 'BLUETOOTH' ||
+      selectedRoute === 'WIRED_HEADSET');
 
   
   // Refs
@@ -1169,7 +1267,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
   const lastRouteParamsRef = useRef<any>(null);
   const callOriginRef = useRef<{ name: string; params?: any } | null>(null);
   const friendsRef = useRef(friends);
-  const isFocused = useIsFocused();
   const [appState, setAppState] = useState(AppState.currentState);
   
   // Обновляем friendsRef при изменении friends
@@ -1707,7 +1804,6 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       }
       callEndedTransitionDoneRef.current = true;
       markGlobalCleanupDone(source, finalCallId, finalRoomId);
-      clearEndingCallInProgress();
 
       if (shouldReportEndCall) {
         const doReportEndCall = () => {
@@ -1768,8 +1864,10 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       markInCallAudioSessionStarted(false);
       pauseBackgroundMediaAfterCall();
       try { (InCallManager as any).abandonAudioFocus?.(); } catch {}
+      clearEndingCallInProgress();
       clearSessionRefs();
       clearVideoCallHomeScreenLocks(`${source}-deferred`);
+      clearGlobalCallTimer(finalCallId);
       remoteStreamRef.current = null;
       remoteStreamReceivedAtRef.current = null;
       currentCallIdRef.current = null;
@@ -2053,6 +2151,20 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       logger.info('[VideoCall] Звонок завершается — пропускаем инициализацию/rebind сессии');
       return;
     }
+    const routeCallIdForDupGuard = String(route?.params?.callId ?? '').trim();
+    if (!isFocused && routeCallIdForDupGuard) {
+      try {
+        const gs = (global as any).__webrtcSessionRef?.current;
+        const gsId =
+          gs && typeof gs.getCallId === 'function' ? String(gs.getCallId() || '').trim() : '';
+        if (gsId && gsId === routeCallIdForDupGuard) {
+          logger.info('[VideoCall] Unfocused duplicate mount — skip session init', {
+            callId: routeCallIdForDupGuard,
+          });
+          return;
+        }
+      } catch (_) {}
+    }
     const routeCallIdForInit = route?.params?.callId ?? null;
     const routeRoomIdForInit = route?.params?.roomId ?? null;
     const initRouteKey = `${String(routeCallIdForInit || '')}|${String(routeRoomIdForInit || '')}`;
@@ -2218,7 +2330,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
             if (callConnectedAtRef.current == null && stream.getAudioTracks?.()?.length) {
               callConnectedAtRef.current = acceptCallTimeRef.current;
             }
-            persistCallTimerToGlobal(acceptCallTimeRef, callConnectedAtRef);
+            persistCallTimerToGlobal(
+              acceptCallTimeRef,
+              callConnectedAtRef,
+              currentCallIdRef.current || callId || route?.params?.callId || null,
+            );
             setFriendCallAccepted(true);
             setIsInactiveState(false);
             setWasFriendCallEnded(false);
@@ -2249,6 +2365,17 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         onCallIdChange: (id) => {
           if (isEndingCallRef.current) return;
           setCallId(id);
+        },
+        onCallAcceptedAtChange: (acceptedAt) => {
+          if (isEndingCallRef.current || !acceptedAt) return;
+          const timerCallId = currentCallIdRef.current || callId || route?.params?.callId || null;
+          acceptCallTimeRef.current = acceptedAt;
+          const refs = getGlobalCallTimerRefs(timerCallId);
+          refs.accept.current = acceptedAt;
+          if (refs.connected.current != null && refs.connected.current < acceptedAt) {
+            refs.connected.current = acceptedAt;
+            callConnectedAtRef.current = acceptedAt;
+          }
         },
         onMicStateChange: (enabled) => {
           logMicTraceRef.current('onMicStateChange ← VideoCall initial session config', {
@@ -2509,8 +2636,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
               remoteStreamReceivedAtRef.current = Date.now();
             }
           }
-          syncCallTimerFromGlobal(acceptCallTimeRef, callConnectedAtRef);
-          const { connected: globalConnected } = getGlobalCallTimerRefs();
+          const timerCallId = currentCallIdRef.current || callId || route?.params?.callId || null;
+          syncCallTimerFromGlobal(acceptCallTimeRef, callConnectedAtRef, timerCallId);
+          const { connected: globalConnected } = getGlobalCallTimerRefs(timerCallId);
           if (globalConnected.current != null) {
             setCallElapsedSec(Math.floor((Date.now() - globalConnected.current) / 1000));
           }
@@ -2531,6 +2659,16 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         }
         try {
           if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
+        } catch {}
+        try {
+          const reuseAudioRoute =
+            readUserLockedBuiltinCallAudioRoute() ||
+            readUserSelectedCallAudioRoute() ||
+            getPersistedCallAudioRoute();
+          if (reuseAudioRoute === 'SPEAKER_PHONE' || reuseAudioRoute === 'EARPIECE') {
+            userRouteRef.current = reuseAudioRoute;
+            speakerOnRef.current = reuseAudioRoute === 'SPEAKER_PHONE';
+          }
         } catch {}
       }
     }
@@ -2748,7 +2886,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     // Это гарантирует, что обработчики устанавливаются даже если сессия уже существует
     // КРИТИЧНО: Убрали зависимости roomId, callId, partnerId чтобы не пересоздавать сессию
     // Сессия создается один раз при монтировании компонента
-  }, [route?.params?.directCall, route?.params?.resume, route?.params?.endedFromRemoteSystemPiP, clearSessionRefs, isInactiveState, wasFriendCallEnded, isCleanupOwner, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn, extendPiPReturnAbortGuard, cleanupFunction, getSystemPiPReturnToken, claimSystemPiPReturnOwner]);
+  }, [route?.params?.directCall, route?.params?.resume, route?.params?.endedFromRemoteSystemPiP, clearSessionRefs, isInactiveState, wasFriendCallEnded, isCleanupOwner, getDesiredLocalMediaStateForPiPReturn, getDesiredRemoteMutedForPiPReturn, extendPiPReturnAbortGuard, cleanupFunction, getSystemPiPReturnToken, claimSystemPiPReturnOwner, isFocused]);
   
   useEffect(() => {
     const session = sessionRef.current;
@@ -2891,25 +3029,8 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           if (route?.name === 'Home') return;
           if (route?.name !== 'VideoCall') return;
           const returnTo = (route as any)?.params?.returnTo;
-          const state = rootNav.getState();
-          const routes = state?.routes ?? [];
-          const canGoBack = typeof rootNav.canGoBack === 'function' ? rootNav.canGoBack() : routes.length > 1;
-          logger.info('[VideoCall] [end] closeVideoCallScreen: dispatch goBack/reset', {
-            routesLength: routes.length,
-            canGoBack,
-            hasReturnTo: !!returnTo?.name,
-          });
-          if (canGoBack) {
-            rootNav.dispatch(CommonActions.goBack());
-            try { emitCallEndedOnHome(); } catch (_) {}
-          } else if (returnTo?.name) {
-            rootNav.dispatch(CommonActions.reset({
-              index: 0,
-              routes: [{ name: returnTo.name as any, params: { ...(returnTo.params || {}), callEnded: true } }],
-            }));
-          } else {
-            rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
-          }
+          dispatchLeaveVideoCallScreen(rootNav, { returnTo, callEnded: true });
+          try { emitCallEndedOnHome(); } catch (_) {}
         } catch (e) {
           logger.warn('[VideoCall] closeVideoCallScreen at handleCallEnded failed', e);
         }
@@ -2977,7 +3098,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       if (audioFirst) {
         armDirectAudioEarpieceStabilizeWindow();
         try {
-          getGlobalCallTimerRefs().accept.current = acceptCallTimeRef.current;
+          getGlobalCallTimerRefs(currentCallIdRef.current || callId || route?.params?.callId || null).accept.current = acceptCallTimeRef.current;
         } catch {}
         const selectedAudioRoute = readUserSelectedCallAudioRoute();
         const initialAudioRoute =
@@ -3361,15 +3482,9 @@ const VideoCall: React.FC<Props> = ({ route }) => {
           const alreadyResetByVideoCall = !!(global as any).__homeResetByVideoCallRef?.current;
           if (currentRoute?.name === 'VideoCall' && !alreadyResetByVideoCall) {
             try { (global as any).__homeResetByVideoCallRef.current = true; } catch (_) {}
-            const state = rootNav.getState();
-            const routes = state?.routes ?? [];
-            if (routes.length > 1) {
-              rootNav.dispatch(CommonActions.goBack());
-              try { emitCallEndedOnHome(); } catch (_) {}
-            } else {
-              rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
-              try { emitCallEndedOnHome(); } catch (_) {}
-            }
+            const returnTo = (currentRoute as any)?.params?.returnTo;
+            dispatchLeaveVideoCallScreen(rootNav, { returnTo, callEnded: true });
+            try { emitCallEndedOnHome(); } catch (_) {}
           }
         }
       } catch (e) {
@@ -3481,29 +3596,11 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       try {
         const rootNav = (global as any).__navRef;
         if (rootNav?.isReady?.()) {
-          const state = rootNav.getState();
-          const routes = state?.routes ?? [];
           const currentRoute = rootNav.getCurrentRoute();
-          const returnTo = (currentRoute as any)?.params?.returnTo;
           if (currentRoute?.name === 'VideoCall') {
-            const canGoBack = typeof rootNav.canGoBack === 'function' ? rootNav.canGoBack() : routes.length > 1;
-            logger.info('[VideoCall] [end] onAbortCall: goBack (вернём на экран под VideoCall)', {
-              routesLength: routes.length,
-              canGoBack,
-              hasReturnTo: !!returnTo?.name,
-            });
-            if (canGoBack) {
-              rootNav.dispatch(CommonActions.goBack());
-              try { emitCallEndedOnHome(); } catch (_) {}
-            } else if (returnTo?.name) {
-              rootNav.dispatch(CommonActions.reset({
-                index: 0,
-                routes: [{ name: returnTo.name as any, params: { ...(returnTo.params || {}), callEnded: true } }],
-              }));
-            } else {
-              rootNav.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Home' as any, params: { callEnded: true } }] }));
-              try { emitCallEndedOnHome(); } catch (_) {}
-            }
+            const returnTo = (currentRoute as any)?.params?.returnTo;
+            dispatchLeaveVideoCallScreen(rootNav, { returnTo, callEnded: true });
+            try { emitCallEndedOnHome(); } catch (_) {}
           }
         } else {
           (navigation as any)?.dispatch?.(CommonActions.goBack());
@@ -3838,7 +3935,14 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     opts?: { fromPiP?: boolean; pinInitialEarpiece?: boolean },
   ) => {
     stayOnVideoCallUiRef.current = false;
-    const audioRoute = resolveRouteForAudioOnlyUi(!!opts?.fromPiP);
+    const userBuiltinLocked =
+      readUserLockedBuiltinCallAudioRoute() ||
+      (() => {
+        const u = readUserSelectedCallAudioRoute();
+        return u === 'SPEAKER_PHONE' || u === 'EARPIECE' ? u : null;
+      })();
+    const audioRoute =
+      userBuiltinLocked || resolveRouteForAudioOnlyUi(!!opts?.fromPiP);
     if (opts?.pinInitialEarpiece && audioRoute === 'EARPIECE') {
       armDirectAudioEarpieceStabilizeWindow();
     }
@@ -3895,14 +3999,19 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       remoteStreamReceivedAtRef.current = Date.now();
     }
     if (!acceptCallTimeRef.current && rs) {
-      syncCallTimerFromGlobal(acceptCallTimeRef, callConnectedAtRef);
+      syncCallTimerFromGlobal(
+        acceptCallTimeRef,
+        callConnectedAtRef,
+        currentCallIdRef.current || callId || route?.params?.callId || null,
+      );
       if (!acceptCallTimeRef.current) {
         acceptCallTimeRef.current = Date.now();
-        getGlobalCallTimerRefs().accept.current = acceptCallTimeRef.current;
+        getGlobalCallTimerRefs(currentCallIdRef.current || callId || route?.params?.callId || null).accept.current = acceptCallTimeRef.current;
       }
     }
-    syncCallTimerFromGlobal(acceptCallTimeRef, callConnectedAtRef);
-    const { connected: globalConnected } = getGlobalCallTimerRefs();
+    const timerCallId = currentCallIdRef.current || callId || route?.params?.callId || null;
+    syncCallTimerFromGlobal(acceptCallTimeRef, callConnectedAtRef, timerCallId);
+    const { connected: globalConnected } = getGlobalCallTimerRefs(timerCallId);
     if (globalConnected.current != null) {
       callConnectedAtRef.current = globalConnected.current;
       setCallElapsedSec(Math.floor((Date.now() - globalConnected.current) / 1000));
@@ -3913,7 +4022,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     ) {
       const seed = acceptCallTimeRef.current > 0 ? acceptCallTimeRef.current : Date.now();
       callConnectedAtRef.current = seed;
-      globalConnected.current = seed;
+      getGlobalCallTimerRefs(timerCallId).connected.current = seed;
       setCallElapsedSec(Math.floor((Date.now() - seed) / 1000));
     }
     setFriendCallAccepted(true);
@@ -3932,6 +4041,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
     }
     try {
       syncRouteNowRef.current?.();
+      if (userBuiltinLocked) {
+        return;
+      }
+      if (directCallRoute && route?.params?.callMedia !== 'video') {
+        return;
+      }
       if (opts?.pinInitialEarpiece) {
         pinInitialAudioCallEarpieceRef.current({ force: true });
         setTimeout(() => pinInitialAudioCallEarpieceRef.current({ force: true }), 450);
@@ -3944,7 +4059,7 @@ const VideoCall: React.FC<Props> = ({ route }) => {
         });
       }
     } catch {}
-  }, [pip, syncPeerVideoInviteHint, resolveRouteForAudioOnlyUi]);
+  }, [pip, syncPeerVideoInviteHint, resolveRouteForAudioOnlyUi, directCallRoute, route?.params?.callMedia]);
 
   const applyVideoCallUiFromPiPExpand = useCallback((session: VideoCallSession | null) => {
     if ((global as any).__preferAudioOnlyUiOnNextVideoCallRef?.current === true) {
@@ -4376,11 +4491,12 @@ const VideoCall: React.FC<Props> = ({ route }) => {
       return;
     }
     if (callConnectedAtRef.current == null && remoteAudioLiveForTimer) {
-      syncCallTimerFromGlobal(acceptCallTimeRef, callConnectedAtRef);
+      const timerCallId = currentCallIdRef.current || callId || route?.params?.callId || null;
+      syncCallTimerFromGlobal(acceptCallTimeRef, callConnectedAtRef, timerCallId);
       if (callConnectedAtRef.current == null) {
         const seed = acceptCallTimeRef.current > 0 ? acceptCallTimeRef.current : Date.now();
         callConnectedAtRef.current = seed;
-        getGlobalCallTimerRefs().connected.current = seed;
+        getGlobalCallTimerRefs(timerCallId).connected.current = seed;
       }
     }
     if (callConnectedAtRef.current == null) {

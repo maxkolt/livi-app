@@ -98,6 +98,21 @@ export function clearEndingCallInProgress(): void {
   }
 }
 
+/**
+ * Не вызывать InCallManager.stop / сброс маршрута при unmount дубликата VideoCall
+ * или во время отложенного teardown (иначе мерцание earpiece/speaker между звонками).
+ */
+export function shouldDeferCallAudioStopOnHookUnmount(): boolean {
+  try {
+    const g = global as any;
+    if (g.__endingCallInProgressRef?.current === true) return true;
+    if (g.__inCallAudioSessionStartedRef?.current === true) return true;
+    const session = g.__webrtcSessionRef?.current;
+    if (session && typeof session.isEnded === 'function' && !session.isEnded()) return true;
+  } catch {}
+  return isOngoingCallSession();
+}
+
 /** Активный direct / VideoCall (не teardown, сессия не ended). */
 export function isOngoingCallSession(): boolean {
   try {
@@ -397,6 +412,79 @@ export function readUserSelectedCallAudioRoute(): InCallAudioRoute | null {
   } catch {
     return null;
   }
+}
+
+function readActiveCallAudioRouteCallId(): string {
+  try {
+    const g = global as any;
+    return String(
+      g.__activeCallAudioRouteCallIdRef?.current ||
+        g.__currentCallPiPParamsRef?.current?.callId ||
+        '',
+    ).trim();
+  } catch {
+    return '';
+  }
+}
+
+export function markActiveCallAudioRouteCallId(callId?: string | null): void {
+  try {
+    const g = global as any;
+    const nextCallId = String(callId || '').trim();
+    const prevCallId = String(g.__activeCallAudioRouteCallIdRef?.current || '').trim();
+    if (nextCallId && prevCallId && nextCallId !== prevCallId) {
+      if (g.__manualBuiltinCallAudioRouteRef) g.__manualBuiltinCallAudioRouteRef.current = null;
+      if (g.__userSelectedCallAudioRouteRef) g.__userSelectedCallAudioRouteRef.current = null;
+      if (g.__explicitBuiltInCallAudioRouteRef) g.__explicitBuiltInCallAudioRouteRef.current = false;
+    }
+    g.__activeCallAudioRouteCallIdRef = g.__activeCallAudioRouteCallIdRef || { current: '' };
+    g.__activeCallAudioRouteCallIdRef.current = nextCallId;
+  } catch {}
+}
+
+export function rememberManualBuiltinCallAudioRoute(route: InCallAudioRoute): void {
+  if (route !== 'SPEAKER_PHONE' && route !== 'EARPIECE') return;
+  try {
+    const g = global as any;
+    g.__manualBuiltinCallAudioRouteRef = {
+      current: {
+        route,
+        callId: readActiveCallAudioRouteCallId(),
+        at: Date.now(),
+      },
+    };
+  } catch {}
+}
+
+export function readManualBuiltinCallAudioRoute(maxAgeMs = 120_000): InCallAudioRoute | null {
+  try {
+    const g = global as any;
+    const record = g.__manualBuiltinCallAudioRouteRef?.current;
+    const route = normalizeInCallRoute(record?.route || '');
+    if (route !== 'SPEAKER_PHONE' && route !== 'EARPIECE') return null;
+    const at = Number(record?.at || 0);
+    if (!at || Date.now() - at > maxAgeMs) return null;
+    const activeCallId = readActiveCallAudioRouteCallId();
+    const recordCallId = String(record?.callId || '').trim();
+    if (!activeCallId || !recordCallId || activeCallId !== recordCallId) return null;
+    return route;
+  } catch {
+    return null;
+  }
+}
+
+/** Builtin (ухо/громкая), зафиксированный пользователем через cycle — не перебивать reapply/poll. */
+export function readUserLockedBuiltinCallAudioRoute(): InCallAudioRoute | null {
+  const manual = readManualBuiltinCallAudioRoute();
+  if (manual) return manual;
+  const userSel = readUserSelectedCallAudioRoute();
+  if (userSel !== 'SPEAKER_PHONE' && userSel !== 'EARPIECE') return null;
+  try {
+    if ((global as any).__explicitBuiltInCallAudioRouteRef?.current) {
+      return userSel;
+    }
+  } catch {}
+  return null;
 }
 
 export function setUserSelectedCallAudioRoute(route: InCallAudioRoute | null): void {

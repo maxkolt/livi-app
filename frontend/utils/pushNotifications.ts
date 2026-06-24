@@ -21,6 +21,7 @@ import { trackReleaseError, trackReleaseEvent } from './telemetry';
 import { stopIncomingCallAlert } from './incomingCallAlert';
 import { displayIncomingCall, isCallKeepAvailable, sendCallAnsweredBroadcast, addEndedCallId, closeOutgoingCallActivity, notifyCallCanceled, isEndedCallId, isOutgoingDeclineHandled, markOutgoingDeclineHandled, stopIncomingCallRingtoneAndVibration, setCallMediaHint, getCallMediaHint, videoCallNavExtras, type DirectCallMediaHint } from './callKeep';
 import { emitCloseOutgoingCall, emitCloseHomeModals, emitMissedClear, emitMissedIncrement } from './globalEvents';
+import { navigateToVideoCallScreen, type VideoCallNavLike } from './appNavigationGuard';
 import { recordAppliedFromPending } from '../sockets/socket';
 import { loadLang, t } from './i18n';
 import { isIncomingCallExpired } from './callExpiry';
@@ -1024,15 +1025,18 @@ async function navigateToVideoCallIncoming(peerUserId: string, callId: string, m
   await runWhenNavReady(`call:${callId || peerUserId}`, (nav) => {
     setActiveVideoCall(true);
     try { emitCloseHomeModals(); } catch {}
-    // Push VideoCall поверх текущего экрана (не reset), чтобы после завершения звонка goBack() вернул на тот же экран (Chat, Friends и т.д.).
-    nav.navigate('VideoCall' as any, {
-      peerUserId,
-      directCall: true,
-      directInitiator: false,
-      callId,
-      isIncoming: true,
-      ...videoCallNavExtras(callId, incomingMedia),
-    });
+    navigateToVideoCallScreen(
+      nav as VideoCallNavLike,
+      {
+        peerUserId,
+        directCall: true,
+        directInitiator: false,
+        callId,
+        isIncoming: true,
+        ...videoCallNavExtras(callId, incomingMedia),
+      },
+      'incoming_navigate',
+    );
   });
 }
 

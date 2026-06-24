@@ -175,6 +175,8 @@ export function applyCallEndedGlobalRefsOnce(
     g.__pendingCallAcceptedRef.current = null;
     g.__acceptCallTimeRef = g.__acceptCallTimeRef || { current: 0 };
     g.__acceptCallTimeRef.current = 0;
+    g.__callTimerCallIdRef = g.__callTimerCallIdRef || { current: '' };
+    g.__callTimerCallIdRef.current = '';
     g.__directAudioEarpieceStabilizeUntilRef = g.__directAudioEarpieceStabilizeUntilRef || { current: 0 };
     g.__directAudioEarpieceStabilizeUntilRef.current = 0;
     g.__callConnectedAtRef = g.__callConnectedAtRef || { current: null };

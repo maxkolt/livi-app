@@ -1,5 +1,5 @@
 import { AppState, AppStateStatus } from 'react-native';
-import { CommonActions } from '@react-navigation/native';
+import { CommonActions, StackActions } from '@react-navigation/native';
 import { logger } from './logger';
 
 let appState: AppStateStatus = AppState.currentState;
@@ -7,9 +7,9 @@ let guardInstalled = false;
 
 export type RootNavLike = {
   isReady?: () => boolean;
-  getCurrentRoute?: () => { name?: string; params?: Record<string, unknown> } | undefined;
-  getState?: () => { routes?: { name?: string }[]; index?: number } | undefined;
-  dispatch?: (action: any) => void;
+  getCurrentRoute?: () => { name?: string; params?: object } | undefined;
+  getState?: () => { routes?: ReadonlyArray<{ name?: string; params?: object }>; index?: number } | undefined;
+  dispatch?: (...args: any[]) => any;
   canGoBack?: () => boolean;
 };
 
@@ -66,7 +66,8 @@ export function leaveVideoCallScreenPreservingStack(
   if (routeName === 'Home') return;
   if (routeName !== 'VideoCall') return;
 
-  const returnTo = route?.params?.returnTo as { name?: string; params?: Record<string, unknown> } | undefined;
+  const routeParams = route?.params as Record<string, unknown> | undefined;
+  const returnTo = routeParams?.returnTo as { name?: string; params?: Record<string, unknown> } | undefined;
   const canGoBack = typeof nav.canGoBack === 'function' ? nav.canGoBack() : false;
 
   if (canGoBack) {
@@ -144,7 +145,7 @@ export function stashPendingVideoCallNavigation(params: Record<string, unknown>)
 }
 
 export function flushPendingVideoCallNavigation(
-  nav: RootNavLike & { navigate?: (name: string, params: Record<string, unknown>) => void },
+  nav: RootNavLike & { navigate?: (...args: any[]) => any },
 ): boolean {
   if (!isAppForegroundForUi()) return false;
   const g = global as typeof globalThis & Record<string, unknown>;
@@ -160,11 +161,223 @@ export function flushPendingVideoCallNavigation(
     return false;
   }
   (g as any).__pendingForegroundVideoCallNavRef.current = null;
+  return navigateToVideoCallScreen(nav, pending.params, 'flush_pending');
+}
+
+const VIDEO_CALL_NAV_DEDUP_MS = 6000;
+const recentVideoCallNavAt = new Map<string, number>();
+
+export type VideoCallNavLike = RootNavLike & {
+  navigate?: (...args: any[]) => any;
+};
+
+function readRouteCallId(route: { params?: object } | undefined): string {
+  return String((route?.params as Record<string, unknown> | undefined)?.callId ?? '').trim();
+}
+
+/** Снять лишние VideoCall с тем же callId в стеке (гонка incoming_navigate + call_accepted). */
+function focusExistingVideoCallInStack(
+  nav: VideoCallNavLike,
+  callId: string,
+  params: Record<string, unknown>,
+  reason?: string,
+): boolean {
+  if (!callId) return false;
+  const state = nav.getState?.();
+  const routes = state?.routes ?? [];
+  if (!routes.length) return false;
+  const topIdx = state?.index ?? routes.length - 1;
+  const sameIdIdx = routes.findIndex(
+    (r) => r.name === 'VideoCall' && readRouteCallId(r) === callId,
+  );
+  if (sameIdIdx < 0) return false;
+
+  if (topIdx > sameIdIdx) {
+    const popCount = topIdx - sameIdIdx;
+    try {
+      nav.dispatch?.(StackActions.pop(popCount));
+      logger.info('[navGuard] VideoCall popped duplicate stack entries', {
+        callId,
+        reason,
+        popCount,
+        sameIdIdx,
+        topIdx,
+      });
+    } catch (e) {
+      logger.warn('[navGuard] VideoCall pop duplicate failed', { callId, reason, e });
+    }
+  }
   try {
-    nav.navigate?.('VideoCall', pending.params);
+    nav.dispatch?.(CommonActions.setParams({ ...params }));
+  } catch (_) {}
+  logger.info('[navGuard] VideoCall focused existing stack entry', { callId, reason, sameIdIdx });
+  return true;
+}
+
+/** Один экран VideoCall на callId: merge params вместо второго push/mount. */
+export function navigateToVideoCallScreen(
+  nav: VideoCallNavLike,
+  params: Record<string, unknown>,
+  reason?: string,
+): boolean {
+  if (!nav.isReady?.()) return false;
+  const callId = String(params.callId ?? '').trim();
+  const current = nav.getCurrentRoute?.();
+  const currentName = String(current?.name ?? '');
+  const currentCallId = readRouteCallId(current);
+
+  if (callId && focusExistingVideoCallInStack(nav, callId, params, reason)) {
+    return true;
+  }
+
+  if (currentName === 'VideoCall') {
+    if (!callId || !currentCallId || currentCallId === callId) {
+      try {
+        nav.dispatch?.(CommonActions.setParams({ ...params }));
+      } catch (_) {}
+      logger.info('[navGuard] VideoCall already active — params merged', { callId, reason });
+      return true;
+    }
+  }
+
+  if (callId) {
+    const marked = recentVideoCallNavAt.get(callId);
+    if (marked && Date.now() - marked < VIDEO_CALL_NAV_DEDUP_MS) {
+      if (currentName === 'VideoCall' && (!currentCallId || currentCallId === callId)) {
+        try {
+          nav.dispatch?.(CommonActions.setParams({ ...params }));
+        } catch (_) {}
+        logger.info('[navGuard] VideoCall nav deduped (recent active)', { callId, reason });
+        return true;
+      }
+      logger.info('[navGuard] VideoCall nav deduped (recent pending)', {
+        callId,
+        reason,
+        currentName,
+        currentCallId,
+      });
+      return true;
+    }
+    recentVideoCallNavAt.set(callId, Date.now());
+    setTimeout(() => recentVideoCallNavAt.delete(callId), VIDEO_CALL_NAV_DEDUP_MS);
+  }
+
+  const state = nav.getState?.();
+  const routes = state?.routes ?? [];
+  const topIdx = state?.index ?? routes.length - 1;
+  if (callId && routes.length >= 1) {
+    const existingIdx = routes.findIndex(
+      (r) =>
+        r.name === 'VideoCall' &&
+        String((r.params as Record<string, unknown> | undefined)?.callId ?? '').trim() ===
+          callId,
+    );
+    if (existingIdx >= 0) {
+      try {
+        nav.dispatch?.(
+          CommonActions.navigate({
+            name: 'VideoCall',
+            params,
+            merge: true,
+          }),
+        );
+        logger.info('[navGuard] VideoCall navigate — existing stack entry', {
+          callId,
+          reason,
+          existingIdx,
+          topIdx,
+        });
+        return true;
+      } catch (e) {
+        logger.warn('[navGuard] VideoCall pop-to-existing failed', { callId, reason, e });
+      }
+    }
+  }
+
+  try {
+    nav.navigate?.('VideoCall', params);
+    logger.info('[navGuard] VideoCall navigate', { callId, reason });
     return true;
   } catch (e) {
-    logger.warn('[navGuard] flushPendingVideoCallNavigation failed', e);
+    logger.warn('[navGuard] VideoCall navigate failed', { callId, reason, e });
     return false;
   }
+}
+
+export type LeaveVideoCallScreenOpts = {
+  returnTo?: { name: string; params?: object };
+  callEnded?: boolean;
+};
+
+/**
+ * Закрыть экран звонка: goBack на Home/предыдущий экран (без remount — нет мерцания аватара),
+ * reset только если нельзя назад или в стеке несколько VideoCall.
+ */
+export function dispatchLeaveVideoCallScreen(
+  nav: RootNavLike,
+  opts?: LeaveVideoCallScreenOpts,
+): void {
+  if (!nav.isReady?.()) return;
+  const route = nav.getCurrentRoute?.();
+  if (String(route?.name ?? '') !== 'VideoCall') return;
+
+  const state = nav.getState?.();
+  const routes = state?.routes ?? [];
+  const topIdx = state?.index ?? routes.length - 1;
+  const videoCallCount = routes.filter((r) => r.name === 'VideoCall').length;
+  const routeParams = (route?.params ?? {}) as Record<string, unknown>;
+  const returnTo =
+    opts?.returnTo ??
+    (routeParams.returnTo as LeaveVideoCallScreenOpts['returnTo'] | undefined);
+  const callEnded = opts?.callEnded !== false;
+  const endedParams = callEnded ? { callEnded: true } : {};
+  const canGoBack = typeof nav.canGoBack === 'function' ? nav.canGoBack() : false;
+
+  if (returnTo?.name) {
+    nav.dispatch?.(
+      CommonActions.reset({
+        index: 0,
+        routes: [
+          {
+            name: returnTo.name as never,
+            params: { ...(returnTo.params || {}), ...endedParams },
+          },
+        ],
+      }),
+    );
+    return;
+  }
+
+  if (videoCallCount > 1 && topIdx > 0) {
+    const firstVcIdx = routes.findIndex((r) => r.name === 'VideoCall');
+    if (firstVcIdx >= 0 && topIdx > firstVcIdx) {
+      try {
+        nav.dispatch?.(StackActions.pop(topIdx - firstVcIdx));
+      } catch (e) {
+        logger.warn('[navGuard] leave VideoCall — pop duplicates failed', { e, videoCallCount });
+      }
+    }
+  }
+
+  const canGoBackAfterPop =
+    typeof nav.canGoBack === 'function' ? nav.canGoBack() : canGoBack;
+  if (canGoBackAfterPop) {
+    nav.dispatch?.(CommonActions.goBack());
+    logger.info('[navGuard] leave VideoCall — goBack', {
+      routesLength: routes.length,
+      videoCallCount,
+    });
+    return;
+  }
+
+  nav.dispatch?.(
+    CommonActions.reset({
+      index: 0,
+      routes: [{ name: 'Home' as never, params: {} }],
+    }),
+  );
+  logger.info('[navGuard] leave VideoCall — reset Home', {
+    routesLength: routes.length,
+    videoCallCount,
+  });
 }

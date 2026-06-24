@@ -25,6 +25,7 @@ export interface WebRTCSessionCallbacks {
   onPartnerIdChange?: (partnerId: string | null) => void;
   onRoomIdChange?: (roomId: string | null) => void;
   onCallIdChange?: (callId: string | null) => void;
+  onCallAcceptedAtChange?: (acceptedAt: number | null) => void;
   
   // Error callbacks
   onError?: (error: Error) => void;

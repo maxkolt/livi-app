@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.kolt12max.livi",
-      "buildNumber": "155",
+      "buildNumber": "156",
       "infoPlist": {
         "CFBundleDisplayName": "LiVi",
         "ITSAppUsesNonExemptEncryption": false,
@@ -31,7 +31,7 @@
     },
     "android": {
       "package": "com.kolt12max.livi",
-      "versionCode": 155,
+      "versionCode": 157,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"

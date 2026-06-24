@@ -81,6 +81,7 @@ type CallAcceptedPayload = {
   livekitToken?: string | null;
   livekitRoomName?: string | null;
   livekitUrl?: string | null;
+  acceptedAt?: number | string | null;
 };
 
 type CallIncomingPayload = {
@@ -2914,6 +2915,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       roomId: data.roomId,
       from: data.from,
       fromUserId: data.fromUserId,
+      acceptedAt: data.acceptedAt,
       hasLivekitToken: !!data.livekitToken,
       hasLivekitRoomName: !!data.livekitRoomName,
       myUserId: this.config.myUserId,
@@ -2926,6 +2928,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     const roomId = data.roomId ?? null;
     const partnerId = data.from ?? null;
     const partnerUserId = data.fromUserId ?? null;
+    const acceptedAt = Number(data.acceptedAt || 0);
 
     // КРИТИЧНО: Проверяем, не подключены ли уже к этой комнате
     // Это предотвращает повторное подключение и ошибку "could not establish pc connection"
@@ -2952,6 +2955,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (callId && callId !== this.callId) {
         this.callId = callId;
         this.notifyCallIdChange(callId);
+      }
+      if (Number.isFinite(acceptedAt) && acceptedAt > 0) {
+        this.config.callbacks.onCallAcceptedAtChange?.(acceptedAt);
       }
       if (roomId && roomId !== this.roomId) {
         this.roomId = roomId;
@@ -2980,6 +2986,9 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.notifyPartnerIdChange(partnerId);
     if (callId) {
       this.notifyCallIdChange(callId);
+    }
+    if (Number.isFinite(acceptedAt) && acceptedAt > 0) {
+      this.config.callbacks.onCallAcceptedAtChange?.(acceptedAt);
     }
     
     // КРИТИЧНО: Уведомляем компонент об изменении partnerUserId для отображения бейджа друга
@@ -3438,6 +3447,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     // КРИТИЧНО: Сразу помечаем завершение, чтобы повторный вызов (socket call:ended + ParticipantDisconnected
     // почти одновременно) не выполнял очистку и emit('callEnded') дважды.
     this.ended = true;
+    this.endCallInProgress = true;
     this.lastEmittedPeerVideoCallUi = null;
     this.partnerPeerDirectCallVideoUi = null;
     this.unregisterSocketHandlers('callEnded');
@@ -4940,6 +4950,13 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.info('[VideoCallSession] ⏭️ Skipping connectToLiveKit: call already ended');
       return false;
     }
+    try {
+      const pending = (global as any).__videoCallRoomDisconnectPromiseRef?.current as Promise<void> | null;
+      if (pending) {
+        logger.debug('[VideoCallSession] Waiting for prior room disconnect before LiveKit connect');
+        await pending.catch(() => {});
+      }
+    } catch {}
     // КРИТИЧНО: Защита от множественных одновременных вызовов connectToLiveKit
     // Если уже идет подключение к той же комнате, ждем его завершения
     if (this.connectingPromise && targetRoomName) {
@@ -6044,6 +6061,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     
     this.isDisconnecting = true;
     this.disconnectReason = reason;
+    this.connectRequestId++;
     
     // КРИТИЧНО: Создаем промис, который разрешится только когда комната полностью отключится
     // Это гарантирует, что все ресурсы (включая ping/pong handlers) будут очищены перед новым подключением
@@ -6108,8 +6126,6 @@ export class VideoCallSession extends SimpleEventEmitter {
         resolve();
       }, 5000); // 5 секунд максимум на отключение
       
-      // Увеличиваем connectRequestId, чтобы остановить отложенные подключения
-      this.connectRequestId++;
       // КРИТИЧНО: НЕ устанавливаем this.room = null сразу - это делается только после полного отключения
       // в обработчике Disconnected, чтобы избежать утечек соединений
       
@@ -6195,6 +6211,20 @@ export class VideoCallSession extends SimpleEventEmitter {
         this.currentRoomName = null;
       }
     });
+
+    try {
+      const g = global as any;
+      const pending = this.disconnectPromise;
+      g.__videoCallRoomDisconnectPromiseRef = g.__videoCallRoomDisconnectPromiseRef || { current: null };
+      g.__videoCallRoomDisconnectPromiseRef.current = pending;
+      void pending.finally(() => {
+        try {
+          if (g.__videoCallRoomDisconnectPromiseRef?.current === pending) {
+            g.__videoCallRoomDisconnectPromiseRef.current = null;
+          }
+        } catch {}
+      });
+    } catch {}
     
     return this.disconnectPromise;
   }
@@ -6670,6 +6700,7 @@ export class VideoCallSession extends SimpleEventEmitter {
         }
       })
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
+        if (this.ended || this.endCallInProgress || this.isDisconnecting) return;
         if (this.isSameRemoteParticipant(participant)) {
           if (!this.isDisconnecting) {
             // LiveKit can emit ParticipantDisconnected transiently during reconnect/negotiation.
