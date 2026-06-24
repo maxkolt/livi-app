@@ -5,12 +5,11 @@ import {
   Platform,
   Pressable,
   Text,
+  ToastAndroid,
   TouchableOpacity,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeViewGestureHandler, FlatList as GHFlatList } from 'react-native-gesture-handler';
 import AvatarImage from './AvatarImage';
@@ -21,7 +20,7 @@ import { fetchFriends } from '../sockets/socket';
 import { t } from '../utils/i18n';
 import { useLang } from '../store/lang';
 import type { IncomingShareItem } from '../utils/incomingShare';
-import type { RootStackParamList } from '../navigation/types';
+import { sendIncomingShareToFriend } from '../utils/sendIncomingShare';
 
 type FriendRow = {
   _id: string;
@@ -34,19 +33,18 @@ type Props = {
   visible: boolean;
   items: IncomingShareItem[];
   onClose: () => void;
-  onOpenChat: (params: RootStackParamList['Chat']) => void;
 };
 
-export default function IncomingSharePickerModal({ visible, items, onClose, onOpenChat }: Props) {
+export default function IncomingSharePickerModal({ visible, items, onClose }: Props) {
   const insets = useSafeAreaInsets();
-  const { height: windowH } = useWindowDimensions();
   const lang = useLang((s) => s.lang);
   const { theme, isDark } = useAppTheme();
   const accent = useMemo(() => uiAccent(isDark), [isDark]);
+  const screenBg = theme.colors.background as string;
   const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
   const [friends, setFriends] = useState<FriendRow[]>([]);
-
-  const sheetMaxH = Math.min(windowH * 0.72, 520);
+  const [selectedFriendId, setSelectedFriendId] = useState('');
 
   const loadFriends = useCallback(async () => {
     setLoading(true);
@@ -85,20 +83,35 @@ export default function IncomingSharePickerModal({ visible, items, onClose, onOp
 
   useEffect(() => {
     if (!visible) return;
+    setSelectedFriendId('');
+    setSending(false);
     void loadFriends();
   }, [visible, loadFriends]);
 
   const onPickFriend = (friend: FriendRow) => {
     const peerId = String(friend._id || '');
     if (!peerId) return;
-    onClose();
-    onOpenChat({
-      peerId,
-      peerName: friend.nick,
-      peerAvatarVer: friend.avatarVer || 0,
-      peerAvatarThumbB64: friend.avatarThumbB64 || '',
-      incomingShareItems: items,
-    });
+    setSelectedFriendId((prev) => (prev === peerId ? '' : peerId));
+  };
+
+  const onSend = async () => {
+    const peerId = String(selectedFriendId || '');
+    if (!peerId || sending) return;
+    setSending(true);
+    try {
+      const sent = await sendIncomingShareToFriend(peerId, items);
+      if (Platform.OS === 'android') {
+        ToastAndroid.show(sent > 0 ? t('chatSent', lang) : t('chatSendFailed', lang), ToastAndroid.SHORT);
+      }
+    } catch {
+      if (Platform.OS === 'android') {
+        ToastAndroid.show(t('chatSendFailed', lang), ToastAndroid.SHORT);
+      }
+    } finally {
+      setSending(false);
+      setSelectedFriendId('');
+      onClose();
+    }
   };
 
   if (!visible) return null;
@@ -107,16 +120,8 @@ export default function IncomingSharePickerModal({ visible, items, onClose, onOp
   const subColor = theme.colors.onSurfaceVariant as string;
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        {Platform.OS === 'android' ? (
-          <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.55)' }} />
-        ) : (
-          <>
-            <BlurView intensity={70} tint="dark" style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }} />
-            <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.25)' }} />
-          </>
-        )}
+    <Modal visible animationType="fade" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: screenBg }}>
         <ChatStyleBackButton
           onPress={onClose}
           iconColor={subColor}
@@ -129,13 +134,11 @@ export default function IncomingSharePickerModal({ visible, items, onClose, onOp
         />
         <View
           style={{
-            backgroundColor: isDark ? '#0D0E10' : theme.colors.surface,
-            borderTopLeftRadius: 20,
-            borderTopRightRadius: 20,
-            paddingTop: 12,
+            backgroundColor: screenBg,
+            flex: 1,
+            paddingTop: insets.top + 56,
             paddingHorizontal: 16,
             paddingBottom: Math.max(insets.bottom, 16),
-            maxHeight: sheetMaxH,
             minHeight: 280,
           }}
         >
@@ -157,12 +160,18 @@ export default function IncomingSharePickerModal({ visible, items, onClose, onOp
                     <Pressable
                       onPress={() => onPickFriend(item)}
                       style={({ pressed }) => ({
+                        opacity: sending ? 0.7 : 1,
                         flexDirection: 'row',
                         alignItems: 'center',
-                        paddingVertical: 10,
-                        paddingHorizontal: 4,
-                        borderRadius: 12,
-                        backgroundColor: pressed
+                        paddingVertical: 7,
+                        paddingHorizontal: 8,
+                        marginVertical: 4,
+                        borderRadius: 28,
+                        backgroundColor: selectedFriendId === item._id
+                          ? isDark
+                            ? 'rgba(77,208,225,0.16)'
+                            : 'rgba(77,208,225,0.12)'
+                          : pressed
                           ? isDark
                             ? 'rgba(255,255,255,0.08)'
                             : 'rgba(0,0,0,0.05)'
@@ -179,7 +188,11 @@ export default function IncomingSharePickerModal({ visible, items, onClose, onOp
                       <Text style={{ marginLeft: 12, flex: 1, fontSize: 16, fontWeight: '600', color: textColor }}>
                         {(item.nick && String(item.nick).trim()) || '—'}
                       </Text>
-                      <Ionicons name="chevron-forward" size={20} color={subColor} />
+                      <Ionicons
+                        name={selectedFriendId === item._id ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={22}
+                        color={selectedFriendId === item._id ? accent.bright : subColor}
+                      />
                     </Pressable>
                   )}
                   ListEmptyComponent={() => (
@@ -191,19 +204,42 @@ export default function IncomingSharePickerModal({ visible, items, onClose, onOp
               )}
             </NativeViewGestureHandler>
           </View>
-          <TouchableOpacity
-            onPress={onClose}
-            style={{
-              marginTop: 8,
-              paddingVertical: 12,
-              borderRadius: 12,
-              alignItems: 'center',
-              borderWidth: 1,
-              borderColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.1)',
-            }}
-          >
-            <Text style={{ color: accent.bright, fontWeight: '600' }}>{t('cancel', lang)}</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+            <TouchableOpacity
+              onPress={onClose}
+              disabled={sending}
+              style={{
+                flex: 1,
+                paddingVertical: 12,
+                borderRadius: 12,
+                alignItems: 'center',
+                borderWidth: 1,
+                borderColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.1)',
+                opacity: sending ? 0.6 : 1,
+              }}
+            >
+              <Text style={{ color: accent.bright, fontWeight: '600' }}>{t('cancelAction', lang)}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={onSend}
+              disabled={!selectedFriendId || loading || sending}
+              style={{
+                flex: 1,
+                paddingVertical: 12,
+                borderRadius: 12,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: accent.bright,
+                opacity: !selectedFriendId || loading || sending ? 0.45 : 1,
+              }}
+            >
+              {sending ? (
+                <ActivityIndicator color="#0D0E10" />
+              ) : (
+                <Text style={{ color: '#0D0E10', fontWeight: '700' }}>{t('send', lang)}</Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </Modal>

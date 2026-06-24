@@ -439,6 +439,19 @@ function AppContent() {
   const [overlayPermissionModalVisible, setOverlayPermissionModalVisible] = React.useState(false);
   const [incomingShareVisible, setIncomingShareVisible] = React.useState(false);
   const [incomingShareItems, setIncomingShareItems] = React.useState<IncomingShareItem[]>([]);
+  const closeIncomingShareFlow = React.useCallback(() => {
+    setIncomingShareVisible(false);
+    setIncomingShareItems([]);
+    if (Platform.OS === 'android') {
+      setTimeout(() => {
+        try {
+          NativeModules.LiviAppModule?.moveTaskToBack?.(true);
+        } catch {
+          // Best effort: the share action itself is already finished.
+        }
+      }, 120);
+    }
+  }, []);
   React.useEffect(() => {
     return subscribeIncomingShare((items) => {
       if (!items?.length) return;
@@ -3559,15 +3572,7 @@ function AppContent() {
           <IncomingSharePickerModal
             visible={incomingShareVisible}
             items={incomingShareItems}
-            onClose={() => {
-              setIncomingShareVisible(false);
-              setIncomingShareItems([]);
-            }}
-            onOpenChat={(params) => {
-              if (navRef.isReady()) {
-                navRef.navigate('Chat', params);
-              }
-            }}
+            onClose={closeIncomingShareFlow}
           />
           </>
       </PaperProvider>
