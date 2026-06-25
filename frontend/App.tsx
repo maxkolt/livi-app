@@ -103,7 +103,7 @@ import {
   prefetchDirectCallIce,
   prewarmDirectCallAudioCapture,
 } from './utils/directCallConnectPrewarm';
-import { restoreCallMediaAfterSystemPiPReturn } from './utils/callAudioRoutePersist';
+import { restoreCallMediaAfterSystemPiPReturn, prepareDirectCallVideoExpandFromInAppPiP } from './utils/callAudioRoutePersist';
 import {
   installAppNavigationGuard,
   applyCallCancelledHomeNotice,
@@ -970,6 +970,7 @@ function AppContent() {
         } else {
           g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
           g.__expandToVideoCallUiFromPiPRef.current = true;
+          prepareDirectCallVideoExpandFromInAppPiP();
         }
         g.__suppressAbortDuringSystemPiPReturnUntilRef =
           g.__suppressAbortDuringSystemPiPReturnUntilRef || { current: 0 };

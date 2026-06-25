@@ -6,7 +6,7 @@ import InCallManager from 'react-native-incall-manager';
 import { CommonActions } from '@react-navigation/native';
 import socket, { onConnected, emitPresenceUpdateIfChanged } from '../../sockets/socket';
 import { applyCallEndedGlobalRefsOnce } from '../../utils/globalEvents';
-import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState, markDirectCallVideoMediaActive, ongoingCallPrefersVideoMedia, resolveActiveCallInCallMedia, readInAppPiPAudioOutputRoute, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute } from '../../utils/activeCallSession';
+import { clearEndingCallInProgress, captureSystemPiPReturnMediaSnapshot, resolvePiPLocalMutedState, markDirectCallVideoMediaActive, ongoingCallPrefersVideoMedia, resolveActiveCallInCallMedia, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, rememberManualBuiltinCallAudioRoute } from '../../utils/activeCallSession';
 import { buildCallEndSocketPayload } from '../../utils/callEndPayload';
 import { logger } from '../../utils/logger';
 import { trackReleaseEvent } from '../../utils/telemetry';
@@ -27,9 +27,14 @@ import {
   restoreCallMediaAfterSystemPiPReturn,
   scheduleReapplyPersistedCallAudioRoute,
   setPersistedCallAudioRoute,
+  resolveVideoInAppPiPAudioRoute,
+  getPersistedCallAudioRoute,
   restoreCallAudioForInAppPiPPlaque,
   armCallAudioPreservePriority,
   shouldApplyHomeLoudSpeakerPin,
+  prepareSystemPiPEnterCallAudioRoute,
+  isInAppPiPContextIncludingSuspended,
+  prepareDirectCallVideoExpandFromInAppPiP,
 } from '../../utils/callAudioRoutePersist';
 import { resolveCallRouteAfterHeadsetDisconnect } from '../../utils/callHeadsetAudioFallback';
 import { mergeNativeProbeIntoGlobal, probeNativeCallAudioRoutes } from '../../utils/nativeCallAudioProbe';
@@ -509,20 +514,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           if (session && typeof (session as any).enterPiP === 'function') (session as any).enterPiP();
           // КРИТИЧНО: В PiP система часто переключает звук — переприменяем сохранённый маршрут (BT / динамик).
           const reapplyPiPAudio = () => {
-            try {
-              armCallAudioPreservePriority(5000);
-              const pipRoute = readInAppPiPAudioOutputRoute();
-              const honorBuiltin =
-                pipRoute === 'SPEAKER_PHONE' ||
-                pipRoute === 'EARPIECE' ||
-                !!readUserSelectedCallAudioRoute();
-              scheduleReapplyPersistedCallAudioRoute('system_pip_enter_preserve_headset', {
-                media: resolveActiveCallInCallMedia(),
-                delaysMs: [0, 450],
-                skipInCallRestart: true,
-                honorUserRoute: honorBuiltin,
-              });
-            } catch (_) {}
+            prepareSystemPiPEnterCallAudioRoute();
           };
           if (Platform.OS === 'android') {
             reapplyPiPAudio();
@@ -591,10 +583,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       const userSel = readUserSelectedCallAudioRoute();
       const lockedExternal = readUserSelectedExternalCallAudioRoute();
       const externalRoute = resolvePiPExternalAudioRoute(p.audioOutputRoute || userSel);
+      const authoritativeBuiltin = readAuthoritativeCallAudioRouteAfterPiP();
       let routeNorm =
         externalRoute ||
         lockedExternal ||
         userSel ||
+        authoritativeBuiltin ||
+        readLastAppliedCallAudioRoute() ||
+        getPersistedCallAudioRoute() ||
         normalizeInCallRoute(p.audioOutputRoute || '') ||
         readInAppPiPAudioOutputRoute() ||
         'EARPIECE';
@@ -620,6 +616,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       }
       setPersistedCallAudioRoute(routeNorm);
       setUserSelectedCallAudioRoute(routeNorm);
+      if (routeNorm === 'SPEAKER_PHONE' || routeNorm === 'EARPIECE') {
+        rememberManualBuiltinCallAudioRoute(routeNorm);
+        try {
+          const gExp = global as any;
+          gExp.__explicitBuiltInCallAudioRouteRef =
+            gExp.__explicitBuiltInCallAudioRouteRef || { current: false };
+          gExp.__explicitBuiltInCallAudioRouteRef.current = true;
+        } catch {}
+      }
       try {
         const gParams = global as any;
         gParams.__currentCallPiPParamsRef = gParams.__currentCallPiPParamsRef || { current: null };
@@ -676,7 +681,20 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       ) {
         videoRouteNorm = videoLastApplied;
       }
-      setUserSelectedCallAudioRoute(videoRouteNorm);
+      if (!isExternalHeadsetRoute(videoRouteNorm)) {
+        videoRouteNorm = resolveVideoInAppPiPAudioRoute(
+          videoRouteNorm ||
+            readLastAppliedCallAudioRoute() ||
+            getPersistedCallAudioRoute() ||
+            p.audioOutputRoute,
+          { mapForEnterVideoUi: true },
+        );
+      }
+      if (isExternalHeadsetRoute(videoRouteNorm)) {
+        setUserSelectedCallAudioRoute(videoRouteNorm);
+      } else {
+        setUserSelectedCallAudioRoute(null);
+      }
       persistVideoInAppPiPAudioRoute(videoRouteNorm, { mapForEnterVideoUi: false });
       if (Platform.OS === 'android') {
         void probeNativeCallAudioRoutes().then((probe) => {
@@ -1248,20 +1266,26 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         logHomePiPTrace('js_about_to_enter_skip', { traceId, reason: 'audio_placeholder' });
         try {
           armCallAudioPreservePriority(6000);
+          g.__systemPiPEntryInProgressUntilRef = g.__systemPiPEntryInProgressUntilRef || { current: 0 };
+          g.__systemPiPEntryInProgressUntilRef.current = Date.now() + 6000;
           if (resolveActiveCallInCallMedia() === 'audio') {
-            const pipRoute = readInAppPiPAudioOutputRoute();
-            const external = readActiveExternalCallAudioRoute(pipRoute);
-            if (isExternalHeadsetRoute(pipRoute) || external || !shouldApplyHomeLoudSpeakerPin()) {
-              scheduleReapplyPersistedCallAudioRoute('in_app_pip_preserve_headset', {
-                media: 'audio',
-                delaysMs: [0, 500, 1200],
-              });
+            if (isInAppPiPContextIncludingSuspended()) {
+              prepareSystemPiPEnterCallAudioRoute();
             } else {
-              pinLoudSpeakerForAudioCallLeavingToBackground();
-              scheduleReapplyPersistedCallAudioRoute('audio_home_loud_speaker', {
-                media: 'audio',
-                delaysMs: [0, 250, 800, 1500],
-              });
+              const pipRoute = readInAppPiPAudioOutputRoute();
+              const external = readActiveExternalCallAudioRoute(pipRoute);
+              if (isExternalHeadsetRoute(pipRoute) || external || !shouldApplyHomeLoudSpeakerPin()) {
+                scheduleReapplyPersistedCallAudioRoute('in_app_pip_preserve_headset', {
+                  media: 'audio',
+                  delaysMs: [0, 500, 1200],
+                });
+              } else {
+                pinLoudSpeakerForAudioCallLeavingToBackground();
+                scheduleReapplyPersistedCallAudioRoute('audio_home_loud_speaker', {
+                  media: 'audio',
+                  delaysMs: [0, 250, 800, 1500],
+                });
+              }
             }
           }
           NativeModules.LiviAppModule?.setShouldEnterPiPOnLeaveHint?.(false);
@@ -1298,6 +1322,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         callId: stableIds.callId,
         roomId: stableIds.roomId,
       });
+      try {
+        prepareSystemPiPEnterCallAudioRoute();
+      } catch (_) {}
 
       try {
         g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
@@ -1665,6 +1692,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       } else if (preferAudioOnlyUi) {
         prepareDirectCallAudioReturnFromPiP();
       } else {
+        prepareDirectCallVideoExpandFromInAppPiP();
         g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
         g.__expandToVideoCallUiFromPiPRef.current = true;
       }

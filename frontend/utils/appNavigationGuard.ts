@@ -167,6 +167,35 @@ export function flushPendingVideoCallNavigation(
 const VIDEO_CALL_NAV_DEDUP_MS = 6000;
 const recentVideoCallNavAt = new Map<string, number>();
 
+const FRESH_VIDEO_CALL_NAV_REASONS = new Set([
+  'incoming_navigate',
+  'call_accepted',
+  'flush_pending',
+]);
+
+/** Не тащить fromPiP/resume с прошлого VideoCall при новом входящем / call:accepted. */
+export function stripStalePiPReturnNavParams(
+  params: Record<string, unknown>,
+  reason?: string,
+): Record<string, unknown> {
+  if (!reason || !FRESH_VIDEO_CALL_NAV_REASONS.has(reason)) {
+    return params;
+  }
+  const next = { ...params };
+  delete next.fromPiP;
+  delete next.resume;
+  delete next.audioOnlyPiPReturn;
+  delete next.preferVideoCallUi;
+  // merge: true оставляет старые ключи — явно сбрасываем.
+  return {
+    ...next,
+    fromPiP: undefined,
+    resume: undefined,
+    audioOnlyPiPReturn: undefined,
+    preferVideoCallUi: undefined,
+  };
+}
+
 export type VideoCallNavLike = RootNavLike & {
   navigate?: (...args: any[]) => any;
 };
@@ -221,19 +250,20 @@ export function navigateToVideoCallScreen(
   reason?: string,
 ): boolean {
   if (!nav.isReady?.()) return false;
-  const callId = String(params.callId ?? '').trim();
+  const safeParams = stripStalePiPReturnNavParams(params, reason);
+  const callId = String(safeParams.callId ?? '').trim();
   const current = nav.getCurrentRoute?.();
   const currentName = String(current?.name ?? '');
   const currentCallId = readRouteCallId(current);
 
-  if (callId && focusExistingVideoCallInStack(nav, callId, params, reason)) {
+  if (callId && focusExistingVideoCallInStack(nav, callId, safeParams, reason)) {
     return true;
   }
 
   if (currentName === 'VideoCall') {
     if (!callId || !currentCallId || currentCallId === callId) {
       try {
-        nav.dispatch?.(CommonActions.setParams({ ...params }));
+        nav.dispatch?.(CommonActions.setParams({ ...safeParams }));
       } catch (_) {}
       logger.info('[navGuard] VideoCall already active — params merged', { callId, reason });
       return true;
@@ -245,7 +275,7 @@ export function navigateToVideoCallScreen(
     if (marked && Date.now() - marked < VIDEO_CALL_NAV_DEDUP_MS) {
       if (currentName === 'VideoCall' && (!currentCallId || currentCallId === callId)) {
         try {
-          nav.dispatch?.(CommonActions.setParams({ ...params }));
+          nav.dispatch?.(CommonActions.setParams({ ...safeParams }));
         } catch (_) {}
         logger.info('[navGuard] VideoCall nav deduped (recent active)', { callId, reason });
         return true;
@@ -277,7 +307,7 @@ export function navigateToVideoCallScreen(
         nav.dispatch?.(
           CommonActions.navigate({
             name: 'VideoCall',
-            params,
+            params: safeParams,
             merge: true,
           }),
         );
@@ -295,7 +325,7 @@ export function navigateToVideoCallScreen(
   }
 
   try {
-    nav.navigate?.('VideoCall', params);
+    nav.navigate?.('VideoCall', safeParams);
     logger.info('[navGuard] VideoCall navigate', { callId, reason });
     return true;
   } catch (e) {

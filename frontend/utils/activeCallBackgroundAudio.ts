@@ -62,6 +62,9 @@ export function maintainCallAudioForActiveCall(reason = 'maintain_active_call'):
   }
   captureCallAudioRouteFromUi();
   nativeMaintainCallVoiceAudio(reason === 'app_state_background');
+  if (reason === 'app_state_background' && isCallAudioPiPTransitionWindow()) {
+    return;
+  }
   scheduleReapplyPersistedCallAudioRoute(reason, {
     media,
     delaysMs: BACKGROUND_REAPPLY_DELAYS_MS,
@@ -105,9 +108,10 @@ function onAppStateChange(next: AppStateStatus): void {
       const g = global as any;
       const returningFromPiP = Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
       const hasPendingSnap = !!peekSystemPiPReturnMediaSnapshot();
+      const plaqueVisible = g.__pipVisibleRef?.current === true;
       if (returningFromPiP || hasPendingSnap) {
         restoreCallMediaAfterSystemPiPReturn();
-      } else {
+      } else if (!plaqueVisible && !isCallAudioPiPTransitionWindow()) {
         restoreAudioCallEarpieceAfterHomeReturn();
       }
     } catch {
@@ -133,13 +137,18 @@ function onAppStateChange(next: AppStateStatus): void {
       armCallAudioPreservePriority(isCallAudioPiPTransitionWindow() ? 5000 : 3500);
       try {
         const g = global as any;
+        const plaqueVisible = g.__pipVisibleRef?.current === true;
         const onHomeWithPlaque =
-          g.__pipVisibleRef?.current === true &&
+          plaqueVisible &&
           g.__navRef?.getCurrentRoute?.()?.name !== 'VideoCall';
+        const returningFromPiP =
+          Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
         const external =
           readActiveExternalCallAudioRoute() || readNativeProbedExternalRoute();
         if (onHomeWithPlaque) {
           restoreCallAudioForInAppPiPPlaque('app_state_foreground_in_app_pip');
+        } else if (returningFromPiP || isCallAudioPiPTransitionWindow() || plaqueVisible) {
+          restoreCallAudioForInAppPiPPlaque('app_state_foreground_pip_transition');
         } else if (stabilizeEarpiece) {
           // Маршрут уже зафиксирован на earpiece в окне после accept — без цепочки reapply.
         } else if (external) {

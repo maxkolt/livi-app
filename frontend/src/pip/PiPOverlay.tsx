@@ -19,11 +19,10 @@ import { useAppTheme } from '../../theme/ThemeProvider';
 import { uiAccent } from '../../theme/uiAccent';
 import {
   prepareDirectCallAudioReturnFromPiP,
-  prepareDirectCallVideoReturnFromPiP,
   pipInAppBarEnteredFromAudioOnly,
 } from './pipPlaceholderOnly';
 import { resolvePiPLocalMutedState, setUserSelectedCallAudioRoute } from '../../utils/activeCallSession';
-import { setPersistedCallAudioRoute } from '../../utils/callAudioRoutePersist';
+import { setPersistedCallAudioRoute, prepareDirectCallVideoExpandFromInAppPiP } from '../../utils/callAudioRoutePersist';
 import {
   readInAppPiPAudioOutputRoute,
   toggleInAppPiPAudioOutputRoute,
@@ -186,13 +185,21 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
   const pipAudioRouteIconColor = pipAudioRouteHighlight ? pipRouteAccent.softText : chrome.icon;
   const pipAudioRouteIcon = iconNameForRoute(pipAudioRoute);
 
+  const pipAudioRouteToggleBusyRef = useRef(false);
+
   const toggleAudioOutputRoute = useCallback(() => {
+    if (pipAudioRouteToggleBusyRef.current) return;
+    pipAudioRouteToggleBusyRef.current = true;
     void (async () => {
-      const next = await toggleInAppPiPAudioOutputRoute();
-      if (next) {
-        setPipAudioRoute(next);
-      } else {
-        setPipAudioRoute(readInAppPiPAudioOutputRoute());
+      try {
+        const next = await toggleInAppPiPAudioOutputRoute();
+        if (next) {
+          setPipAudioRoute(next);
+        } else {
+          setPipAudioRoute(readInAppPiPAudioOutputRoute());
+        }
+      } finally {
+        pipAudioRouteToggleBusyRef.current = false;
       }
     })();
   }, []);
@@ -238,23 +245,25 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       const g = global as any;
       const onVideoCallScreen = shouldSuppressInAppPiPOnRoute(currentRouteName);
       if (onVideoCallScreen) {
+        if (!pipFromAudioOnly) {
+          prepareDirectCallVideoExpandFromInAppPiP();
+        }
         hidePiP();
         if (pipFromAudioOnly) {
           const fn = g.__returnToAudioCallRef?.current;
           if (typeof fn === 'function') {
             void fn({ skipNavigation: true, fromPiP: true });
           }
-        } else {
-          g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-          g.__expandToVideoCallUiFromPiPRef.current = true;
         }
         return;
       }
-      hidePiP();
       if (pipFromAudioOnly) {
         prepareDirectCallAudioReturnFromPiP();
+        hidePiP();
         returnToCall({ preferAudioOnlyUi: true });
       } else {
+        prepareDirectCallVideoExpandFromInAppPiP();
+        hidePiP();
         returnToCall({ preferAudioOnlyUi: false });
       }
     } catch (_) {}
@@ -264,16 +273,15 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     try {
       const g = global as any;
       const onVideoCallScreen = shouldSuppressInAppPiPOnRoute(currentRouteName);
+      prepareDirectCallVideoExpandFromInAppPiP();
       hidePiP();
       if (onVideoCallScreen) {
-        prepareDirectCallVideoReturnFromPiP();
         const expandFn = g.__expandDirectCallToVideoUiRef?.current;
         if (typeof expandFn === 'function') {
           void expandFn();
         }
         return;
       }
-      prepareDirectCallVideoReturnFromPiP();
       returnToCall({ preferAudioOnlyUi: false });
     } catch (_) {}
   }, [returnToCall, currentRouteName, hidePiP]);
