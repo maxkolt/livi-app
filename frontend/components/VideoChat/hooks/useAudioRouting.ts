@@ -294,6 +294,27 @@ export const useAudioRouting = (
     return defaultUserRoute(opts);
   };
 
+  /** Auto-paths (preferAudioMode, deferred bootstrap): не сбрасывать SPEAKER с PiP/video без явного EAR. */
+  const resolveAutoAudioBuiltInOrNull = (): InCallAudioRoute | null => {
+    const lock = readCallAudioRouteUiLock();
+    if (lock === 'EARPIECE' || lock === 'SPEAKER_PHONE') return lock;
+    const userSel = readUserSelectedCallAudioRoute();
+    if (userSel === 'EARPIECE' || userSel === 'SPEAKER_PHONE') return userSel;
+    const explicit = readExplicitUserSelectedBuiltInRoute();
+    if (explicit === 'EARPIECE' || explicit === 'SPEAKER_PHONE') return explicit;
+    const persisted = getPersistedCallAudioRoute();
+    if (persisted === 'SPEAKER_PHONE' || persisted === 'EARPIECE') return persisted;
+    if (isCallAudioPiPTransitionWindow() || isInAudioOnlyCallUi()) {
+      const authoritative = readAuthoritativeCallAudioRouteAfterPiP();
+      if (authoritative === 'EARPIECE' || authoritative === 'SPEAKER_PHONE') {
+        return authoritative;
+      }
+      const last = readLastAppliedCallAudioRoute();
+      if (last === 'SPEAKER_PHONE') return 'SPEAKER_PHONE';
+    }
+    return null;
+  };
+
   const shouldPersistAppliedRoute = (route: InCallAudioRoute, reason?: string): boolean => {
     if (isExternalHeadsetRoute(route)) return true;
     const r = String(reason || '');
@@ -357,6 +378,10 @@ export const useAudioRouting = (
       } else if (norm === 'SPEAKER_PHONE' || norm === 'EARPIECE') {
         setSelectedRoute(norm);
         lastAppliedRouteRef.current = norm;
+        const uiLock = readCallAudioRouteUiLock();
+        if (uiLock === norm) {
+          setUserRoute(norm, { persist: true });
+        }
       } else {
         setSelectedRoute(user);
         lastAppliedRouteRef.current = user;
@@ -413,16 +438,25 @@ export const useAudioRouting = (
 
   /** Android: earpiece или speaker через InCallManager + native fallback. */
   const applyBuiltInOutputRoute = (wantSpeaker: boolean, reason: string, force = false) => {
-    const av = lastAvailableRef.current;
-    const builtinTarget: InCallAudioRoute = wantSpeaker ? 'SPEAKER_PHONE' : 'EARPIECE';
     const userIntent =
       reason === 'manualSync' ||
       reason.startsWith('toggle') ||
       reason.startsWith('cycle') ||
       reason === 'in_app_pip_audio_route_toggle' ||
       reason === 'return_to_audio_ui' ||
-      isExplicitBuiltInRouteChoice(reason, builtinTarget);
+      reason === 'return_to_audio_ui_sync' ||
+      reason === 'audio_ui_route_cycle';
     if (!wantSpeaker && !userIntent) {
+      const pinned = resolveAutoAudioBuiltInOrNull();
+      if (pinned === 'SPEAKER_PHONE') {
+        wantSpeaker = true;
+      }
+    }
+    const av = lastAvailableRef.current;
+    const builtinTarget: InCallAudioRoute = wantSpeaker ? 'SPEAKER_PHONE' : 'EARPIECE';
+    const userIntentBuiltIn =
+      userIntent || isExplicitBuiltInRouteChoice(reason, builtinTarget);
+    if (!wantSpeaker && !userIntentBuiltIn) {
       const nativeExt = readNativeProbedExternalRoute();
       if (nativeExt && (av.includes(nativeExt) || av.length === 0)) {
         applySpecificRoute(nativeExt, reason, force);
@@ -440,7 +474,7 @@ export const useAudioRouting = (
     }
     if (
       !wantSpeaker &&
-      !userIntent &&
+      !userIntentBuiltIn &&
       !force &&
       Platform.OS === 'android' &&
       isCallAudioBootstrapPending() &&
@@ -450,7 +484,7 @@ export const useAudioRouting = (
     }
     const now = Date.now();
 
-    if (!userIntent) {
+    if (!userIntentBuiltIn) {
       if (
         !force &&
         lastHardRouteSpeakerRef.current === wantSpeaker &&
@@ -488,7 +522,7 @@ export const useAudioRouting = (
           }
         } catch {}
       });
-      applyNativeSpeakerThrottled(wantSpeaker, userIntent || force, userIntent);
+      applyNativeSpeakerThrottled(wantSpeaker, userIntentBuiltIn || force, userIntentBuiltIn);
       logRouteInfo(wantSpeaker ? 'speaker route' : 'earpiece route', { reason, force });
       return;
     }
@@ -922,6 +956,20 @@ export const useAudioRouting = (
       effectiveRoute = uiLockApply;
     }
 
+    if (
+      effectiveRoute === 'EARPIECE' &&
+      (reason === 'preferAudioMode' || reason === 'applyRouting_deferred_earpiece') &&
+      !isExplicitBuiltInRouteChoice(reason, 'EARPIECE')
+    ) {
+      const uiLockPin = readCallAudioRouteUiLock();
+      if (uiLockPin !== 'EARPIECE') {
+        const pinnedBuiltin = resolveAutoAudioBuiltInOrNull();
+        if (pinnedBuiltin === 'SPEAKER_PHONE') {
+          effectiveRoute = 'SPEAKER_PHONE';
+        }
+      }
+    }
+
     const now = Date.now();
     const userIntent =
       reason === 'manualSync' ||
@@ -1098,6 +1146,15 @@ export const useAudioRouting = (
         hasRemoteStream: !!remoteStream,
         streamId: remoteStream?.id,
       });
+      const deferredBuiltin = resolveAutoAudioBuiltInOrNull();
+      if (deferredBuiltin === 'SPEAKER_PHONE' || deferredBuiltin === 'EARPIECE') {
+        setUserRoute(deferredBuiltin);
+        setSelectedRoute(deferredBuiltin);
+        lastSelectedRef.current = deferredBuiltin;
+        lastAppliedRouteRef.current = deferredBuiltin;
+        applySpecificRoute(deferredBuiltin, 'applyRouting_deferred_bootstrap', true);
+        return;
+      }
       applySpecificRoute('EARPIECE', 'applyRouting_deferred_earpiece', true);
       return;
     }
@@ -1975,13 +2032,21 @@ export const useAudioRouting = (
           return;
         }
         const persisted = getPersistedCallAudioRoute();
-        if (
-          persisted === 'SPEAKER_PHONE' &&
-          !(isInAudioOnlyCallUi() && !isPiPBuiltinCallAudioRouteLockActive())
-        ) {
+        if (persisted === 'SPEAKER_PHONE') {
           applySpecificRoute('SPEAKER_PHONE', 'preferAudioMode', true);
           return;
         }
+        if (persisted === 'EARPIECE') {
+          applySpecificRoute('EARPIECE', 'preferAudioMode', true);
+          return;
+        }
+      }
+      const pinnedBeforeEarDefault = resolveAutoAudioBuiltInOrNull();
+      if (pinnedBeforeEarDefault === 'SPEAKER_PHONE' || pinnedBeforeEarDefault === 'EARPIECE') {
+        setUserRoute(pinnedBeforeEarDefault, { persist: false });
+        setSelectedRoute(pinnedBeforeEarDefault);
+        applySpecificRoute(pinnedBeforeEarDefault, 'preferAudioMode', true);
+        return;
       }
       setUserRoute('EARPIECE', { persist: false });
       setSelectedRoute('EARPIECE');

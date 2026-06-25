@@ -5,6 +5,7 @@ import {
   normalizeInCallRoute,
 } from '../components/VideoChat/hooks/audioRouteTypes';
 import { isInAudioOnlyCallUi, setPipAudioOnlyPlaceholderSticky } from '../src/pip/pipPlaceholderOnly';
+import { readCallAudioRouteUiLock } from './callAudioRouteTransitionGuards';
 import { readNativeProbedExternalRoute } from './nativeCallAudioProbe';
 
 /** Direct-call / video UI: сброс sticky audio-only refs (Home/PiP не должны включать audio_home speaker). */
@@ -699,15 +700,70 @@ export function captureSystemPiPReturnMediaSnapshot(): void {
       typeof session.getIsMicOn === 'function' ? session.getIsMicOn() : true;
     const camOn =
       typeof session.getIsCamOn === 'function' ? session.getIsCamOn() : false;
-    const preferAudioOnlyUi = isInAudioOnlyCallUi();
+    const preferAudioOnlyUi = (() => {
+      if (isInAudioOnlyCallUi()) return true;
+      try {
+        const gg = global as any;
+        if (gg.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return true;
+        if (gg.__pipInAppRtcFromAudioOnlyRef?.current === true) return true;
+        if (
+          gg.__pipAudioOnlyPlaceholderRef?.current === true &&
+          gg.__stayOnVideoCallUiRef?.current !== true
+        ) {
+          return true;
+        }
+      } catch {}
+      return false;
+    })();
     const fromParams = normalizeInCallRoute(
       g.__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
     );
     const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
     const routeFromPiP = readInAppPiPAudioOutputRoute();
-    const audioRoute = preferAudioOnlyUi
-      ? routeFromPiP
-      : fromParams || stored || routeFromPiP || 'SPEAKER_PHONE';
+    const userSel = readUserSelectedCallAudioRoute();
+    const extSel =
+      readUserSelectedExternalCallAudioRoute() ||
+      readActiveExternalCallAudioRoute(userSel || routeFromPiP);
+    let audioRoute: InCallAudioRoute;
+    if (preferAudioOnlyUi) {
+      if (isExternalHeadsetRoute(extSel)) {
+        audioRoute = extSel;
+      } else {
+        const uiLock = readCallAudioRouteUiLock();
+        if (
+          uiLock === 'EARPIECE' ||
+          uiLock === 'SPEAKER_PHONE' ||
+          isExternalHeadsetRoute(uiLock)
+        ) {
+          audioRoute = uiLock;
+        } else {
+          const fromUiSelected = normalizeInCallRoute(
+            g.__inCallSelectedAudioRouteRef?.current || '',
+          );
+          const merged =
+            readLastAppliedCallAudioRoute() ||
+            (fromUiSelected === 'EARPIECE' || fromUiSelected === 'SPEAKER_PHONE'
+              ? fromUiSelected
+              : null) ||
+            routeFromPiP ||
+            stored ||
+            fromParams ||
+            normalizeInCallRoute(g.__audioUiExplicitCycleRouteRef?.current || '') ||
+            userSel ||
+            'EARPIECE';
+          const norm = normalizeInCallRoute(String(merged));
+          if (norm === 'SPEAKER_PHONE' || norm === 'EARPIECE') {
+            audioRoute = norm;
+          } else if (isExternalHeadsetRoute(norm)) {
+            audioRoute = norm;
+          } else {
+            audioRoute = 'EARPIECE';
+          }
+        }
+      }
+    } else {
+      audioRoute = (fromParams || stored || routeFromPiP || 'SPEAKER_PHONE') as InCallAudioRoute;
+    }
     const snap: SystemPiPReturnMediaSnapshot = {
       micOn: !!micOn,
       camOn: !!camOn,
@@ -754,7 +810,7 @@ export function applySystemPiPReturnMediaSnapshot(): boolean {
         session.toggleMic();
       }
     }
-    const route = normalizeInCallRoute(snap.audioRoute || '');
+    let route = normalizeInCallRoute(snap.audioRoute || '');
     if (route) {
       g.__persistedCallAudioRouteRef = g.__persistedCallAudioRouteRef || { current: null };
       g.__persistedCallAudioRouteRef.current = route;
