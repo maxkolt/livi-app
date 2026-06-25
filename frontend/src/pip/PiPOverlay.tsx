@@ -22,7 +22,11 @@ import {
   pipInAppBarEnteredFromAudioOnly,
 } from './pipPlaceholderOnly';
 import { resolvePiPLocalMutedState, setUserSelectedCallAudioRoute } from '../../utils/activeCallSession';
-import { setPersistedCallAudioRoute, prepareDirectCallVideoExpandFromInAppPiP } from '../../utils/callAudioRoutePersist';
+import {
+  setPersistedCallAudioRoute,
+  prepareDirectCallVideoExpandFromInAppPiP,
+  armCallAudioRouteUiLock,
+} from '../../utils/callAudioRoutePersist';
 import {
   readInAppPiPAudioOutputRoute,
   toggleInAppPiPAudioOutputRoute,
@@ -226,6 +230,9 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
       const pipRoute = readInAppPiPAudioOutputRoute();
       setUserSelectedCallAudioRoute(pipRoute);
       setPersistedCallAudioRoute(pipRoute);
+      if (pipRoute === 'EARPIECE' || pipRoute === 'SPEAKER_PHONE') {
+        armCallAudioRouteUiLock(pipRoute);
+      }
       const onVideoCallScreen = shouldSuppressInAppPiPOnRoute(currentRouteName);
       hidePiP();
       if (onVideoCallScreen) {

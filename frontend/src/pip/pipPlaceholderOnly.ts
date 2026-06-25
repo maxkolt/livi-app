@@ -1,4 +1,6 @@
 /** Активен экран «аудиозвонок» (ещё не перешли на video UI). */
+import { armCallAudioRouteUiLock } from '../../utils/callAudioRouteTransitionGuards';
+
 export function isInAudioOnlyCallUi(): boolean {
   try {
     const g = global as any;
@@ -153,14 +155,25 @@ export function prepareDirectCallAudioReturnFromPiP(): void {
       void session.enterDirectCallAudioOnlyMode();
     }
     const paramsRef = g.__currentCallPiPParamsRef?.current;
+    const rawRoute =
+      (paramsRef && typeof paramsRef === 'object' ? paramsRef.audioOutputRoute : null) ||
+      g.__persistedCallAudioRouteRef?.current ||
+      g.__userSelectedCallAudioRouteRef?.current;
+    const audioRoute =
+      rawRoute === 'SPEAKER_PHONE' || rawRoute === 'EARPIECE' ? rawRoute : 'EARPIECE';
     if (paramsRef && typeof paramsRef === 'object') {
       paramsRef.inAudioOnlyUi = true;
       paramsRef.preferVideoCallUi = false;
       paramsRef.localCamOn = false;
-      paramsRef.audioOutputRoute = 'EARPIECE';
+      paramsRef.audioOutputRoute = audioRoute;
     }
     g.__persistedCallAudioRouteRef = g.__persistedCallAudioRouteRef || { current: null };
-    g.__persistedCallAudioRouteRef.current = 'EARPIECE';
+    g.__persistedCallAudioRouteRef.current = audioRoute;
+    g.__userSelectedCallAudioRouteRef = g.__userSelectedCallAudioRouteRef || { current: null };
+    g.__userSelectedCallAudioRouteRef.current = audioRoute;
+    g.__lastAppliedCallAudioRouteRef = g.__lastAppliedCallAudioRouteRef || { current: null };
+    g.__lastAppliedCallAudioRouteRef.current = audioRoute;
+    armCallAudioRouteUiLock(audioRoute);
     if (g.__audioCallHomeSpeakerPinRef) {
       g.__audioCallHomeSpeakerPinRef.current = false;
     }

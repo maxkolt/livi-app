@@ -559,11 +559,51 @@ export function readAuthoritativeCallAudioRouteAfterPiP(): InCallAudioRoute | nu
       }
     }
     const explicitIdle = normalizeInCallRoute(g.__inAppPiPExplicitToggleRouteRef?.current || '');
+    const pipPlaqueRoute = readInAppPiPAudioOutputRoute();
+    const audioOrPlaqueCtx =
+      isInAudioOnlyCallUi() ||
+      (() => {
+        try {
+          return g.__pipVisibleRef?.current === true && g.__pipInSystemModeRef?.current !== true;
+        } catch {
+          return false;
+        }
+      })();
+    if (isInAudioOnlyCallUi()) {
+      try {
+        if (g.__pipVisibleRef?.current !== true) {
+          const fullUiSel = readUserSelectedCallAudioRoute();
+          if (
+            fullUiSel === 'SPEAKER_PHONE' ||
+            fullUiSel === 'EARPIECE' ||
+            isExternalHeadsetRoute(fullUiSel)
+          ) {
+            return fullUiSel;
+          }
+        }
+      } catch {}
+    }
+    if (audioOrPlaqueCtx) {
+      if (
+        pipPlaqueRoute === 'EARPIECE' ||
+        pipPlaqueRoute === 'SPEAKER_PHONE' ||
+        isExternalHeadsetRoute(pipPlaqueRoute)
+      ) {
+        return pipPlaqueRoute;
+      }
+    }
+    const userSelEarly = readUserSelectedCallAudioRoute();
+    if (
+      (isInAudioOnlyCallUi() || isPiPBuiltinCallAudioRouteLockActive()) &&
+      userSelEarly === 'EARPIECE'
+    ) {
+      return 'EARPIECE';
+    }
     const candidates = [
       readUserSelectedCallAudioRoute(),
-      normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || ''),
       explicitIdle === 'SPEAKER_PHONE' || explicitIdle === 'EARPIECE' ? explicitIdle : null,
-      readInAppPiPAudioOutputRoute(),
+      pipPlaqueRoute,
+      normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || ''),
       readLastAppliedCallAudioRoute(),
     ];
     for (const r of candidates) {

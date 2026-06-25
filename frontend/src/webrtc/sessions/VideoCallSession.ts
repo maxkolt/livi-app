@@ -1295,6 +1295,11 @@ export class VideoCallSession extends SimpleEventEmitter {
     return !!this.room && this.room.state === ConnectionState.Connected;
   }
 
+  /** Состояние LiveKit-комнаты для UI (без доступа к private `room`). */
+  getLiveKitRoomState(): string | undefined {
+    return this.room?.state as string | undefined;
+  }
+
   /** Ждём connected перед recreate/publish (expand из PiP на connecting). */
   private async waitForLiveKitRoomConnected(timeoutMs = 12000): Promise<boolean> {
     if (!this.room) return false;

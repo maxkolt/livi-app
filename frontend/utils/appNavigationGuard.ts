@@ -1,6 +1,7 @@
 import { AppState, AppStateStatus } from 'react-native';
 import { CommonActions, StackActions } from '@react-navigation/native';
 import { logger } from './logger';
+import { clearStaleInAppPiPAudioContextForFreshCallNav } from './callAudioRoutePersist';
 
 let appState: AppStateStatus = AppState.currentState;
 let guardInstalled = false;
@@ -251,6 +252,9 @@ export function navigateToVideoCallScreen(
 ): boolean {
   if (!nav.isReady?.()) return false;
   const safeParams = stripStalePiPReturnNavParams(params, reason);
+  if (reason) {
+    clearStaleInAppPiPAudioContextForFreshCallNav(reason);
+  }
   const callId = String(safeParams.callId ?? '').trim();
   const current = nav.getCurrentRoute?.();
   const currentName = String(current?.name ?? '');
