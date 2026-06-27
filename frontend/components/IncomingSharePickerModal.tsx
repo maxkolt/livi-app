@@ -16,6 +16,7 @@ import AvatarImage from './AvatarImage';
 import ChatStyleBackButton from './ChatStyleBackButton';
 import { useAppTheme } from '../theme/ThemeProvider';
 import { uiAccent } from '../theme/uiAccent';
+import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE } from '../constants/uiTokens';
 import { fetchFriends } from '../sockets/socket';
 import { t } from '../utils/i18n';
 import { useLang } from '../store/lang';
@@ -44,7 +45,7 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [friends, setFriends] = useState<FriendRow[]>([]);
-  const [selectedFriendId, setSelectedFriendId] = useState('');
+  const [selectedFriendIds, setSelectedFriendIds] = useState<Set<string>>(new Set());
 
   const loadFriends = useCallback(async () => {
     setLoading(true);
@@ -83,25 +84,33 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
 
   useEffect(() => {
     if (!visible) return;
-    setSelectedFriendId('');
+    setSelectedFriendIds(new Set());
     setSending(false);
     void loadFriends();
   }, [visible, loadFriends]);
 
   const onPickFriend = (friend: FriendRow) => {
     const peerId = String(friend._id || '');
-    if (!peerId) return;
-    setSelectedFriendId((prev) => (prev === peerId ? '' : peerId));
+    if (!peerId || sending) return;
+    setSelectedFriendIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(peerId)) next.delete(peerId);
+      else next.add(peerId);
+      return next;
+    });
   };
 
   const onSend = async () => {
-    const peerId = String(selectedFriendId || '');
-    if (!peerId || sending) return;
+    const peerIds = Array.from(selectedFriendIds);
+    if (peerIds.length === 0 || sending) return;
     setSending(true);
     try {
-      const sent = await sendIncomingShareToFriend(peerId, items);
+      let totalSent = 0;
+      for (const peerId of peerIds) {
+        totalSent += await sendIncomingShareToFriend(peerId, items);
+      }
       if (Platform.OS === 'android') {
-        ToastAndroid.show(sent > 0 ? t('chatSent', lang) : t('chatSendFailed', lang), ToastAndroid.SHORT);
+        ToastAndroid.show(totalSent > 0 ? t('chatSent', lang) : t('chatSendFailed', lang), ToastAndroid.SHORT);
       }
     } catch {
       if (Platform.OS === 'android') {
@@ -109,15 +118,20 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
       }
     } finally {
       setSending(false);
-      setSelectedFriendId('');
+      setSelectedFriendIds(new Set());
       onClose();
     }
   };
+
+  const selectedCount = selectedFriendIds.size;
 
   if (!visible) return null;
 
   const textColor = isDark ? '#F4F5F7' : theme.colors.onSurface;
   const subColor = theme.colors.onSurfaceVariant as string;
+  const backBtnTop = insets.top + (Platform.OS === 'android' ? 12 : 8);
+  const backBtnHeight = 40;
+  const titleGapBelowBack = 36;
 
   return (
     <Modal visible animationType="fade" onRequestClose={onClose}>
@@ -125,18 +139,29 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
         <ChatStyleBackButton
           onPress={onClose}
           iconColor={subColor}
+          iconSize={FRIEND_ACTION_ICON_SIZE - 2}
           style={{
             position: 'absolute',
             zIndex: 10,
-            top: insets.top + (Platform.OS === 'android' ? 12 : 8),
+            top: backBtnTop,
             left: Platform.OS === 'ios' ? 15 : 17,
+            width: 40,
+            height: 40,
+            borderRadius: FRIEND_ACTION_BUTTON.borderRadius - 1,
+            ...(isDark
+              ? null
+              : {
+                  backgroundColor: 'rgba(0,0,0,0.06)',
+                  borderWidth: 1,
+                  borderColor: (theme.colors?.outline as string) || 'rgba(0,0,0,0.12)',
+                }),
           }}
         />
         <View
           style={{
             backgroundColor: screenBg,
             flex: 1,
-            paddingTop: insets.top + 56,
+            paddingTop: backBtnTop + backBtnHeight + titleGapBelowBack,
             paddingHorizontal: 16,
             paddingBottom: Math.max(insets.bottom, 16),
             minHeight: 280,
@@ -156,7 +181,9 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
                   data={friends}
                   keyExtractor={(it) => String(it._id)}
                   keyboardShouldPersistTaps="handled"
-                  renderItem={({ item }) => (
+                  renderItem={({ item }) => {
+                    const isSelected = selectedFriendIds.has(item._id);
+                    return (
                     <Pressable
                       onPress={() => onPickFriend(item)}
                       style={({ pressed }) => ({
@@ -167,10 +194,16 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
                         paddingHorizontal: 8,
                         marginVertical: 4,
                         borderRadius: 28,
-                        backgroundColor: selectedFriendId === item._id
+                        borderWidth: 1,
+                        borderColor: isSelected
                           ? isDark
-                            ? 'rgba(77,208,225,0.16)'
-                            : 'rgba(77,208,225,0.12)'
+                            ? accent.solid34
+                            : '#8B7BC8'
+                          : 'transparent',
+                        backgroundColor: isSelected
+                          ? isDark
+                            ? accent.vivid16
+                            : accent.forwardSendBg
                           : pressed
                           ? isDark
                             ? 'rgba(255,255,255,0.08)'
@@ -189,12 +222,13 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
                         {(item.nick && String(item.nick).trim()) || '—'}
                       </Text>
                       <Ionicons
-                        name={selectedFriendId === item._id ? 'checkmark-circle' : 'ellipse-outline'}
+                        name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
                         size={22}
-                        color={selectedFriendId === item._id ? accent.bright : subColor}
+                        color={isSelected ? accent.bright : subColor}
                       />
                     </Pressable>
-                  )}
+                    );
+                  }}
                   ListEmptyComponent={() => (
                     <View style={{ paddingVertical: 24, alignItems: 'center' }}>
                       <Text style={{ color: subColor, textAlign: 'center' }}>{t('chatForwardNoFriends', lang)}</Text>
@@ -222,7 +256,7 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
             </TouchableOpacity>
             <TouchableOpacity
               onPress={onSend}
-              disabled={!selectedFriendId || loading || sending}
+              disabled={selectedCount === 0 || loading || sending}
               style={{
                 flex: 1,
                 paddingVertical: 12,
@@ -230,13 +264,15 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
                 alignItems: 'center',
                 justifyContent: 'center',
                 backgroundColor: accent.bright,
-                opacity: !selectedFriendId || loading || sending ? 0.45 : 1,
+                opacity: selectedCount === 0 || loading || sending ? 0.45 : 1,
               }}
             >
               {sending ? (
                 <ActivityIndicator color="#0D0E10" />
               ) : (
-                <Text style={{ color: '#0D0E10', fontWeight: '700' }}>{t('send', lang)}</Text>
+                <Text style={{ color: '#0D0E10', fontWeight: '700' }}>
+                  {selectedCount > 0 ? `${t('send', lang)} (${selectedCount})` : t('send', lang)}
+                </Text>
               )}
             </TouchableOpacity>
           </View>
