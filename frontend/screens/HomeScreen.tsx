@@ -34,7 +34,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Sharing from 'expo-sharing';
 import SplashLoader from '../components/SplashLoader';
-import { Swipeable, PinchGestureHandler, State, NativeViewGestureHandler, FlatList } from 'react-native-gesture-handler';
+import { Swipeable, PinchGestureHandler, State, FlatList } from 'react-native-gesture-handler';
 import { Avatar, Divider, IconButton, List, Surface, Portal, Dialog, Button, Icon } from 'react-native-paper';
 import { Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
@@ -221,7 +221,143 @@ const FRIEND_ACTION_BTN_SURFACE = {
 };
 
 /** Одинаковый оттенок иконки чата и видео при удержании пальца (не busy/outgoing state). */
-const FRIEND_ACTION_ICON_PRESSED = '#ddd';
+const FRIEND_ACTION_ICON_PRESSED = '#FFFFFF';
+const FRIEND_ACTION_BTN_PRESSED_SURFACE = {
+  backgroundColor: 'rgba(255,255,255,0.28)',
+  borderColor: 'rgba(255,255,255,0.45)',
+  transform: [{ scale: 0.92 }],
+} as const;
+
+function friendRowBadgeLongPressHaptic() {
+  try {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  } catch {
+    Vibration.vibrate(15);
+  }
+}
+
+const GAP_AFTER_AVATAR = 20;
+const MARK_READ_OVERLAY_LEFT_FALLBACK =
+  Platform.OS === 'ios' ? 52 + GAP_AFTER_AVATAR : 44 + GAP_AFTER_AVATAR;
+
+const markReadStripStyles = StyleSheet.create({
+  strip: {
+    overflow: 'hidden',
+    minWidth: 200,
+    maxWidth: 320,
+    alignSelf: 'flex-end',
+    height: 35,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: LIVI.border,
+    backgroundColor: '#141518',
+    justifyContent: 'center',
+    zIndex: 1,
+    ...(Platform.OS === 'android' ? { elevation: 12 } : {}),
+  },
+  stripInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: 15,
+    paddingRight: 12,
+    height: 32,
+    width: '100%',
+  },
+  stripText: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    color: LIVI.white,
+    fontSize: 12,
+    fontWeight: '400',
+    marginRight: 12,
+  },
+  btnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: 16,
+  },
+  btn: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: LIVI.border,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
+
+function FriendMarkReadMenuStrip({
+  label,
+  onConfirm,
+  onCancel,
+}: {
+  label: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const scale = useRef(new Animated.Value(0.96)).current;
+  useEffect(() => {
+    opacity.setValue(0);
+    scale.setValue(0.96);
+    const anim = Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 220,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.spring(scale, { toValue: 1, friction: 7, tension: 140, useNativeDriver: true }),
+    ]);
+    anim.start();
+    return () => {
+      anim.stop();
+    };
+  }, [opacity, scale]);
+  return (
+    <Animated.View
+      style={[markReadStripStyles.strip, { opacity, transform: [{ scale }] }]}
+      pointerEvents="auto"
+      collapsable={false}
+    >
+      <View style={markReadStripStyles.stripInner} pointerEvents="box-none">
+        <Text
+          numberOfLines={1}
+          ellipsizeMode="tail"
+          style={markReadStripStyles.stripText}
+          allowFontScaling={false}
+        >
+          {label}
+        </Text>
+        <View style={markReadStripStyles.btnRow} pointerEvents="box-none">
+          <TouchableOpacity
+            style={markReadStripStyles.btn}
+            activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
+            {...ANDROID_INSTANT_TOUCH}
+            hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
+            onPress={onConfirm}
+          >
+            <Ionicons name="checkmark" size={17} color={LIVI.white} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={markReadStripStyles.btn}
+            activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
+            {...ANDROID_INSTANT_TOUCH}
+            hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
+            onPress={onCancel}
+          >
+            <MaterialIcons name="close" size={17} color={LIVI.text2} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
 
 type FriendRowIconActionButtonProps = {
   icon: 'chat-processing-outline' | 'video' | 'phone-in-talk-outline';
@@ -229,6 +365,8 @@ type FriendRowIconActionButtonProps = {
   hitSlop?: { top?: number; bottom?: number; left?: number; right?: number };
   delayLongPress?: number;
   disabled?: boolean;
+  /** Серый вид без блокировки long press (пропущенные при занятом друге). */
+  appearanceDisabled?: boolean;
   accessibilityState?: { disabled?: boolean };
   rescueMissedPress?: boolean;
   onPressIn?: () => void;
@@ -242,6 +380,7 @@ function FriendRowIconActionButton({
   hitSlop,
   delayLongPress,
   disabled,
+  appearanceDisabled,
   accessibilityState,
   rescueMissedPress,
   onPressIn,
@@ -252,7 +391,10 @@ function FriendRowIconActionButton({
   const pressHandledRef = React.useRef(false);
   const longPressHandledRef = React.useRef(false);
   const rescueTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressDelay = delayLongPress ?? 500;
+  const inactiveLook = !!(disabled || appearanceDisabled);
+  const longPressEnabled = !!onLongPress && !disabled;
 
   const clearRescueTimer = React.useCallback(() => {
     if (rescueTimerRef.current) {
@@ -261,57 +403,82 @@ function FriendRowIconActionButton({
     }
   }, []);
 
-  useEffect(() => clearRescueTimer, [clearRescueTimer]);
+  const clearLongPressTimer = React.useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearRescueTimer();
+      clearLongPressTimer();
+    };
+  }, [clearRescueTimer, clearLongPressTimer]);
+
+  const fireLongPress = React.useCallback(() => {
+    if (!onLongPress || disabled || longPressHandledRef.current || pressHandledRef.current) return;
+    clearRescueTimer();
+    clearLongPressTimer();
+    longPressHandledRef.current = true;
+    pressHandledRef.current = true;
+    onLongPress();
+  }, [clearRescueTimer, clearLongPressTimer, disabled, onLongPress]);
 
   const runPress = React.useCallback(() => {
     clearRescueTimer();
-    if (pressHandledRef.current) return;
+    if (pressHandledRef.current || longPressHandledRef.current) return;
     pressHandledRef.current = true;
     onPress?.();
   }, [clearRescueTimer, onPress]);
 
   return (
     <Pressable
+      disabled={disabled}
       accessibilityState={accessibilityState}
       hitSlop={hitSlop}
       pressRetentionOffset={FRIEND_ACTION_PRESS_RETENTION}
-      delayLongPress={delayLongPress}
+      delayLongPress={longPressEnabled ? longPressDelay : undefined}
       unstable_pressDelay={0}
       android_disableSound
       android_ripple={null}
       onPressIn={() => {
         clearRescueTimer();
+        clearLongPressTimer();
         pressStartedAtRef.current = Date.now();
         pressHandledRef.current = false;
         longPressHandledRef.current = false;
         onPressIn?.();
+        if (longPressEnabled) {
+          longPressTimerRef.current = setTimeout(fireLongPress, longPressDelay);
+        }
       }}
       onPressOut={() => {
+        clearLongPressTimer();
         if (!rescueMissedPress || !onPress || pressHandledRef.current || longPressHandledRef.current) return;
         const pressDuration = Date.now() - pressStartedAtRef.current;
-        if (pressDuration >= longPressDelay) return;
+        if (longPressEnabled && pressDuration >= longPressDelay - 40) return;
         rescueTimerRef.current = setTimeout(runPress, 80);
       }}
-      onPress={runPress}
-      onLongPress={() => {
-        clearRescueTimer();
-        longPressHandledRef.current = true;
-        onLongPress?.();
-      }}
-      style={[
+      onPress={longPressEnabled ? undefined : runPress}
+      onLongPress={longPressEnabled ? fireLongPress : undefined}
+      style={({ pressed }) => [
         {
           width: FRIEND_ACTION_BUTTON.width,
           height: FRIEND_ACTION_BUTTON.height,
           borderRadius: FRIEND_ACTION_BUTTON.borderRadius,
         },
         FRIEND_ACTION_BTN_SURFACE,
-        disabled
+        inactiveLook
           ? {
               backgroundColor: ANDROID_VIDEO_CALL_DISABLED_BG,
               borderWidth: 1,
               borderColor: 'rgba(255,255,255,0.08)',
             }
-          : null,
+          : pressed
+            ? FRIEND_ACTION_BTN_PRESSED_SURFACE
+            : null,
       ]}
     >
       {({ pressed }) => (
@@ -320,7 +487,7 @@ function FriendRowIconActionButton({
             name={icon}
             size={FRIEND_ACTION_ICON_SIZE}
             color={
-              disabled
+              inactiveLook
                 ? ANDROID_VIDEO_CALL_DISABLED_ICON
                 : pressed
                   ? FRIEND_ACTION_ICON_PRESSED
@@ -363,6 +530,84 @@ const mapToFriend = (u: any): Friend => {
 /** Не залипаем «Занято»: если REST/presence уже сняли busy — доверяем серверу. */
 function mergeFriendBusyFromFetch(serverBusy: boolean): boolean {
   return !!serverBusy;
+}
+
+function cleanPositiveBadgeMap(map: Record<string, number> | null | undefined): Record<string, number> {
+  const cleaned: Record<string, number> = {};
+  if (!map || typeof map !== 'object') return cleaned;
+  Object.keys(map).forEach((key) => {
+    const v = map[key];
+    if (typeof v === 'number' && v > 0) cleaned[String(key)] = v;
+  });
+  return cleaned;
+}
+
+function badgeMapsEqual(a: Record<string, number>, b: Record<string, number>): boolean {
+  const keys = new Set([...Object.keys(cleanPositiveBadgeMap(a)), ...Object.keys(cleanPositiveBadgeMap(b))]);
+  for (const k of keys) {
+    if ((a[k] || 0) !== (b[k] || 0)) return false;
+  }
+  return true;
+}
+
+/** Storage + native + UI: не опускаем счётчик из-за гонки (устраняет мигание бейджа). */
+function mergeMissedFromSources(
+  prev: Record<string, number>,
+  storage: Record<string, number> | null | undefined,
+  native: Record<string, number> | null | undefined,
+): Record<string, number> {
+  const merged = cleanPositiveBadgeMap(prev);
+  const keys = new Set([
+    ...Object.keys(storage || {}),
+    ...Object.keys(native || {}),
+    ...Object.keys(merged),
+  ]);
+  keys.forEach((key) => {
+    const k = String(key);
+    const fromStorage = typeof storage?.[k] === 'number' && storage[k] > 0 ? storage[k] : 0;
+    const fromNative = typeof native?.[k] === 'number' && native[k] > 0 ? native[k] : 0;
+    const value = Math.max(fromStorage, fromNative, merged[k] || 0);
+    if (value > 0) merged[k] = value;
+    else delete merged[k];
+  });
+  return merged;
+}
+
+function buildFriendBadgesSignature(
+  missed: Record<string, number>,
+  unread: Record<string, number>,
+): string {
+  const parts: string[] = [];
+  Object.keys(missed)
+    .sort()
+    .forEach((k) => {
+      const n = missed[k];
+      if (typeof n === 'number' && n > 0) parts.push(`m:${k}:${n}`);
+    });
+  Object.keys(unread)
+    .sort()
+    .forEach((k) => {
+      const n = unread[k];
+      if (typeof n === 'number' && n > 0) parts.push(`u:${k}:${n}`);
+    });
+  return parts.join('|');
+}
+
+function patchUnreadCountsIfChanged(
+  prev: Record<string, number>,
+  patch: Record<string, number>,
+): Record<string, number> {
+  let changed = false;
+  const next = { ...prev };
+  Object.keys(patch).forEach((key) => {
+    const normalized = typeof patch[key] === 'number' && patch[key] > 0 ? patch[key] : 0;
+    const cur = prev[key] || 0;
+    if (cur === normalized) return;
+    changed = true;
+    if (normalized > 0) next[key] = normalized;
+    else delete next[key];
+  });
+  return changed ? next : prev;
 }
 
 /** Есть ли реально активный direct-call (не залипшие global refs после завершения). */
@@ -969,6 +1214,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [refreshing, setRefreshing] = useState(false);
   const friendsRef = useRef<Friend[]>([]);
   const pendingUnreadBatchRefreshRef = useRef(false);
+  const badgeSyncDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => { friendsRef.current = friends; }, [friends]);
 
   /** Метки времени «точно онлайн» для debounce офлайна в onPresenceUpdate (loadFriends больше не затирает online сервера). */
@@ -1642,23 +1888,45 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [missedLoaded, setMissedLoaded] = useState(false);
   const [markReadMenu, setMarkReadMenu] = useState<{ friendId: string; type: 'video' | 'chat' } | null>(null);
   const [friendActionsGestureResetSeq, setFriendActionsGestureResetSeq] = useState(0);
+  const openMarkReadMenu = useCallback((friendId: string, type: 'video' | 'chat') => {
+    try {
+      openSwipeableRef.current?.close?.();
+    } catch {}
+    openSwipeableRef.current = null;
+    setMarkReadOverlayLeft(MARK_READ_OVERLAY_LEFT_FALLBACK);
+    setMarkReadMenu({ friendId, type });
+  }, []);
   const rowRefForMarkReadMenu = useRef<View>(null);
   const avatarRefForMarkReadMenu = useRef<View>(null);
-  const [markReadOverlayLeft, setMarkReadOverlayLeft] = useState<number | null>(null);
-  const GAP_AFTER_AVATAR = 20;
-  useEffect(() => {
-    if (!markReadMenu) setMarkReadOverlayLeft(null);
-  }, [markReadMenu]);
+  const [markReadOverlayLeft, setMarkReadOverlayLeft] = useState<number>(MARK_READ_OVERLAY_LEFT_FALLBACK);
   const measureAvatarForOverlay = useCallback(() => {
     const row = rowRefForMarkReadMenu.current;
     const avatar = avatarRefForMarkReadMenu.current;
     if (row && avatar && typeof (avatar as any).measureLayout === 'function') {
       (avatar as any).measureLayout(
         row as any,
-        (x: number, _y: number, width: number, _h: number) => setMarkReadOverlayLeft(x + width + GAP_AFTER_AVATAR)
+        (x: number, _y: number, width: number, _h: number) => {
+          const next = x + width + GAP_AFTER_AVATAR;
+          setMarkReadOverlayLeft((prev) => (Math.abs(prev - next) <= 1 ? prev : next));
+        },
       );
     }
   }, []);
+  useEffect(() => {
+    if (!markReadMenu) {
+      setMarkReadOverlayLeft(MARK_READ_OVERLAY_LEFT_FALLBACK);
+      return;
+    }
+    let layoutTimer: ReturnType<typeof setTimeout> | undefined;
+    const raf = requestAnimationFrame(() => {
+      measureAvatarForOverlay();
+      layoutTimer = setTimeout(measureAvatarForOverlay, 72);
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      if (layoutTimer) clearTimeout(layoutTimer);
+    };
+  }, [markReadMenu, measureAvatarForOverlay]);
   const lastIncomingFromRef = useRef<string | null>(null);
   const [roomFull, setRoomFull] = useState<{ visible: boolean; name?: string }>({ visible: false });
   const wave1 = useRef(new Animated.Value(0)).current;
@@ -2035,7 +2303,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         : prev
     ));
     setSwipeActionsHiddenForCall(null);
-    setMarkReadMenu(null);
     try { openSwipeableRef.current?.close?.(); } catch {}
     openSwipeableRef.current = null;
     if (hadOutgoingState) {
@@ -2877,7 +3144,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         entries[id] = typeof n === 'number' && n > 0 ? n : 0;
       }
       setUnreadByUser((prev) => {
-        const next = { ...prev, ...entries };
+        const next = patchUnreadCountsIfChanged(prev, entries);
+        if (next === prev) return prev;
         const cleaned: Record<string, number> = {};
         Object.keys(next).forEach((key) => {
           const v = next[key];
@@ -3623,7 +3891,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               }
             });
           }
-          setMissedByUser(normalized);
+          setMissedByUser((prev) => (badgeMapsEqual(prev, normalized) ? prev : normalized));
           setMissedLoaded(true);
           logger.debug('[HomeScreen] Loaded missed calls from storage', { count: Object.keys(normalized).length, normalized });
         } catch (e) {
@@ -3668,8 +3936,15 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [missedByUser, missedLoaded]);
 
   useEffect(() => {
-    syncAppBadgeFromMissedCount().catch(() => {});
-  }, [unreadByUser]);
+    if (badgeSyncDebounceRef.current) clearTimeout(badgeSyncDebounceRef.current);
+    badgeSyncDebounceRef.current = setTimeout(() => {
+      badgeSyncDebounceRef.current = null;
+      syncAppBadgeFromMissedCount().catch(() => {});
+    }, 350);
+    return () => {
+      if (badgeSyncDebounceRef.current) clearTimeout(badgeSyncDebounceRef.current);
+    };
+  }, [unreadByUser, missedByUser]);
 
   /* ===== reconnect handling ===== */
   useEffect(() => {
@@ -3914,17 +4189,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         const raw = await AsyncStorage.getItem(MISSED_CALLS_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
         const nativeMissed = await getMissedCountByUserFromNative();
-        const merged: Record<string, number> = {};
-        const allKeys = new Set([...Object.keys(parsed || {}), ...Object.keys(nativeMissed || {})]);
-        allKeys.forEach((key) => {
-          const fromStorage = typeof parsed?.[key] === 'number' ? parsed[key] : 0;
-          const fromNative = typeof nativeMissed?.[key] === 'number' ? nativeMissed[key] : 0;
-          let value = Math.max(fromStorage, fromNative);
-          if (fromNative > 0 && fromStorage > fromNative) value = fromNative;
-          if (value > 0) merged[String(key)] = value;
+        setMissedByUser((prev) => {
+          const merged = mergeMissedFromSources(prev, parsed, nativeMissed);
+          if (badgeMapsEqual(prev, merged)) return prev;
+          AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(merged)).catch(() => {});
+          return merged;
         });
-        await AsyncStorage.setItem(MISSED_CALLS_KEY, JSON.stringify(merged));
-        setMissedByUser(merged);
         setMissedLoaded(true);
         if (!onFriendsTab) {
           await syncAppBadgeFromMissedCount();
@@ -3956,7 +4226,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             if (typeof value === 'number' && value > 0) normalized[String(key)] = value;
           });
         }
-        setMissedByUser(normalized);
+        setMissedByUser((prev) => {
+          if (badgeMapsEqual(prev, normalized)) return prev;
+          return normalized;
+        });
         setMissedLoaded(true);
         await clearMissedBadgeCleared();
         await syncAppBadgeFromMissedCount();
@@ -4464,11 +4737,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       if (!userId) return;
       const userIdStr = String(userId);
       setMissedByUser((prev) => {
+        const prevCount = prev[userIdStr] || 0;
         const nextCount =
-          typeof count === 'number' ? count : (prev[userIdStr] || 0) + 1;
-        const next = { ...prev, [userIdStr]: nextCount };
+          typeof count === 'number' ? Math.max(prevCount, count) : prevCount + 1;
+        if (nextCount <= 0 || nextCount === prevCount) return prev;
         logger.debug('[HomeScreen] Missed call updated (UI)', { userId: userIdStr, count: nextCount });
-        return next;
+        return { ...prev, [userIdStr]: nextCount };
       });
     });
     return () => off?.();
@@ -4523,9 +4797,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         // Используем новую функцию getUnreadCount
         const result = await getUnreadCount(pid);
         const count = result.ok ? (result.count || 0) : 0;
-        if (!disposed) setUnreadByUser((prev) => ({ ...prev, [pid]: count }));
+        if (!disposed) {
+          setUnreadByUser((prev) => patchUnreadCountsIfChanged(prev, { [pid]: count }));
+        }
       } catch {
-        if (!disposed) setUnreadByUser((prev) => ({ ...prev, [pid]: 0 }));
+        if (!disposed) setUnreadByUser((prev) => patchUnreadCountsIfChanged(prev, { [pid]: 0 }));
       }
     };
 
@@ -4538,13 +4814,16 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       // Пользователь в открытом чате с этим отправителем — не поднимаем локальный счётчик (сервер тоже не кладёт unread при chat:viewing).
       const openChatPeer = String((global as any).__currentChatPeerId || '').trim();
       if (openChatPeer && openChatPeer === messageFromStr) {
-        if (!disposed) setUnreadByUser((prev) => ({ ...prev, [messageFromStr]: 0 }));
+        if (!disposed) {
+          setUnreadByUser((prev) => patchUnreadCountsIfChanged(prev, { [messageFromStr]: 0 }));
+        }
       } else {
         if (!disposed) {
-          setUnreadByUser((prev) => ({
-            ...prev,
-            [messageFromStr]: Math.max(1, prev[messageFromStr] || 0),
-          }));
+          setUnreadByUser((prev) =>
+            patchUnreadCountsIfChanged(prev, {
+              [messageFromStr]: Math.max(1, prev[messageFromStr] || 0),
+            }),
+          );
         }
         void updateOne(messageFromStr);
       }
@@ -5149,12 +5428,6 @@ const handleClearNick = useCallback(async () => {
         // ignore navigation state errors
       }
 
-      try {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      } catch {
-        Vibration.vibrate(8);
-      }
-
       const fullNickname = (friend.name && friend.name.trim()) || '—';
       lastChatOpenRef.current = { peerId: peerIdStr, at: now };
       if (__DEV__) {
@@ -5187,8 +5460,8 @@ const handleClearNick = useCallback(async () => {
             onLongPress={
               count > 0
                 ? () => {
-                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(15); }
-                    setMarkReadMenu({ friendId: friendIdStr, type: 'chat' });
+                    friendRowBadgeLongPressHaptic();
+                    openMarkReadMenu(friendIdStr, 'chat');
                   }
                 : undefined
             }
@@ -5215,7 +5488,6 @@ const handleClearNick = useCallback(async () => {
     if (swipeActionsHiddenForCall === id) return <View style={panelStyle} />;
     return (
       <View style={panelStyle}>
-        <View style={{ width: FRIEND_ROW_ACTION_GAP }} />
         <IconButton
           icon="close"
           size={23}
@@ -5231,6 +5503,7 @@ const handleClearNick = useCallback(async () => {
           ]}
           onPress={() => handleRemoveFriend(id)}
         />
+        <View style={{ width: FRIEND_ROW_ACTION_GAP }} />
       </View>
     );
   };
@@ -5368,7 +5641,8 @@ const handleClearNick = useCallback(async () => {
         <View style={styles.friendCallActionsAnchor}>
           <FriendRowIconActionButton
             icon="phone-in-talk-outline"
-            disabled={hardVideoDisabled}
+            disabled={hardVideoDisabled && missedCount === 0}
+            appearanceDisabled={hardVideoDisabled}
             accessibilityState={{ disabled: !!videoDisabled }}
             hitSlop={FRIEND_ROW_HIT_AUDIO}
             delayLongPress={280}
@@ -5377,10 +5651,10 @@ const handleClearNick = useCallback(async () => {
               prepareFriendRowActionTap();
             }}
             onLongPress={
-              missedCount > 0 && !hardVideoDisabled
+              missedCount > 0
                 ? () => {
-                    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch { Vibration.vibrate(15); }
-                    setMarkReadMenu({ friendId: friendIdStr, type: 'video' });
+                    friendRowBadgeLongPressHaptic();
+                    openMarkReadMenu(friendIdStr, 'video');
                   }
                 : undefined
             }
@@ -5414,11 +5688,6 @@ const handleClearNick = useCallback(async () => {
                   return;
                 }
               }
-              try {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              } catch {
-                Vibration.vibrate(8);
-              }
               const fid = String(friend.id);
               clearMissedCallsForFriend(fid);
               handleStartFriendCall(friend);
@@ -5449,6 +5718,10 @@ const handleClearNick = useCallback(async () => {
     FRIEND_ROW_ACTION_GAP +
     FRIEND_ACTION_BUTTON.width +
     FRIEND_ROW_TRAILING_PAD;
+  const friendBadgesSignature = React.useMemo(
+    () => buildFriendBadgesSignature(missedByUser, unreadByUser),
+    [missedByUser, unreadByUser],
+  );
   const friendsListExtraData = React.useMemo(
     () => ({
       friendActionsGestureResetSeq,
@@ -5457,8 +5730,8 @@ const handleClearNick = useCallback(async () => {
       incomingVisible: incomingCallScreen.visible,
       incomingFromUserId: incomingCallScreen.fromUserId ?? null,
       markReadFriendId: markReadMenu?.friendId ?? null,
-      missedByUser,
-      unreadByUser,
+      markReadMenuType: markReadMenu?.type ?? null,
+      friendBadgesSignature,
       swipeActionsHiddenForCall,
     }),
     [
@@ -5468,8 +5741,8 @@ const handleClearNick = useCallback(async () => {
       incomingCallScreen.visible,
       incomingCallScreen.fromUserId,
       markReadMenu?.friendId,
-      missedByUser,
-      unreadByUser,
+      markReadMenu?.type,
+      friendBadgesSignature,
       swipeActionsHiddenForCall,
     ],
   );
@@ -5478,6 +5751,7 @@ const handleClearNick = useCallback(async () => {
     <FlatList
       // Первый тап по action-кнопкам (чат/звонок) должен срабатывать даже при открытой клавиатуре.
       keyboardShouldPersistTaps="always"
+      clipToPadding={false}
       showsVerticalScrollIndicator={false}
       overScrollMode="never"
       removeClippedSubviews={false}
@@ -5505,8 +5779,9 @@ const handleClearNick = useCallback(async () => {
         <View key={item.id}>
           <View
             style={styles.listRowWrap}
-            ref={markReadMenu?.friendId === item.id ? rowRefForMarkReadMenu : undefined}
+            ref={isMenuRow ? rowRefForMarkReadMenu : undefined}
           >
+            <View style={styles.friendRowSwipeColumn}>
             <Swipeable
               containerStyle={styles.friendRowSwipeContainer}
               childrenContainerStyle={styles.friendRowSwipeChild}
@@ -5520,6 +5795,7 @@ const handleClearNick = useCallback(async () => {
                 delete swipeableRefsMap.current[item.id];
               }}
               onSwipeableWillOpen={() => {
+                setMarkReadMenu(null);
                 const opening = swipeableRefsMap.current[item.id];
                 const prev = openSwipeableRef.current;
                 if (prev && prev !== opening) {
@@ -5569,79 +5845,65 @@ const handleClearNick = useCallback(async () => {
                     }
                   />
                 </View>
-                <View style={[styles.nameCol, styles.friendRowNameFlex, { paddingRight: FRIEND_ROW_ACTIONS_TRAY_WIDTH }, rowHidden && { opacity: 0 }]}>
+                <View
+                  style={[
+                    styles.nameCol,
+                    styles.friendRowNameFlex,
+                    { paddingRight: 8 },
+                    rowHidden && styles.friendRowHiddenWhileMarkRead,
+                  ]}
+                >
                   <Text style={styles.friendName}>{displayName}</Text>
                   <Text style={[styles.friendStatus, { color: item.online ? LIVI.green : LIVI.red }]}>
                     {item.online ? L('online') : L('offline')}
                   </Text>
                 </View>
-                <NativeViewGestureHandler disallowInterruption shouldActivateOnStart>
-                  <View
-                    style={[styles.rowRightActions, rowHidden && { opacity: 0 }]}
-                    pointerEvents={rowHidden ? 'none' : 'box-none'}
-                  >
-                    <InviteButton friend={item} />
-                    <ChatButton friend={item} />
-                  </View>
-                </NativeViewGestureHandler>
               </View>
             </Swipeable>
+            </View>
+            <View
+              style={[
+                styles.rowRightActionsTray,
+                rowHidden && styles.friendRowHiddenWhileMarkRead,
+              ]}
+              pointerEvents={rowHidden ? 'none' : 'box-none'}
+            >
+              <InviteButton friend={item} />
+              <ChatButton friend={item} />
+            </View>
             {markReadMenu && markReadMenu.friendId === item.id && (
               <View
                 style={[
                   styles.markReadMenuOverlay,
-                  { left: markReadOverlayLeft ?? (Platform.OS === 'ios' ? 52 + GAP_AFTER_AVATAR : 44 + GAP_AFTER_AVATAR) },
+                  { left: isMenuRow ? markReadOverlayLeft : MARK_READ_OVERLAY_LEFT_FALLBACK },
                 ]}
                 pointerEvents="box-none"
               >
-                <View style={styles.markReadMenuStrip} collapsable={false}>
-                  <View style={styles.markReadMenuStripInner} pointerEvents="box-none">
-                    <Text
-                      numberOfLines={1}
-                      ellipsizeMode="tail"
-                      style={styles.markReadMenuStripText}
-                      allowFontScaling={false}
-                    >
-                      {markReadMenu.type === 'video'
-                        ? `${t('markAsViewed', lang)}...`
-                        : `${t('markAsRead', lang)}...`}
-                    </Text>
-                    <View style={styles.markReadMenuBtnRow} pointerEvents="box-none">
-                      <TouchableOpacity
-                        style={styles.markReadMenuBtn}
-                        activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
-                        {...ANDROID_INSTANT_TOUCH}
-                        hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
-                        onPress={() => {
-                          const { friendId, type } = markReadMenu;
-                          setMarkReadMenu(null);
-                          if (type === 'video') {
-                            clearMissedCallsForFriend(friendId);
-                          } else {
-                            markMessagesAsRead(friendId).then((r) => {
-                              setUnreadByUser((prev) => ({ ...prev, [friendId]: 0 }));
-                              if (r?.ok) {
-                                dismissMessageNotificationForUser(friendId).catch(() => {});
-                                syncAppBadgeFromMissedCount().catch(() => {});
-                              }
-                            }).catch(() => {});
-                          }
-                        }}
-                      >
-                        <Ionicons name="checkmark" size={17} color={LIVI.white} />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.markReadMenuBtn}
-                        activeOpacity={Platform.OS === 'android' ? 1 : 0.8}
-                        {...ANDROID_INSTANT_TOUCH}
-                        hitSlop={Platform.OS === 'android' ? ANDROID_FRIEND_ACTION_HIT_SLOP : undefined}
-                        onPress={() => setMarkReadMenu(null)}
-                      >
-                        <MaterialIcons name="close" size={17} color={LIVI.text2} />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </View>
+                <View style={styles.markReadMenuOpaqueCover} pointerEvents="none" />
+                <FriendMarkReadMenuStrip
+                  key={`${markReadMenu.friendId}-${markReadMenu.type}`}
+                  label={
+                    markReadMenu.type === 'video'
+                      ? `${t('markAsViewed', lang)}...`
+                      : `${t('markAsRead', lang)}...`
+                  }
+                  onConfirm={() => {
+                    const { friendId, type } = markReadMenu;
+                    setMarkReadMenu(null);
+                    if (type === 'video') {
+                      clearMissedCallsForFriend(friendId);
+                    } else {
+                      markMessagesAsRead(friendId).then((r) => {
+                        setUnreadByUser((prev) => ({ ...prev, [friendId]: 0 }));
+                        if (r?.ok) {
+                          dismissMessageNotificationForUser(friendId).catch(() => {});
+                          syncAppBadgeFromMissedCount().catch(() => {});
+                        }
+                      }).catch(() => {});
+                    }
+                  }}
+                  onCancel={() => setMarkReadMenu(null)}
+                />
               </View>
             )}
           </View>
@@ -5955,7 +6217,10 @@ const handleClearNick = useCallback(async () => {
               if (typeof value === 'number' && value > 0) normalized[String(key)] = value;
             });
           }
-          setMissedByUser((prev) => ({ ...prev, ...normalized }));
+          setMissedByUser((prev) => {
+            const merged = mergeMissedFromSources(prev, normalized, null);
+            return badgeMapsEqual(prev, merged) ? prev : merged;
+          });
         } catch {}
       }).catch(() => {});
     }
@@ -7043,8 +7308,18 @@ const styles = StyleSheet.create({
   menuBtnIconWrap: { margin: 0, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' },
   menuBtnIcon: { margin: 0, backgroundColor: 'transparent' },
   // Симметричные отступы: левый padding у FlatList; правый — paddingRight у блока кнопок.
-  // Swipeable только на аватар+ник; звонок/чат вне свайпа.
-  listRowWrap: { position: 'relative', overflow: 'visible' as const },
+  // Swipeable только на аватар+ник; звонок/чат в отдельной колонке справа.
+  listRowWrap: {
+    position: 'relative',
+    overflow: 'visible' as const,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    minHeight: 72,
+  },
+  friendRowSwipeColumn: {
+    flex: 1,
+    minWidth: 0,
+  },
   listRow: {
     backgroundColor: Platform.OS === 'android' ? '#0D0E10' : 'rgba(13,14,16,0.88)',
     paddingVertical: 10,
@@ -7173,17 +7448,14 @@ const styles = StyleSheet.create({
   segActiveBg: { backgroundColor: 'rgba(157, 161, 169, 0.11)' },
   segTopShadow: { position: 'absolute', top: 0, left: 0, right: 0, height: 0 },
 
-  rowRightActions: {
-    position: 'absolute' as const,
-    right: 0,
-    top: 0,
-    bottom: 0,
+  rowRightActionsTray: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingRight: FRIEND_ROW_TRAILING_PAD,
     overflow: 'visible' as const,
+    flexShrink: 0,
   },
-  friendRowSwipeContainer: { overflow: 'hidden' as const },
+  friendRowSwipeContainer: { flex: 1, overflow: 'hidden' as const },
   friendRowSwipeChild: {
     backgroundColor: Platform.OS === 'android' ? '#0D0E10' : 'rgba(13,14,16,0.88)',
   },
@@ -7233,7 +7505,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     right: 0,
-    zIndex: 20,
+    zIndex: 30,
     minWidth: 11,
     minHeight: 11,
     height: 11,
@@ -7242,32 +7514,44 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,90,103,0.95)',
     alignItems: 'center',
     justifyContent: 'center',
-    ...(Platform.OS === 'android' ? { elevation: 10 } : {}),
+    ...(Platform.OS === 'android' ? { elevation: 12 } : {}),
     transform: [{ translateX: 4.5 }, { translateY: -3.5 }],
   },
   badgeBubbleText: { color: '#fff', fontSize: 8, fontWeight: '800', lineHeight: 8 },
 
-  // left задаётся инлайн по measureLayout аватара + GAP_AFTER_AVATAR, чтобы отступ был одинаков на всех устройствах
+  // Полоска «Прочитано / Просмотрено» — отступ после аватара (left через measureLayout).
+  friendRowHiddenWhileMarkRead: {
+    opacity: 0,
+    pointerEvents: 'none' as const,
+  },
   markReadMenuOverlay: {
     position: 'absolute',
-    right: 14,
     top: 0,
-    bottom: 3,
+    right: 0,
+    bottom: 0,
     justifyContent: 'center',
     alignItems: 'flex-end',
-    zIndex: 10,
+    zIndex: 40,
+    overflow: 'hidden' as const,
+    paddingRight: FRIEND_ROW_TRAILING_PAD,
+  },
+  markReadMenuOpaqueCover: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: Platform.OS === 'android' ? '#0D0E10' : '#0D0E10',
   },
   markReadMenuStrip: {
     overflow: 'hidden',
-    width: '100%',
+    minWidth: 200,
     maxWidth: 320,
     alignSelf: 'flex-end',
     height: 35,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: LIVI.border,
-    backgroundColor: LIVI.glass,
+    backgroundColor: '#141518',
     justifyContent: 'center',
+    zIndex: 1,
+    ...(Platform.OS === 'android' ? { elevation: 12 } : {}),
   },
   markReadMenuStripInner: {
     flexDirection: 'row',
