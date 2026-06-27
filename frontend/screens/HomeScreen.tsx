@@ -5440,7 +5440,9 @@ const handleClearNick = useCallback(async () => {
   const FRIEND_ROW_HEIGHT = 72;
   const FRIEND_SEPARATOR_HEIGHT = StyleSheet.hairlineWidth;
   const FRIEND_ITEM_HEIGHT = FRIEND_ROW_HEIGHT + FRIEND_SEPARATOR_HEIGHT;
-  const FRIENDS_LIST_PAD_H = 16;
+  const SHEET_CONTENT_PAD_H = 12;
+  /** Совпадает с sheetTopBar paddingHorizontal + marginLeft у ChatStyleBackButton (5). */
+  const FRIENDS_LIST_PAD_H = SHEET_CONTENT_PAD_H + 5;
   const FRIEND_SWIPE_DELETE_WIDTH = FRIEND_ROW_ACTION_GAP + FRIEND_ACTION_BUTTON.width;
   const FRIEND_ROW_ACTIONS_TRAY_WIDTH =
     FRIEND_ACTION_BUTTON.width +
@@ -5652,7 +5654,7 @@ const handleClearNick = useCallback(async () => {
   );
 
   const MoreTab = () => (
-    <View style={{ paddingTop: 8, paddingLeft: 8, paddingRight: 16, paddingBottom: 16, gap: 16, flex: 1 }}>
+    <View style={{ paddingTop: 8, paddingHorizontal: FRIENDS_LIST_PAD_H, paddingBottom: 16, gap: 16, flex: 1 }}>
 
 
       {/* UI Settings */}
