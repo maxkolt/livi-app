@@ -22,6 +22,12 @@ export const CHAT_BACK_BUTTON_SURFACE = {
 export const TOUCH_HIT_OUTER = 26;
 export const TOUCH_HIT_INNER = 6;
 
+/** Горизонтальный зазор между кнопками в строке друга (звонок ↔ чат ↔ удаление). */
+export const FRIEND_ROW_ACTION_GAP = 18;
+
+/** Отступ от правого края кнопки сообщения до правого края строки. */
+export const FRIEND_ROW_TRAILING_PAD = 1;
+
 /** Лёгкое касание: не срывать onPress при микродвижении пальца. */
 export const FRIEND_ACTION_PRESS_RETENTION = {
   top: 22,

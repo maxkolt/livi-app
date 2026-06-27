@@ -8,7 +8,6 @@ import {
   TouchableOpacity,
   Pressable,
   View,
-  FlatList,
   Dimensions,
   useWindowDimensions,
   Platform,
@@ -35,7 +34,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Sharing from 'expo-sharing';
 import SplashLoader from '../components/SplashLoader';
-import { Swipeable, PinchGestureHandler, State, NativeViewGestureHandler } from 'react-native-gesture-handler';
+import { Swipeable, PinchGestureHandler, State, NativeViewGestureHandler, FlatList } from 'react-native-gesture-handler';
 import { Avatar, Divider, IconButton, List, Surface, Portal, Dialog, Button, Icon } from 'react-native-paper';
 import { Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
@@ -54,6 +53,8 @@ import LanguagePicker from '../components/LanguagePicker';
 import {
   FRIEND_ACTION_BUTTON,
   FRIEND_ACTION_ICON_SIZE,
+  FRIEND_ROW_ACTION_GAP,
+  FRIEND_ROW_TRAILING_PAD,
   FRIEND_ROW_HIT_CHAT,
   FRIEND_ROW_HIT_VIDEO,
   FRIEND_ROW_HIT_AUDIO,
@@ -5202,9 +5203,19 @@ const handleClearNick = useCallback(async () => {
     );
   };
   const renderRightActions = (id: string) => {
-    if (swipeActionsHiddenForCall === id) return <View style={styles.swipeRight} />;
+    const panelStyle = [
+      styles.swipeRight,
+      {
+        width: FRIEND_SWIPE_DELETE_WIDTH,
+        minHeight: FRIEND_ROW_HEIGHT,
+        flexDirection: 'row' as const,
+        alignItems: 'center' as const,
+      },
+    ];
+    if (swipeActionsHiddenForCall === id) return <View style={panelStyle} />;
     return (
-      <View style={styles.swipeRight}>
+      <View style={panelStyle}>
+        <View style={{ width: FRIEND_ROW_ACTION_GAP }} />
         <IconButton
           icon="close"
           size={23}
@@ -5213,7 +5224,6 @@ const handleClearNick = useCallback(async () => {
             styles.actionBtn,
             styles.friendActionBtnSize,
             {
-              marginRight: 6,
               backgroundColor: 'rgba(255,90,103,0.18)',
               borderWidth: 1,
               borderColor: 'rgba(200,50,65,0.7)',
@@ -5227,6 +5237,15 @@ const handleClearNick = useCallback(async () => {
 
   const handleRemoveFriend = useCallback(
     async (peerId: string) => {
+      try {
+        openSwipeableRef.current?.close?.();
+      } catch {}
+      openSwipeableRef.current = null;
+      try {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      } catch {
+        Vibration.vibrate(12);
+      }
       const prevFriends = friendsRef.current;
       setFriends((prev) => prev.filter((f) => f.id !== peerId));
       try {
@@ -5421,6 +5440,13 @@ const handleClearNick = useCallback(async () => {
   const FRIEND_ROW_HEIGHT = 72;
   const FRIEND_SEPARATOR_HEIGHT = StyleSheet.hairlineWidth;
   const FRIEND_ITEM_HEIGHT = FRIEND_ROW_HEIGHT + FRIEND_SEPARATOR_HEIGHT;
+  const FRIENDS_LIST_PAD_H = 16;
+  const FRIEND_SWIPE_DELETE_WIDTH = FRIEND_ROW_ACTION_GAP + FRIEND_ACTION_BUTTON.width;
+  const FRIEND_ROW_ACTIONS_TRAY_WIDTH =
+    FRIEND_ACTION_BUTTON.width +
+    FRIEND_ROW_ACTION_GAP +
+    FRIEND_ACTION_BUTTON.width +
+    FRIEND_ROW_TRAILING_PAD;
   const friendsListExtraData = React.useMemo(
     () => ({
       friendActionsGestureResetSeq,
@@ -5431,6 +5457,7 @@ const handleClearNick = useCallback(async () => {
       markReadFriendId: markReadMenu?.friendId ?? null,
       missedByUser,
       unreadByUser,
+      swipeActionsHiddenForCall,
     }),
     [
       friendActionsGestureResetSeq,
@@ -5441,6 +5468,7 @@ const handleClearNick = useCallback(async () => {
       markReadMenu?.friendId,
       missedByUser,
       unreadByUser,
+      swipeActionsHiddenForCall,
     ],
   );
 
@@ -5467,44 +5495,59 @@ const handleClearNick = useCallback(async () => {
       refreshing={refreshing}
       onRefresh={onRefreshFriends}
       onScrollBeginDrag={() => setMarkReadMenu(null)}
-      renderItem={({ item }) => (
-        <Swipeable
-          key={item.id}
-          ref={(r) => {
-            if (r) {
-              swipeableRefsMap.current[item.id] = r;
-              return;
-            }
-            const existing = swipeableRefsMap.current[item.id];
-            if (openSwipeableRef.current === existing) openSwipeableRef.current = null;
-            delete swipeableRefsMap.current[item.id];
-          }}
-          onSwipeableOpen={() => { openSwipeableRef.current = swipeableRefsMap.current[item.id] ?? null; }}
-          onSwipeableClose={() => { if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) openSwipeableRef.current = null; }}
-          renderRightActions={() => renderRightActions(item.id)}
-          // Требуем заметный горизонтальный жест, чтобы случайные микросдвиги не "съедали" первый тап по кнопкам.
-          dragOffsetFromRightEdge={108}
-          dragOffsetFromLeftEdge={108}
-          rightThreshold={72}
-          leftThreshold={72}
-          overshootRight={false}
-          {...(Platform.OS === 'android'
-            ? { friction: 2, overshootFriction: 8, enableTrackpadTwoFingerGesture: false }
-            : {})}
-        >
+      renderItem={({ item }) => {
+        const { displayName, avatarLetter } = getFriendDisplay(item);
+        const isMenuRow = markReadMenu?.friendId === item.id;
+        const rowHidden = isMenuRow;
+        return (
+        <View key={item.id}>
           <View
             style={styles.listRowWrap}
             ref={markReadMenu?.friendId === item.id ? rowRefForMarkReadMenu : undefined}
           >
-            <List.Item
-              style={[styles.listRow, styles.listRowAligned, styles.listRowOverflowVisible]}
-              containerStyle={styles.listRowContainerOverflowVisible}
-              contentStyle={{ marginLeft: 0 }}
-              rippleColor="transparent"
-              left={() => {
-              const { avatarLetter } = getFriendDisplay(item);
-              const isMenuRow = markReadMenu?.friendId === item.id;
-              return (
+            <Swipeable
+              containerStyle={styles.friendRowSwipeContainer}
+              childrenContainerStyle={styles.friendRowSwipeChild}
+              ref={(r) => {
+                if (r) {
+                  swipeableRefsMap.current[item.id] = r;
+                  return;
+                }
+                const existing = swipeableRefsMap.current[item.id];
+                if (openSwipeableRef.current === existing) openSwipeableRef.current = null;
+                delete swipeableRefsMap.current[item.id];
+              }}
+              onSwipeableWillOpen={() => {
+                const opening = swipeableRefsMap.current[item.id];
+                const prev = openSwipeableRef.current;
+                if (prev && prev !== opening) {
+                  try {
+                    prev.close?.();
+                  } catch {}
+                }
+              }}
+              onSwipeableOpen={() => { openSwipeableRef.current = swipeableRefsMap.current[item.id] ?? null; }}
+              onSwipeableClose={() => { if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) openSwipeableRef.current = null; }}
+              renderRightActions={() => renderRightActions(item.id)}
+              dragOffsetFromRightEdge={0}
+              dragOffsetFromLeftEdge={0}
+              activeOffsetX={[-6, 6]}
+              failOffsetY={[-14, 14]}
+              rightThreshold={16}
+              leftThreshold={24}
+              overshootRight={false}
+              friction={1}
+              overshootFriction={6}
+              enableTrackpadTwoFingerGesture={false}
+            >
+              <View
+                style={[
+                  styles.listRow,
+                  styles.listRowAligned,
+                  styles.listRowOverflowVisible,
+                  styles.listRowContainerOverflowVisible,
+                ]}
+              >
                 <View
                   style={styles.avatarBox}
                   ref={isMenuRow ? avatarRefForMarkReadMenu : undefined}
@@ -5524,39 +5567,23 @@ const handleClearNick = useCallback(async () => {
                     }
                   />
                 </View>
-              );
-            }}
-            
-            title={() => {
-              const { displayName } = getFriendDisplay(item);
-              const hidden = markReadMenu?.friendId === item.id;
-              return (
-                <View style={[styles.nameCol, hidden && { opacity: 0 }]}>
+                <View style={[styles.nameCol, styles.friendRowNameFlex, { paddingRight: FRIEND_ROW_ACTIONS_TRAY_WIDTH }, rowHidden && { opacity: 0 }]}>
                   <Text style={styles.friendName}>{displayName}</Text>
                   <Text style={[styles.friendStatus, { color: item.online ? LIVI.green : LIVI.red }]}>
                     {item.online ? L('online') : L('offline')}
                   </Text>
                 </View>
-              );
-            }}            
-            right={() => {
-              const hidden = markReadMenu?.friendId === item.id;
-              return (
-                <NativeViewGestureHandler
-                  disallowInterruption
-                  shouldActivateOnStart={Platform.OS === 'android'}
-                >
+                <NativeViewGestureHandler disallowInterruption shouldActivateOnStart>
                   <View
-                    style={[styles.rowRightActions, hidden && { opacity: 0 }]}
-                    pointerEvents={hidden ? 'none' : 'auto'}
+                    style={[styles.rowRightActions, rowHidden && { opacity: 0 }]}
+                    pointerEvents={rowHidden ? 'none' : 'box-none'}
                   >
                     <InviteButton friend={item} />
                     <ChatButton friend={item} />
                   </View>
                 </NativeViewGestureHandler>
-              );
-            }}
-          />
+              </View>
+            </Swipeable>
             {markReadMenu && markReadMenu.friendId === item.id && (
               <View
                 style={[
@@ -5616,9 +5643,10 @@ const handleClearNick = useCallback(async () => {
               </View>
             )}
           </View>
-        </Swipeable>
-      )}
-      contentContainerStyle={{ paddingBottom: 24, paddingHorizontal: 16 }}
+        </View>
+        );
+      }}
+      contentContainerStyle={{ paddingBottom: 24, paddingHorizontal: FRIENDS_LIST_PAD_H }}
       ListEmptyComponent={initialized ? (<View style={{ padding: 16 }}><Text style={{ color: LIVI.text2 }}>👤 {L('friendsEmpty')}</Text></View>) : null}
     />
   );
@@ -7012,16 +7040,28 @@ const styles = StyleSheet.create({
   menuBtnPressed: { opacity: 0.9 },
   menuBtnIconWrap: { margin: 0, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' },
   menuBtnIcon: { margin: 0, backgroundColor: 'transparent' },
-  // Симметричные отступы: левый край -> аватар = правый край -> иконка чата.
-  // Горизонтальные отступы задаются contentContainerStyle у FlatList (paddingHorizontal: 16),
-  // поэтому не добавляем дополнительный paddingRight на уровне строки.
+  // Симметричные отступы: левый padding у FlatList; правый — paddingRight у блока кнопок.
+  // Swipeable только на аватар+ник; звонок/чат вне свайпа.
   listRowWrap: { position: 'relative', overflow: 'visible' as const },
-  listRow: { backgroundColor: 'transparent', paddingVertical: 10, paddingRight: 0 },
-  listRowAligned: { alignItems: 'center', paddingLeft: 0, paddingRight: 0, minHeight: 72 },
+  listRow: {
+    backgroundColor: Platform.OS === 'android' ? '#0D0E10' : 'rgba(13,14,16,0.88)',
+    paddingVertical: 10,
+    paddingRight: 0,
+  },
+  listRowAligned: {
+    flexDirection: 'row',
+    width: '100%',
+    alignItems: 'center',
+    paddingLeft: 0,
+    paddingRight: 0,
+    minHeight: 72,
+    position: 'relative' as const,
+  },
   /** Чтобы бейджи на углу кнопок (translate 50%/-50%) не обрезались TouchableRipple / строкой */
   listRowOverflowVisible: { overflow: 'visible' as const },
   listRowContainerOverflowVisible: { overflow: 'visible' as const },
-  nameCol: { marginLeft: 0, justifyContent: 'center' },
+  nameCol: { marginLeft: 16, justifyContent: 'center' },
+  friendRowNameFlex: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
   friendName: {
     color: LIVI.white,
     fontWeight: '700',
@@ -7131,7 +7171,20 @@ const styles = StyleSheet.create({
   segActiveBg: { backgroundColor: 'rgba(157, 161, 169, 0.11)' },
   segTopShadow: { position: 'absolute', top: 0, left: 0, right: 0, height: 0 },
 
-  rowRightActions: { height: 48, flexDirection: 'row', alignItems: 'center', paddingRight: 6, overflow: 'visible' as const },
+  rowRightActions: {
+    position: 'absolute' as const,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: FRIEND_ROW_TRAILING_PAD,
+    overflow: 'visible' as const,
+  },
+  friendRowSwipeContainer: { overflow: 'hidden' as const },
+  friendRowSwipeChild: {
+    backgroundColor: Platform.OS === 'android' ? '#0D0E10' : 'rgba(13,14,16,0.88)',
+  },
   friendSeparator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.10)',
@@ -7146,7 +7199,7 @@ const styles = StyleSheet.create({
     borderRadius: FRIEND_ACTION_BUTTON.borderRadius,
   },
   /** Отступ между видео и чатом — снаружи якоря кнопки, чтобы hitSlop-зоны не пересекались. */
-  chatBtnOuter: { marginLeft: 18 },
+  chatBtnOuter: { marginLeft: FRIEND_ROW_ACTION_GAP },
   friendActionBadgeAnchor: {
     width: FRIEND_ACTION_BUTTON.width,
     height: FRIEND_ACTION_BUTTON.height,
@@ -7249,7 +7302,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  rightWrap: { width: 128, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' as const, gap: 6 },
+  rightWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    overflow: 'visible' as const,
+    gap: 6,
+  },
   inviteBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
   inviteBtnDisabled: { 
     backgroundColor: LIVI.glass,
@@ -7291,7 +7350,7 @@ const styles = StyleSheet.create({
   input: { marginBottom: 16, backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 12 },
   fieldLabel: { color: LIVI.text2, fontSize: 14, fontWeight: '500', marginBottom: 8, marginTop: 16 },
 
-  swipeRight: { flex: 1, alignItems: 'flex-end', justifyContent: 'center' },
+  swipeRight: { justifyContent: 'center' },
 
   // SettingsTab needs
   avatarCircle: {
