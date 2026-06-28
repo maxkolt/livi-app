@@ -71,16 +71,50 @@ export function cycleRoutesForAvailable(available: string[]): InCallAudioRoute[]
   return cycleRoutesForContext('audio_ui', available);
 }
 
+export function sanitizeRoutesForAudioCycle(
+  candidates: string[],
+  icmDeviceList: string[],
+): string[] {
+  const icm = icmDeviceList.map((s) => String(s));
+  const cand = new Set(candidates.map((s) => String(s)));
+  const out = new Set<string>(['EARPIECE', 'SPEAKER_PHONE']);
+  for (const ext of ['BLUETOOTH', 'WIRED_HEADSET'] as const) {
+    if (icm.length > 0) {
+      if (icm.includes(ext)) out.add(ext);
+    } else if (cand.has(ext)) {
+      out.add(ext);
+    }
+  }
+  return Array.from(out);
+}
+
+function resolveEffectiveCycleRoute(
+  current: InCallAudioRoute,
+  order: InCallAudioRoute[],
+): InCallAudioRoute {
+  if (order.includes(current)) return current;
+  if (isExternalHeadsetRoute(current)) {
+    return order.includes('EARPIECE') ? 'EARPIECE' : order[0] || 'EARPIECE';
+  }
+  return order[0] || 'EARPIECE';
+}
+
 export function nextRouteInCycleForContext(
   current: InCallAudioRoute,
   available: string[],
   context: CallAudioRouteCycleContext,
+  icmDeviceList: string[] = [],
 ): InCallAudioRoute {
+  const sanitized = sanitizeRoutesForAudioCycle(
+    available.length ? available : ['EARPIECE', 'SPEAKER_PHONE'],
+    icmDeviceList,
+  );
   const order = cycleRoutesForContext(
     context,
-    available.length ? available : ['EARPIECE', 'SPEAKER_PHONE'],
+    sanitized.length ? sanitized : ['EARPIECE', 'SPEAKER_PHONE'],
   );
-  const idx = Math.max(0, order.indexOf(current));
+  const effective = resolveEffectiveCycleRoute(current, order);
+  const idx = order.indexOf(effective);
   if (idx < 0 || order.length === 0) {
     return order[0] || 'SPEAKER_PHONE';
   }
@@ -88,7 +122,7 @@ export function nextRouteInCycleForContext(
 }
 
 export function nextRouteInCycle(current: InCallAudioRoute, available: string[]): InCallAudioRoute {
-  return nextRouteInCycleForContext(current, available, 'audio_ui');
+  return nextRouteInCycleForContext(current, available, 'audio_ui', []);
 }
 
 export function mapRouteForEnterVideoUi(route: InCallAudioRoute): InCallAudioRoute {

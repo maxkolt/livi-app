@@ -45,7 +45,11 @@ import {
   rememberVideoUiSpeakerAfterHeadsetDisconnect,
   resolveCallRouteAfterHeadsetDisconnect,
 } from '../../utils/callHeadsetAudioFallback';
-import { mergeNativeProbeIntoGlobal, probeNativeCallAudioRoutes, clearNativeProbeBluetoothRoute, clearNativeProbeWiredHeadsetRoute } from '../../utils/nativeCallAudioProbe';
+import { mergeNativeProbeIntoGlobal, probeNativeCallAudioRoutes, clearNativeProbeBluetoothRoute, clearNativeProbeWiredHeadsetRoute, isBluetoothHeadsetActiveForCall, setCallBluetoothHeadsetConnectedCache } from '../../utils/nativeCallAudioProbe';
+import {
+  applyInAppPiPHeadsetConnectRoute,
+  shouldAutoBtConnectFromDeviceList,
+} from '../../utils/inAppPiPHeadsetConnect';
 import { notifyInAppPiPAudioRouteUi } from '../../utils/callInAppPiPAudioRouteUi';
 import type { InCallAudioRoute } from '../../components/VideoChat/hooks/audioRouteTypes';
 import { isExternalHeadsetRoute, normalizeInCallRoute } from '../../components/VideoChat/hooks/audioRouteTypes';
@@ -738,6 +742,20 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           mergeNativeProbeIntoGlobal(probe);
           const externalRoute = resolvePiPExternalAudioRoute(p.audioOutputRoute);
           if (!externalRoute) return;
+          if (
+            externalRoute === 'BLUETOOTH' &&
+            (!probe.available.includes('BLUETOOTH') || !isBluetoothHeadsetActiveForCall())
+          ) {
+            clearNativeProbeBluetoothRoute();
+            return;
+          }
+          if (
+            externalRoute === 'WIRED_HEADSET' &&
+            !probe.available.includes('WIRED_HEADSET')
+          ) {
+            clearNativeProbeWiredHeadsetRoute();
+            return;
+          }
           setUserSelectedCallAudioRoute(externalRoute);
           setPersistedCallAudioRoute(externalRoute);
           try {
@@ -1035,36 +1053,91 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         const prev = Array.isArray(prevRaw) ? prevRaw.map((s: unknown) => String(s)) : [];
         g.__inCallAvailableAudioRoutesRef = g.__inCallAvailableAudioRoutesRef || { current: [] };
         g.__inCallAvailableAudioRoutesRef.current = available;
+        if (!available.includes('BLUETOOTH')) {
+          setCallBluetoothHeadsetConnectedCache(false);
+        }
+
+        const plaqueRouteSync = normalizeInCallRoute(
+          String(g.__currentCallPiPParamsRef?.current?.audioOutputRoute || ''),
+        );
+        if (
+          g.__pipVisibleRef?.current === true &&
+          (selected === 'EARPIECE' ||
+            selected === 'SPEAKER_PHONE' ||
+            (plaqueRouteSync === 'BLUETOOTH' && !available.includes('BLUETOOTH')) ||
+            (plaqueRouteSync === 'WIRED_HEADSET' && !available.includes('WIRED_HEADSET')))
+        ) {
+          const userOnPlaque = readUserSelectedCallAudioRoute();
+          const paramsStillShowExternal =
+            plaqueRouteSync === 'BLUETOOTH' ||
+            plaqueRouteSync === 'WIRED_HEADSET' ||
+            userOnPlaque === 'BLUETOOTH' ||
+            userOnPlaque === 'WIRED_HEADSET';
+          if (paramsStillShowExternal) {
+            const uiRoute =
+              selected === 'EARPIECE' || selected === 'SPEAKER_PHONE'
+                ? selected
+                : plaqueRouteSync === 'BLUETOOTH' && !available.includes('BLUETOOTH')
+                  ? 'EARPIECE'
+                  : plaqueRouteSync === 'WIRED_HEADSET' && !available.includes('WIRED_HEADSET')
+                    ? 'EARPIECE'
+                    : selected || 'EARPIECE';
+            g.__inCallSelectedAudioRouteRef = { current: uiRoute };
+            setUserSelectedCallAudioRoute(uiRoute);
+            setPersistedCallAudioRoute(uiRoute);
+            if (plaqueRouteSync === 'BLUETOOTH' && !available.includes('BLUETOOTH')) {
+              clearNativeProbeBluetoothRoute();
+            }
+            if (plaqueRouteSync === 'WIRED_HEADSET' && !available.includes('WIRED_HEADSET')) {
+              clearNativeProbeWiredHeadsetRoute();
+            }
+            try {
+              g.__userSelectedExternalCallAudioRouteRef = { current: null };
+            } catch {}
+            const media =
+              g.__pipInAppRtcFromAudioOnlyRef?.current === true || isInAudioOnlyCallUi()
+                ? 'audio'
+                : resolveActiveCallInCallMedia();
+            void applyCallAudioOutputRouteNow(uiRoute, { media, forceBuiltIn: true });
+            notifyInAppPiPAudioRouteUi(uiRoute);
+          }
+        }
 
         const gainedBt = available.includes('BLUETOOTH') && !prev.includes('BLUETOOTH');
         const gainedWired = available.includes('WIRED_HEADSET') && !prev.includes('WIRED_HEADSET');
         if (selected && isExternalHeadsetRoute(selected) && available.includes(selected)) {
           setUserSelectedCallAudioRoute(selected);
           setPersistedCallAudioRoute(selected);
+          if (selected === 'BLUETOOTH' || selected === 'WIRED_HEADSET') {
+            markUserSelectedExternalCallAudioRoute(selected);
+          }
           const params = g.__currentCallPiPParamsRef?.current;
           if (params && typeof params === 'object') {
             params.audioOutputRoute = selected;
           }
           g.__inCallSelectedAudioRouteRef = { current: selected };
-          g.__onInAppPiPAudioRouteChanged?.(selected);
+          const media =
+            g.__pipInAppRtcFromAudioOnlyRef?.current === true || isInAudioOnlyCallUi()
+              ? 'audio'
+              : resolveActiveCallInCallMedia();
+          void applyCallAudioOutputRouteNow(selected, { media, forceBuiltIn: false });
+          notifyInAppPiPAudioRouteUi(selected);
         } else if (gainedBt || gainedWired) {
           clearBuiltinPinForExternalHeadsetConnect();
           clearCallAudioRouteUiLock();
-          const route = gainedWired && available.includes('WIRED_HEADSET') ? 'WIRED_HEADSET' : 'BLUETOOTH';
+          const route =
+            gainedWired && available.includes('WIRED_HEADSET') ? 'WIRED_HEADSET' : 'BLUETOOTH';
           if (available.includes(route)) {
-            setUserSelectedCallAudioRoute(route);
-            setPersistedCallAudioRoute(route);
-            if (route === 'BLUETOOTH' || route === 'WIRED_HEADSET') {
-              markUserSelectedExternalCallAudioRoute(route);
-            }
-            const params = g.__currentCallPiPParamsRef?.current;
-            if (params && typeof params === 'object') {
-              params.audioOutputRoute = route;
-            }
-            g.__pipUpdateStateRef?.current?.({ audioOutputRoute: route });
-            g.__onInAppPiPAudioRouteChanged?.(route);
-            notifyInAppPiPAudioRouteUi(route);
+            void applyInAppPiPHeadsetConnectRoute(
+              route as 'BLUETOOTH' | 'WIRED_HEADSET',
+              gainedBt ? 'pip_device_changed_gained_bt' : 'pip_device_changed_gained_wired',
+            );
           }
+        } else if (
+          shouldAutoBtConnectFromDeviceList(available, prev) &&
+          available.includes('BLUETOOTH')
+        ) {
+          void applyInAppPiPHeadsetConnectRoute('BLUETOOTH', 'pip_device_changed_bt_present');
         }
 
         const paramsRoute = normalizeInCallRoute(
@@ -1104,6 +1177,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         const applyUnplugUiNow = (route: InCallAudioRoute) => {
           if (needBtUnplug) clearNativeProbeBluetoothRoute();
           if (needWiredUnplug) clearNativeProbeWiredHeadsetRoute();
+          try {
+            g.__userSelectedExternalCallAudioRouteRef = { current: null };
+          } catch {}
           setUserSelectedCallAudioRoute(route);
           setPersistedCallAudioRoute(route);
           g.__inCallSelectedAudioRouteRef = { current: route };

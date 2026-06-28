@@ -21,7 +21,7 @@ function readUserSelectedExternalFromGlobals(): InCallAudioRoute | null {
     if (!route || !isExternalHeadsetRoute(route)) return null;
     if (Number(entry?.until || 0) <= Date.now()) return null;
     const available = readInCallAvailableAudioRoutesList();
-    if (available.length && !available.includes(route)) return null;
+    if (!available.length || !available.includes(route)) return null;
     return route;
   } catch {
     return null;
@@ -57,11 +57,11 @@ export function readConnectedExternalCallAudioRoute(
 ): InCallAudioRoute | null {
   const available = readInCallAvailableAudioRoutesList();
   const nativeExt = readNativeProbedExternalRoute();
-  if (nativeExt && (!available.length || available.includes(nativeExt))) {
+  if (nativeExt && available.length > 0 && available.includes(nativeExt)) {
     return nativeExt;
   }
   const fromPersist = readActiveExternalCallAudioRouteFromGlobals(hint);
-  if (fromPersist && (!available.length || available.includes(fromPersist))) {
+  if (fromPersist && available.length > 0 && available.includes(fromPersist)) {
     return fromPersist;
   }
   try {

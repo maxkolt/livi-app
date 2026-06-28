@@ -24,6 +24,43 @@ function parseProbe(raw: unknown): NativeCallAudioProbe {
   return { available, preferred };
 }
 
+export function setCallBluetoothHeadsetConnectedCache(connected: boolean): void {
+  try {
+    (global as any).__callBtHeadsetConnectedRef = { current: connected };
+  } catch {}
+}
+
+export function readCallBluetoothHeadsetConnectedCache(): boolean | null {
+  try {
+    const v = (global as any).__callBtHeadsetConnectedRef?.current;
+    return typeof v === 'boolean' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Синхронный gate для UI/cycle: после отключения BT cache=false, даже если ICM ещё отстаёт. */
+export function isBluetoothHeadsetActiveForCall(): boolean {
+  const cached = readCallBluetoothHeadsetConnectedCache();
+  if (cached === false) return false;
+  if (cached === true) return true;
+  try {
+    const av = (global as any).__inCallAvailableAudioRoutesRef?.current;
+    const list = Array.isArray(av) ? av.map((s: unknown) => String(s)) : [];
+    return list.includes('BLUETOOTH');
+  } catch {
+    return false;
+  }
+}
+
+export async function refreshCallBluetoothHeadsetConnectedCache(): Promise<boolean> {
+  const bt =
+    Platform.OS === 'android' ? await isNativeBluetoothHeadsetConnectedForCall() : false;
+  setCallBluetoothHeadsetConnectedCache(bt);
+  if (!bt) clearNativeProbeBluetoothRoute();
+  return bt;
+}
+
 /** Android AudioManager — до onAudioDeviceChanged от InCallManager. */
 export async function isNativeBluetoothHeadsetConnectedForCall(): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
@@ -50,13 +87,19 @@ export async function probeNativeCallAudioRoutes(): Promise<NativeCallAudioProbe
     const parsed = parseProbe(await mod.getVoiceCallCommunicationRoutes());
     if (Platform.OS === 'android') {
       const btConnected = await isNativeBluetoothHeadsetConnectedForCall();
+      setCallBluetoothHeadsetConnectedCache(btConnected);
       if (!btConnected) {
         parsed.available = parsed.available.filter((r) => r !== 'BLUETOOTH');
         if (parsed.preferred === 'BLUETOOTH') parsed.preferred = null;
       }
     }
     if (parsed.available.includes('BLUETOOTH') || parsed.preferred === 'BLUETOOTH') {
-      logger.info('[nativeCallAudioProbe] BT in communication devices', parsed);
+      const prev = (global as any).__nativeCallAudioProbeLogSigRef?.current as string | undefined;
+      const sig = `${parsed.available.join(',')}|${parsed.preferred || ''}`;
+      if (prev !== sig) {
+        (global as any).__nativeCallAudioProbeLogSigRef = { current: sig };
+        logger.info('[nativeCallAudioProbe] BT in communication devices', parsed);
+      }
     }
     return parsed;
   } catch {
@@ -70,8 +113,20 @@ export function mergeNativeProbeIntoGlobal(probe: NativeCallAudioProbe): InCallA
   const prev: InCallAudioRoute[] = Array.isArray(g.__inCallAvailableAudioRoutesRef?.current)
     ? g.__inCallAvailableAudioRoutesRef.current
     : [];
-  const merged = Array.from(new Set([...probe.available, ...prev]));
+  const probeHas = new Set(probe.available);
+  const merged = Array.from(
+    new Set([...probe.available, ...prev]),
+  ).filter((r) => {
+    if (r === 'BLUETOOTH' && !probeHas.has('BLUETOOTH')) return false;
+    if (r === 'WIRED_HEADSET' && !probeHas.has('WIRED_HEADSET')) return false;
+    return true;
+  });
   g.__inCallAvailableAudioRoutesRef = { current: merged };
+  if (probeHas.has('BLUETOOTH')) {
+    setCallBluetoothHeadsetConnectedCache(true);
+  } else {
+    setCallBluetoothHeadsetConnectedCache(false);
+  }
   return merged;
 }
 
@@ -86,7 +141,13 @@ export function readNativeProbedExternalRoute(): InCallAudioRoute | null {
       return probe.preferred;
     }
     if (probe.available.includes('WIRED_HEADSET') && listed('WIRED_HEADSET')) return 'WIRED_HEADSET';
-    if (probe.available.includes('BLUETOOTH') && listed('BLUETOOTH')) return 'BLUETOOTH';
+    if (
+      probe.available.includes('BLUETOOTH') &&
+      listed('BLUETOOTH') &&
+      isBluetoothHeadsetActiveForCall()
+    ) {
+      return 'BLUETOOTH';
+    }
   } catch {}
   return null;
 }
@@ -107,6 +168,7 @@ export function setCallAudioBootstrapPending(pending: boolean): void {
 
 /** После физического отключения BT — не держать stale BLUETOOTH в probe/available. */
 export function clearNativeProbeBluetoothRoute(): void {
+  setCallBluetoothHeadsetConnectedCache(false);
   try {
     const g = global as any;
     const probe = g.__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined;

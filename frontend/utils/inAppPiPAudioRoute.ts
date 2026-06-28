@@ -3,16 +3,17 @@ import {
   type InCallAudioRoute,
   isExternalHeadsetRoute,
   nextRouteInCycleForContext,
+  sanitizeRoutesForAudioCycle,
 } from '../components/VideoChat/hooks/audioRouteTypes';
 import {
   readInAppPiPAudioOutputRoute,
+  readInCallAvailableAudioRoutesForCycle,
   rememberManualBuiltinCallAudioRoute,
   setUserSelectedCallAudioRoute,
 } from './activeCallSession';
 import {
   mergeNativeProbeIntoGlobal,
   probeNativeCallAudioRoutes,
-  readNativeProbedExternalRoute,
 } from './nativeCallAudioProbe';
 import {
   applyCallAudioOutputRouteNow,
@@ -33,6 +34,7 @@ let lastPipAudioToggleAt = 0;
 const PIP_AUDIO_TOGGLE_DEBOUNCE_MS = 480;
 
 function readAvailableInCallAudioRoutes(): string[] {
+  const icm = readInCallAvailableAudioRoutesForCycle();
   const set = new Set<string>();
   try {
     const raw = (global as any).__inCallAvailableAudioRoutesRef?.current;
@@ -48,10 +50,8 @@ function readAvailableInCallAudioRoutes(): string[] {
       for (const r of probe.available) set.add(String(r));
     }
   } catch {}
-  const nativeExt = readNativeProbedExternalRoute();
-  if (nativeExt) set.add(nativeExt);
-  if (set.size) return Array.from(set);
-  return [...BUILTIN_FALLBACK];
+  const merged = set.size ? Array.from(set) : [...BUILTIN_FALLBACK];
+  return sanitizeRoutesForAudioCycle(merged, icm);
 }
 
 async function syncProbeBeforeCycle(): Promise<void> {
@@ -122,9 +122,10 @@ async function toggleInAppPiPAudioOutputRouteInner(): Promise<InCallAudioRoute |
   await syncProbeBeforeCycle();
 
   const available = readAvailableInCallAudioRoutes();
+  const icm = readInCallAvailableAudioRoutesForCycle();
   const orderList = available.length ? available : BUILTIN_FALLBACK;
   const current = readInAppPiPAudioOutputRoute();
-  const next = nextRouteInCycleForContext(current, orderList, 'in_app_pip');
+  const next = nextRouteInCycleForContext(current, orderList, 'in_app_pip', icm);
   if (next === current) {
     return current;
   }

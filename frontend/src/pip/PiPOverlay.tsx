@@ -10,6 +10,7 @@ import {
   Animated,
   PanResponder,
   Image,
+  Platform,
 } from 'react-native';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { PiPContext } from './PiPContext';
@@ -27,10 +28,11 @@ import {
   prepareDirectCallVideoExpandFromInAppPiP,
   armCallAudioRouteUiLock,
 } from '../../utils/callAudioRoutePersist';
-import {
-  readInAppPiPAudioOutputRoute,
-  toggleInAppPiPAudioOutputRoute,
-} from '../../utils/inAppPiPAudioRoute';
+import { toggleInAppPiPAudioOutputRoute } from '../../utils/inAppPiPAudioRoute';
+import { reconcileInAppPiPAudioRoutePlaqueUi } from '../../utils/callInAppPiPAudioRouteUi';
+import { refreshCallBluetoothHeadsetConnectedCache } from '../../utils/nativeCallAudioProbe';
+import { tryAutoSwitchInAppPiPToConnectedHeadset, tryAutoSwitchInAppPiPFromDisconnectedHeadset } from '../../utils/inAppPiPHeadsetConnect';
+import { readInAppPiPAudioOutputRoute } from '../../utils/activeCallSession';
 import {
   iconNameForRoute,
   type InCallAudioRoute,
@@ -118,13 +120,30 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
 
   useEffect(() => {
     if (!visible) return;
-    const syncRoute = () => setPipAudioRoute(readInAppPiPAudioOutputRoute());
+    const syncRoute = () => {
+      void (async () => {
+        if (Platform.OS === 'android') {
+          const unplugged = await tryAutoSwitchInAppPiPFromDisconnectedHeadset();
+          if (unplugged) {
+            setPipAudioRoute(unplugged);
+            return;
+          }
+          const switched = await tryAutoSwitchInAppPiPToConnectedHeadset();
+          if (switched) {
+            setPipAudioRoute(switched);
+            return;
+          }
+          await refreshCallBluetoothHeadsetConnectedCache();
+        }
+        setPipAudioRoute(reconcileInAppPiPAudioRoutePlaqueUi());
+      })();
+    };
     setLocalMicMuted(resolvePiPLocalMutedState());
     syncRoute();
     const g = global as any;
     const onRoute = (route: InCallAudioRoute) => setPipAudioRoute(route);
     g.__onInAppPiPAudioRouteChanged = onRoute;
-    const interval = setInterval(syncRoute, 800);
+    const interval = setInterval(syncRoute, 400);
     return () => {
       clearInterval(interval);
       if (g.__onInAppPiPAudioRouteChanged === onRoute) {

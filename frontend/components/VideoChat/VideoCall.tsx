@@ -78,7 +78,7 @@ import {
   goBackFromCallScreenOrHome,
 } from '../../utils/appNavigationGuard';
 import type { RootStackParamList } from '../../navigation/types';
-import { getPersistedCallAudioRoute, persistVideoInAppPiPAudioRoute, readPreferredCallAudioRouteForTransition, setPersistedCallAudioRoute, scheduleReapplyPersistedCallAudioRoute, isCallAudioPiPTransitionWindow, shouldPreserveCallAudioRouteInInAppPiP, shouldDeferPreserveDuringCallBootstrap, hasRealInAppPiPOrSystemReturnContext, prepareDirectCallVideoExpandFromInAppPiP, resolveFullVideoCallScreenAudioRoute, armCallAudioRouteUiLock, readCallAudioRouteUiLock, applyCallAudioOutputRouteNow, clearScheduledCallAudioRouteReapplies } from '../../utils/callAudioRoutePersist';
+import { getPersistedCallAudioRoute, persistVideoInAppPiPAudioRoute, readPreferredCallAudioRouteForTransition, setPersistedCallAudioRoute, scheduleReapplyPersistedCallAudioRoute, isCallAudioPiPTransitionWindow, shouldPreserveCallAudioRouteInInAppPiP, shouldDeferPreserveDuringCallBootstrap, hasRealInAppPiPOrSystemReturnContext, prepareDirectCallVideoExpandFromInAppPiP, resolveFullVideoCallScreenAudioRoute, armCallAudioRouteUiLock, readCallAudioRouteUiLock, applyCallAudioOutputRouteNow, clearScheduledCallAudioRouteReapplies, clearCallAudioRouteUiLock } from '../../utils/callAudioRoutePersist';
 import { readBuiltinCallRouteBeforeHeadset, rememberBuiltinCallRouteBeforeHeadset, rememberDirectCallAudioRouteBeforeVideo, readDirectCallAudioRouteBeforeVideo } from '../../utils/callHeadsetAudioFallback';
 import { iconNameForRoute, isExternalHeadsetRoute, mapRouteForEnterVideoUi, type InCallAudioRoute, normalizeInCallRoute } from './hooks/audioRouteTypes';
 import { useAudioRouting } from './hooks/useAudioRouting';
@@ -988,10 +988,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const audioRoutingOptions =
     hasActiveCallForAudio && !isInactiveState
       ? {
-          defaultToEarpiece: !!(
-            audioFirstDirectCall &&
-            (inAudioOnlyUi || !stayOnVideoCallUiRef.current)
-          ),
+          defaultToEarpiece: !!(audioFirstDirectCall && inAudioOnlyUi),
           userRouteRef,
           speakerOnRef,
         }
@@ -2094,6 +2091,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
   const pinVideoUiSpeakerAndSyncAudio = useCallback(() => {
     releaseInAppPiPBuiltinAudioLockForFullVideoUi();
+    clearCallAudioRouteUiLock();
     markDirectCallVideoMediaActive();
     const mapped = resolveFullVideoCallScreenAudioRoute();
     if (isExternalHeadsetRoute(mapped)) {
@@ -2110,6 +2108,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       g.__lastAppliedCallAudioRouteRef = { current: mapped };
       g.__applyCallAudioRouteFromParentRef?.current?.(mapped, 'pinVideoUiSpeaker');
     } catch {}
+    if (isExternalHeadsetRoute(mapped)) {
+      clearCallAudioRouteUiLock();
+    } else {
+      armCallAudioRouteUiLock('SPEAKER_PHONE');
+    }
     repinVideoUiAudioRoute();
   }, [repinVideoUiAudioRoute]);
 
