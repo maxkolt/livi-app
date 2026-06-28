@@ -53,6 +53,7 @@ import {
   applyInAppPiPHeadsetConnectRoute,
   shouldAutoBtConnectFromDeviceList,
   isInAppPiPExplicitBuiltinRouteChoiceActive,
+  isInAppPiPManualRouteLockActive,
 } from '../../utils/inAppPiPHeadsetConnect';
 import { notifyInAppPiPAudioRouteUi } from '../../utils/callInAppPiPAudioRouteUi';
 import type { InCallAudioRoute } from '../../components/VideoChat/hooks/audioRouteTypes';
@@ -1147,6 +1148,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           void applyCallAudioOutputRouteNow(selected, { media, forceBuiltIn: false });
           notifyInAppPiPAudioRouteUi(selected);
         } else if (gainedBt || gainedWired) {
+          if (isInAppPiPManualRouteLockActive() || isInAppPiPExplicitBuiltinRouteChoiceActive()) {
+            return;
+          }
           clearBuiltinPinForExternalHeadsetConnect();
           clearCallAudioRouteUiLock();
           const route =
@@ -1161,6 +1165,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           shouldAutoBtConnectFromDeviceList(available, prev) &&
           available.includes('BLUETOOTH')
         ) {
+          if (isInAppPiPManualRouteLockActive() || isInAppPiPExplicitBuiltinRouteChoiceActive()) {
+            return;
+          }
           void applyInAppPiPHeadsetConnectRoute('BLUETOOTH', 'pip_device_changed_bt_present');
         }
 
@@ -1193,6 +1200,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           return;
         }
         if (!needBtUnplug && !needWiredUnplug) return;
+        if (isInAppPiPManualRouteLockActive()) return;
 
         const resolveUnplugFallbackRoute = (): InCallAudioRoute => {
           if (available.includes('WIRED_HEADSET') && needBtUnplug && !needWiredUnplug) {

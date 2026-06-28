@@ -38,9 +38,16 @@ import {
   resolveCallRouteAfterHeadsetDisconnect,
 } from './callHeadsetAudioFallback';
 
-import { isInAppPiPExplicitBuiltinRouteChoiceActive, readInAppPiPPlaqueAudioRoute } from './inAppPiPExplicitBuiltinRoute';
+import {
+  isInAppPiPExplicitBuiltinRouteChoiceActive,
+  isInAppPiPManualRouteLockActive,
+  readInAppPiPPlaqueAudioRoute,
+} from './inAppPiPExplicitBuiltinRoute';
 
-export { isInAppPiPExplicitBuiltinRouteChoiceActive } from './inAppPiPExplicitBuiltinRoute';
+export {
+  isInAppPiPExplicitBuiltinRouteChoiceActive,
+  isInAppPiPManualRouteLockActive,
+} from './inAppPiPExplicitBuiltinRoute';
 
 function readPlaqueRoute(): InCallAudioRoute | null {
   return readInAppPiPPlaqueAudioRoute();
@@ -62,8 +69,8 @@ export async function applyInAppPiPHeadsetConnectRoute(
   reason: string,
 ): Promise<boolean> {
   if (Platform.OS !== 'android' || !pipPlaqueVisible()) return false;
+  if (isInAppPiPManualRouteLockActive()) return false;
   if (isInAppPiPExplicitBuiltinRouteChoiceActive()) return false;
-  if (userExplicitlyPinnedBuiltinCallAudio()) return false;
   if (userExplicitlyPinnedBuiltinCallAudio()) return false;
   if (route === 'BLUETOOTH') {
     const bt = await isNativeBluetoothHeadsetConnectedForCall();
@@ -134,6 +141,8 @@ export async function applyInAppPiPHeadsetConnectRoute(
  */
 export async function tryAutoSwitchInAppPiPFromDisconnectedHeadset(): Promise<InCallAudioRoute | null> {
   if (Platform.OS !== 'android' || !pipPlaqueVisible()) return null;
+  if (isInAppPiPManualRouteLockActive()) return null;
+  if (isInAppPiPExplicitBuiltinRouteChoiceActive()) return null;
 
   const plaque = readPlaqueRoute();
   const userSel = readUserSelectedCallAudioRoute();
@@ -230,6 +239,7 @@ let lastPiPHeadsetPollAttemptAt = 0;
 
 export async function tryAutoSwitchInAppPiPToConnectedHeadset(): Promise<InCallAudioRoute | null> {
   if (Platform.OS !== 'android' || !pipPlaqueVisible()) return null;
+  if (isInAppPiPManualRouteLockActive()) return null;
   if (isInAppPiPExplicitBuiltinRouteChoiceActive()) return null;
   if (userExplicitlyPinnedBuiltinCallAudio()) return null;
   const pollNow = Date.now();

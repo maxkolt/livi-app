@@ -31,7 +31,7 @@ import {
 import { toggleInAppPiPAudioOutputRoute } from '../../utils/inAppPiPAudioRoute';
 import { reconcileInAppPiPAudioRoutePlaqueUi } from '../../utils/callInAppPiPAudioRouteUi';
 import { refreshCallBluetoothHeadsetConnectedCache } from '../../utils/nativeCallAudioProbe';
-import { tryAutoSwitchInAppPiPToConnectedHeadset, tryAutoSwitchInAppPiPFromDisconnectedHeadset } from '../../utils/inAppPiPHeadsetConnect';
+import { tryAutoSwitchInAppPiPToConnectedHeadset, tryAutoSwitchInAppPiPFromDisconnectedHeadset, isInAppPiPManualRouteLockActive } from '../../utils/inAppPiPHeadsetConnect';
 import { readInAppPiPAudioOutputRoute } from '../../utils/activeCallSession';
 import {
   iconNameForRoute,
@@ -122,7 +122,7 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     if (!visible) return;
     const syncRoute = () => {
       void (async () => {
-        if (Platform.OS === 'android') {
+        if (Platform.OS === 'android' && !isInAppPiPManualRouteLockActive()) {
           const unplugged = await tryAutoSwitchInAppPiPFromDisconnectedHeadset();
           if (unplugged) {
             setPipAudioRoute(unplugged);

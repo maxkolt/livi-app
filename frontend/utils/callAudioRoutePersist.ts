@@ -41,7 +41,7 @@ import {
   isDirectCallVideoExpandGuardActive,
   prepareDirectCallVideoReturnFromPiP,
 } from './directCallVideoExpandGuard';
-import { isInAppPiPExplicitBuiltinRouteChoiceActive } from './inAppPiPExplicitBuiltinRoute';
+import { isInAppPiPExplicitBuiltinRouteChoiceActive, isInAppPiPManualRouteLockActive } from './inAppPiPExplicitBuiltinRoute';
 import {
   resolveCallRouteAfterHeadsetDisconnect,
   rememberBuiltinCallRouteBeforeHeadset,
@@ -235,9 +235,32 @@ export function isDirectCallVideoExpandAudioPreparedRecently(
   }
 }
 
+/** Явный «громкий» в video in-app PiP — только если плашка/persist сейчас громкий (не stale lock/toggle). */
+function readVideoInAppPiPExplicitSpeakerBeforeExpand(): boolean {
+  const authoritative = normalizeInCallRoute(
+    readInAppPiPAudioOutputRoute() ||
+      readUserSelectedCallAudioRoute() ||
+      getPersistedCallAudioRoute() ||
+      '',
+  );
+  if (authoritative === 'BLUETOOTH' || authoritative === 'WIRED_HEADSET') {
+    return false;
+  }
+  if (authoritative === 'EARPIECE') {
+    return false;
+  }
+  return authoritative === 'SPEAKER_PHONE';
+}
+
 /** Video UI из in-app плашки (VideoCall уже на экране): UI-флаги + динамик/BT без earpiece. */
 export function prepareDirectCallVideoExpandFromInAppPiP(): void {
-  releaseInAppPiPBuiltinAudioLockForFullVideoUi();
+  const plaqueNow = normalizeInCallRoute(
+    readInAppPiPAudioOutputRoute() || getPersistedCallAudioRoute() || '',
+  );
+  const userChoseSpeakerInPiP = readVideoInAppPiPExplicitSpeakerBeforeExpand();
+  if (!userChoseSpeakerInPiP) {
+    releaseInAppPiPBuiltinAudioLockForFullVideoUi();
+  }
   if (Platform.OS === 'android') {
     armCallAudioNativeTransitionLock(900);
   }
@@ -250,9 +273,37 @@ export function prepareDirectCallVideoExpandFromInAppPiP(): void {
   ]);
   touchDirectCallVideoExpandAudioPrepared();
   prepareDirectCallVideoReturnFromPiP();
-  clearCallAudioRouteUiLock();
+  if (!userChoseSpeakerInPiP) {
+    clearCallAudioRouteUiLock();
+  }
   markDirectCallVideoMediaActive();
   try {
+    if (isExternalHeadsetRoute(plaqueNow)) {
+      clearCallAudioRouteUiLock();
+      setPersistedCallAudioRoute(plaqueNow);
+      setUserSelectedCallAudioRoute(plaqueNow);
+      markUserSelectedExternalCallAudioRoute(plaqueNow);
+      try {
+        const g = global as any;
+        g.__explicitBuiltInCallAudioRouteRef = { current: false };
+        g.__lastAppliedCallAudioRouteRef = { current: plaqueNow };
+      } catch {}
+      void applyCallAudioOutputRouteNow(plaqueNow, { media: 'video', forceBuiltIn: false });
+      return;
+    }
+    if (userChoseSpeakerInPiP) {
+      setPersistedCallAudioRoute('SPEAKER_PHONE');
+      setUserSelectedCallAudioRoute('SPEAKER_PHONE');
+      rememberManualBuiltinCallAudioRoute('SPEAKER_PHONE');
+      armCallAudioRouteUiLock('SPEAKER_PHONE');
+      try {
+        const g = global as any;
+        g.__userSelectedExternalCallAudioRouteRef = { current: null };
+        g.__explicitBuiltInCallAudioRouteRef = { current: true };
+      } catch {}
+      void applyCallAudioOutputRouteNow('SPEAKER_PHONE', { media: 'video', forceBuiltIn: true });
+      return;
+    }
     const ext =
       readUserSelectedExternalCallAudioRoute() ||
       readActiveExternalCallAudioRoute(readInAppPiPAudioOutputRoute());
@@ -608,13 +659,23 @@ export function resolveVideoInAppPiPAudioRoute(
 
 /** Громкий с video in-app PiP (явный выбор) — не отбирать BT на full video. */
 export function readExplicitVideoCallBuiltInRoute(): InCallAudioRoute | null {
+  const plaque = normalizeInCallRoute(readInAppPiPAudioOutputRoute() || '');
+  const userSel = readUserSelectedCallAudioRoute();
+  const persisted = normalizeInCallRoute(getPersistedCallAudioRoute() || '');
+  if (
+    userSel === 'BLUETOOTH' ||
+    userSel === 'WIRED_HEADSET' ||
+    plaque === 'BLUETOOTH' ||
+    plaque === 'WIRED_HEADSET' ||
+    persisted === 'BLUETOOTH' ||
+    persisted === 'WIRED_HEADSET'
+  ) {
+    return null;
+  }
   const uiLock = readCallAudioRouteUiLock();
   if (uiLock === 'SPEAKER_PHONE') return 'SPEAKER_PHONE';
   const locked = readUserLockedBuiltinCallAudioRoute();
   if (locked === 'SPEAKER_PHONE') return 'SPEAKER_PHONE';
-  const plaque = normalizeInCallRoute(readInAppPiPAudioOutputRoute() || '');
-  const userSel = readUserSelectedCallAudioRoute();
-  const persisted = normalizeInCallRoute(getPersistedCallAudioRoute() || '');
   let explicitPiP: InCallAudioRoute | null = null;
   try {
     explicitPiP = normalizeInCallRoute(
@@ -637,6 +698,16 @@ export function readExplicitVideoCallBuiltInRoute(): InCallAudioRoute | null {
 
 /** Полный video UI: гарнитура/BT как в плашке; встроенное ухо → громкая. */
 export function resolveFullVideoCallScreenAudioRoute(): InCallAudioRoute {
+  const userSel = readUserSelectedCallAudioRoute();
+  if (isExternalHeadsetRoute(userSel)) {
+    return userSel;
+  }
+  const plaqueRaw =
+    readInAppPiPAudioOutputRoute() || getPersistedCallAudioRoute() || readLastAppliedCallAudioRoute();
+  const plaque = normalizeInCallRoute(plaqueRaw || '');
+  if (isExternalHeadsetRoute(plaque)) {
+    return plaque;
+  }
   const explicitSpeaker = readExplicitVideoCallBuiltInRoute();
   if (explicitSpeaker === 'SPEAKER_PHONE') return 'SPEAKER_PHONE';
   const ext =
@@ -644,11 +715,6 @@ export function resolveFullVideoCallScreenAudioRoute(): InCallAudioRoute {
     readActiveExternalCallAudioRoute(readInAppPiPAudioOutputRoute());
   if (isExternalHeadsetRoute(ext)) {
     return ext;
-  }
-  const plaque =
-    readInAppPiPAudioOutputRoute() || getPersistedCallAudioRoute() || readLastAppliedCallAudioRoute();
-  if (isExternalHeadsetRoute(plaque)) {
-    return plaque;
   }
   return 'SPEAKER_PHONE';
 }
@@ -1773,6 +1839,7 @@ export async function reapplyPersistedCallAudioRoute(
       if (reason === 'audio_ui_route_cycle' || reason === 'in_app_pip_audio_route_toggle') {
         let route: InCallAudioRoute | null = null;
         let explicitBuiltin: InCallAudioRoute | null = null;
+        let explicitFromUserToggle: InCallAudioRoute | null = null;
         try {
           const g = global as any;
           const explicit = normalizeInCallRoute(
@@ -1782,6 +1849,7 @@ export async function reapplyPersistedCallAudioRoute(
           );
           if (explicit) {
             route = explicit;
+            explicitFromUserToggle = explicit;
             if (explicit === 'EARPIECE' || explicit === 'SPEAKER_PHONE') {
               explicitBuiltin = explicit;
             }
@@ -1793,7 +1861,7 @@ export async function reapplyPersistedCallAudioRoute(
             getPersistedCallAudioRoute() ||
             readInAppPiPAudioOutputRoute();
         }
-        if (!explicitBuiltin) {
+        if (!explicitBuiltin && !explicitFromUserToggle) {
           const ext =
             readUserSelectedExternalCallAudioRoute() ||
             (isExternalHeadsetRoute(route) ? route : null) ||
@@ -1802,7 +1870,11 @@ export async function reapplyPersistedCallAudioRoute(
             route = ext;
           }
         }
-        route = coercePersistedRouteForAvailableDevices(route || 'EARPIECE');
+        if (isInAppPiPManualRouteLockActive() && route) {
+          // Не переписывать выбор из-за кратковременного probe без BT в списке.
+        } else {
+          route = coercePersistedRouteForAvailableDevices(route || 'EARPIECE');
+        }
         setPersistedCallAudioRoute(route);
         try {
           const g = global as any;
@@ -2238,6 +2310,10 @@ export async function reapplyPersistedCallAudioRoute(
       }
 
       if (reason === 'in_app_pip_from_video') {
+        if (isInAppPiPManualRouteLockActive()) {
+          logger.debug('[callAudioRoutePersist] reapply skipped (pip manual lock)', { reason });
+          return;
+        }
         const videoRoute = resolveVideoInAppPiPPreserveRoute();
         if (isExternalHeadsetRoute(videoRoute)) {
           setUserSelectedCallAudioRoute(videoRoute);
@@ -2258,6 +2334,10 @@ export async function reapplyPersistedCallAudioRoute(
       }
 
       if (reason === 'in_app_pip_headset_unplug') {
+        if (isInAppPiPManualRouteLockActive()) {
+          logger.debug('[callAudioRoutePersist] reapply skipped (pip manual lock)', { reason });
+          return;
+        }
         let route = normalizeInCallRoute(
           readUserSelectedCallAudioRoute() || getPersistedCallAudioRoute() || '',
         ) as InCallAudioRoute;
@@ -2311,6 +2391,7 @@ export async function reapplyPersistedCallAudioRoute(
             (global as any).__explicitBuiltInCallAudioRouteRef = { current: true };
           } catch {}
         } else if (isExternalHeadsetRoute(videoRoute)) {
+          clearCallAudioRouteUiLock();
           setUserSelectedCallAudioRoute(videoRoute);
           markUserSelectedExternalCallAudioRoute(videoRoute);
         }

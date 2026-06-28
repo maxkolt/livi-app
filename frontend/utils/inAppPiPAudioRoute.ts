@@ -169,11 +169,14 @@ async function toggleInAppPiPAudioOutputRouteInner(): Promise<InCallAudioRoute |
     g.__inAppPiPExplicitToggleRouteRef.current = next;
     g.__pipBuiltinRouteLockUntilRef = g.__pipBuiltinRouteLockUntilRef || { current: 0 };
     g.__pipBuiltinRouteLockUntilRef.current = Date.now() + 6500;
+    g.__lastInAppPiPAudioToggleAtRef = g.__lastInAppPiPAudioToggleAtRef || { current: 0 };
+    g.__lastInAppPiPAudioToggleAtRef.current = Date.now();
     armCallAudioPreservePriority(6500);
   } catch {}
   const media = fromAudioPiP ? 'audio' : 'video';
   cancelScheduledCallAudioRouteReappliesMatching([
     'in_app_pip_headset_connect',
+    'in_app_pip_headset_unplug',
     'in_app_pip_from_audio',
     'in_app_pip_from_video',
     'in_app_pip_audio_route_toggle',
@@ -191,7 +194,7 @@ async function toggleInAppPiPAudioOutputRouteInner(): Promise<InCallAudioRoute |
     media,
     honorUserRoute: true,
     skipInCallRestart: true,
-    delaysMs: [0, 450],
+    delaysMs: [0],
   });
   logger.info('[inAppPiPAudioRoute] pip toggle', { from: current, next, media });
   return next;

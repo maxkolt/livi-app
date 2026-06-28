@@ -217,6 +217,12 @@ function readUserSelectedExternalRoute(): InCallAudioRoute | null {
 
 function isExplicitBuiltInRouteChoice(reason: string, route: InCallAudioRoute): boolean {
   if (route !== 'EARPIECE' && route !== 'SPEAKER_PHONE') return false;
+  if (
+    route === 'SPEAKER_PHONE' &&
+    readExplicitVideoCallBuiltInRoute() === 'SPEAKER_PHONE'
+  ) {
+    return true;
+  }
   const lockedBuiltin = readExplicitUserSelectedBuiltInRoute();
   if (lockedBuiltin === route) {
     return true;
@@ -1014,7 +1020,17 @@ export const useAudioRouting = (
     if (!enabled) return;
 
     let effectiveRoute = route;
+    const explicitVideoSpeaker =
+      readExplicitVideoCallBuiltInRoute() === 'SPEAKER_PHONE' &&
+      ongoingCallPrefersVideoMedia() &&
+      !routingOptionsRef.current?.defaultToEarpiece;
     if (
+      explicitVideoSpeaker &&
+      effectiveRoute === 'SPEAKER_PHONE' &&
+      !isExternalHeadsetRoute(route)
+    ) {
+      // Явный громкий из video PiP — не подменять BT/гарнитурой.
+    } else if (
       (effectiveRoute === 'EARPIECE' || effectiveRoute === 'SPEAKER_PHONE') &&
       !isExplicitBuiltInRouteChoice(reason, route) &&
       !isHeadsetDisconnectFallbackReason(reason)
@@ -1919,7 +1935,11 @@ export const useAudioRouting = (
           previousAvailableRef.current = merged;
         }
         const nativeExt = readNativeProbedExternalRoute();
-        if (nativeExt) {
+        const blockExtForVideoSpeakerProbe =
+          readExplicitVideoCallBuiltInRoute() === 'SPEAKER_PHONE' &&
+          ongoingCallPrefersVideoMedia() &&
+          !routingOptionsRef.current?.defaultToEarpiece;
+        if (nativeExt && !blockExtForVideoSpeakerProbe) {
           applySpecificRoute(nativeExt, 'native_probe', true);
         }
       }
@@ -2464,6 +2484,29 @@ export const useAudioRouting = (
   useEffect(() => {
     if (!enabled || preferAudioMode) return;
     const applyVideoUiBuiltin = () => {
+      const plaqueExt = normalizeInCallRoute(
+        readInAppPiPAudioOutputRoute() ||
+          readUserSelectedCallAudioRoute() ||
+          getPersistedCallAudioRoute() ||
+          '',
+      );
+      if (isExternalHeadsetRoute(plaqueExt)) {
+        const av = lastAvailableRef.current;
+        if (
+          plaqueExt !== 'BLUETOOTH' ||
+          isBluetoothHeadsetActiveForCall()
+        ) {
+          if (!av.length || av.includes(plaqueExt)) {
+            clearCallAudioRouteUiLock();
+            applySpecificRoute(plaqueExt, 'leave_audio_only_ui', true);
+            return;
+          }
+        }
+      }
+      if (readExplicitVideoCallBuiltInRoute() === 'SPEAKER_PHONE') {
+        applySpecificRoute('SPEAKER_PHONE', 'leave_audio_only_ui', true);
+        return;
+      }
       const av = lastAvailableRef.current;
       const ext =
         readNativeProbedExternalRoute() ||
