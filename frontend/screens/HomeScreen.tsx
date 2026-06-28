@@ -5769,10 +5769,11 @@ const handleClearNick = useCallback(async () => {
       refreshing={refreshing}
       onRefresh={onRefreshFriends}
       onScrollBeginDrag={() => setMarkReadMenu(null)}
-      renderItem={({ item }) => {
+      renderItem={({ item, index }) => {
         const { displayName, avatarLetter } = getFriendDisplay(item);
         const isMenuRow = markReadMenu?.friendId === item.id;
         const rowHidden = isMenuRow;
+        const showRowDivider = index < friends.length - 1;
         return (
         <View key={item.id}>
           <View
@@ -5868,7 +5869,9 @@ const handleClearNick = useCallback(async () => {
               <InviteButton friend={item} />
               <ChatButton friend={item} />
             </View>
-            <View style={styles.friendRowDivider} pointerEvents="none" />
+            {showRowDivider ? (
+              <View style={styles.friendRowDivider} pointerEvents="none" />
+            ) : null}
             {markReadMenu && markReadMenu.friendId === item.id && (
               <View
                 style={[
