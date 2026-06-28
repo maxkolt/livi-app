@@ -23,6 +23,7 @@ import {
   applyCallAudioOutputRouteNow,
   armCallAudioPreservePriority,
   cancelScheduledCallAudioRouteReappliesMatching,
+  scheduleReapplyPersistedCallAudioRoute,
   setPersistedCallAudioRoute,
 } from './callAudioRoutePersist';
 import { armCallAudioRouteUiLock, clearCallAudioRouteUiLock } from './callAudioRouteTransitionGuards';
@@ -185,6 +186,12 @@ async function toggleInAppPiPAudioOutputRouteInner(): Promise<InCallAudioRoute |
   await applyCallAudioOutputRouteNow(next, {
     media,
     forceBuiltIn: !isExternalHeadsetRoute(next),
+  });
+  scheduleReapplyPersistedCallAudioRoute('in_app_pip_audio_route_toggle', {
+    media,
+    honorUserRoute: true,
+    skipInCallRestart: true,
+    delaysMs: [0, 450],
   });
   logger.info('[inAppPiPAudioRoute] pip toggle', { from: current, next, media });
   return next;

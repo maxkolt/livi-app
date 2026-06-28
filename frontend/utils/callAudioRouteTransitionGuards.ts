@@ -4,6 +4,49 @@ import { isExternalHeadsetRoute, normalizeInCallRoute } from '../components/Vide
 const CALL_AUDIO_PRESERVE_PRIORITY_MS = 4000;
 const CALL_AUDIO_UI_ROUTE_LOCK_MS = 8500;
 const CALL_AUDIO_NATIVE_TRANSITION_MS = 500;
+const CALL_AUDIO_PREFER_QUIET_MS = 450;
+
+/** После sync/bootstrap — не перебивать preferAudioMode (убирает SPEAKER→BT мерцание). */
+export function armCallAudioPreferAudioModeQuiet(ms = CALL_AUDIO_PREFER_QUIET_MS): void {
+  try {
+    const g = global as any;
+    g.__callAudioPreferQuietUntilRef = g.__callAudioPreferQuietUntilRef || { current: 0 };
+    g.__callAudioPreferQuietUntilRef.current = Date.now() + ms;
+  } catch {}
+}
+
+export function isCallAudioPreferAudioModeQuiet(): boolean {
+  try {
+    const g = global as any;
+    return Date.now() < Number(g.__callAudioPreferQuietUntilRef?.current || 0);
+  } catch {}
+  return false;
+}
+
+/** return_to_audio_ui_sync только что выставил маршрут — не дублировать отложенный reapply. */
+export function markCallAudioReturnToUiSyncApplied(route: InCallAudioRoute): void {
+  try {
+    const g = global as any;
+    g.__callAudioReturnSyncRouteRef = g.__callAudioReturnSyncRouteRef || { current: null };
+    g.__callAudioReturnSyncAtRef = g.__callAudioReturnSyncAtRef || { current: 0 };
+    g.__callAudioReturnSyncRouteRef.current = route;
+    g.__callAudioReturnSyncAtRef.current = Date.now();
+    armCallAudioPreferAudioModeQuiet();
+  } catch {}
+}
+
+export function shouldSkipScheduledReturnToAudioUiReapply(expectedRoute?: InCallAudioRoute): boolean {
+  try {
+    const g = global as any;
+    const at = Number(g.__callAudioReturnSyncAtRef?.current || 0);
+    if (Date.now() - at > 2500) return false;
+    const synced = normalizeInCallRoute(g.__callAudioReturnSyncRouteRef?.current || '');
+    if (!synced) return false;
+    if (expectedRoute && normalizeInCallRoute(expectedRoute) !== synced) return false;
+    return true;
+  } catch {}
+  return false;
+}
 
 /** Короткое окно PiP enter/exit/focus — без InCallManager stop/start и полного bootstrap. */
 export function armCallAudioNativeTransitionLock(ms = CALL_AUDIO_NATIVE_TRANSITION_MS): void {
@@ -80,4 +123,18 @@ export function clearCallAudioRouteUiLock(): void {
     if (g.__callAudioUiLockedRouteRef) g.__callAudioUiLockedRouteRef.current = null;
     if (g.__callAudioUiLockUntilRef) g.__callAudioUiLockUntilRef.current = 0;
   } catch {}
+}
+
+export function resolveExternalRouteForAudioUiBootstrap(
+  uiLock: InCallAudioRoute | null,
+): InCallAudioRoute | null {
+  try {
+    const g = global as any;
+    const extMarked = normalizeInCallRoute(g.__userSelectedExternalCallAudioRouteRef?.current || '');
+    if (isExternalHeadsetRoute(extMarked)) return extMarked;
+    const userSel = normalizeInCallRoute(g.__userSelectedCallAudioRouteRef?.current || '');
+    if (isExternalHeadsetRoute(userSel)) return userSel;
+    if (isExternalHeadsetRoute(uiLock)) return uiLock;
+  } catch {}
+  return null;
 }

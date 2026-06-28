@@ -70,15 +70,16 @@ import {
   syncAndroidSystemPiPLeaveHintForActiveVideoCall,
   syncAndroidSystemPiPNativeFlags,
 } from '../../utils/activeCallNotification';
-import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, markInCallAudioSessionStarted, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserLockedBuiltinCallAudioRoute, armDirectAudioEarpieceStabilizeWindow, isDirectAudioEarpieceStabilizeWindow, markActiveCallAudioRouteCallId, rememberManualBuiltinCallAudioRoute, isPiPBuiltinCallAudioRouteLockActive, releaseInAppPiPBuiltinAudioLockForFullVideoUi, markUserSelectedExternalCallAudioRoute } from '../../utils/activeCallSession';
+import { clearEndingCallInProgress, isOngoingCallSession, resolvePiPLocalMutedState, readOngoingCallMicOn, restoreOngoingCallMicrophoneIfEnabled, resolvePersistedCallAudioRouteForActiveUi, resolveActiveCallInCallMedia, ongoingCallPrefersVideoMedia, markDirectCallVideoMediaActive, readInAppPiPAudioOutputRoute, readAuthoritativeCallAudioRouteAfterPiP, readLastAppliedCallAudioRoute, readActiveExternalCallAudioRoute, readConnectedExternalCallAudioRoute, markInCallAudioSessionStarted, setUserSelectedCallAudioRoute, readUserSelectedCallAudioRoute, readUserSelectedExternalCallAudioRoute, readUserLockedBuiltinCallAudioRoute, armDirectAudioEarpieceStabilizeWindow, isDirectAudioEarpieceStabilizeWindow, markActiveCallAudioRouteCallId, rememberManualBuiltinCallAudioRoute, isPiPBuiltinCallAudioRouteLockActive, releaseInAppPiPBuiltinAudioLockForFullVideoUi, markUserSelectedExternalCallAudioRoute } from '../../utils/activeCallSession';
 import { readNativeProbedExternalRoute } from '../../utils/nativeCallAudioProbe';
+import { isInAppPiPExplicitBuiltinRouteChoiceActive } from '../../utils/inAppPiPHeadsetConnect';
 import {
   dispatchLeaveVideoCallScreen,
   mergeActiveVideoCallParams,
   goBackFromCallScreenOrHome,
 } from '../../utils/appNavigationGuard';
 import type { RootStackParamList } from '../../navigation/types';
-import { getPersistedCallAudioRoute, persistVideoInAppPiPAudioRoute, readPreferredCallAudioRouteForTransition, setPersistedCallAudioRoute, scheduleReapplyPersistedCallAudioRoute, scheduleVideoCallReturnFromPiPAudioReapply, isCallAudioPiPTransitionWindow, shouldPreserveCallAudioRouteInInAppPiP, shouldDeferPreserveDuringCallBootstrap, hasRealInAppPiPOrSystemReturnContext, prepareDirectCallVideoExpandFromInAppPiP, resolveFullVideoCallScreenAudioRoute, armCallAudioRouteUiLock, readCallAudioRouteUiLock, applyCallAudioOutputRouteNow, clearScheduledCallAudioRouteReapplies, clearCallAudioRouteUiLock, isDirectCallVideoExpandAudioPreparedRecently, cancelScheduledCallAudioRouteReappliesMatching, resolveStayOnAudioUiRouteWhenPartnerEntersVideo } from '../../utils/callAudioRoutePersist';
+import { getPersistedCallAudioRoute, persistVideoInAppPiPAudioRoute, readPreferredCallAudioRouteForTransition, setPersistedCallAudioRoute, scheduleReapplyPersistedCallAudioRoute, scheduleVideoCallReturnFromPiPAudioReapply, isCallAudioPiPTransitionWindow, shouldPreserveCallAudioRouteInInAppPiP, shouldDeferPreserveDuringCallBootstrap, hasRealInAppPiPOrSystemReturnContext, prepareDirectCallVideoExpandFromInAppPiP, resolveFullVideoCallScreenAudioRoute, readExplicitVideoCallBuiltInRoute, armCallAudioRouteUiLock, readCallAudioRouteUiLock, applyCallAudioOutputRouteNow, clearScheduledCallAudioRouteReapplies, clearCallAudioRouteUiLock, isDirectCallVideoExpandAudioPreparedRecently, cancelScheduledCallAudioRouteReappliesMatching, resolveStayOnAudioUiRouteWhenPartnerEntersVideo, markCallAudioReturnToUiSyncApplied, shouldSkipScheduledReturnToAudioUiReapply, clearStaleVideoSpeakerUiLockForAudioOnlyUi, cancelDeferredVideoMediaAudioReappliesForLocalAudioUi, armLocalAudioOnlyUiAudioRoutingQuiet } from '../../utils/callAudioRoutePersist';
 import { readBuiltinCallRouteBeforeHeadset, rememberBuiltinCallRouteBeforeHeadset, rememberDirectCallAudioRouteBeforeVideo, readDirectCallAudioRouteBeforeVideo } from '../../utils/callHeadsetAudioFallback';
 import { iconNameForRoute, isExternalHeadsetRoute, mapRouteForEnterVideoUi, type InCallAudioRoute, normalizeInCallRoute } from './hooks/audioRouteTypes';
 import { useAudioRouting } from './hooks/useAudioRouting';
@@ -1176,6 +1177,24 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       if (pipIntent === 'SPEAKER_PHONE' || pipIntent === 'EARPIECE') return pipIntent;
       if (pipIntent && isExternalHeadsetRoute(pipIntent)) return pipIntent;
     }
+    const uiLockBuiltin = readCallAudioRouteUiLock();
+    if (uiLockBuiltin === 'EARPIECE' || uiLockBuiltin === 'SPEAKER_PHONE') {
+      return uiLockBuiltin;
+    }
+    const lockedBuiltinEarly = readUserLockedBuiltinCallAudioRoute();
+    if (lockedBuiltinEarly === 'EARPIECE' || lockedBuiltinEarly === 'SPEAKER_PHONE') {
+      return lockedBuiltinEarly;
+    }
+    if (isInAppPiPExplicitBuiltinRouteChoiceActive()) {
+      const sel = readUserSelectedCallAudioRoute();
+      if (sel === 'EARPIECE' || sel === 'SPEAKER_PHONE') return sel;
+      try {
+        const explicit = normalizeInCallRoute(
+          (global as any).__inAppPiPExplicitToggleRouteRef?.current || '',
+        );
+        if (explicit === 'EARPIECE' || explicit === 'SPEAKER_PHONE') return explicit;
+      } catch {}
+    }
     const externalRoute =
       [
         normalizeInCallRoute(userRouteRef.current),
@@ -2079,6 +2098,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
 
   const repinVideoUiAudioRoute = useCallback(() => {
     if (isDirectCallVideoExpandAudioPreparedRecently()) return;
+    if (inAudioOnlyUiRef.current) return;
+    try {
+      if ((global as any).__pipVisibleRef?.current === true) return;
+    } catch {}
+    cancelScheduledCallAudioRouteReappliesMatching(['direct_call_accept_audio_route']);
     scheduleReapplyPersistedCallAudioRoute('direct_call_video_ui_route', {
       media: 'video',
       delaysMs: [0],
@@ -2091,10 +2115,17 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   }, []);
 
   const pinVideoUiSpeakerAndSyncAudio = useCallback(() => {
-    releaseInAppPiPBuiltinAudioLockForFullVideoUi();
-    clearCallAudioRouteUiLock();
+    try {
+      if ((global as any).__pipVisibleRef?.current === true) return;
+    } catch {}
+    if (inAudioOnlyUiRef.current || isInAudioOnlyCallUi()) return;
     markDirectCallVideoMediaActive();
     const mapped = resolveFullVideoCallScreenAudioRoute();
+    const explicitSpeakerFromPiP = readExplicitVideoCallBuiltInRoute() === 'SPEAKER_PHONE';
+    if (!explicitSpeakerFromPiP) {
+      releaseInAppPiPBuiltinAudioLockForFullVideoUi();
+      clearCallAudioRouteUiLock();
+    }
     if (isDirectCallVideoExpandAudioPreparedRecently()) {
       userRouteRef.current = mapped;
       speakerOnRef.current = mapped === 'SPEAKER_PHONE';
@@ -2111,6 +2142,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     }
     if (isExternalHeadsetRoute(mapped)) {
       setUserSelectedCallAudioRoute(mapped);
+    } else if (explicitSpeakerFromPiP || mapped === 'SPEAKER_PHONE') {
+      setUserSelectedCallAudioRoute('SPEAKER_PHONE');
+      rememberManualBuiltinCallAudioRoute('SPEAKER_PHONE');
     } else {
       // Продуктовый speaker на video UI — не залипать в userSelected (мешает вернуть earpiece с audio).
       setUserSelectedCallAudioRoute(null);
@@ -2127,7 +2161,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       clearCallAudioRouteUiLock();
       return;
     }
-    armCallAudioRouteUiLock('SPEAKER_PHONE');
+    if (!explicitSpeakerFromPiP) {
+      armCallAudioRouteUiLock('SPEAKER_PHONE');
+    }
     repinVideoUiAudioRoute();
   }, [repinVideoUiAudioRoute]);
 
@@ -3340,7 +3376,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         setPeerInvitedVideo(false);
       }
       if (inAudioOnlyUiRef.current && payload?.inVideoCallUi === true) {
-        cancelScheduledCallAudioRouteReappliesMatching(['direct_call_video_ui_route']);
+        cancelScheduledCallAudioRouteReappliesMatching([
+          'direct_call_video_ui_route',
+          'video_call_return_from_pip',
+        ]);
         const target = resolveStayOnAudioUiRouteWhenPartnerEntersVideo();
         userRouteRef.current = target;
         speakerOnRef.current = target === 'SPEAKER_PHONE';
@@ -3987,6 +4026,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const toggleCam = useCallback(() => {
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
     if (session && typeof session.toggleCam === 'function') {
+      const camWasOn = session.getIsCamOn?.() ?? camOn;
       if (!inAudioOnlyUiRef.current) {
         stayOnVideoCallUiRef.current = true;
       }
@@ -4022,6 +4062,22 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       void session.toggleCam().then(() => {
         if (repinAfterCam) {
           pinVideoUiSpeakerAndSyncAudio();
+        } else if (
+          route?.params?.directCall &&
+          camWasOn &&
+          session.getIsCamOn?.() === false &&
+          !inAudioOnlyUiRef.current
+        ) {
+          const wasVideoUi = !isInAudioOnlyCallUi();
+          if (wasVideoUi) {
+            try {
+              session.deferRemoteVideoConsumption({ uiOnly: true });
+            } catch {}
+            (global as any).__syncDirectCallAudioOnlyUiRef?.current?.(session);
+            try {
+              session.notifyPeerDirectCallVideoUi?.(false);
+            } catch {}
+          }
         }
       }).catch((e: any) => {
         logger.warn('[VideoCall] toggleCam error:', e);
@@ -4029,7 +4085,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     } else {
       logger.warn('[VideoCall] Session не найдена для toggleCam');
     }
-  }, [pip, syncDirectCallVideoUiSession, pinVideoUiSpeakerAndSyncAudio, rememberAudioPageRouteBeforeVideoUi]);
+  }, [pip, syncDirectCallVideoUiSession, pinVideoUiSpeakerAndSyncAudio, rememberAudioPageRouteBeforeVideoUi, route?.params?.directCall, camOn]);
 
   const preserveAudioRouteFromInAppPiP = useCallback(() => {
     try {
@@ -4134,6 +4190,30 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         return;
       }
       if (isActualPiPReturn && audioRoute === 'EARPIECE') {
+        const userPinnedEarpiece =
+          isInAppPiPExplicitBuiltinRouteChoiceActive() ||
+          readUserLockedBuiltinCallAudioRoute() === 'EARPIECE' ||
+          readCallAudioRouteUiLock() === 'EARPIECE';
+        if (!userPinnedEarpiece) {
+          const extAuthoritative =
+            readNativeProbedExternalRoute() ||
+            readUserSelectedExternalCallAudioRoute() ||
+            readActiveExternalCallAudioRoute(audioRoute);
+          if (isExternalHeadsetRoute(extAuthoritative)) {
+            try {
+              g.__applyCallAudioRouteFromParentRef?.current?.(
+                extAuthoritative,
+                'preserve_in_app_pip_headset',
+              );
+            } catch {}
+            void applyCallAudioOutputRouteNow(extAuthoritative, {
+              media: 'audio',
+              forceBuiltIn: false,
+            });
+            markCallAudioReturnToUiSyncApplied(extAuthoritative);
+            return;
+          }
+        }
         try {
           g.__applyCallAudioRouteFromParentRef?.current?.(audioRoute, 'preserve_in_app_pip_headset');
         } catch {}
@@ -4150,13 +4230,18 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       } catch {}
       const isBuiltin = audioRoute === 'SPEAKER_PHONE' || audioRoute === 'EARPIECE';
       if (isExternalHeadsetRoute(audioRoute)) {
-        cancelScheduledCallAudioRouteReappliesMatching(['preserve_in_app_pip_headset']);
-        scheduleReapplyPersistedCallAudioRoute('return_to_audio_ui', {
+        cancelScheduledCallAudioRouteReappliesMatching([
+          'preserve_in_app_pip_headset',
+          'return_to_audio_ui',
+        ]);
+        void applyCallAudioOutputRouteNow(audioRoute, {
           media: 'audio',
-          honorUserRoute: true,
-          skipInCallRestart: true,
-          delaysMs: [0],
+          forceBuiltIn: false,
         });
+        try {
+          g.__applyCallAudioRouteFromParentRef?.current?.(audioRoute, 'return_to_audio_ui_sync');
+        } catch {}
+        markCallAudioReturnToUiSyncApplied(audioRoute);
       } else if (isBuiltin) {
         scheduleReapplyPersistedCallAudioRoute('preserve_in_app_pip_headset', {
           media: resolveActiveCallInCallMedia(),
@@ -4232,16 +4317,15 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           'preserve_in_app_pip_headset',
           'return_to_audio_ui',
         ]);
-        scheduleReapplyPersistedCallAudioRoute('return_to_audio_ui', {
+        void applyCallAudioOutputRouteNow(pipRoute, {
           media: 'audio',
-          honorUserRoute: true,
-          skipInCallRestart: true,
-          delaysMs: [0],
+          forceBuiltIn: false,
         });
         (global as any).__applyCallAudioRouteFromParentRef?.current?.(
           pipRoute,
           'return_to_audio_ui_sync',
         );
+        markCallAudioReturnToUiSyncApplied(pipRoute);
         return;
       }
       if (pipRoute !== 'EARPIECE' && pipRoute !== 'SPEAKER_PHONE') return;
@@ -4257,6 +4341,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         pipRoute,
         'return_to_audio_ui_sync',
       );
+      markCallAudioReturnToUiSyncApplied(pipRoute);
     } catch {}
   }, [applyBuiltinAudioRouteIntent]);
 
@@ -4265,11 +4350,16 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     opts?: { fromPiP?: boolean; pinInitialEarpiece?: boolean; acceptBootstrap?: boolean },
   ) => {
     stayOnVideoCallUiRef.current = false;
+    clearStaleVideoSpeakerUiLockForAudioOnlyUi();
+    cancelDeferredVideoMediaAudioReappliesForLocalAudioUi();
+    armLocalAudioOnlyUiAudioRoutingQuiet();
     const userBuiltinLocked = readUserLockedBuiltinCallAudioRoute();
-    const pinInitial = !!opts?.pinInitialEarpiece || !!opts?.acceptBootstrap;
+    const acceptBootstrap = !!opts?.acceptBootstrap;
+    const pinInitialEarpiece = !!opts?.pinInitialEarpiece;
+    const bootstrapAcceptRoute = acceptBootstrap || pinInitialEarpiece;
     const audioRoute =
       userBuiltinLocked ||
-      (pinInitial && !opts?.fromPiP
+      (bootstrapAcceptRoute && !opts?.fromPiP
         ? (() => {
             const external =
               readNativeProbedExternalRoute() ||
@@ -4288,9 +4378,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         ? ('EARPIECE' as InCallAudioRoute)
         : audioRoute;
     const finalAudioRoute = resolvedBuiltin;
-    if (opts?.pinInitialEarpiece && finalAudioRoute === 'EARPIECE') {
+    if (pinInitialEarpiece && finalAudioRoute === 'EARPIECE') {
       armDirectAudioEarpieceStabilizeWindow();
-    } else if (pinInitial && finalAudioRoute === 'EARPIECE') {
+    } else if (
+      acceptBootstrap &&
+      finalAudioRoute === 'EARPIECE' &&
+      !isExternalHeadsetRoute(finalAudioRoute)
+    ) {
       armDirectAudioEarpieceStabilizeWindow();
     }
     userRouteRef.current = finalAudioRoute;
@@ -4383,7 +4477,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     try {
       syncRouteNowRef.current?.();
       if (opts?.pinInitialEarpiece || opts?.acceptBootstrap) {
-        if (finalAudioRoute === 'EARPIECE') {
+        if (
+          finalAudioRoute === 'EARPIECE' &&
+          !isExternalHeadsetRoute(finalAudioRoute)
+        ) {
           pinInitialAudioCallEarpieceRef.current({ force: true });
           setTimeout(() => pinInitialAudioCallEarpieceRef.current({ force: true }), 450);
         }
@@ -4402,6 +4499,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           delaysMs: [0, 450, 1200],
         });
       } else {
+        if (opts?.fromPiP && shouldSkipScheduledReturnToAudioUiReapply()) {
+          return;
+        }
         scheduleReapplyPersistedCallAudioRoute('return_to_audio_ui', {
           media: 'audio',
           honorUserRoute: true,
@@ -4554,12 +4654,6 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           if (opts?.fromPiP) {
             pinPiPReturnToAudioRoute();
             preserveAudioRouteFromInAppPiP();
-            scheduleReapplyPersistedCallAudioRoute('return_to_audio_ui', {
-              media: 'audio',
-              honorUserRoute: true,
-              skipInCallRestart: true,
-              delaysMs: [0, 450],
-            });
           }
         }
         return;
@@ -4673,7 +4767,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         setPipAudioOnlyPlaceholderSticky(true);
         applyAudioOnlyUiState(session, {
           fromPiP: fromPiPReturn,
-          pinInitialEarpiece: bootstrapAccept,
+          pinInitialEarpiece:
+            bootstrapAccept &&
+            !isExternalHeadsetRoute(
+              readNativeProbedExternalRoute() ||
+                readConnectedExternalCallAudioRoute() ||
+                null,
+            ),
           acceptBootstrap: bootstrapAccept,
         });
         g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
@@ -4745,7 +4845,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         armDirectAudioEarpieceStabilizeWindow();
       }
       const session = (sessionRef.current || g.__webrtcSessionRef?.current) as VideoCallSession | null;
-      applyAudioOnlyUiState(session, { acceptBootstrap: true, pinInitialEarpiece: true });
+      const extAfterProbe =
+        readNativeProbedExternalRoute() || readConnectedExternalCallAudioRoute();
+      applyAudioOnlyUiState(session, {
+        acceptBootstrap: true,
+        pinInitialEarpiece: !(extAfterProbe && isExternalHeadsetRoute(extAfterProbe)),
+      });
     })();
   }, [
     route?.params?.directCall,

@@ -29,6 +29,7 @@ import {
   scheduleReapplyPersistedCallAudioRoute,
   setPersistedCallAudioRoute,
   resolveVideoInAppPiPAudioRoute,
+  resolveVideoInAppPiPPreserveRoute,
   getPersistedCallAudioRoute,
   restoreCallAudioForInAppPiPPlaque,
   armCallAudioPreservePriority,
@@ -39,6 +40,7 @@ import {
   prepareDirectCallVideoExpandFromInAppPiP,
   clearCallAudioRouteUiLock,
   applyCallAudioOutputRouteNow,
+  resolveReapplyMediaInCallContext,
 } from '../../utils/callAudioRoutePersist';
 import { armCallAudioRouteUiLock } from '../../utils/callAudioRouteTransitionGuards';
 import {
@@ -552,7 +554,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
               const honorBuiltin =
                 userBuiltin === 'SPEAKER_PHONE' || userBuiltin === 'EARPIECE';
               scheduleReapplyPersistedCallAudioRoute('system_pip_exit_preserve_route', {
-                media: resolveActiveCallInCallMedia(),
+                media: resolveReapplyMediaInCallContext(),
                 delaysMs: [0, 300, 900],
                 honorUserRoute: honorBuiltin,
                 skipInCallRestart: honorBuiltin,
@@ -716,13 +718,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         videoRouteNorm = videoLastApplied;
       }
       if (!isExternalHeadsetRoute(videoRouteNorm)) {
-        videoRouteNorm = resolveVideoInAppPiPAudioRoute(
-          videoRouteNorm ||
-            readLastAppliedCallAudioRoute() ||
-            getPersistedCallAudioRoute() ||
-            p.audioOutputRoute,
-          { mapForEnterVideoUi: true },
-        );
+        videoRouteNorm = resolveVideoInAppPiPPreserveRoute();
       }
       if (isExternalHeadsetRoute(videoRouteNorm)) {
         setUserSelectedCallAudioRoute(videoRouteNorm);
@@ -1188,6 +1184,14 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           readUserSelectedExternalCallAudioRoute() === 'WIRED_HEADSET';
         const needBtUnplug = btAbsent && (lostBt || routingOnBt);
         const needWiredUnplug = wiredAbsent && (lostWired || routingOnWired);
+        if (
+          needBtUnplug &&
+          routingOnBt &&
+          !lostBt &&
+          isBluetoothHeadsetActiveForCall()
+        ) {
+          return;
+        }
         if (!needBtUnplug && !needWiredUnplug) return;
 
         const resolveUnplugFallbackRoute = (): InCallAudioRoute => {
@@ -1237,6 +1241,7 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             const stillNeedWired =
               needWiredUnplug && !latestList.includes('WIRED_HEADSET');
             if (!stillNeedBt && !stillNeedWired) return;
+            if (stillNeedBt && isBluetoothHeadsetActiveForCall()) return;
 
             let route = resolveUnplugFallbackRoute();
             if (route === 'SPEAKER_PHONE' && preferSpeakerAfterHeadsetDisconnect()) {
@@ -1250,9 +1255,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             g.__inCallSelectedAudioRouteRef = { current: route };
             notifyInAppPiPAudioRouteUi(route);
             scheduleReapplyPersistedCallAudioRoute('in_app_pip_headset_unplug', {
-              media: isInAudioOnlyCallUi() ? 'audio' : resolveActiveCallInCallMedia(),
-              delaysMs: [0, 250, 800],
-              honorUserRoute: !!readUserLockedBuiltinCallAudioRoute(),
+              media: resolveReapplyMediaInCallContext(),
+              delaysMs: [0],
+              skipInCallRestart: true,
+              honorUserRoute: true,
             });
           } catch (_) {}
         }, 650);

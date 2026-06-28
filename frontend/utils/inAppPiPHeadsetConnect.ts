@@ -176,7 +176,9 @@ export async function tryAutoSwitchInAppPiPFromDisconnectedHeadset(): Promise<In
     'in_app_pip_headset_connect',
     'in_app_pip_preserve_external',
     'in_app_pip_from_audio',
+    'in_app_pip_from_video',
     'audio_ui_headset_connect',
+    'in_app_pip_headset_unplug',
   ]);
 
   const g = global as any;
@@ -214,7 +216,7 @@ export async function tryAutoSwitchInAppPiPFromDisconnectedHeadset(): Promise<In
   notifyInAppPiPAudioRouteUi(fallback);
   scheduleReapplyPersistedCallAudioRoute('in_app_pip_headset_unplug', {
     media,
-    delaysMs: [0, 300],
+    delaysMs: [0],
     skipInCallRestart: true,
     honorUserRoute: true,
   });
