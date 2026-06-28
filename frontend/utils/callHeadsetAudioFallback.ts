@@ -1,6 +1,6 @@
 import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { normalizeInCallRoute } from '../components/VideoChat/hooks/audioRouteTypes';
-import { isInAudioOnlyCallUi } from '../src/pip/pipPlaceholderOnly';
+import { isInAudioOnlyCallUi } from './callAudioOnlyUiContext';
 import { ongoingCallPrefersVideoMedia, rememberManualBuiltinCallAudioRoute, readUserLockedBuiltinCallAudioRoute } from './activeCallSession';
 import { readRootCurrentRouteName } from './safeRootNavigation';
 import { armCallAudioRouteUiLock } from './callAudioRouteTransitionGuards';

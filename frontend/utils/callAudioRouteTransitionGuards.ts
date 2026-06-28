@@ -3,6 +3,27 @@ import { isExternalHeadsetRoute, normalizeInCallRoute } from '../components/Vide
 
 const CALL_AUDIO_PRESERVE_PRIORITY_MS = 4000;
 const CALL_AUDIO_UI_ROUTE_LOCK_MS = 8500;
+const CALL_AUDIO_NATIVE_TRANSITION_MS = 500;
+
+/** Короткое окно PiP enter/exit/focus — без InCallManager stop/start и полного bootstrap. */
+export function armCallAudioNativeTransitionLock(ms = CALL_AUDIO_NATIVE_TRANSITION_MS): void {
+  try {
+    const g = global as any;
+    g.__callAudioNativeTransitionUntilRef = g.__callAudioNativeTransitionUntilRef || { current: 0 };
+    g.__callAudioNativeTransitionUntilRef.current = Math.max(
+      Number(g.__callAudioNativeTransitionUntilRef.current || 0),
+      Date.now() + ms,
+    );
+  } catch {}
+}
+
+export function isCallAudioNativeTransitionLocked(): boolean {
+  try {
+    const g = global as any;
+    return Date.now() < Number(g.__callAudioNativeTransitionUntilRef?.current || 0);
+  } catch {}
+  return false;
+}
 
 /** Окно enter/exit system PiP и возврата — не форсить громкую связь поверх earpiece/BT. */
 export function isCallAudioPiPTransitionWindow(): boolean {

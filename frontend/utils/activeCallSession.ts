@@ -478,6 +478,9 @@ export function readManualBuiltinCallAudioRoute(maxAgeMs = 120_000): InCallAudio
 
 /** Builtin (ухо/громкая), зафиксированный пользователем через cycle — не перебивать reapply/poll. */
 export function readUserLockedBuiltinCallAudioRoute(): InCallAudioRoute | null {
+  const userSelNow = readUserSelectedCallAudioRoute();
+  if (isExternalHeadsetRoute(userSelNow)) return null;
+  if (readUserSelectedExternalCallAudioRoute()) return null;
   const manual = readManualBuiltinCallAudioRoute();
   if (manual) return manual;
   const userSel = readUserSelectedCallAudioRoute();
@@ -674,19 +677,50 @@ export function readInAppPiPAudioOutputRoute(): InCallAudioRoute {
     const fromParams = normalizeInCallRoute(g.__currentCallPiPParamsRef?.current?.audioOutputRoute || '');
     const userSel = readUserSelectedCallAudioRoute();
     const icmSelected = normalizeInCallRoute(g.__inCallSelectedAudioRouteRef?.current || '');
+    const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
+    const lastApplied = readLastAppliedCallAudioRoute();
+    const explicitToggle = normalizeInCallRoute(g.__inAppPiPExplicitToggleRouteRef?.current || '');
+    const extLocked = readUserSelectedExternalCallAudioRoute();
+
+    if (g.__pipVisibleRef?.current === true) {
+      if (extLocked && externalRouteListedInCall(extLocked)) {
+        return extLocked;
+      }
+      if (
+        explicitToggle &&
+        (isExternalHeadsetRoute(explicitToggle) ||
+          explicitToggle === 'EARPIECE' ||
+          explicitToggle === 'SPEAKER_PHONE')
+      ) {
+        if (isExternalHeadsetRoute(explicitToggle)) {
+          if (externalRouteListedInCall(explicitToggle)) return explicitToggle;
+        } else {
+          return explicitToggle;
+        }
+      }
+    }
 
     if (
       g.__pipVisibleRef?.current === true &&
       (icmSelected === 'EARPIECE' || icmSelected === 'SPEAKER_PHONE') &&
-      isExternalHeadsetRoute(fromParams)
+      isExternalHeadsetRoute(fromParams) &&
+      !externalRouteListedInCall(fromParams)
     ) {
       return icmSelected;
     }
 
+    if (userSel && isExternalHeadsetRoute(userSel) && externalRouteListedInCall(userSel)) {
+      return userSel;
+    }
+    if (fromParams && isExternalHeadsetRoute(fromParams) && externalRouteListedInCall(fromParams)) {
+      return fromParams;
+    }
+    if (lastApplied && isExternalHeadsetRoute(lastApplied) && externalRouteListedInCall(lastApplied)) {
+      return lastApplied;
+    }
+
     if (userSel === 'SPEAKER_PHONE' || userSel === 'EARPIECE') return userSel;
 
-    const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
-    const lastApplied = readLastAppliedCallAudioRoute();
     if (icmSelected === 'SPEAKER_PHONE' || icmSelected === 'EARPIECE') return icmSelected;
 
     if (fromParams && isExternalHeadsetRoute(fromParams) && !externalRouteListedInCall(fromParams)) {

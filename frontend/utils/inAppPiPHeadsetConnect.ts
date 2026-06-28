@@ -9,6 +9,8 @@ import {
   markUserSelectedExternalCallAudioRoute,
   readUserSelectedCallAudioRoute,
   readUserSelectedExternalCallAudioRoute,
+  readUserLockedBuiltinCallAudioRoute,
+  userExplicitlyPinnedBuiltinCallAudio,
   resolveActiveCallInCallMedia,
   setUserSelectedCallAudioRoute,
 } from './activeCallSession';
@@ -36,14 +38,12 @@ import {
   resolveCallRouteAfterHeadsetDisconnect,
 } from './callHeadsetAudioFallback';
 
+import { isInAppPiPExplicitBuiltinRouteChoiceActive, readInAppPiPPlaqueAudioRoute } from './inAppPiPExplicitBuiltinRoute';
+
+export { isInAppPiPExplicitBuiltinRouteChoiceActive } from './inAppPiPExplicitBuiltinRoute';
+
 function readPlaqueRoute(): InCallAudioRoute | null {
-  try {
-    return normalizeInCallRoute(
-      (global as any).__currentCallPiPParamsRef?.current?.audioOutputRoute || '',
-    );
-  } catch {
-    return null;
-  }
+  return readInAppPiPPlaqueAudioRoute();
 }
 
 function pipPlaqueVisible(): boolean {
@@ -54,12 +54,17 @@ function pipPlaqueVisible(): boolean {
   }
 }
 
+const IN_APP_PIP_HEADSET_CONNECT_COOLDOWN_MS = 2200;
+
 /** In-app PiP без VideoCall: подключили BT/провод — нативный маршрут + иконка плашки. */
 export async function applyInAppPiPHeadsetConnectRoute(
   route: 'BLUETOOTH' | 'WIRED_HEADSET',
   reason: string,
 ): Promise<boolean> {
   if (Platform.OS !== 'android' || !pipPlaqueVisible()) return false;
+  if (isInAppPiPExplicitBuiltinRouteChoiceActive()) return false;
+  if (userExplicitlyPinnedBuiltinCallAudio()) return false;
+  if (userExplicitlyPinnedBuiltinCallAudio()) return false;
   if (route === 'BLUETOOTH') {
     const bt = await isNativeBluetoothHeadsetConnectedForCall();
     setCallBluetoothHeadsetConnectedCache(bt);
@@ -67,6 +72,27 @@ export async function applyInAppPiPHeadsetConnectRoute(
   }
   try {
     const g = global as any;
+    g.__lastInAppPiPHeadsetConnectAtRef = g.__lastInAppPiPHeadsetConnectAtRef || { current: 0 };
+    g.__lastInAppPiPHeadsetConnectRouteRef =
+      g.__lastInAppPiPHeadsetConnectRouteRef || { current: null as InCallAudioRoute | null };
+    const now = Date.now();
+    const lastAt = Number(g.__lastInAppPiPHeadsetConnectAtRef.current || 0);
+    const lastRoute = g.__lastInAppPiPHeadsetConnectRouteRef.current;
+    const lastApplied = normalizeInCallRoute(g.__lastAppliedCallAudioRouteRef?.current || '');
+    if (
+      route === lastRoute &&
+      route === lastApplied &&
+      now - lastAt < IN_APP_PIP_HEADSET_CONNECT_COOLDOWN_MS
+    ) {
+      return true;
+    }
+    if (
+      route === lastApplied &&
+      readUserSelectedExternalCallAudioRoute() === route &&
+      now - lastAt < IN_APP_PIP_HEADSET_CONNECT_COOLDOWN_MS
+    ) {
+      return true;
+    }
     clearBuiltinPinForExternalHeadsetConnect();
     clearCallAudioRouteUiLock();
     cancelScheduledCallAudioRouteReappliesMatching([
@@ -88,9 +114,12 @@ export async function applyInAppPiPHeadsetConnectRoute(
         : resolveActiveCallInCallMedia();
     await applyCallAudioOutputRouteNow(route, { media, forceBuiltIn: false });
     notifyInAppPiPAudioRouteUi(route);
+    g.__lastInAppPiPHeadsetConnectAtRef.current = now;
+    g.__lastInAppPiPHeadsetConnectRouteRef.current = route;
+    cancelScheduledCallAudioRouteReappliesMatching(['in_app_pip_headset_connect']);
     scheduleReapplyPersistedCallAudioRoute('in_app_pip_headset_connect', {
       media,
-      delaysMs: [0, 350, 900],
+      delaysMs: [0],
       skipInCallRestart: true,
       honorUserRoute: true,
     });
@@ -195,8 +224,17 @@ export async function tryAutoSwitchInAppPiPFromDisconnectedHeadset(): Promise<In
 /**
  * Опрос (плашка на Home): ICM/onAudioDeviceChanged может не прийти — ловим BT по native probe.
  */
+let lastPiPHeadsetPollAttemptAt = 0;
+
 export async function tryAutoSwitchInAppPiPToConnectedHeadset(): Promise<InCallAudioRoute | null> {
   if (Platform.OS !== 'android' || !pipPlaqueVisible()) return null;
+  if (isInAppPiPExplicitBuiltinRouteChoiceActive()) return null;
+  if (userExplicitlyPinnedBuiltinCallAudio()) return null;
+  const pollNow = Date.now();
+  if (pollNow - lastPiPHeadsetPollAttemptAt < 900) {
+    return null;
+  }
+  lastPiPHeadsetPollAttemptAt = pollNow;
 
   const plaque = readPlaqueRoute();
   const userSel = readUserSelectedCallAudioRoute();
@@ -255,6 +293,8 @@ export function shouldAutoBtConnectFromDeviceList(
   prev: string[],
 ): boolean {
   if (!pipPlaqueVisible()) return false;
+  if (isInAppPiPExplicitBuiltinRouteChoiceActive()) return false;
+  if (userExplicitlyPinnedBuiltinCallAudio()) return false;
   const gainedBt = available.includes('BLUETOOTH') && !prev.includes('BLUETOOTH');
   if (gainedBt) return true;
   if (!available.includes('BLUETOOTH') || !isBluetoothHeadsetActiveForCall()) return false;

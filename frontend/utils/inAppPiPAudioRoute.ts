@@ -3,26 +3,32 @@ import {
   type InCallAudioRoute,
   isExternalHeadsetRoute,
   nextRouteInCycleForContext,
+  normalizeInCallRoute,
   sanitizeRoutesForAudioCycle,
 } from '../components/VideoChat/hooks/audioRouteTypes';
 import {
+  markUserSelectedExternalCallAudioRoute,
   readInAppPiPAudioOutputRoute,
   readInCallAvailableAudioRoutesForCycle,
   rememberManualBuiltinCallAudioRoute,
   setUserSelectedCallAudioRoute,
+  clearBuiltinPinForExternalHeadsetConnect,
 } from './activeCallSession';
 import {
   mergeNativeProbeIntoGlobal,
   probeNativeCallAudioRoutes,
+  isBluetoothHeadsetActiveForCall,
 } from './nativeCallAudioProbe';
 import {
   applyCallAudioOutputRouteNow,
   armCallAudioPreservePriority,
-  reapplyPersistedCallAudioRoute,
+  cancelScheduledCallAudioRouteReappliesMatching,
   setPersistedCallAudioRoute,
 } from './callAudioRoutePersist';
+import { armCallAudioRouteUiLock, clearCallAudioRouteUiLock } from './callAudioRouteTransitionGuards';
 import { rememberBuiltinCallRouteBeforeHeadset, rememberDirectCallAudioRouteBeforeVideo } from './callHeadsetAudioFallback';
 import { notifyInAppPiPAudioRouteUi } from './callInAppPiPAudioRouteUi';
+import { logger } from './logger';
 
 export { readInAppPiPAudioOutputRoute } from './activeCallSession';
 export { notifyInAppPiPAudioRouteUi } from './callInAppPiPAudioRouteUi';
@@ -51,7 +57,11 @@ function readAvailableInCallAudioRoutes(): string[] {
     }
   } catch {}
   const merged = set.size ? Array.from(set) : [...BUILTIN_FALLBACK];
-  return sanitizeRoutesForAudioCycle(merged, icm);
+  let sanitized = sanitizeRoutesForAudioCycle(merged, icm);
+  if (Platform.OS === 'android' && !isBluetoothHeadsetActiveForCall()) {
+    sanitized = sanitized.filter((r) => r !== 'BLUETOOTH');
+  }
+  return sanitized;
 }
 
 async function syncProbeBeforeCycle(): Promise<void> {
@@ -81,6 +91,16 @@ function persistInAppPiPAudioRoute(route: InCallAudioRoute): void {
       g.__explicitBuiltInCallAudioRouteRef =
         g.__explicitBuiltInCallAudioRouteRef || { current: false };
       g.__explicitBuiltInCallAudioRouteRef.current = true;
+      g.__userSelectedExternalCallAudioRouteRef = { current: null };
+    } catch {}
+  } else if (isExternalHeadsetRoute(route)) {
+    clearBuiltinPinForExternalHeadsetConnect();
+    markUserSelectedExternalCallAudioRoute(route);
+    try {
+      const g = global as any;
+      g.__explicitBuiltInCallAudioRouteRef =
+        g.__explicitBuiltInCallAudioRouteRef || { current: false };
+      g.__explicitBuiltInCallAudioRouteRef.current = false;
     } catch {}
   }
   try {
@@ -88,19 +108,11 @@ function persistInAppPiPAudioRoute(route: InCallAudioRoute): void {
     if (params && typeof params === 'object') {
       params.audioOutputRoute = route;
     }
+    (global as any).__inCallSelectedAudioRouteRef = { current: route };
+    (global as any).__lastAppliedCallAudioRouteRef = { current: route };
     (global as any).__pipUpdateStateRef?.current?.({ audioOutputRoute: route });
     notifyPiPAudioRouteChanged(route);
   } catch {}
-}
-
-function applyPiPAudioRouteNow(route: InCallAudioRoute): void {
-  const fromAudioPiP = (global as any).__pipInAppRtcFromAudioOnlyRef?.current === true;
-  const media = fromAudioPiP ? 'audio' : 'video';
-  void reapplyPersistedCallAudioRoute('in_app_pip_audio_route_toggle', {
-    media,
-    honorUserRoute: true,
-    skipInCallRestart: route !== 'SPEAKER_PHONE',
-  });
 }
 
 /** In-app PiP: всегда 3 режима (как аудио-страница), не делегировать в video UI (2 режима). */
@@ -124,7 +136,18 @@ async function toggleInAppPiPAudioOutputRouteInner(): Promise<InCallAudioRoute |
   const available = readAvailableInCallAudioRoutes();
   const icm = readInCallAvailableAudioRoutesForCycle();
   const orderList = available.length ? available : BUILTIN_FALLBACK;
-  const current = readInAppPiPAudioOutputRoute();
+  let current = readInAppPiPAudioOutputRoute();
+  const explicitToggle = normalizeInCallRoute(
+    (global as any).__inAppPiPExplicitToggleRouteRef?.current || '',
+  );
+  if (
+    explicitToggle &&
+    (explicitToggle === 'EARPIECE' ||
+      explicitToggle === 'SPEAKER_PHONE' ||
+      isExternalHeadsetRoute(explicitToggle))
+  ) {
+    current = explicitToggle;
+  }
   const next = nextRouteInCycleForContext(current, orderList, 'in_app_pip', icm);
   if (next === current) {
     return current;
@@ -139,6 +162,8 @@ async function toggleInAppPiPAudioOutputRouteInner(): Promise<InCallAudioRoute |
   persistInAppPiPAudioRoute(next);
   try {
     const g = global as any;
+    g.__audioUiExplicitCycleRouteRef = g.__audioUiExplicitCycleRouteRef || { current: null };
+    g.__audioUiExplicitCycleRouteRef.current = next;
     g.__inAppPiPExplicitToggleRouteRef = g.__inAppPiPExplicitToggleRouteRef || { current: null };
     g.__inAppPiPExplicitToggleRouteRef.current = next;
     g.__pipBuiltinRouteLockUntilRef = g.__pipBuiltinRouteLockUntilRef || { current: 0 };
@@ -146,9 +171,21 @@ async function toggleInAppPiPAudioOutputRouteInner(): Promise<InCallAudioRoute |
     armCallAudioPreservePriority(6500);
   } catch {}
   const media = fromAudioPiP ? 'audio' : 'video';
-  await applyCallAudioOutputRouteNow(next, { media, forceBuiltIn: true });
-  if (next === 'SPEAKER_PHONE') {
-    applyPiPAudioRouteNow(next);
+  cancelScheduledCallAudioRouteReappliesMatching([
+    'in_app_pip_headset_connect',
+    'in_app_pip_from_audio',
+    'in_app_pip_from_video',
+    'in_app_pip_audio_route_toggle',
+  ]);
+  if (next === 'EARPIECE' || next === 'SPEAKER_PHONE') {
+    armCallAudioRouteUiLock(next);
+  } else if (isExternalHeadsetRoute(next)) {
+    clearCallAudioRouteUiLock();
   }
+  await applyCallAudioOutputRouteNow(next, {
+    media,
+    forceBuiltIn: !isExternalHeadsetRoute(next),
+  });
+  logger.info('[inAppPiPAudioRoute] pip toggle', { from: current, next, media });
   return next;
 }

@@ -1,10 +1,29 @@
 /** Активен экран «аудиозвонок» (ещё не перешли на video UI). */
-import { armCallAudioRouteUiLock } from '../../utils/callAudioRouteTransitionGuards';
+import { Platform } from 'react-native';
+import {
+  armCallAudioRouteUiLock,
+  armCallAudioNativeTransitionLock,
+  armCallAudioPreservePriority,
+} from '../../utils/callAudioRoutePersist';
+import { finishDirectCallVideoExpandInFlight } from '../../utils/directCallVideoExpandGuard';
+
+export {
+  touchDirectCallVideoExpandGuard,
+  isDirectCallVideoExpandGuardActive,
+  tryBeginDirectCallVideoExpand,
+  finishDirectCallVideoExpandInFlight,
+  runDirectCallVideoExpandOnce,
+  prepareDirectCallVideoReturnFromPiP,
+} from '../../utils/directCallVideoExpandGuard';
 import {
   isExternalHeadsetRoute,
   normalizeInCallRoute,
   type InCallAudioRoute,
 } from '../../components/VideoChat/hooks/audioRouteTypes';
+import {
+  clearBuiltinPinForExternalHeadsetConnect,
+  markUserSelectedExternalCallAudioRoute,
+} from '../../utils/activeCallSession';
 import { readConnectedExternalCallAudioRoute } from '../../utils/callConnectedExternalAudioRoute';
 import { isInAudioOnlyCallUi, setPipAudioOnlyPlaceholderSticky } from '../../utils/callAudioOnlyUiContext';
 import { readRootCurrentRouteName } from '../../utils/safeRootNavigation';
@@ -14,92 +33,6 @@ export {
   isInAudioOnlyCallUi,
   setPipAudioOnlyPlaceholderSticky,
 } from '../../utils/callAudioOnlyUiContext';
-
-const DIRECT_CALL_VIDEO_EXPAND_GUARD_MS = 3500;
-const DIRECT_CALL_VIDEO_EXPAND_DEDUP_MS = 900;
-
-/** Продлевает окно, в котором audio-only / PiP-return не должны откатывать переход на video UI. */
-export function touchDirectCallVideoExpandGuard(): void {
-  try {
-    const g = global as any;
-    g.__directCallVideoExpandUntilRef = g.__directCallVideoExpandUntilRef || { current: 0 };
-    g.__directCallVideoExpandUntilRef.current = Date.now() + DIRECT_CALL_VIDEO_EXPAND_GUARD_MS;
-  } catch {}
-}
-
-export function isDirectCallVideoExpandGuardActive(): boolean {
-  try {
-    const g = global as any;
-    if (g.__directCallVideoExpandInFlightRef?.current === true) return true;
-    return Date.now() < Number(g.__directCallVideoExpandUntilRef?.current || 0);
-  } catch {
-    return false;
-  }
-}
-
-/** Один активный expand на коротком интервале (PiP overlay + mount effects). */
-export function tryBeginDirectCallVideoExpand(): boolean {
-  try {
-    const g = global as any;
-    const now = Date.now();
-    g.__directCallVideoExpandInFlightRef = g.__directCallVideoExpandInFlightRef || { current: false };
-    g.__directCallVideoExpandLastBeginRef = g.__directCallVideoExpandLastBeginRef || { current: 0 };
-    g.__directCallVideoExpandUntilRef = g.__directCallVideoExpandUntilRef || { current: 0 };
-    if (g.__directCallVideoExpandInFlightRef.current) return false;
-    const lastBegin = Number(g.__directCallVideoExpandLastBeginRef.current || 0);
-    if (now - lastBegin < DIRECT_CALL_VIDEO_EXPAND_DEDUP_MS) return false;
-    g.__directCallVideoExpandInFlightRef.current = true;
-    g.__directCallVideoExpandLastBeginRef.current = now;
-    g.__directCallVideoExpandUntilRef.current = now + DIRECT_CALL_VIDEO_EXPAND_GUARD_MS;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function finishDirectCallVideoExpandInFlight(): void {
-  try {
-    const g = global as any;
-    if (g.__directCallVideoExpandInFlightRef) {
-      g.__directCallVideoExpandInFlightRef.current = false;
-    }
-  } catch {}
-}
-
-/** Один expand + enable camera на всех входах (PiP overlay, mount, focus). */
-export function runDirectCallVideoExpandOnce(run: () => Promise<void>): Promise<void> {
-  try {
-    const g = global as any;
-    g.__directCallVideoExpandPromiseRef =
-      g.__directCallVideoExpandPromiseRef || { current: null as Promise<void> | null };
-    const inFlight = g.__directCallVideoExpandPromiseRef.current;
-    if (inFlight) {
-      return inFlight;
-    }
-    if (!tryBeginDirectCallVideoExpand()) {
-      return Promise.resolve();
-    }
-    const task = (async () => {
-      try {
-        await run();
-      } finally {
-        finishDirectCallVideoExpandInFlight();
-        try {
-          g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-          g.__expandToVideoCallUiFromPiPRef.current = false;
-        } catch {}
-      }
-    })();
-    g.__directCallVideoExpandPromiseRef.current = task;
-    return task.finally(() => {
-      if (g.__directCallVideoExpandPromiseRef?.current === task) {
-        g.__directCallVideoExpandPromiseRef.current = null;
-      }
-    });
-  } catch {
-    return Promise.resolve();
-  }
-}
 
 /**
  * In-app PiP → «Аудиозвонок» с Home: до navigate выставить audio UI и запустить WebRTC,
@@ -163,40 +96,20 @@ export function prepareDirectCallAudioReturnFromPiP(): void {
     g.__userSelectedCallAudioRouteRef.current = audioRoute;
     g.__lastAppliedCallAudioRouteRef = g.__lastAppliedCallAudioRouteRef || { current: null };
     g.__lastAppliedCallAudioRouteRef.current = audioRoute;
+    if (isExternalHeadsetRoute(audioRoute)) {
+      clearBuiltinPinForExternalHeadsetConnect();
+      markUserSelectedExternalCallAudioRoute(audioRoute, 20_000);
+    }
+    if (Platform.OS === 'android') {
+      armCallAudioNativeTransitionLock(900);
+    }
+    armCallAudioPreservePriority(5000);
     if (audioRoute === 'SPEAKER_PHONE' || audioRoute === 'EARPIECE') {
       armCallAudioRouteUiLock(audioRoute);
     }
     if (g.__audioCallHomeSpeakerPinRef) {
       g.__audioCallHomeSpeakerPinRef.current = false;
     }
-  } catch {}
-}
-
-/** In-app PiP → экран видеозвонка с Home / другого экрана (не audio UI). */
-export function prepareDirectCallVideoReturnFromPiP(): void {
-  try {
-    const g = global as any;
-    g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || { current: false };
-    g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
-    g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
-    g.__expandToVideoCallUiFromPiPRef.current = true;
-    g.__inAudioOnlyUiRef = g.__inAudioOnlyUiRef || { current: false };
-    g.__inAudioOnlyUiRef.current = false;
-    setPipAudioOnlyPlaceholderSticky(false);
-    setPipInAppRtcFromAudioOnlySticky(false);
-    try {
-      g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
-      g.__stayOnVideoCallUiRef.current = true;
-    } catch {}
-    const paramsRef = g.__currentCallPiPParamsRef?.current;
-    if (paramsRef && typeof paramsRef === 'object') {
-      paramsRef.inAudioOnlyUi = false;
-      paramsRef.preferVideoCallUi = true;
-      paramsRef.localCamOn = true;
-    }
-    g.__directCallAudioOnlyPreparedAtRef = g.__directCallAudioOnlyPreparedAtRef || { current: 0 };
-    g.__directCallAudioOnlyPreparedAtRef.current = 0;
-    touchDirectCallVideoExpandGuard();
   } catch {}
 }
 

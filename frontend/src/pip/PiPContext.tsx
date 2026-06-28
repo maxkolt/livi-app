@@ -32,6 +32,7 @@ import {
   getPersistedCallAudioRoute,
   restoreCallAudioForInAppPiPPlaque,
   armCallAudioPreservePriority,
+  scheduleInAppPiPAudioTransitionReapply,
   shouldApplyHomeLoudSpeakerPin,
   prepareSystemPiPEnterCallAudioRoute,
   isInAppPiPContextIncludingSuspended,
@@ -49,6 +50,7 @@ import { mergeNativeProbeIntoGlobal, probeNativeCallAudioRoutes, clearNativeProb
 import {
   applyInAppPiPHeadsetConnectRoute,
   shouldAutoBtConnectFromDeviceList,
+  isInAppPiPExplicitBuiltinRouteChoiceActive,
 } from '../../utils/inAppPiPHeadsetConnect';
 import { notifyInAppPiPAudioRouteUi } from '../../utils/callInAppPiPAudioRouteUi';
 import type { InCallAudioRoute } from '../../components/VideoChat/hooks/audioRouteTypes';
@@ -636,6 +638,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           gExp.__explicitBuiltInCallAudioRouteRef =
             gExp.__explicitBuiltInCallAudioRouteRef || { current: false };
           gExp.__explicitBuiltInCallAudioRouteRef.current = true;
+          gExp.__pipBuiltinRouteLockUntilRef = gExp.__pipBuiltinRouteLockUntilRef || { current: 0 };
+          gExp.__pipBuiltinRouteLockUntilRef.current = Date.now() + 6500;
+          gExp.__inAppPiPExplicitToggleRouteRef =
+            gExp.__inAppPiPExplicitToggleRouteRef || { current: null };
+          gExp.__inAppPiPExplicitToggleRouteRef.current = routeNorm;
         } catch {}
       }
       try {
@@ -651,22 +658,36 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       } catch {}
       const audioBuiltin =
         routeNorm === 'SPEAKER_PHONE' || routeNorm === 'EARPIECE';
-      const audioReapplyOpts = {
-        media: 'audio' as const,
-        delaysMs: [0, 450] as number[],
-        skipInCallRestart: true,
-        honorUserRoute: audioBuiltin,
-      };
       try {
         const gAudio = global as any;
         gAudio.__lastInAppPipAudioReapplyAtRef = gAudio.__lastInAppPipAudioReapplyAtRef || { current: 0 };
         const nowAudio = Date.now();
-        if (nowAudio - Number(gAudio.__lastInAppPipAudioReapplyAtRef.current || 0) > 1200) {
+        const lastAppliedEnter = readLastAppliedCallAudioRoute();
+        const skipFromAudioReapply =
+          isInAppPiPExplicitBuiltinRouteChoiceActive() ||
+          (!!lastAppliedEnter && routeNorm === lastAppliedEnter);
+        if (
+          !skipFromAudioReapply &&
+          nowAudio - Number(gAudio.__lastInAppPipAudioReapplyAtRef.current || 0) > 1200
+        ) {
           gAudio.__lastInAppPipAudioReapplyAtRef.current = nowAudio;
-          scheduleReapplyPersistedCallAudioRoute('in_app_pip_from_audio', audioReapplyOpts);
+          scheduleInAppPiPAudioTransitionReapply('from_audio', {
+            media: 'audio',
+            skipInCallRestart: true,
+            honorUserRoute: audioBuiltin,
+          });
         }
       } catch {
-        scheduleReapplyPersistedCallAudioRoute('in_app_pip_from_audio', audioReapplyOpts);
+        if (
+          !isInAppPiPExplicitBuiltinRouteChoiceActive() &&
+          routeNorm !== readLastAppliedCallAudioRoute()
+        ) {
+          scheduleInAppPiPAudioTransitionReapply('from_audio', {
+            media: 'audio',
+            skipInCallRestart: true,
+            honorUserRoute: audioBuiltin,
+          });
+        }
       }
     } else {
       const lockedExternal = readUserSelectedExternalCallAudioRoute();
@@ -720,17 +741,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         const nowVideo = Date.now();
         if (nowVideo - Number(gVideo.__lastInAppPipAudioReapplyAtRef.current || 0) > 1200) {
           gVideo.__lastInAppPipAudioReapplyAtRef.current = nowVideo;
-          scheduleReapplyPersistedCallAudioRoute('in_app_pip_from_video', {
+          scheduleInAppPiPAudioTransitionReapply('from_video', {
             media: 'video',
-            delaysMs: [0, 450],
             skipInCallRestart: true,
             honorUserRoute: !!readUserLockedBuiltinCallAudioRoute(),
           });
         }
       } catch {
-        scheduleReapplyPersistedCallAudioRoute('in_app_pip_from_video', {
+        scheduleInAppPiPAudioTransitionReapply('from_video', {
           media: 'video',
-          delaysMs: [0, 450],
           skipInCallRestart: true,
         });
       }
@@ -769,11 +788,20 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
             gAudio.__onInAppPiPAudioRouteChanged?.(externalRoute);
             gAudio.__pipUpdateStateRef?.current?.({ audioOutputRoute: externalRoute });
           } catch {}
-          scheduleReapplyPersistedCallAudioRoute('in_app_pip_preserve_external', {
-            media: fromAudioOnlyUi ? 'audio' : 'video',
-            delaysMs: [0, 450],
-            skipInCallRestart: true,
-          });
+          try {
+            const gOrch = global as any;
+            gOrch.__lastInAppPipExternalOrchestratorAtRef =
+              gOrch.__lastInAppPipExternalOrchestratorAtRef || { current: 0 };
+            const nowExt = Date.now();
+            if (nowExt - Number(gOrch.__lastInAppPipExternalOrchestratorAtRef.current || 0) > 600) {
+              gOrch.__lastInAppPipExternalOrchestratorAtRef.current = nowExt;
+              scheduleInAppPiPAudioTransitionReapply(fromAudioOnlyUi ? 'from_audio' : 'from_video', {
+                media: fromAudioOnlyUi ? 'audio' : 'video',
+                skipInCallRestart: true,
+                honorUserRoute: true,
+              });
+            }
+          } catch {}
         })
         .catch(() => {});
     }
