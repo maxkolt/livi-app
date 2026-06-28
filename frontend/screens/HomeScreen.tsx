@@ -7530,7 +7530,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     right: 0,
-    bottom: 0,
+    bottom: StyleSheet.hairlineWidth,
     justifyContent: 'center',
     alignItems: 'flex-end',
     zIndex: 40,
