@@ -1,6 +1,9 @@
 import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { normalizeInCallRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { isInAudioOnlyCallUi } from '../src/pip/pipPlaceholderOnly';
+import { ongoingCallPrefersVideoMedia, rememberManualBuiltinCallAudioRoute, readUserLockedBuiltinCallAudioRoute } from './activeCallSession';
+import { readRootCurrentRouteName } from './safeRootNavigation';
+import { armCallAudioRouteUiLock } from './callAudioRouteTransitionGuards';
 
 export type BuiltinCallAudioRoute = 'EARPIECE' | 'SPEAKER_PHONE';
 
@@ -73,19 +76,101 @@ export function resolveBuiltinCallRouteAfterHeadsetDisconnect(
   return productDefaultEarpiece ? 'EARPIECE' : 'SPEAKER_PHONE';
 }
 
-/** После снятия гарнитуры: earpiece только на экране аудиозвонка; video UI / system PiP → громкий. */
-export function shouldDefaultToEarpieceAfterHeadsetDisconnect(): boolean {
+export function isInSystemPiPMode(): boolean {
   try {
-    if ((global as any).__pipInSystemModeRef?.current === true) return false;
+    return (global as any).__pipInSystemModeRef?.current === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Полноэкранный video UI на VideoCall (не audio-only). */
+export function isOnFullScreenVideoCallUi(): boolean {
+  try {
+    return readRootCurrentRouteName() === 'VideoCall' && ongoingCallPrefersVideoMedia();
+  } catch {
+    return false;
+  }
+}
+
+/** После снятия BT на video UI / system PiP: громкий + lock для последующих экранов. */
+export function rememberVideoUiSpeakerAfterHeadsetDisconnect(): void {
+  rememberBuiltinCallRouteBeforeHeadset('SPEAKER_PHONE', false);
+  rememberManualBuiltinCallAudioRoute('SPEAKER_PHONE');
+  try {
+    const g = global as any;
+    g.__explicitBuiltInCallAudioRouteRef = g.__explicitBuiltInCallAudioRouteRef || { current: false };
+    g.__explicitBuiltInCallAudioRouteRef.current = true;
   } catch {}
-  return isInAudioOnlyCallUi();
+  armCallAudioRouteUiLock('SPEAKER_PHONE');
+}
+
+/** In-app PiP с video (камера / video UI), не audio-only plaque. */
+export function isInAppPiPVideoPathContext(): boolean {
+  try {
+    const g = global as any;
+    if (g.__pipVisibleRef?.current !== true) return false;
+    if (g.__pipInSystemModeRef?.current === true) return false;
+    if (g.__pipInAppRtcFromAudioOnlyRef?.current === true) return false;
+    return ongoingCallPrefersVideoMedia();
+  } catch {
+    return false;
+  }
+}
+
+/** System PiP во время audio-звонка (не video-медиа). */
+export function isInSystemPiPAudioOnlyContext(): boolean {
+  return isInSystemPiPMode() && !ongoingCallPrefersVideoMedia();
+}
+
+/** Громкий после снятия BT: полноэкранное video, system/in-app PiP с video-медиа. */
+export function preferSpeakerAfterHeadsetDisconnect(): boolean {
+  if (isOnFullScreenVideoCallUi()) return true;
+  if (isInAppPiPVideoPathContext()) return true;
+  if (isInSystemPiPMode() && ongoingCallPrefersVideoMedia()) return true;
+  return false;
+}
+
+/** После снятия гарнитуры: earpiece везде, кроме video UI и PiP с video-медиа. */
+export function shouldDefaultToEarpieceAfterHeadsetDisconnect(): boolean {
+  if (preferSpeakerAfterHeadsetDisconnect()) return false;
+  if (isInSystemPiPAudioOnlyContext()) return true;
+  const locked = readUserLockedBuiltinCallAudioRoute();
+  if (locked === 'SPEAKER_PHONE') return false;
+  if (locked === 'EARPIECE') return true;
+  const stored = readBuiltinCallRouteBeforeHeadset();
+  if (stored === 'SPEAKER_PHONE') return false;
+  if (isInAudioOnlyCallUi()) return true;
+  try {
+    const g = global as any;
+    if (g.__pipVisibleRef?.current === true && g.__pipInAppRtcFromAudioOnlyRef?.current === true) {
+      return true;
+    }
+    if (g.__pipVisibleRef?.current === true) return true;
+    const route = readRootCurrentRouteName();
+    if (route !== 'VideoCall') return true;
+    return !ongoingCallPrefersVideoMedia();
+  } catch {
+    return true;
+  }
 }
 
 export function resolveCallRouteAfterHeadsetDisconnect(): BuiltinCallAudioRoute {
-  if (!shouldDefaultToEarpieceAfterHeadsetDisconnect()) {
+  const locked = readUserLockedBuiltinCallAudioRoute();
+  if (locked === 'SPEAKER_PHONE' || locked === 'EARPIECE') {
+    return locked;
+  }
+  if (preferSpeakerAfterHeadsetDisconnect()) {
     return 'SPEAKER_PHONE';
   }
-  return resolveBuiltinCallRouteAfterHeadsetDisconnect(true);
+  const stored = readBuiltinCallRouteBeforeHeadset();
+  if (stored === 'EARPIECE' || stored === 'SPEAKER_PHONE') {
+    return stored;
+  }
+  if (shouldDefaultToEarpieceAfterHeadsetDisconnect()) {
+    return 'EARPIECE';
+  }
+  return 'SPEAKER_PHONE';
 }
 
 export function clearBuiltinCallRouteBeforeHeadset(): void {

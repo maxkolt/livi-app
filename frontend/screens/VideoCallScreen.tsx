@@ -5,8 +5,8 @@ import type { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'VideoCall'>;
 
-const VideoCallScreen: React.FC<Props> = ({ route }) => {
-  return <VideoCall route={route} />;
+const VideoCallScreen: React.FC<Props> = ({ route, navigation }) => {
+  return <VideoCall route={route} screenNavigation={navigation} />;
 };
 
 export default VideoCallScreen;

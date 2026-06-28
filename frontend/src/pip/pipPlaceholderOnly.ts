@@ -1,41 +1,19 @@
 /** Активен экран «аудиозвонок» (ещё не перешли на video UI). */
 import { armCallAudioRouteUiLock } from '../../utils/callAudioRouteTransitionGuards';
+import {
+  isExternalHeadsetRoute,
+  normalizeInCallRoute,
+  type InCallAudioRoute,
+} from '../../components/VideoChat/hooks/audioRouteTypes';
+import { readConnectedExternalCallAudioRoute } from '../../utils/callConnectedExternalAudioRoute';
+import { isInAudioOnlyCallUi, setPipAudioOnlyPlaceholderSticky } from '../../utils/callAudioOnlyUiContext';
+import { readRootCurrentRouteName } from '../../utils/safeRootNavigation';
+import { readNativeProbedExternalRoute } from '../../utils/nativeCallAudioProbe';
 
-export function isInAudioOnlyCallUi(): boolean {
-  try {
-    const g = global as any;
-    if (g.__stayOnVideoCallUiRef?.current === true) {
-      return false;
-    }
-    const params = g.__currentCallPiPParamsRef?.current;
-    if (params?.preferVideoCallUi === true) {
-      return false;
-    }
-    if (g.__inAudioOnlyUiRef?.current === true) {
-      return true;
-    }
-    // VideoCall может размонтироваться при Home → system PiP; sticky ref сохраняет audio-only до endCall.
-    if (g.__pipAudioOnlyPlaceholderRef?.current === true) {
-      const session = g.__webrtcSessionRef?.current;
-      const callLive =
-        session && typeof session.isEnded === 'function' ? !session.isEnded() : !!session;
-      if (callLive) {
-        return true;
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-export function setPipAudioOnlyPlaceholderSticky(active: boolean): void {
-  try {
-    const g = global as any;
-    g.__pipAudioOnlyPlaceholderRef = g.__pipAudioOnlyPlaceholderRef || { current: false };
-    g.__pipAudioOnlyPlaceholderRef.current = !!active;
-  } catch {}
-}
+export {
+  isInAudioOnlyCallUi,
+  setPipAudioOnlyPlaceholderSticky,
+} from '../../utils/callAudioOnlyUiContext';
 
 const DIRECT_CALL_VIDEO_EXPAND_GUARD_MS = 3500;
 const DIRECT_CALL_VIDEO_EXPAND_DEDUP_MS = 900;
@@ -159,8 +137,20 @@ export function prepareDirectCallAudioReturnFromPiP(): void {
       (paramsRef && typeof paramsRef === 'object' ? paramsRef.audioOutputRoute : null) ||
       g.__persistedCallAudioRouteRef?.current ||
       g.__userSelectedCallAudioRouteRef?.current;
-    const audioRoute =
-      rawRoute === 'SPEAKER_PHONE' || rawRoute === 'EARPIECE' ? rawRoute : 'EARPIECE';
+    const rawNorm = normalizeInCallRoute(String(rawRoute || ''));
+    let audioRoute: InCallAudioRoute = 'EARPIECE';
+    if (rawNorm === 'SPEAKER_PHONE' || rawNorm === 'EARPIECE') {
+      audioRoute = rawNorm;
+    } else if (isExternalHeadsetRoute(rawNorm)) {
+      audioRoute = rawNorm;
+    } else {
+      const ext =
+        readNativeProbedExternalRoute() ||
+        readConnectedExternalCallAudioRoute(rawNorm || undefined);
+      if (ext && isExternalHeadsetRoute(ext)) {
+        audioRoute = ext;
+      }
+    }
     if (paramsRef && typeof paramsRef === 'object') {
       paramsRef.inAudioOnlyUi = true;
       paramsRef.preferVideoCallUi = false;
@@ -173,7 +163,9 @@ export function prepareDirectCallAudioReturnFromPiP(): void {
     g.__userSelectedCallAudioRouteRef.current = audioRoute;
     g.__lastAppliedCallAudioRouteRef = g.__lastAppliedCallAudioRouteRef || { current: null };
     g.__lastAppliedCallAudioRouteRef.current = audioRoute;
-    armCallAudioRouteUiLock(audioRoute);
+    if (audioRoute === 'SPEAKER_PHONE' || audioRoute === 'EARPIECE') {
+      armCallAudioRouteUiLock(audioRoute);
+    }
     if (g.__audioCallHomeSpeakerPinRef) {
       g.__audioCallHomeSpeakerPinRef.current = false;
     }
@@ -428,7 +420,7 @@ export function refreshSystemPiPLeaveContextSnapshot(): void {
       preferAudioOnly,
       // Любой in-app PiP (в т.ч. с аудио-экрана) — при развороте system PiP возвращаем на Home + overlay, не на полный VideoCall.
       restoreInAppPiP: inAppPiP,
-      routeName: (g.__navRef?.getCurrentRoute?.()?.name as string | undefined) ?? null,
+      routeName: readRootCurrentRouteName() || null,
       capturedAt: Date.now(),
     };
   } catch {}

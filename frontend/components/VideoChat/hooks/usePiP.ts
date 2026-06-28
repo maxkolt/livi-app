@@ -1,9 +1,9 @@
 import { useCallback, useRef, useEffect } from 'react';
 import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
 import { usePiP as usePiPContext, isPipOverlayVisibleSync } from '../../../src/pip/PiPContext';
 import { isInAudioOnlyCallUi, setPipInAppRtcFromAudioOnlySticky } from '../../../src/pip/pipPlaceholderOnly';
 import { resolvePiPLocalMutedState } from '../../../utils/activeCallSession';
+import { goBackFromCallScreenOrHome } from '../../../utils/appNavigationGuard';
 import { setPersistedCallAudioRoute } from '../../../utils/callAudioRoutePersist';
 import { readInAppPiPAudioOutputRoute } from '../../../utils/inAppPiPAudioRoute';
 import { logger } from '../../../utils/logger';
@@ -56,7 +56,6 @@ export const usePiP = ({
   enableAndroidBackHandler = true,
   getAudioOutputRoute,
 }: UsePiPProps) => {
-  const navigation = useNavigation();
   const pip = usePiPContext();
   const pipRef = useRef(pip);
   const pipVisibleRef = useRef(pip.visible);
@@ -275,13 +274,11 @@ export const usePiP = ({
     }
 
     const navigateBackFromCallScreen = () => {
-      const returnTo = (routeParams as any)?.returnTo;
-      if (navigation.canGoBack && navigation.canGoBack()) {
-        navigation.goBack();
-      } else if (returnTo?.name) {
-        (navigation as any).navigate(returnTo.name, returnTo.params);
-      } else {
-        navigation.navigate('Home' as never);
+      const returnTo = (routeParams as any)?.returnTo as
+        | { name: string; params?: object }
+        | undefined;
+      if (goBackFromCallScreenOrHome(returnTo)) {
+        return;
       }
     };
 
@@ -354,7 +351,6 @@ export const usePiP = ({
     wasFriendCallEnded,
     pip.visible,
     session,
-    navigation,
     routeParams,
     localStream,
     remoteStream,
@@ -422,11 +418,9 @@ export const usePiP = ({
           if (isInactiveStateRef.current || wasFriendCallEndedRef.current) {
             // Звонок завершен - просто возвращаемся назад без PiP
             requestAnimationFrame(() => {
-              if (navigation.canGoBack && navigation.canGoBack()) {
-                navigation.goBack();
-              } else {
-                navigation.navigate('Home' as never);
-              }
+              goBackFromCallScreenOrHome(
+                (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+              );
             });
             return;
           }
@@ -446,11 +440,9 @@ export const usePiP = ({
             if (Platform.OS === 'android') {
               // Android: in-app PiP отключён. Свайп — просто шаг назад (системный PiP только по Back/Home).
               requestAnimationFrame(() => {
-                if (navigation.canGoBack && navigation.canGoBack()) {
-                  navigation.goBack();
-                } else {
-                  navigation.navigate('Home' as never);
-                }
+                goBackFromCallScreenOrHome(
+                  (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+                );
               });
             } else {
               // iOS: системный PiP для текущего сценария недоступен, сохраняем in-app PiP.
@@ -458,21 +450,17 @@ export const usePiP = ({
                 enterPiPMode({ deferVisible: true });
                 pipShownDuringSwipeRef.current = true;
               }
-              if (navigation.canGoBack && navigation.canGoBack()) {
-                navigation.goBack();
-              } else {
-                navigation.navigate('Home' as never);
-              }
+              goBackFromCallScreenOrHome(
+                (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+              );
               pipShownDuringSwipeRef.current = false;
             }
           } else {
             // Нет активного звонка - просто возвращаемся назад
             requestAnimationFrame(() => {
-              if (navigation.canGoBack && navigation.canGoBack()) {
-                navigation.goBack();
-              } else {
-                navigation.navigate('Home' as never);
-              }
+              goBackFromCallScreenOrHome(
+                (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+              );
             });
           }
         }
@@ -488,11 +476,9 @@ export const usePiP = ({
             if (Platform.OS === 'android') {
               // На Android при terminate не показываем in-app PiP: логика едина с onPanResponderRelease.
               requestAnimationFrame(() => {
-                if (navigation.canGoBack && navigation.canGoBack()) {
-                  navigation.goBack();
-                } else {
-                  navigation.navigate('Home' as never);
-                }
+                goBackFromCallScreenOrHome(
+                  (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+                );
                 pipShownDuringSwipeRef.current = false;
               });
             } else {
@@ -501,11 +487,9 @@ export const usePiP = ({
                 pipShownDuringSwipeRef.current = true;
               }
               requestAnimationFrame(() => {
-                if (navigation.canGoBack && navigation.canGoBack()) {
-                  navigation.goBack();
-                } else {
-                  navigation.navigate('Home' as never);
-                }
+                goBackFromCallScreenOrHome(
+                  (routeParams as any)?.returnTo as { name: string; params?: object } | undefined,
+                );
                 pipShownDuringSwipeRef.current = false;
               });
             }

@@ -79,9 +79,14 @@ export function readNativeProbedExternalRoute(): InCallAudioRoute | null {
   try {
     const probe = (global as any).__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined;
     if (!probe) return null;
-    if (probe.preferred && isExternalHeadsetRoute(probe.preferred)) return probe.preferred;
-    if (probe.available.includes('WIRED_HEADSET')) return 'WIRED_HEADSET';
-    if (probe.available.includes('BLUETOOTH')) return 'BLUETOOTH';
+    const icmRaw = (global as any).__inCallAvailableAudioRoutesRef?.current;
+    const icm = Array.isArray(icmRaw) ? icmRaw.map((s: unknown) => String(s)) : [];
+    const listed = (route: InCallAudioRoute) => icm.length > 0 && icm.includes(route);
+    if (probe.preferred && isExternalHeadsetRoute(probe.preferred) && listed(probe.preferred)) {
+      return probe.preferred;
+    }
+    if (probe.available.includes('WIRED_HEADSET') && listed('WIRED_HEADSET')) return 'WIRED_HEADSET';
+    if (probe.available.includes('BLUETOOTH') && listed('BLUETOOTH')) return 'BLUETOOTH';
   } catch {}
   return null;
 }
@@ -118,6 +123,38 @@ export function clearNativeProbeBluetoothRoute(): void {
       g.__inCallAvailableAudioRoutesRef = {
         current: av.filter((r: string) => r !== 'BLUETOOTH'),
       };
+    }
+    const ext = g.__userSelectedExternalCallAudioRouteRef?.current;
+    const extRoute = String(ext?.route || '');
+    if (extRoute === 'BLUETOOTH') {
+      g.__userSelectedExternalCallAudioRouteRef = { current: null };
+    }
+  } catch {}
+}
+
+/** После отключения провода — убрать stale WIRED_HEADSET из probe/available. */
+export function clearNativeProbeWiredHeadsetRoute(): void {
+  try {
+    const g = global as any;
+    const probe = g.__nativeCallAudioRoutesRef?.current as NativeCallAudioProbe | undefined;
+    if (probe) {
+      g.__nativeCallAudioRoutesRef = {
+        current: {
+          available: probe.available.filter((r) => r !== 'WIRED_HEADSET'),
+          preferred: probe.preferred === 'WIRED_HEADSET' ? null : probe.preferred,
+        },
+      };
+    }
+    const av = g.__inCallAvailableAudioRoutesRef?.current;
+    if (Array.isArray(av)) {
+      g.__inCallAvailableAudioRoutesRef = {
+        current: av.filter((r: string) => r !== 'WIRED_HEADSET'),
+      };
+    }
+    const ext = g.__userSelectedExternalCallAudioRouteRef?.current;
+    const extRoute = String(ext?.route || '');
+    if (extRoute === 'WIRED_HEADSET') {
+      g.__userSelectedExternalCallAudioRouteRef = { current: null };
     }
   } catch {}
 }

@@ -2,6 +2,7 @@ import { AppState, NativeModules, Platform } from 'react-native';
 import { isInAudioOnlyCallUi, shouldUsePipPlaceholderOnly, refreshSystemPiPLeaveContextSnapshot } from '../src/pip/pipPlaceholderOnly';
 import { logHomePiPTrace } from './systemPiPHomeTrace';
 import { isOngoingCallSession, resolveActiveCallInCallMedia } from './activeCallSession';
+import { readRootCurrentRouteName } from './safeRootNavigation';
 import {
   pinLoudSpeakerForAudioCallLeavingToBackground,
   scheduleReapplyPersistedCallAudioRoute,
@@ -123,7 +124,7 @@ export function shouldBlockAndroidLeaveHintDisarm(): boolean {
   if (isAndroidActiveCallEligibleForLeaveHint()) return true;
   try {
     const g = global as any;
-    const route = g.__navRef?.getCurrentRoute?.()?.name;
+    const route = readRootCurrentRouteName();
     if (route === 'VideoCall' && g.__videoCallActiveRef?.current !== false) return true;
     if (AppState.currentState === 'background' && g.__videoCallActiveRef?.current !== false) return true;
   } catch (_) {}
@@ -282,7 +283,7 @@ export function isAndroidActiveCallEligibleForLeaveHint(): boolean {
 
     const homeHold = isAndroidLeaveHintHomeTransitionHold();
     const onVideoCallRoute =
-      g.__navRef?.getCurrentRoute?.()?.name === 'VideoCall' && g.__videoCallActiveRef?.current !== false;
+      readRootCurrentRouteName() === 'VideoCall' && g.__videoCallActiveRef?.current !== false;
     const inBackgroundWithLiveCall =
       AppState.currentState === 'background' && g.__videoCallActiveRef?.current !== false;
     const ongoingSession = isOngoingCallSession();

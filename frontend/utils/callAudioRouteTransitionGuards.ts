@@ -52,3 +52,11 @@ export function readCallAudioRouteUiLock(): InCallAudioRoute | null {
   } catch {}
   return null;
 }
+
+export function clearCallAudioRouteUiLock(): void {
+  try {
+    const g = global as any;
+    if (g.__callAudioUiLockedRouteRef) g.__callAudioUiLockedRouteRef.current = null;
+    if (g.__callAudioUiLockUntilRef) g.__callAudioUiLockUntilRef.current = 0;
+  } catch {}
+}

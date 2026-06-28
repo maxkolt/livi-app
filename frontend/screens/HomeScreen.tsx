@@ -138,6 +138,7 @@ import socket, {
   setActiveVideoCall,
 } from '../sockets/socket';
 import { primeAndroidCallContextForLeaveHint } from '../utils/activeCallNotification';
+import { clearHomeTransientRouteParams } from '../utils/appNavigationGuard';
 import {
   isUpdateAvailable,
   isUpdateReminderCooldownActive,
@@ -6226,17 +6227,9 @@ const handleClearNick = useCallback(async () => {
       }).catch(() => {});
     }
     if (ended || cancelled || openFriendsMenu || openFriendsTab) {
-      try {
-        navigation.setParams?.({
-          callEnded: undefined,
-          callCancelled: undefined,
-          openFriendsMenu: undefined,
-          openFriendsTab: undefined,
-          pushMessageFrom: undefined,
-        });
-      } catch {}
+      clearHomeTransientRouteParams();
     }
-  }, [route, navigation, showNotice, suppressUpdateBadgeForCallNotice]);
+  }, [route, showNotice, suppressUpdateBadgeForCallNotice]);
 
   // Отмена входящего, когда пользователь уже на Home: бейдж «Вызов отменён» на 3 сек через событие, без setParams — без лишних ре-рендеров
   useEffect(() => {

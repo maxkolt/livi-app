@@ -14,6 +14,7 @@ import {
 } from './callAudioRoutePersist';
 import { armAndroidLeaveHintForVideoCallHome, syncAndroidLeaveHintForOngoingCall } from './activeCallNotification';
 import { readNativeProbedExternalRoute } from './nativeCallAudioProbe';
+import { readRootCurrentRouteName } from './safeRootNavigation';
 
 const BACKGROUND_REAPPLY_DELAYS_MS = [0, 450, 1200];
 const FOREGROUND_REAPPLY_DELAYS_MS = [0, 350];
@@ -140,7 +141,7 @@ function onAppStateChange(next: AppStateStatus): void {
         const plaqueVisible = g.__pipVisibleRef?.current === true;
         const onHomeWithPlaque =
           plaqueVisible &&
-          g.__navRef?.getCurrentRoute?.()?.name !== 'VideoCall';
+          readRootCurrentRouteName() !== 'VideoCall';
         const returningFromPiP =
           Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
         const external =

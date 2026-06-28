@@ -115,6 +115,7 @@ import {
   flushPendingVideoCallNavigation,
   navigateToVideoCallScreen,
 } from './utils/appNavigationGuard';
+import { readRootCurrentRouteName } from './utils/safeRootNavigation';
 
 // Повторяем index.tsx: дефолты у RN Text часто не цепляются к Fabric/Paper; нативный фикс fontScale/density — MainApplication/MainActivity + onConfigurationChanged (FontScaleContextHelper).
 const __noAccessibilityFontScale = { allowFontScaling: false as const, maxFontSizeMultiplier: 1 as const };
@@ -590,7 +591,7 @@ function AppContent() {
       });
       return false;
     }
-    const currentRouteName = navRef.getCurrentRoute()?.name;
+    const currentRouteName = readRootCurrentRouteName();
     const g = global as any;
     const session = (global as any).__webrtcSessionRef?.current;
     const sessionEnded =
@@ -2969,7 +2970,7 @@ function AppContent() {
         try { doneRef.from = callerId; doneRef.at = now; } catch (_) {}
         alreadyDidNav = false;
       }
-      const routeName = String(navRef.getCurrentRoute()?.name ?? '');
+      const routeName = readRootCurrentRouteName();
       const willDispatch = !homeResetByVideoCall && !alreadyDidNav && navRef.isReady();
       // Callee уже на Home: страница приветствия не должна ре-рендериться — не вызываем setIncoming и эмиты с подписчиками-setState
       const calleeAlreadyOnHome = isCallee && routeName === 'Home';
@@ -3034,10 +3035,10 @@ function AppContent() {
       logger.info('[App] 📥 call:accepted received in App.tsx', {
         callId: data?.callId,
         from: data?.from,
-        currentRoute: navRef.getCurrentRoute()?.name,
+        currentRoute: readRootCurrentRouteName(),
       });
       const callId = data?.callId ? String(data.callId) : '';
-      const currentRouteName = navRef.getCurrentRoute()?.name;
+      const currentRouteName = readRootCurrentRouteName();
       const currentOutgoing = (global as any).__outgoingCallIdRef?.current;
       const hasMatchingOutgoing = !!callId && currentOutgoing != null && String(currentOutgoing) === callId;
       const hasIncomingContext = !!callId && incomingCallIdRef.current === callId;

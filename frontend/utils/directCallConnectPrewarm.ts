@@ -1,6 +1,8 @@
 import { createLocalTracks, type LocalAudioTrack, type LocalTrack } from 'livekit-client';
+import { Platform } from 'react-native';
 import { getIceConfiguration } from './iceConfig';
 import { logger } from './logger';
+import { mergeNativeProbeIntoGlobal, probeNativeCallAudioRoutes } from './nativeCallAudioProbe';
 
 const PREWARM_TTL_MS = 120_000;
 
@@ -43,6 +45,11 @@ export function prefetchDirectCallIce(reason: string): void {
 }
 
 export function prewarmDirectCallAudioCapture(reason: string): void {
+  if (Platform.OS === 'android') {
+    void probeNativeCallAudioRoutes()
+      .then((probe) => mergeNativeProbeIntoGlobal(probe))
+      .catch(() => {});
+  }
   if (audioPrewarmInFlight) return;
   const ref = getAudioPrewarmRef();
   const existing = ref.current;

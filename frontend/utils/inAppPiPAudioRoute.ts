@@ -21,8 +21,10 @@ import {
   setPersistedCallAudioRoute,
 } from './callAudioRoutePersist';
 import { rememberBuiltinCallRouteBeforeHeadset, rememberDirectCallAudioRouteBeforeVideo } from './callHeadsetAudioFallback';
+import { notifyInAppPiPAudioRouteUi } from './callInAppPiPAudioRouteUi';
 
 export { readInAppPiPAudioOutputRoute } from './activeCallSession';
+export { notifyInAppPiPAudioRouteUi } from './callInAppPiPAudioRouteUi';
 
 const BUILTIN_FALLBACK = ['SPEAKER_PHONE', 'EARPIECE'];
 
@@ -61,9 +63,7 @@ async function syncProbeBeforeCycle(): Promise<void> {
 }
 
 function notifyPiPAudioRouteChanged(route: InCallAudioRoute): void {
-  try {
-    (global as any).__onInAppPiPAudioRouteChanged?.(route);
-  } catch {}
+  notifyInAppPiPAudioRouteUi(route);
 }
 
 function persistInAppPiPAudioRoute(route: InCallAudioRoute): void {

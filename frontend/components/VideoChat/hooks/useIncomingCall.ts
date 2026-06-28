@@ -7,6 +7,7 @@ import { logger } from '../../../utils/logger';
 import { startIncomingCallAlert, stopIncomingCallAlert } from '../../../utils/incomingCallAlert';
 import { syncAppBadgeFromMissedCount } from '../../../utils/pushNotifications';
 import { emitMissedClear } from '../../../utils/globalEvents';
+import { readRootNavigationState } from '../../../utils/safeRootNavigation';
 
 interface UseIncomingCallProps {
   myUserId?: string;
@@ -91,8 +92,7 @@ export const useIncomingCall = ({
 
       // Фиксируем экран на момент входящего звонка, чтобы вернуть пользователя туда после завершения
       try {
-        const nav = (global as any).__navRef;
-        const state = nav?.getRootState?.();
+        const state = readRootNavigationState();
         const idx = state?.index ?? 0;
         const routes = state?.routes || [];
         const cur = routes[idx];

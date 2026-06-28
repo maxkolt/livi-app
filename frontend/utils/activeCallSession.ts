@@ -4,9 +4,11 @@ import {
   isExternalHeadsetRoute,
   normalizeInCallRoute,
 } from '../components/VideoChat/hooks/audioRouteTypes';
-import { isInAudioOnlyCallUi, setPipAudioOnlyPlaceholderSticky } from '../src/pip/pipPlaceholderOnly';
+import { isInAudioOnlyCallUi, setPipAudioOnlyPlaceholderSticky } from './callAudioOnlyUiContext';
+import { readConnectedExternalCallAudioRoute } from './callConnectedExternalAudioRoute';
 import { readCallAudioRouteUiLock } from './callAudioRouteTransitionGuards';
 import { readNativeProbedExternalRoute } from './nativeCallAudioProbe';
+import { readRootCurrentRouteName } from './safeRootNavigation';
 
 /** Direct-call / video UI: сброс sticky audio-only refs (Home/PiP не должны включать audio_home speaker). */
 export function markDirectCallVideoMediaActive(): void {
@@ -186,7 +188,7 @@ export function shouldKeepInCallAudioOnAppBackground(): boolean {
       if (params?.callId || params?.roomId) return true;
     }
 
-    const route = g.__navRef?.getCurrentRoute?.()?.name;
+    const route = readRootCurrentRouteName();
     if (route === 'VideoCall' && g.__videoCallActiveRef?.current !== false) {
       return true;
     }
@@ -391,31 +393,7 @@ function readInCallAvailableAudioRoutesList(): string[] {
   }
 }
 
-/**
- * Гарнитура, которая реально в списке InCallManager (persist + selected + hint).
- * Нужно для in-app PiP, когда persist на миг EARPIECE, а BT уже в available/selected.
- */
-export function readConnectedExternalCallAudioRoute(
-  hint?: InCallAudioRoute | string | null,
-): InCallAudioRoute | null {
-  const nativeExt = readNativeProbedExternalRoute();
-  if (nativeExt) return nativeExt;
-  const available = readInCallAvailableAudioRoutesList();
-  const fromPersist = readActiveExternalCallAudioRoute(hint);
-  if (fromPersist && (!available.length || available.includes(fromPersist))) {
-    return fromPersist;
-  }
-  try {
-    const selected = normalizeInCallRoute((global as any).__inCallSelectedAudioRouteRef?.current || '');
-    if (isExternalHeadsetRoute(selected) && available.includes(selected)) {
-      return selected;
-    }
-  } catch {}
-  const hintNorm = normalizeInCallRoute(hint || '');
-  if (hintNorm === 'BLUETOOTH' && available.includes('BLUETOOTH')) return 'BLUETOOTH';
-  if (hintNorm === 'WIRED_HEADSET' && available.includes('WIRED_HEADSET')) return 'WIRED_HEADSET';
-  return null;
-}
+export { readConnectedExternalCallAudioRoute } from './callConnectedExternalAudioRoute';
 
 /** Явный выбор маршрута (PiP / cycle) — не перебивать авто-BT в UI. */
 export function readUserSelectedCallAudioRoute(): InCallAudioRoute | null {
@@ -502,6 +480,48 @@ export function readUserLockedBuiltinCallAudioRoute(): InCallAudioRoute | null {
     }
   } catch {}
   return null;
+}
+
+/** Cycle/toggle/PiP toggle — не авто-BT. Продуктовый earpiece при accept/bootstrap сюда не входит. */
+export function userExplicitlyPinnedBuiltinCallAudio(): boolean {
+  try {
+    const g = global as any;
+    const cycled = normalizeInCallRoute(g.__lastCycleUserRouteResultRef?.current || '');
+    const cycledAt = Number(g.__lastCycleUserRouteAtRef?.current || 0);
+    const cycledCallId = String(g.__lastCycleUserRouteCallIdRef?.current || '').trim();
+    const activeCallId = String(g.__activeCallAudioRouteCallIdRef?.current || '').trim();
+    if (
+      (cycled === 'SPEAKER_PHONE' || cycled === 'EARPIECE') &&
+      activeCallId &&
+      cycledCallId === activeCallId &&
+      Date.now() - cycledAt < 120_000
+    ) {
+      return true;
+    }
+    const explicitCycle = normalizeInCallRoute(g.__audioUiExplicitCycleRouteRef?.current || '');
+    if (explicitCycle === 'SPEAKER_PHONE' || explicitCycle === 'EARPIECE') {
+      return true;
+    }
+    const pipToggle = normalizeInCallRoute(g.__inAppPiPExplicitToggleRouteRef?.current || '');
+    if (pipToggle === 'SPEAKER_PHONE' || pipToggle === 'EARPIECE') {
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+/** Снять pin уха/громкой — перед авто-переходом на BT/провод при подключении. */
+export function clearBuiltinPinForExternalHeadsetConnect(): void {
+  try {
+    const g = global as any;
+    if (g.__manualBuiltinCallAudioRouteRef) g.__manualBuiltinCallAudioRouteRef.current = null;
+    g.__explicitBuiltInCallAudioRouteRef = g.__explicitBuiltInCallAudioRouteRef || { current: false };
+    g.__explicitBuiltInCallAudioRouteRef.current = false;
+    g.__audioUiExplicitCycleRouteRef = { current: null };
+    g.__inAppPiPExplicitToggleRouteRef = { current: null };
+    g.__lastCycleUserRouteResultRef = { current: null };
+    g.__lastCycleUserRouteAtRef = { current: 0 };
+  } catch {}
 }
 
 export function setUserSelectedCallAudioRoute(route: InCallAudioRoute | null): void {
@@ -617,36 +637,62 @@ export function readAuthoritativeCallAudioRouteAfterPiP(): InCallAudioRoute | nu
   return null;
 }
 
+function externalRouteListedInCall(route: InCallAudioRoute | null | undefined): boolean {
+  if (!route || !isExternalHeadsetRoute(route)) return false;
+  const available = readInCallAvailableAudioRoutesList();
+  if (!available.length) return false;
+  return available.includes(route);
+}
+
+function readPiPBuiltinWhenExternalUnavailable(g: any): InCallAudioRoute {
+  const lock = readCallAudioRouteUiLock();
+  if (lock === 'EARPIECE' || lock === 'SPEAKER_PHONE') return lock;
+  const fromAudioPiP = g.__pipInAppRtcFromAudioOnlyRef?.current === true;
+  const params = g.__currentCallPiPParamsRef?.current;
+  if (fromAudioPiP || params?.inAudioOnlyUi === true) return 'EARPIECE';
+  const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
+  const lastApplied = readLastAppliedCallAudioRoute();
+  if (stored === 'EARPIECE' || stored === 'SPEAKER_PHONE') return stored;
+  if (lastApplied === 'EARPIECE' || lastApplied === 'SPEAKER_PHONE') return lastApplied;
+  if (params?.preferVideoCallUi === true && !fromAudioPiP) return 'SPEAKER_PHONE';
+  return 'EARPIECE';
+}
+
 /** Маршрут из PiP params + persist ref (без импорта callAudioRoutePersist — без циклов). */
 export function readInAppPiPAudioOutputRoute(): InCallAudioRoute {
   try {
     const g = global as any;
     const userSel = readUserSelectedCallAudioRoute();
-    if (userSel) {
-      return userSel;
-    }
+    if (userSel === 'SPEAKER_PHONE' || userSel === 'EARPIECE') return userSel;
+    if (userSel && externalRouteListedInCall(userSel)) return userSel;
+
     const fromParams = normalizeInCallRoute(g.__currentCallPiPParamsRef?.current?.audioOutputRoute || '');
+    if (fromParams === 'SPEAKER_PHONE' || fromParams === 'EARPIECE') return fromParams;
+
     const stored = normalizeInCallRoute(g.__persistedCallAudioRouteRef?.current || '');
     const lastApplied = readLastAppliedCallAudioRoute();
-    const intent =
+    const builtinEarly =
       (stored === 'SPEAKER_PHONE' || stored === 'EARPIECE' ? stored : null) ||
-      (lastApplied === 'SPEAKER_PHONE' || lastApplied === 'EARPIECE' ? lastApplied : null) ||
-      fromParams ||
-      stored ||
-      lastApplied;
-    if (intent === 'SPEAKER_PHONE' || intent === 'EARPIECE') {
-      return intent;
-    }
-    if (intent && isExternalHeadsetRoute(intent)) {
-      const available = readInCallAvailableAudioRoutesList();
-      if (!available.length || available.includes(intent)) {
-        return intent;
-      }
-    }
+      (lastApplied === 'SPEAKER_PHONE' || lastApplied === 'EARPIECE' ? lastApplied : null);
+    if (builtinEarly) return builtinEarly;
+
+    if (fromParams && externalRouteListedInCall(fromParams)) return fromParams;
+
+    const hint = fromParams || userSel || stored || lastApplied;
     const external =
-      readConnectedExternalCallAudioRoute(intent) ||
-      readActiveExternalCallAudioRoute(intent);
-    if (external) return external;
+      readConnectedExternalCallAudioRoute(hint) || readActiveExternalCallAudioRoute(hint);
+    if (external && externalRouteListedInCall(external)) return external;
+
+    if (
+      (userSel && isExternalHeadsetRoute(userSel)) ||
+      (fromParams && isExternalHeadsetRoute(fromParams)) ||
+      (hint && isExternalHeadsetRoute(hint))
+    ) {
+      return readPiPBuiltinWhenExternalUnavailable(g);
+    }
+
+    const intent = fromParams || stored || lastApplied;
+    if (intent === 'SPEAKER_PHONE' || intent === 'EARPIECE') return intent;
     return intent || 'EARPIECE';
   } catch {
     return 'EARPIECE';

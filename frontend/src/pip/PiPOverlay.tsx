@@ -124,11 +124,9 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
     const g = global as any;
     const onRoute = (route: InCallAudioRoute) => setPipAudioRoute(route);
     g.__onInAppPiPAudioRouteChanged = onRoute;
-    const interval = setInterval(syncRoute, 500);
-    const stopPoll = setTimeout(() => clearInterval(interval), 5000);
+    const interval = setInterval(syncRoute, 800);
     return () => {
       clearInterval(interval);
-      clearTimeout(stopPoll);
       if (g.__onInAppPiPAudioRouteChanged === onRoute) {
         g.__onInAppPiPAudioRouteChanged = null;
       }

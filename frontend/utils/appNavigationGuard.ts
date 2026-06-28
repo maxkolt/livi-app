@@ -2,6 +2,9 @@ import { AppState, AppStateStatus } from 'react-native';
 import { CommonActions, StackActions } from '@react-navigation/native';
 import { logger } from './logger';
 import { clearStaleInAppPiPAudioContextForFreshCallNav } from './callAudioRoutePersist';
+import { readSafeRootNavigation } from './safeRootNavigation';
+
+export { readRootCurrentRouteName, readRootCurrentRoute, readRootNavigationState } from './safeRootNavigation';
 
 let appState: AppStateStatus = AppState.currentState;
 let guardInstalled = false;
@@ -336,6 +339,152 @@ export function navigateToVideoCallScreen(
     logger.warn('[navGuard] VideoCall navigate failed', { callId, reason, e });
     return false;
   }
+}
+
+export function readAppRootNavigation(): RootNavLike | null {
+  return readSafeRootNavigation() as RootNavLike | null;
+}
+
+const ROOT_NAV_RETRY_FRAMES = 45;
+
+function runWhenRootNavigationReady(run: (nav: RootNavLike) => void): boolean {
+  const nav = readAppRootNavigation();
+  if (nav) {
+    run(nav);
+    return true;
+  }
+  let frames = 0;
+  const tick = () => {
+    const n = readAppRootNavigation();
+    if (n) {
+      run(n);
+      return;
+    }
+    frames += 1;
+    if (frames >= ROOT_NAV_RETRY_FRAMES) {
+      logger.warn('[navGuard] root navigation not ready after retries');
+      return;
+    }
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(tick);
+    } else {
+      setTimeout(tick, 16);
+    }
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(tick);
+  } else {
+    setTimeout(tick, 16);
+  }
+  return false;
+}
+
+function mergeActiveVideoCallParamsOnNav(
+  nav: RootNavLike,
+  params: Record<string, unknown>,
+): boolean {
+  try {
+    if (String(nav.getCurrentRoute?.()?.name ?? '') === 'VideoCall') {
+      nav.dispatch?.(CommonActions.setParams(params));
+    } else {
+      nav.dispatch?.(
+        CommonActions.navigate({
+          name: 'VideoCall' as never,
+          params,
+          merge: true,
+        }),
+      );
+    }
+    return true;
+  } catch (e) {
+    logger.warn('[navGuard] mergeActiveVideoCallParams failed', { e });
+    return false;
+  }
+}
+
+/** setParams на VideoCall через root ref (не бросает, если hook navigation ещё не инициализирован). */
+export function mergeActiveVideoCallParams(params: Record<string, unknown>): boolean {
+  const nav = readAppRootNavigation();
+  if (nav) {
+    return mergeActiveVideoCallParamsOnNav(nav, params);
+  }
+  runWhenRootNavigationReady((n) => {
+    mergeActiveVideoCallParamsOnNav(n, params);
+  });
+  return false;
+}
+
+function goBackFromCallScreenOrHomeOnNav(
+  nav: RootNavLike,
+  returnTo?: { name: string; params?: object },
+): boolean {
+  try {
+    if (typeof nav.canGoBack === 'function' && nav.canGoBack()) {
+      nav.dispatch?.(CommonActions.goBack());
+      return true;
+    }
+    if (returnTo?.name) {
+      nav.dispatch?.(
+        CommonActions.reset({
+          index: 0,
+          routes: [{ name: returnTo.name as never, params: returnTo.params ?? {} }],
+        }),
+      );
+      return true;
+    }
+    nav.dispatch?.(
+      CommonActions.reset({ index: 0, routes: [{ name: 'Home' as never }] }),
+    );
+    return true;
+  } catch (e) {
+    logger.warn('[navGuard] goBackFromCallScreenOrHome failed', { e });
+    return false;
+  }
+}
+
+/** goBack / Home без useNavigation() — для PiP и remount VideoCall. */
+export function goBackFromCallScreenOrHome(returnTo?: {
+  name: string;
+  params?: object;
+}): boolean {
+  const nav = readAppRootNavigation();
+  if (nav) {
+    return goBackFromCallScreenOrHomeOnNav(nav, returnTo);
+  }
+  runWhenRootNavigationReady((n) => {
+    goBackFromCallScreenOrHomeOnNav(n, returnTo);
+  });
+  return false;
+}
+
+/** Сброс одноразовых params на Home через root ref (без hook navigation). */
+export function clearHomeTransientRouteParams(): boolean {
+  const tryClear = (nav: RootNavLike): boolean => {
+    if (String(nav.getCurrentRoute?.()?.name ?? '') !== 'Home') return false;
+    try {
+      nav.dispatch?.(
+        CommonActions.setParams({
+          callEnded: undefined,
+          callCancelled: undefined,
+          openFriendsMenu: undefined,
+          openFriendsTab: undefined,
+          pushMessageFrom: undefined,
+        }),
+      );
+      return true;
+    } catch (e) {
+      logger.warn('[navGuard] clearHomeTransientRouteParams failed', { e });
+      return false;
+    }
+  };
+  const nav = readAppRootNavigation();
+  if (nav) {
+    return tryClear(nav);
+  }
+  runWhenRootNavigationReady((n) => {
+    tryClear(n);
+  });
+  return false;
 }
 
 export type LeaveVideoCallScreenOpts = {
