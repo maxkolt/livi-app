@@ -5481,8 +5481,10 @@ const handleClearNick = useCallback(async () => {
       {
         width: FRIEND_SWIPE_DELETE_WIDTH,
         minHeight: FRIEND_ROW_HEIGHT,
+        alignSelf: 'stretch' as const,
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
+        backgroundColor: Platform.OS === 'android' ? LIVI.surface : 'rgba(13,14,16,0.88)',
       },
     ];
     if (swipeActionsHiddenForCall === id) return <View style={panelStyle} />;
@@ -5707,8 +5709,6 @@ const handleClearNick = useCallback(async () => {
   
 
   const FRIEND_ROW_HEIGHT = 72;
-  const FRIEND_SEPARATOR_HEIGHT = StyleSheet.hairlineWidth;
-  const FRIEND_ITEM_HEIGHT = FRIEND_ROW_HEIGHT + FRIEND_SEPARATOR_HEIGHT;
   const SHEET_CONTENT_PAD_H = 12;
   /** Совпадает с sheetTopBar paddingHorizontal + marginLeft у ChatStyleBackButton (5). */
   const FRIENDS_LIST_PAD_H = SHEET_CONTENT_PAD_H + 5;
@@ -5751,7 +5751,6 @@ const handleClearNick = useCallback(async () => {
     <FlatList
       // Первый тап по action-кнопкам (чат/звонок) должен срабатывать даже при открытой клавиатуре.
       keyboardShouldPersistTaps="always"
-      clipToPadding={false}
       showsVerticalScrollIndicator={false}
       overScrollMode="never"
       removeClippedSubviews={false}
@@ -5761,13 +5760,12 @@ const handleClearNick = useCallback(async () => {
       updateCellsBatchingPeriod={50}
       getItemLayout={(_, index) => ({
         length: FRIEND_ROW_HEIGHT,
-        offset: FRIEND_ITEM_HEIGHT * index,
+        offset: FRIEND_ROW_HEIGHT * index,
         index,
       })}
       data={friends}
       keyExtractor={(item) => item.id}
       extraData={friendsListExtraData}
-      ItemSeparatorComponent={() => <View style={styles.friendSeparator} />}
       refreshing={refreshing}
       onRefresh={onRefreshFriends}
       onScrollBeginDrag={() => setMarkReadMenu(null)}
@@ -5784,7 +5782,6 @@ const handleClearNick = useCallback(async () => {
             <View style={styles.friendRowSwipeColumn}>
             <Swipeable
               containerStyle={styles.friendRowSwipeContainer}
-              childrenContainerStyle={styles.friendRowSwipeChild}
               ref={(r) => {
                 if (r) {
                   swipeableRefsMap.current[item.id] = r;
@@ -5871,6 +5868,7 @@ const handleClearNick = useCallback(async () => {
               <InviteButton friend={item} />
               <ChatButton friend={item} />
             </View>
+            <View style={styles.friendRowDivider} pointerEvents="none" />
             {markReadMenu && markReadMenu.friendId === item.id && (
               <View
                 style={[
@@ -7456,14 +7454,15 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   friendRowSwipeContainer: { flex: 1, overflow: 'hidden' as const },
-  friendRowSwipeChild: {
-    backgroundColor: Platform.OS === 'android' ? '#0D0E10' : 'rgba(13,14,16,0.88)',
-  },
-  friendSeparator: {
+  /** Внутри строки, поверх фона listRow — иначе следующая ячейка перекрывает ItemSeparator слева. */
+  friendRowDivider: {
+    position: 'absolute',
+    left: 4,
+    right: 4,
+    bottom: 0,
     height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.10)',
-    marginLeft: 4,
-    marginRight: 4,
+    zIndex: 20,
   },
 
   actionBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
