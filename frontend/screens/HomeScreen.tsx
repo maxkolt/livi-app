@@ -5802,6 +5802,7 @@ const handleClearNick = useCallback(async () => {
 
   const FriendsTab = () => (
     <FlatList
+      style={styles.friendsList}
       // Первый тап по action-кнопкам (чат/звонок) должен срабатывать даже при открытой клавиатуре.
       keyboardShouldPersistTaps="always"
       showsVerticalScrollIndicator={false}
@@ -7363,12 +7364,17 @@ const styles = StyleSheet.create({
   menuBtnIcon: { margin: 0, backgroundColor: 'transparent' },
   // Симметричные отступы: левый padding у FlatList; правый — paddingRight у блока кнопок.
   // Swipeable только на аватар+ник; звонок/чат в отдельной колонке справа.
+  friendsList: {
+    flex: 1,
+    backgroundColor: Platform.OS === 'android' ? LIVI.surface : 'rgba(13,14,16,0.88)',
+  },
   listRowWrap: {
     position: 'relative',
     overflow: 'visible' as const,
     flexDirection: 'row',
     alignItems: 'stretch',
     minHeight: 72,
+    backgroundColor: Platform.OS === 'android' ? LIVI.surface : 'rgba(13,14,16,0.88)',
   },
   friendRowSwipeColumn: {
     flex: 1,
@@ -7386,6 +7392,8 @@ const styles = StyleSheet.create({
     paddingLeft: 0,
     paddingRight: 0,
     minHeight: 72,
+    flex: 1,
+    alignSelf: 'stretch' as const,
     position: 'relative' as const,
   },
   /** Чтобы бейджи на углу кнопок (translate 50%/-50%) не обрезались TouchableRipple / строкой */
@@ -7509,7 +7517,7 @@ const styles = StyleSheet.create({
     overflow: 'visible' as const,
     flexShrink: 0,
   },
-  friendRowSwipeContainer: { flex: 1, overflow: 'hidden' as const },
+  friendRowSwipeContainer: { flex: 1, alignSelf: 'stretch' as const, overflow: 'hidden' as const },
   /** Внутри строки, поверх фона listRow — иначе следующая ячейка перекрывает ItemSeparator слева. */
   friendRowDivider: {
     position: 'absolute',
