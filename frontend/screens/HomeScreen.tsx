@@ -193,6 +193,9 @@ const LIVI = {
   textThemeWhite: "#444444" 
 };
 
+/** Толщина разделителя между строками друзей (hairline + 1px). */
+const FRIEND_ROW_DIVIDER_HEIGHT = StyleSheet.hairlineWidth + 1;
+
 /** Android: неактивная кнопка видео в списке друзей — тёмный «чип» и приглушённая иконка (единый вид на всех девайсах). */
 const ANDROID_VIDEO_CALL_DISABLED_BG = '#1C1C1E';
 const ANDROID_VIDEO_CALL_DISABLED_ICON = '#48484A';
@@ -5476,7 +5479,45 @@ const handleClearNick = useCallback(async () => {
       </View>
     );
   };
-  const renderRightActions = (id: string) => {
+  const friendRowBlocksSwipeDelete = useCallback(
+    (friend: Friend) => {
+      const friendIdStr = String(friend.id);
+      if (swipeActionsHiddenForCall === friendIdStr) return true;
+      const g = global as any;
+      const videoCallPartner = g.__videoCallPartnerUserIdRef?.current;
+      if (
+        isDirectCallSessionLive(g) &&
+        videoCallPartner &&
+        String(videoCallPartner) === friendIdStr
+      ) {
+        return true;
+      }
+      const isFriendBusy = friend.isBusy || false;
+      const friendBusyBlocksCall =
+        friend.online && isFriendBusy && !isRecentlyEndedCallFriend(friendIdStr);
+      const isIncomingFromThisFriend =
+        incomingCallScreen.visible &&
+        incomingCallScreen.fromUserId != null &&
+        String(incomingCallScreen.fromUserId) === friendIdStr;
+      const showBusyBadge = friendBusyBlocksCall && !isIncomingFromThisFriend;
+      if (showBusyBadge) return true;
+      if (calling.visible && calling.friend && String(calling.friend.id) === friendIdStr) {
+        return true;
+      }
+      return false;
+    },
+    [
+      swipeActionsHiddenForCall,
+      isRecentlyEndedCallFriend,
+      incomingCallScreen.visible,
+      incomingCallScreen.fromUserId,
+      calling.visible,
+      calling.friend,
+    ],
+  );
+
+  const renderRightActions = (friend: Friend) => {
+    const id = String(friend.id);
     const panelStyle = [
       styles.swipeRight,
       {
@@ -5488,7 +5529,7 @@ const handleClearNick = useCallback(async () => {
         backgroundColor: Platform.OS === 'android' ? LIVI.surface : 'rgba(13,14,16,0.88)',
       },
     ];
-    if (swipeActionsHiddenForCall === id) return <View style={panelStyle} />;
+    if (friendRowBlocksSwipeDelete(friend)) return <View style={panelStyle} />;
     return (
       <View style={panelStyle}>
         <IconButton
@@ -5513,6 +5554,8 @@ const handleClearNick = useCallback(async () => {
 
   const handleRemoveFriend = useCallback(
     async (peerId: string) => {
+      const friend = friendsRef.current.find((f) => String(f.id) === String(peerId));
+      if (friend && friendRowBlocksSwipeDelete(friend)) return;
       try {
         openSwipeableRef.current?.close?.();
       } catch {}
@@ -5533,7 +5576,7 @@ const handleClearNick = useCallback(async () => {
         showNotice(`${L('friendRemoveFailed')}: ${e?.message || 'error'}`, 'error', 3000);
       }
     },
-    [showNotice, L],
+    [showNotice, L, friendRowBlocksSwipeDelete],
   );
 
   type FriendDisplay = {
@@ -5723,6 +5766,13 @@ const handleClearNick = useCallback(async () => {
     () => buildFriendBadgesSignature(missedByUser, unreadByUser),
     [missedByUser, unreadByUser],
   );
+  const friendsCallSwipeBlockSignature = React.useMemo(
+    () =>
+      friends
+        .map((f) => `${f.id}:${f.online ? 1 : 0}:${f.isBusy ? 1 : 0}`)
+        .join(';'),
+    [friends],
+  );
   const friendsListExtraData = React.useMemo(
     () => ({
       friendActionsGestureResetSeq,
@@ -5733,6 +5783,7 @@ const handleClearNick = useCallback(async () => {
       markReadFriendId: markReadMenu?.friendId ?? null,
       markReadMenuType: markReadMenu?.type ?? null,
       friendBadgesSignature,
+      friendsCallSwipeBlockSignature,
       swipeActionsHiddenForCall,
     }),
     [
@@ -5744,6 +5795,7 @@ const handleClearNick = useCallback(async () => {
       markReadMenu?.friendId,
       markReadMenu?.type,
       friendBadgesSignature,
+      friendsCallSwipeBlockSignature,
       swipeActionsHiddenForCall,
     ],
   );
@@ -5775,6 +5827,7 @@ const handleClearNick = useCallback(async () => {
         const isMenuRow = markReadMenu?.friendId === item.id;
         const rowHidden = isMenuRow;
         const showRowDivider = index < friends.length - 1;
+        const swipeDeleteBlocked = friendRowBlocksSwipeDelete(item);
         return (
         <View key={item.id}>
           <View
@@ -5784,6 +5837,7 @@ const handleClearNick = useCallback(async () => {
             <View style={styles.friendRowSwipeColumn}>
             <Swipeable
               containerStyle={styles.friendRowSwipeContainer}
+              enabled={!swipeDeleteBlocked}
               ref={(r) => {
                 if (r) {
                   swipeableRefsMap.current[item.id] = r;
@@ -5794,6 +5848,12 @@ const handleClearNick = useCallback(async () => {
                 delete swipeableRefsMap.current[item.id];
               }}
               onSwipeableWillOpen={() => {
+                if (swipeDeleteBlocked) {
+                  try {
+                    swipeableRefsMap.current[item.id]?.close?.();
+                  } catch {}
+                  return;
+                }
                 setMarkReadMenu(null);
                 const opening = swipeableRefsMap.current[item.id];
                 const prev = openSwipeableRef.current;
@@ -5805,7 +5865,7 @@ const handleClearNick = useCallback(async () => {
               }}
               onSwipeableOpen={() => { openSwipeableRef.current = swipeableRefsMap.current[item.id] ?? null; }}
               onSwipeableClose={() => { if (openSwipeableRef.current === swipeableRefsMap.current[item.id]) openSwipeableRef.current = null; }}
-              renderRightActions={() => renderRightActions(item.id)}
+              renderRightActions={() => renderRightActions(item)}
               dragOffsetFromRightEdge={0}
               dragOffsetFromLeftEdge={0}
               activeOffsetX={[-6, 6]}
@@ -7456,9 +7516,10 @@ const styles = StyleSheet.create({
     left: 4,
     right: 4,
     bottom: 0,
-    height: StyleSheet.hairlineWidth,
+    height: FRIEND_ROW_DIVIDER_HEIGHT,
     backgroundColor: 'rgba(255,255,255,0.10)',
-    zIndex: 20,
+    zIndex: 50,
+    ...(Platform.OS === 'android' ? { elevation: 50 } : {}),
   },
 
   actionBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
@@ -7521,9 +7582,9 @@ const styles = StyleSheet.create({
   },
   markReadMenuOverlay: {
     position: 'absolute',
-    top: 0,
+    top: FRIEND_ROW_DIVIDER_HEIGHT,
     right: 0,
-    bottom: StyleSheet.hairlineWidth,
+    bottom: FRIEND_ROW_DIVIDER_HEIGHT,
     justifyContent: 'center',
     alignItems: 'flex-end',
     zIndex: 40,

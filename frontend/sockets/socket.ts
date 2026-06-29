@@ -3581,10 +3581,10 @@ export async function clearChatMessages(peerId: string, forAll: boolean = true):
 export async function deleteMessage(messageId: string): Promise<boolean> {
   try {
     const viaSocket = async () => {
-      return await emitAck('message:delete', { messageId });
+      return await emitAck<{ ok: boolean; error?: string }>('message:delete', { messageId });
     };
 
-    const viaHttp = async () => {
+    const viaHttp = async (): Promise<{ ok: boolean; error?: string }> => {
       const installId = await getInstallId().catch(() => '');
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (installId) headers['x-install-id'] = String(installId);
@@ -3600,28 +3600,32 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
           body: JSON.stringify({ messageId }),
           signal: controller.signal,
         });
-        if (!res.ok) return false;
+        if (!res.ok) return { ok: false, error: 'network' };
         const data = await res.json().catch(() => null);
-        return !!data?.ok;
+        return { ok: !!data?.ok, error: data?.error ? String(data.error) : undefined };
       } finally {
         clearTimeout(timeoutId);
       }
     };
 
+    const finishOk = async () => {
+      await rememberGloballyDeletedMessageIds([messageId]);
+      return true;
+    };
+
     try {
       const r: any = await viaSocket();
-      // IMPORTANT: if socket responds with ok=false (no throw), fall back to HTTP for reliability.
-      if (r?.ok === true) {
-        await rememberGloballyDeletedMessageIds([messageId]);
-        return true;
-      }
-      const httpOk = await viaHttp();
-      if (httpOk) await rememberGloballyDeletedMessageIds([messageId]);
-      return httpOk;
+      if (r?.ok === true) return finishOk();
+      if (r?.ok === false && String(r?.error || '') === 'not_found') return finishOk();
+      const http = await viaHttp();
+      if (http.ok) return finishOk();
+      if (!http.ok && String(http.error || '') === 'not_found') return finishOk();
+      return false;
     } catch {
-      const httpOk = await viaHttp();
-      if (httpOk) await rememberGloballyDeletedMessageIds([messageId]);
-      return httpOk;
+      const http = await viaHttp();
+      if (http.ok) return finishOk();
+      if (!http.ok && String(http.error || '') === 'not_found') return finishOk();
+      return false;
     }
   } catch (error) {
     console.error('Failed to delete message:', error);
@@ -3629,18 +3633,24 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
   }
 }
 
-export async function deleteMessages(messageIds: string[]): Promise<{ deletedIds: string[]; failedIds: string[] }> {
+export type DeleteMessagesBatchResult = {
+  deletedIds: string[];
+  failedIds: string[];
+  error?: string;
+};
+
+export async function deleteMessages(messageIds: string[]): Promise<DeleteMessagesBatchResult> {
   try {
     const normalized = Array.from(new Set((messageIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
     if (normalized.length === 0) return { deletedIds: [], failedIds: [] };
 
     const viaSocket = async () => {
-      return await emitAck<{ ok: boolean; deletedIds?: string[]; failedIds?: string[] }>('messages:delete', {
+      return await emitAck<{ ok: boolean; deletedIds?: string[]; failedIds?: string[]; error?: string }>('messages:delete', {
         messageIds: normalized,
       });
     };
 
-    const viaHttp = async () => {
+    const viaHttp = async (): Promise<DeleteMessagesBatchResult> => {
       const installId = await getInstallId().catch(() => '');
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (installId) headers['x-install-id'] = String(installId);
@@ -3656,49 +3666,56 @@ export async function deleteMessages(messageIds: string[]): Promise<{ deletedIds
           body: JSON.stringify({ messageIds: normalized }),
           signal: controller.signal,
         });
-        if (!res.ok) return { deletedIds: [], failedIds: normalized };
+        if (!res.ok) {
+          return { deletedIds: [], failedIds: normalized, error: 'network' };
+        }
         const data = await res.json().catch(() => null);
         return {
           deletedIds: Array.isArray(data?.deletedIds) ? data.deletedIds.map(String) : [],
-          failedIds: Array.isArray(data?.failedIds) ? data.failedIds.map(String) : normalized,
+          failedIds: Array.isArray(data?.failedIds) ? data.failedIds.map(String) : [],
+          error: data?.error ? String(data.error) : undefined,
         };
       } finally {
         clearTimeout(timeoutId);
       }
     };
 
+    const buildResult = async (partial: DeleteMessagesBatchResult): Promise<DeleteMessagesBatchResult> => {
+      const deletedIds = partial.deletedIds.map(String);
+      const failedIds = partial.failedIds.map(String);
+      const tombstones = [...deletedIds];
+      if (!partial.error || partial.error === 'not_found') {
+        tombstones.push(...failedIds);
+      }
+      if (tombstones.length > 0) {
+        await rememberGloballyDeletedMessageIds(tombstones);
+      }
+      return { deletedIds, failedIds, error: partial.error };
+    };
+
     try {
       const r: any = await viaSocket();
       const deletedFromSocket = Array.isArray(r?.deletedIds) ? r.deletedIds.map(String) : [];
       const failedFromSocket = Array.isArray(r?.failedIds) ? r.failedIds.map(String) : [];
-      if (r?.ok === true || deletedFromSocket.length > 0) {
-        if (deletedFromSocket.length > 0) {
-          await rememberGloballyDeletedMessageIds(deletedFromSocket);
-        }
-        return {
+      if (r?.ok === true || deletedFromSocket.length > 0 || failedFromSocket.length > 0) {
+        return buildResult({
           deletedIds: deletedFromSocket,
           failedIds: failedFromSocket.length > 0
             ? failedFromSocket
             : normalized.filter((id) => !deletedFromSocket.includes(String(id))),
-        };
+          error: r?.error ? String(r.error) : undefined,
+        });
       }
-      const httpResult = await viaHttp();
-      if (httpResult.deletedIds.length > 0) {
-        await rememberGloballyDeletedMessageIds(httpResult.deletedIds);
-      }
-      return httpResult;
+      return buildResult(await viaHttp());
     } catch {
-      const httpResult = await viaHttp();
-      if (httpResult.deletedIds.length > 0) {
-        await rememberGloballyDeletedMessageIds(httpResult.deletedIds);
-      }
-      return httpResult;
+      return buildResult(await viaHttp());
     }
   } catch (error) {
     console.error('Failed to delete messages:', error);
     return {
       deletedIds: [],
       failedIds: Array.from(new Set((messageIds || []).map((id) => String(id || '').trim()).filter(Boolean))),
+      error: 'server_error',
     };
   }
 }

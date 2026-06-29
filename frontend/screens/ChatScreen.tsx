@@ -438,6 +438,75 @@ function filterRemoveMessageAndOutgoingDupes(prev: any[], deletedId: string): an
   });
 }
 
+/** Снять с ленты id с сервера и связанные outbox/optimistic (по тексту и local→server map). */
+function removeMessagesForDeletedIds(
+  prev: any[],
+  rawIds: readonly string[],
+  localToServer?: ReadonlyMap<string, string>,
+): any[] {
+  const deletedSet = new Set(
+    (rawIds || []).map((id) => String(id || '').trim()).filter(Boolean),
+  );
+  if (deletedSet.size === 0) return prev;
+
+  const aliasIds = new Set<string>();
+  if (localToServer) {
+    for (const sid of deletedSet) {
+      for (const [local, server] of localToServer.entries()) {
+        if (server === sid) aliasIds.add(local);
+      }
+    }
+  }
+
+  let next = prev;
+  for (const id of deletedSet) {
+    next = filterRemoveMessageAndOutgoingDupes(next, id);
+  }
+  for (const aid of aliasIds) {
+    next = filterRemoveMessageAndOutgoingDupes(next, aid);
+  }
+
+  return next.filter((msg) => {
+    const id = String(msg?.id || '').trim();
+    if (!id) return true;
+    if (deletedSet.has(id) || aliasIds.has(id)) return false;
+    const mapped = localToServer?.get(id);
+    if (mapped && deletedSet.has(mapped)) return false;
+    return true;
+  });
+}
+
+/** Перед delete «для обоих»: outbox_* → server id из ленты или из map после доставки. */
+function resolveServerMessageIdForDelete(
+  messageId: string,
+  messages: any[],
+  localToServer: ReadonlyMap<string, string>,
+): string {
+  const id = String(messageId || '').trim();
+  if (!id) return '';
+  if (isDeletableOnServerMessageId(id)) return id;
+
+  const mapped = localToServer.get(id);
+  if (mapped && isDeletableOnServerMessageId(mapped)) return mapped;
+
+  const victim = messages.find((m) => String(m?.id || '').trim() === id);
+  if (!victim) return id;
+
+  for (const m of messages) {
+    const mid = String(m?.id || '').trim();
+    if (!mid || mid === id) continue;
+    if (String(m?.sender || '') !== 'me') continue;
+    if (!isDeletableOnServerMessageId(mid)) continue;
+    if (approxSameOutgoingTextMessage(m, victim)) return mid;
+  }
+  return id;
+}
+
+function isHardDeleteBatchError(error: unknown): boolean {
+  const e = String(error || '').trim();
+  return e === 'network' || e === 'server_error' || e === 'unauthorized';
+}
+
 type ChatListRow =
   | { type: 'date'; id: string; label: string }
   | ({ type: 'message' } & Record<string, any>);
@@ -723,8 +792,21 @@ export default function ChatScreen({ route, navigation }: Props) {
   const [readStatuses, setReadStatuses] = useState<Record<string, 'sending' | 'delivered' | 'read' | 'failed' | 'sent'>>({});
   const readStatusesRef = useRef(readStatuses);
   readStatusesRef.current = readStatuses;
-  /** Удалённые на сервере id (в т.ч. legacy numeric): блокируем повтор из history/outbox. */
+  /** Удалённые на сервере id (в t.ч. legacy numeric): блокируем повтор из history/outbox. */
   const deletedServerMessageIdsRef = useRef<Set<string>>(new Set());
+  /** outbox_* / optimistic ui id → id в Mongo (после доставки). */
+  const outboxLocalIdToServerIdRef = useRef<Map<string, string>>(new Map());
+  const rememberOutboxLocalToServerId = React.useCallback((localId: string, serverId: string) => {
+    const local = String(localId || '').trim();
+    const server = String(serverId || '').trim();
+    if (!local || !server || local === server) return;
+    const map = outboxLocalIdToServerIdRef.current;
+    map.set(local, server);
+    if (map.size > 500) {
+      const keep = new Map(Array.from(map.entries()).slice(-250));
+      outboxLocalIdToServerIdRef.current = keep;
+    }
+  }, []);
   const hiddenForMeMessageIdsRef = useRef<Set<string>>(new Set());
   const rememberDeletedServerMessageId = React.useCallback((rawId: string) => {
     const id = String(rawId || '').trim();
@@ -1819,7 +1901,11 @@ export default function ChatScreen({ route, navigation }: Props) {
       for (const id of deletedIds) rememberDeletedServerMessageId(String(id));
       clearMessageCache(peerId, currentUserId || undefined);
       setMessages((prev) => {
-        const next = prev.filter((msg) => !deletedIds.has(String(msg?.id || '').trim()));
+        const next = removeMessagesForDeletedIds(
+          prev,
+          Array.from(deletedIds),
+          outboxLocalIdToServerIdRef.current,
+        );
         latestMessagesForPersistRef.current = next;
         queueMicrotask(() => enqueueMessagesPersist('delete_event_messages'));
         return next;
@@ -1852,7 +1938,11 @@ export default function ChatScreen({ route, navigation }: Props) {
       for (const id of deletedIds) rememberDeletedServerMessageId(String(id));
       clearMessageCache(peerId, currentUserId || undefined);
       setMessages((prev) => {
-        const next = prev.filter((msg) => !deletedIds.has(String(msg?.id || '').trim()));
+        const next = removeMessagesForDeletedIds(
+          prev,
+          Array.from(deletedIds),
+          outboxLocalIdToServerIdRef.current,
+        );
         latestMessagesForPersistRef.current = next;
         queueMicrotask(() => enqueueMessagesPersist('delete_event_messages'));
         return next;
@@ -1916,6 +2006,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         [ev.outboxId, ev.optimisticUiId].map((x) => String(x || '').trim()).filter(Boolean),
       );
       if (olds.size === 0) return;
+      for (const oid of olds) rememberOutboxLocalToServerId(oid, serverMessageId);
 
       if (deletedServerMessageIdsRef.current.has(serverMessageId)) {
         clearMessageCache(peerId, currentUserId || undefined);
@@ -1977,7 +2068,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       unsubscribeOutboxDelivered();
       unsubscribeDelivered();
     };
-  }, [currentUserId, peerId, rememberDeletedServerMessageId]);
+  }, [currentUserId, peerId, rememberDeletedServerMessageId, rememberOutboxLocalToServerId]);
 
   // When app returns from background with chat open, we might have missed realtime events
   // (e.g. message deleted by peer while device was sleeping). Do a quiet sync.
@@ -3189,9 +3280,21 @@ export default function ChatScreen({ route, navigation }: Props) {
 
 
   const deleteSingleMessage = async (messageId: string, forBoth: boolean = true) => {
-    const mid = String(messageId || '').trim();
+    let mid = String(messageId || '').trim();
     if (!mid) return;
     void removeQueuedEditsMatching([mid]).catch(() => {});
+
+    const snap = Array.isArray(messagesRef.current) ? messagesRef.current : [];
+    if (!isDeletableOnServerMessageId(mid) && forBoth) {
+      const resolved = resolveServerMessageIdForDelete(
+        mid,
+        snap,
+        outboxLocalIdToServerIdRef.current,
+      );
+      if (isDeletableOnServerMessageId(resolved)) {
+        mid = resolved;
+      }
+    }
 
     // Только outbox_* ещё не на сервере. Id вида timestamp-random — clientMessageId в Mongo.
     if (!isDeletableOnServerMessageId(mid)) {
@@ -4002,9 +4105,26 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (ids.length === 0) return;
 
     const idSet = new Set(ids.map((x) => String(x)));
+    const snapForResolve = Array.isArray(messagesRef.current) ? [...messagesRef.current] : [];
+    const localToServer = outboxLocalIdToServerIdRef.current;
 
-    const serverIds = forBoth ? ids.filter((id) => isDeletableOnServerMessageId(String(id))) : [];
-    const localOnlyIds = ids.filter((id) => !forBoth || !isDeletableOnServerMessageId(String(id)));
+    let serverIds: string[] = [];
+    let localOnlyIds: string[] = [];
+    if (forBoth) {
+      const resolvedServer = new Set<string>();
+      localOnlyIds = [];
+      for (const uiId of ids) {
+        const resolved = resolveServerMessageIdForDelete(uiId, snapForResolve, localToServer);
+        if (isDeletableOnServerMessageId(resolved)) {
+          resolvedServer.add(resolved);
+        } else {
+          localOnlyIds.push(String(uiId));
+        }
+      }
+      serverIds = Array.from(resolvedServer);
+    } else {
+      localOnlyIds = [...ids];
+    }
     if (!forBoth) {
       await rememberHiddenForMeMessageIds(ids);
     }
@@ -4044,19 +4164,29 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     const batchResult = forBoth && serverIds.length > 0
       ? await deleteMessages(serverIds)
-      : { deletedIds: [], failedIds: [] };
-    const failedServer = forBoth
-      ? (Array.isArray(batchResult?.failedIds) ? batchResult.failedIds.map(String) : serverIds)
+      : { deletedIds: [], failedIds: [], error: undefined as string | undefined };
+    const deletedOnServer = new Set(
+      (Array.isArray(batchResult?.deletedIds) ? batchResult.deletedIds : []).map(String),
+    );
+    const notFoundOrGone = forBoth
+      ? (Array.isArray(batchResult?.failedIds) ? batchResult.failedIds.map(String) : [])
+      : [];
+    const hardFailure = forBoth && serverIds.length > 0 && isHardDeleteBatchError(batchResult?.error);
+
+    // На сервере уже нет (not_found) — снимаем локально, не восстанавливаем «призраков».
+    const failedServer = hardFailure
+      ? serverIds.filter((id) => !deletedOnServer.has(String(id)))
       : [];
 
     // local-only deletions are always considered successful (client-side only)
-    const successServerIds = serverIds.filter((id) => !failedServer.includes(String(id)));
-    for (const sid of successServerIds) {
+    const successServerIds = serverIds.filter((id) => deletedOnServer.has(String(id)));
+    const goneServerIds = hardFailure ? [] : notFoundOrGone;
+    for (const sid of [...successServerIds, ...goneServerIds]) {
       rememberDeletedServerMessageId(String(sid));
     }
 
     // cleanup status maps for successful deletions (both server + local-only)
-    const deletedOk = new Set<string>([...localOnlyIds, ...successServerIds].map(String));
+    const deletedOk = new Set<string>([...localOnlyIds, ...successServerIds, ...goneServerIds].map(String));
     if (deletedOk.size > 0) {
       updateReadStatuses((prev) => {
         const next: any = { ...prev };
@@ -4723,6 +4853,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
           const serverMessageId = String(result.messageId || '');
           if (serverMessageId && serverMessageId !== messageId) {
+            rememberOutboxLocalToServerId(messageId, serverMessageId);
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.id === messageId
