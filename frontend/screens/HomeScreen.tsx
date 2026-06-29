@@ -193,11 +193,13 @@ const LIVI = {
   textThemeWhite: "#444444" 
 };
 
-/** Толщина разделителя между строками друзей. */
-const FRIEND_ROW_DIVIDER_HEIGHT = 1.2;
+/** Горизонтальный padding списка друзей (sheet 12 + отступ «назад» 5). */
+const FRIENDS_LIST_HORIZONTAL_PAD = 17;
 
-/** Высота строки друзей в списке (совпадает с getItemLayout). */
 const FRIEND_ROW_LAYOUT_HEIGHT = 72;
+
+/** Непрозрачный фон строк списка друзей — без просвета чёрного RecyclerView / окна. */
+const FRIEND_LIST_ROW_BG = LIVI.surface;
 
 /** Android: неактивная кнопка видео в списке друзей — тёмный «чип» и приглушённая иконка (единый вид на всех девайсах). */
 const ANDROID_VIDEO_CALL_DISABLED_BG = '#1C1C1E';
@@ -5832,10 +5834,13 @@ const handleClearNick = useCallback(async () => {
         const showRowDivider = index < friends.length - 1;
         const swipeDeleteBlocked = friendRowBlocksSwipeDelete(item);
         return (
-        <View key={item.id}>
           <View
-            style={styles.listRowWrap}
+            style={[
+              styles.listRowWrap,
+              showRowDivider && !isMenuRow ? styles.listRowWrapSeparator : null,
+            ]}
             ref={isMenuRow ? rowRefForMarkReadMenu : undefined}
+            collapsable={false}
           >
             <View style={styles.friendRowSwipeColumn}>
             <Swipeable
@@ -5933,9 +5938,6 @@ const handleClearNick = useCallback(async () => {
               <InviteButton friend={item} />
               <ChatButton friend={item} />
             </View>
-            {showRowDivider && !isMenuRow ? (
-              <View style={styles.friendRowDivider} pointerEvents="none" />
-            ) : null}
             {markReadMenu && markReadMenu.friendId === item.id && (
               <View
                 style={[
@@ -5973,10 +5975,9 @@ const handleClearNick = useCallback(async () => {
               </View>
             )}
           </View>
-        </View>
         );
       }}
-      contentContainerStyle={{ paddingBottom: 24, paddingHorizontal: FRIENDS_LIST_PAD_H }}
+      contentContainerStyle={styles.friendsListContent}
       ListEmptyComponent={initialized ? (<View style={{ padding: 16 }}><Text style={{ color: LIVI.text2 }}>👤 {L('friendsEmpty')}</Text></View>) : null}
     />
   );
@@ -6761,7 +6762,7 @@ const handleClearNick = useCallback(async () => {
 
             <Divider style={{ backgroundColor: LIVI.border, marginTop: 12 }} />
 
-            <View style={{ flex: 1 }}>
+            <View style={styles.friendsTabHost}>
               {tab === 'friends' && FriendsTab()}
               {tab === 'settings' && (
                 <SettingsTab
@@ -7369,7 +7370,16 @@ const styles = StyleSheet.create({
   // Swipeable только на аватар+ник; звонок/чат в отдельной колонке справа.
   friendsList: {
     flex: 1,
-    backgroundColor: Platform.OS === 'android' ? LIVI.surface : 'rgba(13,14,16,0.88)',
+    backgroundColor: FRIEND_LIST_ROW_BG,
+  },
+  friendsListContent: {
+    paddingBottom: 24,
+    paddingHorizontal: FRIENDS_LIST_HORIZONTAL_PAD,
+    backgroundColor: FRIEND_LIST_ROW_BG,
+  },
+  friendsTabHost: {
+    flex: 1,
+    backgroundColor: FRIEND_LIST_ROW_BG,
   },
   listRowWrap: {
     position: 'relative',
@@ -7377,14 +7387,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'stretch',
     height: FRIEND_ROW_LAYOUT_HEIGHT,
-    backgroundColor: Platform.OS === 'android' ? LIVI.surface : 'rgba(13,14,16,0.88)',
+    backgroundColor: FRIEND_LIST_ROW_BG,
+  },
+  listRowWrapSeparator: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.10)',
+    ...(Platform.OS === 'android' ? { marginBottom: -StyleSheet.hairlineWidth } : null),
   },
   friendRowSwipeColumn: {
     flex: 1,
     minWidth: 0,
+    backgroundColor: FRIEND_LIST_ROW_BG,
   },
   listRow: {
-    backgroundColor: Platform.OS === 'android' ? '#0D0E10' : 'rgba(13,14,16,0.88)',
+    backgroundColor: FRIEND_LIST_ROW_BG,
     paddingVertical: 10,
     paddingRight: 0,
   },
@@ -7519,19 +7535,9 @@ const styles = StyleSheet.create({
     paddingRight: FRIEND_ROW_TRAILING_PAD,
     overflow: 'visible' as const,
     flexShrink: 0,
+    backgroundColor: FRIEND_LIST_ROW_BG,
   },
   friendRowSwipeContainer: { flex: 1, alignSelf: 'stretch' as const, overflow: 'hidden' as const },
-  /** Внутри строки, поверх фона listRow — иначе следующая ячейка перекрывает ItemSeparator слева. */
-  friendRowDivider: {
-    position: 'absolute',
-    left: 4,
-    right: 4,
-    bottom: 0,
-    height: FRIEND_ROW_DIVIDER_HEIGHT,
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    zIndex: 50,
-    ...(Platform.OS === 'android' ? { elevation: 50 } : {}),
-  },
 
   actionBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
   friendActionBtnSize: {
@@ -7595,7 +7601,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     right: 0,
-    height: FRIEND_ROW_LAYOUT_HEIGHT + FRIEND_ROW_DIVIDER_HEIGHT,
+    height: FRIEND_ROW_LAYOUT_HEIGHT,
     justifyContent: 'center',
     alignItems: 'flex-end',
     zIndex: 55,
@@ -7604,7 +7610,7 @@ const styles = StyleSheet.create({
   },
   markReadMenuBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: Platform.OS === 'android' ? LIVI.surface : 'rgba(13,14,16,0.88)',
+    backgroundColor: FRIEND_LIST_ROW_BG,
     zIndex: 0,
     ...(Platform.OS === 'android' ? { elevation: 0 } : {}),
   },
