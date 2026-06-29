@@ -193,8 +193,8 @@ const LIVI = {
   textThemeWhite: "#444444" 
 };
 
-/** Толщина разделителя между строками друзей (hairline + 1px). */
-const FRIEND_ROW_DIVIDER_HEIGHT = StyleSheet.hairlineWidth + 1;
+/** Толщина разделителя между строками друзей. */
+const FRIEND_ROW_DIVIDER_HEIGHT = 1.2;
 
 /** Android: неактивная кнопка видео в списке друзей — тёмный «чип» и приглушённая иконка (единый вид на всех девайсах). */
 const ANDROID_VIDEO_CALL_DISABLED_BG = '#1C1C1E';
