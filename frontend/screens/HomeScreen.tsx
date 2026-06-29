@@ -196,6 +196,9 @@ const LIVI = {
 /** Толщина разделителя между строками друзей. */
 const FRIEND_ROW_DIVIDER_HEIGHT = 1.2;
 
+/** Высота строки друзей в списке (совпадает с getItemLayout). */
+const FRIEND_ROW_LAYOUT_HEIGHT = 72;
+
 /** Android: неактивная кнопка видео в списке друзей — тёмный «чип» и приглушённая иконка (единый вид на всех девайсах). */
 const ANDROID_VIDEO_CALL_DISABLED_BG = '#1C1C1E';
 const ANDROID_VIDEO_CALL_DISABLED_ICON = '#48484A';
@@ -257,7 +260,6 @@ const markReadStripStyles = StyleSheet.create({
     backgroundColor: '#141518',
     justifyContent: 'center',
     zIndex: 1,
-    ...(Platform.OS === 'android' ? { elevation: 12 } : {}),
   },
   stripInner: {
     flexDirection: 'row',
@@ -5752,7 +5754,7 @@ const handleClearNick = useCallback(async () => {
   };
   
 
-  const FRIEND_ROW_HEIGHT = 72;
+  const FRIEND_ROW_HEIGHT = FRIEND_ROW_LAYOUT_HEIGHT;
   const SHEET_CONTENT_PAD_H = 12;
   /** Совпадает с sheetTopBar paddingHorizontal + marginLeft у ChatStyleBackButton (5). */
   const FRIENDS_LIST_PAD_H = SHEET_CONTENT_PAD_H + 5;
@@ -5931,7 +5933,7 @@ const handleClearNick = useCallback(async () => {
               <InviteButton friend={item} />
               <ChatButton friend={item} />
             </View>
-            {showRowDivider ? (
+            {showRowDivider && !isMenuRow ? (
               <View style={styles.friendRowDivider} pointerEvents="none" />
             ) : null}
             {markReadMenu && markReadMenu.friendId === item.id && (
@@ -5941,8 +5943,9 @@ const handleClearNick = useCallback(async () => {
                   { left: isMenuRow ? markReadOverlayLeft : MARK_READ_OVERLAY_LEFT_FALLBACK },
                 ]}
                 pointerEvents="box-none"
+                collapsable={false}
               >
-                <View style={styles.markReadMenuOpaqueCover} pointerEvents="none" />
+                <View style={styles.markReadMenuBackdrop} pointerEvents="none" collapsable={false} />
                 <FriendMarkReadMenuStrip
                   key={`${markReadMenu.friendId}-${markReadMenu.type}`}
                   label={
@@ -7373,7 +7376,7 @@ const styles = StyleSheet.create({
     overflow: 'visible' as const,
     flexDirection: 'row',
     alignItems: 'stretch',
-    minHeight: 72,
+    height: FRIEND_ROW_LAYOUT_HEIGHT,
     backgroundColor: Platform.OS === 'android' ? LIVI.surface : 'rgba(13,14,16,0.88)',
   },
   friendRowSwipeColumn: {
@@ -7590,18 +7593,20 @@ const styles = StyleSheet.create({
   },
   markReadMenuOverlay: {
     position: 'absolute',
-    top: FRIEND_ROW_DIVIDER_HEIGHT,
+    top: 0,
     right: 0,
-    bottom: FRIEND_ROW_DIVIDER_HEIGHT,
+    height: FRIEND_ROW_LAYOUT_HEIGHT + FRIEND_ROW_DIVIDER_HEIGHT,
     justifyContent: 'center',
     alignItems: 'flex-end',
-    zIndex: 40,
+    zIndex: 55,
     overflow: 'hidden' as const,
     paddingRight: FRIEND_ROW_TRAILING_PAD,
   },
-  markReadMenuOpaqueCover: {
+  markReadMenuBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: Platform.OS === 'android' ? '#0D0E10' : '#0D0E10',
+    backgroundColor: Platform.OS === 'android' ? LIVI.surface : 'rgba(13,14,16,0.88)',
+    zIndex: 0,
+    ...(Platform.OS === 'android' ? { elevation: 0 } : {}),
   },
   markReadMenuStrip: {
     overflow: 'hidden',
