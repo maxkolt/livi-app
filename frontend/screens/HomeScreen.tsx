@@ -196,6 +196,9 @@ const LIVI = {
 /** Горизонтальный padding списка друзей (sheet 12 + отступ «назад» 5). */
 const FRIENDS_LIST_HORIZONTAL_PAD = 17;
 
+/** Толщина разделителя между строками друзей. */
+const FRIEND_ROW_DIVIDER_HEIGHT = 1.2;
+
 const FRIEND_ROW_LAYOUT_HEIGHT = 72;
 
 /** Непрозрачный фон строк списка друзей — без просвета чёрного RecyclerView / окна. */
@@ -5831,17 +5834,19 @@ const handleClearNick = useCallback(async () => {
         const { displayName, avatarLetter } = getFriendDisplay(item);
         const isMenuRow = markReadMenu?.friendId === item.id;
         const rowHidden = isMenuRow;
-        const showRowDivider = index < friends.length - 1;
+        const prevFriendId = index > 0 ? friends[index - 1]?.id : null;
+        const showTopDivider =
+          index > 0 && markReadMenu?.friendId !== prevFriendId;
         const swipeDeleteBlocked = friendRowBlocksSwipeDelete(item);
         return (
           <View
-            style={[
-              styles.listRowWrap,
-              showRowDivider && !isMenuRow ? styles.listRowWrapSeparator : null,
-            ]}
+            style={styles.listRowWrap}
             ref={isMenuRow ? rowRefForMarkReadMenu : undefined}
             collapsable={false}
           >
+            {showTopDivider ? (
+              <View style={styles.friendRowDivider} pointerEvents="none" />
+            ) : null}
             <View style={styles.friendRowSwipeColumn}>
             <Swipeable
               containerStyle={styles.friendRowSwipeContainer}
@@ -7389,10 +7394,15 @@ const styles = StyleSheet.create({
     height: FRIEND_ROW_LAYOUT_HEIGHT,
     backgroundColor: FRIEND_LIST_ROW_BG,
   },
-  listRowWrapSeparator: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(255,255,255,0.10)',
-    ...(Platform.OS === 'android' ? { marginBottom: -StyleSheet.hairlineWidth } : null),
+  /** Линия между строками — сверху текущей ячейки, чтобы RecyclerView не перекрывал нижний border. */
+  friendRowDivider: {
+    position: 'absolute',
+    top: 0,
+    left: 4,
+    right: 4,
+    height: FRIEND_ROW_DIVIDER_HEIGHT,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    zIndex: 2,
   },
   friendRowSwipeColumn: {
     flex: 1,
