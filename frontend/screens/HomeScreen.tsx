@@ -66,6 +66,12 @@ import { t, defaultLang } from '../utils/i18n';
 import type { Lang } from '../utils/i18n';
 import { useLang } from '../store/lang';
 import { LinearGradient } from 'expo-linear-gradient';
+import Svg, {
+  Defs,
+  LinearGradient as SvgLinearGradient,
+  Stop as SvgStop,
+  Text as SvgText,
+} from 'react-native-svg';
 
 import { getInstallId, resetInstallId } from '../utils/installId';
 import { logger } from '../utils/logger';
@@ -218,6 +224,20 @@ const ANDROID_FRIEND_ACTION_HIT_SLOP = { top: 14, bottom: 14, left: 14, right: 1
 const ANDROID_MENU_HIT_SLOP = { top: 12, bottom: 12, left: 12, right: 12 };
 const MENU_BTN_RADIUS = 12;
 const MENU_BTN_SIZE = 42;
+const BRAND_OUTLINE_STROKE = 1.35;
+const BRAND_FONT_FAMILY = Platform.OS === 'ios' ? 'System' : 'sans-serif-medium';
+const BRAND_3D_LAYERS = 5;
+const BRAND_3D_STEP_X = 0.55;
+const BRAND_3D_STEP_Y = 0.62;
+const BRAND_LETTER_GLOW_LAYERS = 3;
+const BRAND_LETTER_GLOW_SPREAD = 1.2;
+const BRAND_LETTER_GLOW_INSET = BRAND_LETTER_GLOW_LAYERS * BRAND_LETTER_GLOW_SPREAD;
+const BRAND_LETTER_GLOW_INTENSITY = 0.58;
+const CHROME_PERIMETER_GLOW_LAYERS = 5;
+const CHROME_PERIMETER_GLOW_SPREAD = 2.8;
+/** Компенсация ширины ореола справа — кнопка меню остаётся на прежнем отступе от края. */
+const CHROME_PERIMETER_GLOW_LAYOUT_INSET =
+  CHROME_PERIMETER_GLOW_LAYERS * CHROME_PERIMETER_GLOW_SPREAD;
 const ANIMATED_BORDER_WIDTH = 0.8;
 const ANDROID_SEG_RIPPLE = { color: 'rgba(255,255,255,0.14)', borderless: false as const };
 const FRIENDS_PAGE_SIZE = 50;
@@ -875,6 +895,112 @@ const EQUALIZER_GRADIENT_LIGHT = [
   '#8f7ad8', '#FFF8F0', '#B0B5BF',
 ];
 
+function chromeExtrudeFill(layer: number, layerCount: number, isDark: boolean): string {
+  const depth = layer / layerCount;
+  if (isDark) {
+    return `rgba(6, 10, 18, ${0.2 + depth * 0.38})`;
+  }
+  return `rgba(28, 32, 40, ${0.16 + depth * 0.32})`;
+}
+
+function chromePerimeterGlowFill(
+  layer: number,
+  layerCount: number,
+  isDark: boolean,
+  intensity = 1
+): string {
+  const falloff = (layerCount - layer + 1) / layerCount;
+  if (isDark) {
+    const alpha = (0.012 + falloff * 0.042) * intensity;
+    return `rgba(0, 0, 0, ${alpha})`;
+  }
+  const alpha = (0.005 + falloff * 0.018) * intensity;
+  return `rgba(16, 20, 28, ${alpha})`;
+}
+
+type ChromePerimeterGlowProps = {
+  isDark: boolean;
+  width: number;
+  height: number;
+  borderRadius: number;
+  outerStyle?: StyleProp<ViewStyle>;
+  glowLayers?: number;
+  glowSpread?: number;
+  glowIntensity?: number;
+  children: React.ReactNode;
+};
+
+const ChromePerimeterGlow: React.FC<ChromePerimeterGlowProps> = ({
+  isDark,
+  width,
+  height,
+  borderRadius,
+  outerStyle,
+  glowLayers: glowLayerCount = CHROME_PERIMETER_GLOW_LAYERS,
+  glowSpread = CHROME_PERIMETER_GLOW_SPREAD,
+  glowIntensity = 1,
+  children,
+}) => {
+  const maxGlowSpread = glowLayerCount * glowSpread;
+  const glowLayers = Array.from(
+    { length: glowLayerCount },
+    (_, idx) => glowLayerCount - idx
+  );
+
+  return (
+    <Animated.View
+      style={[
+        {
+          width: width + maxGlowSpread * 2,
+          height: height + maxGlowSpread * 2,
+        },
+        outerStyle,
+      ]}
+    >
+      {glowLayers.map((layer) => {
+        const spread = layer * glowSpread;
+        return (
+          <View
+            key={`chrome-glow-${layer}`}
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              left: maxGlowSpread - spread,
+              top: maxGlowSpread - spread,
+              width: width + spread * 2,
+              height: height + spread * 2,
+              borderRadius: borderRadius + spread * 0.55,
+              backgroundColor: chromePerimeterGlowFill(
+                layer,
+                glowLayerCount,
+                isDark,
+                glowIntensity
+              ),
+            }}
+          />
+        );
+      })}
+      <View
+        style={{
+          position: 'absolute',
+          left: maxGlowSpread,
+          top: maxGlowSpread,
+          ...(Platform.OS === 'ios'
+            ? {
+                shadowColor: isDark ? '#000000' : '#141820',
+                shadowOffset: { width: 0, height: 0 },
+                shadowOpacity: (isDark ? 0.12 : 0.045) * glowIntensity,
+                shadowRadius: 16,
+              }
+            : null),
+        }}
+      >
+        {children}
+      </View>
+    </Animated.View>
+  );
+};
+
 type AnimatedGradientBorderProps = {
   isDark: boolean;
   width: number;
@@ -883,6 +1009,7 @@ type AnimatedGradientBorderProps = {
   borderWidth?: number;
   outerStyle?: StyleProp<ViewStyle>;
   innerStyle?: StyleProp<ViewStyle>;
+  perimeterGlow?: boolean;
   children: React.ReactNode;
 };
 
@@ -894,6 +1021,7 @@ const AnimatedGradientBorder: React.FC<AnimatedGradientBorderProps> = ({
   borderWidth = ANIMATED_BORDER_WIDTH,
   outerStyle,
   innerStyle,
+  perimeterGlow = false,
   children,
 }) => {
   const rotateAnim = useRef(new Animated.Value(0)).current;
@@ -925,14 +1053,15 @@ const AnimatedGradientBorder: React.FC<AnimatedGradientBorderProps> = ({
   const outerW = width + borderWidth * 2;
   const outerH = height + borderWidth * 2;
   const gradientSize = Math.max(width, height) * 2;
+  const outerRadius = borderRadius + borderWidth;
 
-  return (
+  const chromeBody = (
     <Animated.View
       style={[
         {
           width: outerW,
           height: outerH,
-          borderRadius: borderRadius + borderWidth,
+          borderRadius: outerRadius,
           overflow: 'hidden',
           ...(Platform.OS === 'android' && !isDark
             ? {
@@ -941,7 +1070,7 @@ const AnimatedGradientBorder: React.FC<AnimatedGradientBorderProps> = ({
               }
             : {}),
         },
-        outerStyle,
+        !perimeterGlow ? outerStyle : undefined,
       ]}
     >
       <Animated.View
@@ -979,7 +1108,196 @@ const AnimatedGradientBorder: React.FC<AnimatedGradientBorderProps> = ({
       </View>
     </Animated.View>
   );
+
+  if (!perimeterGlow) {
+    return chromeBody;
+  }
+
+  return (
+    <ChromePerimeterGlow
+      isDark={isDark}
+      width={outerW}
+      height={outerH}
+      borderRadius={outerRadius}
+      outerStyle={outerStyle}
+    >
+      {chromeBody}
+    </ChromePerimeterGlow>
+  );
 };
+
+const BrandStrokeGradientDefs: React.FC<{ gradId: string; isDark: boolean }> = ({
+  gradId,
+  isDark,
+}) => {
+  const colors = isDark ? EQUALIZER_GRADIENT_DARK : EQUALIZER_GRADIENT_LIGHT;
+  return (
+    <Defs>
+      <SvgLinearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
+        <SvgStop offset="0%" stopColor={colors[0]} />
+        <SvgStop offset="35%" stopColor={colors[1]} />
+        <SvgStop offset="65%" stopColor={colors[2]} />
+        <SvgStop offset="100%" stopColor={colors[3]} />
+      </SvgLinearGradient>
+    </Defs>
+  );
+};
+
+const Brand3dFaceGradientDefs: React.FC<{ gradId: string; isDark: boolean }> = ({
+  gradId,
+  isDark,
+}) => (
+  <Defs>
+    {isDark ? (
+      <SvgLinearGradient id={gradId} x1="0%" y1="0%" x2="0%" y2="100%">
+        <SvgStop offset="0%" stopColor="#C5CDDC" />
+        <SvgStop offset="48%" stopColor="#AEB6C6" />
+        <SvgStop offset="100%" stopColor="#7A8496" />
+      </SvgLinearGradient>
+    ) : (
+      <SvgLinearGradient id={gradId} x1="0%" y1="0%" x2="0%" y2="100%">
+        <SvgStop offset="0%" stopColor="#5C5C5C" />
+        <SvgStop offset="48%" stopColor="#444444" />
+        <SvgStop offset="100%" stopColor="#2E2E2E" />
+      </SvgLinearGradient>
+    )}
+  </Defs>
+);
+
+const BRAND_LETTERS = ['L', 'i', 'V', 'i'] as const;
+const BRAND_LETTER_GRAD_SUFFIX = ['L', 'I1', 'V', 'I2'] as const;
+
+type BrandLetterWithOutlineAndGlowProps = {
+  letter: string;
+  letterIndex: number;
+  isDark: boolean;
+  strokeGradId: string;
+  fillGradId: string;
+};
+
+const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps> = ({
+  letter,
+  letterIndex,
+  isDark,
+  strokeGradId,
+  fillGradId,
+}) => {
+  const [textSize, setTextSize] = useState({
+    w: letter === 'i' ? 14 : 26,
+    h: 40,
+  });
+  const stroke = BRAND_OUTLINE_STROKE;
+  const pad = stroke;
+  const extrudeX = BRAND_3D_LAYERS * BRAND_3D_STEP_X;
+  const extrudeY = BRAND_3D_LAYERS * BRAND_3D_STEP_Y;
+  const svgW = textSize.w + pad * 2 + extrudeX;
+  const svgH = textSize.h + pad * 2 + extrudeY;
+  const fontSize = 41;
+  const fontWeight = '600';
+  const baselineY =
+    pad + textSize.h - (Platform.OS === 'ios' ? 3 : 4);
+
+  const brandSvgTextLayout = {
+    fontSize,
+    fontWeight,
+    fontFamily: BRAND_FONT_FAMILY,
+    letterSpacing: 0,
+    x: pad,
+    y: baselineY,
+  };
+
+  const extrusionLayers = Array.from(
+    { length: BRAND_3D_LAYERS },
+    (_, idx) => BRAND_3D_LAYERS - idx
+  );
+  const glowRadius = Math.min(14, svgH * 0.26, svgW * 0.42);
+  const letterGlowOverlap = BRAND_LETTER_GLOW_INSET * 0.72;
+
+  return (
+    <ChromePerimeterGlow
+      isDark={isDark}
+      width={svgW}
+      height={svgH}
+      borderRadius={glowRadius}
+      glowLayers={BRAND_LETTER_GLOW_LAYERS}
+      glowSpread={BRAND_LETTER_GLOW_SPREAD}
+      glowIntensity={BRAND_LETTER_GLOW_INTENSITY}
+      outerStyle={{
+        marginLeft: letterIndex === 0 ? -BRAND_LETTER_GLOW_INSET : -letterGlowOverlap,
+        marginRight: -letterGlowOverlap,
+      }}
+    >
+      <Text
+        style={[styles.brand, styles.brandMeasureProbe]}
+        onLayout={(e) => {
+          const { width, height } = e.nativeEvent.layout;
+          if (width > 0 && height > 0) {
+            setTextSize({ w: width, h: height });
+          }
+        }}
+      >
+        {letter}
+      </Text>
+      <Svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
+        <BrandStrokeGradientDefs gradId={strokeGradId} isDark={isDark} />
+        <Brand3dFaceGradientDefs gradId={fillGradId} isDark={isDark} />
+        {extrusionLayers.map((layer) => (
+          <SvgText
+            key={`extrude-${letter}-${layer}`}
+            {...brandSvgTextLayout}
+            x={pad + layer * BRAND_3D_STEP_X}
+            y={baselineY + layer * BRAND_3D_STEP_Y}
+            fill={chromeExtrudeFill(layer, BRAND_3D_LAYERS, isDark)}
+            stroke="none"
+          >
+            {letter}
+          </SvgText>
+        ))}
+        <SvgText
+          {...brandSvgTextLayout}
+          fill="none"
+          stroke={`url(#${strokeGradId})`}
+          strokeWidth={stroke}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        >
+          {letter}
+        </SvgText>
+        <SvgText
+          {...brandSvgTextLayout}
+          fill={`url(#${fillGradId})`}
+          stroke="none"
+        >
+          {letter}
+        </SvgText>
+      </Svg>
+    </ChromePerimeterGlow>
+  );
+};
+
+type BrandTitleWithOutlineProps = {
+  isDark: boolean;
+};
+
+const BrandTitleWithOutline: React.FC<BrandTitleWithOutlineProps> = ({ isDark }) => (
+  <View
+    style={styles.brandOutlineWrap}
+    accessible
+    accessibilityRole="header"
+    accessibilityLabel="LiVi"
+  >
+    {BRAND_LETTERS.map((letter, index) => (
+      <BrandLetterWithOutlineAndGlow
+        key={`${letter}-${index}`}
+        letter={letter}
+        letterIndex={index}
+        isDark={isDark}
+        strokeGradId={`liviBrandGrad${BRAND_LETTER_GRAD_SUFFIX[index]}`}
+        fillGradId={`liviBrandFill3d${BRAND_LETTER_GRAD_SUFFIX[index]}`}
+      />
+    ))}
+  </View>
+);
 
 /* ================= Animated Border Button Component ================= */
 
@@ -1050,6 +1368,7 @@ const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
         width={buttonWidth}
         height={buttonHeight}
         borderRadius={borderRadius}
+        perimeterGlow
         outerStyle={{
           transform: [{ translateX: blockedShakeX }],
           shadowOpacity: 0,
@@ -5834,9 +6153,7 @@ const handleClearNick = useCallback(async () => {
         const { displayName, avatarLetter } = getFriendDisplay(item);
         const isMenuRow = markReadMenu?.friendId === item.id;
         const rowHidden = isMenuRow;
-        const prevFriendId = index > 0 ? friends[index - 1]?.id : null;
-        const showTopDivider =
-          index > 0 && markReadMenu?.friendId !== prevFriendId;
+        const showTopDivider = index > 0;
         const swipeDeleteBlocked = friendRowBlocksSwipeDelete(item);
         return (
           <View
@@ -5952,7 +6269,14 @@ const handleClearNick = useCallback(async () => {
                 pointerEvents="box-none"
                 collapsable={false}
               >
-                <View style={styles.markReadMenuBackdrop} pointerEvents="none" collapsable={false} />
+                <View
+                  style={[
+                    styles.markReadMenuBackdrop,
+                    showTopDivider && styles.markReadMenuBackdropBelowDivider,
+                  ]}
+                  pointerEvents="none"
+                  collapsable={false}
+                />
                 <FriendMarkReadMenuStrip
                   key={`${markReadMenu.friendId}-${markReadMenu.type}`}
                   label={
@@ -6183,9 +6507,19 @@ const handleClearNick = useCallback(async () => {
     const noAvatar = !isLocalPreview && !hasCachedAvatar && !hasDirectAvatarUri;
     const noNick = !(savedNick && String(savedNick).trim());
 
+    const centerAvatarSize = Platform.OS === "ios" ? 136 : 120;
+    const centerAvatarRadius = centerAvatarSize / 2;
+
     return (
       <View style={wrapperStyle}>
         <Pressable onPress={() => { setModalAvatarUri(myFullAvatarUri || avatarUri || ''); setAvatarModalVisible(true); }} style={{ alignSelf: 'center' }}>
+          <ChromePerimeterGlow
+            isDark={isDark}
+            width={centerAvatarSize}
+            height={centerAvatarSize}
+            borderRadius={centerAvatarRadius}
+            outerStyle={{ marginBottom: -CHROME_PERIMETER_GLOW_LAYOUT_INSET }}
+          >
           <View style={[styles.centerAvatarWrap, { backgroundColor: MENU_CHROME_BG }]}>
             {isLocalPreview ? (
             // Локальное превью (до загрузки); на Android data: уже разрешён в file: через resolvedAvatarUri
@@ -6231,6 +6565,7 @@ const handleClearNick = useCallback(async () => {
             (<View style={[styles.centerAvatarImg, { alignItems: 'center', justifyContent: 'center' }]} />)
           )}
           </View>
+          </ChromePerimeterGlow>
         </Pressable>
         <Text
           style={[
@@ -6384,16 +6719,21 @@ const handleClearNick = useCallback(async () => {
       />
 
       <View style={[styles.topBar, { backgroundColor: 'transparent' }] }>
-        <Text style={[styles.brand, { color: isDark ? LIVI.text : LIVI.textThemeWhite }]}>
-          LiVi
-        </Text>
+        <BrandTitleWithOutline isDark={isDark} />
 
-        <View style={{ position: 'relative', flexShrink: 0 }}>
+        <View
+          style={{
+            position: 'relative',
+            flexShrink: 0,
+            marginRight: -CHROME_PERIMETER_GLOW_LAYOUT_INSET,
+          }}
+        >
           <AnimatedGradientBorder
             isDark={isDark}
             width={MENU_BTN_SIZE}
             height={MENU_BTN_SIZE}
             borderRadius={MENU_BTN_RADIUS}
+            perimeterGlow
           >
             <Pressable
               hitSlop={Platform.OS === 'android' ? ANDROID_MENU_HIT_SLOP : { top: 8, bottom: 8, left: 8, right: 8 }}
@@ -7358,7 +7698,29 @@ const handleClearNick = useCallback(async () => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: LIVI.bg, paddingHorizontal: 14, paddingBottom: 10, justifyContent: 'center' },
   topBar: { height: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',   paddingHorizontal: Platform.OS === "android" ? 0 : 10, },
-  brand: { color: LIVI.text, fontSize: 41, lineHeight: 40, fontWeight: '600', letterSpacing: 0.3 },
+  brandOutlineWrap: {
+    position: 'relative',
+    flexShrink: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    minHeight: MENU_BTN_SIZE + ANIMATED_BORDER_WIDTH * 2,
+  },
+  brandMeasureProbe: {
+    position: 'absolute',
+    opacity: 0,
+    left: 0,
+    top: 0,
+    zIndex: -1,
+  },
+  brand: {
+    color: LIVI.text,
+    fontSize: 41,
+    lineHeight: 40,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+    fontFamily: BRAND_FONT_FAMILY,
+  },
   menuBtn: { backgroundColor: LIVI.glass, borderRadius: 12 },
   menuBtnInner: {
     borderRadius: MENU_BTN_RADIUS,
@@ -7402,7 +7764,8 @@ const styles = StyleSheet.create({
     right: 4,
     height: FRIEND_ROW_DIVIDER_HEIGHT,
     backgroundColor: 'rgba(255,255,255,0.10)',
-    zIndex: 2,
+    zIndex: 60,
+    ...(Platform.OS === 'android' ? { elevation: 61 } : {}),
   },
   friendRowSwipeColumn: {
     flex: 1,
@@ -7623,6 +7986,9 @@ const styles = StyleSheet.create({
     backgroundColor: FRIEND_LIST_ROW_BG,
     zIndex: 0,
     ...(Platform.OS === 'android' ? { elevation: 0 } : {}),
+  },
+  markReadMenuBackdropBelowDivider: {
+    top: FRIEND_ROW_DIVIDER_HEIGHT,
   },
   markReadMenuStrip: {
     overflow: 'hidden',
