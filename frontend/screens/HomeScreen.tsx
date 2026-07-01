@@ -234,7 +234,7 @@ const BRAND_LETTER_GLOW_SPREAD = 1.2;
 const BRAND_LETTER_GLOW_INSET = BRAND_LETTER_GLOW_LAYERS * BRAND_LETTER_GLOW_SPREAD;
 const BRAND_LETTER_GLOW_INTENSITY = 0.58;
 /** Доля inset для перекрытия ореолов между буквами (больше — буквы ближе). */
-const BRAND_LETTER_GLOW_OVERLAP = 0.88;
+const BRAND_LETTER_GLOW_OVERLAP = 0.9;
 const CHROME_PERIMETER_GLOW_LAYERS = 5;
 const CHROME_PERIMETER_GLOW_SPREAD = 2.8;
 /** Компенсация ширины ореола справа — кнопка меню остаётся на прежнем отступе от края. */
