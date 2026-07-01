@@ -202,12 +202,12 @@ const LIVI = {
 /** Горизонтальный padding списка друзей (sheet 12 + отступ «назад» 5). */
 const FRIENDS_LIST_HORIZONTAL_PAD = 17;
 
-/** Толщина разделителя между строками друзей. */
-const FRIEND_ROW_DIVIDER_HEIGHT = 1.2;
+/** Толщина разделителя между строками друзей (1 pt — читается лучше, чем sub-hairline). */
+const FRIEND_ROW_DIVIDER_HEIGHT = 1;
 
 const FRIEND_ROW_LAYOUT_HEIGHT = 72;
 
-/** Непрозрачный фон строк списка друзей — без просвета чёрного RecyclerView / окна. */
+/** Фон списка друзей — только контейнер FlatList/шита; ячейки строк прозрачные (без «пластин»). */
 const FRIEND_LIST_ROW_BG = LIVI.surface;
 
 /** Android: неактивная кнопка видео в списке друзей — тёмный «чип» и приглушённая иконка (единый вид на всех девайсах). */
@@ -233,6 +233,8 @@ const BRAND_LETTER_GLOW_LAYERS = 3;
 const BRAND_LETTER_GLOW_SPREAD = 1.2;
 const BRAND_LETTER_GLOW_INSET = BRAND_LETTER_GLOW_LAYERS * BRAND_LETTER_GLOW_SPREAD;
 const BRAND_LETTER_GLOW_INTENSITY = 0.58;
+/** Доля inset для перекрытия ореолов между буквами (больше — буквы ближе). */
+const BRAND_LETTER_GLOW_OVERLAP = 0.88;
 const CHROME_PERIMETER_GLOW_LAYERS = 5;
 const CHROME_PERIMETER_GLOW_SPREAD = 2.8;
 /** Компенсация ширины ореола справа — кнопка меню остаётся на прежнем отступе от края. */
@@ -267,10 +269,6 @@ function friendRowBadgeLongPressHaptic() {
     Vibration.vibrate(15);
   }
 }
-
-const GAP_AFTER_AVATAR = 20;
-const MARK_READ_OVERLAY_LEFT_FALLBACK =
-  Platform.OS === 'ios' ? 52 + GAP_AFTER_AVATAR : 44 + GAP_AFTER_AVATAR;
 
 const markReadStripStyles = StyleSheet.create({
   strip: {
@@ -1211,7 +1209,7 @@ const BrandLetterWithOutlineAndGlow: React.FC<BrandLetterWithOutlineAndGlowProps
     (_, idx) => BRAND_3D_LAYERS - idx
   );
   const glowRadius = Math.min(14, svgH * 0.26, svgW * 0.42);
-  const letterGlowOverlap = BRAND_LETTER_GLOW_INSET * 0.72;
+  const letterGlowOverlap = BRAND_LETTER_GLOW_INSET * BRAND_LETTER_GLOW_OVERLAP;
 
   return (
     <ChromePerimeterGlow
@@ -2223,40 +2221,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       openSwipeableRef.current?.close?.();
     } catch {}
     openSwipeableRef.current = null;
-    setMarkReadOverlayLeft(MARK_READ_OVERLAY_LEFT_FALLBACK);
     setMarkReadMenu({ friendId, type });
   }, []);
-  const rowRefForMarkReadMenu = useRef<View>(null);
-  const avatarRefForMarkReadMenu = useRef<View>(null);
-  const [markReadOverlayLeft, setMarkReadOverlayLeft] = useState<number>(MARK_READ_OVERLAY_LEFT_FALLBACK);
-  const measureAvatarForOverlay = useCallback(() => {
-    const row = rowRefForMarkReadMenu.current;
-    const avatar = avatarRefForMarkReadMenu.current;
-    if (row && avatar && typeof (avatar as any).measureLayout === 'function') {
-      (avatar as any).measureLayout(
-        row as any,
-        (x: number, _y: number, width: number, _h: number) => {
-          const next = x + width + GAP_AFTER_AVATAR;
-          setMarkReadOverlayLeft((prev) => (Math.abs(prev - next) <= 1 ? prev : next));
-        },
-      );
-    }
-  }, []);
-  useEffect(() => {
-    if (!markReadMenu) {
-      setMarkReadOverlayLeft(MARK_READ_OVERLAY_LEFT_FALLBACK);
-      return;
-    }
-    let layoutTimer: ReturnType<typeof setTimeout> | undefined;
-    const raf = requestAnimationFrame(() => {
-      measureAvatarForOverlay();
-      layoutTimer = setTimeout(measureAvatarForOverlay, 72);
-    });
-    return () => {
-      cancelAnimationFrame(raf);
-      if (layoutTimer) clearTimeout(layoutTimer);
-    };
-  }, [markReadMenu, measureAvatarForOverlay]);
   const lastIncomingFromRef = useRef<string | null>(null);
   const [roomFull, setRoomFull] = useState<{ visible: boolean; name?: string }>({ visible: false });
   const wave1 = useRef(new Animated.Value(0)).current;
@@ -5852,7 +5818,7 @@ const handleClearNick = useCallback(async () => {
         alignSelf: 'stretch' as const,
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
-        backgroundColor: Platform.OS === 'android' ? LIVI.surface : 'rgba(13,14,16,0.88)',
+        backgroundColor: 'transparent',
       },
     ];
     if (friendRowBlocksSwipeDelete(friend)) return <View style={panelStyle} />;
@@ -6151,20 +6117,16 @@ const handleClearNick = useCallback(async () => {
       onScrollBeginDrag={() => setMarkReadMenu(null)}
       renderItem={({ item, index }) => {
         const { displayName, avatarLetter } = getFriendDisplay(item);
-        const isMenuRow = markReadMenu?.friendId === item.id;
-        const rowHidden = isMenuRow;
+        const rowHidden = markReadMenu?.friendId === item.id;
         const showTopDivider = index > 0;
         const swipeDeleteBlocked = friendRowBlocksSwipeDelete(item);
         return (
-          <View
-            style={styles.listRowWrap}
-            ref={isMenuRow ? rowRefForMarkReadMenu : undefined}
-            collapsable={false}
-          >
+          <View style={styles.listRowWrap} collapsable={false}>
             {showTopDivider ? (
               <View style={styles.friendRowDivider} pointerEvents="none" />
             ) : null}
             <View style={styles.friendRowSwipeColumn}>
+            {!rowHidden ? (
             <Swipeable
               containerStyle={styles.friendRowSwipeContainer}
               enabled={!swipeDeleteBlocked}
@@ -6217,8 +6179,6 @@ const handleClearNick = useCallback(async () => {
               >
                 <View
                   style={styles.avatarBox}
-                  ref={isMenuRow ? avatarRefForMarkReadMenu : undefined}
-                  onLayout={isMenuRow ? measureAvatarForOverlay : undefined}
                 >
                   <AvatarImage
                     userId={item.id}
@@ -6239,7 +6199,6 @@ const handleClearNick = useCallback(async () => {
                     styles.nameCol,
                     styles.friendRowNameFlex,
                     { paddingRight: 8 },
-                    rowHidden && styles.friendRowHiddenWhileMarkRead,
                   ]}
                 >
                   <Text style={styles.friendName}>{displayName}</Text>
@@ -6249,34 +6208,47 @@ const handleClearNick = useCallback(async () => {
                 </View>
               </View>
             </Swipeable>
+            ) : (
+              <View style={styles.friendRowSwipeContainer} pointerEvents="none">
+                <View
+                  style={[
+                    styles.listRow,
+                    styles.listRowAligned,
+                    styles.listRowOverflowVisible,
+                    styles.listRowContainerOverflowVisible,
+                  ]}
+                >
+                  <View style={styles.avatarBox}>
+                    <AvatarImage
+                      userId={item.id}
+                      avatarVer={item.avatarVer || 0}
+                      uri={item.avatarThumbB64 || undefined}
+                      size={48}
+                      fallbackText={avatarLetter || '—'}
+                      containerStyle={{ overflow: 'hidden' }}
+                      fallbackTextStyle={
+                        avatarLetter
+                          ? { fontWeight: '800', color: LIVI.white }
+                          : { fontWeight: '400', color: LIVI.text2 }
+                      }
+                    />
+                  </View>
+                </View>
+              </View>
+            )}
             </View>
-            <View
-              style={[
-                styles.rowRightActionsTray,
-                rowHidden && styles.friendRowHiddenWhileMarkRead,
-              ]}
-              pointerEvents={rowHidden ? 'none' : 'box-none'}
-            >
+            {!rowHidden ? (
+            <View style={styles.rowRightActionsTray} pointerEvents="box-none">
               <InviteButton friend={item} />
               <ChatButton friend={item} />
             </View>
+            ) : null}
             {markReadMenu && markReadMenu.friendId === item.id && (
               <View
-                style={[
-                  styles.markReadMenuOverlay,
-                  { left: isMenuRow ? markReadOverlayLeft : MARK_READ_OVERLAY_LEFT_FALLBACK },
-                ]}
+                style={styles.markReadMenuOverlay}
                 pointerEvents="box-none"
                 collapsable={false}
               >
-                <View
-                  style={[
-                    styles.markReadMenuBackdrop,
-                    showTopDivider && styles.markReadMenuBackdropBelowDivider,
-                  ]}
-                  pointerEvents="none"
-                  collapsable={false}
-                />
                 <FriendMarkReadMenuStrip
                   key={`${markReadMenu.friendId}-${markReadMenu.type}`}
                   label={
@@ -6797,7 +6769,17 @@ const handleClearNick = useCallback(async () => {
                 missedByUser 
               });
             }
-            return shouldShow ? <View style={styles.menuDot} /> : null;
+            return shouldShow ? (
+              <View
+                style={[
+                  styles.menuDot,
+                  {
+                    top: CHROME_PERIMETER_GLOW_LAYOUT_INSET - 2,
+                    right: 2 + CHROME_PERIMETER_GLOW_LAYOUT_INSET,
+                  },
+                ]}
+              />
+            ) : null;
           })()}
         </View>
       </View>
@@ -7754,7 +7736,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'stretch',
     height: FRIEND_ROW_LAYOUT_HEIGHT,
-    backgroundColor: FRIEND_LIST_ROW_BG,
+    backgroundColor: 'transparent',
   },
   /** Линия между строками — сверху текущей ячейки, чтобы RecyclerView не перекрывал нижний border. */
   friendRowDivider: {
@@ -7763,14 +7745,13 @@ const styles = StyleSheet.create({
     left: 4,
     right: 4,
     height: FRIEND_ROW_DIVIDER_HEIGHT,
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    zIndex: 60,
-    ...(Platform.OS === 'android' ? { elevation: 61 } : {}),
+    backgroundColor: LIVI.border,
+    zIndex: 2,
   },
   friendRowSwipeColumn: {
     flex: 1,
     minWidth: 0,
-    backgroundColor: FRIEND_LIST_ROW_BG,
+    backgroundColor: 'transparent',
   },
   listRow: {
     backgroundColor: FRIEND_LIST_ROW_BG,
@@ -7908,7 +7889,7 @@ const styles = StyleSheet.create({
     paddingRight: FRIEND_ROW_TRAILING_PAD,
     overflow: 'visible' as const,
     flexShrink: 0,
-    backgroundColor: FRIEND_LIST_ROW_BG,
+    backgroundColor: 'transparent',
   },
   friendRowSwipeContainer: { flex: 1, alignSelf: 'stretch' as const, overflow: 'hidden' as const },
 
@@ -7965,30 +7946,16 @@ const styles = StyleSheet.create({
   },
   badgeBubbleText: { color: '#fff', fontSize: 8, fontWeight: '800', lineHeight: 8 },
 
-  // Полоска «Прочитано / Просмотрено» — отступ после аватара (left через measureLayout).
-  friendRowHiddenWhileMarkRead: {
-    opacity: 0,
-    pointerEvents: 'none' as const,
-  },
+  // Полоска «Прочитано / Просмотрено» — без фона и без elevation (только чип).
   markReadMenuOverlay: {
     position: 'absolute',
-    top: 0,
+    left: Platform.OS === 'ios' ? 72 : 64,
     right: 0,
+    top: 0,
     height: FRIEND_ROW_LAYOUT_HEIGHT,
     justifyContent: 'center',
     alignItems: 'flex-end',
-    zIndex: 55,
-    overflow: 'hidden' as const,
     paddingRight: FRIEND_ROW_TRAILING_PAD,
-  },
-  markReadMenuBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: FRIEND_LIST_ROW_BG,
-    zIndex: 0,
-    ...(Platform.OS === 'android' ? { elevation: 0 } : {}),
-  },
-  markReadMenuBackdropBelowDivider: {
-    top: FRIEND_ROW_DIVIDER_HEIGHT,
   },
   markReadMenuStrip: {
     overflow: 'hidden',
