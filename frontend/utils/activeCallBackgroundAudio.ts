@@ -180,7 +180,15 @@ function onAppStateChange(next: AppStateStatus): void {
       const returningFromPiP = Date.now() < Number(g.__returningFromSystemPiPUntilRef?.current || 0);
       const session = g.__webrtcSessionRef?.current;
       if (returningFromPiP && session && typeof session.restoreLocalCameraAfterPiPReturn === 'function') {
-        void session.restoreLocalCameraAfterPiPReturn();
+        const g = global as any;
+        const audioOnlyDirect =
+          g.__inAudioOnlyUiRef?.current === true ||
+          g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true;
+        const camOff =
+          typeof session.getIsCamOn === 'function' && session.getIsCamOn() === false;
+        if (!(audioOnlyDirect && camOff)) {
+          void session.restoreLocalCameraAfterPiPReturn();
+        }
         return;
       }
       if (

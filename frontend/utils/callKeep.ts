@@ -7,6 +7,23 @@ import { logger } from './logger';
 import { setIncomingCallScreenVisible } from '../sockets/socket';
 import { loadLang, t } from './i18n';
 import { prefetchDirectCallIce, prewarmDirectCallAudioCapture } from './directCallConnectPrewarm';
+import {
+  type DirectCallMediaHint,
+  setCallMediaHint,
+  getCallMediaHint,
+  resolveDirectCallAudioFirst,
+  resolveCallHasVideo,
+  videoCallNavExtras,
+} from './directCallMediaHint';
+
+export type { DirectCallMediaHint };
+export {
+  setCallMediaHint,
+  getCallMediaHint,
+  resolveDirectCallAudioFirst,
+  resolveCallHasVideo,
+  videoCallNavExtras,
+};
 
 /** Единый источник таймаута исходящего вызова (мс). Передаётся в натив при старте, используется в HomeScreen/App и в LiviOutgoingCallService. */
 export const OUTGOING_CALL_TIMEOUT_MS = 27_000;
@@ -16,55 +33,6 @@ let isSetup = false;
 let isAndroidCallKeepReady = false;
 /** raw callId -> { from, fromNick, callKitId, hasVideo? } для навигации при answer из нативного UI */
 const pendingCallById: Record<string, { from: string; fromNick?: string; callKitId?: string; hasVideo?: boolean }> = {};
-/** callId -> media hint (audio | video) для навигации и CallKit */
-const callMediaByCallId: Record<string, 'audio' | 'video'> = {};
-
-export type DirectCallMediaHint = 'audio' | 'video';
-
-export function setCallMediaHint(callId: string, media: DirectCallMediaHint): void {
-  const id = String(callId || '').trim();
-  if (!id) return;
-  callMediaByCallId[id] = media;
-}
-
-export function getCallMediaHint(callId?: string | null): DirectCallMediaHint {
-  const id = String(callId || '').trim();
-  if (id && callMediaByCallId[id] === 'video') return 'video';
-  return 'audio';
-}
-
-/** Аудио-first UI и startWithCamOff для прямого звонка (мессенджер: по умолчанию аудио). */
-export function resolveDirectCallAudioFirst(params?: {
-  directCall?: boolean;
-  directInitiator?: boolean;
-  callMedia?: DirectCallMediaHint;
-  startWithCamOff?: boolean;
-  callId?: string | null;
-} | null, pendingCallId?: string | null): boolean {
-  const p = params ?? {};
-  if (!p.directCall) return false;
-  if (p.callMedia === 'video') return false;
-  if (p.startWithCamOff || p.callMedia === 'audio') return true;
-  const cid = String(p.callId ?? pendingCallId ?? '').trim();
-  if (cid && getCallMediaHint(cid) === 'audio') return true;
-  if (!p.directInitiator) return true;
-  return cid ? getCallMediaHint(cid) !== 'video' : true;
-}
-
-export function resolveCallHasVideo(callId?: string | null): boolean {
-  return getCallMediaHint(callId) !== 'audio';
-}
-
-export function videoCallNavExtras(
-  callId?: string | null,
-  explicitMedia?: DirectCallMediaHint,
-): { callMedia?: DirectCallMediaHint; startWithCamOff?: boolean } {
-  const id = String(callId || '').trim();
-  const media =
-    explicitMedia ?? (id ? callMediaByCallId[id] : undefined) ?? 'audio';
-  if (media === 'video') return {};
-  return { callMedia: 'audio', startWithCamOff: true };
-}
 const callKitUuidByCallId: Record<string, string> = {};
 const callIdByCallKitUuid: Record<string, string> = {};
 const activeCallKeepCallIds = new Set<string>();
@@ -88,7 +56,7 @@ function rememberPendingCall(input: { callId: string; from: string; fromNick?: s
   if (!callId || !from) return;
   const hasVideo = input.hasVideo === true;
   pendingCallById[callId] = { from, fromNick: input.fromNick, callKitId: callKitId || undefined, hasVideo };
-  callMediaByCallId[callId] = hasVideo ? 'video' : 'audio';
+  setCallMediaHint(callId, hasVideo ? 'video' : 'audio');
   activeCallKeepCallIds.add(callId);
   if (callKitId) {
     callKitUuidByCallId[callId] = callKitId;

@@ -14,6 +14,11 @@ export {
   finishDirectCallVideoExpandInFlight,
   runDirectCallVideoExpandOnce,
   prepareDirectCallVideoReturnFromPiP,
+  markDirectCallUserRequestedVideoExpand,
+  clearDirectCallUserRequestedVideoExpand,
+  isDirectCallUserRequestedVideoExpand,
+  clearStaleDirectCallVideoExpandFlags,
+  shouldBlockAutomatedDirectCallVideoExpand,
 } from '../../utils/directCallVideoExpandGuard';
 import {
   isExternalHeadsetRoute,

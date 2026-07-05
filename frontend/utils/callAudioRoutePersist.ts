@@ -35,11 +35,16 @@ import {
   ongoingCallPrefersVideoMedia,
   isPiPBuiltinCallAudioRouteLockActive,
   releaseInAppPiPBuiltinAudioLockForFullVideoUi,
+  resetDirectCallVideoUiGlobalsAfterCallEnd,
 } from './activeCallSession';
+import { getCallMediaHint } from './directCallMediaHint';
 import { isInAudioOnlyCallUi } from './callAudioOnlyUiContext';
 import {
   isDirectCallVideoExpandGuardActive,
   prepareDirectCallVideoReturnFromPiP,
+  clearDirectCallUserRequestedVideoExpand,
+  finishDirectCallVideoExpandInFlight,
+  markDirectCallUserRequestedVideoExpand,
 } from './directCallVideoExpandGuard';
 import { isInAppPiPExplicitBuiltinRouteChoiceActive, isInAppPiPManualRouteLockActive } from './inAppPiPExplicitBuiltinRoute';
 import {
@@ -92,13 +97,49 @@ function readAvailableAudioDeviceList(): string[] {
 }
 
 /** Свежий вход на VideoCall (incoming / accept): сбросить «хвосты» PiP без активной плашки. */
-export function clearStaleInAppPiPAudioContextForFreshCallNav(reason: string): void {
-  if (reason !== 'incoming_navigate' && reason !== 'call_accepted' && reason !== 'flush_pending') {
+export function clearStaleInAppPiPAudioContextForFreshCallNav(
+  reason: string,
+  callId?: string | null,
+): void {
+  if (reason !== 'incoming_navigate' && reason !== 'call_accepted' && reason !== 'flush_pending' && reason !== 'callkeep_answer') {
     return;
   }
   try {
     const g = global as any;
-    if (g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true) {
+    const pipActive =
+      g.__pipVisibleRef?.current === true || g.__pipInSystemModeRef?.current === true;
+    const cid = String(callId ?? '').trim();
+    const audioFreshCall = !!cid && getCallMediaHint(cid) === 'audio';
+
+    if (audioFreshCall || !pipActive) {
+      resetDirectCallVideoUiGlobalsAfterCallEnd();
+      clearDirectCallUserRequestedVideoExpand();
+      finishDirectCallVideoExpandInFlight();
+      g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
+      g.__stayOnVideoCallUiRef.current = false;
+    }
+    if (audioFreshCall) {
+      g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || {
+        current: false,
+      };
+      g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+      g.__inAudioOnlyUiRef = g.__inAudioOnlyUiRef || { current: false };
+      g.__inAudioOnlyUiRef.current = true;
+      g.__pipAudioOnlyPlaceholderRef = g.__pipAudioOnlyPlaceholderRef || { current: false };
+      g.__pipAudioOnlyPlaceholderRef.current = true;
+    } else if (!pipActive) {
+      if (cid && getCallMediaHint(cid) === 'audio') {
+        g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || {
+          current: false,
+        };
+        g.__preferAudioOnlyUiOnNextVideoCallRef.current = true;
+        g.__inAudioOnlyUiRef = g.__inAudioOnlyUiRef || { current: false };
+        g.__inAudioOnlyUiRef.current = true;
+        g.__pipAudioOnlyPlaceholderRef = g.__pipAudioOnlyPlaceholderRef || { current: false };
+        g.__pipAudioOnlyPlaceholderRef.current = true;
+      }
+    }
+    if (pipActive && !audioFreshCall) {
       return;
     }
     releaseInAppPiPBuiltinAudioLockForFullVideoUi();
@@ -109,6 +150,72 @@ export function clearStaleInAppPiPAudioContextForFreshCallNav(reason: string): v
       g.__returningFromSystemPiPUntilRef.current = 0;
     }
     clearScheduledReapplies({ preserveReasonPrefixes: ['preserve_in_app_pip_headset'] });
+    cancelScheduledCallAudioRouteReappliesMatching(['audio_home']);
+    if (cid && getCallMediaHint(cid) === 'audio') {
+      clearStaleHomeAudioRouteBeforeDirectCallAccept();
+    }
+  } catch {}
+}
+
+/** Не применять SPEAKER на audio-first accept без явного cycle на текущем callId. */
+function coerceDirectAudioAcceptBuiltinRoute(route: InCallAudioRoute): InCallAudioRoute {
+  if (route !== 'SPEAKER_PHONE') return route;
+  if (userExplicitlyPinnedBuiltinCallAudio()) return route;
+  if (isDirectAudioEarpieceStabilizeWindow()) return 'EARPIECE';
+  try {
+    const cid = String((global as any).__activeCallAudioRouteCallIdRef?.current || '').trim();
+    if (cid && getCallMediaHint(cid) === 'audio') return 'EARPIECE';
+  } catch {}
+  return route;
+}
+
+/** После endCall: отменить отложенные reapply и снять carryover маршрута. */
+export function clearDirectCallAudioRouteCarryoverAfterCallEnd(): void {
+  cancelScheduledCallAudioRouteReappliesMatching([
+    'return_to_audio_ui',
+    'direct_call_accept_audio_route',
+    'direct_call_video_ui_route',
+    'audio_home',
+  ]);
+  try {
+    const g = global as any;
+    g.__inCallSelectedAudioRouteRef = g.__inCallSelectedAudioRouteRef || { current: null };
+    g.__inCallSelectedAudioRouteRef.current = null;
+    if (g.__audioUiExplicitCycleRouteRef) g.__audioUiExplicitCycleRouteRef.current = null;
+    if (g.__inAppPiPExplicitToggleRouteRef) g.__inAppPiPExplicitToggleRouteRef.current = null;
+    g.__activeCallAudioRouteCallIdRef = g.__activeCallAudioRouteCallIdRef || { current: '' };
+    g.__activeCallAudioRouteCallIdRef.current = '';
+  } catch {}
+  clearCallAudioRouteUiLock();
+}
+
+/** Новый direct audio accept: не тащить SPEAKER с Home/прошлого звонка. */
+export function clearStaleHomeAudioRouteBeforeDirectCallAccept(): void {
+  try {
+    cancelScheduledCallAudioRouteReappliesMatching([
+      'return_to_audio_ui',
+      'direct_call_accept_audio_route',
+      'audio_home',
+    ]);
+    const g = global as any;
+    if (g.__audioCallHomeSpeakerPinRef) {
+      g.__audioCallHomeSpeakerPinRef.current = false;
+    }
+    g.__callAudioPreservePriorityUntilRef = g.__callAudioPreservePriorityUntilRef || { current: 0 };
+    g.__callAudioPreservePriorityUntilRef.current = 0;
+    if (readUserSelectedExternalCallAudioRoute()) return;
+    const ext = readConnectedExternalCallAudioRoute();
+    if (ext && isExternalHeadsetRoute(ext)) return;
+    clearCallAudioRouteUiLock();
+    setUserSelectedCallAudioRoute(null);
+    if (g.__manualBuiltinCallAudioRouteRef) g.__manualBuiltinCallAudioRouteRef.current = null;
+    if (g.__userSelectedCallAudioRouteRef) g.__userSelectedCallAudioRouteRef.current = null;
+    if (g.__explicitBuiltInCallAudioRouteRef) g.__explicitBuiltInCallAudioRouteRef.current = false;
+    g.__inCallSelectedAudioRouteRef = g.__inCallSelectedAudioRouteRef || { current: null };
+    g.__inCallSelectedAudioRouteRef.current = 'EARPIECE';
+    if (g.__audioUiExplicitCycleRouteRef) g.__audioUiExplicitCycleRouteRef.current = null;
+    setPersistedCallAudioRoute('EARPIECE');
+    g.__lastAppliedCallAudioRouteRef = { current: 'EARPIECE' };
   } catch {}
 }
 
@@ -254,6 +361,7 @@ function readVideoInAppPiPExplicitSpeakerBeforeExpand(): boolean {
 
 /** Video UI из in-app плашки (VideoCall уже на экране): UI-флаги + динамик/BT без earpiece. */
 export function prepareDirectCallVideoExpandFromInAppPiP(): void {
+  markDirectCallUserRequestedVideoExpand();
   const plaqueNow = normalizeInCallRoute(
     readInAppPiPAudioOutputRoute() || getPersistedCallAudioRoute() || '',
   );
@@ -394,7 +502,14 @@ function schedulePreserveCallAudioRoute(reason: string, media?: 'audio' | 'video
   const lockedBuiltin = readUserLockedBuiltinCallAudioRoute();
   const userSel = readUserSelectedCallAudioRoute();
   const honorUser =
-    !!lockedBuiltin || userSel === 'SPEAKER_PHONE' || userSel === 'EARPIECE';
+    !!lockedBuiltin ||
+    ((userSel === 'SPEAKER_PHONE' || userSel === 'EARPIECE') &&
+      !(
+        userSel === 'SPEAKER_PHONE' &&
+        isDirectAudioEarpieceStabilizeWindow() &&
+        !lockedBuiltin &&
+        !userExplicitlyPinnedBuiltinCallAudio()
+      ));
   const route = resolvePreserveCallAudioRoute();
   setPersistedCallAudioRoute(route);
   try {
@@ -907,12 +1022,17 @@ function readPersistedOrUserExternalRoute(): InCallAudioRoute | null {
   return null;
 }
 
-function userExplicitlyChoseLoudSpeakerForCall(): boolean {
-  const locked = readUserLockedBuiltinCallAudioRoute();
-  if (locked === 'SPEAKER_PHONE') return true;
-  const userSel = readUserSelectedCallAudioRoute();
-  if (userSel === 'SPEAKER_PHONE' && userExplicitlyPinnedBuiltinCallAudio()) return true;
-  return false;
+export function userExplicitlyChoseLoudSpeakerForCall(): boolean {
+  if (!userExplicitlyPinnedBuiltinCallAudio()) return false;
+  const userSel = normalizeInCallRoute(readUserSelectedCallAudioRoute() || '');
+  if (userSel === 'SPEAKER_PHONE') return true;
+  try {
+    const g = global as any;
+    const cycled = normalizeInCallRoute(g.__lastCycleUserRouteResultRef?.current || '');
+    return cycled === 'SPEAKER_PHONE';
+  } catch {
+    return false;
+  }
 }
 
 export function resolveReapplyMediaInCallContext(fallback?: 'audio' | 'video'): 'audio' | 'video' {
@@ -1522,6 +1642,38 @@ function resolveExplicitPiPOrAudioUiBuiltinRoute(
   return fallback;
 }
 
+/** Accept audio-first: earpiece по умолчанию; SPEAKER только при явном lock/cycle на текущем callId. */
+export function resolveDirectCallAcceptAudioReapplyRoute(): InCallAudioRoute {
+  const locked = readUserLockedBuiltinCallAudioRoute();
+  if (locked === 'EARPIECE') {
+    return coercePersistedRouteForAvailableDevices(locked);
+  }
+  if (locked === 'SPEAKER_PHONE') {
+    return coercePersistedRouteForAvailableDevices(
+      coerceDirectAudioAcceptBuiltinRoute(locked),
+    );
+  }
+  if (userExplicitlyPinnedBuiltinCallAudio()) {
+    const pinned = normalizeInCallRoute(readUserSelectedCallAudioRoute() || '');
+    if (pinned === 'EARPIECE' || pinned === 'SPEAKER_PHONE') {
+      return coercePersistedRouteForAvailableDevices(pinned);
+    }
+  }
+  const userExt = readUserSelectedExternalCallAudioRoute();
+  if (isExternalHeadsetRoute(userExt)) {
+    return coercePersistedRouteForAvailableDevices(userExt);
+  }
+  const nativeExt = readNativeProbedExternalRoute();
+  if (nativeExt && isExternalHeadsetRoute(nativeExt)) {
+    return coercePersistedRouteForAvailableDevices(nativeExt);
+  }
+  const connected = readConnectedExternalCallAudioRoute();
+  if (connected && isExternalHeadsetRoute(connected)) {
+    return coercePersistedRouteForAvailableDevices(connected);
+  }
+  return 'EARPIECE';
+}
+
 /** Audio UI: партнёр ушёл в video — не менять BT / ухо / громкий пользователя. */
 export function resolveStayOnAudioUiRouteWhenPartnerEntersVideo(): InCallAudioRoute {
   const userExt = readUserSelectedExternalCallAudioRoute();
@@ -1832,6 +1984,15 @@ export async function reapplyPersistedCallAudioRoute(
       if (lockedBuiltin) {
         honorUser = true;
       }
+      if (
+        honorUser &&
+        (reason === 'audio_home_preserve_route' || reason === 'audio_home_loud_speaker') &&
+        isDirectAudioEarpieceStabilizeWindow() &&
+        !userExplicitlyPinnedBuiltinCallAudio() &&
+        !readUserSelectedExternalCallAudioRoute()
+      ) {
+        honorUser = false;
+      }
       const skipInCallRestart =
         opts?.skipInCallRestart ??
         (isInCallAudioSessionStarted() && isOngoingCallSession() && !reason.includes('bootstrap'));
@@ -2134,6 +2295,7 @@ export async function reapplyPersistedCallAudioRoute(
         let route = resolveExplicitPiPOrAudioUiBuiltinRoute(
           readCallAudioRouteUiLock() || resolveReturnToAudioUiReapplyRoute() || 'EARPIECE',
         );
+        route = coerceDirectAudioAcceptBuiltinRoute(route);
         if (
           !isExternalHeadsetRoute(route) &&
           route !== 'EARPIECE' &&
@@ -2223,10 +2385,11 @@ export async function reapplyPersistedCallAudioRoute(
         }
         let route: InCallAudioRoute;
         if (isInAudioOnlyCallUi()) {
-          route = resolveStayOnAudioUiRouteWhenPartnerEntersVideo();
+          route = resolveDirectCallAcceptAudioReapplyRoute();
         } else {
           route = await resolveHeadsetFirstReapplyRoute('EARPIECE');
         }
+        route = coerceDirectAudioAcceptBuiltinRoute(route);
         const media = opts?.media ?? 'audio';
         const acceptNow = Date.now();
         if (shouldSkipDuplicateReapply(route, media, reason, acceptNow)) {
@@ -2237,9 +2400,14 @@ export async function reapplyPersistedCallAudioRoute(
         if (isExternalHeadsetRoute(route)) {
           setUserSelectedCallAudioRoute(route);
         } else if (route === 'SPEAKER_PHONE' || route === 'EARPIECE') {
-          setUserSelectedCallAudioRoute(route);
-          if (readUserLockedBuiltinCallAudioRoute()) {
+          const userPinned =
+            readUserLockedBuiltinCallAudioRoute() === route ||
+            (route === 'SPEAKER_PHONE' && userExplicitlyPinnedBuiltinCallAudio());
+          if (userPinned) {
+            setUserSelectedCallAudioRoute(route);
             rememberManualBuiltinCallAudioRoute(route);
+          } else if (route === 'EARPIECE') {
+            setUserSelectedCallAudioRoute(null);
           }
         }
         try {

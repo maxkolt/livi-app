@@ -109,7 +109,11 @@ function readGlobalBuiltinRouteForSync(): InCallAudioRoute | null {
   const explicit = readExplicitUserSelectedBuiltInRoute();
   if (explicit) return explicit;
   const userSel = readUserSelectedCallAudioRoute();
-  if (userSel === 'SPEAKER_PHONE') return userSel;
+  if (userSel === 'SPEAKER_PHONE') {
+    if (userExplicitlyPinnedBuiltinCallAudio()) return userSel;
+    return null;
+  }
+  if (userSel === 'EARPIECE') return userSel;
   try {
     const g = global as any;
     const cycled = normalizeInCallRoute(g.__lastCycleUserRouteResultRef?.current || '');
@@ -233,9 +237,14 @@ function isExplicitBuiltInRouteChoice(reason: string, route: InCallAudioRoute): 
   if (reason === 'return_to_audio_ui' && readUserSelectedCallAudioRoute() === route) {
     return true;
   }
-  if (reason === 'direct_call_accept_audio_route' || reason === 'applyRouting_deferred_earpiece') {
+  if (
+    reason === 'direct_call_accept_audio_route' ||
+    reason === 'handleCallAnswered_audio_first' ||
+    reason === 'applyRouting_deferred_earpiece'
+  ) {
+    if (route === 'EARPIECE') return true;
     if (!readUserLockedBuiltinCallAudioRoute()) return false;
-    return route === 'EARPIECE' || route === 'SPEAKER_PHONE';
+    return route === 'SPEAKER_PHONE';
   }
   if (
     reason === 'applyRouting_locked_bootstrap' ||
@@ -372,6 +381,23 @@ export const useAudioRouting = (
     return mapRouteForEnterVideoUi('EARPIECE');
   };
 
+  /** На audio-first звонке не восстанавливать SPEAKER с прошлого callId без явного user lock. */
+  const mayApplyProductSpeakerRoute = (route: InCallAudioRoute): boolean => {
+    if (route !== 'SPEAKER_PHONE') return true;
+    if (!routingOptionsRef.current?.defaultToEarpiece) return true;
+    if (readUserLockedBuiltinCallAudioRoute() === 'SPEAKER_PHONE') return true;
+    if (userExplicitlyPinnedBuiltinCallAudio()) return true;
+    if (isDirectAudioEarpieceStabilizeWindow()) return false;
+    return false;
+  };
+
+  const coerceProductBuiltinRoute = (route: InCallAudioRoute): InCallAudioRoute => {
+    if (route === 'SPEAKER_PHONE' && !mayApplyProductSpeakerRoute('SPEAKER_PHONE')) {
+      return 'EARPIECE';
+    }
+    return route;
+  };
+
   /** Auto-paths (preferAudioMode, deferred bootstrap): не сбрасывать SPEAKER с PiP/video без явного EAR. */
   const resolveAutoAudioBuiltInOrNull = (): InCallAudioRoute | null => {
     const lock = readCallAudioRouteUiLock();
@@ -388,12 +414,30 @@ export const useAudioRouting = (
     }
     const userSel = readUserSelectedCallAudioRoute();
     if (userSel === 'EARPIECE' || userSel === 'SPEAKER_PHONE') {
+      if (
+        userSel === 'SPEAKER_PHONE' &&
+        routingOptionsRef.current?.defaultToEarpiece &&
+        !userExplicitlyPinnedBuiltinCallAudio() &&
+        !readUserLockedBuiltinCallAudioRoute()
+      ) {
+        return 'EARPIECE';
+      }
       return mapBuiltInRouteForActiveCallUi(userSel);
     }
     const explicit = readExplicitUserSelectedBuiltInRoute();
     if (explicit === 'EARPIECE' || explicit === 'SPEAKER_PHONE') return explicit;
     const persisted = getPersistedCallAudioRoute();
-    if (persisted === 'SPEAKER_PHONE' || persisted === 'EARPIECE') return persisted;
+    if (persisted === 'SPEAKER_PHONE' || persisted === 'EARPIECE') {
+      if (
+        persisted === 'SPEAKER_PHONE' &&
+        routingOptionsRef.current?.defaultToEarpiece &&
+        !userExplicitlyPinnedBuiltinCallAudio() &&
+        !readUserLockedBuiltinCallAudioRoute()
+      ) {
+        return 'EARPIECE';
+      }
+      return persisted;
+    }
     if (isCallAudioPiPTransitionWindow() || isInAudioOnlyCallUi()) {
       const authoritative = readAuthoritativeCallAudioRouteAfterPiP();
       if (authoritative === 'EARPIECE' || authoritative === 'SPEAKER_PHONE') {
@@ -1066,6 +1110,17 @@ export const useAudioRouting = (
     ) {
       effectiveRoute = 'EARPIECE';
     }
+    if (
+      !!routingOptionsRef.current?.defaultToEarpiece &&
+      effectiveRoute === 'SPEAKER_PHONE' &&
+      !userExplicitlyPinnedBuiltinCallAudio() &&
+      (reason === 'direct_call_accept_audio_route' ||
+        reason === 'handleCallAnswered_audio_first' ||
+        reason === 'applyRouting_locked_bootstrap' ||
+        reason === 'preferAudioMode')
+    ) {
+      effectiveRoute = 'EARPIECE';
+    }
 
     if (
       isPiPBuiltinCallAudioRouteLockActive() &&
@@ -1095,7 +1150,17 @@ export const useAudioRouting = (
       reason !== 'return_to_audio_ui_sync' &&
       reason !== 'audio_ui_route_cycle'
     ) {
-      effectiveRoute = uiLockApply;
+      const blockStaleSpeakerUiLock =
+        uiLockApply === 'SPEAKER_PHONE' &&
+        !!routingOptionsRef.current?.defaultToEarpiece &&
+        !userExplicitlyPinnedBuiltinCallAudio() &&
+        (reason === 'direct_call_accept_audio_route' ||
+          reason === 'handleCallAnswered_audio_first' ||
+          reason === 'preferAudioMode' ||
+          reason === 'applyRouting_deferred_earpiece');
+      if (!blockStaleSpeakerUiLock) {
+        effectiveRoute = uiLockApply;
+      }
     }
 
     if (
@@ -1107,7 +1172,15 @@ export const useAudioRouting = (
       if (uiLockPin !== 'EARPIECE') {
         const pinnedBuiltin = resolveAutoAudioBuiltInOrNull();
         if (pinnedBuiltin === 'SPEAKER_PHONE') {
-          effectiveRoute = 'SPEAKER_PHONE';
+          const blockAutoSpeakerOnAudioFirst =
+            !!routingOptionsRef.current?.defaultToEarpiece &&
+            !readUserLockedBuiltinCallAudioRoute() &&
+            !userExplicitlyPinnedBuiltinCallAudio() &&
+            (isDirectAudioEarpieceStabilizeWindow() ||
+              (isInAudioOnlyCallUi() && !readUserLockedBuiltinCallAudioRoute()));
+          if (!blockAutoSpeakerOnAudioFirst) {
+            effectiveRoute = 'SPEAKER_PHONE';
+          }
         }
       }
     }
@@ -1269,9 +1342,21 @@ export const useAudioRouting = (
       }
       if (earpieceProductMode && isInAudioOnlyCallUi()) {
         const authoritative = readAuthoritativeCallAudioRouteAfterPiP();
-        if (authoritative === 'EARPIECE' || authoritative === 'SPEAKER_PHONE') {
+        if (authoritative === 'EARPIECE') {
+          lockedBootstrap = authoritative;
+        } else if (
+          authoritative === 'SPEAKER_PHONE' &&
+          userExplicitlyPinnedBuiltinCallAudio()
+        ) {
           lockedBootstrap = authoritative;
         }
+      }
+      if (
+        earpieceProductMode &&
+        lockedBootstrap === 'SPEAKER_PHONE' &&
+        !userExplicitlyPinnedBuiltinCallAudio()
+      ) {
+        lockedBootstrap = 'EARPIECE';
       }
       if (
         lockedBootstrap === 'SPEAKER_PHONE' ||
@@ -2250,9 +2335,42 @@ export const useAudioRouting = (
 
   useEffect(() => {
     if (!enabled || !routingOptionsRef.current?.defaultToEarpiece) return;
+    const applyPreferBuiltin = (route: InCallAudioRoute) => {
+      let target = route;
+      if (
+        target === 'SPEAKER_PHONE' &&
+        routingOptionsRef.current?.defaultToEarpiece &&
+        !readUserLockedBuiltinCallAudioRoute() &&
+        !userExplicitlyPinnedBuiltinCallAudio()
+      ) {
+        target = 'EARPIECE';
+      }
+      applySpecificRoute(target, 'preferAudioMode', true);
+    };
     const applyPrefer = () => {
       if (!isInAudioOnlyCallUi()) return;
       if (isCallAudioPreferAudioModeQuiet()) return;
+      if (isDirectAudioEarpieceStabilizeWindow()) {
+        const locked = readUserLockedBuiltinCallAudioRoute();
+        if (locked === 'SPEAKER_PHONE' && userExplicitlyPinnedBuiltinCallAudio()) {
+          applySpecificRoute('SPEAKER_PHONE', 'preferAudioMode', true);
+          return;
+        }
+        const extLockedStabilize = readUserSelectedExternalCallAudioRoute();
+        if (extLockedStabilize) {
+          applySpecificRoute(extLockedStabilize, 'preferAudioMode', true);
+          return;
+        }
+        const nativeExtStabilize = readNativeProbedExternalRoute();
+        if (nativeExtStabilize && isExternalHeadsetRoute(nativeExtStabilize)) {
+          applySpecificRoute(nativeExtStabilize, 'preferAudioMode', true);
+          return;
+        }
+        setUserRoute('EARPIECE', { persist: false });
+        setSelectedRoute('EARPIECE');
+        applySpecificRoute('EARPIECE', 'preferAudioMode', true);
+        return;
+      }
       const userSelExternal = readUserSelectedCallAudioRoute();
       if (isExternalHeadsetRoute(userSelExternal)) {
         applySpecificRoute(userSelExternal, 'preferAudioMode', true);
@@ -2266,16 +2384,12 @@ export const useAudioRouting = (
       if (isInAppPiPExplicitBuiltinRouteChoiceActive()) {
         const uiLockExplicit = readCallAudioRouteUiLock();
         if (uiLockExplicit === 'EARPIECE' || uiLockExplicit === 'SPEAKER_PHONE') {
-          applySpecificRoute(
-            mapBuiltInRouteForActiveCallUi(uiLockExplicit),
-            'preferAudioMode',
-            true,
-          );
+          applyPreferBuiltin(mapBuiltInRouteForActiveCallUi(uiLockExplicit));
           return;
         }
         const plaqueSel = readUserSelectedCallAudioRoute();
         if (plaqueSel === 'EARPIECE' || plaqueSel === 'SPEAKER_PHONE') {
-          applySpecificRoute(plaqueSel, 'preferAudioMode', true);
+          applyPreferBuiltin(plaqueSel);
           return;
         }
       }
@@ -2286,7 +2400,7 @@ export const useAudioRouting = (
       }
       const userSelBuiltInEarly = readExplicitUserSelectedBuiltInRoute();
       if (userSelBuiltInEarly === 'EARPIECE' || userSelBuiltInEarly === 'SPEAKER_PHONE') {
-        applySpecificRoute(userSelBuiltInEarly, 'preferAudioMode', true);
+        applyPreferBuiltin(userSelBuiltInEarly);
         return;
       }
       const nativeExtEarly = readNativeProbedExternalRoute();
@@ -2330,10 +2444,8 @@ export const useAudioRouting = (
           uiLockPrefer === 'SPEAKER_PHONE' ||
           isExternalHeadsetRoute(uiLockPrefer))
       ) {
-        applySpecificRoute(
+        applyPreferBuiltin(
           mapBuiltInRouteForActiveCallUi(uiLockPrefer),
-          'preferAudioMode',
-          true,
         );
         return;
       }
@@ -2350,13 +2462,13 @@ export const useAudioRouting = (
           authoritative === 'EARPIECE' ||
           isExternalHeadsetRoute(authoritative)
         ) {
-          applySpecificRoute(authoritative, 'preferAudioMode', true);
+          applyPreferBuiltin(authoritative);
           return;
         }
       }
       const userSel = readExplicitUserSelectedBuiltInRoute();
       if (userSel === 'SPEAKER_PHONE' || userSel === 'EARPIECE') {
-        applySpecificRoute(userSel, 'preferAudioMode', true);
+        applyPreferBuiltin(userSel);
         return;
       }
       const sticky = readStickyAppliedRoute();
@@ -2367,7 +2479,7 @@ export const useAudioRouting = (
       if (readExplicitBuiltInFromGlobal()) {
         const pinned = getUserRoute();
         if (pinned === 'SPEAKER_PHONE' || pinned === 'EARPIECE') {
-          applySpecificRoute(pinned, 'preferAudioMode', true);
+          applyPreferBuiltin(pinned);
           return;
         }
       }
@@ -2417,15 +2529,25 @@ export const useAudioRouting = (
       const restoreBuiltin =
         readDirectCallAudioRouteBeforeVideo() || readBuiltinCallRouteBeforeHeadset();
       if (restoreBuiltin === 'SPEAKER_PHONE' || restoreBuiltin === 'EARPIECE') {
-        setUserRoute(restoreBuiltin);
-        setSelectedRoute(restoreBuiltin);
-        applySpecificRoute(restoreBuiltin, 'preferAudioMode', true);
+        let builtin = restoreBuiltin;
+        if (
+          builtin === 'SPEAKER_PHONE' &&
+          routingOptionsRef.current?.defaultToEarpiece &&
+          !readUserLockedBuiltinCallAudioRoute() &&
+          !userExplicitlyPinnedBuiltinCallAudio() &&
+          (isDirectAudioEarpieceStabilizeWindow() || !readUserSelectedCallAudioRoute())
+        ) {
+          builtin = 'EARPIECE';
+        }
+        setUserRoute(builtin, { persist: false });
+        setSelectedRoute(builtin);
+        applySpecificRoute(builtin, 'preferAudioMode', true);
         return;
       }
       if (explicitBuiltInChoiceRef.current) {
         const pinned = getUserRoute();
         if (pinned === 'SPEAKER_PHONE' || pinned === 'EARPIECE') {
-          applySpecificRoute(pinned, 'preferAudioMode', true);
+          applyPreferBuiltin(pinned);
           return;
         }
       }
@@ -2457,7 +2579,7 @@ export const useAudioRouting = (
         ) {
           // fall through to ear default
         } else if (persisted === 'SPEAKER_PHONE') {
-          applySpecificRoute('SPEAKER_PHONE', 'preferAudioMode', true);
+          applyPreferBuiltin('SPEAKER_PHONE');
           return;
         }
         if (persisted === 'EARPIECE') {
@@ -2469,7 +2591,7 @@ export const useAudioRouting = (
       if (pinnedBeforeEarDefault === 'SPEAKER_PHONE' || pinnedBeforeEarDefault === 'EARPIECE') {
         setUserRoute(pinnedBeforeEarDefault, { persist: false });
         setSelectedRoute(pinnedBeforeEarDefault);
-        applySpecificRoute(pinnedBeforeEarDefault, 'preferAudioMode', true);
+        applyPreferBuiltin(pinnedBeforeEarDefault);
         return;
       }
       setUserRoute('EARPIECE', { persist: false });
@@ -2483,6 +2605,7 @@ export const useAudioRouting = (
 
   useEffect(() => {
     if (!enabled || preferAudioMode) return;
+    if (routingOptionsRef.current?.defaultToEarpiece) return;
     const applyVideoUiBuiltin = () => {
       const plaqueExt = normalizeInCallRoute(
         readInAppPiPAudioOutputRoute() ||

@@ -2,6 +2,7 @@ import { AppState, AppStateStatus } from 'react-native';
 import { CommonActions, StackActions } from '@react-navigation/native';
 import { logger } from './logger';
 import { clearStaleInAppPiPAudioContextForFreshCallNav } from './callAudioRoutePersist';
+import { getCallMediaHint } from './directCallMediaHint';
 import { readSafeRootNavigation } from './safeRootNavigation';
 
 export { readRootCurrentRouteName, readRootCurrentRoute, readRootNavigationState } from './safeRootNavigation';
@@ -175,6 +176,7 @@ const FRESH_VIDEO_CALL_NAV_REASONS = new Set([
   'incoming_navigate',
   'call_accepted',
   'flush_pending',
+  'callkeep_answer',
 ]);
 
 /** Не тащить fromPiP/resume с прошлого VideoCall при новом входящем / call:accepted. */
@@ -190,13 +192,16 @@ export function stripStalePiPReturnNavParams(
   delete next.resume;
   delete next.audioOnlyPiPReturn;
   delete next.preferVideoCallUi;
+  const cid = String(next.callId ?? '').trim();
+  const audioFirstNav =
+    next.callMedia !== 'video' && (cid ? getCallMediaHint(cid) !== 'video' : next.callMedia === 'audio');
   // merge: true оставляет старые ключи — явно сбрасываем.
   return {
     ...next,
     fromPiP: undefined,
     resume: undefined,
     audioOnlyPiPReturn: undefined,
-    preferVideoCallUi: undefined,
+    preferVideoCallUi: audioFirstNav ? false : undefined,
   };
 }
 
@@ -255,10 +260,10 @@ export function navigateToVideoCallScreen(
 ): boolean {
   if (!nav.isReady?.()) return false;
   const safeParams = stripStalePiPReturnNavParams(params, reason);
-  if (reason) {
-    clearStaleInAppPiPAudioContextForFreshCallNav(reason);
-  }
   const callId = String(safeParams.callId ?? '').trim();
+  if (reason) {
+    clearStaleInAppPiPAudioContextForFreshCallNav(reason, callId || null);
+  }
   const current = nav.getCurrentRoute?.();
   const currentName = String(current?.name ?? '');
   const currentCallId = readRouteCallId(current);

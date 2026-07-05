@@ -45,8 +45,10 @@ import { getInstallId } from '../../../utils/installId';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../../utils/callKeep';
 import { setAndroidSystemPiPLeaveHintEnabled } from '../../../utils/activeCallNotification';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
-import { isDirectCallVideoExpandGuardActive, isInAudioOnlyCallUi } from '../../pip/pipPlaceholderOnly';
-import { markDirectCallVideoMediaActive } from '../../../utils/activeCallSession';
+import { isDirectCallVideoExpandGuardActive, isInAudioOnlyCallUi, isDirectCallUserRequestedVideoExpand } from '../../pip/pipPlaceholderOnly';
+import { markDirectCallVideoMediaActive, resetDirectCallVideoUiGlobalsAfterCallEnd } from '../../../utils/activeCallSession';
+import { clearDirectCallAudioRouteCarryoverAfterCallEnd } from '../../../utils/callAudioRoutePersist';
+import { getCallMediaHint } from '../../../utils/directCallMediaHint';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
 
@@ -732,6 +734,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     this.endCallInProgress = true;
+    resetDirectCallVideoUiGlobalsAfterCallEnd();
+    clearDirectCallAudioRouteCarryoverAfterCallEnd();
     // КРИТИЧНО: Сразу помечаем звонок завершённым, чтобы асинхронный код (handleCallAccepted, connectToLiveKit)
     // видел ended и не выполнял пост-подключение / setLocalDescription после disconnect
     this.ended = true;
@@ -1058,10 +1062,7 @@ export class VideoCallSession extends SimpleEventEmitter {
   onAppBackgroundDuringActiveCall(): void {
     if (this.ended || this.endCallInProgress) return;
     void this.restoreMicrophoneAfterAppBackground().catch(() => {});
-    try {
-      const g = global as any;
-      if (g.__inAudioOnlyUiRef?.current === true) return;
-    } catch (_) {}
+    if (this.isLocalDirectCallAudioOnlyUi()) return;
     logger.info('[VideoCallSession] App background on video UI — notify video UI, then pause camera');
     try {
       this.enterPiP?.();
@@ -1128,6 +1129,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       isDirectCallVideoExpandGuardActive() ||
       (global as any).__stayOnVideoCallUiRef?.current === true;
     if (this.isLocalDirectCallAudioOnlyUi() && !expandingToVideoUi) return;
+    if (this.config.startWithCamOff && !expandingToVideoUi && !this.isCamOn) return;
     if (!this.isCamOn && !this.cameraSuspendedForAppBackground && !expandingToVideoUi) return;
     return this.enqueueCameraAppLifecycle(async () => {
       if (this.localVideoRecreatePromise) {
@@ -1330,15 +1332,37 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   private async applyLocalCameraEnabledNow(enabled: boolean): Promise<void> {
+    const cidForMedia = String(this.getCallId?.() || this.callId || '').trim();
+    const audioFirstCall =
+      !!this.config.startWithCamOff ||
+      (cidForMedia ? getCallMediaHint(cidForMedia) === 'audio' : false);
+    const userLeftAudioOnlyForVideo =
+      enabled &&
+      this.config.getIsDirectCall?.() &&
+      !isInAudioOnlyCallUi() &&
+      (global as any).__stayOnVideoCallUiRef?.current === true &&
+      (!audioFirstCall || isDirectCallUserRequestedVideoExpand());
     if (
       enabled &&
       this.config.getIsDirectCall?.() &&
+      !userLeftAudioOnlyForVideo &&
       (this.isLocalDirectCallAudioOnlyUi() ||
         isInAudioOnlyCallUi() ||
         this.directCallAudioOnlyConsumerDefer)
     ) {
       logger.debug('[VideoCallSession] Skip camera enable — direct-call audio-only UI');
       return;
+    }
+    if (enabled && this.config.getIsDirectCall?.() && !userLeftAudioOnlyForVideo) {
+      if (audioFirstCall && !isDirectCallUserRequestedVideoExpand()) {
+        logger.debug(
+          '[VideoCallSession] Skip camera enable — audio-first call without explicit video UI request',
+        );
+        return;
+      }
+    }
+    if (userLeftAudioOnlyForVideo && this.directCallAudioOnlyConsumerDefer) {
+      this.directCallAudioOnlyConsumerDefer = false;
     }
 
     this.isCamOn = enabled;
@@ -1966,6 +1990,12 @@ export class VideoCallSession extends SimpleEventEmitter {
       logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — local audio-only UI');
       return;
     }
+    if (this.isDirectCallAudioFirstWithoutUserVideo()) {
+      logger.debug(
+        '[VideoCallSession] Skip enableRemoteVideoConsumption — audio-first without user video request',
+      );
+      return;
+    }
     if (this.directCallAudioOnlyConsumerDefer && !opts?.leaveAudioOnlyConsumer) {
       logger.debug('[VideoCallSession] Skip enableRemoteVideoConsumption — direct-call audio-only consumer defer');
       return;
@@ -2208,6 +2238,15 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.remoteAudioMuted;
   }
 
+  private isDirectCallAudioFirstWithoutUserVideo(): boolean {
+    if (!this.config.getIsDirectCall?.()) return false;
+    const cid = String(this.getCallId?.() || this.callId || '').trim();
+    const audioFirst =
+      !!this.config.startWithCamOff ||
+      (cid ? getCallMediaHint(cid) === 'audio' : false);
+    return audioFirst && !isDirectCallUserRequestedVideoExpand();
+  }
+
   /** Намерение пользователя по микрофону (совпадает с UI после синхронизации). */
   getIsMicOn(): boolean {
     return this.isMicOn;
@@ -2223,6 +2262,8 @@ export class VideoCallSession extends SimpleEventEmitter {
     try {
       const g = global as any;
       if (g.__preferAudioOnlyUiOnNextVideoCallRef?.current === true) return true;
+      // Пользователь на video UI (кнопка «видео»): не держать audio-only по startWithCamOff / callMedia hint.
+      if (g.__stayOnVideoCallUiRef?.current === true) return false;
       if (g.__inAudioOnlyUiRef?.current === true) return true;
       if (g.__pipAudioOnlyPlaceholderRef?.current === true) {
         const live =
@@ -2230,6 +2271,11 @@ export class VideoCallSession extends SimpleEventEmitter {
           !this.endCallInProgress &&
           (this.room?.state === 'connected' || !!this.roomId);
         if (live) return true;
+      }
+      if (this.config.getIsDirectCall?.()) {
+        if (this.config.startWithCamOff && !this.isCamOn) return true;
+        const cid = String(this.getCallId?.() || this.callId || '').trim();
+        if (cid && getCallMediaHint(cid) === 'audio' && !this.isCamOn) return true;
       }
       return false;
     } catch {
@@ -2250,6 +2296,12 @@ export class VideoCallSession extends SimpleEventEmitter {
   notifyPeerDirectCallVideoUi(inVideoCallUi: boolean, opts?: { force?: boolean }): void {
     if (!this.config.getIsDirectCall?.()) return;
     if (inVideoCallUi) {
+      if (this.isDirectCallAudioFirstWithoutUserVideo()) {
+        logger.debug(
+          '[VideoCallSession] Skip direct-call:video-ui true — audio-first without user video request',
+        );
+        return;
+      }
       markDirectCallVideoMediaActive();
     }
     if (inVideoCallUi && this.isLocalDirectCallAudioOnlyUi()) {

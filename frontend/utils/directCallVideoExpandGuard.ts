@@ -1,4 +1,5 @@
 import { setPipAudioOnlyPlaceholderSticky } from './callAudioOnlyUiContext';
+import { resolveDirectCallAudioFirst } from './directCallMediaHint';
 
 function setPipInAppRtcFromAudioOnlySticky(fromAudioOnlyUi: boolean): void {
   try {
@@ -57,6 +58,54 @@ export function finishDirectCallVideoExpandInFlight(): void {
       g.__directCallVideoExpandInFlightRef.current = false;
     }
   } catch {}
+}
+
+/** Пользователь явно перешёл на video UI (PiP expand / кнопка камеры), не stale ref с прошлого звонка. */
+export function markDirectCallUserRequestedVideoExpand(): void {
+  try {
+    const g = global as any;
+    g.__directCallUserRequestedVideoExpandRef =
+      g.__directCallUserRequestedVideoExpandRef || { current: false };
+    g.__directCallUserRequestedVideoExpandRef.current = true;
+  } catch {}
+}
+
+export function clearDirectCallUserRequestedVideoExpand(): void {
+  try {
+    const g = global as any;
+    if (g.__directCallUserRequestedVideoExpandRef) {
+      g.__directCallUserRequestedVideoExpandRef.current = false;
+    }
+  } catch {}
+}
+
+export function isDirectCallUserRequestedVideoExpand(): boolean {
+  try {
+    return (global as any).__directCallUserRequestedVideoExpandRef?.current === true;
+  } catch {
+    return false;
+  }
+}
+
+export function clearStaleDirectCallVideoExpandFlags(): void {
+  try {
+    const g = global as any;
+    g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+    g.__expandToVideoCallUiFromPiPRef.current = false;
+    g.__directCallVideoExpandUntilRef = g.__directCallVideoExpandUntilRef || { current: 0 };
+    g.__directCallVideoExpandUntilRef.current = 0;
+    finishDirectCallVideoExpandInFlight();
+    clearDirectCallUserRequestedVideoExpand();
+  } catch {}
+}
+
+/** Audio-first direct call: блокировать expand/camera, пока пользователь явно не перешёл на video UI. */
+export function shouldBlockAutomatedDirectCallVideoExpand(
+  params?: Parameters<typeof resolveDirectCallAudioFirst>[0],
+  callId?: string | null,
+): boolean {
+  if (!resolveDirectCallAudioFirst(params, callId)) return false;
+  return !isDirectCallUserRequestedVideoExpand();
 }
 
 /** Один expand + enable camera на всех входах (PiP overlay, mount, focus). */

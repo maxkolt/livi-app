@@ -97,13 +97,24 @@ import {
   isOngoingCallSession,
   clearEndingCallInProgress,
   shouldKeepInCallAudioOnAppBackground,
+  markActiveCallAudioRouteCallId,
+  armDirectAudioEarpieceStabilizeWindow,
 } from './utils/activeCallSession';
 import {
   disposeDirectCallAudioPrewarm,
   prefetchDirectCallIce,
   prewarmDirectCallAudioCapture,
 } from './utils/directCallConnectPrewarm';
-import { restoreCallMediaAfterSystemPiPReturn, prepareDirectCallVideoExpandFromInAppPiP } from './utils/callAudioRoutePersist';
+import {
+  restoreCallMediaAfterSystemPiPReturn,
+  prepareDirectCallVideoExpandFromInAppPiP,
+  applyCallAudioOutputRouteNow,
+  setPersistedCallAudioRoute,
+  clearStaleVideoSpeakerUiLockForAudioOnlyUi,
+  resolveDirectCallAcceptAudioReapplyRoute,
+  clearStaleHomeAudioRouteBeforeDirectCallAccept,
+} from './utils/callAudioRoutePersist';
+import { isExternalHeadsetRoute } from './components/VideoChat/hooks/audioRouteTypes';
 import {
   installAppNavigationGuard,
   applyCallCancelledHomeNotice,
@@ -3283,10 +3294,29 @@ function AppContent() {
                 logger.error('[App] ❌ Error navigating to VideoCall', { error: err, callId: data?.callId });
               }
             };
+            const prepareCallerAudioRouteThenNavigate = async () => {
+              if (isCaller && callId && getCallMediaHint(callId) !== 'video') {
+                try {
+                  markActiveCallAudioRouteCallId(String(callId));
+                  armDirectAudioEarpieceStabilizeWindow();
+                  clearStaleVideoSpeakerUiLockForAudioOnlyUi();
+                  clearStaleHomeAudioRouteBeforeDirectCallAccept();
+                  const route = resolveDirectCallAcceptAudioReapplyRoute();
+                  const acceptRoute = isExternalHeadsetRoute(route) ? route : 'EARPIECE';
+                  setPersistedCallAudioRoute(acceptRoute);
+                  const forceBuiltIn = acceptRoute === 'EARPIECE';
+                  await applyCallAudioOutputRouteNow(acceptRoute, {
+                    media: 'audio',
+                    forceBuiltIn,
+                  });
+                } catch {}
+              }
+              doNavigate();
+            };
             if (isCaller) {
               closeAcceptedCallUi();
             }
-            doNavigate();
+            void prepareCallerAudioRouteThenNavigate();
             if (!isCaller) {
               closeAcceptedCallUi();
             }
