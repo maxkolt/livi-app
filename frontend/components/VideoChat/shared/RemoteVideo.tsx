@@ -85,6 +85,8 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
 
   // IMPORTANT: must be declared before any early returns (hooks order).
   const prevPartnerInPiPRef = useRef<boolean>(partnerInPiP);
+  const pipReturnRemoteRetryDoneRef = useRef(false);
+  const prevPartnerInPiPForRetryRef = useRef(partnerInPiP);
   useEffect(() => {
     prevPartnerInPiPRef.current = partnerInPiP;
   }, [partnerInPiP]);
@@ -334,6 +336,30 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
       }
     });
   }, [streamToUse, remoteMuted]);
+
+  useEffect(() => {
+    const wasInPiP = prevPartnerInPiPForRetryRef.current;
+    prevPartnerInPiPForRetryRef.current = partnerInPiP;
+    if (partnerInPiP) {
+      pipReturnRemoteRetryDoneRef.current = false;
+      return;
+    }
+    if (!wasInPiP) return;
+    if (pipReturnRemoteRetryDoneRef.current) return;
+    if (!effectiveRemoteCamOn || !streamToUse) return;
+    const videoTrack = (streamToUse as any)?.getVideoTracks?.()?.[0] || null;
+    const renderable =
+      !!videoTrack &&
+      (videoTrack.enabled ?? true) &&
+      !(videoTrack.muted ?? false) &&
+      videoTrack.readyState === 'live';
+    if (renderable) return;
+    pipReturnRemoteRetryDoneRef.current = true;
+    const t = setTimeout(() => {
+      setForceUpdateKey((k) => k + 1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [partnerInPiP, effectiveRemoteCamOn, streamToUse?.id, streamToUseVideoTrackId]);
 
   // Неактивное состояние звонка - показываем надпись "Собеседник" как в эталонном файле
   // КРИТИЧНО: Завершение звонка имеет приоритет над заглушкой "Отошел".

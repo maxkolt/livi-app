@@ -42,7 +42,7 @@ import { isInAudioOnlyCallUi } from './callAudioOnlyUiContext';
 import {
   isDirectCallVideoExpandGuardActive,
   prepareDirectCallVideoReturnFromPiP,
-  clearDirectCallUserRequestedVideoExpand,
+  clearStaleDirectCallVideoExpandGlobalHints,
   finishDirectCallVideoExpandInFlight,
   markDirectCallUserRequestedVideoExpand,
 } from './directCallVideoExpandGuard';
@@ -113,8 +113,7 @@ export function clearStaleInAppPiPAudioContextForFreshCallNav(
 
     if (audioFreshCall || !pipActive) {
       resetDirectCallVideoUiGlobalsAfterCallEnd();
-      clearDirectCallUserRequestedVideoExpand();
-      finishDirectCallVideoExpandInFlight();
+      clearStaleDirectCallVideoExpandGlobalHints();
       g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
       g.__stayOnVideoCallUiRef.current = false;
     }
@@ -127,6 +126,15 @@ export function clearStaleInAppPiPAudioContextForFreshCallNav(
       g.__inAudioOnlyUiRef.current = true;
       g.__pipAudioOnlyPlaceholderRef = g.__pipAudioOnlyPlaceholderRef || { current: false };
       g.__pipAudioOnlyPlaceholderRef.current = true;
+      g.__pipInAppRtcFromAudioOnlyRef = g.__pipInAppRtcFromAudioOnlyRef || { current: false };
+      g.__pipInAppRtcFromAudioOnlyRef.current = false;
+      const params = g.__currentCallPiPParamsRef?.current;
+      if (params && typeof params === 'object') {
+        params.inAudioOnlyUi = true;
+        params.preferVideoCallUi = false;
+        params.localCamOn = false;
+        if (cid) params.callId = cid;
+      }
     } else if (!pipActive) {
       if (cid && getCallMediaHint(cid) === 'audio') {
         g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || {

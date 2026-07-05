@@ -5,7 +5,7 @@ import {
   armCallAudioNativeTransitionLock,
   armCallAudioPreservePriority,
 } from '../../utils/callAudioRoutePersist';
-import { finishDirectCallVideoExpandInFlight } from '../../utils/directCallVideoExpandGuard';
+import { finishDirectCallVideoExpandInFlight, isDirectCallVideoUiActive } from '../../utils/directCallVideoExpandGuard';
 
 export {
   touchDirectCallVideoExpandGuard,
@@ -18,7 +18,18 @@ export {
   clearDirectCallUserRequestedVideoExpand,
   isDirectCallUserRequestedVideoExpand,
   clearStaleDirectCallVideoExpandFlags,
+  clearStaleDirectCallVideoExpandGlobalHints,
+  isStaleDirectCallVideoExpandGlobalHint,
   shouldBlockAutomatedDirectCallVideoExpand,
+  isDirectCallVideoUiActive,
+  shouldSuppressDirectCallAudioOnlyUiTransition,
+  markFreshDirectCallAudioAcceptCall,
+  isFreshDirectCallAudioAcceptCallActive,
+  clearFreshDirectCallAudioAcceptCall,
+  shouldBlockFreshDirectCallAudioAutomatedVideoExpand,
+  markDirectCallAudioAcceptBootstrapped,
+  isDirectCallAudioAcceptBootstrapped,
+  clearDirectCallAudioAcceptBootstrapped,
 } from '../../utils/directCallVideoExpandGuard';
 import {
   isExternalHeadsetRoute,
@@ -259,6 +270,7 @@ export function resolvePreferAudioOnlyUiOnActiveCallReturn(opts?: {
     const params = g.__currentCallPiPParamsRef?.current;
     if (g.__stayOnVideoCallUiRef?.current === true) return false;
     if (params?.preferVideoCallUi === true) return false;
+    if (isDirectCallVideoUiActive()) return false;
     if (params?.inAudioOnlyUi === true) return true;
     const native = opts?.preferAudioOnlyFromNative;
     if (native === false) return false;
@@ -290,6 +302,9 @@ export function resolvePreferAudioOnlyUiOnPiPReturn(opts?: {
     }
     const params = g.__currentCallPiPParamsRef?.current;
     if (params?.preferVideoCallUi === true) {
+      return false;
+    }
+    if (isDirectCallVideoUiActive()) {
       return false;
     }
     if (params?.inAudioOnlyUi === true) {

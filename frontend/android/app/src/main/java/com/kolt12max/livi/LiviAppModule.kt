@@ -288,7 +288,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   @ReactMethod
-  fun closeOutgoingCallActivity(callId: String?, force: Boolean) {
+  fun closeOutgoingCallActivity(callId: String?, force: Boolean, skipMainReturn: Boolean) {
     val id = callId?.trim().orEmpty()
     if (id.isNotBlank()) {
       LiviOngoingCallHelper.clearOngoingCallIfMatches(reactApplicationContext, id)
@@ -301,8 +301,13 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       if (force) putExtra(OutgoingCallActivity.EXTRA_FORCE_CLOSE, true)
     }
     reactApplicationContext.sendBroadcast(intent)
-    Log.d(NAME, "closeOutgoingCallActivity: sent close broadcast callId=${id.ifBlank { "<unscoped>" }} force=$force")
-    LiviAppModule.scheduleMainActivityAfterOutgoingClose(reactApplicationContext)
+    Log.d(
+      NAME,
+      "closeOutgoingCallActivity: sent close broadcast callId=${id.ifBlank { "<unscoped>" }} force=$force skipMainReturn=$skipMainReturn",
+    )
+    if (!skipMainReturn) {
+      LiviAppModule.scheduleMainActivityAfterOutgoingClose(reactApplicationContext)
+    }
   }
 
   /**
@@ -3004,6 +3009,24 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun emitPendingAnswerCallEvent() {
       runOnReactUiQueueIfAlive { it.emitDeviceEvent("LiviPendingAnswerCall", null) }
+    }
+
+    /**
+     * Ответ на входящий с экрана IncomingCallActivity, пока Main в фоне:
+     * если RN жив — шлём LiviPendingAnswerCall (pending уже в [setPendingAnswerCall]).
+     */
+    @JvmStatic
+    fun tryDeliverPendingAnswerToJs(): Boolean {
+      if (!hasPendingAnswerCall()) return false
+      val ctx = reactContextRef ?: return false
+      if (!ctx.hasActiveReactInstance()) return false
+      try {
+        emitPendingAnswerCallEvent()
+        return true
+      } catch (e: Exception) {
+        Log.w(NAME, "tryDeliverPendingAnswerToJs failed", e)
+        return false
+      }
     }
 
     @Volatile private var pendingShareItems: WritableArray? = null

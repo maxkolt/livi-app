@@ -204,7 +204,10 @@ export function resetOutgoingCloseDebounce(): void {
 }
 
 /** Закрыть нативный экран исходящего (OutgoingCallActivity) при принятии/отклонении/таймауте. */
-export function closeOutgoingCallActivity(callId?: string | null, opts?: { force?: boolean }): void {
+export function closeOutgoingCallActivity(
+  callId?: string | null,
+  opts?: { force?: boolean; skipMainReturn?: boolean },
+): void {
   if (Platform.OS !== 'android') return;
   const id = String(callId || '').trim();
   const key = id || '__unscoped__';
@@ -222,9 +225,14 @@ export function closeOutgoingCallActivity(callId?: string | null, opts?: { force
   logger.info('[decline/инициатор] callKeep.closeOutgoingCallActivity — вызываем нативный finish', {
     callId: id || null,
     force: opts?.force === true,
+    skipMainReturn: opts?.skipMainReturn === true,
   });
   try {
-    NativeModules.LiviAppModule?.closeOutgoingCallActivity?.(id, opts?.force === true);
+    NativeModules.LiviAppModule?.closeOutgoingCallActivity?.(
+      id,
+      opts?.force === true,
+      opts?.skipMainReturn === true,
+    );
   } catch {}
 }
 

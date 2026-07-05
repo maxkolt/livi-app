@@ -195,13 +195,13 @@ export function stripStalePiPReturnNavParams(
   const cid = String(next.callId ?? '').trim();
   const audioFirstNav =
     next.callMedia !== 'video' && (cid ? getCallMediaHint(cid) !== 'video' : next.callMedia === 'audio');
-  // merge: true оставляет старые ключи — явно сбрасываем.
+  // merge: true не удаляет ключи через undefined — явно false для boolean «хвостов» PiP.
   return {
     ...next,
-    fromPiP: undefined,
-    resume: undefined,
-    audioOnlyPiPReturn: undefined,
-    preferVideoCallUi: audioFirstNav ? false : undefined,
+    fromPiP: false,
+    resume: false,
+    audioOnlyPiPReturn: false,
+    preferVideoCallUi: audioFirstNav ? false : next.callMedia === 'video' ? true : false,
   };
 }
 

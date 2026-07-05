@@ -278,6 +278,11 @@ export default function PiPOverlay({ currentRouteName }: PiPOverlayProps) {
           if (typeof fn === 'function') {
             void fn({ skipNavigation: true, fromPiP: true });
           }
+        } else {
+          const expandFn = g.__expandDirectCallToVideoUiRef?.current;
+          if (typeof expandFn === 'function') {
+            void expandFn();
+          }
         }
         return;
       }

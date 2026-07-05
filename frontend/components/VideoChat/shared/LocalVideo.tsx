@@ -37,7 +37,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   // Для таких устройств отключаем zOrderMediaOverlay, чтобы Surface корректно композировался в окне.
   const isLegacyAndroidSurface = Platform.OS === 'android' && Number(Platform.Version) <= 27;
   // На старых Android используем TextureView, чтобы RN-оверлеи (кнопки) гарантированно рисовались поверх видео.
-  const useTextureViewOnAndroid = Platform.OS === 'android' && isLegacyAndroidSurface;
+  const useTextureViewOnAndroid = Platform.OS === 'android';
 
   const [trackLiveTick, setTrackLiveTick] = useState(0);
   const [forceUpdateKey, setForceUpdateKey] = useState(0);

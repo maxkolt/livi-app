@@ -10,7 +10,12 @@ import { readCallAudioRouteUiLock, clearCallAudioRouteUiLock } from './callAudio
 import { readNativeProbedExternalRoute, isBluetoothHeadsetActiveForCall } from './nativeCallAudioProbe';
 import { readRootCurrentRouteName } from './safeRootNavigation';
 import { getCallMediaHint } from './directCallMediaHint';
-import { isDirectCallUserRequestedVideoExpand } from './directCallVideoExpandGuard';
+import {
+  isDirectCallUserRequestedVideoExpand,
+  isDirectCallVideoExpandGuardActive,
+  clearFreshDirectCallAudioAcceptCall,
+  clearDirectCallAudioAcceptBootstrapped,
+} from './directCallVideoExpandGuard';
 
 function isActiveDirectCallAudioFirstWithoutUserVideo(): boolean {
   try {
@@ -85,6 +90,11 @@ export function ongoingCallPrefersVideoMedia(): boolean {
   try {
     const g = global as any;
     if (isActiveDirectCallAudioFirstWithoutUserVideo()) {
+      if (isDirectCallVideoExpandGuardActive()) return true;
+      try {
+        const gg = global as any;
+        if (gg.__expandToVideoCallUiFromPiPRef?.current === true) return true;
+      } catch {}
       const session = g.__webrtcSessionRef?.current;
       if (typeof session?.getIsCamOn === 'function' && session.getIsCamOn()) return true;
       const params = g.__currentCallPiPParamsRef?.current;
@@ -449,6 +459,10 @@ function readActiveCallAudioRouteCallId(): string {
 /** После endCall: не наследовать video/PiP UI на следующий audio-first mount. */
 export function resetDirectCallVideoUiGlobalsAfterCallEnd(): void {
   try {
+    clearFreshDirectCallAudioAcceptCall();
+    clearDirectCallAudioAcceptBootstrapped();
+  } catch {}
+  try {
     const g = global as any;
     g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
     g.__expandToVideoCallUiFromPiPRef.current = false;
@@ -459,6 +473,17 @@ export function resetDirectCallVideoUiGlobalsAfterCallEnd(): void {
     g.__directCallUserRequestedVideoExpandRef.current = false;
     g.__directCallVideoExpandUntilRef = g.__directCallVideoExpandUntilRef || { current: 0 };
     g.__directCallVideoExpandUntilRef.current = 0;
+    g.__preferAudioOnlyUiOnNextVideoCallRef = g.__preferAudioOnlyUiOnNextVideoCallRef || {
+      current: false,
+    };
+    g.__preferAudioOnlyUiOnNextVideoCallRef.current = false;
+    g.__pipInAppRtcFromAudioOnlyRef = g.__pipInAppRtcFromAudioOnlyRef || { current: false };
+    g.__pipInAppRtcFromAudioOnlyRef.current = false;
+    const params = g.__currentCallPiPParamsRef?.current;
+    if (params && typeof params === 'object') {
+      params.inAudioOnlyUi = false;
+      params.preferVideoCallUi = false;
+    }
   } catch {}
 }
 

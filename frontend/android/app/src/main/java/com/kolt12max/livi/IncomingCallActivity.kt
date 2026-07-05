@@ -186,7 +186,14 @@ class IncomingCallActivity : AppCompatActivity() {
             declineButton.isEnabled = false
             stopCallRingtone()
             stopRepeatingVibration()
-            startMainForAnswerCall(callId, from, fromNick)
+            LiviAppModule.setPendingAnswerCall(callId, from, fromNick)
+            val deliveredToJs = LiviAppModule.tryDeliverPendingAnswerToJs()
+            if (!deliveredToJs) {
+                android.util.Log.i(TAG, "accept: React not alive — fallback startMainForAnswerCall callId=$callId")
+                startMainForAnswerCall(callId, from, fromNick)
+            } else {
+                android.util.Log.i(TAG, "accept: LiviPendingAnswerCall emitted under Incoming (Main stays behind) callId=$callId")
+            }
             // Не закрываем экран сразу:
             // закрытие подтверждается ACTION_CALL_ANSWERED из JS после фактического старта флоу accept.
             // Это убирает гонку, когда экран входящего исчезает, но VideoCall ещё не открылся.

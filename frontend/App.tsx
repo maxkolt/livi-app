@@ -217,7 +217,20 @@ function markAcceptedVideoCallNavigationInFlight(callId?: string | null): void {
   const cid = String(callId || '').trim();
   if (!cid) return;
   acceptedVideoCallNavInFlight.set(cid, Date.now());
-  setTimeout(() => acceptedVideoCallNavInFlight.delete(cid), ACCEPTED_VIDEO_CALL_NAV_IN_FLIGHT_TTL_MS);
+  try {
+    (global as any).__acceptedVideoCallNavCallIdRef =
+      (global as any).__acceptedVideoCallNavCallIdRef || { current: null as string | null };
+    (global as any).__acceptedVideoCallNavCallIdRef.current = cid;
+  } catch {}
+  setTimeout(() => {
+    acceptedVideoCallNavInFlight.delete(cid);
+    try {
+      const g = global as any;
+      if (String(g.__acceptedVideoCallNavCallIdRef?.current || '') === cid) {
+        g.__acceptedVideoCallNavCallIdRef.current = null;
+      }
+    } catch {}
+  }, ACCEPTED_VIDEO_CALL_NAV_IN_FLIGHT_TTL_MS);
 }
 
 /** reauth шлёт call:accepted для «висящей» сессии — на Home без контекста звонка снимаем её на сервере. */
@@ -3203,10 +3216,24 @@ function AppContent() {
       try {
         const currentRoute = navRef.getCurrentRoute();
         if (navRef.isReady() && currentRoute?.name !== 'VideoCall') {
-          const closeAcceptedCallUi = () => {
+          const resolveOutgoingPartnerNick = (): string | undefined => {
+            const nick = String((global as any).__outgoingCallPeerNickRef?.current || '').trim();
+            return nick || undefined;
+          };
+
+          const closeOutgoingNativeShell = (opts?: { skipMainReturn?: boolean }) => {
             try { setOutgoingCallScreenVisible(false); } catch {}
             try { emitCloseOutgoingCall({ reason: 'accepted', callId: callId || null }); } catch {}
-            try { closeOutgoingCallActivity(callId || null, { force: true }); } catch {}
+            try {
+              closeOutgoingCallActivity(callId || null, {
+                force: true,
+                skipMainReturn: opts?.skipMainReturn === true,
+              });
+            } catch {}
+          };
+
+          const closeAcceptedCallUi = () => {
+            closeOutgoingNativeShell();
             if (isCaller) {
               const bringCallerMain = () => {
                 logger.info('[App] 📱 bringMainActivityToFront (call:accepted, caller)');
@@ -3223,6 +3250,11 @@ function AppContent() {
             }
           };
 
+          const bringCallerMainAfterVideoCallNav = () => {
+            if (!isCaller) return;
+            try { bringMainActivityToFront(); } catch {}
+          };
+
           if (calleeOwnsNavigation) {
             logger.info('[App] ⏭️ call:accepted callee navigation skipped (answer flow owns VideoCall)', {
               callId: data?.callId,
@@ -3233,12 +3265,14 @@ function AppContent() {
             });
             closeAcceptedCallUi();
           } else if (peerUserId) {
+            const outgoingNick = isCaller ? resolveOutgoingPartnerNick() : undefined;
             const params = isCaller
               ? {
                   directCall: true,
                   directInitiator: true,
                   callId: (data as any)?.callId,
                   peerUserId,
+                  ...(outgoingNick ? { partnerNick: outgoingNick } : {}),
                   roomId: (data as any)?.livekitRoomName ?? (data as any)?.roomId,
                   ...videoCallNavExtras(
                     (data as any)?.callId,
@@ -3270,7 +3304,13 @@ function AppContent() {
               peerUserId,
               isCaller,
               myUserId: myUserId || undefined,
+              partnerNick: outgoingNick,
             });
+            if (isCaller && outgoingNick) {
+              try {
+                (global as any).__outgoingCallPeerNickRef.current = null;
+              } catch (_) {}
+            }
             const doNavigate = () => {
               try {
                 if (!navRef.isReady() || navRef.getCurrentRoute()?.name === 'VideoCall') return;
@@ -3294,7 +3334,7 @@ function AppContent() {
                 logger.error('[App] ❌ Error navigating to VideoCall', { error: err, callId: data?.callId });
               }
             };
-            const prepareCallerAudioRouteThenNavigate = async () => {
+            const applyCallerAudioRouteAsync = async () => {
               if (isCaller && callId && getCallMediaHint(callId) !== 'video') {
                 try {
                   markActiveCallAudioRouteCallId(String(callId));
@@ -3311,13 +3351,13 @@ function AppContent() {
                   });
                 } catch {}
               }
-              doNavigate();
             };
+            doNavigate();
+            void applyCallerAudioRouteAsync();
             if (isCaller) {
-              closeAcceptedCallUi();
-            }
-            void prepareCallerAudioRouteThenNavigate();
-            if (!isCaller) {
+              closeOutgoingNativeShell({ skipMainReturn: true });
+              bringCallerMainAfterVideoCallNav();
+            } else {
               closeAcceptedCallUi();
             }
             if (isCaller) {
@@ -3327,6 +3367,7 @@ function AppContent() {
                     flushPendingVideoCallNavigation(navRef);
                     doNavigate();
                   }
+                  bringCallerMainAfterVideoCallNav();
                 } catch (_) {}
               });
             }

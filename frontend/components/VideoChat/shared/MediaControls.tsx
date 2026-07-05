@@ -13,6 +13,8 @@ interface MediaControlsProps {
   opacity: Animated.AnimatedValue;
   showReturnToAudio?: boolean;
   onReturnToAudio?: () => void;
+  /** Разрешить toggle камеры при активной сессии, даже если localStream ещё не в state. */
+  camToggleEnabled?: boolean;
 }
 
 /**
@@ -29,8 +31,11 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
   opacity,
   showReturnToAudio,
   onReturnToAudio,
+  camToggleEnabled,
 }) => {
   if (!visible) return null;
+
+  const canToggleCam = camToggleEnabled ?? !!localStream;
 
   return (
     <>
@@ -80,7 +85,7 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           activeOpacity={0.7}
           style={styles.iconBtn}
-          disabled={!localStream}
+          disabled={!canToggleCam}
         >
           <MaterialIcons
             name={camOn ? "videocam" : "videocam-off"}

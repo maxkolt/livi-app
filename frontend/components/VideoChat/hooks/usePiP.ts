@@ -2,7 +2,7 @@ import { useCallback, useRef, useEffect } from 'react';
 import { BackHandler, PanResponder, Platform, Dimensions, NativeModules } from 'react-native';
 import { usePiP as usePiPContext, isPipOverlayVisibleSync } from '../../../src/pip/PiPContext';
 import { isInAudioOnlyCallUi, setPipInAppRtcFromAudioOnlySticky } from '../../../src/pip/pipPlaceholderOnly';
-import { resolvePiPLocalMutedState } from '../../../utils/activeCallSession';
+import { resolvePiPLocalMutedState, markDirectCallVideoMediaActive } from '../../../utils/activeCallSession';
 import { goBackFromCallScreenOrHome } from '../../../utils/appNavigationGuard';
 import { setPersistedCallAudioRoute } from '../../../utils/callAudioRoutePersist';
 import { readInAppPiPAudioOutputRoute } from '../../../utils/inAppPiPAudioRoute';
@@ -202,6 +202,20 @@ export const usePiP = ({
             ? 'SPEAKER_PHONE'
             : audioRoute;
       const muteLocal = resolvePiPLocalMutedState(micOn);
+      const sessionCamOn =
+        currentSession && typeof currentSession.getIsCamOn === 'function'
+          ? currentSession.getIsCamOn()
+          : false;
+      const effectiveLocalCamOn = camOn || sessionCamOn;
+      pip.updatePiPState({ localCamOn: effectiveLocalCamOn });
+      if (effectiveLocalCamOn) {
+        markDirectCallVideoMediaActive();
+        try {
+          const g = global as any;
+          g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
+          g.__stayOnVideoCallUiRef.current = true;
+        } catch {}
+      }
       pip.showPiP({
         callId: finalCallId,
         roomId: finalRoomId,
@@ -211,7 +225,7 @@ export const usePiP = ({
         muteRemote: remoteMuted,
         localStream: localStream || null,
         remoteStream: remoteStream || null,
-        localCamOn: camOn,
+        localCamOn: effectiveLocalCamOn,
         remoteCamOn,
         fromAudioOnlyUi,
         audioOutputRoute: pipAudioRoute,
@@ -227,7 +241,6 @@ export const usePiP = ({
       pipVisibleRef.current = true;
 
       // КРИТИЧНО: Вызываем session.enterPiP() для отправки pip:state партнеру
-      const currentSession = session || (global as any).__webrtcSessionRef?.current;
       if (currentSession) {
         logStateTransition('active_call', 'pip_mode', { roomId: finalRoomId, callId: finalCallId, partnerId: actualPartnerId });
         // Вызываем enterPiP если метод доступен (может быть опциональным)

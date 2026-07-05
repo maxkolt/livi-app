@@ -67,6 +67,7 @@ export function markDirectCallUserRequestedVideoExpand(): void {
     g.__directCallUserRequestedVideoExpandRef =
       g.__directCallUserRequestedVideoExpandRef || { current: false };
     g.__directCallUserRequestedVideoExpandRef.current = true;
+    clearFreshDirectCallAudioAcceptCall();
   } catch {}
 }
 
@@ -106,6 +107,150 @@ export function shouldBlockAutomatedDirectCallVideoExpand(
 ): boolean {
   if (!resolveDirectCallAudioFirst(params, callId)) return false;
   return !isDirectCallUserRequestedVideoExpand();
+}
+
+function readDirectCallPiPParamsPreferVideo(): boolean {
+  try {
+    return (global as any).__currentCallPiPParamsRef?.current?.preferVideoCallUi === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Хвост expand/PiP с прошлого звонка: ref без guard и без preferVideoCallUi в route/params. */
+export function isStaleDirectCallVideoExpandGlobalHint(
+  routeParams?: {
+    preferVideoCallUi?: boolean;
+    audioOnlyPiPReturn?: boolean;
+  } | null,
+): boolean {
+  try {
+    const g = global as any;
+    const hasHint =
+      g.__expandToVideoCallUiFromPiPRef?.current === true ||
+      isDirectCallUserRequestedVideoExpand();
+    if (!hasHint) return false;
+    if (routeParams?.audioOnlyPiPReturn === true) return false;
+    if (routeParams?.preferVideoCallUi === true) return false;
+    if (readDirectCallPiPParamsPreferVideo()) return false;
+    if (isDirectCallVideoExpandGuardActive()) return false;
+    if (g.__pipVisibleRef?.current === true) return false;
+    if (g.__pipInSystemModeRef?.current === true) return false;
+    if (Number(g.__returningFromSystemPiPUntilRef?.current || 0) > Date.now()) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function clearStaleDirectCallVideoExpandGlobalHints(): void {
+  clearStaleDirectCallVideoExpandFlags();
+  clearDirectCallUserRequestedVideoExpand();
+}
+
+/** Свежий audio-first accept (incoming/caller): блокировать автоматический expand до явного действия пользователя. */
+export function markFreshDirectCallAudioAcceptCall(callId?: string | null): void {
+  const cid = String(callId || '').trim();
+  if (!cid) return;
+  try {
+    const g = global as any;
+    g.__freshDirectCallAudioAcceptCallIdRef =
+      g.__freshDirectCallAudioAcceptCallIdRef || { current: null as string | null };
+    g.__freshDirectCallAudioAcceptCallIdRef.current = cid;
+    clearStaleDirectCallVideoExpandFlags();
+    clearDirectCallUserRequestedVideoExpand();
+  } catch {}
+}
+
+export function isFreshDirectCallAudioAcceptCallActive(callId?: string | null): boolean {
+  const cid = String(callId || '').trim();
+  if (!cid) return false;
+  try {
+    return String((global as any).__freshDirectCallAudioAcceptCallIdRef?.current || '') === cid;
+  } catch {
+    return false;
+  }
+}
+
+export function clearFreshDirectCallAudioAcceptCall(): void {
+  try {
+    const g = global as any;
+    if (g.__freshDirectCallAudioAcceptCallIdRef) {
+      g.__freshDirectCallAudioAcceptCallIdRef.current = null;
+    }
+  } catch {}
+}
+
+/** Авто-expand / PiP-return video UI на свежем audio accept без явного запроса пользователя. */
+export function shouldBlockFreshDirectCallAudioAutomatedVideoExpand(
+  callId?: string | null,
+): boolean {
+  if (!isFreshDirectCallAudioAcceptCallActive(callId)) return false;
+  return !isDirectCallUserRequestedVideoExpand();
+}
+
+/** Первый audio-first accept для callId уже применён — не повторять fresh layout на PiP-return/remount. */
+export function markDirectCallAudioAcceptBootstrapped(callId?: string | null): void {
+  const cid = String(callId || '').trim();
+  if (!cid) return;
+  try {
+    const g = global as any;
+    g.__directCallAudioAcceptBootstrappedCallIdRef =
+      g.__directCallAudioAcceptBootstrappedCallIdRef || { current: null as string | null };
+    g.__directCallAudioAcceptBootstrappedCallIdRef.current = cid;
+  } catch {}
+}
+
+export function isDirectCallAudioAcceptBootstrapped(callId?: string | null): boolean {
+  const cid = String(callId || '').trim();
+  if (!cid) return false;
+  try {
+    return (
+      String((global as any).__directCallAudioAcceptBootstrappedCallIdRef?.current || '') === cid
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function clearDirectCallAudioAcceptBootstrapped(): void {
+  try {
+    const g = global as any;
+    if (g.__directCallAudioAcceptBootstrappedCallIdRef) {
+      g.__directCallAudioAcceptBootstrappedCallIdRef.current = null;
+    }
+  } catch {}
+}
+
+/** Пользователь на video UI (expand / PiP→fullscreen / камера), не на audio-only. */
+export function isDirectCallVideoUiActive(): boolean {
+  try {
+    const g = global as any;
+    const params = g.__currentCallPiPParamsRef?.current;
+    const routePrefersVideo =
+      params?.preferVideoCallUi === true || readDirectCallPiPParamsPreferVideo();
+    if (isDirectCallVideoExpandGuardActive()) return true;
+    if (isDirectCallUserRequestedVideoExpand()) {
+      return routePrefersVideo || isDirectCallVideoExpandGuardActive();
+    }
+    if (g.__expandToVideoCallUiFromPiPRef?.current === true) {
+      return routePrefersVideo || isDirectCallVideoExpandGuardActive();
+    }
+    if (g.__stayOnVideoCallUiRef?.current === true) return true;
+    if (routePrefersVideo) return true;
+    const session = g.__webrtcSessionRef?.current;
+    if (session && typeof session.getIsCamOn === 'function' && session.getIsCamOn()) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** Не переводить в audio-only / enterDirectCallAudioOnlyMode / applyAudioOnlyUiState. */
+export function shouldSuppressDirectCallAudioOnlyUiTransition(): boolean {
+  return isDirectCallVideoUiActive();
 }
 
 /** Один expand + enable camera на всех входах (PiP overlay, mount, focus). */

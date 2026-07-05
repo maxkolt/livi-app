@@ -45,7 +45,7 @@ import { getInstallId } from '../../../utils/installId';
 import { requestExitSystemPiPSoft, dismissSystemPiPAfterCallEnded } from '../../../utils/callKeep';
 import { setAndroidSystemPiPLeaveHintEnabled } from '../../../utils/activeCallNotification';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
-import { isDirectCallVideoExpandGuardActive, isInAudioOnlyCallUi, isDirectCallUserRequestedVideoExpand } from '../../pip/pipPlaceholderOnly';
+import { isDirectCallVideoExpandGuardActive, isInAudioOnlyCallUi, isDirectCallUserRequestedVideoExpand, shouldSuppressDirectCallAudioOnlyUiTransition } from '../../pip/pipPlaceholderOnly';
 import { markDirectCallVideoMediaActive, resetDirectCallVideoUiGlobalsAfterCallEnd } from '../../../utils/activeCallSession';
 import { clearDirectCallAudioRouteCarryoverAfterCallEnd } from '../../../utils/callAudioRoutePersist';
 import { getCallMediaHint } from '../../../utils/directCallMediaHint';
@@ -2328,24 +2328,36 @@ export class VideoCallSession extends SimpleEventEmitter {
   }
 
   /** Direct call: экран аудио — выкл. камеру, cam-toggle партнёру, не подписываться на remote video. */
-  async enterDirectCallAudioOnlyMode(): Promise<void> {
+  async enterDirectCallAudioOnlyMode(opts?: { forceUserReturn?: boolean }): Promise<void> {
     if (this.directCallAudioOnlyModePromise) {
       return this.directCallAudioOnlyModePromise;
     }
-    this.directCallAudioOnlyModePromise = this.runEnterDirectCallAudioOnlyMode().finally(() => {
+    this.directCallAudioOnlyModePromise = this.runEnterDirectCallAudioOnlyMode(opts).finally(() => {
       this.directCallAudioOnlyModePromise = null;
     });
     return this.directCallAudioOnlyModePromise;
   }
 
-  private async runEnterDirectCallAudioOnlyMode(): Promise<void> {
+  private async runEnterDirectCallAudioOnlyMode(opts?: { forceUserReturn?: boolean }): Promise<void> {
     if (!this.config.getIsDirectCall?.()) return;
     if (this.ended || this.endCallInProgress) return;
 
+    const forceUserReturn = !!opts?.forceUserReturn;
+
+    if (!forceUserReturn && shouldSuppressDirectCallAudioOnlyUiTransition()) {
+      return;
+    }
+
     try {
       const g = global as any;
-      if (g.__expandToVideoCallUiFromPiPRef?.current === true) return;
-      if (
+      if (forceUserReturn) {
+        g.__expandToVideoCallUiFromPiPRef = g.__expandToVideoCallUiFromPiPRef || { current: false };
+        g.__expandToVideoCallUiFromPiPRef.current = false;
+        g.__stayOnVideoCallUiRef = g.__stayOnVideoCallUiRef || { current: false };
+        g.__stayOnVideoCallUiRef.current = false;
+      } else if (g.__expandToVideoCallUiFromPiPRef?.current === true) {
+        return;
+      } else if (
         isDirectCallVideoExpandGuardActive() &&
         g.__stayOnVideoCallUiRef?.current === true
       ) {

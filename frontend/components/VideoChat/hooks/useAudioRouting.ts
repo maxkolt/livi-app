@@ -315,6 +315,7 @@ export const useAudioRouting = (
   const [availableRoutes, setAvailableRoutes] = useState<string[]>([]);
 
   const didStartRef = useRef(false);
+  const incomingHandoffApplyRetryRef = useRef(false);
   const bootstrapPendingRef = useRef(false);
   const lastAvailableRef = useRef<string[]>([]);
   const lastSelectedRef = useRef<string>('');
@@ -1260,6 +1261,22 @@ export const useAudioRouting = (
   };
 
   const applyRouting = () => {
+    if (
+      Platform.OS === 'android' &&
+      (global as any).__incomingAnswerNavPending === true &&
+      (global as any).__incomingCalleeAcceptHandoff === true
+    ) {
+      if (!incomingHandoffApplyRetryRef.current) {
+        incomingHandoffApplyRetryRef.current = true;
+        setTimeout(() => {
+          incomingHandoffApplyRetryRef.current = false;
+          if ((global as any).__incomingAnswerNavPending !== true) {
+            applyRouting();
+          }
+        }, 400);
+      }
+      return;
+    }
     if (Platform.OS === 'android' && isCallAudioNativeTransitionLocked()) {
       const sessionActive = didStartRef.current || isInCallAudioSessionStarted();
       if (sessionActive && isOngoingCallSession()) {
