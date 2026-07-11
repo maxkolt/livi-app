@@ -159,6 +159,41 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
   });
 
   /** =========================
+   *  External call hold (сторонний GSM / мессенджер)
+   *  ========================= */
+  socket.on("call:external-hold", (data: { hold?: boolean; from: string; roomId?: string }) => {
+    const { hold, from, roomId } = data;
+    const relayPayload = { hold: hold === true, from, roomId };
+    let forwardedViaRoom = false;
+    if (roomId && roomId.startsWith("room_")) {
+      const room = (io.sockets.adapter.rooms as any)?.get?.(roomId) as Set<string> | undefined;
+      if (room && room.size > 0) {
+        socket.to(roomId).emit("call:external-hold", { ...relayPayload, roomId });
+        forwardedViaRoom = true;
+      }
+    } else {
+      socket.rooms.forEach((currentRoomId) => {
+        if (currentRoomId.startsWith("room_")) {
+          socket.to(currentRoomId).emit("call:external-hold", { ...relayPayload, roomId: currentRoomId });
+          forwardedViaRoom = true;
+        }
+      });
+    }
+    const socketData = (socket as any).data;
+    if (!forwardedViaRoom && socketData && socketData.partnerSid) {
+      const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
+      if (partnerSocket) {
+        partnerSocket.emit("call:external-hold", {
+          hold: hold === true,
+          from,
+          to: partnerSocket.id,
+          ...(roomId ? { roomId } : {}),
+        });
+      }
+    }
+  });
+
+  /** =========================
    *  Camera toggle forwarding
    *  ========================= */
   socket.on("cam-toggle", (data: { enabled: boolean; from: string; to?: string; roomId?: string; camSide?: 'front' | 'back'; sideOnly?: boolean }) => {
