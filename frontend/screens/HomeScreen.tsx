@@ -6793,8 +6793,6 @@ const handleClearNick = useCallback(async () => {
             allowFontScaling={false}
             maxFontSizeMultiplier={1}
             numberOfLines={2}
-            adjustsFontSizeToFit
-            minimumFontScale={0.55}
           >
             {L('welcomeTitle')}
           </Text>
@@ -6814,10 +6812,9 @@ const handleClearNick = useCallback(async () => {
                   ...(Platform.OS === 'android' && { includeFontPadding: false }),
                 },
               ]}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.18}
+              numberOfLines={2}
               allowFontScaling={false}
+              maxFontSizeMultiplier={1}
             >
               {L('welcomeSubtitle')}
             </Text>
@@ -7805,10 +7802,10 @@ const styles = StyleSheet.create({
     lineHeight: Platform.OS === 'android' ? 30 : 32,
     maxWidth: '100%',
   },
-  // Без фиксированного lineHeight: на Android иначе adjustsFontSizeToFit часто не сжимает шрифт и обрезает хвост строки.
   subtitle: {
     color: LIVI.text2,
     fontSize: Platform.OS === 'android' ? 14 : 16,
+    lineHeight: Platform.OS === 'android' ? 18 : 20,
     textAlign: 'center',
     marginTop: 2,
   },
