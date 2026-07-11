@@ -79,7 +79,7 @@ export function prepareDirectCallAudioReturnFromPiP(): void {
     g.__directCallAudioOnlyPreparedAtRef = g.__directCallAudioOnlyPreparedAtRef || { current: 0 };
     g.__directCallAudioOnlyPreparedAtRef.current = Date.now();
     if (session && typeof session.enterDirectCallAudioOnlyMode === 'function' && !session.isEnded?.()) {
-      void session.enterDirectCallAudioOnlyMode();
+      void session.enterDirectCallAudioOnlyMode({ forceUserReturn: true });
     }
     const paramsRef = g.__currentCallPiPParamsRef?.current;
     const rawRoute =

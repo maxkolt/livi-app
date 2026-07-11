@@ -1652,6 +1652,7 @@ export class VideoCallSession extends SimpleEventEmitter {
    */
   async reconnectCameraOnResume(): Promise<void> {
     if (this.ended || !this.room || this.room.state !== 'connected' || !this.isCamOn) return;
+    if (this.localExternalHoldActive) return;
     if (this.localVideoRecreatePromise) return;
     if (Date.now() < this.skipReconnectCameraOnResumeUntil) return;
     try {

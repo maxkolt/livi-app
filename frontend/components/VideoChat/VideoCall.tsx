@@ -643,12 +643,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       return;
     }
     const partnerDeclaredAudioUi = session.isPartnerPeerOnDirectCallAudioUi?.() === true;
+    const partnerExplicitVideoUi = session.getPartnerPeerDirectCallVideoUi?.() === true;
     const partnerInPiPForHint =
       !partnerDeclaredAudioUi &&
       (partnerInPiPRef.current || session.getPartnerInPiP?.() === true);
-    const remoteCamOn = session.getRemoteCamEnabled?.() === true;
-    const partnerVideoUi =
-      partnerInPiPForHint || (remoteCamOn && !partnerDeclaredAudioUi);
+    // Не опираемся на remoteCamOn без явного direct-call:video-ui — иначе после PiP→audio оба видят ложный hint.
+    const partnerVideoUi = partnerExplicitVideoUi || partnerInPiPForHint;
     setPeerInvitedVideo(!!partnerVideoUi);
   }, []);
 
@@ -5359,6 +5359,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             pinPiPReturnToAudioRoute();
             preserveAudioRouteFromInAppPiP();
           }
+          try {
+            await session.enterDirectCallAudioOnlyMode({ forceUserReturn: true });
+          } catch (e) {
+            logger.warn('[VideoCall] returnToAudioCallUi enterDirectCallAudioOnlyMode (already audio) failed', e);
+          }
         }
         return;
       }
@@ -5402,14 +5407,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         preserveAudioRouteFromInAppPiP();
       }
 
-      const preparedRecently =
-        Date.now() - Number(g.__directCallAudioOnlyPreparedAtRef?.current || 0) < 6000;
-      if (!preparedRecently) {
-        try {
-          await session.enterDirectCallAudioOnlyMode({ forceUserReturn: true });
-        } catch (e) {
-          logger.warn('[VideoCall] returnToAudioCallUi enterDirectCallAudioOnlyMode failed', e);
-        }
+      try {
+        await session.enterDirectCallAudioOnlyMode({ forceUserReturn: true });
+      } catch (e) {
+        logger.warn('[VideoCall] returnToAudioCallUi enterDirectCallAudioOnlyMode failed', e);
       }
       if (!opts?.fromPiP) {
         try {
