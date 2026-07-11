@@ -234,6 +234,28 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
           partnerSid,
           hold: holdVal,
         });
+        const scanRoomId =
+          resolvedRoomId ||
+          (roomId && roomId.startsWith("room_") ? roomId : undefined) ||
+          (socketData?.roomId as string | undefined);
+        if (scanRoomId) {
+          const room = (io.sockets.adapter.rooms as any)?.get?.(scanRoomId) as
+            | Set<string>
+            | undefined;
+          if (room) {
+            room.forEach((sid) => {
+              if (sid === socket.id) return;
+              const other = io.sockets.sockets.get(sid);
+              if (!other) return;
+              other.emit("call:external-hold", payload(scanRoomId));
+              logger.info("call:external-hold forwarded via room member scan", {
+                scanRoomId,
+                targetSid: sid,
+                hold: holdVal,
+              });
+            });
+          }
+        }
       }
     }
   });
