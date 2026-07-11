@@ -163,31 +163,76 @@ export function bindWebRTC(io: Server, socket: AuthedSocket) {
    *  ========================= */
   socket.on("call:external-hold", (data: { hold?: boolean; from: string; roomId?: string }) => {
     const { hold, from, roomId } = data;
-    const relayPayload = { hold: hold === true, from, roomId };
-    let forwardedViaRoom = false;
-    if (roomId && roomId.startsWith("room_")) {
-      const room = (io.sockets.adapter.rooms as any)?.get?.(roomId) as Set<string> | undefined;
-      if (room && room.size > 0) {
-        socket.to(roomId).emit("call:external-hold", { ...relayPayload, roomId });
-        forwardedViaRoom = true;
+    const holdVal = hold === true;
+    const payload = (resolvedRoomId: string) => ({
+      hold: holdVal,
+      from,
+      roomId: resolvedRoomId,
+    });
+
+    let resolvedRoomId: string | undefined =
+      roomId && roomId.startsWith("room_") ? roomId : undefined;
+
+    if (resolvedRoomId) {
+      const room = (io.sockets.adapter.rooms as any)?.get?.(resolvedRoomId) as
+        | Set<string>
+        | undefined;
+      if (room && room.size > 1) {
+        socket.to(resolvedRoomId).emit("call:external-hold", payload(resolvedRoomId));
+        logger.info("call:external-hold forwarded to room", {
+          roomId: resolvedRoomId,
+          roomSize: room.size,
+          hold: holdVal,
+        });
+      } else {
+        logger.debug("call:external-hold: room missing or only sender; will use partnerSid", {
+          roomId: resolvedRoomId,
+          roomSize: room?.size ?? 0,
+          hold: holdVal,
+        });
       }
     } else {
       socket.rooms.forEach((currentRoomId) => {
-        if (currentRoomId.startsWith("room_")) {
-          socket.to(currentRoomId).emit("call:external-hold", { ...relayPayload, roomId: currentRoomId });
-          forwardedViaRoom = true;
+        if (!currentRoomId.startsWith("room_")) return;
+        resolvedRoomId = resolvedRoomId || currentRoomId;
+        const room = (io.sockets.adapter.rooms as any)?.get?.(currentRoomId) as
+          | Set<string>
+          | undefined;
+        if (room && room.size > 1) {
+          socket.to(currentRoomId).emit("call:external-hold", payload(currentRoomId));
+          logger.info("call:external-hold forwarded to room (socket.rooms)", {
+            roomId: currentRoomId,
+            roomSize: room.size,
+            hold: holdVal,
+          });
         }
       });
     }
+
     const socketData = (socket as any).data;
-    if (!forwardedViaRoom && socketData && socketData.partnerSid) {
-      const partnerSocket = io.sockets.sockets.get(socketData.partnerSid);
+    const partnerSid = socketData?.partnerSid as string | undefined;
+    if (partnerSid) {
+      const partnerSocket = io.sockets.sockets.get(partnerSid);
       if (partnerSocket) {
-        partnerSocket.emit("call:external-hold", {
-          hold: hold === true,
-          from,
-          to: partnerSocket.id,
-          ...(roomId ? { roomId } : {}),
+        const sidRoomId =
+          resolvedRoomId ||
+          (roomId && roomId.startsWith("room_") ? roomId : undefined) ||
+          (socketData?.roomId as string | undefined);
+        partnerSocket.emit(
+          "call:external-hold",
+          sidRoomId
+            ? payload(sidRoomId)
+            : { hold: holdVal, from, to: partnerSocket.id },
+        );
+        logger.info("call:external-hold forwarded to partnerSid", {
+          partnerSid,
+          hold: holdVal,
+          roomId: sidRoomId ?? roomId,
+        });
+      } else {
+        logger.debug("call:external-hold: partnerSid socket not found", {
+          partnerSid,
+          hold: holdVal,
         });
       }
     }
