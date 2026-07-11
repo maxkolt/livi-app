@@ -15,6 +15,7 @@ import {
 import { armAndroidLeaveHintForVideoCallHome, syncAndroidLeaveHintForOngoingCall } from './activeCallNotification';
 import { readNativeProbedExternalRoute } from './nativeCallAudioProbe';
 import { readRootCurrentRouteName } from './safeRootNavigation';
+import { isExternalCallHoldActive } from './externalCallHold';
 
 const BACKGROUND_REAPPLY_DELAYS_MS = [0, 450, 1200];
 const FOREGROUND_REAPPLY_DELAYS_MS = [0, 350];
@@ -34,6 +35,7 @@ function clearBackgroundInterval(): void {
 }
 
 function restoreSessionMicrophoneIfNeeded(): void {
+  if (isExternalCallHoldActive()) return;
   try {
     const session = (global as any).__webrtcSessionRef?.current;
     if (session && typeof session.restoreMicrophoneAfterAppBackground === 'function') {
@@ -44,6 +46,7 @@ function restoreSessionMicrophoneIfNeeded(): void {
 
 function nativeMaintainCallVoiceAudio(force = false): void {
   if (Platform.OS !== 'android') return;
+  if (isExternalCallHoldActive()) return;
   const now = Date.now();
   if (!force && now - lastNativeVoiceMaintainAt < NATIVE_VOICE_MAINTAIN_MIN_MS) return;
   lastNativeVoiceMaintainAt = now;
@@ -55,6 +58,7 @@ function nativeMaintainCallVoiceAudio(force = false): void {
 /** Переприменить incall-маршрут и focus (Home, навигатор, другое приложение поверх). */
 export function maintainCallAudioForActiveCall(reason = 'maintain_active_call'): void {
   if (!isOngoingCallSession()) return;
+  if (isExternalCallHoldActive()) return;
   const media = resolveActiveCallInCallMedia();
   if (media === 'audio' && shouldApplyHomeLoudSpeakerPin()) {
     pinLoudSpeakerForAudioCallLeavingToBackground();

@@ -16,6 +16,8 @@ export interface WebRTCSessionCallbacks {
   /** Direct call: собеседник на экране видеозвонка (не путать с cam on/off). */
   onPeerDirectCallVideoUiChange?: (inVideoCallUi: boolean) => void;
   onRemoteCamSideChange?: (side: CamSide) => void;
+  /** Локальный hold: приглушить воспроизведение партнёра, пока активен сторонний звонок. */
+  onExternalHoldRemotePlaybackChange?: (suppress: boolean) => void;
   onPcConnectedChange?: (connected: boolean) => void;
   onLoadingChange?: (loading: boolean) => void;
   onMicLevelChange?: (level: number) => void; // Уровень микрофона для эквалайзера

@@ -15,6 +15,8 @@ interface MediaControlsProps {
   onReturnToAudio?: () => void;
   /** Разрешить toggle камеры при активной сессии, даже если localStream ещё не в state. */
   camToggleEnabled?: boolean;
+  /** Сторонний GSM: все кнопки кроме завершения звонка заблокированы на экране VideoCall. */
+  interactionLocked?: boolean;
 }
 
 /**
@@ -32,10 +34,13 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
   showReturnToAudio,
   onReturnToAudio,
   camToggleEnabled,
+  interactionLocked = false,
 }) => {
   if (!visible) return null;
 
   const canToggleCam = camToggleEnabled ?? !!localStream;
+  const locked = interactionLocked;
+  const lockedBtnStyle = locked ? styles.iconBtnLocked : null;
 
   return (
     <>
@@ -45,7 +50,8 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
           onPress={onFlipCamera}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           activeOpacity={0.7}
-          style={styles.iconBtn}
+          style={[styles.iconBtn, lockedBtnStyle]}
+          disabled={locked}
         >
           <MaterialIcons name="flip-camera-ios" size={26} color="#fff" />
         </TouchableOpacity>
@@ -57,8 +63,9 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
             onPress={onReturnToAudio}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             activeOpacity={0.7}
-            style={styles.iconBtn}
+            style={[styles.iconBtn, lockedBtnStyle]}
             accessibilityLabel="return-to-audio"
+            disabled={locked}
           >
             <MaterialCommunityIcons name="phone-in-talk" size={28} color="#fff" />
           </TouchableOpacity>
@@ -71,7 +78,8 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
           onPress={onToggleMic}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           activeOpacity={0.7}
-          style={styles.iconBtn}
+          style={[styles.iconBtn, lockedBtnStyle]}
+          disabled={locked}
         >
           <MaterialIcons
             name={micOn ? "mic" : "mic-off"}
@@ -84,8 +92,8 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
           onPress={onToggleCam}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           activeOpacity={0.7}
-          style={styles.iconBtn}
-          disabled={!canToggleCam}
+          style={[styles.iconBtn, lockedBtnStyle]}
+          disabled={locked || !canToggleCam}
         >
           <MaterialIcons
             name={camOn ? "videocam" : "videocam-off"}
@@ -107,6 +115,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     // Android: чтобы кнопки были выше видеовью (TextureView/обычные View)
     ...(Platform.OS === 'android' ? { elevation: 50 } : {}),
+  },
+  iconBtnLocked: {
+    opacity: 0.35,
   },
   topLeft: {
     position: 'absolute',

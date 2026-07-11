@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-nativ
 import { RTCView, MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
 import AwayPlaceholder from '../../../components/AwayPlaceholder';
+import PartnerCallStatusOverlay from '../../../components/PartnerCallStatusOverlay';
 import { t, type Lang } from '../../../utils/i18n';
 import { logger } from '../../../utils/logger';
 
@@ -22,6 +23,8 @@ interface RemoteVideoProps {
   onStreamReady?: (stream: MediaStream) => void;
   remoteStreamReceivedAt?: number | null; // Время получения remoteStream для предотвращения мерцания
   partnerInPiP?: boolean; // Партнер в режиме PiP
+  /** Партнёр на hold из-за стороннего звонка (GSM / мессенджер). */
+  partnerExternalHold?: boolean;
   forceTextureView?: boolean; // Принудительно использовать TextureView (например, для системного PiP)
   /** 'contain' — собеседник целиком в кадре (системный PiP); 'cover' — заполнение с обрезкой (по умолчанию). */
   objectFit?: 'contain' | 'cover';
@@ -47,6 +50,7 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
   onStreamReady,
   remoteStreamReceivedAt,
   partnerInPiP = false,
+  partnerExternalHold = false,
   forceTextureView = false,
   objectFit: objectFitProp = 'cover',
 }) => {
@@ -368,6 +372,21 @@ export const RemoteVideo: React.FC<RemoteVideoProps> = ({
     return (
       <View style={[styles.rtc, styles.placeholderContainer]}>
         <Text style={styles.placeholder}>{L('peer')}</Text>
+      </View>
+    );
+  }
+
+  if (partnerExternalHold && started && !wasFriendCallEnded) {
+    logRenderState('partner-external-hold', { streamId: streamToUse?.id });
+    return (
+      <View style={styles.videoContainer}>
+        <PartnerCallStatusOverlay lang={lang} mode="busy" />
+        {showFriendBadge && (
+          <View style={styles.friendBadge}>
+            <MaterialIcons name="check-circle" size={16} color="#0f0" />
+            <Text style={styles.friendBadgeText}>{L('friend')}</Text>
+          </View>
+        )}
       </View>
     );
   }

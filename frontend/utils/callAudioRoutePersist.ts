@@ -3,6 +3,7 @@ import InCallManager from 'react-native-incall-manager';
 import type { InCallAudioRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { isExternalHeadsetRoute, mapRouteForEnterVideoUi, normalizeInCallRoute } from '../components/VideoChat/hooks/audioRouteTypes';
 import { beginBackgroundMediaSuppression } from './backgroundMediaSuppression';
+import { isExternalCallHoldActive } from './externalCallHold';
 import { applyNativeVoiceCallSpeaker, applyNativeVoiceCallRoute } from './voiceCallAudioRoute';
 import { logger } from './logger';
 import {
@@ -1176,6 +1177,7 @@ function nativeOutputSignature(route: InCallAudioRoute, media: 'audio' | 'video'
 
 function maybeMaintainActiveCallVoiceAudioOnce(): void {
   if (Platform.OS !== 'android' || !isOngoingCallSession()) return;
+  if (isExternalCallHoldActive()) return;
   const now = Date.now();
   if (now - lastMaintainVoiceAudioAt < 400) return;
   lastMaintainVoiceAudioAt = now;

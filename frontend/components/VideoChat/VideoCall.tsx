@@ -4,7 +4,7 @@
  * Имеет кнопку: Завершить
  */
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   View,
   Text,
@@ -39,6 +39,11 @@ import { useAppTheme } from '../../theme/ThemeProvider';
 import { uiAccent } from '../../theme/uiAccent';
 import { isValidStream } from '../../utils/streamUtils';
 import { logger } from '../../utils/logger';
+import { isExternalCallHoldActive } from '../../utils/externalCallHold';
+import {
+  getPartnerExternalHoldSnapshot,
+  subscribePartnerExternalHoldUi,
+} from '../../utils/partnerExternalHoldUi';
 import { usePiP, isPipOverlayVisibleSync } from '../../src/pip/PiPContext';
 import {
   isDirectCallVideoExpandGuardActive,
@@ -728,6 +733,25 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const [partnerInPiP, setPartnerInPiP] = useState(false);
   const partnerInPiPRef = useRef(false);
   useEffect(() => { partnerInPiPRef.current = partnerInPiP; }, [partnerInPiP]);
+
+  const [partnerExternalHold, setPartnerExternalHold] = useState(false);
+  const partnerExternalHoldSynced = useSyncExternalStore(
+    subscribePartnerExternalHoldUi,
+    getPartnerExternalHoldSnapshot,
+    getPartnerExternalHoldSnapshot,
+  );
+  const partnerExternalHoldUi = partnerExternalHoldSynced || partnerExternalHold;
+  const [localExternalHold, setLocalExternalHold] = useState(false);
+  const localExternalHoldUi = localExternalHold || isExternalCallHoldActive();
+  const partnerExternalHoldRef = useRef(false);
+  const localExternalHoldRef = useRef(false);
+  useEffect(() => {
+    partnerExternalHoldRef.current = partnerExternalHoldUi;
+  }, [partnerExternalHoldUi]);
+  useEffect(() => {
+    localExternalHoldRef.current = localExternalHold;
+  }, [localExternalHold]);
+  const remoteMutedBeforeExternalHoldRef = useRef<boolean | null>(null);
   
   // КРИТИЧНО: Логируем изменения partnerInPiP для отладки
   useEffect(() => {
@@ -1498,6 +1522,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     return 'EARPIECE';
   }, []);
   const cycleAudioRoute = useCallback(() => {
+    if (localExternalHoldRef.current) return;
     void cycleUserRoute();
   }, [cycleUserRoute]);
   const callAudioRouteUiPending = isCallAudioBootstrapPending();
@@ -1579,15 +1604,37 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       return;
     }
     const needsStreamBridge = !createdSessionsRef.current.has(session as any);
+    const globalSession = (global as any).__webrtcSessionRef?.current as VideoCallSession | null | undefined;
+    const attachSession = globalSession || session;
     const key = [
       screenInstanceIdRef.current,
       returnToken || 'no-return',
       needsStreamBridge ? 'bridge' : 'direct',
-      typeof (session as any).getCallId === 'function' ? (session as any).getCallId() || '' : '',
-      typeof (session as any).getRoomId === 'function' ? (session as any).getRoomId() || '' : '',
+      typeof attachSession?.getCallId === 'function' ? attachSession.getCallId() || '' : '',
+      typeof attachSession?.getRoomId === 'function' ? attachSession.getRoomId() || '' : '',
+      attachSession === session ? 'ref' : 'global',
     ].join('|');
     setSessionHandlerAttachKey((prev) => (prev === key ? prev : key));
   }, [sessionTick, currentSystemPiPReturnToken, currentSystemPiPReturnState?.owner]);
+
+  /** Синхронизация hold UI с __webrtcSessionRef (события могут уйти в другой инстанс сессии). */
+  useEffect(() => {
+    if (!sessionHandlerAttachKey) return;
+    const syncHoldUiFromSession = () => {
+      if (!isMountedRef.current || isEndingCallRef.current) return;
+      const s = ((global as any).__webrtcSessionRef?.current ||
+        sessionRef.current) as VideoCallSession | null | undefined;
+      if (!s || typeof s.getLocalExternalHoldActive !== 'function') return;
+      if (s.isEnded?.()) return;
+      setLocalExternalHold(!!s.getLocalExternalHoldActive() || isExternalCallHoldActive());
+      const partnerFromSession = !!s.getPartnerExternalHoldActive?.();
+      const partnerFromRef = (global as any).__partnerExternalHoldRef?.current === true;
+      setPartnerExternalHold(partnerFromSession || partnerFromRef);
+    };
+    syncHoldUiFromSession();
+    const timer = setInterval(syncHoldUiFromSession, 400);
+    return () => clearInterval(timer);
+  }, [sessionHandlerAttachKey, sessionTick]);
 
   // Навигация из App после call:ended в system PiP (собеседник): сессия уже завершена — тот же неактивный UI, что у завершившего из PiP.
   useEffect(() => {
@@ -3009,6 +3056,18 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           setRemoteCamSide(side);
         },
         onPeerDirectCallVideoUiChange: handlePeerDirectCallVideoUiChange,
+        onExternalHoldRemotePlaybackChange: (suppress) => {
+          if (suppress) {
+            if (remoteMutedBeforeExternalHoldRef.current === null) {
+              remoteMutedBeforeExternalHoldRef.current = remoteMutedRef.current;
+            }
+            if (!remoteMutedRef.current) setRemoteMuted(true);
+          } else {
+            const prev = remoteMutedBeforeExternalHoldRef.current;
+            remoteMutedBeforeExternalHoldRef.current = null;
+            if (prev === false) setRemoteMuted(false);
+          }
+        },
         // Эквалайзер отключен
         onMicLevelChange: () => {},
         onMicFrequencyLevelsChange: () => {},
@@ -3538,6 +3597,18 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         setRemoteCamOn(enabled);
       },
       onPeerDirectCallVideoUiChange: handlePeerDirectCallVideoUiChange,
+      onExternalHoldRemotePlaybackChange: (suppress: boolean) => {
+        if (suppress) {
+          if (remoteMutedBeforeExternalHoldRef.current === null) {
+            remoteMutedBeforeExternalHoldRef.current = remoteMutedRef.current;
+          }
+          if (!remoteMutedRef.current) setRemoteMuted(true);
+        } else {
+          const prev = remoteMutedBeforeExternalHoldRef.current;
+          remoteMutedBeforeExternalHoldRef.current = null;
+          if (prev === false) setRemoteMuted(false);
+        }
+      },
     });
   }, [sessionTick, handlePeerDirectCallVideoUiChange, syncPeerVideoInviteHint]);
 
@@ -3546,7 +3617,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     if (!sessionHandlerAttachKey) {
       return;
     }
-    const session = sessionRef.current;
+    const session =
+      ((global as any).__webrtcSessionRef?.current as VideoCallSession | null | undefined) ||
+      sessionRef.current;
     if (!session) {
       logger.debug('[VideoCall] No session for event handlers setup');
       return;
@@ -3598,6 +3671,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       isInactiveStateRef.current = true;
       partnerInPiPRef.current = false;
       setPartnerInPiP(false);
+      setPartnerExternalHold(false);
+      setLocalExternalHold(false);
+      remoteMutedBeforeExternalHoldRef.current = null;
       try {
         const gEnd = global as any;
         gEnd.__endingCallInProgressRef = gEnd.__endingCallInProgressRef || { current: false };
@@ -3921,6 +3997,24 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
       }
     };
 
+    const handlePartnerExternalHoldChanged = ({ hold }: { hold: boolean }) => {
+      if (!isMountedRef.current) return;
+      if (isEndingCallRef.current) {
+        setPartnerExternalHold(false);
+        return;
+      }
+      setPartnerExternalHold(!!hold);
+    };
+
+    const handleLocalExternalHoldChanged = ({ hold }: { hold: boolean }) => {
+      if (!isMountedRef.current) return;
+      if (isEndingCallRef.current) {
+        setLocalExternalHold(false);
+        return;
+      }
+      setLocalExternalHold(!!hold);
+    };
+
     const needsStreamBridge = !createdSessionsRef.current.has(session as any);
     const sessionAttachKey = sessionHandlerAttachKey;
     lastAttachedSessionKeyRef.current = sessionAttachKey;
@@ -3982,6 +4076,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     session.on('remoteState', handleRemoteState);
     session.on('partnerDirectCallVideoUiChanged', handlePartnerDirectCallVideoUiChanged);
     session.on('partnerPiPStateChanged', handlePartnerPiPStateChanged);
+    session.on('partnerExternalHoldChanged', handlePartnerExternalHoldChanged);
+    session.on('localExternalHoldChanged', handleLocalExternalHoldChanged);
     if (needsStreamBridge) {
       session.on('localStream', handleLocalStreamEvent as any);
       session.on('remoteStream', handleRemoteStreamEvent as any);
@@ -4007,6 +4103,8 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         session.off('remoteState', handleRemoteState);
         session.off('partnerDirectCallVideoUiChanged', handlePartnerDirectCallVideoUiChanged);
         session.off('partnerPiPStateChanged', handlePartnerPiPStateChanged);
+        session.off('partnerExternalHoldChanged', handlePartnerExternalHoldChanged);
+        session.off('localExternalHoldChanged', handleLocalExternalHoldChanged);
         if (needsStreamBridge) {
           session.off('localStream', handleLocalStreamEvent as any);
           session.off('remoteStream', handleRemoteStreamEvent as any);
@@ -4446,6 +4544,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   }, [roomId, route?.params?.callId, route?.params?.roomId, wasGlobalCleanupDone, isCleanupOwner, getSystemPiPReturnGuard]);
   
   const toggleMic = useCallback(() => {
+    if (localExternalHoldRef.current) return;
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
     logMicTraceRef.current('toggleMic control invoked (экран или PiP)', {
       hasSession: !!session,
@@ -4507,6 +4606,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const toggleCamInProgressRef = useRef(false);
 
   const toggleCam = useCallback(() => {
+    if (localExternalHoldRef.current) return;
     if (toggleCamInProgressRef.current) return;
     toggleCamInProgressRef.current = true;
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
@@ -5587,6 +5687,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   ]);
   
   const toggleRemoteAudio = useCallback(() => {
+    if (localExternalHoldRef.current) return;
     const session = sessionRef.current || (global as any).__webrtcSessionRef?.current;
     if (session && typeof session.toggleRemoteAudio === 'function') {
       session.toggleRemoteAudio();
@@ -5665,7 +5766,12 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     (inAudioOnlyUi || inAudioOnlyUiRef.current);
 
   const pulsePeerVideoButton =
-    showAudioPresentation && peerInvitedVideo;
+    showAudioPresentation && peerInvitedVideo && !localExternalHoldUi && !partnerExternalHoldUi;
+
+  const controlsLockedForLocalHold = localExternalHoldUi;
+  /** На video UI при GSM hold блокируем только кнопки в блоке «Вы»; «Собеседник» остаётся интерактивным. */
+  const lockControlsOnAudioUiOnly = showAudioPresentation && controlsLockedForLocalHold;
+  const hideLocalMediaControlsOnVideoHold = localExternalHoldUi && !showAudioPresentation;
 
   const audioControlsOpacity = useRef(new Animated.Value(0)).current;
 
@@ -6539,6 +6645,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             session={sessionRef.current}
             remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
             partnerInPiP={false}
+            partnerExternalHold={partnerExternalHoldUi}
             forceTextureView={true}
             objectFit="contain"
           />
@@ -6561,17 +6668,31 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               {partnerDisplayName}
             </Text>
             <Text
-              style={styles.audioCallSubtitle}
+              style={[
+                styles.audioCallSubtitle,
+                (localExternalHoldUi || partnerExternalHoldUi) && styles.audioCallSubtitleHold,
+              ]}
               {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
             >
-              {t('audioCallStatus', lang)}
+              {localExternalHoldUi
+                ? t('externalCallHoldLocal', lang)
+                : partnerExternalHoldUi
+                  ? t('partnerBusyEllipsis', lang)
+                  : t('audioCallStatus', lang)}
             </Text>
             {showCallDuration ? (
               <Text style={styles.audioCallTimer}>{formatCallDuration(callElapsedSec)}</Text>
             ) : null}
           </View>
           <View style={styles.audioCallHeaderSpacer} />
-          <Animated.View style={[styles.audioCallControls, { opacity: audioControlsOpacity }]}>
+          <Animated.View
+            style={[
+              styles.audioCallControls,
+              { opacity: audioControlsOpacity },
+              controlsLockedForLocalHold && styles.audioCallControlsLocked,
+            ]}
+            pointerEvents={controlsLockedForLocalHold ? 'box-none' : 'auto'}
+          >
             <TouchableOpacity
               style={[
                 styles.audioRoundBtn,
@@ -6580,8 +6701,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                   borderColor: audioOutputRouteAccent.solid,
                   backgroundColor: audioOutputRouteAccent.solid15,
                 },
+                controlsLockedForLocalHold && styles.audioRoundBtnLocked,
               ]}
               onPress={cycleAudioRoute}
+              disabled={controlsLockedForLocalHold}
               activeOpacity={0.85}
               accessibilityState={{ selected: audioOutputRouteHighlighted }}
             >
@@ -6605,8 +6728,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                   borderColor: '#E57373',
                   backgroundColor: 'rgba(204, 92, 47, 0.19)',
                 },
+                controlsLockedForLocalHold && styles.audioRoundBtnLocked,
               ]}
               onPress={toggleMic}
+              disabled={controlsLockedForLocalHold}
               activeOpacity={0.85}
               accessibilityLabel={micOn ? 'Выключить микрофон' : 'Включить микрофон'}
               accessibilityState={{ selected: micOn }}
@@ -6630,8 +6755,10 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                     borderColor: accent.solid,
                     backgroundColor: accent.solid15,
                   },
+                  controlsLockedForLocalHold && styles.audioRoundBtnLocked,
                 ]}
                 onPress={() => toggleCam()}
+                disabled={controlsLockedForLocalHold}
                 activeOpacity={0.85}
               >
                 <MaterialIcons
@@ -6683,6 +6810,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             session={sessionRef.current}
             remoteStreamReceivedAt={remoteStreamReceivedAtRef.current}
             partnerInPiP={partnerInPiP}
+            partnerExternalHold={partnerExternalHoldUi}
           />
           
           {showIncomingFriendOverlay && (
@@ -6727,10 +6855,13 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             <Animated.View style={[styles.topLeftAudio, { opacity: buttonsOpacity }]}>
               <TouchableOpacity
                 onPress={toggleRemoteAudio}
-                disabled={!currentRemoteStream}
+                disabled={!currentRemoteStream || lockControlsOnAudioUiOnly}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 activeOpacity={0.7}
-                style={[styles.iconBtn, !currentRemoteStream && styles.iconBtnDisabled]}
+                style={[
+                  styles.iconBtn,
+                  (!currentRemoteStream || lockControlsOnAudioUiOnly) && styles.iconBtnDisabled,
+                ]}
               >
                 <View style={{ position: 'relative', justifyContent: 'center', alignItems: 'center' }}>
                   <MaterialIcons
@@ -6769,6 +6900,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             started={started}
             localRenderKey={localRenderKey}
             lang={lang}
+            localExternalHold={localExternalHoldUi}
           />
           
           {/* Кнопки управления медиа */}
@@ -6781,7 +6913,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               !!localStream ||
               !!(sessionRef.current || (global as any).__webrtcSessionRef?.current)
             }
+            interactionLocked={lockControlsOnAudioUiOnly}
             onFlipCamera={() => {
+              if (localExternalHoldRef.current) return;
               const session = sessionRef.current ?? (global as any).__webrtcSessionRef?.current;
               if (!session?.flipCam) return;
               void (async () => {
@@ -6798,10 +6932,11 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               })();
             }}
             localStream={localStream}
-            visible={showControls}
+            visible={showControls && !hideLocalMediaControlsOnVideoHold}
             opacity={buttonsOpacity}
             showReturnToAudio={isDirectCall && !inAudioOnlyUi && !isInactiveState}
             onReturnToAudio={() => {
+              if (localExternalHoldRef.current) return;
               void returnToAudioCallUi({
                 fromPiP: pip.visible || inAudioOnlyUiRef.current === false,
               });
@@ -6894,6 +7029,12 @@ const styles = StyleSheet.create({
     color: '#B0B0B0',
     textAlign: 'center',
   },
+  audioCallSubtitleHold: {
+    marginTop: 4,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
   audioCallTimer: {
     marginTop: 6,
     fontSize: 16,
@@ -6908,6 +7049,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 28,
     marginBottom: 16,
+  },
+  audioCallControlsLocked: {},
+  audioRoundBtnLocked: {
+    opacity: 0.35,
   },
   audioVideoBtnWrap: {
     width: 64,

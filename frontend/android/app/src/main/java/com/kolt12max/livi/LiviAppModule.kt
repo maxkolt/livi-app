@@ -700,6 +700,24 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /** JS: снять/поставить hold при стороннем звонке (не драться за audio focus). */
+  @ReactMethod
+  fun setExternalCallAudioHoldActive(active: Boolean) {
+    synchronized(LiviAppModule::class.java) {
+      externalCallAudioHoldJsActive = active
+    }
+  }
+
+  /** JS: GSM/telephony audio mode ещё активен — не снимать hold по ложному AUDIOFOCUS_GAIN. */
+  @ReactMethod
+  fun isExternalTelephonyAudioModeActive(promise: Promise) {
+    try {
+      promise.resolve(currentExternalTelephonyBusyStatic(reactApplicationContext.applicationContext))
+    } catch (_: Exception) {
+      promise.resolve(false)
+    }
+  }
+
   /** После завершения видеозвонка: снять media focus и повторно отправить PAUSE (без автовозобновления). */
   @ReactMethod
   fun pauseBackgroundMediaAfterCall() {
@@ -1726,14 +1744,147 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @Volatile
     private var activeCallVoiceFocusLegacyHeld: Boolean = false
 
+    @Volatile
+    private var externalCallAudioHoldJsActive: Boolean = false
+
+    private var externalTelephonyWatchHandler: Handler? = null
+    private var externalTelephonyWatchRunnable: Runnable? = null
+    @Volatile
+    private var externalTelephonyBusyEmitted: Boolean = false
+    private const val EXTERNAL_TELEPHONY_WATCH_INTERVAL_MS = 400L
+    private const val EXTERNAL_TELEPHONY_RESUME_DEBOUNCE_MS = 900L
+
+    @JvmStatic
+    internal fun currentExternalTelephonyBusyStatic(ctx: Context?): Boolean {
+      try {
+        val am = ctx?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        return isExternalTelephonyAudioMode(am.mode)
+      } catch (_: Exception) {
+        return false
+      }
+    }
+
+    @JvmStatic
+    private fun tryEmitExternalCallAudioResumedIfIdleStatic(ctx: Context?) {
+      if (!externalCallAudioHoldJsActive) return
+      if (currentExternalTelephonyBusyStatic(ctx)) {
+        Log.d(NAME, "external hold: skip resume — telephony audio mode still active")
+        return
+      }
+      synchronized(LiviAppModule::class.java) {
+        if (!externalCallAudioHoldJsActive) return
+        externalCallAudioHoldJsActive = false
+      }
+      emitActiveCallExternalAudioResumedStatic()
+    }
+
+    private fun isExternalTelephonyAudioMode(mode: Int): Boolean {
+      if (mode == AudioManager.MODE_IN_CALL) return true
+      // RINGTONE при входящем GSM (экран звонка, LiVi в фоне). В foreground LiVi даёт ложные срабатывания.
+      if (mode == AudioManager.MODE_RINGTONE) {
+        return !MainActivity.isInForeground
+      }
+      return false
+    }
+
+    private fun isTelephonyLikelyAudioMode(mode: Int): Boolean = isExternalTelephonyAudioMode(mode)
+
+    @JvmStatic
+    internal fun startExternalTelephonyWatchStatic(ctx: Context) {
+      stopExternalTelephonyWatchStatic()
+      externalTelephonyBusyEmitted = false
+      val handler = Handler(Looper.getMainLooper())
+      externalTelephonyWatchHandler = handler
+      val appCtx = ctx.applicationContext
+      val r = object : Runnable {
+        override fun run() {
+          if (!activeCallForegroundRunning) {
+            stopExternalTelephonyWatchStatic()
+            return
+          }
+          try {
+            val am = appCtx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            val mode = am?.mode ?: AudioManager.MODE_NORMAL
+            val busy = isExternalTelephonyAudioMode(mode)
+            if (busy && !externalTelephonyBusyEmitted) {
+              externalTelephonyBusyEmitted = true
+              Log.d(NAME, "externalTelephonyWatch: busy audioMode=$mode")
+              emitActiveCallExternalTelephonyBusyStatic(mode)
+            } else if (!busy && externalTelephonyBusyEmitted) {
+              Log.d(NAME, "externalTelephonyWatch: idle candidate audioMode=$mode holdJs=$externalCallAudioHoldJsActive")
+              externalTelephonyWatchHandler?.postDelayed({
+                if (!activeCallForegroundRunning) return@postDelayed
+                try {
+                  val am2 = appCtx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                  val mode2 = am2?.mode ?: AudioManager.MODE_NORMAL
+                  if (isExternalTelephonyAudioMode(mode2)) {
+                    Log.d(NAME, "externalTelephonyWatch: idle debounce rejected — still telephony mode=$mode2")
+                    return@postDelayed
+                  }
+                  externalTelephonyBusyEmitted = false
+                  tryEmitExternalCallAudioResumedIfIdleStatic(appCtx)
+                } catch (_: Exception) {}
+              }, EXTERNAL_TELEPHONY_RESUME_DEBOUNCE_MS)
+            }
+          } catch (_: Exception) {}
+          externalTelephonyWatchHandler?.postDelayed(this, EXTERNAL_TELEPHONY_WATCH_INTERVAL_MS)
+        }
+      }
+      externalTelephonyWatchRunnable = r
+      handler.postDelayed(r, EXTERNAL_TELEPHONY_WATCH_INTERVAL_MS)
+    }
+
+    @JvmStatic
+    internal fun stopExternalTelephonyWatchStatic() {
+      externalTelephonyWatchRunnable?.let { externalTelephonyWatchHandler?.removeCallbacks(it) }
+      externalTelephonyWatchRunnable = null
+      externalTelephonyWatchHandler = null
+      externalTelephonyBusyEmitted = false
+    }
+
     private val activeCallVoiceFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
       when (focusChange) {
-        AudioManager.AUDIOFOCUS_LOSS,
-        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+        AudioManager.AUDIOFOCUS_LOSS -> {
+          if (activeCallForegroundRunning) {
+            val appCtx = reactContextRef?.applicationContext
+            emitActiveCallExternalAudioInterruptedStatic(focusChange, appCtx)
+          }
+        }
+        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+          if (externalCallAudioHoldJsActive) return@OnAudioFocusChangeListener
+          val appCtx = reactContextRef?.applicationContext
           Handler(Looper.getMainLooper()).postDelayed({
             try {
-              reactContextRef?.applicationContext?.let { reacquireActiveCallVoiceAudioHoldStatic(it) }
+              if (externalCallAudioHoldJsActive) return@postDelayed
+              val am = appCtx?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+              val mode = am?.mode ?: AudioManager.MODE_NORMAL
+              if (isExternalTelephonyAudioMode(mode)) {
+                if (!externalTelephonyBusyEmitted) {
+                  externalTelephonyBusyEmitted = true
+                  emitActiveCallExternalTelephonyBusyStatic(mode)
+                }
+                return@postDelayed
+              }
+              if (!externalCallAudioHoldJsActive) {
+                appCtx?.let { reacquireActiveCallVoiceAudioHoldStatic(it) }
+              }
+            } catch (_: Exception) {}
+          }, 150)
+        }
+        AudioManager.AUDIOFOCUS_GAIN -> {
+          if (!externalCallAudioHoldJsActive) return@OnAudioFocusChangeListener
+          val appCtx = reactContextRef?.applicationContext
+          Handler(Looper.getMainLooper()).postDelayed({
+            tryEmitExternalCallAudioResumedIfIdleStatic(appCtx)
+          }, EXTERNAL_TELEPHONY_RESUME_DEBOUNCE_MS)
+        }
+        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+          if (externalCallAudioHoldJsActive) return@OnAudioFocusChangeListener
+          Handler(Looper.getMainLooper()).postDelayed({
+            try {
+              if (!externalCallAudioHoldJsActive) {
+                reactContextRef?.applicationContext?.let { reacquireActiveCallVoiceAudioHoldStatic(it) }
+              }
             } catch (_: Exception) {}
           }, 150)
         }
@@ -1748,42 +1899,47 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         try {
           am.mode = AudioManager.MODE_IN_COMMUNICATION
         } catch (_: Exception) {}
-        if (activeCallVoiceFocusRequest != null || activeCallVoiceFocusLegacyHeld) return
-        try {
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val attrs = AudioAttributes.Builder()
-              .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-              .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-              .build()
-            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-              .setAudioAttributes(attrs)
-              .setAcceptsDelayedFocusGain(true)
-              .setOnAudioFocusChangeListener(
+        val alreadyHasFocus =
+          activeCallVoiceFocusRequest != null || activeCallVoiceFocusLegacyHeld
+        if (!alreadyHasFocus) {
+          try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+              val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+              val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(attrs)
+                .setAcceptsDelayedFocusGain(true)
+                .setOnAudioFocusChangeListener(
+                  activeCallVoiceFocusChangeListener,
+                  Handler(Looper.getMainLooper()),
+                )
+                .build()
+              if (am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                activeCallVoiceFocusRequest = req
+                Log.d(NAME, "beginActiveCallVoiceAudioHold: voice focus granted")
+              }
+            } else {
+              @Suppress("DEPRECATION")
+              val granted = am.requestAudioFocus(
                 activeCallVoiceFocusChangeListener,
-                Handler(Looper.getMainLooper()),
+                AudioManager.STREAM_VOICE_CALL,
+                AudioManager.AUDIOFOCUS_GAIN,
               )
-              .build()
-            if (am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-              activeCallVoiceFocusRequest = req
-              Log.d(NAME, "beginActiveCallVoiceAudioHold: voice focus granted")
+              activeCallVoiceFocusLegacyHeld = granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
             }
-          } else {
-            @Suppress("DEPRECATION")
-            val granted = am.requestAudioFocus(
-              activeCallVoiceFocusChangeListener,
-              AudioManager.STREAM_VOICE_CALL,
-              AudioManager.AUDIOFOCUS_GAIN,
-            )
-            activeCallVoiceFocusLegacyHeld = granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+          } catch (e: Exception) {
+            Log.w(NAME, "beginActiveCallVoiceAudioHold failed", e)
           }
-        } catch (e: Exception) {
-          Log.w(NAME, "beginActiveCallVoiceAudioHold failed", e)
         }
       }
+      startExternalTelephonyWatchStatic(ctx)
     }
 
     @JvmStatic
     internal fun reacquireActiveCallVoiceAudioHoldStatic(ctx: Context) {
+      if (externalCallAudioHoldJsActive) return
       val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
       synchronized(LiviAppModule::class.java) {
         try {
@@ -1802,6 +1958,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
     @JvmStatic
     internal fun maintainActiveCallVoiceAudioStatic(ctx: Context) {
+      if (externalCallAudioHoldJsActive) return
       val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
       synchronized(LiviAppModule::class.java) {
         try {
@@ -1817,6 +1974,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
     @JvmStatic
     internal fun endActiveCallVoiceAudioHoldStatic(ctx: Context) {
+      stopExternalTelephonyWatchStatic()
+      synchronized(LiviAppModule::class.java) {
+        externalCallAudioHoldJsActive = false
+      }
       val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
       synchronized(LiviAppModule::class.java) {
         try {
@@ -2205,6 +2366,41 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     @JvmStatic
     fun emitEndCallFromPiP() {
       runOnReactUiQueueIfAlive { it.emitDeviceEvent("EndCallFromPiP", null) }
+    }
+
+    @JvmStatic
+    fun emitActiveCallExternalAudioInterruptedStatic(focusChange: Int, appCtx: Context? = null) {
+      runOnReactUiQueueIfAlive { ctx ->
+        val params = Arguments.createMap()
+        params.putInt("focusChange", focusChange)
+        try {
+          val am = appCtx?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+          val mode = am?.mode ?: AudioManager.MODE_NORMAL
+          params.putInt("audioMode", mode)
+          params.putBoolean(
+            "telephonyLikely",
+            isTelephonyLikelyAudioMode(mode),
+          )
+        } catch (_: Exception) {
+          params.putBoolean("telephonyLikely", false)
+        }
+        ctx.emitDeviceEvent("ActiveCallExternalAudioInterrupted", params)
+      }
+    }
+
+    @JvmStatic
+    fun emitActiveCallExternalTelephonyBusyStatic(audioMode: Int) {
+      runOnReactUiQueueIfAlive { ctx ->
+        val params = Arguments.createMap()
+        params.putInt("audioMode", audioMode)
+        params.putBoolean("telephonyLikely", true)
+        ctx.emitDeviceEvent("ActiveCallExternalTelephonyBusy", params)
+      }
+    }
+
+    @JvmStatic
+    fun emitActiveCallExternalAudioResumedStatic() {
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("ActiveCallExternalAudioResumed", null) }
     }
 
     @JvmStatic

@@ -14,6 +14,8 @@ interface LocalVideoProps {
   started: boolean;
   localRenderKey: number;
   lang: Lang;
+  /** Локальный GSM hold на video UI: заглушка «Вы» + «Звонок на удержании...». */
+  localExternalHold?: boolean;
   onStreamReady?: (stream: MediaStream) => void;
 }
 
@@ -30,6 +32,7 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
   started,
   localRenderKey,
   lang,
+  localExternalHold = false,
   onStreamReady,
 }) => {
   const L = (key: string) => t(key, lang);
@@ -152,6 +155,15 @@ export const LocalVideo: React.FC<LocalVideoProps> = ({
     );
   }
 
+  if (localExternalHold) {
+    return (
+      <View style={[styles.rtc, styles.placeholderContainer, styles.holdPlaceholderRoot]}>
+        <Text style={styles.placeholder}>{L('you')}</Text>
+        <Text style={styles.holdStatusLabelBottom}>{L('externalCallHoldEllipsis')}</Text>
+      </View>
+    );
+  }
+
   // Если UI считает, что камера выключена — всегда показываем заглушку "Вы".
   // Это должно иметь приоритет над попытками рендера RTCView, иначе получаем "черный прямоугольник".
   if (!camOn) {
@@ -243,8 +255,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(13,14,16,0.85)',
   },
+  holdPlaceholderRoot: {
+    justifyContent: 'center',
+  },
   placeholder: {
     color: 'rgba(237,234,234,0.6)',
     fontSize: 22,
+  },
+  holdStatusLabelBottom: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 14,
+    color: 'rgba(255,255,255,0.88)',
+    fontSize: 16,
+    fontWeight: '400',
+    letterSpacing: 0.2,
+    textAlign: 'center',
   },
 });

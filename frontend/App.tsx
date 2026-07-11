@@ -93,6 +93,8 @@ import {
   peekSystemPiPLeaveContextForReturn,
 } from './src/pip/pipPlaceholderOnly';
 import { installActiveCallBackgroundAudioHandlers } from './utils/activeCallBackgroundAudio';
+import { installExternalCallHoldHandlers } from './utils/externalCallHold';
+import { installExternalHoldSocketRelay } from './utils/externalCallHoldSocketRelay';
 import {
   isOngoingCallSession,
   clearEndingCallInProgress,
@@ -458,6 +460,8 @@ function AppContent() {
   React.useEffect(() => {
     installAppNavigationGuard();
     installActiveCallBackgroundAudioHandlers();
+    installExternalHoldSocketRelay();
+    installExternalCallHoldHandlers();
   }, []);
   /** Пока true — не скрываем оверлей. После обработки initial URL (в т.ч. answer-call) ставим true, чтобы не мелькала Home у принимающего. */
   const [initialUrlProcessed, setInitialUrlProcessed] = React.useState(false);

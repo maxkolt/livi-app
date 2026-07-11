@@ -17,6 +17,8 @@ import {
   VideoPresets,
   ConnectionState,
 } from 'livekit-client';
+import { setExternalCallHoldActive } from '../../../utils/externalCallHold';
+import { dispatchPartnerExternalHoldFromSocket, setPartnerExternalHoldSnapshot } from '../../../utils/partnerExternalHoldUi';
 import { SimpleEventEmitter } from '../base/SimpleEventEmitter';
 import type { WebRTCSessionConfig, WebRTCSessionCallbacks, CamSide } from '../types';
 import socket, {
@@ -146,6 +148,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     disconnected?: () => void;
     pipState?: (data: { inPiP: boolean; roomId: string; from: string }) => void;
     camToggle?: (data: { enabled: boolean; from: string; roomId?: string }) => void;
+    externalHold?: (data: { hold?: boolean; from: string; roomId?: string }) => void;
     directCallVideoUi?: (data: { inVideoCallUi: boolean; from: string; roomId?: string }) => void;
   } = {};
   private lastEmittedPeerVideoCallUi: boolean | null = null;
@@ -164,6 +167,11 @@ export class VideoCallSession extends SimpleEventEmitter {
   private partnerUserId: string | null = null;
   private inPiP = false;
   private partnerInPiP = false; // Состояние партнера в PiP
+  /** Локальный hold: сторонний GSM / мессенджер забрал audio focus. */
+  private localExternalHoldActive = false;
+  private partnerExternalHoldActive = false;
+  private externalHoldMicSuspended = false;
+  private externalHoldVideoTrackSuspended = false;
   private currentRoomName: string | null = null; // Имя текущей подключенной комнаты LiveKit
   private lastProcessedCallAccepted: {
     callId: string | null;
@@ -734,6 +742,9 @@ export class VideoCallSession extends SimpleEventEmitter {
       return;
     }
     this.endCallInProgress = true;
+    void this.exitExternalCallHold().catch(() => {});
+    setPartnerExternalHoldSnapshot(false);
+    this.setPartnerExternalHoldState(false);
     resetDirectCallVideoUiGlobalsAfterCallEnd();
     clearDirectCallAudioRouteCarryoverAfterCallEnd();
     // КРИТИЧНО: Сразу помечаем звонок завершённым, чтобы асинхронный код (handleCallAccepted, connectToLiveKit)
@@ -1232,6 +1243,7 @@ export class VideoCallSession extends SimpleEventEmitter {
    * Фон / другое приложение поверх: восстановить mic uplink и публикацию в LiveKit.
    */
   async restoreMicrophoneAfterAppBackground(): Promise<void> {
+    if (this.localExternalHoldActive) return;
     if (this.ended || this.endCallInProgress || !this.isMicOn) return;
     const room = this.room;
     if (!room || room.state !== 'connected' || !room.localParticipant) return;
@@ -1287,6 +1299,120 @@ export class VideoCallSession extends SimpleEventEmitter {
     try {
       if (this.isMicOn) await this.localAudioTrack?.unmute().catch(() => {});
     } catch {}
+  }
+
+  getLocalExternalHoldActive(): boolean {
+    return this.localExternalHoldActive;
+  }
+
+  getPartnerExternalHoldActive(): boolean {
+    return this.partnerExternalHoldActive;
+  }
+
+  setPartnerExternalHoldState(hold: boolean): void {
+    if (this.partnerExternalHoldActive === hold) {
+      setPartnerExternalHoldSnapshot(hold);
+      return;
+    }
+    this.partnerExternalHoldActive = hold;
+    setPartnerExternalHoldSnapshot(hold);
+    this.emit('partnerExternalHoldChanged', { hold });
+  }
+
+  setLocalExternalHoldState(hold: boolean): void {
+    if (this.localExternalHoldActive === hold) return;
+    this.localExternalHoldActive = hold;
+    this.emit('localExternalHoldChanged', { hold });
+  }
+
+  /** Дублирует hold на __webrtcSessionRef — socket-хендлеры могут жить на другом инстансе сессии. */
+  private syncExternalHoldStateToCanonicalSessions(kind: 'partner' | 'local', hold: boolean): void {
+    const targets: VideoCallSession[] = [this];
+    try {
+      const g = (global as any).__webrtcSessionRef?.current as VideoCallSession | undefined;
+      if (g && g !== this) targets.push(g);
+    } catch {}
+    const seen = new Set<VideoCallSession>();
+    for (const s of targets) {
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      if (s.ended || s.endCallInProgress) continue;
+      if (kind === 'partner') s.setPartnerExternalHoldState(hold);
+      else s.setLocalExternalHoldState(hold);
+    }
+  }
+
+  /** Сторонний звонок (GSM/TG/WA): пауза uplink без разрыва LiveKit и без cam-toggle «Отошёл». */
+  async enterExternalCallHold(): Promise<void> {
+    if (this.ended || this.endCallInProgress) return;
+    if (this.localExternalHoldActive) return;
+    setExternalCallHoldActive(true);
+    this.syncExternalHoldStateToCanonicalSessions('local', true);
+    const currentRoomId = this.resolveSignalingRoomId();
+    try {
+      socket.emit('call:external-hold', {
+        hold: true,
+        from: socket.id,
+        ...(currentRoomId ? { roomId: currentRoomId } : {}),
+      });
+    } catch (e) {
+      logger.warn('[VideoCallSession] call:external-hold (hold) emit failed', e);
+    }
+    const room = this.room;
+    if (this.isMicOn) {
+      try {
+        await room?.localParticipant?.setMicrophoneEnabled(false);
+      } catch {}
+      try {
+        await this.localAudioTrack?.mute();
+        this.externalHoldMicSuspended = true;
+      } catch {}
+    }
+    if (this.isCamOn && this.localVideoTrack) {
+      try {
+        await this.localVideoTrack.mute();
+        if (this.localVideoTrack.mediaStreamTrack) {
+          this.localVideoTrack.mediaStreamTrack.enabled = false;
+        }
+        this.externalHoldVideoTrackSuspended = true;
+      } catch {}
+    }
+    try {
+      this.config.callbacks.onExternalHoldRemotePlaybackChange?.(true);
+    } catch {}
+    logger.info('[VideoCallSession] enterExternalCallHold');
+  }
+
+  async exitExternalCallHold(): Promise<void> {
+    if (!this.localExternalHoldActive) return;
+    setExternalCallHoldActive(false);
+    this.syncExternalHoldStateToCanonicalSessions('local', false);
+    const currentRoomId = this.resolveSignalingRoomId();
+    if (currentRoomId && !this.ended) {
+      try {
+        socket.emit('call:external-hold', {
+          hold: false,
+          from: socket.id,
+          roomId: currentRoomId,
+        });
+      } catch {}
+    }
+    try {
+      this.config.callbacks.onExternalHoldRemotePlaybackChange?.(false);
+    } catch {}
+    if (this.externalHoldMicSuspended) {
+      this.externalHoldMicSuspended = false;
+      if (this.isMicOn && !this.ended && !this.endCallInProgress) {
+        await this.restoreMicrophoneAfterAppBackground().catch(() => {});
+      }
+    }
+    if (this.externalHoldVideoTrackSuspended) {
+      this.externalHoldVideoTrackSuspended = false;
+      if (this.isCamOn && !this.ended && !this.endCallInProgress) {
+        await this.restoreCameraAfterAppBackground().catch(() => {});
+      }
+    }
+    logger.info('[VideoCallSession] exitExternalCallHold');
   }
 
   async toggleCam(): Promise<void> {
@@ -1935,6 +2061,16 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.room?.name || this.roomId;
   }
 
+  /** roomId для socket relay (LiveKit name, pairing roomId, call:accepted room). */
+  private resolveSignalingRoomId(): string | null {
+    for (const raw of [this.getRoomId(), this.currentRoomName, this.roomId, this.room?.name]) {
+      if (raw == null) continue;
+      const s = String(raw).trim();
+      if (s) return s;
+    }
+    return null;
+  }
+
   /** roomId в pip/cam-toggle/direct-call:video-ui может совпадать с socket roomId или именем LiveKit-комнаты. */
   private matchesSignalingRoom(incoming?: string | null): boolean {
     if (!incoming) return false;
@@ -1947,6 +2083,22 @@ export class VideoCallSession extends SimpleEventEmitter {
       if (s) ids.add(s);
     }
     return ids.has(normalized);
+  }
+
+  /** room_<userA>_<userB> из call:accepted / LiveKit — когда getRoomId() ещё не заполнен на «лишней» сессии. */
+  private matchesDirectCallParticipantsRoom(incoming?: string | null): boolean {
+    const normalized = String(incoming ?? '').trim();
+    if (!normalized.startsWith('room_')) return false;
+    const me = String(this.config.myUserId ?? '').trim();
+    const partner = String(this.partnerUserId ?? '').trim();
+    if (!me || !partner) return false;
+    const body = normalized.slice(5);
+    return body.includes(me) && body.includes(partner);
+  }
+
+  /** Партнёр ушёл в GSM — только каноническая сессия (см. partnerExternalHoldUi.ts). */
+  applyRemoteExternalHoldState(hold: boolean, incoming?: string | null): void {
+    dispatchPartnerExternalHoldFromSocket(hold, incoming ?? null);
   }
 
   getCallId(): string | null {
@@ -2580,6 +2732,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     if (handlers.disconnected) socket.off('disconnected', handlers.disconnected);
     if (handlers.pipState) socket.off('pip:state', handlers.pipState);
     if (handlers.camToggle) socket.off('cam-toggle', handlers.camToggle);
+    if (handlers.externalHold) socket.off('call:external-hold', handlers.externalHold);
     if (handlers.directCallVideoUi) socket.off('direct-call:video-ui', handlers.directCallVideoUi);
 
     this.socketHandlers = {};
@@ -2729,6 +2882,16 @@ export class VideoCallSession extends SimpleEventEmitter {
       }
     };
 
+    const externalHoldHandler = (data: { hold?: boolean; from: string; roomId?: string }) => {
+      if (data.from && data.from === socket.id) return;
+      const hold = data.hold === true;
+      logger.info('[VideoCallSession] call:external-hold partner state', {
+        hold,
+        roomId: data.roomId ?? this.resolveSignalingRoomId(),
+      });
+      this.applyRemoteExternalHoldState(hold, data.roomId);
+    };
+
     const camToggleHandler = (data: {
       enabled: boolean;
       from: string;
@@ -2851,6 +3014,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.socketHandlers.disconnected = disconnectedHandler;
     this.socketHandlers.pipState = pipStateHandler;
     this.socketHandlers.camToggle = camToggleHandler;
+    this.socketHandlers.externalHold = externalHoldHandler;
     this.socketHandlers.directCallVideoUi = directCallVideoUiHandler;
     
     socket.on('call:accepted', callAcceptedHandler);
@@ -2862,6 +3026,7 @@ export class VideoCallSession extends SimpleEventEmitter {
     socket.on('call:cancel', onCallCancel);
     socket.on('pip:state', pipStateHandler);
     socket.on('cam-toggle', camToggleHandler);
+    socket.on('call:external-hold', externalHoldHandler);
     socket.on('direct-call:video-ui', directCallVideoUiHandler);
     
     logger.info('[VideoCallSession] ✅ Socket handlers registered', {
@@ -2878,6 +3043,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       () => socket.off('call:cancel', onCallCancel),
       () => socket.off('pip:state', pipStateHandler),
       () => socket.off('cam-toggle', camToggleHandler),
+      () => socket.off('call:external-hold', externalHoldHandler),
       () => socket.off('direct-call:video-ui', directCallVideoUiHandler),
     ];
   }
