@@ -99,6 +99,7 @@ frontend/ios/.xcode.env
 .expo/
 .expo-shared/
 frontend/.expo/
+frontend/.metro-export-debug/
 
 # Logs
 logs/

@@ -32,7 +32,6 @@ import PiPOverlay from "./src/pip/PiPOverlay";
 import SystemPiPLogoLayer from "./src/pip/SystemPiPLogoLayer";
 import { ensureCometChatReady } from "./chat/cometchat";
 import type { RootStackParamList } from "./navigation/types";
-import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
 import { addNotificationListeners, ensureInitialNotificationPermissions, openIncomingCallScreen, openAnswerCallScreen, handleDeclineCallFromDeepLink, registerAndSendPushToken, clearCallRelatedNotificationsAndSyncBadge, syncAppBadgeFromMissedCount, clearMissedBadgeCleared, recordMissedCallForUser, applyPendingMissedCallsFromNative, getMissedCountByUserFromNative } from './utils/pushNotifications';
 import { getInstallId } from './utils/installId';
 import { notifyIncomingShare, pullPendingShareFromNative, subscribeIncomingShare, type IncomingShareItem } from './utils/incomingShare';
@@ -177,13 +176,7 @@ if (__DEV__) {
   } catch {}
 }
 
-// Регистрация глобальных LiveKit штук один раз при старте приложения
-try {
-  safeRegisterLiveKitGlobals();
-} catch (e) {
-  logger.warn('[App] Failed to register LiveKit globals', e);
-}
-
+// Регистрация LiveKit globals — в index.tsx до загрузки App (избегаем stale module id при Fast Refresh).
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const navRef = createNavigationContainerRef<RootStackParamList>();

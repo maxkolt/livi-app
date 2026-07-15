@@ -132,6 +132,10 @@ export async function createCometChatUser(uid: string, name?: string, avatar?: s
       return createdUser;
     } catch (error: any) {
       lastError = error;
+      if (isCometChatQuotaError(error)) {
+        emitCometChatProblem('create-user', 'CometChat sync failed', cometChatErrorSummary(error), uid);
+        throw error;
+      }
       if (error?.code === 'ERR_UID_ALREADY_EXISTS') {
         try {
           const existingUser = await CometChat.getUser(uid);
@@ -149,6 +153,11 @@ export async function createCometChatUser(uid: string, name?: string, avatar?: s
 }
 
 /** CometChat SDK отдаёт ошибки по-разному: code на корне, вложенный объект, message-строка или JSON-строка. */
+function isCometChatQuotaError(err: any): boolean {
+  const summary = cometChatErrorSummary(err).toLowerCase();
+  return summary.includes('err_plan_quota') || (summary.includes('quota') && summary.includes('exhausted'));
+}
+
 function isCometChatUserMissingError(err: any): boolean {
   if (err == null) return false;
   const code = err.code ?? err.errorCode ?? err?.error?.code;
@@ -211,6 +220,10 @@ export async function loginCometChat(uid: string, name?: string, avatar?: string
       return await performLogin();
     } catch (error: any) {
       lastError = error;
+      if (isCometChatQuotaError(error)) {
+        emitCometChatProblem('login', 'CometChat login failed', cometChatErrorSummary(error), uid);
+        throw error;
+      }
       if (isCometChatUserMissingError(error)) {
         await retryCometChatOperation('create-user', () => createCometChatUser(uid, name, avatar), uid, 3);
         try {

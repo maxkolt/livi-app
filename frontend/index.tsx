@@ -1,4 +1,14 @@
 import './polyfills/ensureCoreJsPolyfills';
+import 'well-known-symbols/Symbol.asyncIterator/auto';
+import 'well-known-symbols/Symbol.iterator/auto';
+import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
+
+try {
+  safeRegisterLiveKitGlobals();
+} catch (e) {
+  console.warn('[bootstrap] LiveKit globals registration failed (non-fatal)', e);
+}
+
 import './shims/nativeEventEmitterShim';
 import 'react-native-gesture-handler';
 import 'react-native-reanimated';
@@ -69,6 +79,21 @@ try {
       }
       return;
     }
+    if (msg.includes('android.software.telecom') || msg.includes('FEATURE_TELECOM')) {
+      if (typeof console?.warn === 'function') {
+        console.warn('[Global Error Handler] Suppressed Telecom/CallKeep error on device without telephony', msg);
+      }
+      return;
+    }
+    if (__DEV__ && /Requiring unknown module "\d+"/.test(msg)) {
+      if (typeof console?.warn === 'function') {
+        console.warn(
+          '[Global Error Handler] Stale Metro module id (often after Fast Refresh). Press r in Metro or restart with npm run start:usb:clean',
+          msg,
+        );
+      }
+      return;
+    }
     
     // Логируем все ошибки для отладки
     console.error('[Global Error Handler]', {
@@ -122,6 +147,24 @@ if (typeof global !== 'undefined' && global.HermesInternal) {
       }
       return;
     }
+    if (msg.includes('android.software.telecom') || msg.includes('FEATURE_TELECOM')) {
+      if (typeof console?.warn === 'function') {
+        console.warn('[Unhandled Promise Rejection] Suppressed Telecom/CallKeep error (non-fatal)', msg);
+      }
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      return;
+    }
+    if (__DEV__ && /Requiring unknown module "\d+"/.test(msg)) {
+      if (typeof console?.warn === 'function') {
+        console.warn('[Unhandled Promise Rejection] Stale Metro module id — reload app (r in Metro)', msg);
+      }
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      return;
+    }
     console.error('[Unhandled Promise Rejection]', reason);
     // Предотвращаем краш приложения
     if (event?.preventDefault) {
@@ -144,6 +187,15 @@ if (typeof global !== 'undefined' && global.HermesInternal) {
       if (isLeaveWhileReconnect) {
         if (typeof console?.warn === 'function') {
           console.warn('[Unhandled Promise Rejection] Suppressed LiveKit leave/reconnect error (non-fatal)', msg);
+        }
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        return;
+      }
+      if (msg.includes('android.software.telecom') || msg.includes('FEATURE_TELECOM')) {
+        if (typeof console?.warn === 'function') {
+          console.warn('[Unhandled Promise Rejection] Suppressed Telecom/CallKeep error (non-fatal)', msg);
         }
         if (event?.preventDefault) {
           event.preventDefault();

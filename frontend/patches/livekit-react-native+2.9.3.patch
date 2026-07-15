@@ -13,3 +13,92 @@ index 0000000..1111111 100644
          // adm needs to be re-setup with a new one each time.
          setupAdm(context)
          options.audioDeviceModule = adm
+diff --git a/lib/commonjs/index.js b/lib/commonjs/index.js
+index 0000000..1111111 100644
+--- a/lib/commonjs/index.js
++++ b/lib/commonjs/index.js
+@@ -76,14 +76,35 @@ function fixWebrtcAdapter() {
+   }
+ }
+ function shimPromiseAllSettled() {
+-  var allSettled = require('promise.allsettled');
+-  allSettled.shim();
++  if (typeof Promise.allSettled === 'function') {
++    return;
++  }
++  Promise.allSettled = function allSettled(iterable) {
++    return Promise.all(
++      Array.from(iterable, function (p) {
++        return Promise.resolve(p).then(
++          function (value) {
++            return { status: 'fulfilled', value: value };
++          },
++          function (reason) {
++            return { status: 'rejected', reason: reason };
++          },
++        );
++      }),
++    );
++  };
+ }
+ function shimArrayAt() {
+-  // Some versions of RN don't have Array.prototype.at, which is used by sdp-transform
+-  if (!Array.prototype.at) {
+-    var at = require('array.prototype.at');
+-    at.shim();
++  if (Array.prototype.at) {
++    return;
++  }
++  Array.prototype.at = function at(index) {
++    var len = this.length;
++    var relativeIndex = index >= 0 ? index : len + index;
++    if (relativeIndex < 0 || relativeIndex >= len) {
++      return undefined;
++    }
++    return this[relativeIndex];
+   }
+ }
+ function shimCryptoUuid() {
+diff --git a/lib/module/index.js b/lib/module/index.js
+index 0000000..1111111 100644
+--- a/lib/module/index.js
++++ b/lib/module/index.js
+@@ -76,14 +76,35 @@ function fixWebrtcAdapter() {
+   }
+ }
+ function shimPromiseAllSettled() {
+-  var allSettled = require('promise.allsettled');
+-  allSettled.shim();
++  if (typeof Promise.allSettled === 'function') {
++    return;
++  }
++  Promise.allSettled = function allSettled(iterable) {
++    return Promise.all(
++      Array.from(iterable, (p) =>
++        Promise.resolve(p).then(
++          (value) => ({ status: 'fulfilled', value }),
++          (reason) => ({ status: 'rejected', reason }),
++        ),
++      ),
++    );
++  };
+ }
+ function shimArrayAt() {
+-  // Some versions of RN don't have Array.prototype.at, which is used by sdp-transform
+-  if (!Array.prototype.at) {
+-    var at = require('array.prototype.at');
+-    at.shim();
++  if (Array.prototype.at) {
++    return;
++  }
++  // eslint-disable-next-line no-extend-native
++  Array.prototype.at = function at(index) {
++    const len = this.length;
++    const relativeIndex = index >= 0 ? index : len + index;
++    if (relativeIndex < 0 || relativeIndex >= len) {
++      return undefined;
++    }
++    return this[relativeIndex];
+   }
+ }
+ function shimCryptoUuid() {

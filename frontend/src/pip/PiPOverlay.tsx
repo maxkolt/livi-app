@@ -558,7 +558,7 @@ function PiPActionButton({
           endCall && styles.pipActionCircleEndCall,
           active && activeAccent
             ? {
-                borderWidth: 2,
+                borderWidth: 1,
                 borderColor: activeAccent.solid,
                 backgroundColor: activeAccent.solid15,
               }
@@ -682,7 +682,7 @@ const styles = StyleSheet.create({
     width: PIP_ACTION_BTN,
     height: PIP_ACTION_BTN,
     borderRadius: PIP_ACTION_BTN / 2,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },

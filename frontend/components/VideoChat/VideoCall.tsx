@@ -6698,7 +6698,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               style={[
                 styles.audioRoundBtn,
                 audioOutputRouteHighlighted && {
-                  borderWidth: 2,
+                  borderWidth: 1,
                   borderColor: audioOutputRouteAccent.solid,
                   backgroundColor: audioOutputRouteAccent.solid15,
                 },
@@ -6725,7 +6725,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
               style={[
                 styles.audioRoundBtn,
                 !micOn && {
-                  borderWidth: 2,
+                  borderWidth: 1,
                   borderColor: '#E57373',
                   backgroundColor: 'rgba(204, 92, 47, 0.19)',
                 },
@@ -6752,7 +6752,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
                 style={[
                   styles.audioRoundBtn,
                   pulsePeerVideoButton && {
-                    borderWidth: 2,
+                    borderWidth: 1,
                     borderColor: accent.solid,
                     backgroundColor: accent.solid15,
                   },

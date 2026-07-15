@@ -1,0 +1,97 @@
+--- a/android/src/main/java/com/reactnativecometchatuikit/CometChatImageViewer.java
++++ b/android/src/main/java/com/reactnativecometchatuikit/CometChatImageViewer.java
+@@ -1,26 +1,20 @@
+ package com.reactnativecometchatuikit;
+ 
+ import android.content.Context;
+-import android.graphics.Bitmap;
+-import android.graphics.BitmapFactory;
+-import android.net.Uri;
+-import android.os.AsyncTask;
+ import android.os.Bundle;
+-import android.util.Log;
+ import android.view.ViewGroup;
+ import android.widget.ImageView;
+ import android.widget.LinearLayout;
+-import android.widget.MediaController;
+ 
+ import androidx.annotation.Nullable;
+ import androidx.appcompat.app.AppCompatActivity;
+ 
+-import java.io.BufferedInputStream;
+-import java.io.IOException;
+-import java.io.InputStream;
+-import java.net.URL;
+-import java.net.URLConnection;
++import com.bumptech.glide.Glide;
+ 
++/**
++ * Full-screen image viewer. Uses Glide for download/decode/cache so bitmaps
++ * are downsampled and memory is managed (Play Console bitmap recommendation).
++ */
+ public class CometChatImageViewer extends AppCompatActivity {
+     ImageView imageView;
+     LinearLayout linearLayout;
+@@ -44,36 +38,12 @@
+         );
+         linearLayout.addView(imageView);
+         setContentView(linearLayout);
+-        new DownloadImage().execute(imageUrl);
+-    }
+ 
+-    class DownloadImage extends AsyncTask<String, String, Bitmap> {
+-        @Override
+-        protected Bitmap doInBackground(String... strings) {
+-            return getImageBitmap(strings[0]);
++        if (imageUrl != null && !imageUrl.isEmpty()) {
++            Glide.with(this)
++                    .load(imageUrl)
++                    .fitCenter()
++                    .into(imageView);
+         }
+-
+-        @Override
+-        protected void onPostExecute(Bitmap bitmap) {
+-            super.onPostExecute(bitmap);
+-            imageView.setImageBitmap(bitmap);
+-        }
+     }
+-
+-    private Bitmap getImageBitmap(String url) {
+-        Bitmap bm = null;
+-        try {
+-            URL aURL = new URL(url);
+-            URLConnection conn = aURL.openConnection();
+-            conn.connect();
+-            InputStream is = conn.getInputStream();
+-            BufferedInputStream bis = new BufferedInputStream(is);
+-            bm = BitmapFactory.decodeStream(bis);
+-            bis.close();
+-            is.close();
+-        } catch (IOException e) {
+-            Log.e("ImageViewer", "Error getting bitmap", e);
+-        }
+-        return bm;
+-    }
+ }
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -116,7 +116,8 @@
+   }
+ 
+   if (!found) {
+-    throw new GradleException(
++    // RuntimeException so IDE Groovy language server resolves the type in this module
++    throw new RuntimeException(
+       "${project.name}: unable to locate React Native android sources. " +
+       "Ensure you have you installed React Native as a dependency in your project and try again."
+     )
+@@ -129,6 +130,8 @@
+   implementation "com.facebook.react:react-native:+"
+     implementation 'androidx.appcompat:appcompat:1.4.1'
+     implementation 'com.google.android.material:material:1.5.0'
++    // Image viewer: Glide instead of BitmapFactory.decodeStream (Play Console)
++    implementation 'com.github.bumptech.glide:glide:4.16.0'
+ // From node_modules
+ }
+ 

@@ -1,0 +1,99 @@
+--- a/android/src/main/java/com/reactnativephotoeditor/activity/StickerFragment.kt
++++ b/android/src/main/java/com/reactnativephotoeditor/activity/StickerFragment.kt
+@@ -2,11 +2,8 @@
+ 
+ import android.annotation.SuppressLint
+ import android.app.Dialog
+-import android.content.Context
+ import android.graphics.Bitmap
+-import android.graphics.BitmapFactory
+ import android.os.Build
+-import android.os.StrictMode
+ import android.view.LayoutInflater
+ import android.view.View
+ import android.view.ViewGroup
+@@ -21,9 +18,6 @@
+ import com.google.android.material.bottomsheet.BottomSheetBehavior.BottomSheetCallback
+ import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+ import com.reactnativephotoeditor.R
+-import java.io.InputStream
+-import java.net.URI
+-import java.net.URL
+ 
+ class StickerFragment : BottomSheetDialogFragment() {
+   private var mStickerListener: StickerListener? = null
+@@ -104,49 +98,39 @@
+ 
+       init {
+         itemView.setOnClickListener {
+-          if (mStickerListener != null) {
+-            val url = stickerList[layoutPosition]
++          val listener = mStickerListener ?: return@setOnClickListener
++          val url = stickerList[layoutPosition]
++          val ctx = context ?: return@setOnClickListener
++          val loadModel: Any = if (URLUtil.isValidUrl(url)) {
++            url
++          } else if (url.startsWith("file://")) {
++            url
++          } else {
++            "file://$url"
++          }
+ 
+-            if (URLUtil.isValidUrl(url)) {
+-              val bitmap = handleBitmapImage(url)
+-              mStickerListener!!.onStickerClick(bitmap)
+-            } else {
+-              context?.let {
+-                val stream = openInputStream(
+-                  "file://$url",
+-                  it
+-                )
+-
+-                val bitmap = BitmapFactory.decodeStream(stream)
+-                mStickerListener!!.onStickerClick(bitmap)
++          // Glide handles download/decode/cache/downsample for stickers.
++          Thread {
++            try {
++              val futureTarget = Glide.with(ctx.applicationContext)
++                .asBitmap()
++                .load(loadModel)
++                .submit()
++              val bitmap = futureTarget.get()
++              Glide.with(ctx.applicationContext).clear(futureTarget)
++              activity?.runOnUiThread {
++                listener.onStickerClick(bitmap)
++                dismiss()
+               }
++            } catch (_: Exception) {
++              activity?.runOnUiThread { dismiss() }
+             }
+-          }
+-          dismiss()
++          }.start()
+         }
+       }
+     }
+-
+-
+   }
+ 
+-  private fun openInputStream(uriString: String?, context: Context): InputStream? {
+-    val uri = URI.create(uriString)
+-    return if (uri.scheme == "file" && uri.path.startsWith("/android_asset/")) {
+-      val path = uri.path.replace("/android_asset/", "") // TODO: should be at start only
+-      context.assets.open(path)
+-    } else {
+-      uri.toURL().openStream()
+-    }
+-  }
+-
+-  private fun handleBitmapImage(path: String): Bitmap {
+-    val url = URL(path)
+-    val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
+-    StrictMode.setThreadPolicy(policy)
+-    return BitmapFactory.decodeStream(url.openConnection().getInputStream())
+-  }
+-
+   private fun convertEmoji(emoji: String): String {
+     var returnedEmoji = ""
+     returnedEmoji = try {

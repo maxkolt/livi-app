@@ -1,14 +1,13 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  Animated,
   Linking,
   Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
-  Vibration,
 } from 'react-native';
-import * as Haptics from 'expo-haptics';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Icon } from 'react-native-paper';
@@ -69,6 +68,18 @@ function HomeWelcomeViewInner({
   onStartSearch,
   onBlockedStartSearch,
 }: HomeWelcomeViewProps) {
+  const menuIdleBlur = isDark ? 15 : 20;
+  const menuPressedBlur = isDark ? 25 : 40;
+  const menuIdleTitan = isDark ? 0.25 : 0.14;
+  const menuPressedTitan = isDark ? 0.4 : 0.5;
+  const [menuBlurIntensity, setMenuBlurIntensity] = useState(menuIdleBlur);
+  const menuTitanOpacity = useRef(new Animated.Value(menuIdleTitan)).current;
+
+  useEffect(() => {
+    setMenuBlurIntensity(menuIdleBlur);
+    menuTitanOpacity.setValue(menuIdleTitan);
+  }, [menuIdleBlur, menuIdleTitan, menuTitanOpacity]);
+
   const unreadValues = Object.values(unreadByUser).filter((n) => typeof n === 'number' && n > 0);
   const missedValues = Object.values(missedByUser).filter((n) => typeof n === 'number' && n > 0);
   const shouldShowMenuDot = unreadValues.length > 0 || missedValues.length > 0;
@@ -108,38 +119,52 @@ function HomeWelcomeViewInner({
                   ? ANDROID_MENU_HIT_SLOP
                   : { top: 8, bottom: 8, left: 8, right: 8 }
               }
-              style={({ pressed }) => [
+              android_ripple={{
+                color: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.10)',
+                borderless: false,
+              }}
+              style={[
                 styles.menuBtnInner,
                 {
                   backgroundColor: menuBtnInnerBg,
                   position: 'relative',
                   ...(Platform.OS === 'android' ? { elevation: 0 } : {}),
                 },
-                Platform.OS === 'ios' && pressed && styles.menuBtnPressed,
               ]}
-              onPress={() => {
-                try {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                } catch {
-                  Vibration.vibrate(10);
-                }
-                onOpenMenu();
+              onPressIn={() => {
+                if (Platform.OS !== 'ios') return;
+                setMenuBlurIntensity(menuPressedBlur);
+                Animated.timing(menuTitanOpacity, {
+                  toValue: menuPressedTitan,
+                  duration: 150,
+                  useNativeDriver: true,
+                }).start();
               }}
+              onPressOut={() => {
+                if (Platform.OS !== 'ios') return;
+                setMenuBlurIntensity(menuIdleBlur);
+                Animated.timing(menuTitanOpacity, {
+                  toValue: menuIdleTitan,
+                  duration: 200,
+                  useNativeDriver: true,
+                }).start();
+              }}
+              onPress={onOpenMenu}
             >
               <BlurView
                 pointerEvents="none"
-                intensity={isDark ? 15 : 20}
+                intensity={menuBlurIntensity}
                 tint={isDark ? 'dark' : 'light'}
                 style={[StyleSheet.absoluteFillObject, { borderRadius: MENU_BTN_RADIUS }]}
               />
-              <View
+              <Animated.View
                 pointerEvents="none"
                 style={[
                   StyleSheet.absoluteFillObject,
                   {
                     borderRadius: MENU_BTN_RADIUS,
                     backgroundColor: isDark ? '#8A8F99' : '#3B4453',
-                    opacity: isDark ? 0.25 : 0.14,
+                    opacity: menuTitanOpacity,
                   },
                 ]}
               />

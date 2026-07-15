@@ -31,6 +31,30 @@ export const OUTGOING_CALL_TIMEOUT_MS = 27_000;
 let isSetup = false;
 /** Android: CallKeep успешно инициализирован и готов к показу системного UI звонка. */
 let isAndroidCallKeepReady = false;
+/** Android: устройство без android.software.telecom (планшеты) — CallKeep не используем. */
+let androidTelecomSupported: boolean | null = null;
+let androidTelecomSupportedPromise: Promise<boolean> | null = null;
+
+async function resolveAndroidTelecomSupported(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  if (androidTelecomSupported !== null) return androidTelecomSupported;
+  if (!androidTelecomSupportedPromise) {
+    androidTelecomSupportedPromise = (async () => {
+      try {
+        const mod = NativeModules.LiviAppModule;
+        if (mod?.isTelecomSupported) {
+          androidTelecomSupported = (await mod.isTelecomSupported()) === true;
+        } else {
+          androidTelecomSupported = true;
+        }
+      } catch {
+        androidTelecomSupported = true;
+      }
+      return androidTelecomSupported;
+    })();
+  }
+  return androidTelecomSupportedPromise;
+}
 /** raw callId -> { from, fromNick, callKitId, hasVideo? } для навигации при answer из нативного UI */
 const pendingCallById: Record<string, { from: string; fromNick?: string; callKitId?: string; hasVideo?: boolean }> = {};
 const callKitUuidByCallId: Record<string, string> = {};
@@ -139,7 +163,15 @@ export async function setupCallKeep(options?: SetupCallKeepOptions): Promise<boo
   if (requestPermission) {
     logger.info('[callKeep] setup requested with permission prompt flag; no dangerous runtime permission is requested on Android');
   }
-  if (isSetup) return true;
+  if (isSetup) return isAndroidCallKeepReady;
+
+  const telecomSupported = await resolveAndroidTelecomSupported();
+  if (!telecomSupported) {
+    isSetup = true;
+    isAndroidCallKeepReady = false;
+    logger.info('[callKeep] skip setup: device has no android.software.telecom (tablet / no Telecom stack)');
+    return false;
+  }
 
   try {
     const RNCallKeep = require('react-native-callkeep');

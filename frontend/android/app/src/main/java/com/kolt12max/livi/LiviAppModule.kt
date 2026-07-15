@@ -4,6 +4,7 @@ import android.app.NotificationManager
 import android.app.PictureInPictureParams
 import android.app.RemoteAction
 import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Rational
 import android.service.notification.StatusBarNotification
 import android.content.Intent
@@ -58,6 +59,18 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   }
 
   override fun getName(): String = NAME
+
+  /** false on many tablets / emulators without android.software.telecom — CallKeep must not register PhoneAccount. */
+  @ReactMethod
+  fun isTelecomSupported(promise: Promise) {
+    try {
+      val supported =
+        reactApplicationContext.packageManager.hasSystemFeature(PackageManager.FEATURE_TELECOM)
+      promise.resolve(supported)
+    } catch (_: Exception) {
+      promise.resolve(false)
+    }
+  }
 
   private fun hasActiveNotification(nm: NotificationManager, id: Int): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true

@@ -1,7 +1,6 @@
 import React from 'react';
-import { TouchableOpacity, Vibration, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, Pressable, type StyleProp, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { useTheme } from 'react-native-paper';
 import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE, CHAT_BACK_BUTTON_SURFACE, TOUCH_HIT_OUTER } from '../constants/uiTokens';
 
@@ -29,19 +28,15 @@ export default function ChatStyleBackButton({
   const tint = iconColor ?? ((theme.colors.onSurfaceVariant as string) || '#8A8F99');
 
   return (
-    <TouchableOpacity
-      onPress={() => {
-        try {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        } catch {
-          Vibration.vibrate(10);
-        }
-        onPress();
-      }}
+    <Pressable
+      onPress={onPress}
       disabled={disabled}
       hitSlop={{ top: TOUCH_HIT_OUTER, bottom: TOUCH_HIT_OUTER, left: TOUCH_HIT_OUTER, right: TOUCH_HIT_OUTER }}
-      activeOpacity={0.5}
-      style={[
+      android_ripple={{
+        color: 'rgba(255,255,255,0.14)',
+        borderless: false,
+      }}
+      style={({ pressed }) => [
         {
           width: FRIEND_ACTION_BUTTON.width,
           height: FRIEND_ACTION_BUTTON.height,
@@ -49,11 +44,17 @@ export default function ChatStyleBackButton({
           ...CHAT_BACK_BUTTON_SURFACE,
           alignItems: 'center',
           justifyContent: 'center',
+          overflow: 'hidden',
         },
+        Platform.OS === 'ios' &&
+          pressed && {
+            backgroundColor: 'rgba(255,255,255,0.14)',
+            borderColor: 'rgba(255,255,255,0.22)',
+          },
         style,
       ]}
     >
       <Ionicons name={icon} size={iconSize} color={tint} />
-    </TouchableOpacity>
+    </Pressable>
   );
 }
