@@ -81,6 +81,7 @@ class IncomingCallActivity : AppCompatActivity() {
     private var returnMainOnDismiss = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        ScreenOrientationHelper.applyPhonePortraitTabletAny(this)
         super.onCreate(savedInstanceState)
         returnMainOnDismiss = intent.getBooleanExtra(EXTRA_RETURN_MAIN_ON_DISMISS, false)
         val callIdFromIntent = intent.getStringExtra(EXTRA_CALL_ID) ?: ""

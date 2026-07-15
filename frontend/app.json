@@ -4,7 +4,7 @@
     "slug": "livi-video-chat",
     "scheme": "livi",
     "version": "1.1.20",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": false,

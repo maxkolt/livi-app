@@ -55,6 +55,7 @@ class OutgoingCallActivity : AppCompatActivity() {
     private var suppressMoveToBackOnUserLeaveHint = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        ScreenOrientationHelper.applyPhonePortraitTabletAny(this)
         super.onCreate(savedInstanceState)
         val closeImmediately = intent.getBooleanExtra(EXTRA_CLOSE_IMMEDIATELY, false)
         Log.d(TAG, "onCreate: closeImmediately=$closeImmediately callId=${intent.getStringExtra(EXTRA_CALL_ID) ?: ""} toUserId=${intent.getStringExtra(EXTRA_TO_USER_ID) ?: ""}")

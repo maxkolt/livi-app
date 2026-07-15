@@ -619,6 +619,8 @@ class MainActivity : ReactActivity() {
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    // Phones: portrait; tablets: any orientation (avoids letterbox when tablet is landscape).
+    ScreenOrientationHelper.applyPhonePortraitTabletAny(this)
     // При запуске по livi://decline-call — прозрачная тема: пользователь видит экран блокировки/лаунчер, не страницу приветствия.
     if (isDeclineCallIntent(intent)) {
       setTheme(R.style.Theme_App_Translucent)

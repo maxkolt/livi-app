@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform, Pressable, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from 'react-native-paper';
 import { FRIEND_ACTION_BUTTON, FRIEND_ACTION_ICON_SIZE, CHAT_BACK_BUTTON_SURFACE, TOUCH_HIT_OUTER } from '../constants/uiTokens';
@@ -27,34 +27,48 @@ export default function ChatStyleBackButton({
   const theme = useTheme();
   const tint = iconColor ?? ((theme.colors.onSurfaceVariant as string) || '#8A8F99');
 
+  // Outer View clips Android Ripple to borderRadius — overflow on Pressable alone
+  // often fails on OEM (square ripple past rounded corners).
   return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      hitSlop={{ top: TOUCH_HIT_OUTER, bottom: TOUCH_HIT_OUTER, left: TOUCH_HIT_OUTER, right: TOUCH_HIT_OUTER }}
-      android_ripple={{
-        color: 'rgba(255,255,255,0.14)',
-        borderless: false,
-      }}
-      style={({ pressed }) => [
+    <View
+      style={[
         {
           width: FRIEND_ACTION_BUTTON.width,
           height: FRIEND_ACTION_BUTTON.height,
           borderRadius: FRIEND_ACTION_BUTTON.borderRadius,
-          ...CHAT_BACK_BUTTON_SURFACE,
-          alignItems: 'center',
-          justifyContent: 'center',
           overflow: 'hidden',
+          ...CHAT_BACK_BUTTON_SURFACE,
         },
-        Platform.OS === 'ios' &&
-          pressed && {
-            backgroundColor: 'rgba(255,255,255,0.14)',
-            borderColor: 'rgba(255,255,255,0.22)',
-          },
         style,
       ]}
     >
-      <Ionicons name={icon} size={iconSize} color={tint} />
-    </Pressable>
+      <Pressable
+        onPress={onPress}
+        disabled={disabled}
+        hitSlop={{ top: TOUCH_HIT_OUTER, bottom: TOUCH_HIT_OUTER, left: TOUCH_HIT_OUTER, right: TOUCH_HIT_OUTER }}
+        android_ripple={
+          Platform.OS === 'android'
+            ? {
+                color: 'rgba(255,255,255,0.14)',
+                borderless: false,
+                foreground: true,
+              }
+            : undefined
+        }
+        style={({ pressed }) => [
+          {
+            flex: 1,
+            alignItems: 'center',
+            justifyContent: 'center',
+          },
+          Platform.OS === 'ios' &&
+            pressed && {
+              backgroundColor: 'rgba(255,255,255,0.14)',
+            },
+        ]}
+      >
+        <Ionicons name={icon} size={iconSize} color={tint} />
+      </Pressable>
+    </View>
   );
 }
