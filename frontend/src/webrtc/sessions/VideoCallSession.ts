@@ -331,8 +331,8 @@ export class VideoCallSession extends SimpleEventEmitter {
         roomId: pendingCallAccepted.roomId,
         myUserId: config.myUserId,
       });
-      // Очищаем сохраненное событие
-      (global as any).__pendingCallAcceptedRef.current = null;
+      // Не очищаем pending до успешного LiveKit connect — при remount/сбое сессия сможет повторить.
+      const pendingSnapshot = pendingCallAccepted;
       prefetchDirectCallIce('session:pending-call-accepted');
       // Microtask: раньше, чем setTimeout(0), чтобы инициатор начал Room.connect до конца текущего
       // React useEffect и уменьшил окно «ответивший один в комнате».
@@ -341,7 +341,7 @@ export class VideoCallSession extends SimpleEventEmitter {
       queueMicrotask(() => {
         if (this.ended || this.endCallInProgress || this.isGlobalCallTeardownInProgress()) {
           logger.info('[VideoCallSession] ⏭️ Pending call:accepted microtask cancelled during teardown', {
-            callId: pendingCallAccepted.callId,
+            callId: pendingSnapshot.callId,
             myUserId: config.myUserId,
           });
           return;
@@ -349,13 +349,13 @@ export class VideoCallSession extends SimpleEventEmitter {
         void this.ensureLocalTracks().catch((e) => {
           logger.warn('[VideoCallSession] ensureLocalTracks (pending call:accepted) failed', {
             error: (e as Error)?.message || String(e),
-            callId: pendingCallAccepted.callId,
+            callId: pendingSnapshot.callId,
           });
         });
-        void this.handleCallAccepted(pendingCallAccepted).catch((e) => {
+        void this.handleCallAccepted(pendingSnapshot).catch((e) => {
           logger.error('[VideoCallSession] ❌ Failed to handle pending call:accepted', {
             error: e,
-            callId: pendingCallAccepted.callId,
+            callId: pendingSnapshot.callId,
           });
         });
       });
@@ -3109,13 +3109,42 @@ export class VideoCallSession extends SimpleEventEmitter {
           myUserId: this.config.myUserId,
         });
       } else {
-        logger.info('[VideoCallSession] ⏭️ Another session is active, skipping call:accepted', {
+        const otherCallId =
+          typeof (globalSession as any).getCallId === 'function'
+            ? String((globalSession as any).getCallId() || '').trim()
+            : '';
+        const otherRoomState = (globalSession as any)?.room?.state as string | undefined;
+        const otherBusy =
+          otherRoomState === 'connected' ||
+          otherRoomState === 'connecting' ||
+          otherRoomState === 'reconnecting';
+        const sameCall = !!callId && otherCallId === String(callId);
+        if (sameCall && otherBusy) {
+          logger.info('[VideoCallSession] ⏭️ Another session is active for same call, skipping call:accepted', {
+            callId,
+            roomName: targetRoomName,
+            otherRoomState,
+            myUserId: this.config.myUserId,
+          });
+          this.detachFromCall();
+          return;
+        }
+        // Другая сессия жива, но не к этому звонку / ещё не подключается — забираем ref,
+        // иначе remount глотает первый accept.
+        if (globalSessionRef && typeof globalSessionRef.current !== 'undefined') {
+          globalSessionRef.current = this;
+        }
+        logger.info('[VideoCallSession] Reclaimed global session ref from idle/mismatched session', {
           callId,
-          roomName: targetRoomName,
+          otherCallId: otherCallId || null,
+          otherRoomState: otherRoomState || null,
           myUserId: this.config.myUserId,
         });
-        this.detachFromCall();
-        return;
+        try {
+          if (typeof (globalSession as any).detachFromCall === 'function') {
+            (globalSession as any).detachFromCall();
+          }
+        } catch (_) {}
       }
     }
     
@@ -5579,6 +5608,16 @@ export class VideoCallSession extends SimpleEventEmitter {
       this.lastLiveKitToken = token;
       this.roomConnectedAt = Date.now();
       this.livekitConnectedAt = this.roomConnectedAt;
+      try {
+        const pending = (global as any).__pendingCallAcceptedRef?.current;
+        const pendingCallId = pending ? String(pending?.callId ?? '').trim() : '';
+        if (pendingCallId && this.callId && pendingCallId === String(this.callId)) {
+          (global as any).__pendingCallAcceptedRef.current = null;
+          logger.info('[VideoCallSession] Cleared pending call:accepted after LiveKit connect', {
+            callId: pendingCallId,
+          });
+        }
+      } catch (_) {}
       this.scheduleIceTransportLogging(room, options?.reason ? `connect:${options.reason}` : 'connect');
       this.scheduleRemoteMediaWatchdog({
         url,
@@ -6298,6 +6337,10 @@ export class VideoCallSession extends SimpleEventEmitter {
     this.isDisconnecting = true;
     this.disconnectReason = reason;
     this.connectRequestId++;
+    // Сразу глушим входящие SDP: иначе offer от SFU после ухода партнёра
+    // доезжает до createAnswer параллельно с leave/close → "Called in wrong state: stable".
+    // PC не закрываем здесь — это сделает room.disconnect() в правильном порядке (leave → close).
+    this.abortIncomingSdpNegotiation(room);
     
     // КРИТИЧНО: Создаем промис, который разрешится только когда комната полностью отключится
     // Это гарантирует, что все ресурсы (включая ping/pong handlers) будут очищены перед новым подключением
@@ -6388,21 +6431,6 @@ export class VideoCallSession extends SimpleEventEmitter {
           }
           return;
         }
-        // Отписываем локальные треки без ожидания: чтобы SDK при disconnect() не обновлял mute
-        // у уже отписанных треков. Не ждём завершения unpublish, иначе ренегоциация успевает
-        // дойти до setLocalDescription(answer) и даёт "Called in wrong state: stable".
-        const lp = roomToDisconnect.localParticipant as any;
-        if (lp) {
-          const unpublishAll = (pubs: Map<string, any> | undefined) => {
-            if (!pubs || typeof pubs.values !== 'function') return;
-            for (const pub of pubs.values()) {
-              const track = pub?.track;
-              if (track) (lp.unpublishTrack(track, true) as Promise<void>).catch(() => {});
-            }
-          };
-          unpublishAll(lp.videoTrackPublications);
-          unpublishAll(lp.audioTrackPublications);
-        }
         try {
           // Повторная проверка: за время ожидания комната могла перейти в reconnecting (уход в фон) — тогда disconnect() бросает "Received leave request while trying to (re)connect".
           if (roomToDisconnect.state !== 'connected') {
@@ -6410,6 +6438,9 @@ export class VideoCallSession extends SimpleEventEmitter {
             this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:not_connected_before_disconnect');
             return;
           }
+          // Не вызываем unpublish перед disconnect(): он стартует renegotiation (createAnswer),
+          // а параллельный close PC даёт "Failed to set local answer sdp: Called in wrong state: stable".
+          // LiveKit.disconnect() сам делает leave → close engine/PC → затем stopTracks без SDP race.
           await roomToDisconnect.disconnect();
           logger.debug('[VideoCallSession] Room disconnect() called, waiting for Disconnected event');
           // Короткая задержка перед forceDisposeRoom: даём движку LiveKit обновить состояние (closed/transports),
@@ -6419,11 +6450,23 @@ export class VideoCallSession extends SimpleEventEmitter {
         } catch (e: any) {
           const errorMessage = e?.message || String(e || '');
           const isLeaveWhileReconnect = /leave request|LeaveRequest|reconnect/i.test(errorMessage);
-          if (!errorMessage.includes('before connected') && !errorMessage.includes('already disconnected') && !isLeaveWhileReconnect) {
+          const isTeardownSdpRace =
+            /wrong state:\s*stable|unable to set answer|NegotiationError/i.test(errorMessage);
+          if (
+            !errorMessage.includes('before connected') &&
+            !errorMessage.includes('already disconnected') &&
+            !isLeaveWhileReconnect &&
+            !isTeardownSdpRace
+          ) {
             logger.warn('[VideoCallSession] Error disconnecting room', e);
           }
           if (isLeaveWhileReconnect) {
             logger.debug('[VideoCallSession] Leave during reconnect (e.g. app to background) — ignored', { state: roomToDisconnect.state });
+          }
+          if (isTeardownSdpRace) {
+            logger.debug('[VideoCallSession] Ignored teardown SDP race during disconnect', {
+              error: errorMessage,
+            });
           }
           this.forceDisposeRoom(roomToDisconnect, 'disconnectRoom:after_catch');
         }
@@ -6465,6 +6508,35 @@ export class VideoCallSession extends SimpleEventEmitter {
     return this.disconnectPromise;
   }
 
+  /** Stop accepting remote SDP once teardown begins (prevents late createAnswer during disconnect). */
+  private abortIncomingSdpNegotiation(room: Room): void {
+    try {
+      const client = (room as any)?.engine?.client;
+      if (!client) return;
+      client.onOffer = undefined;
+      client.onAnswer = undefined;
+      client.onTrickle = undefined;
+    } catch {
+      // Best-effort only — disconnect() still runs.
+    }
+  }
+
+  /** Sync-close publisher/subscriber PCs after leave / on force dispose. */
+  private abortPeerConnectionNegotiation(room: Room): void {
+    try {
+      this.abortIncomingSdpNegotiation(room);
+      const engine: any = (room as any)?.engine;
+      if (!engine) return;
+      const pcm = engine.pcManager;
+      try { pcm?.publisher?.close?.(); } catch {}
+      try { pcm?.subscriber?.close?.(); } catch {}
+      try { pcm?.close?.(); } catch {}
+      try { engine.pcManager = undefined; } catch {}
+    } catch {
+      // Best-effort only.
+    }
+  }
+
   // livekit-client иногда оставляет активный ws/engine на мобилках даже после room.disconnect().
   // Это приводит к WARN "ping timeout triggered" и "connection state mismatch" после завершения звонка.
   // Закрываем в порядке: транспорт → сокет/ws → signalClient → engine, чтобы состояние было согласованным.
@@ -6474,7 +6546,8 @@ export class VideoCallSession extends SimpleEventEmitter {
       try { (room as any)?.removeAllListeners?.(); } catch {}
 
       const engine: any = (room as any)?.engine;
-      const signalClient = engine?.signalClient;
+      this.abortPeerConnectionNegotiation(room);
+      const signalClient = engine?.signalClient ?? engine?.client;
       // Порядок: сначала транспорт и сокет, затем signalClient, затем engine — чтобы не было "connection state mismatch".
       try { signalClient?.transport?.close?.(); } catch {}
       try { signalClient?.ws?.close?.(); } catch {}
@@ -6953,6 +7026,10 @@ export class VideoCallSession extends SimpleEventEmitter {
               });
               return;
             }
+
+            // Не принимать late SDP от SFU, пока ждём confirm disconnect — иначе createAnswer
+            // гоняется с последующим disconnectRoom и даёт "unable to set answer".
+            this.abortIncomingSdpNegotiation(room);
 
             // Сразу закрываем системный и in-app PiP при уходе партнёра (без задержки 1.5s — UX).
             if (Platform.OS === 'android') {

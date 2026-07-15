@@ -4067,6 +4067,67 @@ export function requestCallAccepted(callId: string) {
   socket.emit('call:getAccepted', { callId });
 }
 
+/**
+ * Повторно запросить call:accepted, пока нет токена / LiveKit ещё не connected.
+ * Нужен, когда сокет/FCM доставили accept с задержкой — один emit часто не успевает.
+ */
+export function requestCallAcceptedWithRetry(
+  callId: string,
+  opts?: { delaysMs?: number[]; reason?: string },
+): void {
+  const id = String(callId || '').trim();
+  if (!id) return;
+  const delays = opts?.delaysMs ?? [0, 350, 900, 1800, 3200];
+  const reason = opts?.reason || 'retry';
+  delays.forEach((ms, attempt) => {
+    setTimeout(() => {
+      try {
+        const g = global as any;
+        const pending = g.__pendingCallAcceptedRef?.current;
+        const pendingCallId = pending ? String(pending?.callId || '').trim() : '';
+        const pendingHasToken =
+          pendingCallId === id && !!(pending as any)?.livekitToken;
+        const sess = g.__webrtcSessionRef?.current;
+        const sessCallId =
+          sess && typeof sess.getCallId === 'function'
+            ? String(sess.getCallId() || '').trim()
+            : '';
+        const roomState = sess?.room?.state as string | undefined;
+        const liveKitReady =
+          sessCallId === id &&
+          (roomState === 'connected' || roomState === 'connecting' || roomState === 'reconnecting');
+        if (liveKitReady) {
+          if (attempt === 0) {
+            logger.debug('[call:getAccepted] retry skipped — LiveKit already active', {
+              callId: id,
+              reason,
+              roomState,
+            });
+          }
+          return;
+        }
+        if (pendingHasToken && !liveKitReady) {
+          // Токен уже есть — ждём, что сессия его подхватит; лишний getAccepted не нужен.
+          return;
+        }
+        logger.info('[call:getAccepted] emit', {
+          callId: id,
+          reason,
+          attempt: attempt + 1,
+          delayMs: ms,
+        });
+        socket.emit('call:getAccepted', { callId: id });
+      } catch (e) {
+        logger.warn('[call:getAccepted] retry emit failed', {
+          callId: id,
+          reason,
+          error: (e as Error)?.message || String(e),
+        });
+      }
+    }, ms);
+  });
+}
+
 export function onCallIncoming(cb: (d: { callId: string; callKitId?: string; from: string; fromNick?: string; ts?: number | string; expiresAt?: number | string }) => void): () => void {
   const h = (d: any) => {
     logger.debug('Socket received call:incoming', { callId: d.callId, from: d.from, fromNick: d.fromNick });

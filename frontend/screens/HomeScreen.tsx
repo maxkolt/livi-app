@@ -102,7 +102,6 @@ import { warmAvatar, putThumb, putFull, getFull, clearAvatarCacheFor } from '../
 import {
   disposeDirectCallAudioPrewarm,
   prefetchDirectCallIce,
-  prewarmDirectCallAudioCapture,
 } from '../utils/directCallConnectPrewarm';
 import * as FileSystem from 'expo-file-system';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
@@ -1398,9 +1397,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     try {
       warmCallSignaling();
       prefetchDirectCallIce('home:direct-call-start');
-      if (Platform.OS === 'android' && media === 'audio') {
-        prewarmDirectCallAudioCapture('home:direct-call-start');
-      }
+      // Audio prewarm нельзя стартовать на исходящем: mic capture глушит native ringback
+      // (LiviOutgoingCallService). Prewarm mic — после call:accepted в App.tsx.
       pendingCancelRef.current = false;
       outgoingCallUserCanceledRef.current = false;
       lastOutgoingPeerIdRef.current = String(friend.id);

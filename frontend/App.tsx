@@ -15,7 +15,7 @@ import { View, Text, TextInput, Animated, TouchableOpacity, StyleSheet, Easing, 
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PanGestureHandler } from "react-native-gesture-handler";
-import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, declineCall, cancelCall, requestCallAccepted, ensureSocketConnected, warmCallSignaling, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, reportIncomingCallShown, emitPresenceUpdateIfChanged, beginEarlyIncomingCallAccept, getIncomingCallScreenState } from "./sockets/socket";
+import socket, { onCallIncoming, onCallTimeout, onCallDeclined, onCallCanceled, onCallAccepted, declineCall, cancelCall, requestCallAccepted, requestCallAcceptedWithRetry, ensureSocketConnected, warmCallSignaling, SOCKET_CONNECT_WAIT_MS, checkInviteLink, getCurrentUserId, onCurrentUserId, API_BASE, setOutgoingCallScreenVisible, setIncomingCallScreenVisible, setActiveVideoCall, reportIncomingCallShown, emitPresenceUpdateIfChanged, beginEarlyIncomingCallAccept, getIncomingCallScreenState } from "./sockets/socket";
 import { emitCloseIncoming, emitRequestCloseIncoming, emitCloseOutgoingCall, emitCallCancelledOnHome, emitCallEndedOnHome, emitCloseHomeModals, onRequestCloseIncoming, onCloseIncoming, applyCallEndedGlobalRefsOnce } from './utils/globalEvents';
 import { buildCallEndSocketPayload } from './utils/callEndPayload';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -228,14 +228,30 @@ function markAcceptedVideoCallNavigationInFlight(callId?: string | null): void {
   }, ACCEPTED_VIDEO_CALL_NAV_IN_FLIGHT_TTL_MS);
 }
 
+/** Reasons that mean WE are the caller waiting for accept — not the callee answer flow. */
+const CALLER_EXPECTED_ACCEPT_REASON_RE =
+  /outgoing|caller|pending-call-accepted|launch-pending|native-pending|socket-connect|app-active-pending|soft-accept/i;
+
+function isCallerExpectedAcceptReason(reason?: string | null): boolean {
+  return !!reason && CALLER_EXPECTED_ACCEPT_REASON_RE.test(String(reason));
+}
+
 /** reauth шлёт call:accepted для «висящей» сессии — на Home без контекста звонка снимаем её на сервере. */
 const staleCallEndSentIds = new Set<string>();
 function endStaleCallAcceptedOnServer(callId: string, data: unknown, reason: string) {
   const cid = String(callId || '').trim();
   if (!cid || endedCallIdsFromSocket.has(cid) || staleCallEndSentIds.has(cid)) return;
+  const d = (data || {}) as Record<string, unknown>;
+  // Полноценный accept с LiveKit-токенами нельзя «съедать» как stale — иначе первый accept убивает звонок.
+  if (d.livekitToken && (d.livekitRoomName || d.roomId)) {
+    logger.info('[App] skip stale call:end — livekit payload present', {
+      callId: cid,
+      reason,
+    });
+    return;
+  }
   staleCallEndSentIds.add(cid);
   setTimeout(() => staleCallEndSentIds.delete(cid), ENDED_CALL_IDS_TTL_MS);
-  const d = (data || {}) as Record<string, unknown>;
   const roomId = String(d.livekitRoomName ?? d.roomId ?? '').trim();
   try {
     logger.info('[App] call:end for stale call:accepted replay (no local call UI)', {
@@ -868,8 +884,8 @@ function AppContent() {
       LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
         if (callId && shouldRequestPendingCallAccepted(callId, 'native-event')) {
           logger.info('[App] LiviPendingCallAccepted: requesting call:accepted', { callId });
-          rememberExpectedCallAccepted(callId, 'native-pending-call-accepted-event');
-          try { requestCallAccepted(callId); } catch {}
+          rememberExpectedCallAccepted(callId, 'native-pending-call-accepted-event', 60_000);
+          try { requestCallAcceptedWithRetry(callId, { reason: 'native-pending-event' }); } catch {}
         }
       });
     });
@@ -2478,16 +2494,17 @@ function AppContent() {
           LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
             if (callId && shouldRequestPendingCallAccepted(callId, 'socket-connect-native-pending')) {
               logger.info('[App] Socket connected with pending call_accepted, requesting call:accepted', { callId });
-              rememberExpectedCallAccepted(callId, 'socket-connect-native-pending-call-accepted');
-              try { requestCallAccepted(callId); } catch {}
+              rememberExpectedCallAccepted(callId, 'socket-connect-native-pending-call-accepted', 60_000);
+              try { requestCallAcceptedWithRetry(callId, { reason: 'socket-connect-native-pending' }); } catch {}
               return;
             }
             const refCallId = (global as any).__outgoingCallIdRef?.current;
             if (refCallId && shouldRequestPendingCallAccepted(refCallId, 'socket-connect-outgoing-fallback')) {
               logger.info('[App] Socket connected with outgoing callId ref (FCM fallback), requesting call:accepted', { callId: refCallId });
-              rememberExpectedCallAccepted(refCallId, 'socket-connect-outgoing-fallback');
-              (global as any).__outgoingCallIdRef.current = null;
-              try { requestCallAccepted(refCallId); } catch {}
+              // Не очищаем __outgoingCallIdRef до обработки call:accepted — иначе caller теряет контекст
+              // и навигация на VideoCall пропускается (calleeOwnsNavigation).
+              rememberExpectedCallAccepted(refCallId, 'socket-connect-outgoing-fallback', 60_000);
+              try { requestCallAcceptedWithRetry(refCallId, { reason: 'socket-connect-outgoing-fallback' }); } catch {}
             }
           });
         }, 400);
@@ -2841,8 +2858,8 @@ function AppContent() {
       LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
         if (callId && shouldRequestPendingCallAccepted(callId, 'launch-pending')) {
           logger.info('[App] Launch with pending call_accepted, requesting call:accepted', { callId });
-          rememberExpectedCallAccepted(callId, 'launch-pending-call-accepted');
-          try { requestCallAccepted(callId); } catch {}
+          rememberExpectedCallAccepted(callId, 'launch-pending-call-accepted', 60_000);
+          try { requestCallAcceptedWithRetry(callId, { reason: 'launch-pending' }); } catch {}
         }
       });
     };
@@ -2885,8 +2902,8 @@ function AppContent() {
           LiviAppModule?.getAndClearPendingCallAcceptedCallId?.()?.then?.((callId: string | null) => {
             if (callId && shouldRequestPendingCallAccepted(callId, 'app-active-pending')) {
               logger.info('[App] Pending call_accepted from FCM, requesting call:accepted', { callId });
-              rememberExpectedCallAccepted(callId, 'app-active-pending-call-accepted');
-              try { requestCallAccepted(callId); } catch {}
+              rememberExpectedCallAccepted(callId, 'app-active-pending-call-accepted', 60_000);
+              try { requestCallAcceptedWithRetry(callId, { reason: 'app-active-pending' }); } catch {}
             }
           });
           // Пропущенные, показанные из нативного кода (FCM call_ended) — обновить счётчик и бейдж (без дубля, если уже учли по сокету)
@@ -3082,22 +3099,6 @@ function AppContent() {
         return;
       }
 
-      const isCaller = hasMatchingOutgoing;
-      const myUserId = String(getCurrentUserId() || '').trim();
-      let peerUserId = String((data as any)?.fromUserId ?? '').trim() || undefined;
-      if (isCaller) {
-        if (!peerUserId || (myUserId && peerUserId === myUserId)) {
-          const outgoingPeer = String((global as any).__outgoingCallPeerUserIdRef?.current || '').trim();
-          if (outgoingPeer) peerUserId = outgoingPeer;
-        }
-      } else if (myUserId && peerUserId === myUserId) {
-        const incomingPeer =
-          String((global as any).__incomingAnswerPeerUserIdRef?.current || '').trim() ||
-          String(getIncomingCallScreenState().fromUserId || '').trim() ||
-          String(incoming?.from || '').trim() ||
-          undefined;
-        if (incomingPeer) peerUserId = incomingPeer;
-      }
       const gAccept = global as any;
       const incomingTransition = gAccept.__incomingAnswerTransitionRef?.current as
         | { callId?: string; expiresAt?: number }
@@ -3108,27 +3109,95 @@ function AppContent() {
         !!incomingTransition &&
         String(incomingTransition.callId || '') === callId &&
         Date.now() < Number(incomingTransition.expiresAt || 0);
-      const calleeOwnsNavigation =
+      const expectedPeek = readExpectedCallAccepted(callId, false);
+      const expectedIsCallerSide = isCallerExpectedAcceptReason(expectedPeek?.reason);
+      const outgoingPeerHint = String((global as any).__outgoingCallPeerUserIdRef?.current || '').trim();
+      const hasLivekitAcceptPayload =
+        !!(data as any)?.livekitToken &&
+        !!(String((data as any)?.livekitRoomName ?? (data as any)?.roomId ?? '').trim());
+      const myUserId = String(getCurrentUserId() || '').trim();
+      let peerUserId = String((data as any)?.fromUserId ?? '').trim() || undefined;
+      // Инициатор даже если __outgoingCallIdRef уже сброшен (FCM/getAccepted path).
+      let isCaller =
+        hasMatchingOutgoing ||
+        (expectedIsCallerSide && !hasIncomingContext && !incomingAnswerInFlight);
+      if (
         !isCaller &&
-        (hasIncomingContext || hasExpectedAcceptedContext || incomingAnswerInFlight);
-      const hasAcceptedContext =
+        !hasIncomingContext &&
+        !incomingAnswerInFlight &&
+        outgoingPeerHint &&
+        peerUserId &&
+        peerUserId === outgoingPeerHint
+      ) {
+        isCaller = true;
+      }
+      if (isCaller) {
+        if (!peerUserId || (myUserId && peerUserId === myUserId)) {
+          if (outgoingPeerHint) peerUserId = outgoingPeerHint;
+        }
+      } else if (myUserId && peerUserId === myUserId) {
+        const incomingPeer =
+          String((global as any).__incomingAnswerPeerUserIdRef?.current || '').trim() ||
+          String(getIncomingCallScreenState().fromUserId || '').trim() ||
+          String(incoming?.from || '').trim() ||
+          undefined;
+        if (incomingPeer) peerUserId = incomingPeer;
+      }
+      let calleeOwnsNavigation =
+        !isCaller &&
+        (hasIncomingContext ||
+          incomingAnswerInFlight ||
+          (hasExpectedAcceptedContext && !expectedIsCallerSide));
+      let hasAcceptedContext =
         alreadyOnVideoCall ||
         hasMatchingOutgoing ||
         hasIncomingContext ||
         hasExpectedAcceptedContext ||
-        incomingAnswerInFlight;
+        incomingAnswerInFlight ||
+        isCaller;
+      if (!hasAcceptedContext && hasLivekitAcceptPayload && (peerUserId || outgoingPeerHint)) {
+        // Soft recover: полный accept с токенами — не дропать, а открыть VideoCall.
+        hasAcceptedContext = true;
+        if (!peerUserId && outgoingPeerHint) peerUserId = outgoingPeerHint;
+        if (!isCaller && !hasIncomingContext && !incomingAnswerInFlight) {
+          isCaller = !!outgoingPeerHint || expectedIsCallerSide;
+        }
+        calleeOwnsNavigation =
+          !isCaller &&
+          (hasIncomingContext ||
+            incomingAnswerInFlight ||
+            (hasExpectedAcceptedContext && !expectedIsCallerSide));
+        rememberExpectedCallAccepted(callId, isCaller ? 'soft-accept-caller' : 'soft-accept-callee', 60_000);
+        logger.info('[App] call:accepted soft-recovered (livekit payload, weak prior context)', {
+          callId,
+          isCaller,
+          peerUserId: peerUserId || null,
+        });
+      }
       if (!hasAcceptedContext) {
-        logger.info('[App] ⏭️ call:accepted ignored (no active call context)', {
+        logger.info('[App] ⏭️ call:accepted deferred (no active call context)', {
           callId,
           currentRouteName,
           currentOutgoing: currentOutgoing ?? null,
           incomingCallId: incomingCallIdRef.current,
-          isCaller,
+          hasLivekitAcceptPayload,
         });
         disposeDirectCallAudioPrewarm('app:accepted-no-context');
-        if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
-        if (callId && !alreadyOnVideoCall) {
-          endStaleCallAcceptedOnServer(callId, data, 'no-active-call-context');
+        // Не чистим pending и не шлём call:end, если есть LiveKit payload — иначе первый accept убивает звонок.
+        if (!(global as any).__pendingCallAcceptedRef) {
+          (global as any).__pendingCallAcceptedRef = { current: null };
+        }
+        if (hasLivekitAcceptPayload) {
+          (global as any).__pendingCallAcceptedRef.current = data;
+          rememberExpectedCallAccepted(callId, 'soft-accept-stash', 60_000);
+          logger.info('[App] 💾 Stashed call:accepted without UI context for later connect', {
+            callId,
+          });
+        } else {
+          if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
+          if (callId && !alreadyOnVideoCall) {
+            endStaleCallAcceptedOnServer(callId, data, 'no-active-call-context');
+          }
         }
         return;
       }
@@ -3136,7 +3205,10 @@ function AppContent() {
       if (isCaller && callId && currentOutgoing != null && String(currentOutgoing) !== String(callId)) {
         logger.info('[App] ⏭️ call:accepted ignored (callId not current outgoing)', { callId, currentOutgoing });
         disposeDirectCallAudioPrewarm('app:accepted-wrong-outgoing');
-        if ((global as any).__pendingCallAcceptedRef) (global as any).__pendingCallAcceptedRef.current = null;
+        // Не очищаем pending с токеном — может быть гонка двух callId UI.
+        if (!hasLivekitAcceptPayload && (global as any).__pendingCallAcceptedRef) {
+          (global as any).__pendingCallAcceptedRef.current = null;
+        }
         return;
       }
       readExpectedCallAccepted(callId, true);

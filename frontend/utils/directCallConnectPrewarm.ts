@@ -44,6 +44,12 @@ export function prefetchDirectCallIce(reason: string): void {
     });
 }
 
+/**
+ * Поднять mic заранее для быстрого publish.
+ * Не вызывать во время native outgoing ringback (LiviOutgoingCallService) —
+ * createLocalTracks забирает audio focus и глушит MediaPlayer. Для caller —
+ * после call:accepted; для callee — на answer / incoming screen.
+ */
 export function prewarmDirectCallAudioCapture(reason: string): void {
   if (Platform.OS === 'android') {
     void probeNativeCallAudioRoutes()

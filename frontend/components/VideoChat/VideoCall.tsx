@@ -76,6 +76,7 @@ import socket, {
   setActiveVideoCall,
   onConnected,
   emitPresenceUpdateIfChanged,
+  requestCallAcceptedWithRetry,
 } from '../../sockets/socket';
 import { activateKeepAwakeAsync, deactivateKeepAwakeAsync } from '../../utils/keepAwake';
 import {
@@ -3442,6 +3443,24 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             existingCallId,
             friendId,
           });
+          // Если microtask сорвался / сессия застряла — через ~1.8с fallback + getAccepted retry.
+          setTimeout(() => {
+            try {
+              if (typeof session.isEnded === 'function' && session.isEnded()) return;
+              const state = (session as any)?.room?.state as string | undefined;
+              if (state === 'connected' || state === 'connecting' || state === 'reconnecting') return;
+              logger.warn('[VideoCall] Pending accept connect stalled — fallback initiator connect', {
+                existingCallId,
+                roomState: state || null,
+              });
+              try {
+                requestCallAcceptedWithRetry(String(existingCallId), { reason: 'video-call-pending-stall' });
+              } catch {}
+              session.connectAsInitiatorAfterAccepted(existingCallId, friendId).catch((e) => {
+                logger.error('[VideoCall] Fallback connectAsInitiatorAfterAccepted failed:', e);
+              });
+            } catch (_) {}
+          }, 1800);
           return;
         }
 
@@ -3496,6 +3515,20 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
         logger.info('[VideoCall] Callee: call:accepted already pending in session ctor, skipping acceptCall', {
           callId: incomingCallId,
         });
+        setTimeout(() => {
+          try {
+            if (typeof session.isEnded === 'function' && session.isEnded()) return;
+            const state = (session as any)?.room?.state as string | undefined;
+            if (state === 'connected' || state === 'connecting' || state === 'reconnecting') return;
+            logger.warn('[VideoCall] Callee pending accept stalled — retry acceptCall', {
+              callId: incomingCallId,
+              roomState: state || null,
+            });
+            session.acceptCall(incomingCallId, fromUserId).catch((e) => {
+              logger.error('[VideoCall] Callee stalled acceptCall retry failed:', e);
+            });
+          } catch (_) {}
+        }, 1800);
         return;
       }
 

@@ -6,7 +6,7 @@ import { Platform, NativeModules } from 'react-native';
 import { logger } from './logger';
 import { setIncomingCallScreenVisible } from '../sockets/socket';
 import { loadLang, t } from './i18n';
-import { prefetchDirectCallIce, prewarmDirectCallAudioCapture } from './directCallConnectPrewarm';
+import { prefetchDirectCallIce } from './directCallConnectPrewarm';
 import {
   type DirectCallMediaHint,
   setCallMediaHint,
@@ -522,9 +522,8 @@ export function setOutgoingCallTimeoutMs(ms: number): void {
  */
 export function displayOutgoingCallImmediate(toUserId: string, toNick?: string, hasVideo = true): void {
   prefetchDirectCallIce('callKeep:outgoing-immediate');
-  if (!hasVideo) {
-    prewarmDirectCallAudioCapture('callKeep:outgoing-immediate');
-  }
+  // Не делаем audio prewarm здесь: createLocalTracks на mic забирает audio focus и глушит
+  // ringback LiviOutgoingCallService (MediaPlayer VOICE_COMMUNICATION). Prewarm — после accept в App.
   logger.info('[outgoing] displayOutgoingCallImmediate called', {
     toUserId,
     toNick: toNick ?? '',
