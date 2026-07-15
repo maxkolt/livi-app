@@ -1,10 +1,8 @@
 /**
  * Same behavior as @livekit/react-native registerGlobals(), but without
- * unconditional require('promise.allsettled') / array.prototype.at shims
- * that can crash release builds (unknown module IDs in Hermes).
+ * unconditional require('promise.allsettled') / array.prototype.at /
+ * well-known-symbols that can crash Hermes / Metro (unknown module IDs).
  */
-import 'well-known-symbols/Symbol.asyncIterator/auto';
-import 'well-known-symbols/Symbol.iterator/auto';
 import './MediaRecorderShim';
 import { registerGlobals as webrtcRegisterGlobals } from '@livekit/react-native-webrtc';
 import { setupURLPolyfill } from 'react-native-url-polyfill';

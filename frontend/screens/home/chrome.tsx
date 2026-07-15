@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
-  Dimensions,
   Easing,
   Platform,
   Pressable,
@@ -9,6 +8,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
   ViewStyle,
 } from 'react-native';
@@ -22,6 +22,9 @@ import Svg, {
 } from 'react-native-svg';
 import {
   ANIMATED_BORDER_WIDTH,
+  SEARCH_CTA_MAX_WIDTH,
+  SEARCH_CTA_TABLET_MAX_WIDTH,
+  SEARCH_CTA_TABLET_MIN_WIDTH,
   BRAND_3D_LAYERS,
   BRAND_3D_STEP_X,
   BRAND_3D_STEP_Y,
@@ -454,9 +457,6 @@ export const BrandTitleWithOutline: React.FC<BrandTitleWithOutlineProps> = ({ is
 );
 
 /* ================= Animated Border Button Component ================= */
-const { width: screenWidth } = Dimensions.get('window');
-
-
 type AnimatedBorderButtonProps = {
   isDark: boolean;
   onPress: () => void;
@@ -476,6 +476,7 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
   disabled = false,
   onDisabledPress,
 }) => {
+  const { width: windowWidth } = useWindowDimensions();
   const [blurIntensity, setBlurIntensity] = useState<number>(isDark ? 15 : 20);
   const titanOpacity = useRef(new Animated.Value(0.25)).current;
   const blockedFlashOpacity = useRef(new Animated.Value(0)).current;
@@ -483,8 +484,11 @@ export const AnimatedBorderButton: React.FC<AnimatedBorderButtonProps> = ({
 
   const titanColor = isDark ? '#8A8F99' : '#3B4453';
 
-  const buttonWidth = Platform.OS === "ios" ? screenWidth - 60 : screenWidth - 40;
-  const buttonHeight = Platform.OS === "ios" ? 60 : 50;
+  const sideInset = Platform.OS === 'ios' ? 60 : 40;
+  const maxCtaWidth =
+    windowWidth >= SEARCH_CTA_TABLET_MIN_WIDTH ? SEARCH_CTA_TABLET_MAX_WIDTH : SEARCH_CTA_MAX_WIDTH;
+  const buttonWidth = Math.min(Math.max(0, windowWidth - sideInset), maxCtaWidth);
+  const buttonHeight = Platform.OS === 'ios' ? 60 : 50;
   const borderRadius = 12;
 
   const triggerBlockedFeedback = useCallback(() => {

@@ -211,7 +211,7 @@ function HomeWelcomeViewInner({
           </Text>
           <View
             style={{
-              width: Math.max(0, layoutWidth - 36),
+              width: Math.min(Math.max(0, layoutWidth - 36), 400),
               alignSelf: 'center',
               paddingHorizontal: 2,
             }}

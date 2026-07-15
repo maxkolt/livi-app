@@ -1,7 +1,7 @@
 /**
  * Inline polyfills used by LiveKit / sdp-transform.
- * Avoids dynamic require('array.prototype.at') / promise.allsettled in release Hermes
- * (Play crash: Requiring unknown module "3236").
+ * Avoids dynamic require('array.prototype.at') / promise.allsettled / well-known-symbols
+ * in Hermes (Play crash / Metro: Requiring unknown module "NNNN").
  */
 export function ensureCoreJsPolyfills(): void {
   if (typeof Promise.allSettled !== 'function') {
@@ -29,6 +29,25 @@ export function ensureCoreJsPolyfills(): void {
       }
       return this[relativeIndex];
     };
+  }
+
+  // LiveKit used to `import 'well-known-symbols/Symbol.*.auto'` — that package
+  // is a frequent source of Metro "unknown module NNN" after Fast Refresh.
+  try {
+    const Sym = globalThis.Symbol as SymbolConstructor & {
+      asyncIterator?: symbol;
+      iterator?: symbol;
+    };
+    if (typeof Sym === 'function') {
+      if (!Sym.asyncIterator) {
+        (Sym as { asyncIterator: symbol }).asyncIterator = Sym.for('Symbol.asyncIterator');
+      }
+      if (!Sym.iterator) {
+        (Sym as { iterator: symbol }).iterator = Sym.for('Symbol.iterator');
+      }
+    }
+  } catch {
+    // ignore
   }
 }
 

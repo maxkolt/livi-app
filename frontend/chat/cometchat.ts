@@ -58,6 +58,28 @@ function emitCometChatProblem(source: string, title: string, message: string, ui
   lastCometChatStatusKey = key;
   lastCometChatStatusAt = now;
   logger.warn('[CometChat]', { source, title, message, uid });
+
+  // Free-plan Create User quota: don't dump raw API error on Home welcome.
+  // App works without chat; surface a short notice only when user opens DM.
+  if (isCometChatQuotaError({ message })) {
+    trackReleaseEvent('cometchat_quota', {
+      userId: uid || null,
+      source,
+      title,
+      message,
+    });
+    if (source === 'open-dm') {
+      emitCometChatStatus({
+        kind: 'info',
+        title: 'Чат временно недоступен',
+        message: 'Сервис сообщений достиг лимита. Попробуйте позже.',
+        userId: uid,
+        source,
+      });
+    }
+    return;
+  }
+
   if (source === 'login' || title.toLowerCase().includes('login failed')) {
     trackReleaseError('cometchat_login_failed', message, {
       userId: uid || null,

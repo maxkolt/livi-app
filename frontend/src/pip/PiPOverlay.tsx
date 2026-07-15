@@ -23,6 +23,7 @@ import {
   pipInAppBarEnteredFromAudioOnly,
 } from './pipPlaceholderOnly';
 import { resolvePiPLocalMutedState, setUserSelectedCallAudioRoute } from '../../utils/activeCallSession';
+import { displayAvatarLetter } from '../../screens/home/friendHelpers';
 import {
   setPersistedCallAudioRoute,
   prepareDirectCallVideoExpandFromInAppPiP,
@@ -614,7 +615,7 @@ function PipPlaceholder({
       ) : (
         <View style={[styles.pipAvatarFallback, avatarStyle, { backgroundColor: 'rgba(255,255,255,0.14)' }]}>
           <Text style={[styles.pipAvatarText, compact && styles.pipAvatarTextCompact]} numberOfLines={1}>
-            {name ? name.trim().slice(0, 1).toUpperCase() : '?'}
+            {name ? displayAvatarLetter(name) : '?'}
           </Text>
         </View>
       )}

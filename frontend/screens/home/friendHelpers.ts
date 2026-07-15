@@ -2,9 +2,55 @@ import type { Friend } from './types';
 
 export const displayName = (name?: string) => (name && name.trim().length ? name : '—');
 
+/**
+ * Первый графемный символ ника для placeholder-аватара.
+ * Буква → UPPERCASE; emoji (в т.ч. ZWJ / skin tone) → как есть, без обрезки на половину.
+ */
 export const displayAvatarLetter = (name?: string) => {
   const n = (name || '').trim();
-  return n ? n.slice(0, 1).toUpperCase() : '—';
+  if (!n) return '—';
+
+  let glyph = '';
+  try {
+    const Segmenter = (Intl as any)?.Segmenter;
+    if (typeof Segmenter === 'function') {
+      const seg = new Segmenter(undefined, { granularity: 'grapheme' });
+      const first = Array.from(seg.segment(n) as Iterable<{ segment: string }>)[0]?.segment;
+      if (first) glyph = first;
+    }
+  } catch {
+    // fall through
+  }
+
+  if (!glyph) {
+    const chars = Array.from(n);
+    glyph = chars[0] || '—';
+    let i = 1;
+    while (i < chars.length) {
+      const code = chars[i].codePointAt(0) ?? 0;
+      const prev = chars[i - 1]?.codePointAt(0) ?? 0;
+      // VS16, skin tones, keycap, ZWJ continuation
+      if (
+        code === 0xfe0f ||
+        code === 0x20e3 ||
+        code === 0x200d ||
+        (code >= 0x1f3fb && code <= 0x1f3ff) ||
+        prev === 0x200d
+      ) {
+        glyph += chars[i];
+        i += 1;
+        continue;
+      }
+      break;
+    }
+  }
+
+  try {
+    if (/^\p{L}$/u.test(glyph)) return glyph.toUpperCase();
+  } catch {
+    if (/^[a-zA-Zа-яА-ЯёЁ]$/.test(glyph)) return glyph.toUpperCase();
+  }
+  return glyph;
 };
 
 export const mapToFriend = (u: any): Friend => {
@@ -148,6 +194,6 @@ export function getFriendDisplay(f: Friend) {
   const hasNick = rawNick.length > 0;
   const hasAvatar = !!(f.avatarVer && f.avatarVer > 0 && f.avatarThumbB64);
   const displayNameValue = hasNick ? rawNick : '—';
-  const avatarLetter = !hasAvatar && hasNick ? rawNick.slice(0, 1).toUpperCase() : '';
+  const avatarLetter = !hasAvatar && hasNick ? displayAvatarLetter(rawNick) : '';
   return { displayName: displayNameValue, avatarLetter, hasAvatar };
 }

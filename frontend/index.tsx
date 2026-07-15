@@ -1,6 +1,4 @@
 import './polyfills/ensureCoreJsPolyfills';
-import 'well-known-symbols/Symbol.asyncIterator/auto';
-import 'well-known-symbols/Symbol.iterator/auto';
 import { safeRegisterLiveKitGlobals } from './livekit/safeRegisterGlobals';
 
 try {

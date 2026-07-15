@@ -95,3 +95,8 @@ export const FRIENDS_CACHE_KEY_LEGACY = 'friends_cache_v1';
 export const FRIENDS_CACHE_PREFIX = 'friends_cache_v1';
 
 export const CHAT_OPEN_DEBOUNCE_MS = 220;
+
+/** CTA «Начать поиск»: на телефоне компактнее, на планшете шире (но не edge-to-edge). */
+export const SEARCH_CTA_MAX_WIDTH = 360;
+export const SEARCH_CTA_TABLET_MAX_WIDTH = 520;
+export const SEARCH_CTA_TABLET_MIN_WIDTH = 600;

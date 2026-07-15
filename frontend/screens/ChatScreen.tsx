@@ -38,6 +38,7 @@ import {
   FlatList as GHFlatList,
 } from "react-native-gesture-handler";
 import { onCloseIncoming, emitCloseIncoming, onCometChatStatus } from '../utils/globalEvents';
+import { displayAvatarLetter } from './home/friendHelpers';
 import socket from '../sockets/socket';
 import { Ionicons } from "@expo/vector-icons";
 import { useAppTheme } from "../theme/ThemeProvider";
@@ -3051,11 +3052,9 @@ export default function ChatScreen({ route, navigation }: Props) {
       try { loop.stop(); } catch {}
     };
   }, [voiceIsRecording, recordViz]);
-  // КРИТИЧНО: firstLetter используется ТОЛЬКО для аватара (headerInitial), НЕ для текста
-  // Для текста используем peerNameState (полный никнейм)
-  const firstLetter = (s?: string) => (s?.trim()?.[0] || '').toUpperCase();
+  // КРИТИЧНО: headerInitial — только глиф для аватара (буква/emoji), не полный текст ника
   const [peerNameState, setPeerNameState] = useState<string>(peerNameParam);
-  const headerInitial = peerNameState ? firstLetter(peerNameState) : '--'; // Только для аватара!
+  const headerInitial = peerNameState ? displayAvatarLetter(peerNameState) : '--';
   const headerPlaceholder = '--'; // Всегда показываем -- если нет аватара
 
   // Header будет объявлен ниже (после всех helper-функций), чтобы не было "используется до объявления".

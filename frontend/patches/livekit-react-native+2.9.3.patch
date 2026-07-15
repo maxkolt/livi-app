@@ -17,7 +17,17 @@ diff --git a/lib/commonjs/index.js b/lib/commonjs/index.js
 index 0000000..1111111 100644
 --- a/lib/commonjs/index.js
 +++ b/lib/commonjs/index.js
-@@ -76,14 +76,35 @@ function fixWebrtcAdapter() {
+@@ -42,8 +42,6 @@ Object.defineProperty(exports, "RNKeyProvider", {
+   get: function () {
+     return _RNKeyProvider.default;
+   }
+ });
+-require("well-known-symbols/Symbol.asyncIterator/auto");
+-require("well-known-symbols/Symbol.iterator/auto");
+ require("./polyfills/MediaRecorderShim");
+ require("./polyfills/EncoderDecoderTogether.min.js");
+ var _reactNativeWebrtc = require("@livekit/react-native-webrtc");
+@@ -76,14 +74,35 @@ function fixWebrtcAdapter() {
    }
  }
  function shimPromiseAllSettled() {
@@ -63,7 +73,13 @@ diff --git a/lib/module/index.js b/lib/module/index.js
 index 0000000..1111111 100644
 --- a/lib/module/index.js
 +++ b/lib/module/index.js
-@@ -76,14 +76,35 @@ function fixWebrtcAdapter() {
+@@ -1,5 +1,3 @@
+-import 'well-known-symbols/Symbol.asyncIterator/auto';
+-import 'well-known-symbols/Symbol.iterator/auto';
+ import './polyfills/MediaRecorderShim';
+ import { registerGlobals as webrtcRegisterGlobals } from '@livekit/react-native-webrtc';
+ import { setupURLPolyfill } from 'react-native-url-polyfill';
+@@ -76,14 +74,35 @@ function fixWebrtcAdapter() {
    }
  }
  function shimPromiseAllSettled() {

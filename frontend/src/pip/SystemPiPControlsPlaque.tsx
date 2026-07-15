@@ -4,6 +4,7 @@ import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { usePiP } from './PiPContext';
 import { useResolvedImageUri } from '../../hooks/useResolvedImageUri';
 import { pipInAppBarEnteredFromAudioOnly } from './pipPlaceholderOnly';
+import { displayAvatarLetter } from '../../screens/home/friendHelpers';
 
 const BAR_H = 58;
 const BAR_RADIUS = BAR_H / 2;
@@ -151,13 +152,13 @@ function ActionButton({
 
 function PipAvatar({ avatarUri, name }: { avatarUri?: string | null; name: string }) {
   const [resolvedUri, ready] = useResolvedImageUri(avatarUri ?? '');
-  const initial = (name || '?').trim().charAt(0).toUpperCase();
+  const glyph = (name || '').trim() ? displayAvatarLetter(name) : '?';
   if (ready && resolvedUri) {
     return <Image source={{ uri: resolvedUri }} style={styles.avatarImage} />;
   }
   return (
     <View style={styles.avatarFallback}>
-      <Text style={styles.avatarInitial}>{initial}</Text>
+      <Text style={styles.avatarInitial}>{glyph}</Text>
     </View>
   );
 }
