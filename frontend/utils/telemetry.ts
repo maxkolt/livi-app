@@ -57,16 +57,4 @@ export function trackReleaseError(event: string, error: unknown, payload: Teleme
       toJsonSafe(normalized)
     );
   } catch {}
-
-  // Optional Sentry bridge: best effort, no hard dependency.
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const Sentry = require('@sentry/react-native');
-    if (Sentry?.captureException) {
-      Sentry.captureException(error instanceof Error ? error : new Error(errorMessage), {
-        tags: { livi_event: event },
-        extra: normalized,
-      });
-    }
-  } catch {}
 }
