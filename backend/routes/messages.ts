@@ -15,6 +15,7 @@ import {
   findLegacyMessageFriendshipId,
   findLegacyMessageForUser,
   markMessagesReadForUser,
+  normalizeIncomingImageUris,
   normalizeMessageIdBatch,
   removeLegacyFriendshipMessages,
   removeUnreadMessage,
@@ -62,6 +63,10 @@ function toFriendshipMessageSnapshot(message: any): any {
     timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp || Date.now()),
     read: !!message.read,
   };
+  if (Array.isArray(message.uris) && message.uris.length > 0) {
+    snapshot.uris = message.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10);
+    if (!snapshot.uri && snapshot.uris[0]) snapshot.uri = snapshot.uris[0];
+  }
   if (Array.isArray(message.reactions)) snapshot.reactions = message.reactions;
   if (message.replyTo && message.replyTo.id) snapshot.replyTo = message.replyTo;
   return snapshot;
@@ -156,6 +161,7 @@ router.post('/messages/send', async (req, res) => {
     const type = String(req.body?.type || '').trim() as 'text' | 'image' | 'audio' | 'sticker';
     const text = typeof req.body?.text === 'string' ? String(req.body.text) : undefined;
     const uri = typeof req.body?.uri === 'string' ? String(req.body.uri) : undefined;
+    const rawUris = Array.isArray(req.body?.uris) ? req.body.uris : undefined;
     const name = typeof req.body?.name === 'string' ? String(req.body.name) : undefined;
     const size = typeof req.body?.size === 'number' ? Number(req.body.size) : undefined;
     const duration = typeof req.body?.duration === 'number' ? Number(req.body.duration) : undefined;
@@ -201,13 +207,19 @@ router.post('/messages/send', async (req, res) => {
     const messageId = clientMessageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const timestamp = new Date();
 
+    const imageUris = type === 'image' ? normalizeIncomingImageUris({ uri, uris: rawUris }) : [];
+    if (type === 'image' && imageUris.length === 0) {
+      return res.status(400).json({ ok: false, error: 'invalid_uri' });
+    }
+    const primaryUri = type === 'image' ? imageUris[0] : uri;
+
     const messageItem: any = {
       id: messageId,
       from: new mongoose.Types.ObjectId(me),
       to: new mongoose.Types.ObjectId(to),
       type,
       text,
-      uri,
+      uri: primaryUri,
       name,
       size,
       duration,
@@ -218,6 +230,7 @@ router.post('/messages/send', async (req, res) => {
       timestamp,
       read: false,
     };
+    if (type === 'image' && imageUris.length > 1) messageItem.uris = imageUris;
     if (replyTo) messageItem.replyTo = replyTo;
 
     const createItem: any = {
@@ -227,7 +240,7 @@ router.post('/messages/send', async (req, res) => {
       to: messageItem.to,
       type,
       text,
-      uri,
+      uri: primaryUri,
       name,
       size,
       duration,
@@ -238,6 +251,7 @@ router.post('/messages/send', async (req, res) => {
       timestamp,
       read: false,
     };
+    if (type === 'image' && imageUris.length > 1) createItem.uris = imageUris;
     if (replyTo) createItem.replyTo = replyTo;
     try {
       await FriendshipMessageItem.create(createItem);
@@ -276,7 +290,7 @@ router.post('/messages/send', async (req, res) => {
           to,
           type,
           text,
-          uri,
+          uri: primaryUri,
           name,
           size,
           duration,
@@ -287,6 +301,7 @@ router.post('/messages/send', async (req, res) => {
           timestamp: timestamp.toISOString(),
           read: false,
         };
+        if (type === 'image' && imageUris.length > 1) payload.uris = imageUris;
         if (replyTo) payload.replyTo = replyTo;
         io.to(`u:${String(to)}`).emit('message:received', payload);
         return res.json({ ok: true, messageId, timestamp, delivered: true });
@@ -299,7 +314,7 @@ router.post('/messages/send', async (req, res) => {
         to,
         type,
         text,
-        uri,
+        uri: primaryUri,
         name,
         size,
         duration,
@@ -310,6 +325,7 @@ router.post('/messages/send', async (req, res) => {
         timestamp: timestamp.toISOString(),
         read: false,
       };
+      if (type === 'image' && imageUris.length > 1) messageData.uris = imageUris;
       if (replyTo) messageData.replyTo = replyTo;
       await OfflineMessage.create({
         recipientId: new mongoose.Types.ObjectId(to),

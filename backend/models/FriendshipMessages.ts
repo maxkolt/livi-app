@@ -20,7 +20,8 @@ export interface IMessageItem {
   to: mongoose.Types.ObjectId;
   type: 'text' | 'image' | 'audio' | 'sticker';
   text?: string; // Текст сообщения
-  uri?: string; // URL изображения
+  uri?: string; // URL изображения (или первое фото альбома)
+  uris?: string[]; // Альбом: до 10 URL в одном сообщении
   name?: string; // original filename (optional)
   size?: number; // bytes (optional)
   duration?: number; // seconds (optional, for audio)
@@ -71,6 +72,10 @@ const MessageItemSchema = new Schema<IMessageItem>({
   },
   uri: {
     type: String
+  },
+  uris: {
+    type: [String],
+    default: undefined
   },
   name: {
     type: String

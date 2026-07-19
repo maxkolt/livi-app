@@ -20,6 +20,8 @@ export interface IFriendshipMessageItem extends Document {
   type: 'text' | 'image' | 'audio' | 'sticker';
   text?: string;
   uri?: string;
+  /** Album: up to 10 image URLs in one message. `uri` stays as first for back-compat. */
+  uris?: string[];
   name?: string;
   size?: number;
   duration?: number;
@@ -47,6 +49,7 @@ const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
     type: { type: String, enum: ['text', 'image', 'audio', 'sticker'], required: true },
     text: String,
     uri: String,
+    uris: { type: [String], default: undefined },
     name: String,
     size: Number,
     duration: Number,

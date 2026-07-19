@@ -100,9 +100,35 @@ function toFriendshipMessageSnapshot(message: any): any {
     timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp || Date.now()),
     read: !!message.read,
   };
+  if (Array.isArray(message.uris) && message.uris.length > 0) {
+    snapshot.uris = message.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10);
+    if (!snapshot.uri && snapshot.uris[0]) snapshot.uri = snapshot.uris[0];
+  }
   if (Array.isArray(message.reactions)) snapshot.reactions = message.reactions;
   if (message.replyTo && message.replyTo.id) snapshot.replyTo = message.replyTo;
   return snapshot;
+}
+
+const MAX_IMAGE_ALBUM = 10;
+
+/** Normalize image album URIs from client payload (uris[] and/or uri). */
+export function normalizeIncomingImageUris(payload: { uri?: unknown; uris?: unknown }): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: unknown) => {
+    const s = String(raw || '').trim();
+    if (!s || seen.has(s)) return;
+    seen.add(s);
+    out.push(s);
+  };
+  if (Array.isArray(payload?.uris)) {
+    for (const u of payload.uris) {
+      push(u);
+      if (out.length >= MAX_IMAGE_ALBUM) break;
+    }
+  }
+  if (out.length === 0) push(payload?.uri);
+  return out;
 }
 
 const LEGACY_MESSAGE_ARRAYS: Array<{ field: string; type: 'text' | 'image' | 'audio' | 'sticker' }> = [
@@ -173,6 +199,9 @@ function legacyMessageToItem(friendshipId: mongoose.Types.ObjectId, message: any
     type,
     text: message.text,
     uri: message.uri,
+    uris: Array.isArray(message.uris)
+      ? message.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10)
+      : undefined,
     name: message.name,
     size: message.size,
     duration: message.duration,
@@ -295,13 +324,17 @@ export async function findLegacyMessageForUser(
 }
 
 function formatMessageForClient(msg: any) {
+  const uris = Array.isArray(msg.uris)
+    ? msg.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10)
+    : undefined;
   return {
     id: String(msg.id),
     from: msg.from?.toString?.() || String(msg.from),
     to: msg.to?.toString?.() || String(msg.to),
     type: msg.type,
     text: msg.text,
-    uri: msg.uri,
+    uri: msg.uri || (uris && uris[0]) || undefined,
+    ...(uris && uris.length > 1 ? { uris } : {}),
     name: msg.name,
     size: msg.size,
     duration: msg.duration,
@@ -499,6 +532,10 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       timestamp: message.timestamp,
       read: message.read
     };
+    if (Array.isArray(message.uris) && message.uris.length > 0) {
+      messageItem.uris = message.uris.map((u: any) => String(u || '').trim()).filter(Boolean).slice(0, 10);
+      if (!messageItem.uri) messageItem.uri = messageItem.uris[0];
+    }
     if (message.replyTo && typeof message.replyTo === 'object' && message.replyTo.id) {
       messageItem.replyTo = {
         id: String(message.replyTo.id),
@@ -514,7 +551,7 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       to: messageItem.to,
       type: message.type,
       text: message.text,
-      uri: message.uri,
+      uri: messageItem.uri,
       name: message.name,
       size: message.size,
       duration: message.duration,
@@ -525,6 +562,9 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp),
       read: !!message.read,
     };
+    if (Array.isArray(messageItem.uris) && messageItem.uris.length > 0) {
+      createPayload.uris = messageItem.uris;
+    }
     if (messageItem.replyTo) createPayload.replyTo = messageItem.replyTo;
     await FriendshipMessageItem.create(createPayload);
     await (friendship as any).addMessage(messageItem);
@@ -1020,6 +1060,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
     text?: string;
     type: 'text' | 'image' | 'audio' | 'sticker';
     uri?: string;
+    uris?: string[];
     name?: string;
     size?: number;
     duration?: number;
@@ -1043,6 +1084,13 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (payload.type !== 'text' && payload.type !== 'image' && payload.type !== 'audio' && payload.type !== 'sticker') {
         return ack?.({ ok: false, error: 'invalid_type' });
       }
+
+      const imageUris =
+        payload.type === 'image' ? normalizeIncomingImageUris(payload) : [];
+      if (payload.type === 'image' && imageUris.length === 0) {
+        return ack?.({ ok: false, error: 'invalid_uri' });
+      }
+      const primaryUri = payload.type === 'image' ? imageUris[0] : payload.uri;
 
       // Проверяем дружбу
       const isFriend = await areFriendsCached(me, payload.to);
@@ -1080,7 +1128,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         to: payload.to,
         type: payload.type,
         text: payload.text,
-        uri: payload.uri,
+        uri: primaryUri,
         name: payload.name,
         size: payload.size,
         duration: payload.duration,
@@ -1091,6 +1139,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         timestamp: new Date(),
         read: false
       };
+      if (payload.type === 'image' && imageUris.length > 1) {
+        message.uris = imageUris;
+      }
       if (payload.replyTo && typeof payload.replyTo === 'object' && payload.replyTo.id) {
         message.replyTo = {
           id: String(payload.replyTo.id),
@@ -1128,7 +1179,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         to: payload.to,
         type: payload.type,
         text: payload.text,
-        uri: payload.uri,
+        uri: primaryUri,
         name: payload.name,
         size: payload.size,
         duration: payload.duration,
@@ -1139,6 +1190,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         timestamp: message.timestamp.toISOString(),
         read: false
       };
+      if (payload.type === 'image' && imageUris.length > 1) {
+        emitPayload.uris = imageUris;
+      }
       if (message.replyTo) emitPayload.replyTo = message.replyTo;
 
       if (recipientOnline) {
@@ -1169,11 +1223,12 @@ function registerMessageHandlers(io: Server, sock: Socket) {
 
           const unreadCount = (unreadMessages.get(payload.to) || []).length;
           const msgType = payload.type === 'image' ? 'image' : payload.type === 'audio' ? 'audio' : payload.type === 'sticker' ? 'sticker' : 'text';
+          const albumCount = payload.type === 'image' ? imageUris.length : 0;
           const messagePreview =
             msgType === 'text'
               ? (typeof payload.text === 'string' ? String(payload.text).trim().slice(0, 80) : '')
               : msgType === 'image'
-                ? '[Фото]'
+                ? (albumCount > 1 ? `[Фото ×${albumCount}]` : '[Фото]')
                 : msgType === 'sticker'
                   ? '[Стикер]'
                   : '[Голосовое]';
@@ -1513,6 +1568,91 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       return ack?.({ ok: true });
     } catch (e: any) {
       console.error('[message:clear_chat] error:', e?.message || e);
+      return ack?.({ ok: false, error: 'server_error' });
+    }
+  });
+
+  /** ===== Обновление альбома фото (удалить одно фото из сообщения). Только отправитель. ===== */
+  sock.on('message:update_uris', async (payload: { messageId: string; uris?: string[] }, ack?: Function) => {
+    try {
+      const me = meId();
+      const messageId = String(payload?.messageId || '').trim();
+      if (!isOid(me)) return ack?.({ ok: false, error: 'unauthorized' });
+      if (!messageId) return ack?.({ ok: false, error: 'bad_request' });
+
+      const nextUris = normalizeIncomingImageUris({ uris: payload?.uris });
+      const meOid = new mongoose.Types.ObjectId(me);
+      let doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid })
+        .select('from type friendshipId uri uris')
+        .lean();
+      if (!doc) {
+        const legacyFriendshipId = await findLegacyMessageFriendshipId(messageId);
+        if (legacyFriendshipId) {
+          await backfillFriendshipMessageItems(legacyFriendshipId);
+          doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid })
+            .select('from type friendshipId uri uris')
+            .lean();
+        }
+      }
+      if (!doc) return ack?.({ ok: false, error: 'not_found_or_forbidden' });
+      if ((doc as any).type !== 'image') return ack?.({ ok: false, error: 'not_found_or_forbidden' });
+
+      const friendshipId = (doc as any).friendshipId;
+      const fr = await FriendshipMessages.findById(friendshipId).select('user1 user2').lean();
+      const u1 = fr ? String((fr as any).user1) : '';
+      const u2 = fr ? String((fr as any).user2) : '';
+
+      if (nextUris.length === 0) {
+        const del = await deleteMessagesForBothUsersBatch(me, [messageId]);
+        if (!del?.ok || !del.deletedIds?.length) {
+          return ack?.({ ok: false, error: del?.error || 'delete_failed' });
+        }
+        try {
+          const recipients = new Set<string>([me, u1, u2, ...(del.recipients || [])].filter(Boolean));
+          emitMessagesDeletedToParticipants(io, recipients, {
+            messageIds: del.deletedIds,
+            deletedBy: me,
+          });
+        } catch {}
+        return ack?.({ ok: true, messageId, deleted: true, uris: [] });
+      }
+
+      const primaryUri = nextUris[0];
+      const setDoc: any = { uri: primaryUri };
+      if (nextUris.length > 1) setDoc.uris = nextUris;
+      const unsetDoc: any = nextUris.length > 1 ? {} : { uris: '' };
+
+      await FriendshipMessageItem.updateOne(
+        { friendshipId, id: messageId },
+        {
+          $set: setDoc,
+          ...(Object.keys(unsetDoc).length ? { $unset: unsetDoc } : {}),
+        }
+      ).exec();
+
+      const lastSet: any = {
+        'lastMessage.uri': primaryUri,
+        lastActivity: new Date(),
+      };
+      if (nextUris.length > 1) lastSet['lastMessage.uris'] = nextUris;
+      await FriendshipMessages.updateOne(
+        { _id: friendshipId, 'lastMessage.id': messageId },
+        {
+          $set: lastSet,
+          ...(nextUris.length > 1 ? {} : { $unset: { 'lastMessage.uris': '' } }),
+        }
+      ).exec();
+
+      const payloadOut: any = {
+        messageId,
+        uri: primaryUri,
+        uris: nextUris.length > 1 ? nextUris : undefined,
+      };
+      if (u1) io.to(`u:${u1}`).emit('message:uris_updated', payloadOut);
+      if (u2) io.to(`u:${u2}`).emit('message:uris_updated', payloadOut);
+      return ack?.({ ok: true, ...payloadOut });
+    } catch (e: any) {
+      console.error('[message:update_uris] error:', e?.message || e);
       return ack?.({ ok: false, error: 'server_error' });
     }
   });
