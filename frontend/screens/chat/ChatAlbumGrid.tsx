@@ -41,10 +41,10 @@ function tapHaptic(immediate?: boolean) {
 type TileProps = {
   uri: string;
   index: number;
+  messageId: string;
   width?: number;
   height?: number;
   cols: number;
-  tileMeasured: boolean;
   selectionMode?: boolean;
   isTileSelected?: boolean;
   onPress: () => void;
@@ -55,16 +55,17 @@ type TileProps = {
 function AlbumTile({
   uri,
   index,
+  messageId,
   width,
   height,
   cols,
-  tileMeasured,
   selectionMode,
   isTileSelected,
   onPress,
   onLongPress,
 }: TileProps) {
   const scale = React.useRef(new Animated.Value(1)).current;
+  const flexBasis = `${Math.floor(100 / cols) - 1}%` as `${number}%`;
 
   const runScale = React.useCallback(
     (immediate: boolean, then?: () => void) => {
@@ -92,10 +93,12 @@ function AlbumTile({
       style={{
         width: width || undefined,
         height: height || undefined,
-        aspectRatio: tileMeasured ? undefined : 1,
-        flexGrow: tileMeasured ? 0 : 1,
-        flexBasis: tileMeasured ? undefined : `${Math.floor(100 / cols) - 1}%`,
+        aspectRatio: height ? undefined : 1,
+        flexGrow: width ? 0 : 1,
+        flexBasis: width ? undefined : flexBasis,
         borderRadius: 8,
+        overflow: "hidden",
+        backgroundColor: "rgba(255,255,255,0.08)",
         transform: [{ scale }],
       }}
     >
@@ -119,20 +122,18 @@ function AlbumTile({
           borderRadius: 8,
           overflow: "hidden",
           opacity: pressed ? 0.94 : 1,
-          backgroundColor: "rgba(255,255,255,0.08)",
         })}
       >
-        {tileMeasured ? (
-          <ExpoImage
-            source={{ uri }}
-            style={{ width: "100%", height: "100%" }}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            transition={Platform.OS === "android" ? 0 : 160}
-            recyclingKey={`album_tile_${index}_${uri.slice(-20)}`}
-            allowDownscaling
-          />
-        ) : null}
+        <ExpoImage
+          source={{ uri }}
+          style={{ width: "100%", height: "100%" }}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          transition={0}
+          priority="high"
+          recyclingKey={`album_${messageId}_${index}`}
+          allowDownscaling
+        />
         {selectionMode ? (
           <View
             pointerEvents="none"
@@ -167,6 +168,7 @@ function AlbumTile({
 /**
  * Equal-tile album grid. Parent bubble supplies side/top padding;
  * this grid fills 100% of that content box so tiles never overflow.
+ * Images render on first paint (no wait for onLayout) to avoid enter flicker.
  */
 export function ChatAlbumGrid({
   item,
@@ -181,12 +183,13 @@ export function ChatAlbumGrid({
   const cols = albumGridColumns(uris.length);
   const [innerW, setInnerW] = React.useState(0);
   const selectedSet = React.useMemo(() => new Set(selectedIndices), [selectedIndices]);
+  const messageId = String(item?.id || "img");
 
   const tile =
     innerW > 0
       ? Math.max(1, Math.floor((innerW - CHAT_ALBUM_GAP * (cols - 1)) / cols))
       : 0;
-  const rowH = uris.length === 1 ? Math.round(tile * 0.78) : tile;
+  const rowH = uris.length === 1 && tile > 0 ? Math.round(tile * 0.78) : tile || undefined;
 
   return (
     <View
@@ -205,13 +208,13 @@ export function ChatAlbumGrid({
         const uri = resolveMediaUri(raw) || raw;
         return (
           <AlbumTile
-            key={`${item?.id || "img"}-${index}-${raw.slice(-24)}`}
+            key={`${messageId}-${index}-${raw.slice(-24)}`}
+            messageId={messageId}
             uri={uri}
             index={index}
             width={tile || undefined}
-            height={tile ? rowH : undefined}
+            height={rowH}
             cols={cols}
-            tileMeasured={tile > 0}
             selectionMode={!!selectionMode}
             isTileSelected={selectedSet.has(index)}
             onPress={() => {

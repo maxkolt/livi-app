@@ -72,6 +72,7 @@ import {
 import { CHAT_ALBUM_MAX, getMessageImageUris, isImageAlbumMessage, albumSelectionKey, parseAlbumSelectionKey, albumSelectionKeysForMessage, selectedAlbumIndices } from './chat/chatAlbum';
 import { ChatAlbumPickModal } from './chat/ChatAlbumPickModal';
 import { saveImageToGallery } from '../utils/saveToGallery';
+import { prefetchImages } from '../utils/imageOptimization';
 
 import { API_BASE, getMyProfile } from '../sockets/socket';
 import { logger } from '../utils/logger';
@@ -750,6 +751,8 @@ export default function ChatScreen({ route, navigation }: Props) {
   const readReceiptSentIdsRef = useRef<Set<string>>(new Set());
   // Чтобы не показывать "пустую заглушку" до загрузки истории (иначе она мелькает на входе в чат)
   const [historyReady, setHistoryReady] = useState(false);
+  /** Prefetch chat images before first paint so bubbles don't flash empty→loaded. */
+  const [chatImagesWarm, setChatImagesWarm] = useState(false);
   // Кастомное подтверждение удаления сообщения (вместо системного Alert)
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [deleteForBoth, setDeleteForBoth] = useState(true);
@@ -2317,6 +2320,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
     const loadHistory = async () => {
       setHistoryReady(false);
+      setChatImagesWarm(false);
       clearMessageCache(pid, uid);
 
       const fetchPromise = fetchMessages({ with: pid, limit: 50 }).catch(() => null);
@@ -3235,7 +3239,53 @@ export default function ChatScreen({ route, navigation }: Props) {
   // КРИТИЧНО: НЕ делаем ранние return по loading/err, иначе ниже хуки (useMemo/useCallback) будут
   // вызываться не на каждом рендере -> "Rendered more hooks than during the previous render".
   const isEmpty = messages.length === 0;
-  const showEmpty = isEmpty && historyReady;
+  const chatFeedReady = historyReady && chatImagesWarm;
+  const showEmpty = isEmpty && chatFeedReady;
+
+  // При входе в чат: прогреть кэш картинок (короткий таймаут), чтобы облака не мерцали.
+  useEffect(() => {
+    if (!historyReady || chatImagesWarm) return;
+    const t = setTimeout(() => setChatImagesWarm(true), 450);
+    return () => clearTimeout(t);
+  }, [historyReady, chatImagesWarm]);
+
+  useEffect(() => {
+    if (!historyReady) return;
+    let cancelled = false;
+    const urls: string[] = [];
+    const seen = new Set<string>();
+    const tail = messages.length > 40 ? messages.slice(-40) : messages;
+    for (const m of tail) {
+      if (String(m?.type || '') !== 'image') continue;
+      for (const u of getMessageImageUris(m)) {
+        const r = resolveMediaUri(u);
+        if (!r || seen.has(r)) continue;
+        if (Platform.OS === 'android' && /^data:/i.test(r)) continue;
+        if (!/^(https?:|file:)/i.test(r)) continue;
+        seen.add(r);
+        urls.push(r);
+        if (urls.length >= 56) break;
+      }
+      if (urls.length >= 56) break;
+    }
+    if (chatImagesWarm) {
+      if (urls.length > 0) void prefetchImages(urls).catch(() => {});
+      return;
+    }
+    if (urls.length === 0) return; // ждём сообщения или safety timeout
+    (async () => {
+      try {
+        await Promise.race([
+          prefetchImages(urls),
+          new Promise<void>((resolve) => setTimeout(resolve, 340)),
+        ]);
+      } catch {}
+      if (!cancelled) setChatImagesWarm(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [historyReady, messages, resolveMediaUri, chatImagesWarm]);
 
   const openClearMenu = () => {
     setShowClearMenu(true);
@@ -6387,14 +6437,14 @@ export default function ChatScreen({ route, navigation }: Props) {
   // КРИТИЧНО: на каждый ввод нельзя пересоздавать массив data для FlatList,
   // иначе он будет перерисовывать (а иногда и переразмещать) все элементы -> мерцание изображений.
   const iosChatListData = React.useMemo(
-    () => (isEmpty ? [] : buildChatListRows(messages)),
-    [isEmpty, messages],
+    () => (!chatFeedReady || isEmpty ? [] : buildChatListRows(messages)),
+    [chatFeedReady, isEmpty, messages],
   );
 
   const androidChatListData = React.useMemo(() => {
-    if (isEmpty) return [];
+    if (!chatFeedReady || isEmpty) return [];
     return [...buildChatListRows(messages)].reverse();
-  }, [isEmpty, messages]);
+  }, [chatFeedReady, isEmpty, messages]);
 
   iosChatListDataRef.current = iosChatListData;
   androidChatListDataRef.current = androidChatListData;
@@ -6623,7 +6673,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               updateCellsBatchingPeriod={CHAT_LIST_UPDATE_CELLS_BATCHING_PERIOD}
               onContentSizeChange={() => setTimeout(() => scrollToBottom(), 0)}
               ListEmptyComponent={() => {
-                if (!historyReady) {
+                if (!chatFeedReady) {
                   return (
                     <View
                       style={{
@@ -6973,7 +7023,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               updateCellsBatchingPeriod={CHAT_LIST_UPDATE_CELLS_BATCHING_PERIOD}
               ListHeaderComponent={androidListHeader}
               ListEmptyComponent={() => {
-                if (!historyReady) {
+                if (!chatFeedReady) {
                   return (
                     <View
                       style={{

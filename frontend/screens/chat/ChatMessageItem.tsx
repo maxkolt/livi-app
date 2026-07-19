@@ -388,9 +388,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               }}
               contentFit="cover"
               cachePolicy="memory-disk"
-              // КРИТИЧНО: на Android transition часто даёт мерцание в списках
-              transition={Platform.OS === 'android' ? 0 : 200}
-              recyclingKey={`message_image_${item.id}_${localImageUri ? 'local' : 'remote'}`}
+              transition={0}
+              priority="high"
+              recyclingKey={`message_image_${item.id}`}
               allowDownscaling={false}
               placeholder={null}
               onError={(error: any) => {

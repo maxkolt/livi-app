@@ -232,7 +232,7 @@ export function ChatAlbumPickModal({
                         style={{ width: "100%", height: "100%" }}
                         contentFit="cover"
                         cachePolicy="memory-disk"
-                        transition={Platform.OS === "android" ? 0 : 120}
+                        transition={0}
                       />
                     ) : null}
                     <View
