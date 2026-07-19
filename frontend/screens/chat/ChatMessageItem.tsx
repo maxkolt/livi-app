@@ -1005,7 +1005,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             const bubbleFill = isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN;
             const bubbleUnderlay = isMyMessage
               ? (isDark ? '#0E1420' : '#C4CAD4')
-              : (isDark ? '#181E28' : '#8EA6BC');
+              : (isDark ? '#181E28' : '#D6E4F0');
             const isImageMsg = String(item?.type || '') === 'image';
             const isAlbumImage = isAlbumImageMsg;
             // Одинаковые отступы от краёв облака для 1 и для N фото

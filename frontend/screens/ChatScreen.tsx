@@ -247,9 +247,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [LIVI.bg, isDark]);
 
   const BORDER_COLOR = theme.colors.outline as string;
-  // Тёмная тема — как есть. Светлая: исходящие светлее; входящие — прежний тон, но высветленный.
+  // Тёмная тема — как есть. Светлая: исходящие серо-голубые; входящие светлее, почти непрозрачные — текст читается, обои почти не просвечивают.
   const BUBBLE_BG_OUT = isDark ? 'rgba(14, 20, 32, 0.99)' : 'hsla(220, 6%, 80%, 0.97)';
-  const BUBBLE_BG_IN  = isDark ? 'rgba(26, 32, 42, 0.98)' : 'rgba(118, 142, 168, 0.96)';
+  const BUBBLE_BG_IN  = isDark ? 'rgba(26, 32, 42, 0.98)' : 'hsla(208, 38%, 92%, 0.97)';
   const BORDER_WIDTH = 1;
 
   const peerId = String(route?.params?.peerId || "");
