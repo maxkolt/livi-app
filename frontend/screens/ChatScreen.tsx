@@ -126,6 +126,7 @@ import {
   shouldShowChatDeleteToast,
   shouldShowChatGapCenter,
 } from './chat/ChatGapStatus';
+import { ChatParallaxWallpaper } from './chat/ChatParallaxWallpaper';
 import {
   ReactionBarModal,
   ReactionsRowWithSwipe,
@@ -246,10 +247,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   }, [LIVI.bg, isDark]);
 
   const BORDER_COLOR = theme.colors.outline as string;
-  // Цвета облаков: в светлой теме немного затемняем входящие, исходящие чуть светлее
-  // Тёмная тема — как было изначально; светлая — оставляем текущие оттенки
-  const BUBBLE_BG_OUT = isDark ? LIVI.rgb : 'hsla(220, 2.80%, 79.00%, 0.70)';
-  const BUBBLE_BG_IN  = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(114, 141, 175, 0.32)';
+  // Тёмная тема — как есть. Светлая: исходящие светлее; входящие — прежний тон, но высветленный.
+  const BUBBLE_BG_OUT = isDark ? 'rgba(14, 20, 32, 0.99)' : 'hsla(220, 6%, 80%, 0.97)';
+  const BUBBLE_BG_IN  = isDark ? 'rgba(26, 32, 42, 0.98)' : 'rgba(118, 142, 168, 0.96)';
   const BORDER_WIDTH = 1;
 
   const peerId = String(route?.params?.peerId || "");
@@ -1332,7 +1332,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         flex: 1,
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: LIVI.feedBg,
+        backgroundColor: "transparent",
       }}
     >
       <ActivityIndicator />
@@ -2034,12 +2034,14 @@ export default function ChatScreen({ route, navigation }: Props) {
       edges={Platform.OS === 'android' ? ['top', 'left', 'right'] : ['top', 'bottom', 'left', 'right']}
     >
       <View
-        style={{ flex: 1, backgroundColor: LIVI.feedBg }}
+        style={{ flex: 1, backgroundColor: isDark ? '#16243D' : '#B8D4EA' }}
         // Не блокируем весь экран pointerEvents='none': на Android это иногда "съедало" первый тап.
         pointerEvents="auto"
         onLayout={handleRootLayout}
       >
         {headerEl}
+        <View style={{ flex: 1, overflow: 'hidden' }}>
+          <ChatParallaxWallpaper isDark={isDark} />
         {loading ? (
           <Loading />
         ) : err ? (
@@ -2073,7 +2075,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               data={iosChatListData}
               keyExtractor={(item) => item.id}
               renderItem={renderMessageRow}
-              style={{ flex: 1 }}
+              style={{ flex: 1, backgroundColor: 'transparent' }}
               contentContainerStyle={{ 
                 flexGrow: 1,
                 justifyContent: showEmpty ? 'center' : 'flex-end',
@@ -2100,7 +2102,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         flex: 1,
                         justifyContent: 'center',
                         alignItems: 'center',
-                        backgroundColor: LIVI.feedBg,
+                        backgroundColor: 'transparent',
                       }}
                     >
                       <ActivityIndicator color={LIVI.titan} />
@@ -2114,7 +2116,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       flex: 1,
                       justifyContent: 'center',
                       alignItems: 'center',
-                      backgroundColor: LIVI.feedBg,
+                      backgroundColor: 'transparent',
                       ...(Platform.OS === 'ios' ? {} : { transform: [{ scaleY: -1 }] }),
                     }}
                   >
@@ -2424,7 +2426,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               data={androidChatListData}
               keyExtractor={(item) => item.id}
               renderItem={renderMessageRow}
-              style={{ flex: 1 }}
+              style={{ flex: 1, backgroundColor: 'transparent' }}
               contentContainerStyle={{
                 flexGrow: 1,
                 justifyContent: isEmpty ? 'center' : 'flex-start',
@@ -2450,7 +2452,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         flex: 1,
                         justifyContent: 'center',
                         alignItems: 'center',
-                        backgroundColor: LIVI.feedBg,
+                        backgroundColor: 'transparent',
                       }}
                     >
                       <ActivityIndicator color={LIVI.titan} />
@@ -2464,7 +2466,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       flex: 1,
                       justifyContent: 'center',
                       alignItems: 'center',
-                      backgroundColor: LIVI.feedBg,
+                      backgroundColor: 'transparent',
                     }}
                   >
                     <Ionicons
@@ -2799,6 +2801,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             </View>
           </View>)
         )}
+        </View>
       </View>
       {/* Модалка аватара собеседника: полный экран, блюр/затемнение, круг 3×, pinch-to-zoom */}
       {avatarModalVisible && (

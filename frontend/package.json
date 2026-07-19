@@ -67,6 +67,7 @@
     "expo-notifications": "~0.31.4",
     "expo-random": "^14.0.1",
     "expo-secure-store": "~14.2.4",
+    "expo-sensors": "~14.1.4",
     "expo-sharing": "~13.1.5",
     "expo-status-bar": "~2.2.3",
     "expo-video": "~2.2.2",

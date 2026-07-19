@@ -812,8 +812,8 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       byEmoji[r.emoji] = (byEmoji[r.emoji] || 0) + 1;
     });
     const reactionList = Object.entries(byEmoji).map(([emoji, count]) => ({ emoji, count }));
-    const timeColor = isDark ? 'rgba(255,255,255,0.86)' : 'rgba(10,14,18,0.82)';
-    const metaBg = isDark ? 'rgba(10,14,18,0.42)' : 'rgba(255,255,255,0.72)';
+    const timeColor = isDark ? 'rgba(255,255,255,0.86)' : 'rgba(28, 36, 48, 0.92)';
+    const metaBg = isDark ? 'rgba(18, 22, 30, 0.88)' : 'rgba(255,255,255,0.88)';
     const stickerSize = 132;
 
     const checkbox = (
@@ -1003,6 +1003,9 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       >
           {(() => {
             const bubbleFill = isMyMessage ? BUBBLE_BG_OUT : BUBBLE_BG_IN;
+            const bubbleUnderlay = isMyMessage
+              ? (isDark ? '#0E1420' : '#C4CAD4')
+              : (isDark ? '#181E28' : '#8EA6BC');
             const isImageMsg = String(item?.type || '') === 'image';
             const isAlbumImage = isAlbumImageMsg;
             // Одинаковые отступы от краёв облака для 1 и для N фото
@@ -1104,11 +1107,11 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               ) : null}
               <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 0 }}>
                 <Text style={{
-                  color: LIVI.text,
+                  color: isDark ? LIVI.text : 'rgba(28, 36, 48, 0.92)',
                   fontSize: 12,
                   marginRight: isMyMessage ? 4 : 0,
-                  opacity: 0.8,
-                  fontWeight: '500',
+                  opacity: isDark ? 0.8 : 1,
+                  fontWeight: '600',
                 }}>
                   {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </Text>
@@ -1179,7 +1182,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 <View
                   style={{
                     borderRadius: BUBBLE_RADIUS,
-                    backgroundColor: LIVI.feedBg,
+                    backgroundColor: bubbleUnderlay,
                     overflow: 'hidden',
                     maxWidth: '100%',
                   }}

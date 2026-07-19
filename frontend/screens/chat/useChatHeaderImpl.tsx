@@ -1,7 +1,7 @@
 /** Memoized chat header JSX (not a component — avoids avatar remount flicker). */
 
 import React from "react";
-import { Platform, Text, TouchableOpacity, View } from "react-native";
+import { Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import AvatarImage from "../../components/AvatarImage";
 import ChatStyleBackButton from "../../components/ChatStyleBackButton";
@@ -78,11 +78,14 @@ export function useChatHeader({
         paddingTop: headerTopPadding,
         height: headerH + headerTopPadding,
         backgroundColor: LIVI.bg,
-        borderBottomWidth: BORDER_WIDTH,
-        borderBottomColor: BORDER_COLOR,
         flexDirection: "row",
         alignItems: "center",
         paddingHorizontal: 12,
+        zIndex: 2,
+        // Без elevation: на Android тень шапки даёт вертикальную полосу на ленте.
+        elevation: 0,
+        borderWidth: 0,
+        overflow: "hidden",
       }}
     >
       <ChatStyleBackButton
@@ -205,6 +208,18 @@ export function useChatHeader({
           />
         </TouchableOpacity>
       )}
+      {/* Отдельный hairline вместо borderBottom — без вертикальных артефактов на стыке с лентой */}
+      <View
+        pointerEvents="none"
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: StyleSheet.hairlineWidth,
+          backgroundColor: BORDER_COLOR,
+        }}
+      />
     </View>
   ), [
     headerH,

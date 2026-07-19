@@ -51,6 +51,30 @@ for (const { dir, file } of patches) {
   }
 }
 
+// @baronha/react-native-photo-editor: SDWebImage pins conflict with ExpoImage (~> 5.21 / WebPCoder ~> 0.14).
+(() => {
+  const podspec = path.join(
+    root,
+    'node_modules/@baronha/react-native-photo-editor/react-native-photo-editor.podspec',
+  );
+  if (!fs.existsSync(podspec)) return;
+  try {
+    let c = fs.readFileSync(podspec, 'utf8');
+    const next = c
+      .replace(/s\.dependency\s+"SDWebImage",\s+"~> 5\.11\.1"/, 's.dependency "SDWebImage", "~> 5.21.0"')
+      .replace(
+        /s\.dependency\s+'SDWebImageWebPCoder',\s+'~> 0\.8\.4'/,
+        "s.dependency 'SDWebImageWebPCoder', '~> 0.14.6'",
+      );
+    if (next !== c) {
+      fs.writeFileSync(podspec, next, 'utf8');
+      console.log('[apply-patches] react-native-photo-editor.podspec: align SDWebImage with ExpoImage');
+    }
+  } catch (e) {
+    console.warn('[apply-patches] photo-editor podspec SDWebImage fix:', e.message);
+  }
+})();
+
 // expo-dev-launcher/bundle/tsconfig.json может иметь include/exclude строками вместо массивов — TypeScript тогда ругается
 const devLauncherTsconfig = path.join(root, 'node_modules/expo-dev-launcher/bundle/tsconfig.json');
 if (fs.existsSync(devLauncherTsconfig)) {
