@@ -31,7 +31,7 @@
     },
     "android": {
       "package": "com.kolt12max.livi",
-      "versionCode": 169,
+      "versionCode": 171,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -48,6 +48,7 @@
         "android.permission.READ_MEDIA_IMAGES"
       ],
       "blockedPermissions": [
+        "android.permission.ACTIVITY_RECOGNITION",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.READ_MEDIA_AUDIO",

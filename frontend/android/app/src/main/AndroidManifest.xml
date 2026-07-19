@@ -17,6 +17,8 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
   <!-- Remove permissions merged from dependencies to satisfy Play policy. -->
+  <!-- expo-sensors declares this for Pedometer; LiVi only uses Accelerometer (wallpaper) — strip for Play health policy. -->
+  <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" tools:node="remove"/>
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" tools:node="remove"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/>
   <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove"/>
